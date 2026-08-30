@@ -37,18 +37,28 @@ def back(w, h):
 
 
 def front(w, h):
-    """Ring and serif only, transparent elsewhere, so the parallax has depth."""
+    """Ring and bookmark only, transparent elsewhere, so the parallax has depth.
+
+    The same mark as the other platforms. This file has its own copy of the
+    drawing because tvOS assets are a different shape entirely — landscape
+    layers for the parallax — so "side" here is the short edge, which is what
+    the ring is already measured against.
+    """
     img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
-    ring = min(w, h) * 0.52
+    side = min(w, h)
+    ring = side * 0.52
     box = [(w - ring) / 2, (h - ring) / 2, (w + ring) / 2, (h + ring) / 2]
     d.ellipse(box, outline=RING, width=max(round(ring * 0.034), 2))
-    try:
-        font = ImageFont.truetype(str(FONT), int(ring * 0.62))
-    except OSError:
-        font = ImageFont.load_default()
-    l, t, r, b = d.textbbox((0, 0), "I", font=font)
-    d.text(((w - (r - l)) / 2 - l, (h - (b - t)) / 2 - t), "I", font=font, fill=RING)
+
+    # Sized from the ring, not the canvas: this one is landscape and its ring
+    # is a smaller fraction of the short edge than the square icon's, so a mark
+    # measured against the side burst out through the top and bottom.
+    bw, bh = (0.145 / 0.619) * ring, (0.535 / 0.619) * ring
+    x0, x1 = (w - bw) / 2, (w + bw) / 2
+    y0, y1 = (h - bh) / 2, (h + bh) / 2
+    notch = y0 + bh * 0.75
+    d.polygon([(x0, y0), (x1, y0), (x1, notch), ((x0 + x1) / 2, y1), (x0, notch)], fill=RING)
     return img
 
 

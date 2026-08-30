@@ -23,6 +23,9 @@ FONT = pathlib.Path(__file__).resolve().parents[2] / \
 
 # Fractions of the tile's side, from the canvas.
 R_TILE, D_RING, W_RING = 38 / 168, 104 / 168, 3.5 / 168
+# The bookmark, as fractions of the RING's diameter, so every platform's ring
+# holds it at the same proportion however big that ring is.
+W_MARK, H_MARK = 0.145 / D_RING, 0.535 / D_RING
 SUPERSAMPLE = 4  # draw large, downsample once: keeps the ring edge clean
 
 VARIANTS = {
@@ -45,6 +48,26 @@ def radial(size, inner, outer):
             t = min(math.hypot(x - cx, y - cy) / far, 1.0)
             px[x, y] = tuple(round(i + (o - i) * t) for i, o in zip(inner, outer))
     return img
+
+
+def bookmark(d, cx, cy, ring_d, fill):
+    """A bookmark, centred in the ring.
+
+    Testers said the icon did not look like it had anything to do with
+    reading — it was a ring with a serif "I" in it, which reads as a generic
+    logo. A bookmark is the one object that means "a book, and your place in
+    it" at 16px, which is where an app icon has to work hardest.
+
+    Measured against the ring rather than the tile. tvOS draws the same mark on
+    a landscape canvas with a proportionally smaller ring, and sizing from the
+    side there pushed the bookmark straight out through the top and bottom of
+    the circle.
+    """
+    w, h = W_MARK * ring_d, H_MARK * ring_d
+    x0, x1 = (cx - w / 2), (cx + w / 2)
+    y0, y1 = (cy - h / 2), (cy + h / 2)
+    notch = y0 + h * 0.75  # the shoulders the V is cut up from
+    d.polygon([(x0, y0), (x1, y0), (x1, notch), ((x0 + x1) / 2, y1), (x0, notch)], fill=fill)
 
 
 def draw(size, variant, rounded=True):
@@ -77,15 +100,7 @@ def draw(size, variant, rounded=True):
     box = [(s - ring_d) / 2, (s - ring_d) / 2, (s + ring_d) / 2, (s + ring_d) / 2]
     d.ellipse(box, outline=ring, width=round(ring_w))
 
-    # The serif "I" is the whole point of the mark; fall back only if the
-    # bundled face is somehow missing.
-    letter = "I"
-    try:
-        font = ImageFont.truetype(str(FONT), int(ring_d * 0.62))
-    except OSError:
-        font = ImageFont.load_default()
-    l, t, r, b = d.textbbox((0, 0), letter, font=font)
-    d.text(((s - (r - l)) / 2 - l, (s - (b - t)) / 2 - t), letter, font=font, fill=glyph)
+    bookmark(d, s / 2, s / 2, ring_d, glyph)
 
     return tile.resize((size, size), Image.LANCZOS)
 
@@ -97,3 +112,29 @@ for variant in VARIANTS:
     # Square, opaque, for iOS.
     draw(1024, variant, rounded=False).save(OUT / f"icon-ios-{variant}-1024.png")
 print(f"wrote {len(list(OUT.glob('*.png')))} images to {OUT}")
+
+# Install into the asset catalogues.
+#
+# This step used to be done by hand, and nothing recorded that it had to be:
+# the filenames above match no catalogue, so "re-run the script and the icons
+# update" was quietly false and the shipped icons could drift from the source
+# that claims to generate them.
+REPO = pathlib.Path(__file__).resolve().parents[2]
+IOS = REPO / "Apps/IssaReader-iOS/Assets.xcassets/AppIcon.appiconset"
+MAC = REPO / "Apps/IssaReader-macOS/Assets.xcassets/AppIcon.appiconset"
+
+if IOS.is_dir() and MAC.is_dir():
+    # iOS takes the square, opaque pair: an alpha channel is rejected at upload
+    # and the system draws its own rounded mask.
+    draw(1024, "light", rounded=False).save(IOS / "icon-1024.png")
+    draw(1024, "dark", rounded=False).save(IOS / "icon-1024-dark.png")
+
+    # macOS is a free-form shape, so it keeps the rounded corners and alpha.
+    for points, scale in ((16, 1), (16, 2), (32, 1), (32, 2), (128, 1), (128, 2),
+                          (256, 1), (256, 2), (512, 1), (512, 2)):
+        suffix = "@2x" if scale == 2 else ""
+        draw(points * scale, "light").save(MAC / f"icon_{points}x{points}{suffix}.png")
+    print(f"installed into {IOS.name} and {MAC.name}")
+    print("tvOS assets come from make-tvos-assets.py — run that too")
+else:
+    print("asset catalogues not found; wrote to the output directory only")
