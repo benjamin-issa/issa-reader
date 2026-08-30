@@ -17,6 +17,11 @@ public final class AudioPlayer {
     public private(set) var duration: TimeInterval = 0
     public private(set) var currentAudioHref: String?
 
+    /// 0...1, used by the sleep timer's fade-out.
+    public var volume: Float = 1.0 {
+        didSet { player.volume = volume }
+    }
+
     public var rate: Float = 1.0 {
         didSet {
             player.rate = isPlaying ? rate : 0

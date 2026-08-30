@@ -53,6 +53,9 @@ public struct SettingsView: View {
                 NavigationLink { ReadingSettingsView() } label: {
                     Label("Reading & highlights", systemImage: "textformat")
                 }
+                NavigationLink { DownloadsView() } label: {
+                    Label("Downloads & storage", systemImage: "arrow.down.circle")
+                }
             }
             .listRowBackground(Palette.surface)
 

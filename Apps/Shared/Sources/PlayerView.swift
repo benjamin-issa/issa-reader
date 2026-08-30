@@ -14,6 +14,7 @@ public struct PlayerView: View {
 
     @State private var scrubbing = false
     @State private var scrubValue: Double = 0
+    @State private var sleepTimer: SleepTimer?
 
     public init(book: Book, session: Session?, coordinator: ReadalongCoordinator?) {
         self.book = book
@@ -164,15 +165,33 @@ public struct PlayerView: View {
     }
 
     private var sleepTimerControl: some View {
-        Button {
-            // Sleep timer lands with the rest of the playback surfaces.
+        Menu {
+            ForEach(SleepTimer.presets, id: \.self) { mode in
+                Button(mode.title) { sleepTimer?.start(mode) }
+            }
+            if sleepTimer?.mode != SleepTimer.Mode.off {
+                Divider()
+                Button("Cancel timer", role: .destructive) { sleepTimer?.cancel() }
+            }
         } label: {
-            Image(systemName: "moon.zzz")
-                .font(.system(size: 18))
-                .foregroundStyle(Palette.inkTertiary)
+            HStack(spacing: Metrics.spacing4) {
+                Image(systemName: sleepTimer?.mode == SleepTimer.Mode.off ? "moon" : "moon.fill")
+                    .font(.system(size: 16))
+                if let text = sleepTimer?.remainingText {
+                    Text(text).font(Typography.caption.monospacedDigit())
+                }
+            }
+            .foregroundStyle(sleepTimer?.mode == SleepTimer.Mode.off ? Palette.inkTertiary : Palette.tangerine)
         }
-        .buttonStyle(.plain)
-        .disabled(true)
+        .disabled(coordinator == nil)
+        .task {
+            guard sleepTimer == nil, let coordinator else { return }
+            sleepTimer = SleepTimer(
+                onExpire: { coordinator.player.pause() },
+                // Fade the last seconds rather than cutting off mid-word.
+                fade: { level in coordinator.player.volume = level },
+            )
+        }
     }
 
     static func rateText(_ rate: Double) -> String {
