@@ -46,7 +46,7 @@ public final class ChapterLayout {
     private let contentStorage = NSTextContentStorage()
     private let layoutManager = NSTextLayoutManager()
     private let container: NSTextContainer
-    private let fragmentRanges: [String: NSRange]
+    public let fragmentRanges: [String: NSRange]
 
     public init(text: NSAttributedString, fragmentRanges: [String: NSRange]) {
         attributedText = text
@@ -137,6 +137,47 @@ public final class ChapterLayout {
         return rects
     }
 
+    /// What the reader just tapped: the character index under a point on a page.
+    ///
+    /// Page coordinates, so the caller does not have to know about the scroll
+    /// offset pagination is built on.
+    public func characterIndex(at point: CGPoint, on page: RenderedPage) -> Int? {
+        let inDocument = CGPoint(x: point.x, y: point.y + page.yOffset)
+        guard let fragment = layoutManager.textLayoutFragment(for: inDocument) else { return nil }
+        let frame = fragment.layoutFragmentFrame
+        let inFragment = CGPoint(x: inDocument.x - frame.minX, y: inDocument.y - frame.minY)
+
+        // A tap lands in a paragraph; the line inside it has to be found by
+        // hand, because a fragment can hold many lines and only reports its own
+        // origin.
+        guard let line = fragment.textLineFragments.first(where: {
+            $0.typographicBounds.minY <= inFragment.y && inFragment.y < $0.typographicBounds.maxY
+        }) ?? fragment.textLineFragments.last else { return nil }
+
+        let inLine = CGPoint(
+            x: inFragment.x - line.typographicBounds.minX,
+            y: inFragment.y - line.typographicBounds.minY,
+        )
+        // characterIndex(for:) reports an index into the *fragment's* string,
+        // not the line's, so the line's own offset must not be added again —
+        // doing so lands a tap on the sentence after the one that was tapped.
+        let indexInFragment = line.characterIndex(for: inLine)
+        guard indexInFragment >= 0 else { return nil }
+        return offset(of: fragment.rangeInElement.location) + indexInFragment
+    }
+
+    /// The narrated sentence under a point, for tap-to-play.
+    ///
+    /// Nearest-enclosing wins: fragment ranges nest when a sentence contains
+    /// marked-up spans, and the reader means the innermost thing they tapped.
+    public func fragmentID(at point: CGPoint, on page: RenderedPage) -> String? {
+        guard let index = characterIndex(at: point, on: page) else { return nil }
+        return fragmentRanges
+            .filter { NSLocationInRange(index, $0.value) }
+            .min { $0.value.length < $1.value.length }?
+            .key
+    }
+
     /// The character range a fragment occupies, for reading its text back.
     public func fragmentRange(for fragmentID: String) -> NSRange? {
         fragmentRanges[fragmentID]
@@ -150,6 +191,11 @@ public final class ChapterLayout {
                 || (range.location < page.characterRange.location
                     && range.location + range.length > page.characterRange.location)
         }
+    }
+
+    /// The page holding a character index, for restoring a saved position.
+    public func page(containingOffset offset: Int) -> RenderedPage? {
+        pages.first { NSLocationInRange(offset, $0.characterRange) } ?? pages.last
     }
 
     /// Fraction of the chapter before this page, for progress reporting.

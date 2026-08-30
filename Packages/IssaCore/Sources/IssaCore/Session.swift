@@ -65,6 +65,12 @@ public final class Session {
     }
 
     public func signOut() async {
+        // Tell the server first, while the token still works. A token minted
+        // through /token/app lasts thirty-five years; dropping it locally
+        // without revoking it leaves a working credential behind on a device
+        // the reader may be signing out of precisely because they lost it.
+        // Best effort: no network must ever trap someone in a signed-in state.
+        _ = try? await client.post(Endpoint.logout, body: [String: String]())
         await tokens.invalidate()
         state = .signedOut
     }

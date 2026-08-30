@@ -9,7 +9,6 @@ public enum Endpoint {
     public static let token = "/api/v2/token"
     public static let tokenApp = "/api/v2/token/app"
     public static let validate = "/api/v2/validate"
-    public static let logout = "/api/v2/logout"
     public static let deviceStart = "/api/v2/device/start"
     public static let deviceToken = "/api/v2/device/token"
     public static func deviceStatus(_ deviceCode: String) -> String {
@@ -21,6 +20,8 @@ public enum Endpoint {
     }
 
     // Identity
+    /// Revokes the session token server-side.
+    public static let logout = "/api/v2/logout"
     public static let user = "/api/v2/user"
     public static let userSettings = "/api/v2/user/settings"
     public static let userRatings = "/api/v2/user/ratings"

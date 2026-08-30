@@ -72,12 +72,24 @@ public final class AppModel {
     public static func normalizeServerURL(_ input: String) -> URL? {
         var text = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return nil }
-        if !text.contains("://") { text = "http://" + text }
+        let hadScheme = text.contains("://")
+        if !hadScheme { text = "http://" + text }
         guard var components = URLComponents(string: text), let host = components.host, !host.isEmpty
         else { return nil }
-        // Storyteller's default port, applied when the user gave a bare host.
-        if components.port == nil, components.scheme == "http" { components.port = 8001 }
-        components.path = ""
+        // Storyteller's default port, but only when the address was bare. Given
+        // a full URL, guessing a port would break every install behind a proxy
+        // on 80 or 443.
+        if components.port == nil, !hadScheme { components.port = 8001 }
+        // Keep the path: a reverse proxy commonly mounts Storyteller under a
+        // subdirectory, and dropping it made every such server unreachable.
+        // Trailing slashes and a pasted API path are noise, though.
+        var path = components.path
+        if path.hasSuffix("/") { path.removeLast() }
+        for suffix in ["/api/v2", "/api"] where path.hasSuffix(suffix) {
+            path.removeLast(suffix.count)
+            break
+        }
+        components.path = path
         components.query = nil
         components.fragment = nil
         return components.url

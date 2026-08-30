@@ -83,8 +83,17 @@ public struct ReaderView: View {
                 #if !os(tvOS)
                 .onTapGesture { location in
                     Task {
-                        // Left third goes back, the rest goes forward — the
-                        // convention readers already expect.
+                        // In a narrated book, tapping a sentence plays it. The
+                        // tap arrives in the padded frame's space, so the margin
+                        // comes off before the layout is asked what is there.
+                        if model.style.tapToPlay, model.readalong != nil {
+                            let margin = model.style.pageMargin
+                            let inCanvas = CGPoint(x: location.x - margin, y: location.y - margin)
+                            if await model.playSentence(at: inCanvas) { return }
+                        }
+                        // Otherwise the usual zones: left third back, rest
+                        // forward — including every tap that missed a sentence,
+                        // so the page can always be turned by tapping.
                         if location.x < size.width * 0.33 { await model.previousPage() }
                         else { await model.nextPage() }
                     }

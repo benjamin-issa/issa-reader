@@ -44,6 +44,12 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
     /// Allow a page to turn part-way through a sentence rather than waiting
     /// for it to finish.
     public var turnPagesMidSentence: Bool
+    /// Tapping a narrated sentence starts the audio there.
+    ///
+    /// Only ever consulted for a book that has narration, and only for a tap
+    /// that actually lands on a narrated sentence — the margins keep turning
+    /// pages, so a reader is never left unable to advance by tapping.
+    public var tapToPlay: Bool
 
     public init(
         fontFamily: String = "Newsreader",
@@ -55,6 +61,7 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
         highlightGranularity: HighlightGranularity = .sentence,
         followNarration: Bool = true,
         turnPagesMidSentence: Bool = false,
+        tapToPlay: Bool = true,
     ) {
         self.fontFamily = fontFamily
         self.fontSize = fontSize
@@ -65,6 +72,7 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
         self.highlightGranularity = highlightGranularity
         self.followNarration = followNarration
         self.turnPagesMidSentence = turnPagesMidSentence
+        self.tapToPlay = tapToPlay
     }
 
     /// Body font, falling back to the system serif when the bundled family is

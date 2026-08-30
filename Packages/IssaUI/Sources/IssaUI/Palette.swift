@@ -80,4 +80,15 @@ public extension Color {
             opacity: opacity,
         )
     }
+
+    /// A "#RRGGBB" string, which is how the server states a source's colour.
+    ///
+    /// Fails rather than defaulting to black: a colour that could not be read is
+    /// better replaced by a palette token at the call site than drawn wrong.
+    init?(hex string: String?) {
+        guard var text = string?.trimmingCharacters(in: .whitespaces), !text.isEmpty else { return nil }
+        if text.hasPrefix("#") { text.removeFirst() }
+        guard text.count == 6, let value = UInt32(text, radix: 16) else { return nil }
+        self.init(hex: value)
+    }
 }

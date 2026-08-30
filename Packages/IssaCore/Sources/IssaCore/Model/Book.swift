@@ -50,6 +50,9 @@ public struct Book: Codable, Hashable, Sendable, Identifiable {
     public var tags: [Tag]
     public var collections: [Collection]
     public var identifiers: [Identifier]
+    /// Ratings gathered from external sources, keyed to those identifiers.
+    /// Absent on servers with no external source configured.
+    public var externalData: [ExternalData]?
 
     /// Per-user reading status ("To read" / "Reading" / "Read"). Present only
     /// when the request is authenticated.
@@ -75,7 +78,7 @@ public struct Book: Codable, Hashable, Sendable, Identifiable {
         case alignedAt, alignedWith, alignedByStorytellerVersion
         case createdAt, updatedAt
         case authors, narrators, creators
-        case series, tags, collections, identifiers
+        case series, tags, collections, identifiers, externalData
         case status, position
         case ebook, audiobook, readaloud
     }
@@ -186,11 +189,70 @@ public struct Status: Codable, Hashable, Sendable, Identifiable {
     public static let readName = "Read"
 }
 
-public struct Identifier: Codable, Hashable, Sendable {
+public struct Identifier: Codable, Hashable, Sendable, Identifiable {
+    /// The identifier *type's* uuid: the server serialises the type joined with
+    /// the value, so this is not unique per book.
     public var uuid: String?
-    /// e.g. "isbn", "asin", "audible".
-    public var type: String?
+    /// Slug, e.g. `isbn-13`, `audible`, `hardcover-book-slug`.
+    public var kind: String?
+    /// Display name, e.g. "ISBN-13", "Audible ASIN".
+    public var name: String?
+    /// A URL with `{value}` to substitute, when the type has one configured.
+    public var urlTemplate: String?
+    public var externalSourceUuid: String?
     public var value: String?
+
+    public var id: String { (uuid ?? "") + (value ?? "") }
+
+    /// Where to look this identifier up, when the server knows.
+    public var url: URL? {
+        guard let urlTemplate, let value else { return nil }
+        let filled = urlTemplate.replacingOccurrences(of: "{value}", with: value)
+        return URL(string: filled)
+    }
+
+    /// What to call this to a reader. Falls back to the slug, then to nothing:
+    /// a value with no label at all is worse than a slightly ugly one.
+    public var label: String {
+        if let name, !name.isEmpty { return name }
+        if let kind, !kind.isEmpty { return kind.uppercased() }
+        return "Identifier"
+    }
+}
+
+/// A rating carried in from somewhere else — Hardcover, at the time of writing.
+///
+/// The scale travels with the rating because sources do not agree on one: the
+/// server records min and max per source precisely so a client does not have to
+/// assume five stars.
+public struct ExternalData: Codable, Hashable, Sendable, Identifiable {
+    public var uuid: String
+    public var rating: Double
+    public var fetchedAt: FlexibleDate?
+    public var sourceUuid: String?
+    public var sourceName: String?
+    public var sourceColor: String?
+    public var sourceUrl: String?
+    public var sourceRatingIcon: String?
+    public var sourceRatingMin: Double?
+    public var sourceRatingMax: Double?
+
+    public var id: String { uuid }
+
+    /// The rating as a fraction of its own scale, for drawing it on ours.
+    public var normalized: Double? {
+        let low = sourceRatingMin ?? 0
+        guard let high = sourceRatingMax, high > low else { return nil }
+        return min(max((rating - low) / (high - low), 0), 1)
+    }
+
+    /// "4.3 of 5" — stated in the source's own terms rather than converted,
+    /// because a reader who knows Hardcover expects Hardcover's numbers.
+    public var ratingText: String {
+        let value = rating.formatted(.number.precision(.fractionLength(0 ... 1)))
+        guard let high = sourceRatingMax else { return value }
+        return "\(value) of \(high.formatted(.number.precision(.fractionLength(0))))"
+    }
 }
 
 /// A stored reading position, as embedded in a book payload.
@@ -215,7 +277,7 @@ public struct EbookFormat: Codable, Hashable, Sendable {
     public var fingerprint: String?
     public var pageCount: Int?
     public var fileSize: Int?
-    public var identifiers: [Identifier]?
+    public var identifiers: [Identifier]
     public var createdAt: FlexibleDate?
     public var updatedAt: FlexibleDate?
 }
@@ -228,7 +290,7 @@ public struct AudiobookFormat: Codable, Hashable, Sendable {
     /// Seconds.
     public var duration: Double?
     public var fileSize: Int?
-    public var identifiers: [Identifier]?
+    public var identifiers: [Identifier]
     public var createdAt: FlexibleDate?
     public var updatedAt: FlexibleDate?
 }
@@ -249,7 +311,7 @@ public struct ReadaloudFormat: Codable, Hashable, Sendable {
     public var pageCount: Int?
     public var duration: Double?
     public var fileSize: Int?
-    public var identifiers: [Identifier]?
+    public var identifiers: [Identifier]
     public var createdAt: FlexibleDate?
     public var updatedAt: FlexibleDate?
 

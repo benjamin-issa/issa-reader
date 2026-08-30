@@ -57,10 +57,11 @@ public struct ReadingSettingsView: View {
                 .pickerStyle(.segmented)
                 Toggle("Follow narration", isOn: $settings.readerStyle.followNarration)
                 Toggle("Turn pages mid-sentence", isOn: $settings.readerStyle.turnPagesMidSentence)
+                Toggle("Tap a sentence to play it", isOn: $settings.readerStyle.tapToPlay)
             } header: {
                 Text("Read-along")
             } footer: {
-                Text("“Follow narration” keeps the spoken sentence on screen. Turning pages mid-sentence flips as soon as the text runs off, rather than waiting for the sentence to finish.")
+                Text("“Follow narration” keeps the spoken sentence on screen. Turning pages mid-sentence flips as soon as the text runs off, rather than waiting for the sentence to finish. Tapping a sentence starts the narration there; the margins still turn the page.")
             }
             .listRowBackground(Palette.surface)
         }

@@ -1,0 +1,131 @@
+[
+ {
+  "uuid": "2f57d8c4-d6df-4555-99f6-d09a99b9fd58",
+  "title": "Pride and Prejudice",
+  "id": 6813837505486968,
+  "language": "en",
+  "createdAt": "2026-08-30 03:51:47",
+  "updatedAt": "2026-08-30 03:51:47",
+  "publicationDate": "1998-06-01T00:00:00.000Z",
+  "alignedByStorytellerVersion": null,
+  "alignedAt": null,
+  "alignedWith": null,
+  "description": null,
+  "rating": null,
+  "subtitle": null,
+  "duration": null,
+  "pageCount": null,
+  "assetDir": "Pride and Prejudice",
+  "authors": [
+   {
+    "uuid": "cbf61007-6bb2-4da8-adc0-a2e014475fb3",
+    "id": null,
+    "name": "Jane Austen",
+    "fileAs": "Austen, Jane",
+    "createdAt": "2026-08-30 03:51:47",
+    "updatedAt": "2026-08-30 03:51:47"
+   }
+  ],
+  "narrators": [],
+  "creators": [],
+  "series": [],
+  "tags": [
+   {
+    "uuid": "3e4c334d-f4db-4187-9155-d42b107f84d3",
+    "name": "England -- Fiction",
+    "createdAt": "2026-08-30 03:51:47",
+    "updatedAt": "2026-08-30 03:51:47"
+   },
+   {
+    "uuid": "e4562f0f-29d5-4bf0-be57-cd57436fd23b",
+    "name": "Young women -- Fiction",
+    "createdAt": "2026-08-30 03:51:47",
+    "updatedAt": "2026-08-30 03:51:47"
+   },
+   {
+    "uuid": "6d4f7339-bf60-4fe8-83ef-d10226b9f55a",
+    "name": "Love stories",
+    "createdAt": "2026-08-30 03:51:47",
+    "updatedAt": "2026-08-30 03:51:47"
+   },
+   {
+    "uuid": "004424e4-e764-498f-8b13-24701012119b",
+    "name": "Sisters -- Fiction",
+    "createdAt": "2026-08-30 03:51:47",
+    "updatedAt": "2026-08-30 03:51:47"
+   },
+   {
+    "uuid": "d555bccb-5792-47bf-9ecd-f75cc491bcc9",
+    "name": "Domestic fiction",
+    "createdAt": "2026-08-30 03:51:47",
+    "updatedAt": "2026-08-30 03:51:47"
+   },
+   {
+    "uuid": "5eb80884-1f65-4b90-a7d2-15d94a0ec982",
+    "name": "Courtship -- Fiction",
+    "createdAt": "2026-08-30 03:51:47",
+    "updatedAt": "2026-08-30 03:51:47"
+   },
+   {
+    "uuid": "9cd42332-977a-4748-b31f-046b10584abc",
+    "name": "Social classes -- Fiction",
+    "createdAt": "2026-08-30 03:51:47",
+    "updatedAt": "2026-08-30 03:51:47"
+   }
+  ],
+  "collections": [],
+  "identifiers": [
+   {
+    "uuid": "551a2459-fe31-4ae0-8438-777f72a424b8",
+    "kind": "isbn-13",
+    "name": "ISBN-13",
+    "urlTemplate": null,
+    "externalSourceUuid": null,
+    "value": "9780141439518"
+   },
+   {
+    "uuid": "b4531ffc-e718-4eb1-b615-217afbe2ca35",
+    "kind": "audible",
+    "name": "Audible ASIN",
+    "urlTemplate": null,
+    "externalSourceUuid": null,
+    "value": "B000FC1PJI"
+   }
+  ],
+  "externalData": [
+   {
+    "uuid": "bbbbbbbb-1111-4111-8111-bbbbbbbbbbbb",
+    "rating": 4.31,
+    "fetchedAt": "2026-08-30 10:04:25",
+    "sourceUuid": "a89a7213-4921-4a35-8528-431318e36105",
+    "sourceName": "Hardcover",
+    "sourceColor": "#7C3AED",
+    "sourceUrl": "https://hardcover.app",
+    "sourceRatingIcon": "star",
+    "sourceRatingMin": 0,
+    "sourceRatingMax": 5
+   }
+  ],
+  "status": {
+   "uuid": "eaecefa1-7c25-42c8-b93a-89bdd35ba6e3",
+   "name": "To read",
+   "createdAt": "2026-08-30 03:43:25",
+   "updatedAt": "2026-08-30 03:43:25"
+  },
+  "position": null,
+  "ebook": {
+   "uuid": "d1f34ee6-361c-44fc-90ca-dd5aae64d649",
+   "filepath": "/data/library/pride-and-prejudice.epub",
+   "missing": false,
+   "isEpub2": false,
+   "createdAt": "2026-08-30 03:51:47",
+   "updatedAt": "2026-08-30 03:51:47",
+   "fingerprint": "f:24835567:1788061885",
+   "pageCount": 300,
+   "fileSize": 24835567,
+   "identifiers": []
+  },
+  "audiobook": null,
+  "readaloud": null
+ }
+]

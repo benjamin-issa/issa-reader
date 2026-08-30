@@ -102,9 +102,9 @@ public final class ReaderModel {
             // Resume where the server says we were, before the first render, so
             // the reader never flashes page one and then jumps.
             let stored = try? await ProgressService(client: session.client).current(for: book.uuid)
-            let resumeHref = stored?.locator.href
-            chapterIndex = package.spine.firstIndex { $0.href == resumeHref }
-                ?? Self.firstReadableChapter(in: package, style: style)
+            chapterIndex = stored.flatMap { position in
+                package.spine.firstIndex { position.locator.matchesHref($0.href) }
+            } ?? Self.firstReadableChapter(in: package, style: style)
 
             await loadChapter(chapterIndex, restoring: stored?.locator)
             await prepareNarration(package: package)
@@ -168,6 +168,25 @@ public final class ReaderModel {
             Task { await self.loadChapter(index) }
         }
         readalong = coordinator
+    }
+
+    /// Starts narration at the sentence under a point on the page.
+    ///
+    /// Returns whether it found one, so the caller can fall back to turning the
+    /// page: a tap in the margin, on a heading, or on an illustration has to
+    /// keep doing what a tap always did.
+    @discardableResult
+    public func playSentence(at point: CGPoint) async -> Bool {
+        guard let readalong, let layout, let page = currentPage else { return false }
+        guard let fragment = layout.fragmentID(at: point, on: page) else { return false }
+        // A fragment id the timeline does not know is an ordinary element id —
+        // a chapter heading, say — not a narrated sentence.
+        guard timeline?.entry(forFragment: fragment) != nil else { return false }
+        // seek(toFragment:) starts playback, which is the point: tapping a
+        // sentence in a paused book should begin reading it aloud, not merely
+        // move the playhead somewhere the reader cannot hear.
+        await readalong.seek(toFragment: fragment)
+        return true
     }
 
     /// Starts narration from whatever the reader is currently looking at.
@@ -309,14 +328,10 @@ public final class ReaderModel {
             layout.layout(pageSize: pageSize)
             self.layout = layout
 
-            if let fragment = locator?.sentenceID,
-               let page = layout.page(containingFragment: fragment) {
+            if let locator, let offset = LocatorAnchoring.characterOffset(
+                for: locator, in: parsed.text.string, fragmentRanges: parsed.fragmentRanges,
+            ), let page = layout.page(containingOffset: offset) {
                 pageIndex = page.index
-            } else if let progression = locator?.locations?.progression {
-                pageIndex = min(
-                    max(Int((Double(layout.pages.count) * progression).rounded(.down)), 0),
-                    max(layout.pages.count - 1, 0),
-                )
             } else {
                 pageIndex = 0
             }
@@ -411,6 +426,10 @@ public final class ReaderModel {
             ? 0
             : (Double(chapterIndex) + chapterProgress) / Double(package.spine.count)
 
+        // Two anchors beyond the fragment: the character offset, and the words
+        // that were on screen. Between them a position survives a font change,
+        // a different device, and a chapter the publisher has since revised.
+        let offset = page.characterRange.location
         let locator = ReadiumLocator(
             href: href,
             type: "application/xhtml+xml",
@@ -419,7 +438,9 @@ public final class ReaderModel {
                 fragments: fragment.map { [$0] },
                 progression: chapterProgress,
                 totalProgression: overall,
+                charOffset: offset,
             ),
+            text: LocatorAnchoring.quote(from: layout.attributedText.string, at: offset),
         )
         // Recorded locally first: a chapter read with no signal must not be
         // lost, and the drain collapses a run of page turns to one write.

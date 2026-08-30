@@ -325,8 +325,18 @@ public struct BookDetailView: View {
                     factRow("Collections", book.collections.map(\.name).joined(separator: ", "))
                 }
                 if let alignedWith = book.alignedWith { factRow("Aligned with", alignedWith) }
-                ForEach(namedIdentifiers, id: \.label) { identifier in
-                    factRow(identifier.label, identifier.value)
+                ForEach(namedIdentifiers) { identifier in
+                    if let url = identifier.url {
+                        // The server configures the URL template per identifier
+                        // type, so a link only appears where it actually leads
+                        // somewhere.
+                        Link(destination: url) {
+                            factRow(identifier.label, identifier.value ?? "", showsLink: true)
+                        }
+                        .buttonStyle(.plain)
+                    } else {
+                        factRow(identifier.label, identifier.value ?? "")
+                    }
                 }
             }
             .background(Palette.surface, in: RoundedRectangle(cornerRadius: Metrics.radiusMedium))
@@ -334,21 +344,60 @@ public struct BookDetailView: View {
     }
 
     /// Identifiers the server holds (ISBN, ASIN, Audible), ready for display.
-    private var namedIdentifiers: [(label: String, value: String)] {
-        book.identifiers.compactMap { identifier in
-            guard let value = identifier.value, !value.isEmpty else { return nil }
-            return ((identifier.type ?? "id").uppercased(), value)
+    private var namedIdentifiers: [Identifier] {
+        book.identifiers.filter { !($0.value ?? "").isEmpty }
+    }
+
+    /// Ratings gathered from elsewhere, shown in the source's own terms.
+    ///
+    /// A source states its own scale, so nothing is rescaled to five stars: a
+    /// reader who knows Hardcover expects Hardcover's number.
+    @ViewBuilder
+    private var externalRatings: some View {
+        let ratings = book.externalData ?? []
+        if !ratings.isEmpty {
+            VStack(alignment: .leading, spacing: Metrics.spacing8) {
+                Text("ELSEWHERE").font(Typography.overline).foregroundStyle(Palette.inkTertiary)
+                HStack(spacing: Metrics.spacing8) {
+                    ForEach(ratings) { rating in
+                        let chip = HStack(spacing: 5) {
+                            Image(systemName: rating.sourceRatingIcon == "star" ? "star.fill" : "circle.fill")
+                                .font(.system(size: 10))
+                            Text(rating.sourceName ?? "Rating").font(Typography.caption)
+                            Text(rating.ratingText).font(Typography.caption.weight(.semibold))
+                        }
+                        .padding(.horizontal, Metrics.spacing12)
+                        .padding(.vertical, 6)
+                        .foregroundStyle(Color(hex: rating.sourceColor) ?? Palette.inkSecondary)
+                        .background(
+                            Capsule().fill((Color(hex: rating.sourceColor) ?? Palette.moss).opacity(0.12)),
+                        )
+
+                        if let source = rating.sourceUrl, let url = URL(string: source) {
+                            Link(destination: url) { chip }.buttonStyle(.plain)
+                        } else {
+                            chip
+                        }
+                    }
+                    Spacer()
+                }
+            }
         }
     }
 
-    private func factRow(_ label: String, _ value: String) -> some View {
+    private func factRow(_ label: String, _ value: String, showsLink: Bool = false) -> some View {
         HStack(alignment: .top) {
             Text(label).font(Typography.footnote).foregroundStyle(Palette.inkTertiary)
             Spacer(minLength: Metrics.spacing16)
             Text(value)
                 .font(Typography.footnote)
-                .foregroundStyle(Palette.ink)
+                .foregroundStyle(showsLink ? Palette.tangerine : Palette.ink)
                 .multilineTextAlignment(.trailing)
+            if showsLink {
+                Image(systemName: "arrow.up.right")
+                    .font(.system(size: 9))
+                    .foregroundStyle(Palette.tangerine)
+            }
         }
         .padding(Metrics.spacing12)
     }

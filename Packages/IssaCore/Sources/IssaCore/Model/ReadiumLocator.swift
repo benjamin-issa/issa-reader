@@ -31,6 +31,13 @@ public struct ReadiumLocator: Codable, Hashable, Sendable {
         public var cssSelector: String?
         public var partialCfi: String?
         public var domRange: DOMRange?
+        /// Character index into the rendered text of the resource.
+        ///
+        /// An Issa extension: the server stores the locator as opaque JSON, and
+        /// other clients ignore keys they do not know. It is the tie-breaker
+        /// when the same sentence appears twice in a chapter, and it survives a
+        /// font change, which a page number does not.
+        public var charOffset: Int?
 
         public init(
             fragments: [String]? = nil,
@@ -40,6 +47,7 @@ public struct ReadiumLocator: Codable, Hashable, Sendable {
             cssSelector: String? = nil,
             partialCfi: String? = nil,
             domRange: DOMRange? = nil,
+            charOffset: Int? = nil,
         ) {
             self.fragments = fragments
             self.progression = progression
@@ -48,6 +56,7 @@ public struct ReadiumLocator: Codable, Hashable, Sendable {
             self.cssSelector = cssSelector
             self.partialCfi = partialCfi
             self.domRange = domRange
+            self.charOffset = charOffset
         }
     }
 
@@ -107,4 +116,29 @@ public extension ReadiumLocator {
 
     /// The media-overlay sentence id this locator points at, when there is one.
     var sentenceID: String? { locations?.fragments?.first }
+
+    /// Matches this locator's href against a publication's spine hrefs.
+    ///
+    /// The href a locator carries is not reliably the one the OPF spine uses.
+    /// Storyteller's Readium manifest serves absolute, percent-encoded paths,
+    /// the official client writes those back, and an EPUB's own spine hrefs are
+    /// relative to the package document. Comparing the strings directly means a
+    /// position written by any other client silently resolves to nothing and the
+    /// reader opens at chapter one.
+    func matchesHref(_ candidate: String) -> Bool {
+        Self.normalizeHref(href) == Self.normalizeHref(candidate)
+    }
+
+    static func normalizeHref(_ href: String) -> String {
+        // Query and fragment are addressing within the resource, not the
+        // resource itself.
+        var value = href
+        if let hash = value.firstIndex(of: "#") { value = String(value[value.startIndex ..< hash]) }
+        if let query = value.firstIndex(of: "?") { value = String(value[value.startIndex ..< query]) }
+        value = value.removingPercentEncoding ?? value
+        // Compare on the last two components: enough to tell `text/ch01.xhtml`
+        // from `images/ch01.xhtml`, tolerant of differing package roots.
+        let parts = value.split(separator: "/").filter { $0 != "." && !$0.isEmpty }
+        return parts.suffix(2).joined(separator: "/").lowercased()
+    }
 }

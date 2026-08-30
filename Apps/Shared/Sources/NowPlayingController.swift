@@ -141,6 +141,18 @@ public final class NowPlayingController {
     ///
     /// Storyteller keeps two covers; the square one is the right shape for a
     /// Now Playing tile, where the portrait ebook cover would be letterboxed.
+    /// Wraps a cover for the Now Playing centre.
+    ///
+    /// Nonisolated deliberately: MediaPlayer invokes this request handler on its
+    /// own serial queue whenever it rebuilds the info dictionary, so a closure
+    /// formed in main-actor context traps the moment the lock screen, CarPlay or
+    /// a Bluetooth head unit asks for the artwork. The closure touches nothing
+    /// but the image it was handed.
+    private nonisolated static func artwork(from image: PlatformImage, size: CGSize) -> MPMediaItemArtwork {
+        nonisolated(unsafe) let image = image
+        return MPMediaItemArtwork(boundsSize: size) { _ in image }
+    }
+
     private func loadArtwork(for book: Book) {
         guard let session else { return }
         Task { [weak self] in
@@ -148,7 +160,7 @@ public final class NowPlayingController {
                 .coverData(for: book.uuid, shape: .square, pixelWidth: 600),
                 let image = PlatformImage(data: data) else { return }
             let size = image.size
-            self?.artwork = MPMediaItemArtwork(boundsSize: size) { _ in image }
+            self?.artwork = Self.artwork(from: image, size: size)
             self?.publish()
         }
     }

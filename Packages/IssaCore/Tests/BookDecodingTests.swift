@@ -158,3 +158,58 @@ struct RatingContractTests {
         #expect(rating.review == nil)
     }
 }
+
+/// Captured from a live 2.14.21 server after seeding an ISBN, an Audible ASIN
+/// and a Hardcover rating. The shape here is not guessable from the docs: an
+/// identifier arrives as its *type* joined to the value, so `uuid` is the type's
+/// and the display name lives in `name`.
+@Suite("Identifiers and external ratings")
+struct IdentifierDecodingTests {
+    func books() throws -> [Book] {
+        try JSONDecoder().decode(
+            [Book].self, from: BookDecodingTests.fixture("book-with-identifiers"))
+    }
+
+    @Test("An identifier decodes with the label a reader would recognise")
+    func identifiers() throws {
+        let book = try #require(books().first)
+        #expect(book.identifiers.count == 2)
+        let isbn = try #require(book.identifiers.first { $0.kind == "isbn-13" })
+        #expect(isbn.label == "ISBN-13")
+        #expect(isbn.value == "9780141439518")
+        // No template configured on this server, so there is nothing to link to
+        // and the UI must not invent a URL.
+        #expect(isbn.url == nil)
+    }
+
+    @Test("An identifier with no name falls back to its slug, never to nothing")
+    func labelFallback() {
+        #expect(Identifier(kind: "audible").label == "AUDIBLE")
+        #expect(Identifier().label == "Identifier")
+    }
+
+    @Test("A url template is filled in with the identifier's value")
+    func urlTemplate() {
+        let identifier = Identifier(
+            kind: "hardcover-book-slug", urlTemplate: "https://hardcover.app/books/{value}",
+            value: "pride-and-prejudice")
+        #expect(identifier.url?.absoluteString == "https://hardcover.app/books/pride-and-prejudice")
+    }
+
+    /// Sources do not agree on a scale, so the scale travels with the rating.
+    @Test("An external rating keeps its own scale")
+    func externalRating() throws {
+        let book = try #require(books().first)
+        let hardcover = try #require(book.externalData?.first)
+        #expect(hardcover.sourceName == "Hardcover")
+        #expect(hardcover.ratingText == "4.3 of 5")
+        #expect(hardcover.normalized == 4.31 / 5)
+    }
+
+    @Test("A source with no stated maximum is not drawn on a scale we made up")
+    func unknownScale() {
+        let data = ExternalData(uuid: "x", rating: 87, sourceName: "Somewhere")
+        #expect(data.normalized == nil)
+        #expect(data.ratingText == "87")
+    }
+}
