@@ -54,6 +54,7 @@ let package = Package(
             name: "IssaEPUBTests",
             dependencies: ["IssaEPUB"],
             path: "Packages/IssaEPUB/Tests",
+            resources: [.copy("Fixtures")],
         ),
         .testTarget(
             name: "IssaRenderTests",

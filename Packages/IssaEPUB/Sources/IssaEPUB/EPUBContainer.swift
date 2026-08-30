@@ -1,0 +1,210 @@
+import Foundation
+
+/// Reads an EPUB's OCF container without unpacking it to disk.
+///
+/// EPUBs are ZIP archives. This reads the central directory and inflates
+/// individual entries on demand, so opening a 25 MB book costs a directory scan
+/// rather than a full extraction — which is most of the difference between a
+/// book opening instantly and opening after a visible pause.
+public struct EPUBArchive: Sendable {
+    public struct Entry: Sendable {
+        public let path: String
+        let compressionMethod: UInt16
+        let compressedSize: Int
+        let uncompressedSize: Int
+        let localHeaderOffset: Int
+    }
+
+    private let data: Data
+    private let entries: [String: Entry]
+
+    public var paths: [String] { Array(entries.keys) }
+
+    public init(data: Data) throws {
+        self.data = data
+        entries = try Self.readCentralDirectory(data)
+    }
+
+    public init(url: URL) throws {
+        // Mapped rather than read: the OS pages in only the bytes actually
+        // touched, which matters for a large book on a memory-tight device.
+        try self.init(data: Data(contentsOf: url, options: .mappedIfSafe))
+    }
+
+    public func contains(_ path: String) -> Bool { entries[Self.normalize(path)] != nil }
+
+    /// Inflates one entry. Throws rather than returning nil so a corrupt book
+    /// reports where it failed.
+    public func read(_ path: String) throws -> Data {
+        let key = Self.normalize(path)
+        guard let entry = entries[key] else {
+            throw EPUBError.missingResource(path)
+        }
+        return try extract(entry)
+    }
+
+    static func normalize(_ path: String) -> String {
+        var p = path
+        if p.hasPrefix("/") { p.removeFirst() }
+        // Resolve any ".." / "." segments so a manifest href and a ZIP entry
+        // name for the same file always agree.
+        var stack: [String] = []
+        for component in p.split(separator: "/", omittingEmptySubsequences: true) {
+            switch component {
+            case ".": continue
+            case "..": if !stack.isEmpty { stack.removeLast() }
+            default: stack.append(String(component))
+            }
+        }
+        return stack.joined(separator: "/")
+    }
+
+    // MARK: - ZIP
+
+    private func extract(_ entry: Entry) throws -> Data {
+        // The local header's name and extra-field lengths can differ from the
+        // central directory's, so the payload offset must be read from it.
+        let base = entry.localHeaderOffset
+        guard base + 30 <= data.count else { throw EPUBError.malformedArchive("truncated local header") }
+        guard data.u32(base) == 0x0403_4B50 else { throw EPUBError.malformedArchive("bad local signature") }
+        let nameLength = Int(data.u16(base + 26))
+        let extraLength = Int(data.u16(base + 28))
+        let start = base + 30 + nameLength + extraLength
+        let end = start + entry.compressedSize
+        guard end <= data.count else { throw EPUBError.malformedArchive("truncated entry \(entry.path)") }
+
+        let payload = data.subdata(in: start ..< end)
+        switch entry.compressionMethod {
+        case 0:
+            return payload
+        case 8:
+            return try Inflate.raw(payload, expectedSize: entry.uncompressedSize)
+        default:
+            throw EPUBError.malformedArchive("unsupported compression \(entry.compressionMethod)")
+        }
+    }
+
+    private static func readCentralDirectory(_ data: Data) throws -> [String: Entry] {
+        guard let eocd = findEndOfCentralDirectory(data) else {
+            throw EPUBError.malformedArchive("no end-of-central-directory record")
+        }
+        var count = Int(data.u16(eocd + 10))
+        var offset = Int(data.u32(eocd + 16))
+
+        // Zip64: the 32-bit fields saturate, and the real values live in the
+        // Zip64 EOCD record. Rare for EPUBs but cheap to support.
+        if count == 0xFFFF || offset == 0xFFFF_FFFF {
+            guard let locator = findZip64Locator(data, before: eocd) else {
+                throw EPUBError.malformedArchive("zip64 locator missing")
+            }
+            let zip64 = Int(data.u64(locator + 8))
+            guard zip64 + 56 <= data.count, data.u32(zip64) == 0x0605_4B50 else {
+                throw EPUBError.malformedArchive("bad zip64 record")
+            }
+            count = Int(data.u64(zip64 + 32))
+            offset = Int(data.u64(zip64 + 48))
+        }
+
+        var result: [String: Entry] = [:]
+        result.reserveCapacity(count)
+        var cursor = offset
+
+        for _ in 0 ..< count {
+            guard cursor + 46 <= data.count, data.u32(cursor) == 0x0201_4B50 else {
+                throw EPUBError.malformedArchive("bad central directory entry")
+            }
+            let method = data.u16(cursor + 10)
+            var compressed = Int(data.u32(cursor + 20))
+            var uncompressed = Int(data.u32(cursor + 24))
+            let nameLength = Int(data.u16(cursor + 28))
+            let extraLength = Int(data.u16(cursor + 30))
+            let commentLength = Int(data.u16(cursor + 32))
+            var localOffset = Int(data.u32(cursor + 42))
+
+            let nameStart = cursor + 46
+            guard nameStart + nameLength <= data.count else {
+                throw EPUBError.malformedArchive("truncated entry name")
+            }
+            let name = String(decoding: data.subdata(in: nameStart ..< nameStart + nameLength), as: UTF8.self)
+
+            if compressed == 0xFFFF_FFFF || uncompressed == 0xFFFF_FFFF || localOffset == 0xFFFF_FFFF {
+                let extraStart = nameStart + nameLength
+                readZip64Extra(
+                    data, at: extraStart, length: extraLength,
+                    uncompressed: &uncompressed, compressed: &compressed, localOffset: &localOffset,
+                )
+            }
+
+            result[normalize(name)] = Entry(
+                path: name,
+                compressionMethod: method,
+                compressedSize: compressed,
+                uncompressedSize: uncompressed,
+                localHeaderOffset: localOffset,
+            )
+            cursor = nameStart + nameLength + extraLength + commentLength
+        }
+        return result
+    }
+
+    private static func readZip64Extra(
+        _ data: Data, at start: Int, length: Int,
+        uncompressed: inout Int, compressed: inout Int, localOffset: inout Int,
+    ) {
+        var cursor = start
+        let end = start + length
+        while cursor + 4 <= end, cursor + 4 <= data.count {
+            let headerID = data.u16(cursor)
+            let size = Int(data.u16(cursor + 2))
+            var field = cursor + 4
+            if headerID == 0x0001 {
+                if uncompressed == 0xFFFF_FFFF, field + 8 <= data.count { uncompressed = Int(data.u64(field)); field += 8 }
+                if compressed == 0xFFFF_FFFF, field + 8 <= data.count { compressed = Int(data.u64(field)); field += 8 }
+                if localOffset == 0xFFFF_FFFF, field + 8 <= data.count { localOffset = Int(data.u64(field)) }
+                return
+            }
+            cursor += 4 + size
+        }
+    }
+
+    private static func findEndOfCentralDirectory(_ data: Data) -> Int? {
+        // Scan backwards over the maximum comment length rather than the whole file.
+        let minimum = max(0, data.count - 0xFFFF - 22)
+        var i = data.count - 22
+        while i >= minimum {
+            if data.u32(i) == 0x0605_4B50 { return i }
+            i -= 1
+        }
+        return nil
+    }
+
+    private static func findZip64Locator(_ data: Data, before eocd: Int) -> Int? {
+        let candidate = eocd - 20
+        guard candidate >= 0, data.u32(candidate) == 0x0706_4B50 else { return nil }
+        return candidate
+    }
+}
+
+public enum EPUBError: Error, Sendable, Equatable {
+    case malformedArchive(String)
+    case missingResource(String)
+    case malformedPackage(String)
+    case unsupported(String)
+}
+
+private extension Data {
+    func u16(_ offset: Int) -> UInt16 {
+        guard offset + 2 <= count else { return 0 }
+        return UInt16(self[startIndex + offset]) | UInt16(self[startIndex + offset + 1]) << 8
+    }
+
+    func u32(_ offset: Int) -> UInt32 {
+        guard offset + 4 <= count else { return 0 }
+        return (0 ..< 4).reduce(UInt32(0)) { $0 | UInt32(self[startIndex + offset + $1]) << (8 * UInt32($1)) }
+    }
+
+    func u64(_ offset: Int) -> UInt64 {
+        guard offset + 8 <= count else { return 0 }
+        return (0 ..< 8).reduce(UInt64(0)) { $0 | UInt64(self[startIndex + offset + $1]) << (8 * UInt64($1)) }
+    }
+}
