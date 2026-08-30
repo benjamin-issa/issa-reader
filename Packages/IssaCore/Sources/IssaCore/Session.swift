@@ -27,6 +27,10 @@ public final class Session {
     public let client: APIClient
     private let tokens: TokenStore
 
+    /// The same token the API client uses, for the background download session,
+    /// which builds its own requests rather than going through APIClient.
+    public var tokenProvider: any TokenProviding { tokens }
+
     public init(serverURL: URL, keychain: any TokenPersisting) {
         self.serverURL = serverURL
         let store = TokenStore(serverKey: serverURL.absoluteString, keychain: keychain)

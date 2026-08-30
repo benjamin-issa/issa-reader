@@ -64,6 +64,39 @@ public actor APIClient {
         try await send(request(path, method: "DELETE")).0
     }
 
+    /// Streams a response straight to a file, never holding it in memory.
+    ///
+    /// `URLSession.download` writes to a temporary file which is deleted as soon
+    /// as this returns, so the move happens here rather than at the call site.
+    public func download(_ path: String, query: [URLQueryItem] = [], to destination: URL) async throws {
+        var req = request(path, method: "GET", query: query)
+        if let token = await tokens.currentToken() {
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+
+        let location: URL
+        let response: URLResponse
+        do {
+            (location, response) = try await session.download(for: req)
+        } catch {
+            throw StorytellerError.transport(error.localizedDescription)
+        }
+
+        guard let http = response as? HTTPURLResponse else {
+            throw StorytellerError.transport("Non-HTTP response")
+        }
+        guard (200 ..< 300).contains(http.statusCode) else {
+            if http.statusCode == 401 { await tokens.invalidate(); throw StorytellerError.notAuthenticated }
+            if http.statusCode == 404 { throw StorytellerError.notFound }
+            throw StorytellerError.server(status: http.statusCode, message: nil)
+        }
+
+        try FileManager.default.createDirectory(
+            at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? FileManager.default.removeItem(at: destination)
+        try FileManager.default.moveItem(at: location, to: destination)
+    }
+
     /// Returns the raw status without throwing, for capability probing.
     public func probeStatus(_ path: String) async -> Int {
         var req = request(path, method: "GET")

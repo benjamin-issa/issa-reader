@@ -89,12 +89,14 @@ public struct BookContentService: Sendable {
         let destination = localURL(for: book, format: format)
         if FileManager.default.fileExists(atPath: destination.path) { return destination }
 
-        let data = try await client.getData(
+        // Streamed to a temporary file rather than held in memory: a readaloud
+        // edition is hundreds of megabytes, and this path runs on the main
+        // reading flow where a memory spike shows up as a jettison.
+        try await client.download(
             Endpoint.files(book.uuid),
             query: [URLQueryItem(name: "format", value: format.rawValue)],
+            to: destination,
         )
-        guard !data.isEmpty else { throw StorytellerError.notFound }
-        try data.write(to: destination, options: .atomic)
         return destination
     }
 

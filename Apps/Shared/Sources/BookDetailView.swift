@@ -210,16 +210,18 @@ public struct BookDetailView: View {
             Text("Editions").overlineStyle()
             VStack(spacing: 1) {
                 if let ebook = book.ebook {
-                    editionRow("Ebook", detail: ebook.isEpub2 == true ? "EPUB 2" : "EPUB 3",
+                    editionRow("Ebook", format: .ebook,
+                               detail: ebook.isEpub2 == true ? "EPUB 2" : "EPUB 3",
                                size: ebook.fileSize, missing: ebook.missing == true)
                 }
                 if let audiobook = book.audiobook {
-                    editionRow("Audiobook", detail: Self.durationText(audiobook.duration ?? 0),
+                    editionRow("Audiobook", format: .audiobook,
+                               detail: Self.durationText(audiobook.duration ?? 0),
                                size: audiobook.fileSize, missing: audiobook.missing == true)
                 }
                 if let readaloud = book.readaloud {
                     editionRow(
-                        "Readaloud",
+                        "Readaloud", format: .readaloud,
                         detail: readaloud.isAligned
                             ? Self.durationText(readaloud.duration ?? 0)
                             : (readaloud.status ?? "processing").capitalized,
@@ -231,8 +233,11 @@ public struct BookDetailView: View {
         }
     }
 
-    private func editionRow(_ title: String, detail: String, size: Int?, missing: Bool) -> some View {
-        HStack {
+    private func editionRow(
+        _ title: String, format: BookContentService.Format,
+        detail: String, size: Int?, missing: Bool,
+    ) -> some View {
+        HStack(spacing: Metrics.spacing8) {
             Text(title).font(Typography.callout).foregroundStyle(Palette.ink)
             Spacer()
             if missing {
@@ -246,9 +251,63 @@ public struct BookDetailView: View {
                 if let size {
                     Text(Self.sizeText(size)).font(Typography.caption).foregroundStyle(Palette.inkQuaternary)
                 }
+                downloadControl(for: format)
             }
         }
         .padding(Metrics.spacing12)
+    }
+
+    /// One control that reads as its own state: download, progress, or done.
+    @ViewBuilder
+    private func downloadControl(for format: BookContentService.Format) -> some View {
+        let job = DownloadManager.Job(bookUUID: book.uuid, format: format)
+        let state = app.downloads?.state(for: job)
+        let onDisk = app.session.map {
+            BookContentService(client: $0.client).isDownloaded(book, format: format)
+        } ?? false
+
+        if onDisk, state == nil || state == .finished {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 17))
+                .foregroundStyle(Palette.moss)
+                .accessibilityLabel("Downloaded")
+        } else if let state, state.isActive {
+            Button {
+                app.downloads?.pause(job)
+            } label: {
+                ZStack {
+                    Circle().stroke(Palette.border, lineWidth: 2).frame(width: 20, height: 20)
+                    Circle()
+                        .trim(from: 0, to: state.fraction)
+                        .stroke(Palette.tangerine, style: .init(lineWidth: 2, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                        .frame(width: 20, height: 20)
+                    Image(systemName: "stop.fill").font(.system(size: 7)).foregroundStyle(Palette.inkTertiary)
+                }
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Pause download, \(Int(state.fraction * 100)) percent")
+        } else if case let .failed(reason) = state {
+            Button {
+                Task { await app.download(book, format: format) }
+            } label: {
+                Image(systemName: "exclamationmark.arrow.trianglehead.2.clockwise.rotate.90")
+                    .font(.system(size: 15))
+                    .foregroundStyle(Color(hex: 0x7A2F2A))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Download failed: \(reason). Try again")
+        } else {
+            Button {
+                Task { await app.download(book, format: format) }
+            } label: {
+                Image(systemName: state == nil ? "arrow.down.circle" : "play.circle")
+                    .font(.system(size: 17))
+                    .foregroundStyle(Palette.tangerine)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Download \(format.rawValue)")
+        }
     }
 
     private var facts: some View {

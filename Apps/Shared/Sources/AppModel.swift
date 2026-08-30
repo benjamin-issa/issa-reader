@@ -42,6 +42,9 @@ public final class AppModel {
     public private(set) var store: LibraryStore?
     private var mutations: MutationQueue?
     public let reachability = Reachability()
+    /// Streams books to disk in the background. Created with the session, since
+    /// it needs the server URL and the bearer token.
+    public private(set) var downloads: DownloadManager?
     /// Queued writes still waiting for a connection, for the sync row.
     public private(set) var pendingWrites = 0
 
@@ -99,6 +102,12 @@ public final class AppModel {
         // Open the local store first and show what is already known. A reader
         // opening the app on a train should see their shelf, not a spinner that
         // resolves to an error.
+        downloads = DownloadManager(baseURL: url, tokens: session.tokenProvider) { job in
+            BookContentService.defaultDirectory()
+                .appending(path: "\(job.bookUUID)-\(job.format.rawValue).epub")
+        }
+        await downloads?.reattach()
+
         store = try? LibraryStore(serverKey: url.absoluteString)
         if let store {
             mutations = try? await MutationQueue(store: store)
@@ -211,6 +220,43 @@ public final class AppModel {
         try? await mutations.enqueue(kind, bookUUID: bookUUID, payload: data)
         pendingWrites = (try? await mutations.count) ?? 0
         await drainPendingWrites()
+    }
+
+    /// Pending transfers, in a form the Downloads screen can list.
+    public var downloadsPending: [(job: DownloadManager.Job, state: DownloadManager.State)] {
+        downloads?.pending ?? []
+    }
+
+    public var wifiOnlyDownloads: Bool {
+        get { downloads?.wifiOnly ?? false }
+        set { downloads?.wifiOnly = newValue }
+    }
+
+    /// Restarts a paused or failed transfer, looking the book back up so the
+    /// free-space check still has an expected size to work with.
+    public func resumeDownload(_ job: DownloadManager.Job) async {
+        guard let book = books.first(where: { $0.uuid == job.bookUUID }) else {
+            await downloads?.start(job)
+            return
+        }
+        await download(book, format: job.format)
+    }
+
+    /// Starts a download, refusing early if it plainly will not fit.
+    public func download(_ book: Book, format: BookContentService.Format) async {
+        guard let downloads else { return }
+        let expected: Int64? = switch format {
+        case .readaloud: book.readaloud?.fileSize.map(Int64.init)
+        case .audiobook: book.audiobook?.fileSize.map(Int64.init)
+        case .ebook: book.ebook?.fileSize.map(Int64.init)
+        }
+        // Holding back a multi-gigabyte readaloud on cellular is the whole point
+        // of the preference; a small ebook is not worth blocking.
+        if downloads.wifiOnly, reachability.isExpensive, (expected ?? 0) > 20_000_000 {
+            loadError = "Waiting for Wi-Fi to download this."
+            return
+        }
+        await downloads.start(.init(bookUUID: book.uuid, format: format), expectedBytes: expected)
     }
 
     /// Search, using the store's full-text index when there is one.
