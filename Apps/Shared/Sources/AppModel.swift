@@ -543,9 +543,14 @@ public final class AppModel {
             // recurring publish is behind a "progress moved" guard that a
             // paused book never passes — so isPlaying could be set true and
             // never set false again.
-            coordinator.player.addRateObserver { [weak self, weak coordinator] _ in
+            coordinator.player.addRateObserver { [weak self, weak coordinator] rate in
                 guard let self, let coordinator else { return }
-                self.publishListeningSnapshot(book: book, coordinator: coordinator)
+                // The rate the player just reported, not `effectiveRate`.
+                // `play()` notifies before AVPlayer's timeControlStatus leaves
+                // `waitingToPlayAtSpecifiedRate`, so re-reading it here would
+                // publish "not playing" the instant someone pressed play.
+                self.publishListeningSnapshot(
+                    book: book, coordinator: coordinator, isPlaying: rate > 0)
             }
             nowPlaying.attach(
                 coordinator: coordinator, book: book, session: session,
@@ -609,7 +614,13 @@ public final class AppModel {
     /// widget showing whatever was read last — and `isPlaying` came from the
     /// read-along player, which for an audiobook is always false. That is
     /// precisely the case the square cover exists for.
-    private func publishListeningSnapshot(book: Book, coordinator: AudiobookCoordinator) {
+    /// - Parameter isPlaying: what the player just reported, when this is
+    ///   driven by a rate change. Left nil on the periodic tick, where the
+    ///   player's real state is the honest answer — a stall should stop the
+    ///   widget claiming to play.
+    private func publishListeningSnapshot(
+        book: Book, coordinator: AudiobookCoordinator, isPlaying: Bool? = nil,
+    ) {
         let progress = coordinator.bookProgress
         let total = coordinator.totalDuration
         CurrentBookPublisher.shared.publish(
@@ -620,7 +631,7 @@ public final class AppModel {
             remaining: total.isFinite && total > 0 ? total * (1 - progress) : nil,
             // The player's real rate, not a hand-kept flag: a stall, a route
             // change or an interruption all stop playback without asking us.
-            isPlaying: coordinator.player.effectiveRate > 0,
+            isPlaying: isPlaying ?? (coordinator.player.effectiveRate > 0),
             as: .listening(book.uuid),
         )
     }
