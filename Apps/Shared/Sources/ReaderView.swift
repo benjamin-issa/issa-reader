@@ -404,5 +404,18 @@ struct PageCanvas: View {
         }
         .frame(width: pageSize.width, height: pageSize.height)
         .clipped()
+        // A Canvas is a drawing: to VoiceOver the page is blank unless the text
+        // is stated. Reading the page as one element rather than per paragraph
+        // matches how the page turns — there is nothing to navigate between,
+        // because the next paragraph may be on the next page.
+        .accessibilityElement()
+        .accessibilityLabel(model.currentPageText)
+        .accessibilityValue(
+            model.pageCount > 0 ? "Page \(model.pageIndex + 1) of \(model.pageCount)" : "")
+        .accessibilityHint("Swipe up or down to turn the page")
+        .accessibilityAddTraits(.isStaticText)
+        .accessibilityAction(named: "Next page") { Task { await model.nextPage() } }
+        .accessibilityAction(named: "Previous page") { Task { await model.previousPage() } }
+        .accessibilityAction(named: "Bookmark this page") { model.toggleBookmark() }
     }
 }

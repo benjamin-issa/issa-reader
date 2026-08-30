@@ -118,6 +118,15 @@ public final class ReaderModel {
         return (Double(chapterIndex) + layout.progression(of: page)) / Double(package.spine.count)
     }
 
+    /// The words on the current page, for VoiceOver and for copying the page.
+    public var currentPageText: String {
+        guard let layout, let page = currentPage else { return "" }
+        let text = layout.attributedText.string as NSString
+        guard NSMaxRange(page.characterRange) <= text.length else { return "" }
+        return text.substring(with: page.characterRange)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     public var pageCount: Int { layout?.pages.count ?? 0 }
     public var currentPage: RenderedPage? {
         guard let layout, layout.pages.indices.contains(pageIndex) else { return nil }
