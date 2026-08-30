@@ -31,9 +31,14 @@ public final class CoverCache {
     /// The widget cannot reach the app's Caches directory, and a cover fetched
     /// inside the extension would spend its 30 MB budget on a network decode.
     /// One small file, written when the current book changes.
-    public func publishCoverToWidget(
+    /// Fetches the bytes without deciding what to do with them.
+    ///
+    /// Returning the data rather than writing it lets the caller record which
+    /// shape actually landed — a square request 404s for a book with no
+    /// audiobook edition, and the widget needs to know which aspect it got.
+    public func coverDataForWidget(
         for book: Book, session: Session, shape: LibraryService.CoverShape = .portrait,
-    ) async {
+    ) async -> Data? {
         let key = shape == .square ? book.uuid + "-square" : book.uuid
         let fileURL = diskDirectory.appending(path: "\(key).jpg")
         var data = await Task.detached(priority: .utility) {
@@ -42,11 +47,13 @@ public final class CoverCache {
         if data == nil {
             data = try? await LibraryService(client: session.client).coverData(
                 for: book.uuid, shape: shape, pixelWidth: 320, version: book.updatedAt?.value)
+            // Warm the cache the next request would otherwise miss again.
+            if let data {
+                let url = fileURL
+                await Task.detached(priority: .utility) { try? data.write(to: url) }.value
+            }
         }
-        guard let data else { return }
-        await Task.detached(priority: .utility) {
-            CurrentBookSnapshotStore.writeCover(data)
-        }.value
+        return data
     }
 
     /// Drops everything, for sign-out.

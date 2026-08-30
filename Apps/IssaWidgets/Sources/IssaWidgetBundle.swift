@@ -5,6 +5,11 @@ import WidgetKit
 
 @main
 struct IssaWidgetBundle: WidgetBundle {
+    /// A widget extension is a separate process, so the app registering these
+    /// at launch does nothing for it — every `Typography` token was quietly
+    /// falling back to the system face, and `Font.custom` fails silently.
+    init() { IssaFonts.register() }
+
     var body: some Widget {
         CurrentBookWidget()
     }
@@ -121,13 +126,7 @@ struct CurrentBookView: View {
     private var small: some View {
         VStack(alignment: .leading, spacing: Metrics.spacing8) {
             HStack(alignment: .top, spacing: Metrics.spacing8) {
-                if let data = entry.cover, let image = Image(widgetCover: data) {
-                    image
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .frame(width: 52, height: 52)
-                        .clipShape(RoundedRectangle(cornerRadius: Metrics.radiusSmall))
-                }
+                CoverThumb(data: entry.cover, isSquare: entry.snapshot.coverIsSquare)
                 Spacer(minLength: 0)
                 ProgressRingWidget(value: entry.snapshot.progress)
             }
@@ -136,30 +135,35 @@ struct CurrentBookView: View {
                 .font(Typography.bookTitle)
                 .foregroundStyle(Palette.ink)
                 .lineLimit(2)
-            Text(Self.subtitleLine(entry.snapshot))
+                // The cover and the ring are fixed sizes and the type is not,
+                // so at an accessibility size the text was squeezed out of a
+                // ~110pt box entirely. Shrinking secondary text is honest;
+                // clipping it is not.
+                .minimumScaleFactor(0.75)
+            Text(entry.snapshot.subtitle)
                 .font(Typography.caption)
                 .foregroundStyle(Palette.inkSecondary)
                 .lineLimit(1)
+                .minimumScaleFactor(0.75)
         }
     }
 
-    /// "2h 18m left · Part 3", dropping whichever half is unknown.
-    static func subtitleLine(_ snapshot: CurrentBookSnapshot) -> String {
-        var parts: [String] = []
-        if let remaining = snapshot.remaining { parts.append(remainingText(remaining) + " left") }
-        if let chapter = snapshot.chapter { parts.append(chapter) }
-        return parts.isEmpty ? snapshot.author : parts.joined(separator: " · ")
-    }
-
-    /// Medium and large have room for the cover, which is what makes a shelf of
-    /// widgets recognisable at a glance.
+    /// Medium and large have room for the cover beside the text, which is what
+    /// makes a shelf of widgets recognisable at a glance.
     private var withCover: some View {
         HStack(alignment: .top, spacing: Metrics.spacing12) {
             if let data = entry.cover, let image = Image(widgetCover: data) {
+                let width: CGFloat = family == .systemLarge ? 116 : 74
                 image
                     .resizable()
                     .aspectRatio(contentMode: .fill)
-                    .frame(width: family == .systemLarge ? 116 : 74)
+                    // Height as well as width. Fixing width alone let the row's
+                    // height decide the rest, so a square jacket was scaled to
+                    // cover it and then clipped — about 40% of the artwork on
+                    // medium and 60% on large.
+                    .frame(
+                        width: width,
+                        height: entry.snapshot.coverIsSquare ? width : width / Metrics.coverAspect)
                     .clipShape(RoundedRectangle(cornerRadius: Metrics.radiusSmall))
             }
             details
@@ -219,24 +223,63 @@ extension Image {
     }
 }
 
+/// The small family's cover, with something to show when there is not one.
+///
+/// Nil is the normal state on a first render, after a sign-out, and whenever a
+/// publish failed — and the layout this replaced simply left a hole with the
+/// ring pushed against it.
+struct CoverThumb: View {
+    let data: Data?
+    let isSquare: Bool
+
+    private var size: CGSize {
+        isSquare ? CGSize(width: 52, height: 52) : CGSize(width: 40, height: 52)
+    }
+
+    var body: some View {
+        Group {
+            if let data, let image = Image(widgetCover: data) {
+                image.resizable().aspectRatio(contentMode: .fill)
+            } else {
+                ZStack {
+                    Palette.surfaceRaised
+                    Image(systemName: "book.closed")
+                        .font(.system(size: 16))
+                        .foregroundStyle(Palette.inkQuaternary)
+                }
+            }
+        }
+        .frame(width: size.width, height: size.height)
+        .clipShape(RoundedRectangle(cornerRadius: Metrics.radiusSmall))
+    }
+}
+
 /// A ring around the percentage, for the small family.
 struct ProgressRingWidget: View {
     let value: Double
 
     var body: some View {
         ZStack {
-            Circle().stroke(Palette.border, lineWidth: 4)
+            // Inset by half the stroke: `stroke` straddles the path, so a 4pt
+            // line on the frame edge paints 2pt outside it.
+            Circle().inset(by: 2).stroke(Palette.border, lineWidth: 4)
             Circle()
+                .inset(by: 2)
                 .trim(from: 0, to: min(max(value, 0), 1))
                 .stroke(Palette.tangerine, style: .init(lineWidth: 4, lineCap: .round))
                 .rotationEffect(.degrees(-90))
-            Text("\(Int(value * 100))%")
+            // Rounded, matching the reader's own readout. Truncating showed
+            // "99%" beside a ring that had visibly closed.
+            Text("\(Int((value * 100).rounded()))%")
                 .font(Typography.caption.weight(.semibold))
-                .foregroundStyle(Palette.tangerinePressed)
+                // inkSecondary, not tangerinePressed: tangerine on this surface
+                // is about 3.8:1, under the 4.5:1 floor for text this size.
+                .foregroundStyle(Palette.inkSecondary)
                 .minimumScaleFactor(0.7)
                 .lineLimit(1)
         }
         .frame(width: 40, height: 40)
+        .accessibilityLabel("\(Int((value * 100).rounded())) percent through")
     }
 }
 

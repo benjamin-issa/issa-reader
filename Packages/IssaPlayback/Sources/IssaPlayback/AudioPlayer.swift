@@ -25,7 +25,7 @@ public final class AudioPlayer {
     public var rate: Float = 1.0 {
         didSet {
             player.rate = isPlaying ? rate : 0
-            onRateChange?(rate)
+            notifyRateObservers(rate)
         }
     }
 
@@ -40,7 +40,26 @@ public final class AudioPlayer {
     /// Called on every observed time update, so a coordinator can advance the
     /// read-along highlight without polling.
     public var onTimeUpdate: ((TimeInterval) -> Void)?
-    public var onRateChange: ((Float) -> Void)?
+    /// Everything that wants to know the rate moved.
+    ///
+    /// A list, not one closure. Two things genuinely need this — the lock
+    /// screen, so a play tap is not up to five seconds stale, and the widget,
+    /// so a paused book stops claiming to be playing — and a single slot meant
+    /// whichever attached second silently replaced the first.
+    private var rateObservers: [(Float) -> Void] = []
+
+    public func addRateObserver(_ observer: @escaping (Float) -> Void) {
+        rateObservers.append(observer)
+    }
+
+    /// Drops every observer, for a coordinator being torn down.
+    public func removeRateObservers() {
+        rateObservers.removeAll()
+    }
+
+    private func notifyRateObservers(_ rate: Float) {
+        for observer in rateObservers { observer(rate) }
+    }
     public var onFinishedFile: (() -> Void)?
 
     private let player = AVQueuePlayer()
@@ -220,13 +239,13 @@ public final class AudioPlayer {
         // The rate hook fires only from `rate`'s didSet, and this does not touch
         // it — so without this the lock screen kept the old rate for up to five
         // seconds and extrapolated a clock the audio was not following.
-        onRateChange?(rate)
+        notifyRateObservers(rate)
     }
 
     public func pause() {
         isPlaying = false
         player.rate = 0
-        onRateChange?(0)
+        notifyRateObservers(0)
     }
 
     public func togglePlayPause() {

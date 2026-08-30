@@ -85,7 +85,6 @@ public final class ReaderModel {
     public var onDeleteAnnotation: ((Annotation) -> Void)?
 
     public var enqueuePosition: ((ReadiumLocator, Double) async -> Void)?
-    private static var lastPublishedCoverBookID: String?
     /// When the oldest unwritten change happened, for the debounce ceiling.
     private var firstUnsavedChangeAt: Date?
 
@@ -934,33 +933,19 @@ public final class ReaderModel {
     /// widget's own reload budget is the scarce resource, and a snapshot the
     /// widget never reads costs a disk write for nothing.
     private func publishSnapshot(progress: Double) {
-        // Only when the book changes, not on every page turn: the cover is the
-        // same file each time and rewriting it costs a disk write for nothing.
-        if Self.lastPublishedCoverBookID != book.uuid {
-            Self.lastPublishedCoverBookID = book.uuid
-            Task { [book, session = readerSession] in
-                // Square art whenever the book has an audiobook edition: the
-                // widget, the mini player and Now Playing are all audio
-                // surfaces, and NowPlayingController already asks for square —
-                // so the two disagreed about the same book.
-                await CoverCache.shared.publishCoverToWidget(
-                    for: book, session: session,
-                    shape: book.audiobook != nil ? .square : .portrait)
-            }
-        }
         let remaining = (book.readaloud?.duration ?? book.audiobook?.duration)
             .map { $0 * (1 - progress) }
-        CurrentBookSnapshotStore.write(CurrentBookSnapshot(
-            bookID: book.uuid,
-            title: book.title,
-            author: book.byline,
-            chapter: chapterTitle,
+        // One publisher for the whole app: the cover latch, the ownership rule
+        // and the reload all live there, because two surfaces writing one file
+        // is what made the widget flip between books.
+        CurrentBookPublisher.shared.publish(
+            book: book,
+            session: readerSession,
             progress: progress,
+            chapter: chapterTitle,
             remaining: remaining,
             isPlaying: isPlaying,
-        ))
-        #if canImport(WidgetKit)
-        WidgetCenter.shared.reloadTimelines(ofKind: "CurrentBook")
-        #endif
+            as: .reading(book.uuid),
+        )
     }
 }

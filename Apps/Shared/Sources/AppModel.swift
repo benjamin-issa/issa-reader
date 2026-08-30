@@ -231,6 +231,17 @@ public final class AppModel {
     ///   fetch again, so the choice is offered rather than assumed.
     public func signOut(keepDownloads: Bool = false) async {
         await session?.signOut()
+        // Stop the audio first. The progress loop holds the coordinator
+        // strongly and publishes the widget snapshot every fifteen seconds, so
+        // signing out while a book played wrote the ex-account's title and
+        // position straight back into the App Group container — after the
+        // clear below had already run.
+        listeningProgressTask?.cancel()
+        listeningProgressTask = nil
+        listening?.player.pause()
+        listening?.player.removeRateObservers()
+        listening = nil
+        listeningBook = nil
         // The catalogue belongs to the account, so it goes with it. Annotations
         // do not: they are device-local and this is their only copy.
         try? await store?.clearAccountData()
@@ -250,7 +261,10 @@ public final class AppModel {
         CoverCache.shared.clear()
         // The widget keeps showing the last book on a signed-out device unless
         // its snapshot is cleared and its timeline reloaded.
-        CurrentBookSnapshotStore.clear()
+        // Through the publisher, so the cover latch is forgotten too — leaving
+        // it set meant signing back in and reopening the same book skipped the
+        // cover fetch and left the widget with no art at all.
+        CurrentBookPublisher.shared.clear()
         #if canImport(WidgetKit)
         WidgetCenter.shared.reloadAllTimelines()
         #endif
@@ -464,8 +478,11 @@ public final class AppModel {
         to book: Book, nowPlaying: NowPlayingController, settings: PlaybackSettings,
     ) async {
         guard let session, let url = Self.normalizeServerURL(serverAddress) else { return }
-        if listeningBook?.uuid == book.uuid, listening != nil {
-            listening?.player.play()
+        if listeningBook?.uuid == book.uuid, let coordinator = listening {
+            coordinator.player.play()
+            // The reader may have taken the snapshot and the cover while this
+            // book sat paused, and nothing else republishes on a resume.
+            publishListeningSnapshot(book: book, coordinator: coordinator)
             return
         }
         listeningError = nil
@@ -491,17 +508,24 @@ public final class AppModel {
             coordinator.player.rate = Float(settings.playbackRate)
             listening = coordinator
             listeningBook = book
-            // Square art, matching what Now Playing already asks for.
-            Task { [session] in
-                await CoverCache.shared.publishCoverToWidget(
-                    for: book, session: session, shape: .square)
+            // Play and pause both have to reach the widget, and the only
+            // recurring publish is behind a "progress moved" guard that a
+            // paused book never passes — so isPlaying could be set true and
+            // never set false again.
+            coordinator.player.addRateObserver { [weak self, weak coordinator] _ in
+                guard let self, let coordinator else { return }
+                self.publishListeningSnapshot(book: book, coordinator: coordinator)
             }
-            publishListeningSnapshot(book: book, coordinator: coordinator)
             nowPlaying.attach(
                 coordinator: coordinator, book: book, session: session,
                 chapterTitle: { [weak coordinator] in coordinator?.chapterTitle },
             )
             await coordinator.start(atProgress: book.progress ?? 0)
+            // After the seek, never before: a coordinator one line old still
+            // reads bookTime 0, so publishing here would have announced every
+            // resumed audiobook at 0% and left that on disk if the listener
+            // paused inside the next fifteen seconds.
+            publishListeningSnapshot(book: book, coordinator: coordinator)
             watchListeningProgress(book: book, coordinator: coordinator)
         } catch {
             listeningError = Self.message(for: error)
@@ -539,6 +563,10 @@ public final class AppModel {
                         timestamp: ProgressService.now(),
                     ),
                 )
+                // `enqueue` suspends, and can drain the network for seconds.
+                // Without this a tick belonging to a book the reader has since
+                // left resumes and republishes it over whatever replaced it.
+                guard !Task.isCancelled, self.listeningBook?.uuid == book.uuid else { return }
                 self.publishListeningSnapshot(book: book, coordinator: coordinator)
             }
         }
@@ -552,20 +580,18 @@ public final class AppModel {
     /// precisely the case the square cover exists for.
     private func publishListeningSnapshot(book: Book, coordinator: AudiobookCoordinator) {
         let progress = coordinator.bookProgress
-        guard progress.isFinite else { return }
         let total = coordinator.totalDuration
-        CurrentBookSnapshotStore.write(CurrentBookSnapshot(
-            bookID: book.uuid,
-            title: book.title,
-            author: book.byline,
-            chapter: coordinator.chapterTitle,
+        CurrentBookPublisher.shared.publish(
+            book: book,
+            session: session,
             progress: progress,
+            chapter: coordinator.chapterTitle,
             remaining: total.isFinite && total > 0 ? total * (1 - progress) : nil,
-            isPlaying: coordinator.player.isPlaying,
-        ))
-        #if canImport(WidgetKit)
-        WidgetCenter.shared.reloadTimelines(ofKind: "CurrentBook")
-        #endif
+            // The player's real rate, not a hand-kept flag: a stall, a route
+            // change or an interruption all stop playback without asking us.
+            isPlaying: coordinator.player.effectiveRate > 0,
+            as: .listening(book.uuid),
+        )
     }
 
     /// A locator for a position inside an audiobook.

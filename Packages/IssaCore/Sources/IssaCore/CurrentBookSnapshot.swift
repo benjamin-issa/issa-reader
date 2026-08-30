@@ -16,11 +16,19 @@ public struct CurrentBookSnapshot: Codable, Sendable, Hashable {
     /// Seconds of narration left, when the book has audio.
     public var remaining: TimeInterval?
     public var isPlaying: Bool
+    /// Whether the cover beside this snapshot is the square audiobook art.
+    ///
+    /// The widget has one cover file and no other way to know its shape, so
+    /// without this it sized every cover to the portrait aspect — which crops
+    /// away a third of a square jacket on the medium family and more than half
+    /// on the large one.
+    public var coverIsSquare: Bool
     public var updatedAt: Date
 
     public init(
         bookID: String, title: String, author: String, chapter: String? = nil,
         progress: Double, remaining: TimeInterval? = nil, isPlaying: Bool = false,
+        coverIsSquare: Bool = false,
         updatedAt: Date = .now,
     ) {
         self.bookID = bookID
@@ -30,7 +38,59 @@ public struct CurrentBookSnapshot: Codable, Sendable, Hashable {
         self.progress = progress
         self.remaining = remaining
         self.isPlaying = isPlaying
+        self.coverIsSquare = coverIsSquare
         self.updatedAt = updatedAt
+    }
+
+    /// The line under the title on a small widget: "2h 18m left · Part 3",
+    /// dropping whichever half is unknown, and the author when both are.
+    ///
+    /// The chapter is filtered rather than trusted. `ReaderModel.chapterTitle`
+    /// falls back to the book's own title when no navigation entry matches the
+    /// spine document — which is every plain EPUB — so an unfiltered chapter
+    /// printed the title twice. An empty one is reachable too, from a table of
+    /// contents anchor with no text, and left a dangling separator.
+    public var subtitle: String {
+        var parts: [String] = []
+        if let remaining, remaining.isFinite, remaining > 0 {
+            parts.append(Self.durationText(remaining) + " left")
+        }
+        if let chapter {
+            let trimmed = chapter.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty, trimmed != title { parts.append(trimmed) }
+        }
+        return parts.isEmpty ? author : parts.joined(separator: " · ")
+    }
+
+    static func durationText(_ seconds: TimeInterval) -> String {
+        let total = Int(seconds.rounded())
+        let hours = total / 3600
+        let minutes = (total % 3600) / 60
+        return hours > 0 ? "\(hours)h \(minutes)m" : "\(minutes)m"
+    }
+
+    // Spelled out because the decoder below names them.
+    enum CodingKeys: String, CodingKey {
+        case bookID, title, author, chapter, progress, remaining, isPlaying
+        case coverIsSquare, updatedAt
+    }
+
+    /// Decoded field by field, so a snapshot written by an older build still
+    /// reads. The widget is a separate process and can be running against a
+    /// file the previous version left behind; the synthesised decoder would
+    /// fail the whole thing over one absent key and the widget would show its
+    /// placeholder instead of the book.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        bookID = try container.decode(String.self, forKey: .bookID)
+        title = try container.decode(String.self, forKey: .title)
+        author = try container.decodeIfPresent(String.self, forKey: .author) ?? ""
+        chapter = try container.decodeIfPresent(String.self, forKey: .chapter)
+        progress = try container.decodeIfPresent(Double.self, forKey: .progress) ?? 0
+        remaining = try container.decodeIfPresent(TimeInterval.self, forKey: .remaining)
+        isPlaying = try container.decodeIfPresent(Bool.self, forKey: .isPlaying) ?? false
+        coverIsSquare = try container.decodeIfPresent(Bool.self, forKey: .coverIsSquare) ?? false
+        updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? .now
     }
 }
 
