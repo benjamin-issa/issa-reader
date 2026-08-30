@@ -66,8 +66,9 @@ let package = Package(
         ),
         .testTarget(
             name: "IssaPlaybackTests",
-            dependencies: ["IssaPlayback"],
+            dependencies: ["IssaPlayback", "IssaEPUB"],
             path: "Packages/IssaPlayback/Tests",
+            resources: [.copy("Fixtures")],
         ),
     ],
 )
