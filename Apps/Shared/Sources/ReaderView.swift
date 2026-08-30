@@ -20,6 +20,9 @@ public struct ReaderView: View {
     /// knows where it happened.
     @State private var touchPoint: CGPoint = .zero
     @State private var selecting = false
+    /// Whether a finger is currently down, so `selecting` can be cleared at the
+    /// start of a touch rather than the end of one.
+    @State private var touching = false
     @Environment(\.dismiss) private var dismiss
     @Environment(NowPlayingController.self) private var nowPlaying
     @Environment(PlaybackSettings.self) private var settings
@@ -168,11 +171,14 @@ public struct ReaderView: View {
                 // made every tap ambiguous, and because it was tested before the
                 // page zones it left "tap left to go back" unreachable over any
                 // narrated text.
-                .onTapGesture(count: 2) { location in
-                    guard model.style.tapToPlay, model.readalong != nil else { return }
-                    model.clearSelection()
-                    Task { await model.playSentence(at: canvasPoint(location)) }
-                }
+                .modifier(
+                    ReadAloudDoubleTap(
+                        enabled: model.hasNarration && model.style.tapToPlay,
+                    ) { location in
+                        model.clearSelection()
+                        Task { await model.playSentence(at: canvasPoint(location)) }
+                    },
+                )
                 .onTapGesture { location in
                     // A tap with something selected dismisses it, the way it
                     // does everywhere else, and does nothing more.
@@ -188,39 +194,67 @@ public struct ReaderView: View {
                     case .middle: model.toggleChrome()
                     }
                 }
+                // One drag recogniser for the whole page: it tracks the
+                // finger for selection, and on lift-off decides whether the
+                // movement was a page turn. A second DragGesture(minimumDistance:
+                // 24) alongside this one never fired at all — SwiftUI gave the
+                // touch to whichever drag claimed it first — which is why
+                // swiping to turn a page did nothing.
+                //
                 // Press and hold selects the sentence under the finger, then
-                // dragging adjusts it. Two simultaneous gestures rather than a
-                // sequence: a hold that never moves produces no drag value at
-                // all, so a sequenced pair would select nothing until the finger
-                // happened to slide.
+                // dragging adjusts it. Simultaneous with the long press rather
+                // than sequenced after it: a hold that never moves produces no
+                // drag value at all, so a sequenced pair would select nothing
+                // until the finger happened to slide.
                 .simultaneousGesture(
                     DragGesture(minimumDistance: 0)
                         .onChanged { value in
+                            // Cleared at the START of a touch rather than on
+                            // lift-off, because `onEnded` below has to be able
+                            // to tell whether THIS finger made a selection —
+                            // and it cannot do that if the flag is reset by the
+                            // same lift it wants to read.
+                            if !touching {
+                                touching = true
+                                selecting = false
+                            }
                             touchPoint = value.location
                             guard selecting else { return }
                             model.extendSelection(to: canvasPoint(value.location))
                         }
-                        .onEnded { _ in selecting = false },
-                )
-                .simultaneousGesture(
-                    LongPressGesture(minimumDuration: 0.35)
-                        .onEnded { _ in
-                            selecting = true
-                            model.beginSelection(at: canvasPoint(touchPoint))
-                        },
-                )
-                .gesture(
-                    DragGesture(minimumDistance: 24)
                         .onEnded { value in
+                            touching = false
+                            // A press-and-drag that was adjusting a selection is
+                            // not a page turn.
+                            if selecting { return }
+                            // The leading edge belongs to the navigation stack.
+                            // The reader is pushed (BookDetailView's Read
+                            // button), so a back-swipe starting there pops the
+                            // book shut — unguarded it did that AND turned the
+                            // page on the way out.
+                            guard value.startLocation.x > 20 else { return }
+                            guard abs(value.translation.width) >= 24 else { return }
                             // Clear a selection and turn the page in one motion.
                             // Guarding on `selection == nil` meant that once
                             // anything was selected, swiping silently did
                             // nothing at all and nothing said why.
                             if model.selection != nil { model.clearSelection() }
                             Task {
-                                if value.translation.width < -24 { await model.nextPage() }
-                                else if value.translation.width > 24 { await model.previousPage() }
+                                if value.translation.width < 0 { await model.nextPage() }
+                                else { await model.previousPage() }
                             }
+                        },
+                )
+                .simultaneousGesture(
+                    LongPressGesture(minimumDuration: 0.35)
+                        .onEnded { _ in
+                            model.beginSelection(at: canvasPoint(touchPoint))
+                            // Claim the touch only if there was text under it.
+                            // A long press on an illustration or a margin
+                            // selects nothing, and the finger should still be
+                            // free to turn the page — otherwise a slow swipe
+                            // over a plate is silently swallowed.
+                            selecting = model.selection != nil
                         },
                 )
                 .overlay(alignment: .bottom) {
@@ -475,6 +509,28 @@ public struct ReaderView: View {
         .frame(height: 44)
     }
 }
+
+/// Installs the read-aloud double tap only where it could actually fire.
+///
+/// SwiftUI resolves the higher-count gesture first, so merely having a double
+/// tap on the page makes every single tap wait for the double-tap window to
+/// lapse. Applied unconditionally — with the narration check inside the closure,
+/// as it was — that delay was charged to every page turn and every chrome
+/// toggle in every plain ebook, for a gesture that had nothing to play.
+#if !os(tvOS)
+private struct ReadAloudDoubleTap: ViewModifier {
+    let enabled: Bool
+    let action: (CGPoint) -> Void
+
+    func body(content: Content) -> some View {
+        if enabled {
+            content.onTapGesture(count: 2) { action($0) }
+        } else {
+            content
+        }
+    }
+}
+#endif
 
 /// Draws one page, plus the read-along highlight when audio is playing.
 struct PageCanvas: View {

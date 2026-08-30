@@ -162,16 +162,16 @@ struct ChapterLabellingTests {
 struct TapZoneTests {
     typealias Zone = ReaderTapZone
 
-    @Test("the outer quarters turn pages and the middle half toggles chrome")
+    @Test("the outer strips turn pages and the rest toggles chrome")
     func zones() {
         let width: CGFloat = 300
         let margin: CGFloat = 24
-        let full = width + margin * 2   // 348
+        let full = width + margin * 2   // 348, so the strip is 24 + 44 = 68
 
         #expect(Zone.of(x: 0, pageWidth: width, margin: margin) == .back)
-        #expect(Zone.of(x: full * 0.1, pageWidth: width, margin: margin) == .back)
+        #expect(Zone.of(x: 40, pageWidth: width, margin: margin) == .back)
         #expect(Zone.of(x: full * 0.5, pageWidth: width, margin: margin) == .middle)
-        #expect(Zone.of(x: full * 0.9, pageWidth: width, margin: margin) == .forward)
+        #expect(Zone.of(x: full - 40, pageWidth: width, margin: margin) == .forward)
         #expect(Zone.of(x: full, pageWidth: width, margin: margin) == .forward)
     }
 
@@ -182,13 +182,42 @@ struct TapZoneTests {
         let width: CGFloat = 300
         let margin: CGFloat = 24
         let full = width + margin * 2
+        let strip = margin + 44
 
-        // Just inside a quarter of the FULL width is still back; just outside is
-        // middle. Measured against the canvas alone these would both be wrong.
-        #expect(Zone.of(x: full * 0.25 - 1, pageWidth: width, margin: margin) == .back)
-        #expect(Zone.of(x: full * 0.25 + 1, pageWidth: width, margin: margin) == .middle)
-        #expect(Zone.of(x: full * 0.75 - 1, pageWidth: width, margin: margin) == .middle)
-        #expect(Zone.of(x: full * 0.75 + 1, pageWidth: width, margin: margin) == .forward)
+        #expect(Zone.of(x: strip - 1, pageWidth: width, margin: margin) == .back)
+        #expect(Zone.of(x: strip + 1, pageWidth: width, margin: margin) == .middle)
+        #expect(Zone.of(x: full - strip - 1, pageWidth: width, margin: margin) == .middle)
+        #expect(Zone.of(x: full - strip + 1, pageWidth: width, margin: margin) == .forward)
+    }
+
+    /// The reason the strips are points and not a fraction. A quarter of an
+    /// iPad's width is 256pt — 232pt of it live text — so a reader aiming at a
+    /// sentence in the first third of the line turned the page instead.
+    @Test("the strip does not grow with the page")
+    func stripIsPointBased() {
+        let margin: CGFloat = 24
+        let phone: CGFloat = 393 - margin * 2
+        let pad: CGFloat = 1024 - margin * 2
+
+        // Same absolute boundary on both, and a point that is inside a quarter
+        // of the iPad's width is emphatically middle.
+        #expect(Zone.of(x: 100, pageWidth: phone, margin: margin) == .middle)
+        #expect(Zone.of(x: 100, pageWidth: pad, margin: margin) == .middle)
+        #expect(Zone.of(x: 250, pageWidth: pad, margin: margin) == .middle)
+        #expect(Zone.of(x: 60, pageWidth: pad, margin: margin) == .back)
+    }
+
+    /// A Slide Over is narrower than two strips plus a usable middle, so the
+    /// fraction still caps them.
+    @Test("strips stay a quarter each on a narrow page")
+    func narrowPageCapsTheStrip() {
+        let margin: CGFloat = 24
+        let width: CGFloat = 200 - margin * 2   // full = 200, so the cap is 50
+
+        #expect(Zone.of(x: 49, pageWidth: width, margin: margin) == .back)
+        #expect(Zone.of(x: 51, pageWidth: width, margin: margin) == .middle)
+        #expect(Zone.of(x: 100, pageWidth: width, margin: margin) == .middle)
+        #expect(Zone.of(x: 151, pageWidth: width, margin: margin) == .forward)
     }
 
     @Test("a degenerate width does not turn pages")
