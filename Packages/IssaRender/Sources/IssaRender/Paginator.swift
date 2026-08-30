@@ -137,6 +137,11 @@ public final class ChapterLayout {
         return rects
     }
 
+    /// The character range a fragment occupies, for reading its text back.
+    public func fragmentRange(for fragmentID: String) -> NSRange? {
+        fragmentRanges[fragmentID]
+    }
+
     /// The page a fragment appears on, for "follow the narration".
     public func page(containingFragment fragmentID: String) -> RenderedPage? {
         guard let range = fragmentRanges[fragmentID] else { return nil }

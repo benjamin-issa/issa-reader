@@ -6,6 +6,7 @@ import SwiftUI
 struct IssaReaderApp: App {
     @State private var app = AppModel()
     @State private var settings = PlaybackSettings()
+    @State private var nowPlaying = NowPlayingController()
 
     init() {
         // Package-bundled fonts are not registered automatically the way an
@@ -18,6 +19,8 @@ struct IssaReaderApp: App {
             RootView()
                 .environment(app)
                 .environment(settings)
+                .environment(nowPlaying)
+                .task { nowPlaying.configure(settings: settings) }
                 .tint(Palette.tangerine)
         }
     }

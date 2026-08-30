@@ -32,8 +32,8 @@ struct TVRootView: View {
             TVSignInView().task { await app.restoreIfPossible() }
         case .ready:
             TabView {
-                TVLibraryView().tabItem { Text("Library") }
-                ListeningView().tabItem { Text("Listening") }
+                NavigationStack { TVLibraryView() }.tabItem { Text("Library") }
+                NavigationStack { ListeningView() }.tabItem { Text("Listening") }
             }
         }
     }
@@ -155,7 +155,9 @@ struct TVBookCell: View {
     @FocusState private var focused: Bool
 
     var body: some View {
-        Button {} label: {
+        NavigationLink {
+            if let session { TVReadalongView(book: book, session: session) }
+        } label: {
             VStack(alignment: .leading, spacing: Metrics.spacing12) {
                 CoverImage(book: book, session: session)
                     .frame(width: 220)

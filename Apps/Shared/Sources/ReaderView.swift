@@ -11,6 +11,7 @@ public struct ReaderView: View {
     @State private var model: ReaderModel
     @State private var showsPlayer = false
     @Environment(\.dismiss) private var dismiss
+    @Environment(NowPlayingController.self) private var nowPlaying
 
     public init(book: Book, session: Session) {
         _model = State(initialValue: ReaderModel(book: book, session: session))
@@ -90,7 +91,10 @@ public struct ReaderView: View {
 
             footer
         }
-        .onAppear { model.setReaderVisible(true) }
+        .onAppear {
+            model.setReaderVisible(true)
+            nowPlaying.attach(coordinator: model.readalong, book: model.book)
+        }
         .onDisappear { model.setReaderVisible(false) }
     }
 

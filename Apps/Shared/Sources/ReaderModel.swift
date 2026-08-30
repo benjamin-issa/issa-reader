@@ -162,6 +162,28 @@ public final class ReaderModel {
         }
     }
 
+    /// The text of one media-overlay fragment.
+    ///
+    /// Used by the TV presentation, which shows sentences rather than pages: at
+    /// ten feet a paginated book page is unreadable, but one large sentence with
+    /// its neighbours for context is comfortable.
+    public func text(forFragment fragmentID: String) -> String? {
+        guard let layout, let range = layout.fragmentRange(for: fragmentID) else { return nil }
+        return (layout.attributedText.string as NSString)
+            .substring(with: range)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// The narrated sentence, plus the one before and after it.
+    public func narrationContext() -> (previous: String?, current: String?, next: String?) {
+        guard let timeline, let entry = readalong?.activeEntry else { return (nil, nil, nil) }
+        return (
+            timeline.entry(before: entry).flatMap { text(forFragment: $0.fragmentID) },
+            text(forFragment: entry.fragmentID),
+            timeline.entry(after: entry).flatMap { text(forFragment: $0.fragmentID) },
+        )
+    }
+
     /// The first media-overlay fragment appearing on the current page.
     func firstFragmentOnCurrentPage() -> String? {
         guard let layout, let page = currentPage, let timeline else { return nil }

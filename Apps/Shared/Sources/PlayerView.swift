@@ -70,6 +70,12 @@ public struct PlayerView: View {
 
     private var scrubber: some View {
         VStack(spacing: Metrics.spacing4) {
+            // tvOS has no Slider, and dragging a scrubber with a Siri Remote is
+            // miserable anyway — there, seeking is the remote's job and this is
+            // a read-only indicator.
+            #if os(tvOS)
+            ProgressBar(value: progress)
+            #else
             Slider(
                 value: Binding(get: { progress }, set: { scrubValue = $0 }),
                 in: 0 ... 1,
@@ -82,6 +88,7 @@ public struct PlayerView: View {
             )
             .tint(Palette.tangerine)
             .disabled(coordinator == nil)
+            #endif
 
             HStack {
                 Text(Self.timeText(total * progress))
