@@ -44,11 +44,27 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
     /// Allow a page to turn part-way through a sentence rather than waiting
     /// for it to finish.
     public var turnPagesMidSentence: Bool
-    /// Tapping a narrated sentence starts the audio there.
+    /// What the always-visible progress readout shows.
+    public enum ProgressDisplay: String, Codable, Sendable, CaseIterable {
+        case book
+        case chapterPage
+
+        public var title: String {
+            switch self {
+            case .book: "Book percentage"
+            case .chapterPage: "Page in chapter"
+            }
+        }
+    }
+
+    public var progressDisplay: ProgressDisplay
+
+    /// Double-tapping a narrated sentence starts the audio there.
     ///
-    /// Only ever consulted for a book that has narration, and only for a tap
-    /// that actually lands on a narrated sentence — the margins keep turning
-    /// pages, so a reader is never left unable to advance by tapping.
+    /// Only ever consulted for a book that has narration. A single tap can no
+    /// longer do this: it was indistinguishable from a page turn, and because
+    /// it was tested first it made "tap left to go back" unreachable over any
+    /// narrated text.
     public var tapToPlay: Bool
 
     public init(
@@ -62,6 +78,7 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
         followNarration: Bool = true,
         turnPagesMidSentence: Bool = false,
         tapToPlay: Bool = true,
+        progressDisplay: ProgressDisplay = .book,
     ) {
         self.fontFamily = fontFamily
         self.fontSize = fontSize
@@ -73,6 +90,61 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
         self.followNarration = followNarration
         self.turnPagesMidSentence = turnPagesMidSentence
         self.tapToPlay = tapToPlay
+        self.progressDisplay = progressDisplay
+    }
+
+    // Spelled out rather than synthesised, because the decoder below names them.
+    enum CodingKeys: String, CodingKey {
+        case fontFamily, fontSize, lineSpacing, theme, justified, pageMargin
+        case highlightGranularity, followNarration, turnPagesMidSentence
+        case tapToPlay, progressDisplay
+    }
+
+    /// Decoded field by field, with a default for anything absent.
+    ///
+    /// The synthesised decoder fails the whole blob when a new field is missing,
+    /// and `PlaybackSettings` falls back to a fresh `ReaderStyle()` on failure —
+    /// so adding a property the ordinary way would silently reset the font,
+    /// theme, margins and every read-along toggle of everyone already running
+    /// the app.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let fallback = ReaderStyle()
+        fontFamily = try container.decodeIfPresent(String.self, forKey: .fontFamily) ?? fallback.fontFamily
+        fontSize = try container.decodeIfPresent(CGFloat.self, forKey: .fontSize) ?? fallback.fontSize
+        lineSpacing = Self.decodeCase(LineSpacing.self, from: container, key: .lineSpacing)
+            ?? fallback.lineSpacing
+        theme = Self.decodeCase(ReaderTheme.self, from: container, key: .theme) ?? fallback.theme
+        justified = try container.decodeIfPresent(Bool.self, forKey: .justified) ?? fallback.justified
+        pageMargin = try container.decodeIfPresent(CGFloat.self, forKey: .pageMargin) ?? fallback.pageMargin
+        highlightGranularity = Self.decodeCase(
+            HighlightGranularity.self, from: container, key: .highlightGranularity)
+            ?? fallback.highlightGranularity
+        followNarration = try container.decodeIfPresent(
+            Bool.self, forKey: .followNarration) ?? fallback.followNarration
+        turnPagesMidSentence = try container.decodeIfPresent(
+            Bool.self, forKey: .turnPagesMidSentence) ?? fallback.turnPagesMidSentence
+        tapToPlay = try container.decodeIfPresent(Bool.self, forKey: .tapToPlay) ?? fallback.tapToPlay
+        progressDisplay = Self.decodeCase(
+            ProgressDisplay.self, from: container, key: .progressDisplay) ?? fallback.progressDisplay
+    }
+
+    /// Reads a string-backed case, treating an unrecognised one as absent.
+    ///
+    /// `decodeIfPresent` still throws when the key is there but the value is
+    /// not a known case — so a blob written by a newer build, or one that has
+    /// been corrupted, would fail the whole decode and reset every preference.
+    /// A value this build does not understand should cost that one setting,
+    /// not all of them.
+    private static func decodeCase<T: RawRepresentable & Decodable>(
+        _ type: T.Type,
+        from container: KeyedDecodingContainer<CodingKeys>,
+        key: CodingKeys,
+    ) -> T? where T.RawValue == String {
+        // `try?` flattens the doubly-optional decodeIfPresent result, so this is
+        // already the unwrapped string.
+        guard let raw = try? container.decodeIfPresent(String.self, forKey: key) else { return nil }
+        return T(rawValue: raw)
     }
 
     /// Body font, falling back to the system serif when the bundled family is

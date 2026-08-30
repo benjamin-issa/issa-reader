@@ -66,6 +66,17 @@ public final class ReaderModel {
     /// reader does not need to know about the store.
     /// Persisting annotations is the app's job, not the reader's: this model
     /// knows the geometry, the store knows the disk.
+    /// Whether the navigation bar and the footer's controls are showing.
+    ///
+    /// The progress readout is deliberately not part of this — it is the one
+    /// thing that stays on screen, so a reader who has hidden everything can
+    /// still see how far through they are.
+    public private(set) var chromeVisible = true
+
+    public func toggleChrome() {
+        chromeVisible.toggle()
+    }
+
     /// Where the reader gets its downloads from. Set by the view, so the model
     /// does not have to know about AppModel to use the one download engine.
     public weak var downloadHost: AppModel?
@@ -124,7 +135,11 @@ public final class ReaderModel {
         guard let package, !package.spine.isEmpty, let layout, let page = currentPage else {
             return book.progress ?? 0
         }
-        return (Double(chapterIndex) + layout.progression(of: page)) / Double(package.spine.count)
+        // Weighted by each spine item's size, not by its index: counting them
+        // equally made a two-page wrapper worth as much as a forty-page chapter,
+        // which is not good enough for a percentage the reader can see.
+        return package.bookProgress(
+            spineIndex: chapterIndex, within: layout.progression(of: page))
     }
 
     /// The words actually on the current page.
@@ -151,6 +166,17 @@ public final class ReaderModel {
                 ? "Downloading, \(Int(Double(received) / Double(total) * 100)) percent"
                 : "Downloading"
         case .ready: return "This page has no text on it."
+        }
+    }
+
+    /// The always-visible progress readout, in whichever form the reader chose.
+    public var progressText: String {
+        switch style.progressDisplay {
+        case .book:
+            return "\(Int((bookProgress * 100).rounded()))%"
+        case .chapterPage:
+            guard pageCount > 0 else { return "" }
+            return "\(pageIndex + 1) / \(pageCount)"
         }
     }
 
@@ -873,9 +899,7 @@ public final class ReaderModel {
             .attribute(.issaFragmentID, at: page.characterRange.location, effectiveRange: nil) as? String
 
         let chapterProgress = layout.progression(of: page)
-        let overall = package.spine.isEmpty
-            ? 0
-            : (Double(chapterIndex) + chapterProgress) / Double(package.spine.count)
+        let overall = package.bookProgress(spineIndex: chapterIndex, within: chapterProgress)
 
         // Two anchors beyond the fragment: the character offset, and the words
         // that were on screen. Between them a position survives a font change,

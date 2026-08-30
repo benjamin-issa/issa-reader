@@ -9,6 +9,9 @@ public struct EPUBPackage: Sendable {
     public let manifest: [String: ManifestItem]
     public let spine: [SpineItem]
     public let navigation: [NavPoint]
+    /// Each spine item's uncompressed size, read once from the ZIP central
+    /// directory. Used to weight its share of the book.
+    public let spineWeights: [Double]
 
     public struct Metadata: Sendable, Hashable {
         public var title: String?
@@ -40,6 +43,24 @@ public struct EPUBPackage: Sendable {
         public let linear: Bool
         public let href: String
         public let mediaOverlayID: String?
+    }
+
+    /// How far through the book a position in a spine item is, 0...1.
+    ///
+    /// Weighted by each item's uncompressed size rather than by its index, so
+    /// the number means something on a book whose chapters differ in length.
+    /// Sizes come from the ZIP central directory, which was already read when
+    /// the container was opened, so this costs no inflation and no parsing.
+    public func bookProgress(spineIndex: Int, within: Double) -> Double {
+        guard spine.indices.contains(spineIndex) else { return 0 }
+        let weights = spineWeights
+        let total = weights.reduce(0, +)
+        guard total > 0 else {
+            // No sizes available: fall back to counting items equally.
+            return (Double(spineIndex) + within) / Double(spine.count)
+        }
+        let before = weights.prefix(spineIndex).reduce(0, +)
+        return min(max((before + weights[spineIndex] * min(max(within, 0), 1)) / total, 0), 1)
     }
 
     public struct NavPoint: Sendable, Hashable {
@@ -95,6 +116,9 @@ public extension EPUBPackage {
             manifest: manifest,
             spine: spine,
             navigation: navigation,
+            // From the central directory, which was already read when the
+            // container was opened — no inflation, no parsing.
+            spineWeights: spine.map { Double(archive.size(of: $0.href) ?? 0) },
         )
     }
 

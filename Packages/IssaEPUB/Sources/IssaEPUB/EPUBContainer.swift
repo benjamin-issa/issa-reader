@@ -33,6 +33,16 @@ public struct EPUBArchive: Sendable {
 
     public func contains(_ path: String) -> Bool { entries[Self.normalize(path)] != nil }
 
+    /// An entry's uncompressed size, from the central directory — no inflate.
+    ///
+    /// Used to weight a spine item's share of the book. Counting spine items
+    /// equally made a two-page front-matter wrapper worth as much as a
+    /// forty-page chapter, which is fine for a hidden Handoff payload and not
+    /// good enough for a percentage on screen.
+    public func size(of path: String) -> Int? {
+        entries[Self.normalize(path)]?.uncompressedSize
+    }
+
     /// Inflates one entry. Throws rather than returning nil so a corrupt book
     /// reports where it failed.
     public func read(_ path: String) throws -> Data {

@@ -89,8 +89,14 @@ public struct ReaderView: View {
                 }
             }
         }
-        #if !os(tvOS)
-        .navigationBarBackButtonHidden(false)
+        #if os(iOS)
+        // The bar goes with the footer's controls. This is the one part of the
+        // toggle that changes the safe area, so the chapter reflows once — which
+        // is position-preserving, since relayout anchors on the character offset.
+        .toolbar(model.chromeVisible ? .visible : .hidden, for: .navigationBar)
+        .toolbar(model.chromeVisible ? .visible : .hidden, for: .tabBar)
+        .statusBarHidden(!model.chromeVisible)
+        .animation(.easeInOut(duration: 0.2), value: model.chromeVisible)
         #endif
         .onDisappear { Task { await model.saveProgress() } }
         #if os(iOS) || os(macOS)
@@ -157,28 +163,27 @@ public struct ReaderView: View {
                 .padding(model.style.pageMargin)
                 .contentShape(Rectangle())
                 #if !os(tvOS)
+                // Double tap first: SwiftUI gives the higher count priority,
+                // and this is the gesture that used to be a single tap — which
+                // made every tap ambiguous, and because it was tested before the
+                // page zones it left "tap left to go back" unreachable over any
+                // narrated text.
+                .onTapGesture(count: 2) { location in
+                    guard model.style.tapToPlay, model.readalong != nil else { return }
+                    model.clearSelection()
+                    Task { await model.playSentence(at: canvasPoint(location)) }
+                }
                 .onTapGesture { location in
-                    // A tap with something selected dismisses the selection,
-                    // the way it does everywhere else — it must not also turn
-                    // the page out from under the reader.
+                    // A tap with something selected dismisses it, the way it
+                    // does everywhere else, and does nothing more.
                     if model.selection != nil {
                         model.clearSelection()
                         return
                     }
-                    Task {
-                        // In a narrated book, tapping a sentence plays it. The
-                        // tap arrives in the padded frame's space, so the margin
-                        // comes off before the layout is asked what is there.
-                        if model.style.tapToPlay, model.readalong != nil {
-                            let margin = model.style.pageMargin
-                            let inCanvas = CGPoint(x: location.x - margin, y: location.y - margin)
-                            if await model.playSentence(at: inCanvas) { return }
-                        }
-                        // Otherwise the usual zones: left third back, rest
-                        // forward — including every tap that missed a sentence,
-                        // so the page can always be turned by tapping.
-                        if location.x < size.width * 0.33 { await model.previousPage() }
-                        else { await model.nextPage() }
+                    switch Self.zone(for: location, pageWidth: size.width, margin: model.style.pageMargin) {
+                    case .back: Task { await model.previousPage() }
+                    case .forward: Task { await model.nextPage() }
+                    case .middle: model.toggleChrome()
                     }
                 }
                 // Press and hold selects the sentence under the finger, then
@@ -205,7 +210,11 @@ public struct ReaderView: View {
                 .gesture(
                     DragGesture(minimumDistance: 24)
                         .onEnded { value in
-                            guard model.selection == nil else { return }
+                            // Clear a selection and turn the page in one motion.
+                            // Guarding on `selection == nil` meant that once
+                            // anything was selected, swiping silently did
+                            // nothing at all and nothing said why.
+                            if model.selection != nil { model.clearSelection() }
                             Task {
                                 if value.translation.width < -24 { await model.nextPage() }
                                 else if value.translation.width > 24 { await model.previousPage() }
@@ -401,50 +410,78 @@ public struct ReaderView: View {
         ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
     }
 
+    /// Which third of the page a tap landed in.
+    ///
+    /// The sides turn pages and the middle shows or hides the chrome, which is
+    /// what upstream Storyteller and Kindle both do. Measured against the padded
+    /// frame the tap actually arrives in — the old test compared a padded-frame
+    /// x against the canvas width, so the back zone was a margin narrower than
+    /// intended and shifted inward.
+    enum TapZone { case back, middle, forward }
+
+    static func zone(for point: CGPoint, pageWidth: CGFloat, margin: CGFloat) -> TapZone {
+        let full = pageWidth + margin * 2
+        guard full > 0 else { return .middle }
+        let fraction = point.x / full
+        if fraction < 0.25 { return .back }
+        if fraction > 0.75 { return .forward }
+        return .middle
+    }
+
     /// Tap coordinates arrive in the padded frame's space; the layout speaks
     /// in the canvas's, which starts one margin in.
     private func canvasPoint(_ point: CGPoint) -> CGPoint {
         CGPoint(x: point.x - model.style.pageMargin, y: point.y - model.style.pageMargin)
     }
 
+    /// The strip below the page.
+    ///
+    /// Its 44 pt is reserved whether or not the controls are showing, so
+    /// toggling the chrome never changes the page size and never re-paginates
+    /// the chapter. Only the controls fade; the progress readout stays, because
+    /// it is the one thing a reader who has hidden everything still wants.
     private var footer: some View {
         HStack(spacing: Metrics.spacing12) {
-            if model.hasNarration {
-                Button {
-                    Task { await model.togglePlayback() }
-                } label: {
-                    Image(systemName: model.isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                        .font(.system(size: 26))
-                        .foregroundStyle(Palette.tangerine)
+            if model.chromeVisible {
+                if model.hasNarration {
+                    Button {
+                        Task { await model.togglePlayback() }
+                    } label: {
+                        Image(systemName: model.isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                            .font(.system(size: 26))
+                            .foregroundStyle(Palette.tangerine)
+                    }
+                    .buttonStyle(.plain)
+                    Button {
+                        showsPlayer = true
+                    } label: {
+                        Image(systemName: "waveform")
+                            .font(.system(size: 17))
+                            .foregroundStyle(Palette.inkTertiary)
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
                 Button {
-                    showsPlayer = true
+                    showsContents = true
                 } label: {
-                    Image(systemName: "waveform")
-                        .font(.system(size: 17))
-                        .foregroundStyle(Palette.inkTertiary)
+                    HStack(spacing: Metrics.spacing4) {
+                        Image(systemName: "list.bullet")
+                            .font(.system(size: 13))
+                        Text(model.chapterTitle)
+                            .font(Typography.caption)
+                            .lineLimit(1)
+                    }
+                    .foregroundStyle(model.style.theme.text.opacity(0.55))
                 }
                 .buttonStyle(.plain)
             }
-            Button {
-                showsContents = true
-            } label: {
-                HStack(spacing: Metrics.spacing4) {
-                    Image(systemName: "list.bullet")
-                        .font(.system(size: 13))
-                    Text(model.chapterTitle)
-                        .font(Typography.caption)
-                        .lineLimit(1)
-                }
-                .foregroundStyle(model.style.theme.text.opacity(0.55))
-            }
-            .buttonStyle(.plain)
             Spacer()
-            if model.pageCount > 0 {
-                Text("\(model.pageIndex + 1) / \(model.pageCount)")
+            // Always on screen, in either form.
+            if !model.progressText.isEmpty {
+                Text(model.progressText)
                     .font(Typography.caption.monospacedDigit())
                     .foregroundStyle(model.style.theme.text.opacity(0.55))
+                    .contentTransition(.numericText())
                     // The page element already says where the reader is, in
                     // words. Left visible, this would follow it as "3 slash 12".
                     .accessibilityHidden(true)
