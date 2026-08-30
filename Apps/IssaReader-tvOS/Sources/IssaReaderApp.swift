@@ -50,6 +50,15 @@ struct TVSignInView: View {
     @State private var address = ""
     @State private var flow: DeviceSignInModel?
 
+    /// Begins the device flow, reusing whatever server is already known.
+    private func beginFlow(for text: String) async {
+        await app.connect(to: text)
+        guard app.phase != .ready, let url = AppModel.normalizeServerURL(text) else { return }
+        let model = DeviceSignInModel(serverURL: url)
+        flow = model
+        await model.begin()
+    }
+
     var body: some View {
         ZStack {
             Palette.paper.ignoresSafeArea()
@@ -80,13 +89,7 @@ struct TVSignInView: View {
                         .font(Typography.sans(30))
                         .frame(maxWidth: 900)
                     Button {
-                        Task {
-                            await app.connect(to: address)
-                            guard app.phase != .ready,
-                                  let url = AppModel.normalizeServerURL(address) else { return }
-                            flow = DeviceSignInModel(serverURL: url)
-                            await flow?.begin()
-                        }
+                        Task { await beginFlow(for: address) }
                     } label: {
                         // Explicit colours: the app-level tint would otherwise
                         // paint the label the same orange as the fill, and the
@@ -100,6 +103,15 @@ struct TVSignInView: View {
                     .disabled(address.isEmpty)
                 }
                 .frame(maxWidth: 1400, alignment: .leading)
+            }
+        }
+        .task {
+            // Typing a hostname with a Siri Remote is miserable, so a TV that
+            // already knows the server goes straight to showing a code. The
+            // form only appears the first time.
+            if address.isEmpty { address = app.serverAddress }
+            if flow == nil, !address.isEmpty, app.phase != .ready {
+                await beginFlow(for: address)
             }
         }
     }

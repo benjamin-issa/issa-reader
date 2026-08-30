@@ -71,17 +71,40 @@ public struct BookGrid: View {
     public var body: some View {
         LazyVGrid(columns: columns, alignment: .leading, spacing: Metrics.spacing24) {
             ForEach(books) { book in
-                if let session {
-                    NavigationLink {
-                        ReaderView(book: book, session: session)
-                    } label: {
-                        BookCell(book: book, session: session)
-                    }
-                    .buttonStyle(.plain)
-                } else {
-                    BookCell(book: book, session: session)
-                }
+                BookGridItem(book: book, session: session)
             }
+        }
+    }
+}
+
+/// Opens a book the way each platform expects: a pushed screen on iOS and
+/// tvOS, and a separate window on the Mac.
+struct BookGridItem: View {
+    let book: Book
+    let session: Session?
+    #if os(macOS)
+    @Environment(\.openWindow) private var openWindow
+    #endif
+
+    var body: some View {
+        if let session {
+            #if os(macOS)
+            Button {
+                openWindow(id: "Reader", value: book.uuid)
+            } label: {
+                BookCell(book: book, session: session)
+            }
+            .buttonStyle(.plain)
+            #else
+            NavigationLink {
+                ReaderView(book: book, session: session)
+            } label: {
+                BookCell(book: book, session: session)
+            }
+            .buttonStyle(.plain)
+            #endif
+        } else {
+            BookCell(book: book, session: session)
         }
     }
 }

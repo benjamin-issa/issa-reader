@@ -28,6 +28,40 @@ struct IssaReaderMacApp: App {
                     .keyboardShortcut("r", modifiers: .command)
             }
         }
+
+        // A book opens in its own window, which is what a Mac reader should do:
+        // several books can be open at once, each with its own size, position
+        // and full-screen state, and closing one does not disturb the library.
+        WindowGroup("Reader", for: String.self) { $bookID in
+            ReaderWindow(bookID: bookID)
+                .environment(app)
+                .environment(settings)
+                .tint(Palette.tangerine)
+                .frame(minWidth: 520, minHeight: 640)
+        }
+        .defaultSize(width: 760, height: 900)
+    }
+}
+
+/// Resolves a book id into a reader, so the window can be restored by the system
+/// after a relaunch without holding a reference to a model.
+struct ReaderWindow: View {
+    let bookID: String?
+    @Environment(AppModel.self) private var app
+
+    var body: some View {
+        if let bookID,
+           let book = app.books.first(where: { $0.uuid == bookID }),
+           let session = app.session {
+            ReaderView(book: book, session: session)
+                .navigationTitle(book.title)
+        } else {
+            ContentUnavailableView(
+                "Book unavailable",
+                systemImage: "book.closed",
+                description: Text("Open it again from the library window."),
+            )
+        }
     }
 }
 
