@@ -61,7 +61,16 @@ public struct BookGrid: View {
     public var body: some View {
         LazyVGrid(columns: columns, alignment: .leading, spacing: Metrics.spacing24) {
             ForEach(books) { book in
-                BookCell(book: book, session: session)
+                if let session {
+                    NavigationLink {
+                        ReaderView(book: book, session: session)
+                    } label: {
+                        BookCell(book: book, session: session)
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    BookCell(book: book, session: session)
+                }
             }
         }
     }

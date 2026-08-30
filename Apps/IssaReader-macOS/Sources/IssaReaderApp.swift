@@ -6,6 +6,12 @@ import SwiftUI
 struct IssaReaderMacApp: App {
     @State private var app = AppModel()
 
+    init() {
+        // Package-bundled fonts are not registered automatically the way an
+        // app's UIAppFonts entry would be, so this must run before first render.
+        IssaFonts.register()
+    }
+
     var body: some Scene {
         WindowGroup {
             MacRootView()
@@ -42,7 +48,7 @@ struct MacRootView: View {
     var body: some View {
         switch app.phase {
         case .chooseServer, .signingIn:
-            SignInView()
+            SignInView().task { await app.restoreIfPossible() }
         case .ready:
             NavigationSplitView {
                 List(selection: $selection) {

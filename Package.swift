@@ -44,6 +44,7 @@ let package = Package(
             name: "IssaUI",
             dependencies: ["IssaCore"],
             path: "Packages/IssaUI/Sources/IssaUI",
+            resources: [.process("Resources")],
         ),
         .testTarget(
             name: "IssaCoreTests",

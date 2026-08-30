@@ -156,13 +156,16 @@ public struct HTMLContentParser: Sendable {
         if context.bold { font = font.withBoldTrait() }
 
         let paragraph = NSMutableParagraphStyle()
-        paragraph.lineHeightMultiple = context.style.lineSpacing.multiple
+        // Large type needs proportionally less leading; applying the body
+        // multiple to a 1.9x heading leaves it floating in whitespace.
+        let leadingScale = context.sizeScale > 1.2 ? 0.82 : 1.0
+        paragraph.lineHeightMultiple = context.style.lineSpacing.multiple * leadingScale
         paragraph.alignment = context.alignment
             ?? (context.style.justified ? .justified : .natural)
         // Hyphenation matters far more in a justified column; without it,
         // justified text opens rivers of whitespace.
         paragraph.hyphenationFactor = context.style.justified ? 1.0 : 0.0
-        paragraph.paragraphSpacing = context.style.fontSize * 0.35
+        paragraph.paragraphSpacing = context.style.fontSize * (context.sizeScale > 1.2 ? 0.55 : 0.30)
         let indent = CGFloat(context.blockquoteDepth + context.listDepth) * context.style.fontSize * 1.2
         paragraph.headIndent = indent
         paragraph.firstLineHeadIndent = indent

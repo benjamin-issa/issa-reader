@@ -14,11 +14,14 @@ public struct ReaderStyle: Sendable, Hashable {
     public enum LineSpacing: String, CaseIterable, Sendable, Codable {
         case tight, normal, roomy
 
+        /// Multiples of the font's natural line height. A serif reading face
+        /// already carries generous internal leading, so these sit lower than a
+        /// UI stack would use — 1.45 reads as airy, not comfortable.
         var multiple: CGFloat {
             switch self {
-            case .tight: 1.20
-            case .normal: 1.45
-            case .roomy: 1.75
+            case .tight: 1.05
+            case .normal: 1.20
+            case .roomy: 1.42
             }
         }
     }
@@ -44,7 +47,7 @@ public struct ReaderStyle: Sendable, Hashable {
 
     public init(
         fontFamily: String = "Newsreader",
-        fontSize: CGFloat = 19,
+        fontSize: CGFloat = 18,
         lineSpacing: LineSpacing = .normal,
         theme: ReaderTheme = .paper,
         justified: Bool = false,

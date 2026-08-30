@@ -49,6 +49,13 @@ public final class AppModel {
         return components.url
     }
 
+    /// Reconnects to the last server on launch when a token is already stored,
+    /// so a returning reader lands in their library rather than on a form.
+    public func restoreIfPossible() async {
+        guard !serverAddress.isEmpty, phase == .chooseServer else { return }
+        await connect(to: serverAddress)
+    }
+
     public func connect(to address: String) async {
         guard let url = Self.normalizeServerURL(address) else {
             loadError = "That doesn't look like a server address."

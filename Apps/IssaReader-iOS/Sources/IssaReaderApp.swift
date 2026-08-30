@@ -6,6 +6,12 @@ import SwiftUI
 struct IssaReaderApp: App {
     @State private var app = AppModel()
 
+    init() {
+        // Package-bundled fonts are not registered automatically the way an
+        // app's UIAppFonts entry would be, so this must run before first render.
+        IssaFonts.register()
+    }
+
     var body: some Scene {
         WindowGroup {
             RootView()
@@ -27,6 +33,7 @@ struct RootView: View {
                 LibraryTabs()
             }
         }
+        .task { await app.restoreIfPossible() }
     }
 }
 
