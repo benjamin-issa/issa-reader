@@ -148,15 +148,33 @@ public final class ReaderModel {
     }
 
     /// Starts narration from whatever the reader is currently looking at.
+    ///
+    /// Scans forward for the first narrated fragment on the page rather than
+    /// reading only the first character: a page often opens mid-paragraph, or on
+    /// a heading that carries no media overlay at all.
     public func startNarration() async {
-        guard let readalong, let layout, let page = currentPage else { return }
-        if let fragment = layout.attributedText.attribute(
-            .issaFragmentID, at: page.characterRange.location, effectiveRange: nil,
-        ) as? String {
+        guard let readalong else { return }
+        if let fragment = firstFragmentOnCurrentPage() {
             await readalong.seek(toFragment: fragment)
-        } else {
-            readalong.player.play()
+        } else if let first = timeline?.entries.first {
+            // Nothing narrated on this page; begin at the start of the book.
+            await readalong.play(from: first)
         }
+    }
+
+    /// The first media-overlay fragment appearing on the current page.
+    func firstFragmentOnCurrentPage() -> String? {
+        guard let layout, let page = currentPage, let timeline else { return nil }
+        var found: String?
+        layout.attributedText.enumerateAttribute(
+            .issaFragmentID, in: page.characterRange,
+        ) { value, _, stop in
+            if let id = value as? String, timeline.entry(forFragment: id) != nil {
+                found = id
+                stop.pointee = true
+            }
+        }
+        return found
     }
 
     public func togglePlayback() async {

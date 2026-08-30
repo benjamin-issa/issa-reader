@@ -44,9 +44,19 @@ public struct HTMLContentParser: Sendable {
         var context = Context(style: style)
         render(node: body, into: output, ranges: &ranges, complexity: &complexity, context: &context)
 
-        // Collapse the runs of blank lines that block nesting tends to leave.
+        // Trimming the ends shifts every recorded range, so they move with it;
+        // an off-by-one here misplaces every highlight in the chapter.
+        let originalLength = output.length
         let trimmed = Self.trimTrailingNewlines(output)
-        return Result(text: trimmed, fragmentRanges: ranges, complexity: complexity)
+        let offset = Self.leadingTrimOffset(of: output)
+        let adjusted = offset == 0 && trimmed.length == originalLength
+            ? ranges
+            : ranges.compactMapValues { range -> NSRange? in
+                let location = range.location - offset
+                guard location >= 0, location < trimmed.length else { return nil }
+                return NSRange(location: location, length: min(range.length, trimmed.length - location))
+            }
+        return Result(text: trimmed, fragmentRanges: adjusted, complexity: complexity)
     }
 
     // MARK: - Rendering
@@ -135,11 +145,25 @@ public struct HTMLContentParser: Sendable {
         }
 
         // Record the range this element occupies, so a SMIL fragment id maps to
-        // exact characters. Recorded after children so the range covers them.
+        // exact characters.
+        //
+        // The attribute is applied only where none is set yet. Children are
+        // rendered first, so this keeps the innermost id — which is the one the
+        // media overlay references. Overwriting blindly would let an outer
+        // wrapper's id replace every sentence span inside it, and the highlight
+        // would then cover a whole chapter instead of one sentence.
         if let id = node["id"], output.length > start {
             let range = NSRange(location: start, length: output.length - start)
             ranges[id] = range
-            output.addAttribute(.issaFragmentID, value: id, range: range)
+            // Collect first, then apply: mutating an attributed string while
+            // enumerating it is undefined and silently skips ranges.
+            var unclaimed: [NSRange] = []
+            output.enumerateAttribute(.issaFragmentID, in: range) { existing, subrange, _ in
+                if existing == nil { unclaimed.append(subrange) }
+            }
+            for subrange in unclaimed {
+                output.addAttribute(.issaFragmentID, value: id, range: subrange)
+            }
         }
     }
 
@@ -254,16 +278,34 @@ public struct HTMLContentParser: Sendable {
         "trade": 8482, "ensp": 8194, "emsp": 8195, "thinsp": 8201, "shy": 173,
     ]
 
+    /// How many characters `trimTrailingNewlines` removes from the front.
+    static func leadingTrimOffset(of text: NSAttributedString) -> Int {
+        let string = text.string as NSString
+        var begin = 0
+        while begin < string.length {
+            let character = string.character(at: begin)
+            guard character == 10 || character == 32 || character == 9 || character == 13 else { break }
+            begin += 1
+        }
+        return begin
+    }
+
+    /// Trims whitespace from both ends.
+    ///
+    /// Source markup routinely puts a newline between `<body>` and the first
+    /// block, which would otherwise open every chapter on a stray space and
+    /// shift every recorded fragment range by one.
     static func trimTrailingNewlines(_ text: NSAttributedString) -> NSAttributedString {
         let string = text.string as NSString
-        var end = string.length
-        while end > 0 {
-            let character = string.character(at: end - 1)
-            guard character == 10 || character == 32 else { break }
-            end -= 1
+        func isTrimmable(_ character: unichar) -> Bool {
+            character == 10 || character == 32 || character == 9 || character == 13
         }
-        guard end < string.length else { return text }
-        return text.attributedSubstring(from: NSRange(location: 0, length: end))
+        var end = string.length
+        while end > 0, isTrimmable(string.character(at: end - 1)) { end -= 1 }
+        var begin = 0
+        while begin < end, isTrimmable(string.character(at: begin)) { begin += 1 }
+        guard begin > 0 || end < string.length else { return text }
+        return text.attributedSubstring(from: NSRange(location: begin, length: end - begin))
     }
 }
 

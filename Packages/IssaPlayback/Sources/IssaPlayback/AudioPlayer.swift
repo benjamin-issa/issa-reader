@@ -36,6 +36,7 @@ public final class AudioPlayer {
     private let observers = ObserverTokens()
 
     public init() {
+        Self.configureAudioSession()
         player.actionAtItemEnd = .pause
         // Spoken audio at 1.5–3x is unlistenable without pitch correction, and
         // the time-domain algorithm is the one tuned for speech rather than
@@ -46,6 +47,21 @@ public final class AudioPlayer {
 
     deinit {
         observers.tearDown(player: player)
+    }
+
+    /// Prepares the session for spoken audio.
+    ///
+    /// `.playback` keeps sound going when the ring switch is silent and when the
+    /// screen locks, which is the whole point of an audiobook app; `.spokenAudio`
+    /// tells the system this is speech, so it ducks and resumes the way podcasts
+    /// do rather than behaving like music. Without an active session, playback
+    /// is silent on a device even though the player reports it is running.
+    static func configureAudioSession() {
+        #if os(iOS) || os(tvOS)
+        let session = AVAudioSession.sharedInstance()
+        try? session.setCategory(.playback, mode: .spokenAudio, options: [])
+        try? session.setActive(true)
+        #endif
     }
 
     /// Coarse cadence, used when nothing is watching the highlight closely.

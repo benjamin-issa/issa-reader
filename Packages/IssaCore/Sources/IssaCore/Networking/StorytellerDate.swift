@@ -1,15 +1,21 @@
 import Foundation
 
-/// Storyteller emits two different date formats in the same JSON object.
+/// Storyteller emits three different date formats, sometimes in one object.
 ///
-/// Verified against a live `web-v2.14.21` server:
+/// All three verified against a live `web-v2.14.21` server:
 /// - Row timestamps (`createdAt`, `updatedAt`) come straight out of SQLite as
 ///   `"2026-08-30 03:51:47"` — space-separated, no timezone, implicitly UTC.
 /// - Metadata dates (`publicationDate`) are ISO 8601 with milliseconds and a
 ///   `Z` suffix: `"1998-06-01T00:00:00.000Z"`.
+/// - `alignedAt` is a raw JavaScript `Date.toString()`:
+///   `"Sun Aug 30 2026 05:01:37 GMT+0000 (Coordinated Universal Time)"`.
 ///
-/// A single `JSONDecoder.dateDecodingStrategy` therefore cannot work; this type
-/// wraps the parsing so models can declare plain date properties.
+/// The third only appears once a book has been aligned, which is why it can lie
+/// dormant until the first readaloud shows up and then fail the whole library
+/// decode at once.
+///
+/// A single `JSONDecoder.dateDecodingStrategy` cannot cover these, so this type
+/// wraps the parsing and models declare plain date properties.
 public enum StorytellerDate {
     /// UTC, POSIX locale, Gregorian — never the device's calendar or locale.
     private static let sqlite: DateFormatter = {
@@ -27,11 +33,31 @@ public enum StorytellerDate {
     private static let iso8601Fractional = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
     private static let iso8601 = Date.ISO8601FormatStyle()
 
-    /// Parses either shape, or returns `nil` for anything unrecognised.
+    /// JavaScript's `Date.toString()`, e.g.
+    /// "Sun Aug 30 2026 05:01:37 GMT+0000 (Coordinated Universal Time)".
+    /// The trailing parenthetical timezone name is stripped before parsing,
+    /// because its wording is locale- and platform-dependent.
+    private static let javascript: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(secondsFromGMT: 0)
+        f.calendar = Calendar(identifier: .gregorian)
+        f.dateFormat = "EEE MMM dd yyyy HH:mm:ss 'GMT'Z"
+        return f
+    }()
+
+    /// Parses any of the three shapes, or returns `nil` for anything else.
     public static func parse(_ string: String) -> Date? {
         if let date = sqlite.date(from: string) { return date }
         if let date = try? iso8601Fractional.parse(string) { return date }
         if let date = try? iso8601.parse(string) { return date }
+
+        // Strip the human-readable timezone name JavaScript appends.
+        let withoutZoneName = string.contains("(")
+            ? String(string[string.startIndex ..< (string.firstIndex(of: "(") ?? string.endIndex)])
+                .trimmingCharacters(in: .whitespaces)
+            : string
+        if let date = javascript.date(from: withoutZoneName) { return date }
         return nil
     }
 

@@ -185,3 +185,52 @@ struct PaginatorTests {
         }
     }
 }
+
+/// Regression tests for fragment-id nesting.
+///
+/// Media overlays reference the innermost sentence span, but real EPUB markup
+/// wraps those spans in sections, divs and paragraphs that also carry ids.
+struct FragmentNestingTests {
+    @Test("an outer element's id does not overwrite the sentence spans inside it")
+    func innermostIDWins() throws {
+        let html = Data("""
+        <html xmlns="http://www.w3.org/1999/xhtml"><body>
+        <section id="pg-header">
+          <p id="para1"><span id="pg-header-s0">First. </span><span id="pg-header-s1">Second.</span></p>
+        </section>
+        </body></html>
+        """.utf8)
+        let result = try HTMLContentParser(style: ReaderStyle()).parse(xhtml: html, baseHref: "c.xhtml")
+        let text = result.text
+
+        // Every character of "First." must be attributed to the innermost span,
+        // not to the section or paragraph that wraps it. Getting this wrong
+        // highlights an entire chapter instead of one sentence.
+        let firstRange = try #require(result.fragmentRanges["pg-header-s0"])
+        let attribute = text.attribute(.issaFragmentID, at: firstRange.location, effectiveRange: nil) as? String
+        #expect(attribute == "pg-header-s0")
+
+        let secondRange = try #require(result.fragmentRanges["pg-header-s1"])
+        let secondAttribute = text.attribute(.issaFragmentID, at: secondRange.location, effectiveRange: nil) as? String
+        #expect(secondAttribute == "pg-header-s1")
+    }
+
+    @Test("an outer id still covers text no inner span claims")
+    func outerIDFillsGaps() throws {
+        let html = Data("""
+        <html xmlns="http://www.w3.org/1999/xhtml"><body>
+        <section id="outer">Loose text. <span id="inner-s0">Claimed.</span></section>
+        </body></html>
+        """.utf8)
+        let result = try HTMLContentParser(style: ReaderStyle()).parse(xhtml: html, baseHref: "c.xhtml")
+        let outerRange = try #require(result.fragmentRanges["outer"])
+        let attribute = result.text.attribute(.issaFragmentID, at: outerRange.location, effectiveRange: nil) as? String
+        #expect(attribute == "outer")
+        // The chapter must not open on stray whitespace from the source markup.
+        #expect(result.text.string.hasPrefix("Loose text."))
+
+        let innerRange = try #require(result.fragmentRanges["inner-s0"])
+        let inner = result.text.attribute(.issaFragmentID, at: innerRange.location, effectiveRange: nil) as? String
+        #expect(inner == "inner-s0")
+    }
+}

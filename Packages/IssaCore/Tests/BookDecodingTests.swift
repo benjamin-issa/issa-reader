@@ -81,3 +81,52 @@ struct StorytellerDateTests {
         #expect(StorytellerDate.parse("") == nil)
     }
 }
+
+/// Regression tests for the date formats a live server actually returns.
+///
+/// The JavaScript form only appears on `alignedAt`, so it stays dormant until
+/// the first readaloud exists — and then fails the whole library decode at once,
+/// which reads as an empty library rather than an error.
+struct StorytellerDateFormatRegressionTests {
+    @Test("parses the JavaScript Date.toString form used by alignedAt")
+    func parsesJavaScriptDate() throws {
+        let raw = "Sun Aug 30 2026 05:01:37 GMT+0000 (Coordinated Universal Time)"
+        let date = try #require(StorytellerDate.parse(raw))
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = try #require(TimeZone(secondsFromGMT: 0))
+        let parts = utc.dateComponents([.year, .month, .day, .hour, .minute, .second], from: date)
+        #expect(parts.year == 2026)
+        #expect(parts.month == 8)
+        #expect(parts.day == 30)
+        #expect(parts.hour == 5)
+        #expect(parts.minute == 1)
+        #expect(parts.second == 37)
+    }
+
+    @Test("handles a non-UTC offset and a missing timezone name")
+    func parsesOffsetVariants() throws {
+        #expect(StorytellerDate.parse("Sun Aug 30 2026 05:01:37 GMT+0000") != nil)
+        let offset = try #require(StorytellerDate.parse(
+            "Mon Jan 05 2026 12:00:00 GMT-0500 (Eastern Standard Time)"))
+        let utcNoon = try #require(StorytellerDate.parse("2026-01-05 17:00:00"))
+        #expect(abs(offset.timeIntervalSince(utcNoon)) < 1)
+    }
+
+    @Test("all three server formats decode in one object")
+    func allThreeInOneBook() throws {
+        let json = Data("""
+        [{"uuid":"u1","id":1,"title":"Aligned Book",
+          "createdAt":"2026-08-30 04:38:08",
+          "updatedAt":"2026-08-30 04:38:08",
+          "publicationDate":"2008-06-27T00:00:00.000Z",
+          "alignedAt":"Sun Aug 30 2026 05:01:37 GMT+0000 (Coordinated Universal Time)",
+          "authors":[],"narrators":[],"creators":[],"series":[],"tags":[],
+          "collections":[],"identifiers":[]}]
+        """.utf8)
+        let books = try JSONDecoder().decode([Book].self, from: json)
+        let book = try #require(books.first)
+        #expect(book.createdAt != nil)
+        #expect(book.publicationDate != nil)
+        #expect(book.alignedAt != nil)
+    }
+}

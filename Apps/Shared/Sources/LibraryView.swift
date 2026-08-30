@@ -34,6 +34,16 @@ public struct LibraryView: View {
         .overlay {
             if app.books.isEmpty, app.isLoadingLibrary {
                 ProgressView()
+            } else if app.books.isEmpty, let error = app.loadError {
+                // A failed fetch is not an empty library, and showing "no books"
+                // for a decode error sends you looking in entirely the wrong place.
+                ContentUnavailableView {
+                    Label("Couldn't load your library", systemImage: "exclamationmark.triangle")
+                } description: {
+                    Text(error)
+                } actions: {
+                    Button("Try again") { Task { await app.refreshLibrary() } }
+                }
             } else if app.books.isEmpty {
                 ContentUnavailableView(
                     "No books yet",
