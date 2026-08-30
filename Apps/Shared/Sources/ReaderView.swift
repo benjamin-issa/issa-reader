@@ -52,11 +52,15 @@ public struct ReaderView: View {
                 case let .downloading(received, total):
                     downloadingView(received: received, total: total)
                 case let .failed(reason):
-                    ContentUnavailableView(
-                        "Couldn't open this book",
-                        systemImage: "book.closed",
-                        description: Text(reason),
-                    )
+                    ContentUnavailableView {
+                        Label("Couldn't open this book", systemImage: "book.closed")
+                    } description: {
+                        Text(reason)
+                    } actions: {
+                        Button("Try Again") {
+                            Task { await model.retryOpen(pageSize: pageSize) }
+                        }
+                    }
                 case .ready:
                     pageContent(size: pageSize)
                 }
@@ -74,8 +78,14 @@ public struct ReaderView: View {
                     // the task. Without re-attaching, a layout pass mid-download
                     // reported "Download cancelled" over a transfer still running.
                     await model.open(pageSize: pageSize)
-                case .ready, .failed:
+                case .ready:
                     await model.resize(to: pageSize)
+                case .failed:
+                    // resize() guards on the size having changed, and open()
+                    // already assigned this one — so routing failure here was
+                    // an early return every time, with no way back into the
+                    // book but dismissing it. The retry button is the way out.
+                    break
                 }
             }
         }

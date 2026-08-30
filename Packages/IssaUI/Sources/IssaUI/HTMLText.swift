@@ -34,7 +34,10 @@ public enum HTMLText {
         // that are not meant to appear.
         enum Piece {
             case text(String, Style)
-            case gap(Int)
+            /// `hard` gaps come from block tags and merge to the larger of the
+            /// two; soft ones come from `<br>` and add up, because two of them
+            /// in a row is how most scraped blurbs separate paragraphs.
+            case gap(Int, hard: Bool)
         }
 
         var pieces: [Piece] = []
@@ -58,9 +61,10 @@ public enum HTMLText {
                 }
                 flush()
                 var breaks = 0
+                var hard = true
                 apply(tag: String(html[html.index(after: index) ..< close]),
-                      styles: &styles, breaks: &breaks)
-                if breaks > 0 { pieces.append(.gap(breaks)) }
+                      styles: &styles, breaks: &breaks, hard: &hard)
+                if breaks > 0 { pieces.append(.gap(breaks, hard: hard)) }
                 index = html.index(after: close)
             } else {
                 buffer.append(html[index])
@@ -91,8 +95,9 @@ public enum HTMLText {
         var wroteAnything = false
         for piece in pieces {
             switch piece {
-            case let .gap(count):
-                if wroteAnything { pendingGap = max(pendingGap, count) }
+            case let .gap(count, hard):
+                guard wroteAnything else { break }
+                pendingGap = hard ? max(pendingGap, count) : pendingGap + count
             case let .text(raw, style):
                 var text = raw
                 if !wroteAnything {
@@ -124,7 +129,9 @@ public enum HTMLText {
         String(attributed(html).characters)
     }
 
-    private static func apply(tag raw: String, styles: inout [Style], breaks: inout Int) {
+    private static func apply(
+        tag raw: String, styles: inout [Style], breaks: inout Int, hard: inout Bool,
+    ) {
         let closing = raw.hasPrefix("/")
         let body = closing ? String(raw.dropFirst()) : raw
         let name = body.prefix { !$0.isWhitespace && $0 != "/" }.lowercased()
@@ -145,7 +152,8 @@ public enum HTMLText {
                 if !body.hasSuffix("/") { styles.append(style) }
             }
         case "br":
-            breaks = max(breaks, 1)
+            breaks = 1
+            hard = false
         case "p", "div", "ul", "ol", "li", "h1", "h2", "h3", "h4", "blockquote":
             breaks = max(breaks, name == "li" ? 1 : 2)
         default:
@@ -153,19 +161,49 @@ public enum HTMLText {
         }
     }
 
+    /// The destination of an anchor, if it is one worth following.
+    ///
+    /// Descriptions are scraped metadata, not content this app wrote, so the
+    /// scheme is checked. `URL(string:)` happily builds `javascript:` and
+    /// `data:` URLs, and a link rendered from one is handed straight to the
+    /// system when tapped — a book blurb must not be able to do that.
     private static func href(in tag: String) -> URL? {
-        guard let range = tag.range(of: "href", options: .caseInsensitive) else { return nil }
-        let rest = tag[range.upperBound...].drop { $0 == "=" || $0.isWhitespace }
-        let quote = rest.first
-        let value: Substring
-        if quote == "\"" || quote == "'" {
-            let inner = rest.dropFirst()
-            guard let end = inner.firstIndex(of: quote!) else { return nil }
-            value = inner[inner.startIndex ..< end]
-        } else {
-            value = rest.prefix { !$0.isWhitespace && $0 != ">" }
+        guard let value = attribute("href", in: tag) else { return nil }
+        // The value is markup too: `?a=1&amp;b=2` must not navigate to a
+        // parameter literally named "amp;b".
+        let decoded = decodeEntities(value).trimmingCharacters(in: .whitespaces)
+        guard let url = URL(string: decoded),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https"
+        else { return nil }
+        return url
+    }
+
+    /// Reads one attribute out of a tag body.
+    ///
+    /// Matched as a whole attribute name, not a substring: searching for
+    /// "href" anywhere found it inside `class="nohref"` and returned the
+    /// wreckage instead of the real destination.
+    static func attribute(_ name: String, in tag: String) -> String? {
+        var rest = Substring(tag)
+        while let found = rest.range(of: name, options: .caseInsensitive) {
+            let before = found.lowerBound == rest.startIndex
+                ? nil : rest[rest.index(before: found.lowerBound)]
+            var after = rest[found.upperBound...].drop { $0.isWhitespace }
+            // A real attribute is preceded by whitespace and followed by `=`.
+            if before.map({ $0.isWhitespace }) ?? true, after.first == "=" {
+                after = after.dropFirst().drop { $0.isWhitespace }
+                guard let quote = after.first else { return nil }
+                if quote == "\"" || quote == "'" {
+                    let inner = after.dropFirst()
+                    guard let end = inner.firstIndex(of: quote) else { return nil }
+                    return String(inner[inner.startIndex ..< end])
+                }
+                return String(after.prefix { !$0.isWhitespace && $0 != ">" })
+            }
+            rest = rest[found.upperBound...]
         }
-        return URL(string: String(value).trimmingCharacters(in: .whitespaces))
+        return nil
     }
 
     private static func resolved(_ font: Font, bold: Bool, italic: Bool) -> Font {

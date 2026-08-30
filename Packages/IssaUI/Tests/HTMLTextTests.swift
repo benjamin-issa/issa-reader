@@ -83,3 +83,59 @@ struct HTMLTextTests {
         #expect(plain("<p></p>") == "")
     }
 }
+
+/// The review found the first version of these tests vacuous: asserting that a
+/// run had *a* font passed even with the bold handling deleted, because every
+/// run gets a font. These compare against the surrounding text instead, so
+/// removing the feature fails the test.
+@Suite("Description markup that came from somewhere else")
+struct HTMLTextSafetyTests {
+    @Test("bold and italic differ from the text around them")
+    func emphasisIsDistinguishable() {
+        let bold = HTMLText.attributed("plain <b>loud</b>")
+        let fonts = bold.runs.map(\.font)
+        #expect(fonts.count >= 2)
+        #expect(fonts.first != fonts.last, "bold run must not match the plain run")
+
+        let italic = HTMLText.attributed("plain <i>leaning</i>")
+        let italicFonts = italic.runs.map(\.font)
+        #expect(italicFonts.first != italicFonts.last)
+    }
+
+    /// Descriptions are scraped metadata. A blurb must not be able to hand the
+    /// system a javascript: or data: URL to open.
+    @Test("only http and https links survive")
+    func linkSchemesAreRestricted() {
+        for hostile in ["javascript:alert(1)", "data:text/html;base64,PHA+", "file:///etc/passwd"] {
+            let rendered = HTMLText.attributed("<a href=\"\(hostile)\">tap</a>")
+            #expect(rendered.runs.allSatisfy { $0.link == nil }, "\(hostile) must not become a link")
+            // The words still show; only the destination is dropped.
+            #expect(HTMLText.plain("<a href=\"\(hostile)\">tap</a>") == "tap")
+        }
+        let safe = HTMLText.attributed("<a href=\"https://example.com/x\">tap</a>")
+        #expect(safe.runs.compactMap(\.link).first?.absoluteString == "https://example.com/x")
+    }
+
+    @Test("href is matched as an attribute, not as a substring")
+    func hrefIsNotSubstringMatched() {
+        let rendered = HTMLText.attributed(
+            "<a class=\"nohref\" href=\"https://example.com/real\">tap</a>")
+        #expect(rendered.runs.compactMap(\.link).first?.absoluteString == "https://example.com/real")
+    }
+
+    @Test("entities inside a link's destination are decoded")
+    func hrefEntities() {
+        let rendered = HTMLText.attributed("<a href=\"https://example.com/s?a=1&amp;b=2\">tap</a>")
+        #expect(rendered.runs.compactMap(\.link).first?.absoluteString
+            == "https://example.com/s?a=1&b=2")
+    }
+
+    /// Two <br> in a row is how most scraped blurbs separate paragraphs.
+    @Test("consecutive breaks add up rather than collapsing")
+    func consecutiveBreaks() {
+        #expect(HTMLText.plain("A<br>B") == "A\nB")
+        #expect(HTMLText.plain("A<br><br>B") == "A\n\nB")
+        // Block boundaries still merge — </p><p> is one paragraph break, not two.
+        #expect(HTMLText.plain("<p>A</p><p>B</p>") == "A\n\nB")
+    }
+}

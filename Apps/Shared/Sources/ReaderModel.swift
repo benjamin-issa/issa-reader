@@ -228,6 +228,12 @@ public final class ReaderModel {
         }
     }
 
+    /// Starts the whole open again after a failure.
+    public func retryOpen(pageSize: CGSize) async {
+        phase = .loading("Opening…")
+        await open(pageSize: pageSize)
+    }
+
     /// Stops an in-progress download and closes the book.
     public func cancelDownload() {
         guard let format = BookContentService(client: session.client)

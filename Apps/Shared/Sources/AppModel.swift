@@ -147,10 +147,20 @@ public final class AppModel {
 
         if phase != .ready { phase = .signingIn }
         await session.restore()
-        if case .signedIn = session.state { await enterLibrary() }
-        else if phase == .ready {
-            // Cached shelf, no working token: usable offline, honest about it.
-            loadError = books.isEmpty ? nil : nil
+        // The same handling as adopt(). Fixing only that one left this path —
+        // the one that runs on every cold launch — dropping the reason on the
+        // floor and stranding phase at .signingIn, which renders as the blank
+        // sign-in form: exactly the bug adopt() was fixed for.
+        switch session.state {
+        case .signedIn:
+            await enterLibrary()
+        case let .failed(reason):
+            // A cached shelf is still worth showing; say why it may be stale
+            // rather than replacing it with a form.
+            loadError = reason
+            if phase != .ready { phase = .chooseServer }
+        case .signedOut, .signingIn, .expired:
+            if phase != .ready { phase = .chooseServer }
         }
     }
 
@@ -481,8 +491,12 @@ public final class AppModel {
                 throw StorytellerError.transport(reason)
             case let .downloading(_, written, total):
                 onProgress(written, total)
-            case .paused:
-                throw StorytellerError.transport("The download was paused.")
+            case let .paused(fraction):
+                // Not a failure. Pausing from the Downloads screen used to
+                // throw here, and the reader's .failed phase was a dead end —
+                // resuming completed the file but never revived the screen.
+                // Keep waiting; resuming picks straight back up.
+                onProgress(Int64(fraction * 100), 100)
             case .queued, .none:
                 break
             }
