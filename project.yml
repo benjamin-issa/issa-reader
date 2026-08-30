@@ -1,0 +1,120 @@
+name: IssaReader
+
+options:
+  bundleIdPrefix: com.benjaminissa.issareader
+  deploymentTarget:
+    iOS: "26.0"
+    macOS: "26.0"
+    tvOS: "26.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    DEVELOPMENT_TEAM: <certificate CN suffix>
+    CODE_SIGN_STYLE: Automatic
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+
+packages:
+  IssaReaderKit:
+    path: .
+
+targets:
+  IssaReader-iOS:
+    type: application
+    platform: iOS
+    sources:
+      - path: Apps/IssaReader-iOS/Sources
+      - path: Apps/Shared/Sources
+    dependencies:
+      - package: IssaReaderKit
+        product: IssaCore
+      - package: IssaReaderKit
+        product: IssaUI
+      - package: IssaReaderKit
+        product: IssaEPUB
+      - package: IssaReaderKit
+        product: IssaRender
+      - package: IssaReaderKit
+        product: IssaPlayback
+      - target: IssaWidgets
+        embed: true
+        codeSign: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.benjaminissa.issareader
+        INFOPLIST_FILE: Apps/IssaReader-iOS/Info.plist
+        TARGETED_DEVICE_FAMILY: "1,2"
+        CODE_SIGN_ENTITLEMENTS: Apps/IssaReader-iOS/IssaReader.entitlements
+
+  IssaWidgets:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Apps/IssaWidgets/Sources
+    dependencies:
+      - package: IssaReaderKit
+        product: IssaCore
+      - package: IssaReaderKit
+        product: IssaUI
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.benjaminissa.issareader.widgets
+        INFOPLIST_FILE: Apps/IssaWidgets/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Apps/IssaWidgets/IssaWidgets.entitlements
+
+  IssaReader-macOS:
+    type: application
+    platform: macOS
+    sources:
+      - path: Apps/IssaReader-macOS/Sources
+      - path: Apps/Shared/Sources
+    dependencies:
+      - package: IssaReaderKit
+        product: IssaCore
+      - package: IssaReaderKit
+        product: IssaUI
+      - package: IssaReaderKit
+        product: IssaEPUB
+      - package: IssaReaderKit
+        product: IssaRender
+      - package: IssaReaderKit
+        product: IssaPlayback
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.benjaminissa.issareader
+        INFOPLIST_FILE: Apps/IssaReader-macOS/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Apps/IssaReader-macOS/IssaReader.entitlements
+        # Ad-hoc "sign to run locally". Automatic provisioning needs an Apple ID
+        # signed in to Xcode, which a headless build does not have. Switch to
+        # Automatic once the account is added and the App Group is registered.
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "-"
+        PROVISIONING_PROFILE_SPECIFIER: ""
+        DEVELOPMENT_TEAM: ""
+
+  IssaReader-tvOS:
+    type: application
+    platform: tvOS
+    sources:
+      - path: Apps/IssaReader-tvOS/Sources
+      - path: Apps/Shared/Sources
+    dependencies:
+      - package: IssaReaderKit
+        product: IssaCore
+      - package: IssaReaderKit
+        product: IssaUI
+      - package: IssaReaderKit
+        product: IssaEPUB
+      - package: IssaReaderKit
+        product: IssaRender
+      - package: IssaReaderKit
+        product: IssaPlayback
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.benjaminissa.issareader
+        INFOPLIST_FILE: Apps/IssaReader-tvOS/Info.plist

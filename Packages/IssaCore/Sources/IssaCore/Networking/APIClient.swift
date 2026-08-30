@@ -61,7 +61,10 @@ public actor APIClient {
 
     /// Returns the raw status without throwing, for capability probing.
     public func probeStatus(_ path: String) async -> Int {
-        guard let req = try? request(path, method: "GET") else { return -1 }
+        var req = request(path, method: "GET")
+        if let token = await tokens.currentToken() {
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
         guard let (_, response) = try? await session.data(for: req),
               let http = response as? HTTPURLResponse
         else { return -1 }
