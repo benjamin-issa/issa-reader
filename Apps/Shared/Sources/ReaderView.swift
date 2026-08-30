@@ -21,6 +21,10 @@ public struct ReaderView: View {
     @Environment(NowPlayingController.self) private var nowPlaying
     @Environment(PlaybackSettings.self) private var settings
     @Environment(AppModel.self) private var app
+    #if os(macOS)
+    @Environment(\.controlActiveState) private var controlActiveState
+    private var isActiveScene: Bool { controlActiveState == .key }
+    #endif
 
     public init(book: Book, session: Session) {
         _model = State(initialValue: ReaderModel(book: book, session: session))
@@ -193,6 +197,18 @@ public struct ReaderView: View {
         // A tap outside the menu dismisses the selection, the way every text
         // selection anywhere else does.
         .onChange(of: model.pageIndex) { model.clearSelection() }
+        #if os(macOS)
+        // Bare arrow keys turn pages, which is what a Mac reader tries first.
+        // The menu shortcuts are ⌘-arrow so the two do not collide.
+        .focusable()
+        .onKeyPress(.rightArrow) { Task { await model.nextPage() }; return .handled }
+        .onKeyPress(.leftArrow) { Task { await model.previousPage() }; return .handled }
+        .onKeyPress(.space) {
+            guard model.hasNarration else { return .ignored }
+            Task { await model.togglePlayback() }
+            return .handled
+        }
+        #endif
         .onAppear {
             // Seed from the shared preferences, then follow them: the Reading
             // settings screen is otherwise writing to a value nothing reads.
@@ -215,6 +231,34 @@ public struct ReaderView: View {
             )
         }
         .task { model.loadAnnotations(await app.annotations(for: model.book.uuid)) }
+        #if os(macOS)
+        // Menu commands arrive as notifications; only the frontmost reader
+        // window is active, so only it responds.
+        .onReceive(NotificationCenter.default.publisher(for: ReaderCommand.find.notification)) { _ in
+            guard isActiveScene else { return }
+            showsSearch = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: ReaderCommand.contents.notification)) { _ in
+            guard isActiveScene else { return }
+            showsContents = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: ReaderCommand.marks.notification)) { _ in
+            guard isActiveScene else { return }
+            showsAnnotations = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: ReaderCommand.bookmark.notification)) { _ in
+            guard isActiveScene else { return }
+            model.toggleBookmark()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: ReaderCommand.nextPage.notification)) { _ in
+            guard isActiveScene else { return }
+            Task { await model.nextPage() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: ReaderCommand.previousPage.notification)) { _ in
+            guard isActiveScene else { return }
+            Task { await model.previousPage() }
+        }
+        #endif
         .onChange(of: settings.readerStyle) { _, style in model.style = style }
         .onDisappear { model.setReaderVisible(false) }
     }
