@@ -74,6 +74,15 @@ struct LibraryArrangementTests {
         #expect(Set(LibraryArrangement(shelf: .toRead).apply(to: books).map(\.title)) == ["Two", "Four"])
     }
 
+    /// The matching is word-wise for a reason: "Abandoned" contains "done", so
+    /// a substring test filed an abandoned book under Finished.
+    @Test("a custom status is not mistaken for one of the three")
+    func customStatusIsNotMisfiled() {
+        let books = [book("Gave up", status: "Abandoned"), book("Looked up", status: "Reference")]
+        #expect(LibraryArrangement(shelf: .finished).apply(to: books).isEmpty)
+        #expect(LibraryArrangement(shelf: .toRead).apply(to: books).count == 2)
+    }
+
     /// Picking a second tag narrows; a reader who chose two means both.
     @Test("tags narrow rather than widen")
     func tagFilter() {

@@ -162,10 +162,14 @@ public extension LibraryArrangement {
     /// file every book in progress as done.
     static func stage(of book: Book) -> Stage {
         guard let name = book.status?.name.lowercased(), !name.isEmpty else { return .toRead }
-        if name.contains("reading") || name.contains("in progress") { return .reading }
-        if name.contains("to read") || name.contains("unread")
-            || name.contains("want") || name.contains("not started") { return .toRead }
-        if name.contains("read") || name.contains("finished") || name.contains("done") {
+        // Whole words for the short ones, substrings only for the phrases.
+        // "Abandoned" contains "done", so a reader who abandoned a book found
+        // it filed under Finished.
+        let words = Set(name.split { !$0.isLetter }.map(String.init))
+        if words.contains("reading") || name.contains("in progress") { return .reading }
+        if name.contains("to read") || words.contains("unread")
+            || words.contains("want") || name.contains("not started") { return .toRead }
+        if words.contains("read") || words.contains("finished") || words.contains("done") {
             return .finished
         }
         // An entirely custom status ("Abandoned", "Reference") is not one of

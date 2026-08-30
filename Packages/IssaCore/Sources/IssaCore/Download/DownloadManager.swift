@@ -181,7 +181,14 @@ public final class DownloadManager: NSObject {
     }
 
     public func pause(_ job: Job) {
-        guard let task = tasks[job] else { return }
+        guard let task = tasks[job] else {
+            // A job is `.queued` from the moment it is asked for until its
+            // first byte arrives — which for a request that 404s is never. With
+            // no task handle to cancel this returned silently, so the button
+            // offering to pause a waiting download did nothing at all.
+            if states[job]?.isActive == true { states[job] = .paused(fractionCompleted: 0) }
+            return
+        }
         pausing.insert(job)
         let fraction = states[job]?.fraction ?? 0
         task.cancel { [weak self] data in
