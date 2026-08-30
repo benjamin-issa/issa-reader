@@ -6,11 +6,12 @@ import SwiftUI
 public struct LibraryView: View {
     @Environment(AppModel.self) private var app
     @State private var search = ""
+    @State private var results: [Book] = []
 
     public init() {}
 
     private var books: [Book] {
-        app.derivation.search(search)
+        search.isEmpty ? app.books : results
     }
 
     public var body: some View {
@@ -30,6 +31,12 @@ public struct LibraryView: View {
         }
         .background(Palette.paper)
         .searchable(text: $search, prompt: "Search your library")
+        // Full-text, from the local index: the server's book endpoint takes no
+        // query parameters at all, so search has to happen here either way.
+        .task(id: search) {
+            guard !search.isEmpty else { results = []; return }
+            results = await app.search(search)
+        }
         .refreshable { await app.refreshLibrary() }
         .overlay {
             if app.books.isEmpty, app.isLoadingLibrary {

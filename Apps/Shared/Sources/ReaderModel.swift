@@ -59,6 +59,9 @@ public final class ReaderModel {
 
     /// Playback rate to start narration at, supplied by the app's preferences.
     public var preferredRate: Double = 1.0
+    /// Records a position durably before it is sent. Supplied by the app so the
+    /// reader does not need to know about the store.
+    public var enqueuePosition: ((ReadiumLocator, Double) async -> Void)?
 
     public init(book: Book, session: Session, style: ReaderStyle = ReaderStyle()) {
         self.book = book
@@ -418,7 +421,15 @@ public final class ReaderModel {
                 totalProgression: overall,
             ),
         )
-        _ = try? await ProgressService(client: session.client).save(locator, for: book.uuid)
+        // Recorded locally first: a chapter read with no signal must not be
+        // lost, and the drain collapses a run of page turns to one write.
+        let timestamp = ProgressService.now()
+        if let enqueuePosition {
+            await enqueuePosition(locator, timestamp)
+        } else {
+            _ = try? await ProgressService(client: session.client)
+                .save(locator, for: book.uuid, timestamp: timestamp)
+        }
         publishSnapshot(progress: overall)
     }
 

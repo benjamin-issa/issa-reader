@@ -14,6 +14,7 @@ public struct ReaderView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(NowPlayingController.self) private var nowPlaying
     @Environment(PlaybackSettings.self) private var settings
+    @Environment(AppModel.self) private var app
 
     public init(book: Book, session: Session) {
         _model = State(initialValue: ReaderModel(book: book, session: session))
@@ -106,6 +107,12 @@ public struct ReaderView: View {
             // settings screen is otherwise writing to a value nothing reads.
             model.style = settings.readerStyle
             model.preferredRate = settings.playbackRate
+            model.enqueuePosition = { [weak app = app] locator, timestamp in
+                await app?.enqueue(
+                    .position, bookUUID: model.book.uuid,
+                    payload: MutationDrain.PositionPayload(locator: locator, timestamp: timestamp),
+                )
+            }
             model.setReaderVisible(true)
             nowPlaying.attach(
                 coordinator: model.readalong,

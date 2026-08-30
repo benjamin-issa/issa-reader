@@ -139,10 +139,18 @@ public struct LibraryDerivation: Sendable {
     }
 
     /// Tag counts, for the filter UI a 3.x server would serve from /library/facets.
+    ///
+    /// Written out rather than chained: the inferred tuple type made this one of
+    /// the slowest expressions in the package to type-check.
     public var tagCounts: [(name: String, count: Int)] {
-        Dictionary(grouping: books.flatMap(\.tags), by: \.name)
-            .map { ($0.key, $0.value.count) }
-            .sorted { $0.count > $1.count || ($0.count == $1.count && $0.0 < $1.0) }
+        var counts: [String: Int] = [:]
+        for tag in books.flatMap(\.tags) {
+            counts[tag.name, default: 0] += 1
+        }
+        let pairs: [(name: String, count: Int)] = counts.map { (name: $0.key, count: $0.value) }
+        return pairs.sorted { left, right in
+            left.count == right.count ? left.name < right.name : left.count > right.count
+        }
     }
 
     public var formatCounts: [BookFormat: Int] {

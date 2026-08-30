@@ -37,10 +37,20 @@ public final class AppModel {
     public var derivation: LibraryDerivation { LibraryDerivation(books: books) }
 
     private let keychain: any TokenPersisting
+    /// The on-device catalogue. Present as soon as a server is chosen, so the
+    /// shelf is populated before any request is made.
+    public private(set) var store: LibraryStore?
+    private var mutations: MutationQueue?
+    public let reachability = Reachability()
+    /// Queued writes still waiting for a connection, for the sync row.
+    public private(set) var pendingWrites = 0
 
     public init(keychain: any TokenPersisting = KeychainStorage()) {
         self.keychain = keychain
         serverAddress = UserDefaults.standard.string(forKey: Self.lastServerKey) ?? ""
+        reachability.onBecameOnline = { [weak self] in
+            Task { await self?.drainPendingWrites() }
+        }
     }
 
     private static let lastServerKey = "issa.lastServer"
@@ -85,9 +95,26 @@ public final class AppModel {
         UserDefaults.standard.set(address, forKey: Self.lastServerKey)
         let session = Session(serverURL: url, keychain: keychain)
         self.session = session
-        phase = .signingIn
+
+        // Open the local store first and show what is already known. A reader
+        // opening the app on a train should see their shelf, not a spinner that
+        // resolves to an error.
+        store = try? LibraryStore(serverKey: url.absoluteString)
+        if let store {
+            mutations = try? await MutationQueue(store: store)
+            if let cached = try? await store.allBooks(), !cached.isEmpty {
+                books = cached
+                phase = .ready
+            }
+        }
+
+        if phase != .ready { phase = .signingIn }
         await session.restore()
         if case .signedIn = session.state { await enterLibrary() }
+        else if phase == .ready {
+            // Cached shelf, no working token: usable offline, honest about it.
+            loadError = books.isEmpty ? nil : nil
+        }
     }
 
     public func adopt(token: String) async {
@@ -152,13 +179,46 @@ public final class AppModel {
         defer { isLoadingLibrary = false }
         do {
             let service = LibraryService(client: session.client)
-            books = try await service.allBooks()
+            let fetched = try await service.allBooks()
+            books = fetched
             statuses = (try? await service.statuses()) ?? statuses
             ratings = (try? await service.myRatings()) ?? ratings
             loadError = nil
+            try? await store?.replaceCatalogue(fetched)
         } catch {
-            loadError = Self.message(for: error)
+            // A failed refresh is not an empty library when something is cached.
+            if books.isEmpty, let cached = try? await store?.allBooks(), !cached.isEmpty {
+                books = cached
+            }
+            loadError = books.isEmpty ? Self.message(for: error) : nil
         }
+        await drainPendingWrites()
+    }
+
+    /// Sends anything written while there was no connection.
+    public func drainPendingWrites() async {
+        guard let session, let mutations else { return }
+        _ = await MutationDrain(queue: mutations, client: session.client).drain()
+        pendingWrites = (try? await mutations.count) ?? 0
+    }
+
+    /// Records a write locally, then attempts it.
+    ///
+    /// The queue is written first so that losing the connection mid-request
+    /// still leaves the intent recorded.
+    public func enqueue(_ kind: MutationQueue.Kind, bookUUID: String, payload: some Encodable) async {
+        guard let mutations, let data = try? JSONEncoder().encode(payload) else { return }
+        try? await mutations.enqueue(kind, bookUUID: bookUUID, payload: data)
+        pendingWrites = (try? await mutations.count) ?? 0
+        await drainPendingWrites()
+    }
+
+    /// Search, using the store's full-text index when there is one.
+    public func search(_ query: String) async -> [Book] {
+        guard let store, let hits = try? await store.search(query) else {
+            return LibraryDerivation(books: books).search(query)
+        }
+        return hits
     }
 
     // MARK: - Per-user state
@@ -170,28 +230,21 @@ public final class AppModel {
     /// the next refresh is worse than one that never appeared to change.
     public func setStatus(_ status: Status, for book: Book) async {
         guard let session, let index = books.firstIndex(where: { $0.uuid == book.uuid }) else { return }
-        let previous = books[index].status
         books[index].status = status
-        do {
-            try await LibraryMutationService(client: session.client)
-                .setStatus(status.uuid, for: book.uuid)
-        } catch {
-            books[index].status = previous
-            loadError = "Couldn't change the status. " + Self.message(for: error)
-        }
+        try? await store?.upsert(books[index])
+        // Queued, not sent directly: a shelf change made offline must survive,
+        // and rolling it back under the reader's finger was the old behaviour.
+        await enqueue(.status, bookUUID: book.uuid,
+                      payload: MutationDrain.StatusPayload(status: status.uuid))
+        _ = session
     }
 
     public func setRating(_ value: Double?, for book: Book) async {
         guard let session else { return }
-        let previous = ratings[book.uuid]
         if let value { ratings[book.uuid] = value } else { ratings.removeValue(forKey: book.uuid) }
-        do {
-            try await LibraryMutationService(client: session.client)
-                .setRating(value, for: book.uuid)
-        } catch {
-            if let previous { ratings[book.uuid] = previous } else { ratings.removeValue(forKey: book.uuid) }
-            loadError = "Couldn't save the rating. " + Self.message(for: error)
-        }
+        await enqueue(.rating, bookUUID: book.uuid,
+                      payload: MutationDrain.RatingPayload(rating: value))
+        _ = session
     }
 
     /// Re-reads one book after something changed it server-side.
