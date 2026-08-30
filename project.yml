@@ -30,6 +30,7 @@ targets:
     sources:
       - path: Apps/IssaReader-iOS/Sources
       - path: Apps/Shared/Sources
+      - path: Apps/IssaReader-iOS/Assets.xcassets
     dependencies:
       - package: IssaReaderKit
         product: IssaCore
@@ -49,6 +50,8 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.benjaminissa.issareader
         INFOPLIST_FILE: Apps/IssaReader-iOS/Info.plist
         TARGETED_DEVICE_FAMILY: "1,2"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         CODE_SIGN_ENTITLEMENTS: Apps/IssaReader-iOS/IssaReader.entitlements
 
   IssaWidgets:
@@ -73,6 +76,7 @@ targets:
     sources:
       - path: Apps/IssaReader-macOS/Sources
       - path: Apps/Shared/Sources
+      - path: Apps/IssaReader-macOS/Assets.xcassets
     dependencies:
       - package: IssaReaderKit
         product: IssaCore
@@ -88,6 +92,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.benjaminissa.issareader
         INFOPLIST_FILE: Apps/IssaReader-macOS/Info.plist
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         # Ad-hoc "sign to run locally". Automatic provisioning needs an Apple ID
         # signed in to Xcode, which a headless build does not have. Switch to
         # Automatic once the account is added and the App Group is registered.
@@ -107,6 +113,7 @@ targets:
     sources:
       - path: Apps/IssaReader-tvOS/Sources
       - path: Apps/Shared/Sources
+      - path: Apps/IssaReader-tvOS/Assets.xcassets
     dependencies:
       - package: IssaReaderKit
         product: IssaCore
@@ -122,3 +129,4 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.benjaminissa.issareader
         INFOPLIST_FILE: Apps/IssaReader-tvOS/Info.plist
+        ASSETCATALOG_COMPILER_APPICON_NAME: "App Icon & Top Shelf Image"
