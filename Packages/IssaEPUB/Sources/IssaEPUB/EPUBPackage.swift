@@ -44,7 +44,14 @@ public struct EPUBPackage: Sendable {
 
     public struct NavPoint: Sendable, Hashable {
         public let title: String
+        /// Archive path of the document, with any fragment removed.
         public let href: String
+        /// Element id the entry points at, when it targets part of a document.
+        ///
+        /// Books that pack many chapters into a few large spine files — which
+        /// Gutenberg's do — distinguish their chapters only by this fragment.
+        /// Dropping it collapses a seventeen-chapter book to four entries.
+        public let fragment: String?
         public let depth: Int
     }
 }
@@ -82,6 +89,13 @@ public extension EPUBPackage {
             spine: spine,
             navigation: navigation,
         )
+    }
+
+    /// The part of an href after `#`, if any.
+    static func fragmentIdentifier(of href: String) -> String? {
+        guard let hash = href.firstIndex(of: "#") else { return nil }
+        let fragment = String(href[href.index(after: hash)...])
+        return fragment.isEmpty ? nil : fragment
     }
 
     /// Resolves an href that appears inside `base` to an archive path.
@@ -169,7 +183,12 @@ public extension EPUBPackage {
             return document.descendants("navPoint").compactMap { point in
                 guard let label = point.descendants("text").first?.trimmedText,
                       let href = point.descendants("content").first?["src"] else { return nil }
-                return NavPoint(title: label, href: resolve(href, relativeTo: ncx.href), depth: 0)
+                return NavPoint(
+                    title: label,
+                    href: resolve(href, relativeTo: ncx.href),
+                    fragment: fragmentIdentifier(of: href),
+                    depth: 0,
+                )
             }
         }
         return []
@@ -185,6 +204,7 @@ public extension EPUBPackage {
                 points.append(NavPoint(
                     title: title,
                     href: resolve(href, relativeTo: base),
+                    fragment: fragmentIdentifier(of: href),
                     depth: depth,
                 ))
             }

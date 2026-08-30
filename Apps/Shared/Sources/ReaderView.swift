@@ -59,8 +59,8 @@ public struct ReaderView: View {
         #if !os(tvOS)
         .sheet(isPresented: $showsContents) {
             NavigationStack {
-                ChapterListView(model: model) { index in
-                    Task { await model.go(toChapter: index) }
+                ChapterListView(model: model) { index, fragment in
+                    Task { await model.go(toChapter: index, fragment: fragment) }
                 }
             }
             .presentationDetents([.medium, .large])

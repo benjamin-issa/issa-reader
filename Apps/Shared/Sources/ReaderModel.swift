@@ -323,9 +323,24 @@ public final class ReaderModel {
         return text.trimmingCharacters(in: .whitespacesAndNewlines).count < 4
     }
 
-    public func go(toChapter index: Int) async {
+    public func go(toChapter index: Int, fragment: String? = nil) async {
         await loadChapter(index)
+        // Books that pack many chapters into one spine file need the fragment to
+        // land anywhere useful; without it every entry opens page one.
+        if let fragment, let layout, let page = layout.page(containingFragment: fragment) {
+            pageIndex = page.index
+        }
         scheduleSave()
+    }
+
+    /// Element ids appearing on the current page, for marking the contents list.
+    public func visibleFragments() -> Set<String> {
+        guard let layout, let page = currentPage else { return [] }
+        var found: Set<String> = []
+        layout.attributedText.enumerateAttribute(.issaFragmentID, in: page.characterRange) { value, _, _ in
+            if let id = value as? String { found.insert(id) }
+        }
+        return found
     }
 
     // MARK: - Progress

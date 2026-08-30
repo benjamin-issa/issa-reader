@@ -108,3 +108,42 @@ struct SMILClockTests {
         #expect(SMILClock.seconds(from: "abc") == nil)
     }
 }
+
+/// Navigation entries must keep their fragment.
+///
+/// Gutenberg packs many chapters into a handful of large spine files, so nav
+/// points differ only by the `#fragment`. Dropping it turns a seventeen-chapter
+/// book into four table-of-contents rows that all open page one.
+struct NavigationFragmentTests {
+    @Test("extracts the fragment from an href")
+    func extractsFragment() {
+        #expect(EPUBPackage.fragmentIdentifier(of: "ch01.xhtml#sec-3") == "sec-3")
+        #expect(EPUBPackage.fragmentIdentifier(of: "ch01.xhtml") == nil)
+        #expect(EPUBPackage.fragmentIdentifier(of: "ch01.xhtml#") == nil)
+    }
+
+    @Test("a real book keeps more nav points than spine items")
+    func keepsPerChapterEntries() throws {
+        let url = try #require(
+            Bundle.module.url(forResource: "Fixtures/alice", withExtension: "epub"),
+        )
+        let package = try EPUBPackage.open(url: url)
+        let distinctHrefs = Set(package.navigation.map(\.href))
+
+        // Whether this book packs chapters into few files or many, every entry
+        // that names a fragment must have kept it.
+        for point in package.navigation where point.href.contains("#") {
+            #expect(point.fragment != nil)
+        }
+        #expect(!package.navigation.isEmpty)
+        #expect(!distinctHrefs.isEmpty)
+
+        // Entries pointing into the same document must be distinguishable.
+        let grouped = Dictionary(grouping: package.navigation, by: \.href)
+        for (_, points) in grouped where points.count > 1 {
+            let fragments = points.compactMap(\.fragment)
+            #expect(fragments.count == points.count,
+                    "nav points share a document but not all carry a fragment")
+        }
+    }
+}
