@@ -15,6 +15,9 @@ import WidgetKit
 public final class ReaderModel {
     public enum Phase: Equatable {
         case loading(String)
+        /// Fetching the book itself, with real bytes to show. Distinct from
+        /// `.loading` because this one can take minutes and must be cancellable.
+        case downloading(received: Int64, total: Int64)
         case ready
         case failed(String)
     }
@@ -63,6 +66,10 @@ public final class ReaderModel {
     /// reader does not need to know about the store.
     /// Persisting annotations is the app's job, not the reader's: this model
     /// knows the geometry, the store knows the disk.
+    /// Where the reader gets its downloads from. Set by the view, so the model
+    /// does not have to know about AppModel to use the one download engine.
+    public weak var downloadHost: AppModel?
+
     public var onSaveAnnotation: ((Annotation) -> Void)?
     public var onDeleteAnnotation: ((Annotation) -> Void)?
 
@@ -139,6 +146,10 @@ public final class ReaderModel {
         switch phase {
         case let .failed(reason): return reason
         case .loading: return "Opening the book"
+        case let .downloading(received, total):
+            return total > 0
+                ? "Downloading, \(Int(Double(received) / Double(total) * 100)) percent"
+                : "Downloading"
         case .ready: return "This page has no text on it."
         }
     }
@@ -167,9 +178,19 @@ public final class ReaderModel {
             return
         }
 
-        phase = .loading(content.isDownloaded(book, format: format) ? "Opening…" : "Downloading…")
+        let alreadyOnDisk = content.isDownloaded(book, format: format)
+        phase = alreadyOnDisk ? .loading("Opening…") : .downloading(received: 0, total: 0)
         do {
-            let url = try await content.ensureDownloaded(book, format: format)
+            let url: URL
+            if alreadyOnDisk {
+                url = content.localURL(for: book, format: format)
+            } else if let app = downloadHost {
+                url = try await app.downloadAndWait(book, format: format) { [weak self] written, total in
+                    self?.phase = .downloading(received: written, total: total)
+                }
+            } else {
+                url = try await content.ensureDownloaded(book, format: format)
+            }
             let package = try EPUBPackage.open(url: url)
             self.package = package
             // A book the server calls ALIGNED can still carry no overlays, so
@@ -189,9 +210,30 @@ public final class ReaderModel {
             guard await loadChapter(chapterIndex, restoring: stored?.locator) else { return }
             await prepareNarration(package: package)
             phase = .ready
+        } catch is CancellationError {
+            // The view task was replaced, not the reader's intent. The transfer
+            // is still running in the background session and the next pass
+            // picks the wait back up, so leave the phase exactly as it is.
+            return
         } catch {
-            phase = .failed(AppModel.message(for: error))
+            // Distinguish "the file never arrived" from "the server is down".
+            // Both used to render as "Couldn't reach your server", which sent
+            // people looking at their network for a book that simply had not
+            // finished downloading.
+            let onDisk = BookContentService(client: session.client)
+                .isDownloaded(book, format: format)
+            phase = .failed(onDisk
+                ? "Couldn't open this book. " + AppModel.message(for: error)
+                : "This book hasn't finished downloading. " + AppModel.message(for: error))
         }
+    }
+
+    /// Stops an in-progress download and closes the book.
+    public func cancelDownload() {
+        guard let format = BookContentService(client: session.client)
+            .preferredReadingFormat(for: book) else { return }
+        downloadHost?.downloads?.cancel(.init(bookUUID: book.uuid, format: format))
+        phase = .failed("Download cancelled.")
     }
 
     /// The first spine item with actual prose.

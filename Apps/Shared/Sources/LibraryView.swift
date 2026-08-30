@@ -81,7 +81,10 @@ public struct LibraryView: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: Metrics.spacing32, pinnedViews: []) {
                 if search.isEmpty, let current = app.derivation.continueReading.first {
-                    ContinueCard(book: current, session: app.session)
+                    // Wrapped the same way BookGridItem is. The card was styled
+                    // from the design canvas and never given an affordance, so
+                    // the app's most prominent control did nothing at all.
+                    ContinueCardLink(book: current, session: app.session)
                 }
 
                 VStack(alignment: .leading, spacing: Metrics.spacing12) {
@@ -155,6 +158,10 @@ public struct BookGrid: View {
         LazyVGrid(columns: columns, alignment: .leading, spacing: Metrics.spacing24) {
             ForEach(books) { book in
                 BookGridItem(book: book, session: session)
+                    // Rows size to their tallest cell and centre vertically —
+                    // LazyVGrid's alignment is horizontal only — so a title
+                    // wrapping to two lines pushed its neighbours down.
+                    .frame(maxHeight: .infinity, alignment: .top)
             }
         }
     }
@@ -205,10 +212,13 @@ public struct BookCell: View {
                         .padding(Metrics.spacing4)
                 }
             }
+            // Two lines' worth of room whether the title needs it or not, so a
+            // one-line title does not pull its byline up above the neighbours'.
             Text(book.title)
                 .font(Typography.subhead)
                 .foregroundStyle(Palette.ink)
-                .lineLimit(2)
+                .lineLimit(2, reservesSpace: true)
+                .fixedSize(horizontal: false, vertical: true)
             Text(book.byline)
                 .font(Typography.caption)
                 .foregroundStyle(Palette.inkTertiary)
@@ -235,6 +245,42 @@ public struct ProgressBar: View {
 }
 
 /// The design's lead card: current book, chapter, time left.
+/// Makes the Continue card open its book.
+///
+/// Mirrors `BookGridItem` rather than inventing a second pattern: a pushed
+/// screen on iOS and tvOS, a window on the Mac. A value-based NavigationLink
+/// would have been shorter but only iOS registers a Book destination, so it
+/// would silently do nothing on the other two platforms.
+struct ContinueCardLink: View {
+    let book: Book
+    let session: Session?
+    #if os(macOS)
+    @Environment(\.openWindow) private var openWindow
+    #endif
+
+    var body: some View {
+        if let session {
+            #if os(macOS)
+            Button {
+                openWindow(id: "Reader", value: book.uuid)
+            } label: {
+                ContinueCard(book: book, session: session)
+            }
+            .buttonStyle(.plain)
+            #else
+            NavigationLink {
+                BookDetailView(book: book)
+            } label: {
+                ContinueCard(book: book, session: session)
+            }
+            .buttonStyle(.plain)
+            #endif
+        } else {
+            ContinueCard(book: book, session: session)
+        }
+    }
+}
+
 public struct ContinueCard: View {
     let book: Book
     let session: Session?

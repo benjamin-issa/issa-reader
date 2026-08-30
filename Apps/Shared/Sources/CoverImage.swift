@@ -141,14 +141,23 @@ public struct CoverImage: View {
     }
 
     public var body: some View {
-        ZStack {
-            if let image {
-                image.resizable().aspectRatio(contentMode: .fill)
-            } else {
-                placeholder
+        // The art is an OVERLAY on a box that sizes itself, not a child of a
+        // stack that sizes to its children. `.aspectRatio(contentMode: .fill)`
+        // is a request to exceed the proposal, so as a ZStack child a square
+        // cover reported a square cell — which bled sideways into its
+        // neighbour and inflated the whole grid row. Overlay content is sized
+        // to its base and can never grow it, and `.clipShape` alone could not
+        // help because it is a drawing mask, not a layout constraint.
+        Color.clear
+            .aspectRatio(aspect, contentMode: .fit)
+            .overlay {
+                if let image {
+                    image.resizable().aspectRatio(contentMode: .fill)
+                } else {
+                    placeholder
+                }
             }
-        }
-        .aspectRatio(aspect, contentMode: .fit)
+            .clipped()
         .clipShape(RoundedRectangle(cornerRadius: Metrics.radiusSmall, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: Metrics.radiusSmall, style: .continuous)

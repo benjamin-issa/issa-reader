@@ -55,6 +55,14 @@ public final class DownloadManager: NSObject {
             return false
         }
 
+        /// True when the total size is unknown, so a bar should be
+        /// indeterminate rather than sitting at zero — which is indisputably
+        /// what a stalled download also looks like.
+        public var isIndeterminate: Bool {
+            if case let .downloading(_, _, total) = self { return total <= 0 }
+            return false
+        }
+
         public var isActive: Bool {
             switch self {
             case .queued, .downloading: true
@@ -95,6 +103,16 @@ public final class DownloadManager: NSObject {
     private var session: URLSession!
     private var tasks: [Job: URLSessionDownloadTask] = [:]
     private var resumeData: [Job: Data] = [:]
+    /// Jobs the app itself paused.
+    ///
+    /// A pause cancels the task, and a cancellation is otherwise
+    /// indistinguishable from the system killing a transfer — so without this
+    /// the delegate had to ignore every cancellation, which left a killed
+    /// download showing "downloading" forever with every button dead.
+    private var pausing: Set<Job> = []
+    /// Set when the session has been torn down, so late delegate callbacks from
+    /// a superseded session cannot write state the app is no longer showing.
+    private var isShutDown = false
 
     public init(
         baseURL: URL,
@@ -137,6 +155,12 @@ public final class DownloadManager: NSObject {
             return
         }
 
+        // Claim the job before the first await. Two callers arriving together —
+        // the reader re-entering after a layout pass is the ordinary case —
+        // would otherwise both pass the guard above while the token was being
+        // fetched, and start two transfers for one file.
+        states[job] = .queued
+
         var request = URLRequest(url: baseURL.appending(path: Endpoint.files(job.bookUUID)))
         request.url?.append(queryItems: [URLQueryItem(name: "format", value: job.format.rawValue)])
         if let token = await tokens.currentToken() {
@@ -153,12 +177,12 @@ public final class DownloadManager: NSObject {
         }
         task.taskDescription = Self.encode(job)
         tasks[job] = task
-        states[job] = .queued
         task.resume()
     }
 
     public func pause(_ job: Job) {
         guard let task = tasks[job] else { return }
+        pausing.insert(job)
         let fraction = states[job]?.fraction ?? 0
         task.cancel { [weak self] data in
             Task { @MainActor in
@@ -171,10 +195,24 @@ public final class DownloadManager: NSObject {
     }
 
     public func cancel(_ job: Job) {
+        pausing.insert(job)
         tasks[job]?.cancel()
         tasks[job] = nil
         resumeData[job] = nil
         states[job] = nil
+    }
+
+    /// Ends this manager's session for good.
+    ///
+    /// A background session owns its identifier for the whole process, so a
+    /// second one built on the same identifier makes the daemon hand the
+    /// transfers to one owner and kill the other's — which is what cancelled
+    /// downloads mid-flight. Nothing invalidated the old session, and the
+    /// URLSession/delegate pair retains itself, so old managers leaked and went
+    /// on mutating state nothing was reading.
+    public func shutDown() async {
+        isShutDown = true
+        session.finishTasksAndInvalidate()
     }
 
     /// Reattaches to whatever the system carried on with while the app was away.
@@ -221,7 +259,8 @@ extension DownloadManager: URLSessionDownloadDelegate {
             ? Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)
             : 0
         Task { @MainActor [weak self] in
-            self?.states[job] = DownloadManager.State.downloading(
+            guard let self, !self.isShutDown else { return }
+            self.states[job] = DownloadManager.State.downloading(
                 fractionCompleted: fraction,
                 bytesWritten: totalBytesWritten,
                 totalBytes: totalBytesExpectedToWrite,
@@ -256,8 +295,9 @@ extension DownloadManager: URLSessionDownloadDelegate {
 
         let failure = moveError
         Task { @MainActor [weak self] in
-            guard let self else { return }
+            guard let self, !self.isShutDown else { return }
             self.tasks[job] = nil
+            self.pausing.remove(job)
             if let failure {
                 self.states[job] = .failed(failure)
             } else {
@@ -277,11 +317,18 @@ extension DownloadManager: URLSessionDownloadDelegate {
         let cancelled = (error as NSError).code == NSURLErrorCancelled
 
         Task { @MainActor [weak self] in
-            guard let self else { return }
+            guard let self, !self.isShutDown else { return }
             self.tasks[job] = nil
             if let resume { self.resumeData[job] = resume }
-            // A pause cancels the task; that is not a failure to report.
-            guard !cancelled else { return }
+            if cancelled {
+                // Only a cancellation we asked for is not a failure. Anything
+                // else — the system reclaiming the transfer, a second session
+                // taking the identifier — has to be reported, or the row sits
+                // at "downloading" forever and every control on it is dead.
+                if self.pausing.remove(job) != nil { return }
+                self.states[job] = .failed("The download was interrupted. Tap to try again.")
+                return
+            }
             self.states[job] = .failed(message)
         }
     }

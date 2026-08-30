@@ -49,6 +49,8 @@ public struct ReaderView: View {
                         ProgressView()
                         Text(message).font(Typography.footnote).foregroundStyle(Palette.inkTertiary)
                     }
+                case let .downloading(received, total):
+                    downloadingView(received: received, total: total)
                 case let .failed(reason):
                     ContentUnavailableView(
                         "Couldn't open this book",
@@ -60,9 +62,19 @@ public struct ReaderView: View {
                 }
             }
             .task(id: geometry.size) {
-                if case .loading = model.phase {
+                // Set before open(), not in pageContent's onAppear — that only
+                // renders once the book is already open, so the reader always
+                // fell back to the old blocking foreground download.
+                model.downloadHost = app
+                switch model.phase {
+                case .loading, .downloading:
+                    // Re-entering while downloading is safe and necessary: the
+                    // transfer belongs to the background session, but the wait
+                    // for it lived in this task, and a geometry change cancels
+                    // the task. Without re-attaching, a layout pass mid-download
+                    // reported "Download cancelled" over a transfer still running.
                     await model.open(pageSize: pageSize)
-                } else {
+                case .ready, .failed:
                     await model.resize(to: pageSize)
                 }
             }
@@ -333,6 +345,45 @@ public struct ReaderView: View {
         .transition(.opacity)
     }
     #endif
+
+    /// What a book looks like while it is still arriving.
+    ///
+    /// Real bytes and a way out. This used to be a bare spinner reading
+    /// "Downloading…" with a sixty-second timeout behind it, so a large
+    /// readaloud was indistinguishable from a hang until it failed.
+    private func downloadingView(received: Int64, total: Int64) -> some View {
+        VStack(spacing: Metrics.spacing16) {
+            Text(model.book.title)
+                .font(Typography.title)
+                .foregroundStyle(Palette.ink)
+                .multilineTextAlignment(.center)
+
+            if total > 0 {
+                ProgressView(value: Double(received), total: Double(total))
+                    .tint(Palette.tangerine)
+                    .frame(maxWidth: 280)
+                Text("\(Self.sizeText(received)) of \(Self.sizeText(total))")
+                    .font(Typography.caption.monospacedDigit())
+                    .foregroundStyle(Palette.inkTertiary)
+            } else {
+                // No Content-Length: an indeterminate bar is honest, where a
+                // bar pinned at zero looks exactly like a stall.
+                ProgressView().frame(maxWidth: 280)
+                Text(received > 0 ? Self.sizeText(received) : "Starting…")
+                    .font(Typography.caption.monospacedDigit())
+                    .foregroundStyle(Palette.inkTertiary)
+            }
+
+            Button("Cancel") { model.cancelDownload() }
+                .font(Typography.callout)
+                .foregroundStyle(Palette.inkSecondary)
+        }
+        .padding(Metrics.spacing32)
+    }
+
+    static func sizeText(_ bytes: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+    }
 
     /// Tap coordinates arrive in the padded frame's space; the layout speaks
     /// in the canvas's, which starts one margin in.

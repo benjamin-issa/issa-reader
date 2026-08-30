@@ -29,6 +29,20 @@ struct TVReadalongView: View {
                     ProgressView()
                     Text(message).font(Typography.sans(28)).foregroundStyle(Palette.inkSecondary)
                 }
+            case let .downloading(received, total):
+                VStack(spacing: 24) {
+                    Text(model.book.title).font(Typography.serif(48, weight: .medium))
+                    if total > 0 {
+                        ProgressView(value: Double(received), total: Double(total))
+                            .tint(Palette.tangerine)
+                            .frame(width: 520)
+                        Text("\(ByteCountFormatter.string(fromByteCount: received, countStyle: .file)) of \(ByteCountFormatter.string(fromByteCount: total, countStyle: .file))")
+                            .font(Typography.sans(24).monospacedDigit())
+                            .foregroundStyle(Palette.inkSecondary)
+                    } else {
+                        ProgressView().frame(width: 520)
+                    }
+                }
             case let .failed(reason):
                 VStack(spacing: 20) {
                     Text("Couldn't open this book").font(Typography.serif(48, weight: .medium))

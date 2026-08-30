@@ -17,6 +17,9 @@ public final class Session {
         /// `signedOut` so the app can keep the server and say what happened
         /// rather than dropping the reader back to a blank form.
         case expired
+        /// Authenticated, but the identity call did not come back. The reason
+        /// is carried so the app can say it rather than dropping the reader on
+        /// a blank form with nothing to go on.
         case failed(String)
     }
 
@@ -75,16 +78,43 @@ public final class Session {
         state = .signedOut
     }
 
+    /// How many times to ask for the identity before giving up.
+    ///
+    /// The device grant ends with the app returning from Safari after a minute
+    /// or so of the user approving in a browser, and the very next request
+    /// reuses a pooled connection that idled through all of it. A half-closed
+    /// one fails as "network connection lost" and works immediately on retry —
+    /// which is exactly the "sign-in always fails the first time" report. A
+    /// token that was just minted deserves more than one attempt.
+    private static let identityAttempts = 3
+
     private func loadIdentity() async {
-        do {
-            let user: User = try await client.get(Endpoint.user)
-            capabilities = await Self.probeCapabilities(using: client)
-            state = .signedIn(user)
-        } catch StorytellerError.notAuthenticated {
-            state = .signedOut
-        } catch {
-            state = .failed(String(describing: error))
+        for attempt in 1 ... Self.identityAttempts {
+            do {
+                let user: User = try await client.get(Endpoint.user)
+                state = .signedIn(user)
+                // Off the critical path: six probes that all 404 on a 2.x server
+                // used to run before the reader was considered signed in, and
+                // every one widened the window for the failure above.
+                let apiClient = client
+                Task { [weak self] in
+                    let caps = await Self.probeCapabilities(using: apiClient)
+                    self?.capabilities = caps
+                }
+                return
+            } catch StorytellerError.notAuthenticated {
+                // The token is genuinely bad; retrying cannot help.
+                state = .signedOut
+                return
+            } catch let error as StorytellerError where error.isRetryable
+                && attempt < Self.identityAttempts {
+                try? await Task.sleep(for: .milliseconds(300 * attempt))
+            } catch {
+                state = .failed(AppFacingError.text(for: error))
+                return
+            }
         }
+        state = .failed("Couldn't reach your server. Check that you're on the same network as your server.")
     }
 
     /// Establishes which optional 3.x endpoints this server has.

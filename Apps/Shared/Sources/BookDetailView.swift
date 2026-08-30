@@ -35,9 +35,12 @@ public struct BookDetailView: View {
             VStack(alignment: .leading, spacing: Metrics.spacing32) {
                 hero
                 if let description = book.description, !description.isEmpty {
-                    Text(description)
-                        .font(Typography.body)
-                        .foregroundStyle(Palette.inkSecondary)
+                    // Server descriptions carry markup. Rendered as a raw
+                    // string, <p> and &amp; showed up on screen verbatim.
+                    Text(HTMLText.attributed(description))
+                        #if !os(tvOS)
+                        .textSelection(.enabled)
+                        #endif
                 }
                 if !book.tags.isEmpty { tags }
                 editions

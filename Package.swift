@@ -70,5 +70,10 @@ let package = Package(
             path: "Packages/IssaPlayback/Tests",
             resources: [.copy("Fixtures")],
         ),
+        .testTarget(
+            name: "IssaUITests",
+            dependencies: ["IssaUI"],
+            path: "Packages/IssaUI/Tests",
+        ),
     ],
 )

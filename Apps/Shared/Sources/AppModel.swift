@@ -44,6 +44,7 @@ public final class AppModel {
     private var mutations: MutationQueue?
     public let reachability = Reachability()
     private var listeningProgressTask: Task<Void, Never>?
+    private var isConnecting = false
     /// Streams books to disk in the background. Created with the session, since
     /// it needs the server URL and the bearer token.
     public private(set) var downloads: DownloadManager?
@@ -105,11 +106,24 @@ public final class AppModel {
     }
 
     public func connect(to address: String) async {
+        // Re-entrancy guard. Two overlapping connects each built a Session and
+        // a DownloadManager, and two background sessions cannot share one
+        // identifier: the daemon hands the transfers to one and kills the
+        // other's copies, which is what stalled downloads.
+        guard !isConnecting else { return }
+        isConnecting = true
+        defer { isConnecting = false }
+
         guard let url = Self.normalizeServerURL(address) else {
             loadError = "That doesn't look like a server address."
             return
         }
         UserDefaults.standard.set(address, forKey: Self.lastServerKey)
+        // Also in memory. Only UserDefaults was written, so `serverAddress`
+        // stayed empty for the whole first launch — which silently broke
+        // audiobook playback (startListening guards on it) and left the expired
+        // notice showing a blank server name.
+        serverAddress = address
         let session = Session(serverURL: url, keychain: keychain)
         self.session = session
 
@@ -143,7 +157,19 @@ public final class AppModel {
     public func adopt(token: String) async {
         guard let session else { return }
         await session.adopt(token: token)
-        if case .signedIn = session.state { await enterLibrary() }
+        switch session.state {
+        case .signedIn:
+            await enterLibrary()
+        case let .failed(reason):
+            // The grant worked and the token is in the keychain — only the
+            // identity call failed. Saying so is the whole fix: this used to
+            // leave `phase` at .signingIn, which renders as the blank server
+            // form, so a successful sign-in looked like a silent failure.
+            loadError = reason
+            phase = .chooseServer
+        default:
+            phase = .chooseServer
+        }
     }
 
     /// Signs out and leaves nothing behind.
@@ -157,6 +183,11 @@ public final class AppModel {
         ratings = [:]
         loadError = nil
 
+        // The download session outlived sign-out, so the next connect stacked
+        // a second one on the same identifier.
+        await downloads?.shutDown()
+        downloads = nil
+        session = nil
         CoverCache.shared.clear()
         // The widget keeps showing the last book on a signed-out device unless
         // its snapshot is cleared and its timeline reloaded.
@@ -186,9 +217,12 @@ public final class AppModel {
     /// it with, so this happens to every install eventually. Without it the
     /// library simply stops loading and nothing explains why.
     public func watchForExpiry() async {
-        guard let session else { return }
+        // No `guard let session` here. This starts from a .task at launch, when
+        // the session is still nil, so the guard returned immediately and
+        // expiry was never watched in the launch where you actually signed in.
+        // It also has to re-read `session` each pass, since connect() replaces it.
         while !Task.isCancelled {
-            if session.state == .expired, phase == .ready {
+            if session?.state == .expired, phase == .ready {
                 phase = .expired
                 loadError = nil
             }
@@ -417,6 +451,44 @@ public final class AppModel {
                 totalProgression: coordinator.bookProgress,
             ),
         )
+    }
+
+    /// Downloads a book and waits for it, reporting progress as it goes.
+    ///
+    /// The reader used to run its own foreground transfer on URLSession.shared
+    /// with a sixty-second ceiling — fine for a small ebook, hopeless for a
+    /// readaloud of several hundred megabytes, and it reported the timeout as
+    /// "couldn't reach your server". Going through the same manager as every
+    /// other download means progress, cancellation, resume-after-interruption,
+    /// the Wi-Fi-only preference and the free-space check all apply here too.
+    public func downloadAndWait(
+        _ book: Book, format: BookContentService.Format,
+        onProgress: @escaping (Int64, Int64) -> Void,
+    ) async throws -> URL {
+        guard let session, let downloads else { throw StorytellerError.notAuthenticated }
+        let content = BookContentService(client: session.client)
+        let destination = content.localURL(for: book, format: format)
+        if content.isDownloaded(book, format: format) { return destination }
+
+        let job = DownloadManager.Job(bookUUID: book.uuid, format: format)
+        await download(book, format: format)
+
+        while !Task.isCancelled {
+            switch downloads.state(for: job) {
+            case .finished:
+                return destination
+            case let .failed(reason):
+                throw StorytellerError.transport(reason)
+            case let .downloading(_, written, total):
+                onProgress(written, total)
+            case .paused:
+                throw StorytellerError.transport("The download was paused.")
+            case .queued, .none:
+                break
+            }
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+        throw CancellationError()
     }
 
     /// Pending transfers, in a form the Downloads screen can list.
