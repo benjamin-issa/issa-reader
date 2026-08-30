@@ -253,15 +253,21 @@ public struct ReaderView: View {
             model.onSaveAnnotation = { [weak app = app] in app?.save($0) }
             model.onDeleteAnnotation = { [weak app = app] in app?.delete($0) }
             model.setReaderVisible(true)
-            nowPlaying.attach(
-                coordinator: model.readalong,
-                book: model.book,
-                session: model.readerSession,
-                // Weak for the same reason: the Now Playing controller outlives
-                // this screen deliberately, and holding the reader through it
-                // would keep an entire book in memory after it closed.
-                chapterTitle: { [weak model] in model?.chapterTitle },
-            )
+            // Only claim Now Playing if this book actually has narration.
+            // Opening a plain ebook used to attach a nil coordinator, which
+            // cleared nowPlayingInfo entirely — silencing the lock screen for an
+            // audiobook that was still playing in the background.
+            if model.readalong != nil {
+                nowPlaying.attach(
+                    coordinator: model.readalong,
+                    book: model.book,
+                    session: model.readerSession,
+                    // Weak: the controller outlives this screen deliberately,
+                    // and holding the reader through it would keep an entire
+                    // book in memory after it closed.
+                    chapterTitle: { [weak model] in model?.chapterTitle },
+                )
+            }
         }
         .task { model.loadAnnotations(await app.annotations(for: model.book.uuid)) }
         #if os(macOS)

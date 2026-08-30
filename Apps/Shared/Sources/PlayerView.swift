@@ -123,7 +123,13 @@ public struct PlayerView: View {
                 symbol: "gobackward", action: .skipBackward,
             )
             Button {
-                Task { await coordinator?.perform(.playPause, using: settings.commandMap) }
+                Task {
+                    await coordinator?.perform(.playPause, using: settings.commandMap)
+                    // The lock screen otherwise keeps the old rate until the
+                    // five-second poll, extrapolating a clock the audio has
+                    // stopped following. The mini player already does this.
+                    nowPlaying.publish()
+                }
             } label: {
                 Image(systemName: (coordinator?.player.isPlaying ?? false) ? "pause.fill" : "play.fill")
                     .font(.system(size: 30, weight: .semibold))

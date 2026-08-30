@@ -61,6 +61,10 @@ public final class RemoteCommandCenter {
             MainActor.assumeIsolated { self?.onRateChange?(event.playbackRate) }
             return .success
         }
+        // Recorded so tearDown can remove it. These two were added directly and
+        // never tracked, so every activate() stacked another target: one
+        // scrubber drag fired a seek per accumulated registration.
+        handlers.append(center.changePlaybackRateCommand)
 
         // Without this the Lock Screen scrubber is a read-only progress bar;
         // with it, dragging seeks. CarPlay surfaces the same control.
@@ -70,6 +74,7 @@ public final class RemoteCommandCenter {
             MainActor.assumeIsolated { self?.onSeek?(event.positionTime) }
             return .success
         }
+        handlers.append(center.changePlaybackPositionCommand)
     }
 
     private func fire(_ control: PlaybackControl) {

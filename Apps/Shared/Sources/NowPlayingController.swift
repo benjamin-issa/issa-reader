@@ -135,14 +135,25 @@ public final class NowPlayingController {
     public func publish() {
         guard let coordinator, let book else { return }
         let total = coordinator.totalDuration
+        let elapsed = total * coordinator.bookProgress
+        // Never hand iOS a number it cannot hold. It stores a non-finite
+        // elapsed as zero and then extrapolates from there at the published
+        // rate — which is exactly the lock screen counting 0:01, 0:02 while the
+        // listener is four hours into the book. Publishing nothing leaves the
+        // last good value in place, which is always closer to the truth.
+        guard total.isFinite, total > 0, elapsed.isFinite else { return }
+
         remote.updateNowPlaying(
             title: book.title,
             author: book.byline,
             // The real chapter, not the book title a second time.
             chapter: currentChapterTitle(),
-            elapsed: total * coordinator.bookProgress,
+            elapsed: elapsed,
             duration: total,
-            rate: coordinator.player.isPlaying ? coordinator.player.rate : 0,
+            // From the player, not from intent: `isPlaying` stays true through a
+            // buffering stall, and telling iOS the rate is 1 while the audio is
+            // stopped makes its clock run away from the sound.
+            rate: coordinator.player.effectiveRate,
             artwork: artwork,
         )
     }

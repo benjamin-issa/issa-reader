@@ -30,6 +30,8 @@ public final class AudiobookCoordinator {
     public var onChapterChange: ((Int) -> Void)?
 
     private let source: Source
+    /// Increments per load so a superseded one cannot write back.
+    private var loadGeneration = 0
 
     public init(manifest: AudiobookManifest, source: Source, player: AudioPlayer = AudioPlayer()) {
         self.manifest = manifest
@@ -37,8 +39,14 @@ public final class AudiobookCoordinator {
         self.player = player
 
         player.onTimeUpdate = { [weak self] time in
-            guard let self else { return }
-            bookTime = manifest.startTime(ofTrackAt: trackIndex) + time
+            guard let self, time.isFinite else { return }
+            let candidate = manifest.startTime(ofTrackAt: trackIndex) + time
+            // Belt as well as braces. The book clock is what Now Playing
+            // publishes and what every skip is measured from, so nothing
+            // non-finite may enter it — a single NaN latched here and never
+            // cleared itself.
+            guard candidate.isFinite else { return }
+            bookTime = candidate
         }
         // Tracks are contiguous: the end of one is the start of the next, and a
         // listener should hear no seam at a chapter boundary.
@@ -54,7 +62,10 @@ public final class AudiobookCoordinator {
 
     /// Fraction of the whole book, for a scrubber and for the saved position.
     public var progress: Double {
-        guard totalDuration > 0 else { return 0 }
+        guard totalDuration > 0, bookTime.isFinite else { return 0 }
+        // An explicit gate, not incidental comparison semantics: Swift's
+        // min/max return the other operand when a comparison with NaN is false,
+        // so `min(max(NaN, 0), 1)` is NaN, not 0.
         return min(max(bookTime / totalDuration, 0), 1)
     }
 
@@ -110,6 +121,11 @@ public final class AudiobookCoordinator {
     /// Skips within the book rather than within the file, so a skip near a
     /// chapter boundary crosses it instead of stopping dead at the edge.
     public func skip(by delta: TimeInterval) async {
+        // Refuse rather than guess. With a non-finite clock the clamp below
+        // collapsed to exactly 0, so both rewind and fast-forward threw the
+        // listener back to the start of the book — and the position writer then
+        // persisted that zero.
+        guard bookTime.isFinite, totalDuration > 0 else { return }
         await seek(toBookTime: max(0, min(bookTime + delta, totalDuration)))
     }
 
@@ -156,8 +172,18 @@ public final class AudiobookCoordinator {
 
     private func load(track index: Int, startAt offset: TimeInterval) async {
         guard tracks.indices.contains(index) else { return }
+        // One load at a time. Two interleaved loads left `trackIndex` and
+        // `bookTime` set by whichever coroutine resumed last while the audio
+        // came from whichever insert won, which is the one way the book clock
+        // could genuinely disagree with the playing track.
+        let generation = loadGeneration &+ 1
+        loadGeneration = generation
+
         let track = tracks[index]
         trackIndex = index
+        // Corrected BEFORE the await, not after: a publish during the load used
+        // to report the start of the target track and silently drop the offset.
+        bookTime = manifest.startTime(ofTrackAt: index) + offset
         switch source {
         case let .streaming(base, cookies):
             // Hrefs in the manifest are relative to the listen directory.
@@ -166,6 +192,8 @@ public final class AudiobookCoordinator {
         case let .local(url):
             await player.load(url: url, href: track.href, startAt: offset)
         }
+        // A newer load started while this one was awaiting; it owns the state.
+        guard loadGeneration == generation else { return }
         bookTime = manifest.startTime(ofTrackAt: index) + offset
         onChapterChange?(index)
     }

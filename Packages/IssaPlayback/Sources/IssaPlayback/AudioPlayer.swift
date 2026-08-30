@@ -29,6 +29,14 @@ public final class AudioPlayer {
         }
     }
 
+    /// The rate audio is genuinely playing at, as opposed to the one we asked
+    /// for. `isPlaying` is a hand-maintained flag and stays true through a
+    /// buffering stall, so publishing it as the Now Playing rate told iOS to
+    /// keep advancing a clock that had stopped.
+    public var effectiveRate: Float {
+        player.timeControlStatus == .playing ? player.rate : 0
+    }
+
     /// Called on every observed time update, so a coordinator can advance the
     /// read-along highlight without polling.
     public var onTimeUpdate: ((TimeInterval) -> Void)?
@@ -157,8 +165,17 @@ public final class AudioPlayer {
         observers.time = player.addPeriodicTimeObserver(forInterval: time, queue: .main) { [weak self] time in
             guard let self else { return }
             MainActor.assumeIsolated {
-                self.currentTime = time.seconds
-                self.onTimeUpdate?(time.seconds)
+                // A CMTime is not a Double. This observer is attached to the
+                // player, not the item, and it keeps firing across a track
+                // change — at which point `removeAllItems()` has left no current
+                // item and the player's time is `.invalid`, whose `.seconds` is
+                // NaN. Forwarding that poisoned the book clock: it survived
+                // every downstream clamp, was published to Now Playing as a
+                // non-finite elapsed, and made a skip seek to zero.
+                let seconds = time.seconds
+                guard time.isValid, seconds.isFinite else { return }
+                self.currentTime = seconds
+                self.onTimeUpdate?(seconds)
             }
         }
     }
@@ -190,18 +207,26 @@ public final class AudioPlayer {
 
         player.removeAllItems()
         player.insert(item, after: nil)
-        duration = (try? await asset.load(.duration).seconds) ?? 0
+        // `?? 0` cannot catch NaN, and a streamed asset with an indefinite
+        // duration reports exactly that.
+        let loaded = (try? await asset.load(.duration).seconds) ?? 0
+        duration = loaded.isFinite ? loaded : 0
         if offset > 0 { await seek(to: offset) }
     }
 
     public func play() {
         isPlaying = true
         player.rate = rate
+        // The rate hook fires only from `rate`'s didSet, and this does not touch
+        // it — so without this the lock screen kept the old rate for up to five
+        // seconds and extrapolated a clock the audio was not following.
+        onRateChange?(rate)
     }
 
     public func pause() {
         isPlaying = false
         player.rate = 0
+        onRateChange?(0)
     }
 
     public func togglePlayPause() {

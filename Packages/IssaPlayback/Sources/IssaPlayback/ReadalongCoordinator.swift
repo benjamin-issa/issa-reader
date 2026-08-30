@@ -109,6 +109,22 @@ public final class ReadalongCoordinator {
     }
 
     /// Seeks by fraction of the whole book, for a scrubber.
+    /// Skips within the BOOK, not within the current audio file.
+    ///
+    /// `AudioPlayer.skip` moves the playhead inside whichever file is loaded and
+    /// clamps at that file's zero, so a fifteen-second rewind five seconds into
+    /// a file landed at the start of the file rather than ten seconds earlier in
+    /// the book — while the elapsed time published to the lock screen was
+    /// book-wide. The audiobook coordinator already worked this way; this is the
+    /// same contract for narration.
+    public func skipBook(by delta: TimeInterval) async {
+        let total = totalDuration
+        guard total > 0 else { return }
+        let current = bookProgress * total
+        guard current.isFinite else { return }
+        await seek(toBookProgress: max(0, min(current + delta, total)) / total)
+    }
+
     public func seek(toBookProgress progress: Double) async {
         let time = timeline.totalDuration * min(max(progress, 0), 1)
         guard let entry = timeline.entry(atBookTime: time) else { return }
@@ -125,9 +141,9 @@ public final class ReadalongCoordinator {
         case .playPause:
             player.togglePlayPause()
         case .skipForward:
-            await player.skip(by: map.skipForwardInterval)
+            await skipBook(by: map.skipForwardInterval)
         case .skipBackward:
-            await player.skip(by: -map.skipBackwardInterval)
+            await skipBook(by: -map.skipBackwardInterval)
         case .nextSentence:
             if let entry = activeEntry, let next = timeline.entry(after: entry) { await play(from: next) }
         case .previousSentence:
