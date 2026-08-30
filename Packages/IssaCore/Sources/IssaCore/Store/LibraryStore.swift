@@ -248,6 +248,19 @@ public actor LibraryStore {
         }
     }
 
+    /// Drops the account's catalogue, leaving the reader's own annotations.
+    ///
+    /// Called on sign-out. Books and queued writes belong to the account and
+    /// must not outlive it; highlights and bookmarks are device-local and are
+    /// the only copy there is, so deleting those would be data loss rather
+    /// than cleanup.
+    public func clearAccountData() async throws {
+        try await dbQueue.write { db in
+            try db.execute(sql: "DELETE FROM book")
+            try db.execute(sql: "DELETE FROM mutation")
+        }
+    }
+
     // MARK: - Test hooks
 
     /// Blanks the flattened search columns, standing in for a row written

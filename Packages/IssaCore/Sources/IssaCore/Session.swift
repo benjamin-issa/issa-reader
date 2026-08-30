@@ -60,6 +60,15 @@ public final class Session {
         await loadIdentity()
     }
 
+    /// Whether a credential is stored for this server at all.
+    ///
+    /// Asked *before* showing the cached shelf: the offline-first path used to
+    /// present a whole library on the strength of the local database alone,
+    /// which meant signing out left every book still readable.
+    public var hasStoredCredential: Bool {
+        get async { await tokens.hasToken }
+    }
+
     /// Restores a previously stored token, if there is one that still works.
     public func restore() async {
         guard await tokens.hasToken else { state = .signedOut; return }

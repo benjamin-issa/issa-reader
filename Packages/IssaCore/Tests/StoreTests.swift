@@ -244,3 +244,35 @@ struct StoreFilenameTests {
         #expect(name.allSatisfy { $0.isHexDigit })
     }
 }
+
+/// Signing out has to take the account's books with it.
+///
+/// The bug: the token was cleared and the rows were not, and `connect()` showed
+/// the cached shelf before authenticating — so a signed-out device walked past
+/// the sign-in screen into a full library, across a cold launch.
+@Suite("Signing out")
+struct SignOutCleanupTests {
+    @Test("the catalogue goes, and the reader's own annotations stay")
+    func clearsBooksButKeepsAnnotations() async throws {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appending(path: "issa-signout-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try LibraryStore(serverKey: "http://example.test", directory: directory)
+
+        let url = try #require(Bundle.module.url(forResource: "Fixtures/books", withExtension: "json"))
+        let books = try JSONDecoder().decode([Book].self, from: Data(contentsOf: url))
+        try await store.replaceCatalogue(books)
+        let annotation = Annotation(
+            bookUUID: books[0].uuid, kind: .bookmark,
+            locator: ReadiumLocator(
+                href: "chapter1.xhtml", type: "application/xhtml+xml",
+                locations: .init(progression: 0.1, totalProgression: 0.1, charOffset: 10)),
+            excerpt: "kept")
+        try await store.save(annotation)
+
+        try await store.clearAccountData()
+
+        #expect(try await store.isEmpty)
+        #expect(try await store.annotations(for: books[0].uuid).count == 1)
+    }
+}

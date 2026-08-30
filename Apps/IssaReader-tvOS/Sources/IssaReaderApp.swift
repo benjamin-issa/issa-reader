@@ -88,7 +88,7 @@ struct TVSignInView: View {
                     Text("Sign in to your server")
                         .font(Typography.serif(64, weight: .medium))
                         .foregroundStyle(Palette.ink)
-                    Text("We'll show a code to approve on your phone. Your server decides which sign-in it offers.")
+                    Text("You'll get a short code to enter on your phone or computer — like signing into a streaming TV app.")
                         .font(Typography.sans(28))
                         .foregroundStyle(Palette.inkSecondary)
                         .frame(maxWidth: 1100, alignment: .leading)

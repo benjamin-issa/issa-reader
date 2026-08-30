@@ -4,10 +4,12 @@ import SwiftUI
 
 /// Server address, then sign-in.
 ///
-/// The client never implements an OIDC client. It hands the user to the
-/// server's own login page, which presents whichever providers the server admin
-/// configured — so "sign in with your provider" works without this app knowing
-/// anything about Authelia, Keycloak, Authentik or any other IdP.
+/// The client never implements an OIDC client, and it never redirects anywhere
+/// either: it runs the device authorization grant, so the server shows a short
+/// code that the reader approves in a browser on whatever device is handy. The
+/// server's own login page presents whichever providers its admin configured,
+/// so this app knows nothing about Authelia, Keycloak, Authentik or any other
+/// IdP — and says nothing about them on screen.
 public struct SignInView: View {
     @Environment(AppModel.self) private var app
     @State private var address: String = ""
@@ -121,7 +123,10 @@ public struct SignInView: View {
             .buttonStyle(.plain)
             .disabled(address.isEmpty || connecting)
 
-            Text("Your server chooses the identity provider. We only redirect you to it.")
+            // Was "Your server chooses the identity provider. We only redirect
+            // you to it." — describing a redirect the app has not done for some
+            // time, so the code screen then arrived unannounced.
+            Text("You'll get a short code to enter on your phone or computer — like signing into a streaming TV app.")
                 .font(Typography.footnote)
                 .foregroundStyle(Palette.inkTertiary)
         }

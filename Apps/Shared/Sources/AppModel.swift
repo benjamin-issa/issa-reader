@@ -161,7 +161,12 @@ public final class AppModel {
         // opening the app on a train should see their shelf, not a spinner that
         // resolves to an error.
         store = try? LibraryStore(serverKey: url.absoluteString)
-        if let store {
+        // Only for someone who is actually signed in. Showing the cached shelf
+        // on the strength of the database alone meant signing out left the
+        // entire library readable: the token went, the rows did not, and the
+        // next launch walked straight past the sign-in screen into the grid.
+        let hasCredential = await session.hasStoredCredential
+        if let store, hasCredential {
             mutations = try? MutationQueue(store: store)
             if let cached = try? await store.allBooks(), !cached.isEmpty {
                 books = cached
@@ -226,6 +231,11 @@ public final class AppModel {
     ///   fetch again, so the choice is offered rather than assumed.
     public func signOut(keepDownloads: Bool = false) async {
         await session?.signOut()
+        // The catalogue belongs to the account, so it goes with it. Annotations
+        // do not: they are device-local and this is their only copy.
+        try? await store?.clearAccountData()
+        store = nil
+        mutations = nil
         books = []
         downloadedUUIDs = []
         statuses = []

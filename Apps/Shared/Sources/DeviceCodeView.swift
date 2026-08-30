@@ -1,6 +1,12 @@
+import CoreImage.CIFilterBuiltins
 import IssaCore
 import IssaUI
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#elseif canImport(AppKit)
+import AppKit
+#endif
 
 /// Shows the user code to type, and on TV the QR to scan.
 ///
@@ -8,7 +14,9 @@ import SwiftUI
 /// — and therefore its QR — embeds the `device_code`, which is the polling
 /// secret rather than the user code RFC 8628 specifies. Anyone who photographs
 /// the screen can race the app for the session that approval mints, so the code
-/// is the primary affordance and the QR is offered as a convenience.
+/// is the primary affordance and the QR is offered as a convenience — and the
+/// QR encodes only the plain `verification_uri`, never the complete one, so
+/// scanning saves typing an address rather than handing over the secret.
 public struct DeviceCodeView: View {
     let model: DeviceSignInModel
     let onGranted: (String) -> Void
@@ -63,13 +71,54 @@ public struct DeviceCodeView: View {
         #endif
     }
 
+    /// One numbered instruction.
+    private func step(_ number: Int, @ViewBuilder _ text: () -> Text) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: Metrics.spacing8) {
+            Text("\(number).")
+                .font(Typography.headline.monospacedDigit())
+                .foregroundStyle(Palette.tangerine)
+            text()
+                .font(Typography.callout)
+                .foregroundStyle(Palette.ink)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// Renders the approval link as a QR code, locally.
+    ///
+    /// `DeviceAuthorization.qrSVGURL` exists and is decoded, but nothing has
+    /// ever drawn it: SVG is not loadable by any of the image types here, and
+    /// tvOS ships no WebKit. CoreImage generates the same payload on every
+    /// platform with no network at all.
+    static func qrImage(for string: String) -> Image? {
+        // Never pass a URL carrying the device code here.
+
+        let filter = CIFilter.qrCodeGenerator()
+        filter.message = Data(string.utf8)
+        // Medium correction: the payload is a URL with a code in it, and a
+        // denser symbol is harder to scan off a television across a room.
+        filter.correctionLevel = "M"
+        guard let output = filter.outputImage,
+              let cgImage = CIContext().createCGImage(output, from: output.extent)
+        else { return nil }
+        #if canImport(UIKit)
+        return Image(uiImage: UIImage(cgImage: cgImage))
+        #elseif canImport(AppKit)
+        return Image(nsImage: NSImage(cgImage: cgImage, size: output.extent.size))
+        #else
+        return nil
+        #endif
+    }
+
     private func approval(_ auth: DeviceAuthorization) -> some View {
         VStack(alignment: .leading, spacing: Metrics.spacing24) {
             VStack(alignment: .leading, spacing: Metrics.spacing8) {
                 Text("Approve this device").overlineStyle(Palette.tangerine)
-                Text("Open the link below and enter this code.")
-                    .font(Typography.title)
-                    .foregroundStyle(Palette.ink)
+                // Three steps in order, rather than one instruction with the
+                // address printed below the code it refers to.
+                step(1) { Text("Go to ") + Text(auth.verificationURI).bold() + Text(" on your phone or computer.") }
+                step(2) { Text("Enter the code below.") }
+                step(3) { Text("Approve this device.") }
             }
 
             Text(auth.userCode)
@@ -85,8 +134,32 @@ public struct DeviceCodeView: View {
                 )
                 .accessibilityLabel(Text(auth.userCode.map { String($0) }.joined(separator: " ")))
 
+            // Secondary to the code, and generated rather than fetched: the
+            // server offers an SVG, which neither AsyncImage nor UIImage can
+            // load, and tvOS — where typing a URL is worst — has no WebKit to
+            // render one with.
+            // The plain address, NOT `verificationURIComplete`. That one
+            // embeds the device_code — the polling secret, as the note above
+            // records — and a QR is machine-readable across a room, which makes
+            // a photographed screen strictly easier to exploit than one showing
+            // a URL and a short code. Scanning saves typing the address; the
+            // code is still typed, which is the point of it leading.
+            if let qr = Self.qrImage(for: auth.verificationURI) {
+                VStack(alignment: .leading, spacing: Metrics.spacing8) {
+                    Text("Or scan this").font(Typography.footnote)
+                        .foregroundStyle(Palette.inkTertiary)
+                    qr
+                        .interpolation(.none)
+                        .resizable()
+                        .frame(width: 132, height: 132)
+                        .padding(Metrics.spacing8)
+                        .background(.white, in: RoundedRectangle(cornerRadius: Metrics.radiusSmall))
+                        .accessibilityLabel("QR code linking to \(auth.verificationURI)")
+                }
+            }
+
             VStack(alignment: .leading, spacing: Metrics.spacing4) {
-                Text("On another device, visit").font(Typography.footnote)
+                Text("Or type the address").font(Typography.footnote)
                     .foregroundStyle(Palette.inkTertiary)
                 verificationLink(auth.verificationURI)
             }

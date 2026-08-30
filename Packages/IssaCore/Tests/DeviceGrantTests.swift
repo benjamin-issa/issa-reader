@@ -136,3 +136,25 @@ struct DeviceGrantTests {
         #expect(await transport.pollCount == 4)
     }
 }
+
+/// The QR is a convenience, and must not become the fastest way to steal a
+/// session. `verification_uri_complete` carries the device code, which is the
+/// polling secret; a QR is readable across a room.
+@Suite("What the sign-in QR may carry")
+struct DeviceCodeQRPayloadTests {
+    @Test("the complete URI carries the polling secret, which is why it is not the payload")
+    func completeURICarriesTheSecret() throws {
+        let json = Data(#"""
+        {"device_code":"SECRET-abc","user_code":"WXYZ-1234",
+         "verification_uri":"https://library.example/link",
+         "verification_uri_complete":"https://library.example/link?code=SECRET-abc",
+         "expires_in":900,"interval":5}
+        """#.utf8)
+        let auth = try JSONDecoder().decode(DeviceAuthorization.self, from: json)
+
+        // The premise: the complete URI really does embed the secret …
+        #expect(auth.verificationURIComplete?.contains(auth.deviceCode) == true)
+        // … and the plain one, which is what the view encodes, does not.
+        #expect(!auth.verificationURI.contains(auth.deviceCode))
+    }
+}
