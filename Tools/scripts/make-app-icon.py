@@ -47,17 +47,30 @@ def radial(size, inner, outer):
     return img
 
 
-def draw(size, variant):
+def draw(size, variant, rounded=True):
+    """Draws one icon.
+
+    `rounded` is the difference between the two platforms' idea of an icon.
+    A Mac icon is a free-form shape, so it rounds its own corners and keeps the
+    alpha channel that makes them. An iOS icon is a full-bleed square that the
+    system masks itself — rounding it here would show a rounded tile inside
+    iOS's own rounded mask, and the transparency outside the corners is
+    rejected outright at upload ("the large app icon can't be transparent or
+    contain an alpha channel").
+    """
     inner, outer, ring, glyph, flat = VARIANTS[variant]
     s = size * SUPERSAMPLE
 
     base = Image.new("RGB", (s, s), flat) if flat else radial(s, inner, outer)
 
-    # Round the tile by masking, so the corner is antialiased with the artwork.
-    mask = Image.new("L", (s, s), 0)
-    ImageDraw.Draw(mask).rounded_rectangle([0, 0, s - 1, s - 1], radius=R_TILE * s, fill=255)
-    tile = Image.new("RGBA", (s, s), (0, 0, 0, 0))
-    tile.paste(base, (0, 0), mask)
+    if rounded:
+        # Round the tile by masking, so the corner is antialiased with the artwork.
+        mask = Image.new("L", (s, s), 0)
+        ImageDraw.Draw(mask).rounded_rectangle([0, 0, s - 1, s - 1], radius=R_TILE * s, fill=255)
+        tile = Image.new("RGBA", (s, s), (0, 0, 0, 0))
+        tile.paste(base, (0, 0), mask)
+    else:
+        tile = base  # RGB, fully opaque, corner to corner
 
     d = ImageDraw.Draw(tile)
     ring_d, ring_w = D_RING * s, max(W_RING * s, 1)
@@ -80,6 +93,7 @@ def draw(size, variant):
 OUT.mkdir(parents=True, exist_ok=True)
 for variant in VARIANTS:
     for size in (1024, 512, 256, 128, 64, 32, 16):
-        path = OUT / f"icon-{variant}-{size}.png"
-        draw(size, variant).save(path)
+        draw(size, variant).save(OUT / f"icon-{variant}-{size}.png")
+    # Square, opaque, for iOS.
+    draw(1024, variant, rounded=False).save(OUT / f"icon-ios-{variant}-1024.png")
 print(f"wrote {len(list(OUT.glob('*.png')))} images to {OUT}")
