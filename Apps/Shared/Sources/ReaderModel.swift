@@ -262,8 +262,7 @@ public final class ReaderModel {
 
     /// Stops an in-progress download and closes the book.
     public func cancelDownload() {
-        guard let format = BookContentService(client: session.client)
-            .preferredReadingFormat(for: book) else { return }
+        guard let format = BookContentService.preferredReadingFormat(for: book) else { return }
         downloadHost?.downloads?.cancel(.init(bookUUID: book.uuid, format: format))
         phase = .failed("Download cancelled.")
     }

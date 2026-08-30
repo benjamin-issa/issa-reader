@@ -86,6 +86,8 @@ public struct Book: Codable, Hashable, Sendable, Identifiable {
 
 public extension Book {
     /// The formats this book is actually available in.
+    /// Every format the server has a row for, whether or not it can serve it.
+    /// For anything user-facing prefer `servableFormats`.
     var availableFormats: Set<BookFormat> {
         var formats: Set<BookFormat> = []
         if ebook != nil { formats.insert(.ebook) }
@@ -96,6 +98,21 @@ public extension Book {
 
     /// True when the book has audio synchronised to its text.
     var hasReadalong: Bool { readaloud?.filepath != nil }
+
+    /// The formats the server can actually serve, as opposed to the rows it
+    /// happens to have created.
+    ///
+    /// Distinct from `availableFormats`, which is a bare `!= nil` check: the
+    /// server creates a readaloud row when alignment is merely *requested*, so
+    /// a book can carry one with no file behind it. A badge promising narration
+    /// the server cannot serve is a lie the reader only discovers after tapping.
+    var servableFormats: Set<BookFormat> {
+        var formats: Set<BookFormat> = []
+        if ebook != nil, ebook?.missing != true { formats.insert(.ebook) }
+        if audiobook?.filepath != nil, audiobook?.missing != true { formats.insert(.audiobook) }
+        if readaloud?.filepath != nil, readaloud?.missing != true { formats.insert(.readaloud) }
+        return formats
+    }
 
     /// Book-level completion, 0...1, from the stored Readium locator.
     var progress: Double? { position?.locator.totalProgression }

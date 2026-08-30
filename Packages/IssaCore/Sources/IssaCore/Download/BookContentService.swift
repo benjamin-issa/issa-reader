@@ -11,11 +11,33 @@ public struct BookContentService: Sendable {
     private let client: APIClient
     private let cacheDirectory: URL
 
+    /// Prepared once per process rather than once per construction.
+    ///
+    /// This type is built inside view bodies — once per edition row on the book
+    /// screen, and on every access of the library's `arrangedBooks` — and the
+    /// preparation below is a `createDirectory` plus a resource-value write. At
+    /// one per render that is a filesystem write per frame.
+    private static let preparedDefaultDirectory: URL = {
+        let directory = defaultDirectory()
+        prepare(directory)
+        return directory
+    }()
+
+    private static func prepare(_ directory: URL) {
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        excludeFromBackup(directory)
+    }
+
     public init(client: APIClient, cacheDirectory: URL? = nil) {
         self.client = client
-        self.cacheDirectory = cacheDirectory ?? Self.defaultDirectory()
-        try? FileManager.default.createDirectory(at: self.cacheDirectory, withIntermediateDirectories: true)
-        Self.excludeFromBackup(self.cacheDirectory)
+        if let cacheDirectory {
+            // An injected directory is a test's, and a fresh one each time, so
+            // it does have to be prepared on the spot.
+            self.cacheDirectory = cacheDirectory
+            Self.prepare(cacheDirectory)
+        } else {
+            self.cacheDirectory = Self.preparedDefaultDirectory
+        }
     }
 
     /// Where downloaded books live.
@@ -76,10 +98,47 @@ public struct BookContentService: Sendable {
 
     /// The best format available for reading: the aligned edition when the
     /// server has one, otherwise the plain ebook.
+    ///
+    /// `missing` is honoured here rather than at each call site, because both
+    /// bugs it causes are downstream of this one answer: an audiobook-only book
+    /// used to offer "Read" and dead-end in the reader, and a book whose ebook
+    /// the server had lost returned `.ebook` and 404'd mid-download.
+    ///
+    /// Static because it is a question about a `Book`, not about the cache —
+    /// `ReaderModel` was constructing an entire service, and three filesystem
+    /// syscalls with it, just to ask.
+    public static func preferredReadingFormat(for book: Book) -> Format? {
+        let readaloudUsable = book.readaloud?.filepath != nil && book.readaloud?.missing != true
+        let ebookUsable = book.ebook != nil && book.ebook?.missing != true
+        if readaloudUsable, book.readaloud?.isAligned == true { return .readaloud }
+        if ebookUsable { return .ebook }
+        if readaloudUsable { return .readaloud }
+        return nil
+    }
+
     public func preferredReadingFormat(for book: Book) -> Format? {
-        if book.readaloud?.filepath != nil, book.readaloud?.isAligned == true { return .readaloud }
-        if book.ebook != nil { return .ebook }
-        if book.readaloud?.filepath != nil { return .readaloud }
+        Self.preferredReadingFormat(for: book)
+    }
+
+    /// Every book with at least one file on disk, from a single directory read.
+    ///
+    /// `isDownloaded` is one `stat` per book per format; asking it for a whole
+    /// library — which the download shelf and its count both do — is thousands
+    /// of syscalls per render.
+    public static func downloadedBookUUIDs(in directory: URL? = nil) -> Set<String> {
+        let directory = directory ?? preparedDefaultDirectory
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+        return Set(names.compactMap(bookUUID(fromFilename:)))
+    }
+
+    /// The uuid a download's filename encodes, or nil if it is not one of ours.
+    static func bookUUID(fromFilename name: String) -> String? {
+        guard name.hasSuffix(".epub") else { return nil }
+        let stem = String(name.dropLast(".epub".count))
+        for format in Format.allCases where stem.hasSuffix("-\(format.rawValue)") {
+            let uuid = String(stem.dropLast(format.rawValue.count + 1))
+            return uuid.isEmpty ? nil : uuid
+        }
         return nil
     }
 
