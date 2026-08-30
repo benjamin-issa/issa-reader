@@ -1,0 +1,337 @@
+import IssaCore
+import IssaUI
+import SwiftUI
+
+/// Everything the server knows about a book.
+///
+/// The brief asks for views as data-rich as the server allows, and a single
+/// `GET /api/v2/books` already carries all of this — description, both cover
+/// editions, creators by role, series position, collections, tags, identifiers,
+/// per-user status and position. None of it costs an extra request.
+public struct BookDetailView: View {
+    @Environment(AppModel.self) private var app
+    let book: Book
+
+    public init(book: Book) {
+        self.book = book
+    }
+
+    public var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: Metrics.spacing32) {
+                hero
+                if let description = book.description, !description.isEmpty {
+                    Text(description)
+                        .font(Typography.body)
+                        .foregroundStyle(Palette.inkSecondary)
+                }
+                if !book.tags.isEmpty { tags }
+                editions
+                facts
+                relatedRails
+            }
+            .padding(Metrics.spacing16)
+        }
+        .background(Palette.paper)
+        .navigationTitle(book.title)
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
+    }
+
+    private var hero: some View {
+        HStack(alignment: .top, spacing: Metrics.spacing16) {
+            CoverImage(book: book, session: app.session)
+                .frame(width: 130)
+
+            VStack(alignment: .leading, spacing: Metrics.spacing8) {
+                Text(book.title)
+                    .font(Typography.title)
+                    .foregroundStyle(Palette.ink)
+                Text(book.byline)
+                    .font(Typography.callout)
+                    .foregroundStyle(Palette.inkSecondary)
+                if !book.narrators.isEmpty {
+                    Text("Narrated by " + book.narrators.map(\.name).joined(separator: ", "))
+                        .font(Typography.footnote)
+                        .foregroundStyle(Palette.inkTertiary)
+                }
+                if let rating = book.rating { stars(rating) }
+                formatBadge
+                if let progress = book.progress, progress > 0 {
+                    ProgressBar(value: progress).frame(maxWidth: 200)
+                    Text("\(Int(progress * 100))% complete")
+                        .font(Typography.caption)
+                        .foregroundStyle(Palette.inkTertiary)
+                }
+                readButton
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    private var readButton: some View {
+        Group {
+            if let session = app.session {
+                NavigationLink {
+                    ReaderView(book: book, session: session)
+                } label: {
+                    Text(book.progress ?? 0 > 0 ? "Resume" : "Read")
+                        .font(Typography.headline)
+                        .padding(.horizontal, Metrics.spacing24)
+                        .padding(.vertical, Metrics.spacing8)
+                        .background(Palette.tangerine, in: Capsule())
+                        .foregroundStyle(.white)
+                }
+                .buttonStyle(.plain)
+                .padding(.top, Metrics.spacing4)
+            }
+        }
+    }
+
+    private func stars(_ rating: Double) -> some View {
+        HStack(spacing: 2) {
+            ForEach(0 ..< 5, id: \.self) { index in
+                Image(systemName: Double(index) + 0.5 < rating ? "star.fill" : "star")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Palette.tangerine)
+            }
+            Text(String(format: "%.1f", rating))
+                .font(Typography.caption)
+                .foregroundStyle(Palette.inkTertiary)
+        }
+    }
+
+    private var formatBadge: some View {
+        HStack(spacing: Metrics.spacing8) {
+            if book.hasReadalong {
+                badge("Readaloud", duration: book.readaloud?.duration)
+            } else if book.audiobook != nil {
+                badge("Audiobook", duration: book.audiobook?.duration)
+            }
+            if book.ebook != nil {
+                badge("Ebook", pages: book.ebook?.pageCount)
+            }
+        }
+    }
+
+    private func badge(_ title: String, duration: Double? = nil, pages: Int? = nil) -> some View {
+        var text = title
+        if let duration { text += " · " + Self.durationText(duration) }
+        if let pages { text += " · \(pages) pages" }
+        return Text(text)
+            .font(Typography.caption)
+            .padding(.horizontal, Metrics.spacing8)
+            .padding(.vertical, 3)
+            .background(Palette.surfaceRaised, in: Capsule())
+            .foregroundStyle(Palette.inkSecondary)
+    }
+
+    private var tags: some View {
+        VStack(alignment: .leading, spacing: Metrics.spacing8) {
+            Text("Tags").overlineStyle()
+            FlowRow(spacing: Metrics.spacing8) {
+                ForEach(book.tags) { tag in
+                    Text(tag.name)
+                        .font(Typography.caption)
+                        .padding(.horizontal, Metrics.spacing8)
+                        .padding(.vertical, 4)
+                        .background(Palette.surface, in: Capsule())
+                        .overlay(Capsule().strokeBorder(Palette.border, lineWidth: 1))
+                        .foregroundStyle(Palette.inkSecondary)
+                }
+            }
+        }
+    }
+
+    /// Storyteller keeps up to three editions of a book; showing which exist
+    /// answers "can I listen to this" without opening it.
+    private var editions: some View {
+        VStack(alignment: .leading, spacing: Metrics.spacing8) {
+            Text("Editions").overlineStyle()
+            VStack(spacing: 1) {
+                if let ebook = book.ebook {
+                    editionRow("Ebook", detail: ebook.isEpub2 == true ? "EPUB 2" : "EPUB 3",
+                               size: ebook.fileSize, missing: ebook.missing == true)
+                }
+                if let audiobook = book.audiobook {
+                    editionRow("Audiobook", detail: Self.durationText(audiobook.duration ?? 0),
+                               size: audiobook.fileSize, missing: audiobook.missing == true)
+                }
+                if let readaloud = book.readaloud {
+                    editionRow(
+                        "Readaloud",
+                        detail: readaloud.isAligned
+                            ? Self.durationText(readaloud.duration ?? 0)
+                            : (readaloud.status ?? "processing").capitalized,
+                        size: readaloud.fileSize, missing: readaloud.missing == true,
+                    )
+                }
+            }
+            .background(Palette.surface, in: RoundedRectangle(cornerRadius: Metrics.radiusMedium))
+        }
+    }
+
+    private func editionRow(_ title: String, detail: String, size: Int?, missing: Bool) -> some View {
+        HStack {
+            Text(title).font(Typography.callout).foregroundStyle(Palette.ink)
+            Spacer()
+            if missing {
+                // The server tracks files that vanished from disk; saying so
+                // beats a download that fails for no visible reason.
+                Text("Missing on server")
+                    .font(Typography.caption)
+                    .foregroundStyle(Color(hex: 0x7A2F2A))
+            } else {
+                Text(detail).font(Typography.caption).foregroundStyle(Palette.inkSecondary)
+                if let size {
+                    Text(Self.sizeText(size)).font(Typography.caption).foregroundStyle(Palette.inkQuaternary)
+                }
+            }
+        }
+        .padding(Metrics.spacing12)
+    }
+
+    private var facts: some View {
+        VStack(alignment: .leading, spacing: Metrics.spacing8) {
+            Text("Details").overlineStyle()
+            VStack(spacing: 1) {
+                if let series = book.series.first {
+                    factRow("Series", series.position.map { "\(series.name) · \(Self.positionText($0))" } ?? series.name)
+                }
+                if let published = book.publicationDate?.value {
+                    factRow("Published", published.formatted(.dateTime.year()))
+                }
+                if let language = book.language { factRow("Language", language.uppercased()) }
+                if !book.collections.isEmpty {
+                    factRow("Collections", book.collections.map(\.name).joined(separator: ", "))
+                }
+                if let status = book.status { factRow("Status", status.name) }
+                if let alignedWith = book.alignedWith { factRow("Aligned with", alignedWith) }
+                ForEach(namedIdentifiers, id: \.label) { identifier in
+                    factRow(identifier.label, identifier.value)
+                }
+            }
+            .background(Palette.surface, in: RoundedRectangle(cornerRadius: Metrics.radiusMedium))
+        }
+    }
+
+    /// Identifiers the server holds (ISBN, ASIN, Audible), ready for display.
+    private var namedIdentifiers: [(label: String, value: String)] {
+        book.identifiers.compactMap { identifier in
+            guard let value = identifier.value, !value.isEmpty else { return nil }
+            return ((identifier.type ?? "id").uppercased(), value)
+        }
+    }
+
+    private func factRow(_ label: String, _ value: String) -> some View {
+        HStack(alignment: .top) {
+            Text(label).font(Typography.footnote).foregroundStyle(Palette.inkTertiary)
+            Spacer(minLength: Metrics.spacing16)
+            Text(value)
+                .font(Typography.footnote)
+                .foregroundStyle(Palette.ink)
+                .multilineTextAlignment(.trailing)
+        }
+        .padding(Metrics.spacing12)
+    }
+
+    /// The design's Explore rails, all derived from the one catalogue fetch.
+    private var relatedRails: some View {
+        let derivation = app.derivation
+        return VStack(alignment: .leading, spacing: Metrics.spacing24) {
+            if let series = book.series.first,
+               let siblings = derivation.bySeries[series.name]?.filter({ $0.uuid != book.uuid }),
+               !siblings.isEmpty {
+                rail("The \(series.name)", books: siblings)
+            }
+            if let author = book.authors.first,
+               let others = derivation.byAuthor[author.name]?.filter({ $0.uuid != book.uuid }),
+               !others.isEmpty {
+                rail("More by \(author.name)", books: others)
+            }
+            if let narrator = book.narrators.first,
+               let others = derivation.byNarrator[narrator.name]?.filter({ $0.uuid != book.uuid }),
+               !others.isEmpty {
+                rail("Narrated by \(narrator.name)", books: others)
+            }
+        }
+    }
+
+    private func rail(_ title: String, books: [Book]) -> some View {
+        VStack(alignment: .leading, spacing: Metrics.spacing8) {
+            Text(title).overlineStyle()
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(alignment: .top, spacing: Metrics.spacing12) {
+                    ForEach(books) { sibling in
+                        NavigationLink {
+                            BookDetailView(book: sibling)
+                        } label: {
+                            VStack(alignment: .leading, spacing: Metrics.spacing4) {
+                                CoverImage(book: sibling, session: app.session).frame(width: 84)
+                                Text(sibling.title)
+                                    .font(Typography.caption)
+                                    .foregroundStyle(Palette.ink)
+                                    .lineLimit(2)
+                                    .frame(width: 84, alignment: .leading)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+    }
+
+    static func positionText(_ position: Double) -> String {
+        position == position.rounded() ? "Book \(Int(position))" : "Book \(position)"
+    }
+
+    static func durationText(_ seconds: Double) -> String {
+        let total = Int(seconds.rounded())
+        let hours = total / 3600
+        let minutes = (total % 3600) / 60
+        return hours > 0 ? "\(hours)h \(minutes)m" : "\(minutes)m"
+    }
+
+    static func sizeText(_ bytes: Int) -> String {
+        ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+    }
+}
+
+/// Wraps its children onto as many lines as needed. Used for tag chips, where
+/// a fixed grid would leave ragged gaps between short and long names.
+struct FlowRow: Layout {
+    var spacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? .infinity
+        var x: CGFloat = 0, y: CGFloat = 0, lineHeight: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x + size.width > width, x > 0 {
+                x = 0
+                y += lineHeight + spacing
+                lineHeight = 0
+            }
+            x += size.width + spacing
+            lineHeight = max(lineHeight, size.height)
+        }
+        return CGSize(width: width == .infinity ? x : width, height: y + lineHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX, y = bounds.minY, lineHeight: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x + size.width > bounds.maxX, x > bounds.minX {
+                x = bounds.minX
+                y += lineHeight + spacing
+                lineHeight = 0
+            }
+            subview.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+            x += size.width + spacing
+            lineHeight = max(lineHeight, size.height)
+        }
+    }
+}

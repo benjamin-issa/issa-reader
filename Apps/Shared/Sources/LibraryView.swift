@@ -97,7 +97,7 @@ struct BookGridItem: View {
             .buttonStyle(.plain)
             #else
             NavigationLink {
-                ReaderView(book: book, session: session)
+                BookDetailView(book: book)
             } label: {
                 BookCell(book: book, session: session)
             }
