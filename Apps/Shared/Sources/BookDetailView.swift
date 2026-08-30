@@ -12,10 +12,22 @@ public struct BookDetailView: View {
     @Environment(AppModel.self) private var app
     @Environment(NowPlayingController.self) private var nowPlaying
     @Environment(PlaybackSettings.self) private var settings
-    let book: Book
+    /// The book as it was when this screen opened. Identity only — everything
+    /// drawn comes from `book` below.
+    private let initialBook: Book
+
+    /// The live book from the model.
+    ///
+    /// Navigating here hands over a value, and a value does not change when the
+    /// library does: setting a status updated the model and left this screen
+    /// showing the old one. Looking it up each time keeps the screen honest
+    /// about status, rating and progress, all of which change from here.
+    private var book: Book {
+        app.books.first { $0.uuid == initialBook.uuid } ?? initialBook
+    }
 
     public init(book: Book) {
-        self.book = book
+        initialBook = book
     }
 
     public var body: some View {
