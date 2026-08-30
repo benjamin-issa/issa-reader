@@ -12,11 +12,13 @@ struct LibraryArrangementTests {
         _ title: String, author: String = "Someone", status: String? = nil,
         progress: Double? = nil, tags: [String] = [], duration: Double? = nil,
         positionTimestamp: Double? = nil, createdAt: String? = nil,
+        narrator: String? = nil,
     ) -> Book {
         var json: [String: Any] = [
             "uuid": title, "title": title,
             "authors": [["uuid": author, "name": author, "fileAs": author]],
-            "narrators": [], "creators": [], "series": [], "collections": [],
+            "narrators": narrator.map { [["uuid": $0, "name": $0, "fileAs": $0]] } ?? [],
+            "creators": [], "series": [], "collections": [],
             "identifiers": [],
             "tags": tags.map { ["uuid": $0, "name": $0] },
         ]
@@ -92,5 +94,59 @@ struct LibraryArrangementTests {
         let shelf = LibraryArrangement(shelf: .downloaded)
         let result = shelf.apply(to: books) { $0.title == "On disk" }
         #expect(result.map(\.title) == ["On disk"])
+    }
+
+    /// The trap this guards: `restored(from:)` falls back to a fresh
+    /// arrangement on any decode failure, so one unrecognised value used to
+    /// cost the reader their shelf, their tags and their direction as well.
+    @Test("an unknown sort costs the sort, not the whole arrangement")
+    func unknownSortKeepsEverythingElse() throws {
+        let json = #"{"sort":"chronological","ascending":true,"shelf":"reading","tags":["Fiction"]}"#
+        let restored = try JSONDecoder().decode(LibraryArrangement.self, from: Data(json.utf8))
+
+        #expect(restored.sort == .recent)      // fell back
+        #expect(restored.shelf == .reading)    // survived
+        #expect(restored.tags == ["Fiction"])  // survived
+        #expect(restored.ascending == true)    // survived
+    }
+
+    @Test("an unknown shelf costs the shelf, not the sort")
+    func unknownShelfKeepsEverythingElse() throws {
+        let json = #"{"sort":"title","shelf":"borrowed","tags":[]}"#
+        let restored = try JSONDecoder().decode(LibraryArrangement.self, from: Data(json.utf8))
+
+        #expect(restored.shelf == .all)    // fell back
+        #expect(restored.sort == .title)   // survived
+    }
+
+    @Test("a field an older blob never had takes its default, alone")
+    func missingFieldTakesItsDefault() throws {
+        let json = #"{"shelf":"finished"}"#
+        let restored = try JSONDecoder().decode(LibraryArrangement.self, from: Data(json.utf8))
+
+        #expect(restored.shelf == .finished)
+        #expect(restored.sort == LibraryArrangement().sort)
+        #expect(restored.tags.isEmpty)
+    }
+
+    @Test("what a reader chose survives a round trip through defaults")
+    func roundTripsThroughDefaults() throws {
+        let suite = try #require(UserDefaults(suiteName: "test.\(UUID().uuidString)"))
+        let arrangement = LibraryArrangement(
+            sort: .narrator, ascending: true, shelf: .withNarration, tags: ["Fantasy"])
+
+        arrangement.store(in: suite)
+        #expect(LibraryArrangement.restored(from: suite) == arrangement)
+    }
+
+    @Test("narrator sort orders by narrator, and books without one go last")
+    func narratorSort() {
+        let books = [
+            book("No narrator"),
+            book("Zeta", narrator: "Zeta"),
+            book("Alpha", narrator: "Alpha"),
+        ]
+        let sorted = LibraryArrangement(sort: .narrator).apply(to: books)
+        #expect(sorted.map(\.title) == ["Alpha", "Zeta", "No narrator"])
     }
 }

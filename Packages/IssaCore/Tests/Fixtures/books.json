@@ -1,1 +1,473 @@
-[{"uuid":"2f57d8c4-d6df-4555-99f6-d09a99b9fd58","title":"Pride and Prejudice","id":6813837505486968,"language":"en","createdAt":"2026-08-30 03:51:47","updatedAt":"2026-08-30 03:51:47","publicationDate":"1998-06-01T00:00:00.000Z","alignedByStorytellerVersion":null,"alignedAt":null,"alignedWith":null,"description":null,"rating":null,"subtitle":null,"duration":null,"pageCount":null,"assetDir":"Pride and Prejudice","authors":[{"uuid":"cbf61007-6bb2-4da8-adc0-a2e014475fb3","id":null,"name":"Jane Austen","fileAs":"Austen, Jane","createdAt":"2026-08-30 03:51:47","updatedAt":"2026-08-30 03:51:47"}],"narrators":[],"creators":[],"series":[],"tags":[{"uuid":"3e4c334d-f4db-4187-9155-d42b107f84d3","name":"England -- Fiction","createdAt":"2026-08-30 03:51:47","updatedAt":"2026-08-30 03:51:47"},{"uuid":"e4562f0f-29d5-4bf0-be57-cd57436fd23b","name":"Young women -- Fiction","createdAt":"2026-08-30 03:51:47","updatedAt":"2026-08-30 03:51:47"},{"uuid":"6d4f7339-bf60-4fe8-83ef-d10226b9f55a","name":"Love stories","createdAt":"2026-08-30 03:51:47","updatedAt":"2026-08-30 03:51:47"},{"uuid":"004424e4-e764-498f-8b13-24701012119b","name":"Sisters -- Fiction","createdAt":"2026-08-30 03:51:47","updatedAt":"2026-08-30 03:51:47"},{"uuid":"d555bccb-5792-47bf-9ecd-f75cc491bcc9","name":"Domestic fiction","createdAt":"2026-08-30 03:51:47","updatedAt":"2026-08-30 03:51:47"},{"uuid":"5eb80884-1f65-4b90-a7d2-15d94a0ec982","name":"Courtship -- Fiction","createdAt":"2026-08-30 03:51:47","updatedAt":"2026-08-30 03:51:47"},{"uuid":"9cd42332-977a-4748-b31f-046b10584abc","name":"Social classes -- Fiction","createdAt":"2026-08-30 03:51:47","updatedAt":"2026-08-30 03:51:47"}],"collections":[],"identifiers":[],"externalData":[],"status":{"uuid":"eaecefa1-7c25-42c8-b93a-89bdd35ba6e3","name":"To read","createdAt":"2026-08-30 03:43:25","updatedAt":"2026-08-30 03:43:25"},"position":null,"ebook":{"uuid":"d1f34ee6-361c-44fc-90ca-dd5aae64d649","filepath":"/data/library/pride-and-prejudice.epub","missing":false,"isEpub2":false,"createdAt":"2026-08-30 03:51:47","updatedAt":"2026-08-30 03:51:47","fingerprint":"f:24835567:1788061885","pageCount":300,"fileSize":24835567,"identifiers":[]},"audiobook":null,"readaloud":null},{"uuid":"35f8896e-58f1-48b6-9c3d-d79725f38071","title":"Alice's Adventures in Wonderland","id":1740004741486781,"language":"en","createdAt":"2026-08-30 03:51:47","updatedAt":"2026-08-30 03:51:47","publicationDate":"2008-06-27T00:00:00.000Z","alignedByStorytellerVersion":null,"alignedAt":null,"alignedWith":null,"description":null,"rating":null,"subtitle":null,"duration":null,"pageCount":null,"assetDir":"Alice's Adventures in Wonderland","authors":[{"uuid":"aa41e962-8289-4389-8040-1b039fbb4379","id":null,"name":"Lewis Carroll","fileAs":"Carroll, Lewis","createdAt":"2026-08-30 03:51:47","updatedAt":"2026-08-30 03:51:47"}],"narrators":[],"creators":[],"series":[],"tags":[{"uuid":"ad880a53-61b1-4ff5-ae1c-13e99705ef1c","name":"Fantasy fiction","createdAt":"2026-08-30 03:51:35","updatedAt":"2026-08-30 03:51:35"},{"uuid":"b4dea7a4-c054-4168-b3b1-4899e6584f19","name":"Children's stories","createdAt":"2026-08-30 03:51:35","updatedAt":"2026-08-30 03:51:35"},{"uuid":"338024f3-b3cd-47be-ad99-e4bdbad8fb8a","name":"Imaginary places -- Juvenile fiction","createdAt":"2026-08-30 03:51:35","updatedAt":"2026-08-30 03:51:35"},{"uuid":"0b52519b-0c53-4fae-801b-b6a26ceb3ede","name":"Alice (Fictitious character from Carroll) -- Juvenile fiction","createdAt":"2026-08-30 03:51:35","updatedAt":"2026-08-30 03:51:35"}],"collections":[],"identifiers":[],"externalData":[],"status":{"uuid":"eaecefa1-7c25-42c8-b93a-89bdd35ba6e3","name":"To read","createdAt":"2026-08-30 03:43:25","updatedAt":"2026-08-30 03:43:25"},"position":null,"ebook":{"uuid":"f584dfe5-0c3f-4e17-a8e6-0accc0567e00","filepath":"/data/library/alice-in-wonderland.epub","missing":false,"isEpub2":false,"createdAt":"2026-08-30 03:51:47","updatedAt":"2026-08-30 03:51:47","fingerprint":"f:189231:1788061882","pageCount":83,"fileSize":189231,"identifiers":[]},"audiobook":null,"readaloud":null},{"uuid":"3fd4494b-01d6-4611-aee7-03abed1908d5","title":"The Time Machine","id":4574227902062259,"language":"en","createdAt":"2026-08-30 03:51:47","updatedAt":"2026-08-30 03:51:47","publicationDate":"2004-10-02T00:00:00.000Z","alignedByStorytellerVersion":null,"alignedAt":null,"alignedWith":null,"description":null,"rating":null,"subtitle":null,"duration":null,"pageCount":null,"assetDir":"The Time Machine","authors":[{"uuid":"881a537b-a9fe-49a3-85b6-21948f4701e9","id":null,"name":"H. G. Wells","fileAs":"Wells, H. G. (Herbert George)","createdAt":"2026-08-30 03:51:47","updatedAt":"2026-08-30 03:51:47"}],"narrators":[],"creators":[],"series":[],"tags":[{"uuid":"8b5dcdae-cb9a-44d8-9693-5b3b12a2047e","name":"Science fiction","createdAt":"2026-08-30 03:51:47","updatedAt":"2026-08-30 03:51:47"},{"uuid":"55284a03-574e-416f-a9e1-ca38527fb9ae","name":"Time travel -- Fiction","createdAt":"2026-08-30 03:51:47","updatedAt":"2026-08-30 03:51:47"},{"uuid":"62ba5e2a-a1f2-4534-9806-66349f78a83d","name":"Dystopias -- Fiction","createdAt":"2026-08-30 03:51:47","updatedAt":"2026-08-30 03:51:47"}],"collections":[],"identifiers":[],"externalData":[],"status":{"uuid":"eaecefa1-7c25-42c8-b93a-89bdd35ba6e3","name":"To read","createdAt":"2026-08-30 03:43:25","updatedAt":"2026-08-30 03:43:25"},"position":null,"ebook":{"uuid":"a7eebcdf-8d94-4863-a78b-761dea23cf86","filepath":"/data/library/the-time-machine.epub","missing":false,"isEpub2":false,"createdAt":"2026-08-30 03:51:47","updatedAt":"2026-08-30 03:51:47","fingerprint":"f:306944:1788061883","pageCount":103,"fileSize":306944,"identifiers":[]},"audiobook":null,"readaloud":null},{"uuid":"75560bcc-057b-43ae-8a3e-3dc1afc698dc","title":"Frankenstein; or, the modern prometheus","id":2299845667450587,"language":"en","createdAt":"2026-08-30 03:51:47","updatedAt":"2026-08-30 03:51:47","publicationDate":"1993-10-01T00:00:00.000Z","alignedByStorytellerVersion":null,"alignedAt":null,"alignedWith":null,"description":null,"rating":null,"subtitle":null,"duration":null,"pageCount":null,"assetDir":"Frankenstein; or, the modern prometheus","authors":[{"uuid":"47f13ed9-057c-420d-a6ba-1d0f1305fe2b","id":null,"name":"Mary Wollstonecraft Shelley","fileAs":"Shelley, Mary Wollstonecraft","createdAt":"2026-08-30 03:51:47","updatedAt":"2026-08-30 03:51:47"}],"narrators":[],"creators":[],"series":[],"tags":[{"uuid":"8b5dcdae-cb9a-44d8-9693-5b3b12a2047e","name":"Science fiction","createdAt":"2026-08-30 03:51:47","updatedAt":"2026-08-30 03:51:47"},{"uuid":"a645f797-ee9e-4fc1-8489-ac9fb0a6a328","name":"Horror tales","createdAt":"2026-08-30 03:51:47","updatedAt":"2026-08-30 03:51:47"},{"uuid":"aee41985-1442-4b93-abec-9367c2c1167e","name":"Gothic fiction","createdAt":"2026-08-30 03:51:47","updatedAt":"2026-08-30 03:51:47"},{"uuid":"7449d67a-bf8c-4c46-8561-7a0941245563","name":"Scientists -- Fiction","createdAt":"2026-08-30 03:51:47","updatedAt":"2026-08-30 03:51:47"},{"uuid":"c9b2e308-ef85-4943-8cce-aea7e076355f","name":"Monsters -- Fiction","createdAt":"2026-08-30 03:51:47","updatedAt":"2026-08-30 03:51:47"},{"uuid":"3a09375e-50c2-4a52-a235-5e440599be54","name":"Frankenstein, Victor (Fictitious character) -- Fiction","createdAt":"2026-08-30 03:51:47","updatedAt":"2026-08-30 03:51:47"},{"uuid":"fb643328-6bc1-4cd6-9bbf-3e7e427c1926","name":"Frankenstein's monster (Fictitious character) -- Fiction","createdAt":"2026-08-30 03:51:47","updatedAt":"2026-08-30 03:51:47"}],"collections":[],"identifiers":[],"externalData":[],"status":{"uuid":"eaecefa1-7c25-42c8-b93a-89bdd35ba6e3","name":"To read","createdAt":"2026-08-30 03:43:25","updatedAt":"2026-08-30 03:43:25"},"position":null,"ebook":{"uuid":"434adc45-39c8-4137-a5df-726457481ae8","filepath":"/data/library/frankenstein.epub","missing":false,"isEpub2":false,"createdAt":"2026-08-30 03:51:47","updatedAt":"2026-08-30 03:51:47","fingerprint":"f:474401:1788061882","pageCount":212,"fileSize":474401,"identifiers":[]},"audiobook":null,"readaloud":null},{"uuid":"96bc0e87-c693-4cf7-bf89-8e37bc3b9b9d","title":"Dracula","id":4529815857472389,"language":"en","createdAt":"2026-08-30 03:51:47","updatedAt":"2026-08-30 03:51:47","publicationDate":"1995-10-01T00:00:00.000Z","alignedByStorytellerVersion":null,"alignedAt":null,"alignedWith":null,"description":null,"rating":null,"subtitle":null,"duration":null,"pageCount":null,"assetDir":"Dracula","authors":[{"uuid":"58685781-29a4-4045-9211-ca4037218b29","id":null,"name":"Bram Stoker","fileAs":"Stoker, Bram","createdAt":"2026-08-30 03:51:47","updatedAt":"2026-08-30 03:51:47"}],"narrators":[],"creators":[],"series":[],"tags":[{"uuid":"a645f797-ee9e-4fc1-8489-ac9fb0a6a328","name":"Horror tales","createdAt":"2026-08-30 03:51:47","updatedAt":"2026-08-30 03:51:47"},{"uuid":"bde6b488-a866-4e67-89c0-008654fbc156","name":"Epistolary fiction","createdAt":"2026-08-30 03:51:47","updatedAt":"2026-08-30 03:51:47"},{"uuid":"aee41985-1442-4b93-abec-9367c2c1167e","name":"Gothic fiction","createdAt":"2026-08-30 03:51:47","updatedAt":"2026-08-30 03:51:47"},{"uuid":"2bd3f2b6-19ed-4853-96db-9c397506299f","name":"Vampires -- Fiction","createdAt":"2026-08-30 03:51:47","updatedAt":"2026-08-30 03:51:47"},{"uuid":"6bcd32b2-5542-43ee-be1a-ef1ffdab20cf","name":"Dracula, Count (Fictitious character) -- Fiction","createdAt":"2026-08-30 03:51:47","updatedAt":"2026-08-30 03:51:47"},{"uuid":"8e8fa951-85bc-429f-8be6-0322b16e2905","name":"Transylvania (Romania) -- Fiction","createdAt":"2026-08-30 03:51:47","updatedAt":"2026-08-30 03:51:47"},{"uuid":"c823badf-7a90-44a8-a16a-b6f816433ea3","name":"Whitby (England) -- Fiction","createdAt":"2026-08-30 03:51:47","updatedAt":"2026-08-30 03:51:47"}],"collections":[],"identifiers":[],"externalData":[],"status":{"uuid":"eaecefa1-7c25-42c8-b93a-89bdd35ba6e3","name":"To read","createdAt":"2026-08-30 03:43:25","updatedAt":"2026-08-30 03:43:25"},"position":null,"ebook":{"uuid":"1138c503-126a-4b2f-9b20-9a0ccda008e9","filepath":"/data/library/dracula.epub","missing":false,"isEpub2":false,"createdAt":"2026-08-30 03:51:47","updatedAt":"2026-08-30 03:51:47","fingerprint":"f:602409:1788061885","pageCount":387,"fileSize":602409,"identifiers":[]},"audiobook":null,"readaloud":null}]
+[
+  {
+    "uuid": "2f57d8c4-d6df-4555-99f6-d09a99b9fd58",
+    "title": "Pride and Prejudice",
+    "id": 6813837505486968,
+    "language": "en",
+    "createdAt": "2026-08-30 03:51:47",
+    "updatedAt": "2026-08-30 03:51:47",
+    "publicationDate": "1998-06-01T00:00:00.000Z",
+    "alignedByStorytellerVersion": null,
+    "alignedAt": null,
+    "alignedWith": null,
+    "description": null,
+    "rating": null,
+    "subtitle": null,
+    "duration": null,
+    "pageCount": null,
+    "assetDir": "Pride and Prejudice",
+    "authors": [
+      {
+        "uuid": "cbf61007-6bb2-4da8-adc0-a2e014475fb3",
+        "id": null,
+        "name": "Jane Austen",
+        "fileAs": "Austen, Jane",
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      }
+    ],
+    "narrators": [],
+    "creators": [],
+    "series": [],
+    "tags": [
+      {
+        "uuid": "3e4c334d-f4db-4187-9155-d42b107f84d3",
+        "name": "England -- Fiction",
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      },
+      {
+        "uuid": "e4562f0f-29d5-4bf0-be57-cd57436fd23b",
+        "name": "Young women -- Fiction",
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      },
+      {
+        "uuid": "6d4f7339-bf60-4fe8-83ef-d10226b9f55a",
+        "name": "Love stories",
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      },
+      {
+        "uuid": "004424e4-e764-498f-8b13-24701012119b",
+        "name": "Sisters -- Fiction",
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      },
+      {
+        "uuid": "d555bccb-5792-47bf-9ecd-f75cc491bcc9",
+        "name": "Domestic fiction",
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      },
+      {
+        "uuid": "5eb80884-1f65-4b90-a7d2-15d94a0ec982",
+        "name": "Courtship -- Fiction",
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      },
+      {
+        "uuid": "9cd42332-977a-4748-b31f-046b10584abc",
+        "name": "Social classes -- Fiction",
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      }
+    ],
+    "collections": [],
+    "identifiers": [],
+    "externalData": [],
+    "status": {
+      "uuid": "eaecefa1-7c25-42c8-b93a-89bdd35ba6e3",
+      "name": "To read",
+      "createdAt": "2026-08-30 03:43:25",
+      "updatedAt": "2026-08-30 03:43:25"
+    },
+    "position": null,
+    "ebook": {
+      "uuid": "d1f34ee6-361c-44fc-90ca-dd5aae64d649",
+      "filepath": "/data/library/pride-and-prejudice.epub",
+      "missing": false,
+      "isEpub2": false,
+      "createdAt": "2026-08-30 03:51:47",
+      "updatedAt": "2026-08-30 03:51:47",
+      "fingerprint": "f:24835567:1788061885",
+      "pageCount": 300,
+      "fileSize": 24835567,
+      "identifiers": []
+    },
+    "audiobook": null,
+    "readaloud": null
+  },
+  {
+    "uuid": "35f8896e-58f1-48b6-9c3d-d79725f38071",
+    "title": "Alice's Adventures in Wonderland",
+    "id": 1740004741486781,
+    "language": "en",
+    "createdAt": "2026-08-30 03:51:47",
+    "updatedAt": "2026-08-30 03:51:47",
+    "publicationDate": "2008-06-27T00:00:00.000Z",
+    "alignedByStorytellerVersion": null,
+    "alignedAt": null,
+    "alignedWith": null,
+    "description": null,
+    "rating": null,
+    "subtitle": "A Tale for a Summer Afternoon",
+    "duration": null,
+    "pageCount": null,
+    "assetDir": "Alice's Adventures in Wonderland",
+    "authors": [
+      {
+        "uuid": "aa41e962-8289-4389-8040-1b039fbb4379",
+        "id": null,
+        "name": "Lewis Carroll",
+        "fileAs": "Carroll, Lewis",
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      }
+    ],
+    "narrators": [
+      {
+        "uuid": "3f1c6a20-0d5e-4a11-9c2e-7b8a4e1d0f33",
+        "id": null,
+        "name": "Chris Hoban",
+        "fileAs": "Hoban, Chris",
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      }
+    ],
+    "creators": [],
+    "series": [
+      {
+        "uuid": "6b2d9e14-7a3f-4c58-b0d1-2e9f5a7c8b40",
+        "name": "The Piranesi Sequence",
+        "featured": false,
+        "position": 1.0,
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      }
+    ],
+    "tags": [
+      {
+        "uuid": "ad880a53-61b1-4ff5-ae1c-13e99705ef1c",
+        "name": "Fantasy fiction",
+        "createdAt": "2026-08-30 03:51:35",
+        "updatedAt": "2026-08-30 03:51:35"
+      },
+      {
+        "uuid": "b4dea7a4-c054-4168-b3b1-4899e6584f19",
+        "name": "Children's stories",
+        "createdAt": "2026-08-30 03:51:35",
+        "updatedAt": "2026-08-30 03:51:35"
+      },
+      {
+        "uuid": "338024f3-b3cd-47be-ad99-e4bdbad8fb8a",
+        "name": "Imaginary places -- Juvenile fiction",
+        "createdAt": "2026-08-30 03:51:35",
+        "updatedAt": "2026-08-30 03:51:35"
+      },
+      {
+        "uuid": "0b52519b-0c53-4fae-801b-b6a26ceb3ede",
+        "name": "Alice (Fictitious character from Carroll) -- Juvenile fiction",
+        "createdAt": "2026-08-30 03:51:35",
+        "updatedAt": "2026-08-30 03:51:35"
+      }
+    ],
+    "collections": [],
+    "identifiers": [],
+    "externalData": [],
+    "status": {
+      "uuid": "eaecefa1-7c25-42c8-b93a-89bdd35ba6e3",
+      "name": "To read",
+      "createdAt": "2026-08-30 03:43:25",
+      "updatedAt": "2026-08-30 03:43:25"
+    },
+    "position": null,
+    "ebook": {
+      "uuid": "f584dfe5-0c3f-4e17-a8e6-0accc0567e00",
+      "filepath": "/data/library/alice-in-wonderland.epub",
+      "missing": false,
+      "isEpub2": false,
+      "createdAt": "2026-08-30 03:51:47",
+      "updatedAt": "2026-08-30 03:51:47",
+      "fingerprint": "f:189231:1788061882",
+      "pageCount": 83,
+      "fileSize": 189231,
+      "identifiers": []
+    },
+    "audiobook": null,
+    "readaloud": null
+  },
+  {
+    "uuid": "3fd4494b-01d6-4611-aee7-03abed1908d5",
+    "title": "The Time Machine",
+    "id": 4574227902062259,
+    "language": "en",
+    "createdAt": "2026-08-30 03:51:47",
+    "updatedAt": "2026-08-30 03:51:47",
+    "publicationDate": "2004-10-02T00:00:00.000Z",
+    "alignedByStorytellerVersion": null,
+    "alignedAt": null,
+    "alignedWith": null,
+    "description": null,
+    "rating": null,
+    "subtitle": null,
+    "duration": null,
+    "pageCount": null,
+    "assetDir": "The Time Machine",
+    "authors": [
+      {
+        "uuid": "881a537b-a9fe-49a3-85b6-21948f4701e9",
+        "id": null,
+        "name": "H. G. Wells",
+        "fileAs": "Wells, H. G. (Herbert George)",
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      }
+    ],
+    "narrators": [],
+    "creators": [],
+    "series": [],
+    "tags": [
+      {
+        "uuid": "8b5dcdae-cb9a-44d8-9693-5b3b12a2047e",
+        "name": "Science fiction",
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      },
+      {
+        "uuid": "55284a03-574e-416f-a9e1-ca38527fb9ae",
+        "name": "Time travel -- Fiction",
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      },
+      {
+        "uuid": "62ba5e2a-a1f2-4534-9806-66349f78a83d",
+        "name": "Dystopias -- Fiction",
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      }
+    ],
+    "collections": [],
+    "identifiers": [],
+    "externalData": [],
+    "status": {
+      "uuid": "eaecefa1-7c25-42c8-b93a-89bdd35ba6e3",
+      "name": "To read",
+      "createdAt": "2026-08-30 03:43:25",
+      "updatedAt": "2026-08-30 03:43:25"
+    },
+    "position": null,
+    "ebook": {
+      "uuid": "a7eebcdf-8d94-4863-a78b-761dea23cf86",
+      "filepath": "/data/library/the-time-machine.epub",
+      "missing": false,
+      "isEpub2": false,
+      "createdAt": "2026-08-30 03:51:47",
+      "updatedAt": "2026-08-30 03:51:47",
+      "fingerprint": "f:306944:1788061883",
+      "pageCount": 103,
+      "fileSize": 306944,
+      "identifiers": []
+    },
+    "audiobook": null,
+    "readaloud": null
+  },
+  {
+    "uuid": "75560bcc-057b-43ae-8a3e-3dc1afc698dc",
+    "title": "Frankenstein; or, the modern prometheus",
+    "id": 2299845667450587,
+    "language": "en",
+    "createdAt": "2026-08-30 03:51:47",
+    "updatedAt": "2026-08-30 03:51:47",
+    "publicationDate": "1993-10-01T00:00:00.000Z",
+    "alignedByStorytellerVersion": null,
+    "alignedAt": null,
+    "alignedWith": null,
+    "description": null,
+    "rating": null,
+    "subtitle": null,
+    "duration": null,
+    "pageCount": null,
+    "assetDir": "Frankenstein; or, the modern prometheus",
+    "authors": [
+      {
+        "uuid": "47f13ed9-057c-420d-a6ba-1d0f1305fe2b",
+        "id": null,
+        "name": "Mary Wollstonecraft Shelley",
+        "fileAs": "Shelley, Mary Wollstonecraft",
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      }
+    ],
+    "narrators": [],
+    "creators": [],
+    "series": [],
+    "tags": [
+      {
+        "uuid": "8b5dcdae-cb9a-44d8-9693-5b3b12a2047e",
+        "name": "Science fiction",
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      },
+      {
+        "uuid": "a645f797-ee9e-4fc1-8489-ac9fb0a6a328",
+        "name": "Horror tales",
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      },
+      {
+        "uuid": "aee41985-1442-4b93-abec-9367c2c1167e",
+        "name": "Gothic fiction",
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      },
+      {
+        "uuid": "7449d67a-bf8c-4c46-8561-7a0941245563",
+        "name": "Scientists -- Fiction",
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      },
+      {
+        "uuid": "c9b2e308-ef85-4943-8cce-aea7e076355f",
+        "name": "Monsters -- Fiction",
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      },
+      {
+        "uuid": "3a09375e-50c2-4a52-a235-5e440599be54",
+        "name": "Frankenstein, Victor (Fictitious character) -- Fiction",
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      },
+      {
+        "uuid": "fb643328-6bc1-4cd6-9bbf-3e7e427c1926",
+        "name": "Frankenstein's monster (Fictitious character) -- Fiction",
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      }
+    ],
+    "collections": [],
+    "identifiers": [],
+    "externalData": [],
+    "status": {
+      "uuid": "eaecefa1-7c25-42c8-b93a-89bdd35ba6e3",
+      "name": "To read",
+      "createdAt": "2026-08-30 03:43:25",
+      "updatedAt": "2026-08-30 03:43:25"
+    },
+    "position": null,
+    "ebook": {
+      "uuid": "434adc45-39c8-4137-a5df-726457481ae8",
+      "filepath": "/data/library/frankenstein.epub",
+      "missing": false,
+      "isEpub2": false,
+      "createdAt": "2026-08-30 03:51:47",
+      "updatedAt": "2026-08-30 03:51:47",
+      "fingerprint": "f:474401:1788061882",
+      "pageCount": 212,
+      "fileSize": 474401,
+      "identifiers": []
+    },
+    "audiobook": null,
+    "readaloud": null
+  },
+  {
+    "uuid": "96bc0e87-c693-4cf7-bf89-8e37bc3b9b9d",
+    "title": "Dracula",
+    "id": 4529815857472389,
+    "language": "en",
+    "createdAt": "2026-08-30 03:51:47",
+    "updatedAt": "2026-08-30 03:51:47",
+    "publicationDate": "1995-10-01T00:00:00.000Z",
+    "alignedByStorytellerVersion": null,
+    "alignedAt": null,
+    "alignedWith": null,
+    "description": null,
+    "rating": null,
+    "subtitle": null,
+    "duration": null,
+    "pageCount": null,
+    "assetDir": "Dracula",
+    "authors": [
+      {
+        "uuid": "58685781-29a4-4045-9211-ca4037218b29",
+        "id": null,
+        "name": "Bram Stoker",
+        "fileAs": "Stoker, Bram",
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      }
+    ],
+    "narrators": [],
+    "creators": [],
+    "series": [],
+    "tags": [
+      {
+        "uuid": "a645f797-ee9e-4fc1-8489-ac9fb0a6a328",
+        "name": "Horror tales",
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      },
+      {
+        "uuid": "bde6b488-a866-4e67-89c0-008654fbc156",
+        "name": "Epistolary fiction",
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      },
+      {
+        "uuid": "aee41985-1442-4b93-abec-9367c2c1167e",
+        "name": "Gothic fiction",
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      },
+      {
+        "uuid": "2bd3f2b6-19ed-4853-96db-9c397506299f",
+        "name": "Vampires -- Fiction",
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      },
+      {
+        "uuid": "6bcd32b2-5542-43ee-be1a-ef1ffdab20cf",
+        "name": "Dracula, Count (Fictitious character) -- Fiction",
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      },
+      {
+        "uuid": "8e8fa951-85bc-429f-8be6-0322b16e2905",
+        "name": "Transylvania (Romania) -- Fiction",
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      },
+      {
+        "uuid": "c823badf-7a90-44a8-a16a-b6f816433ea3",
+        "name": "Whitby (England) -- Fiction",
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      }
+    ],
+    "collections": [],
+    "identifiers": [],
+    "externalData": [],
+    "status": {
+      "uuid": "eaecefa1-7c25-42c8-b93a-89bdd35ba6e3",
+      "name": "To read",
+      "createdAt": "2026-08-30 03:43:25",
+      "updatedAt": "2026-08-30 03:43:25"
+    },
+    "position": null,
+    "ebook": {
+      "uuid": "1138c503-126a-4b2f-9b20-9a0ccda008e9",
+      "filepath": "/data/library/dracula.epub",
+      "missing": false,
+      "isEpub2": false,
+      "createdAt": "2026-08-30 03:51:47",
+      "updatedAt": "2026-08-30 03:51:47",
+      "fingerprint": "f:602409:1788061885",
+      "pageCount": 387,
+      "fileSize": 602409,
+      "identifiers": []
+    },
+    "audiobook": null,
+    "readaloud": null
+  }
+]

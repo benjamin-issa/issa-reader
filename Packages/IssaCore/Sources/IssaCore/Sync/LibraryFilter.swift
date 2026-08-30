@@ -14,6 +14,7 @@ public struct LibraryArrangement: Codable, Hashable, Sendable {
         case added
         case progress
         case duration
+        case narrator
 
         public var id: String { rawValue }
 
@@ -25,6 +26,7 @@ public struct LibraryArrangement: Codable, Hashable, Sendable {
             case .added: "Recently added"
             case .progress: "Progress"
             case .duration: "Length"
+            case .narrator: "Narrator"
             }
         }
     }
@@ -47,7 +49,7 @@ public struct LibraryArrangement: Codable, Hashable, Sendable {
             case .toRead: "To read"
             case .finished: "Finished"
             case .downloaded: "Downloaded"
-            case .withNarration: "With narration"
+            case .withNarration: "With audio"
             }
         }
     }
@@ -71,6 +73,41 @@ public struct LibraryArrangement: Codable, Hashable, Sendable {
     /// True when anything other than the default arrangement is in force, so
     /// the UI can say so rather than leaving a filtered library looking short.
     public var isFiltering: Bool { shelf != .all || !tags.isEmpty }
+
+    // Spelled out rather than synthesised, because the decoder below names them.
+    enum CodingKeys: String, CodingKey {
+        case sort, ascending, shelf, tags
+    }
+
+    /// Decoded field by field, with a default for anything absent or unknown.
+    ///
+    /// The synthesised decoder fails the *whole* blob when one value is not
+    /// recognised, and `restored(from:)` falls back to a fresh arrangement on
+    /// failure — so adding a `Sort` case, or reading a blob written by a newer
+    /// build, would silently reset a reader's shelf, tags and direction along
+    /// with the sort. One unfamiliar value should cost one field.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let fallback = LibraryArrangement()
+        sort = Self.decodeCase(Sort.self, from: container, key: .sort) ?? fallback.sort
+        shelf = Self.decodeCase(Shelf.self, from: container, key: .shelf) ?? fallback.shelf
+        ascending = try container.decodeIfPresent(Bool.self, forKey: .ascending) ?? fallback.ascending
+        tags = try container.decodeIfPresent(Set<String>.self, forKey: .tags) ?? fallback.tags
+    }
+
+    /// Reads a string-backed case, treating an unrecognised one as absent.
+    ///
+    /// `decodeIfPresent` still throws when the key is there but the value is
+    /// not a known case, which is exactly the newer-build blob this guards.
+    private static func decodeCase<T: RawRepresentable & Decodable>(
+        _ type: T.Type,
+        from container: KeyedDecodingContainer<CodingKeys>,
+        key: CodingKeys,
+    ) -> T? where T.RawValue == String {
+        // `try?` flattens the doubly-optional decodeIfPresent result.
+        guard let raw = try? container.decodeIfPresent(String.self, forKey: key) else { return nil }
+        return T(rawValue: raw)
+    }
 }
 
 public extension LibraryArrangement {
@@ -163,6 +200,19 @@ public extension LibraryArrangement {
             ordered = books.sorted { ($0.progress ?? 0) > ($1.progress ?? 0) }
         case .duration:
             ordered = books.sorted { Self.duration(of: $0) > Self.duration(of: $1) }
+        case .narrator:
+            // Books with no narrator sort last either way, the same rule
+            // `.recent` uses for books never opened.
+            ordered = books.sorted {
+                let l = $0.narrators.first.map { $0.fileAs ?? $0.name }
+                let r = $1.narrators.first.map { $0.fileAs ?? $0.name }
+                switch (l, r) {
+                case let (l?, r?): return l.localizedCaseInsensitiveCompare(r) == .orderedAscending
+                case (nil, _?): return false
+                case (_?, nil): return true
+                case (nil, nil): return false
+                }
+            }
         }
         return ascending ? ordered.reversed() : ordered
     }

@@ -55,6 +55,32 @@ public actor LibraryStore {
         return digest.prefix(8).map { String(format: "%02x", $0) }.joined()
     }
 
+    /// Rebuilds the flattened search columns from each row's stored payload.
+    ///
+    /// Shared by the migration and its test, so the thing under test is the
+    /// thing that ships. Reads `json`, which holds the whole encoded `Book`,
+    /// so it needs no network.
+    static func backfillSearchFields(_ db: Database) throws {
+        for row in try Row.fetchAll(db, sql: "SELECT rowid, json FROM book") {
+            guard let data: Data = row["json"],
+                  let book = try? JSONDecoder().decode(Book.self, from: data)
+            else { continue }
+            try db.execute(
+                sql: """
+                    UPDATE book SET subtitle = ?, narrators = ?, series = ?, tags = ?
+                    WHERE rowid = ?
+                    """,
+                arguments: [
+                    book.subtitle ?? "",
+                    BookRow.joined(book.narrators.map(\.name)),
+                    BookRow.joined(book.series.map(\.name)),
+                    BookRow.joined(book.tags.map(\.name)),
+                    row["rowid"] as Int64?,
+                ],
+            )
+        }
+    }
+
     private static var migrator: DatabaseMigrator {
         var migrator = DatabaseMigrator()
         migrator.registerMigration("v1") { db in
@@ -108,6 +134,44 @@ public actor LibraryStore {
                 t.column("json", .blob).notNull()
             }
             try db.create(index: "annotation_on_book", on: "annotation", columns: ["bookUUID"])
+        }
+
+        // Searching a narrator, a series or a tag returned nothing at all: the
+        // index carried `title` and `byline` only, and `byline` is authors —
+        // narrators only when a book has no author whatsoever.
+        //
+        // No catalogue refresh is needed to repair existing installs. `json`
+        // holds the whole encoded `Book`, so the new columns are backfilled by
+        // decoding what is already on disk. Search is correct offline, on the
+        // first launch after upgrading.
+        migrator.registerMigration("v3-search-fields") { db in
+            // Order matters. The synchronisation triggers hard-code the column
+            // list they were created with, so they have to go before the table
+            // they feed; and the columns have to exist before the new virtual
+            // table names them.
+            try db.dropFTS5SynchronizationTriggers(forTable: "bookSearch")
+            try db.drop(table: "bookSearch")
+
+            for column in ["subtitle", "narrators", "series", "tags"] {
+                try db.alter(table: "book") { t in
+                    t.add(column: column, .text).notNull().defaults(to: "")
+                }
+            }
+
+            try backfillSearchFields(db)
+
+            // Recreating the table re-emits the triggers and issues its own
+            // 'rebuild', so the index repopulates from `book` on its own.
+            try db.create(virtualTable: "bookSearch", using: FTS5()) { t in
+                t.synchronize(withTable: "book")
+                t.tokenizer = .unicode61(diacritics: .remove)
+                t.column("title")
+                t.column("byline")
+                t.column("subtitle")
+                t.column("narrators")
+                t.column("series")
+                t.column("tags")
+            }
         }
         return migrator
     }
@@ -171,12 +235,32 @@ public actor LibraryStore {
                 if !rows.isEmpty { return rows.compactMap { try? $0.decoded() } }
             }
             let like = "%\(trimmed)%"
+            // The same field set the FTS index carries, so the two paths cannot
+            // disagree about what is searchable. (They still differ in *how*:
+            // FTS matches token prefixes, LIKE matches any substring.)
+            let columns = ["title", "byline", "subtitle", "narrators", "series", "tags"]
+            let clause = columns.map { "\($0) LIKE ?" }.joined(separator: " OR ")
             return try BookRow
-                .filter(sql: "title LIKE ? OR byline LIKE ?", arguments: [like, like])
+                .filter(sql: clause, arguments: StatementArguments(columns.map { _ in like }))
                 .order(Column("title").asc)
                 .fetchAll(db)
                 .compactMap { try? $0.decoded() }
         }
+    }
+
+    // MARK: - Test hooks
+
+    /// Blanks the flattened search columns, standing in for a row written
+    /// before they existed.
+    func eraseSearchFieldsForTesting() async throws {
+        try await dbQueue.write { db in
+            try db.execute(sql: "UPDATE book SET subtitle = '', narrators = '', series = '', tags = ''")
+        }
+    }
+
+    /// Runs the migration's own backfill against the current contents.
+    func backfillSearchFieldsForTesting() async throws {
+        try await dbQueue.write { db in try Self.backfillSearchFields(db) }
     }
 }
 
@@ -194,6 +278,12 @@ struct BookRow: Codable, FetchableRecord, PersistableRecord {
     var statusName: String?
     var hasReadalong: Bool
     var hasAudio: Bool
+    // Flattened for the search index. `byline` is authors, so without these a
+    // narrator, a series or a tag was unreachable.
+    var subtitle: String
+    var narrators: String
+    var series: String
+    var tags: String
     var json: Data
 
     init(book: Book) throws {
@@ -207,7 +297,17 @@ struct BookRow: Codable, FetchableRecord, PersistableRecord {
         statusName = book.status?.name
         hasReadalong = book.hasReadalong
         hasAudio = book.audiobook != nil || book.hasReadalong
+        subtitle = book.subtitle ?? ""
+        narrators = Self.joined(book.narrators.map(\.name))
+        series = Self.joined(book.series.map(\.name))
+        tags = Self.joined(book.tags.map(\.name))
         json = try JSONEncoder().encode(book)
+    }
+
+    /// Joins names for the index. A newline rather than a comma, so a query
+    /// cannot match across two adjacent names.
+    static func joined(_ names: [String]) -> String {
+        names.joined(separator: "\n")
     }
 
     func decoded() throws -> Book {

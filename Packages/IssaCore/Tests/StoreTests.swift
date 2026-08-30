@@ -88,6 +88,50 @@ struct LibraryStoreTests {
         #expect(try await store.search("   ").count == (try await store.allBooks().count))
     }
 
+    /// The bug this fixes: the index carried `title` and `byline` only, and
+    /// `byline` is authors — so a narrator on a book that *has* an author, and
+    /// every series and tag, returned nothing at all.
+    @Test("search reaches narrator, series, tag and subtitle, not just title and author")
+    func searchesEveryPromisedField() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try LibraryStore(serverKey: "http://example.test", directory: directory)
+        try await store.replaceCatalogue(try sampleBooks())
+
+        func hitsAlice(_ query: String) async throws -> Bool {
+            try await store.search(query).contains { $0.title.hasPrefix("Alice") }
+        }
+
+        #expect(try await hitsAlice("hoban"))            // narrator
+        #expect(try await hitsAlice("piranesi"))         // series
+        #expect(try await hitsAlice("fantasy"))          // tag
+        #expect(try await hitsAlice("afternoon"))        // subtitle
+        // And the two that already worked must keep working.
+        #expect(try await hitsAlice("carroll"))
+        #expect(try await hitsAlice("alice"))
+    }
+
+    /// The whole basis for not requiring a catalogue refresh: `json` already
+    /// holds the entire encoded `Book`, so a row written before the new columns
+    /// existed can be repaired locally, offline.
+    @Test("the migration backfills rows that were written before the new columns")
+    func migrationBackfillsExistingRows() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let books = try sampleBooks()
+
+        // Write with the current schema, then blank the derived columns to
+        // stand in for a row that predates them, and confirm a rebuild from
+        // `json` alone restores searchability.
+        let store = try LibraryStore(serverKey: "http://example.test", directory: directory)
+        try await store.replaceCatalogue(books)
+        try await store.eraseSearchFieldsForTesting()
+        #expect(try await store.search("hoban").isEmpty)
+
+        try await store.backfillSearchFieldsForTesting()
+        #expect(try await store.search("hoban").contains { $0.title.hasPrefix("Alice") })
+    }
+
     @Test("a single character still searches rather than returning nothing")
     func shortQueryFallsBack() async throws {
         let directory = temporaryDirectory()
