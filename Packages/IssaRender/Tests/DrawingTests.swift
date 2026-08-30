@@ -1,4 +1,5 @@
 import CoreGraphics
+import ImageIO
 import Foundation
 import IssaEPUB
 import Testing
@@ -89,5 +90,72 @@ struct DrawingTests {
         // open on the first chapter with content rather than spine item zero.
         print("first spine item \(first.href) has \(parsed.text.length) characters, \(parsed.complexity.imageCount) images")
         #expect(parsed.text.length >= 0)
+    }
+}
+
+/// Illustrations must occupy real space and actually paint.
+///
+/// Every Gutenberg book opens on a cover wrapper that is nothing but an image,
+/// so "renders no image" and "renders an empty chapter" look identical from the
+/// outside — which is exactly how the blank first page shipped once already.
+@MainActor
+struct ImageRenderingTests {
+    static func aliceCoverChapter() throws -> (HTMLContentParser.Result, EPUBArchive) {
+        let url = try #require(Bundle.module.url(forResource: "Fixtures/alice", withExtension: "epub"))
+        let package = try EPUBPackage.open(url: url)
+        let archive = package.archive
+        let item = package.spine[0]
+
+        let parsed = try HTMLContentParser(
+            style: ReaderStyle(),
+            maxImageWidth: 300,
+            loadImage: { href in
+                guard let data = try? archive.read(href) else { return nil }
+                return PlatformImage(data: data)
+            },
+        ).parse(xhtml: try archive.read(item.href), baseHref: item.href)
+        return (parsed, archive)
+    }
+
+    @Test("a cover-only chapter is no longer empty")
+    func coverChapterHasContent() throws {
+        let (parsed, _) = try Self.aliceCoverChapter()
+        #expect(parsed.complexity.imageCount > 0)
+        // The object-replacement character stands in for the illustration.
+        #expect(parsed.text.string.contains("\u{FFFC}"))
+        var hrefs: [String] = []
+        parsed.text.enumerateAttribute(
+            .issaImageHref, in: NSRange(location: 0, length: parsed.text.length),
+        ) { value, _, _ in
+            if let href = value as? String { hrefs.append(href) }
+        }
+        #expect(!hrefs.isEmpty, "no image href recorded")
+    }
+
+    @Test("the illustration actually rasterises")
+    func coverChapterRasterises() throws {
+        let (parsed, _) = try Self.aliceCoverChapter()
+        let layout = ChapterLayout(text: parsed.text, fragmentRanges: parsed.fragmentRanges)
+        layout.layout(pageSize: CGSize(width: 340, height: 560))
+        let page = try #require(layout.pages.first)
+
+        let coverage = DrawingTests.inkCoverage(layout, page: page)
+        #expect(coverage > 0.02, "cover illustration did not paint (coverage \(coverage))")
+    }
+
+    @Test("an image with no resolver is skipped rather than reserving empty space")
+    func unresolvableImageSkipped() throws {
+        let html = Data("""
+        <html xmlns="http://www.w3.org/1999/xhtml"><body>
+        <p>Before.</p><img src="missing.png"/><p>After.</p>
+        </body></html>
+        """.utf8)
+        let result = try HTMLContentParser(style: ReaderStyle()).parse(xhtml: html, baseHref: "c.xhtml")
+        #expect(result.complexity.imageCount == 1)
+        // Counted, but nothing reserved: a box with no picture in it is worse
+        // than no box.
+        #expect(!result.text.string.contains("\u{FFFC}"))
+        #expect(result.text.string.contains("Before."))
+        #expect(result.text.string.contains("After."))
     }
 }

@@ -179,6 +179,9 @@ public final class ChapterLayout {
     // MARK: - Drawing
 
     /// Draws one page into the current graphics context.
+    ///
+    /// Illustrations ride along inside the layout fragments as text attachments
+    /// carrying their own artwork, so there is no second drawing pass.
     public func draw(page: RenderedPage, in context: CGContext) {
         context.saveGState()
         context.translateBy(x: 0, y: -page.yOffset)

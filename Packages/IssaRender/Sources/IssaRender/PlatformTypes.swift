@@ -5,10 +5,12 @@ import Foundation
 import UIKit
 public typealias PlatformFont = UIFont
 public typealias PlatformColor = UIColor
+public typealias PlatformImage = UIImage
 #elseif canImport(AppKit)
 import AppKit
 public typealias PlatformFont = NSFont
 public typealias PlatformColor = NSColor
+public typealias PlatformImage = NSImage
 #endif
 
 public extension NSAttributedString.Key {
@@ -21,4 +23,10 @@ public extension NSAttributedString.Key {
     static let issaFragmentID = NSAttributedString.Key("issaFragmentID")
     /// Nesting depth of block quotes, used for indentation.
     static let issaBlockquoteDepth = NSAttributedString.Key("issaBlockquoteDepth")
+    /// Archive path of an image occupying this run.
+    ///
+    /// The image is drawn by the renderer rather than by a text attachment view
+    /// provider, because pages are drawn straight into a CGContext with no text
+    /// view in the picture.
+    static let issaImageHref = NSAttributedString.Key("issaImageHref")
 }

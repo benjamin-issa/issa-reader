@@ -14,7 +14,9 @@ import AppKit
 /// It covers what reflowable trade fiction actually uses — block and inline
 /// flow, headings, emphasis, lists, blockquotes, breaks — and reports anything
 /// beyond that so the caller can route the chapter to a web view instead.
-public struct HTMLContentParser: Sendable {
+/// Not `Sendable`: it holds an image loader that vends `UIImage`/`NSImage`,
+/// which are not. Parsing happens on one actor at a time, so this costs nothing.
+public struct HTMLContentParser {
     /// `NSAttributedString` is immutable but predates `Sendable`, and this
     /// struct only ever holds a finished, never-mutated instance.
     public struct Result: @unchecked Sendable {
@@ -27,9 +29,24 @@ public struct HTMLContentParser: Sendable {
     }
 
     private let style: ReaderStyle
+    private let loadImage: ((String) -> PlatformImage?)?
+    private let maxImageWidth: CGFloat
 
-    public init(style: ReaderStyle) {
+    /// - Parameters:
+    ///   - loadImage: given an archive path, the decoded artwork. Supplying it is
+    ///     what lets illustrations occupy real space and actually draw; without
+    ///     it, images are skipped and an illustrated chapter reads as empty.
+    ///     Results are expected to be cached by the caller — a chapter asks once
+    ///     per plate.
+    ///   - maxImageWidth: the column width images are scaled to fit.
+    public init(
+        style: ReaderStyle,
+        maxImageWidth: CGFloat = 320,
+        loadImage: ((String) -> PlatformImage?)? = nil,
+    ) {
         self.style = style
+        self.maxImageWidth = maxImageWidth
+        self.loadImage = loadImage
     }
 
     public func parse(xhtml data: Data, baseHref: String) throws -> Result {
@@ -41,7 +58,7 @@ public struct HTMLContentParser: Sendable {
         var complexity = ChapterComplexity()
 
         let body = root.firstDescendant(named: "body") ?? root
-        var context = Context(style: style)
+        var context = Context(style: style, baseHref: baseHref)
         render(node: body, into: output, ranges: &ranges, complexity: &complexity, context: &context)
 
         // Trimming the ends shifts every recorded range, so they move with it;
@@ -63,6 +80,8 @@ public struct HTMLContentParser: Sendable {
 
     private struct Context {
         var style: ReaderStyle
+        /// Path of the document being parsed, so image srcs resolve correctly.
+        var baseHref: String
         var bold = false
         var italic = false
         var sizeScale: CGFloat = 1
@@ -105,11 +124,19 @@ public struct HTMLContentParser: Sendable {
             output.append(NSAttributedString(string: "\n", attributes: attributes(for: context)))
             return
 
-        case "img", "image", "svg":
-            // Images are recorded rather than drawn for now; a chapter that
-            // leans on them is a candidate for the web-view path.
+        case "img", "image":
             complexity.imageCount += 1
+            appendImage(node: node, to: output, context: child)
             return
+
+        case "svg":
+            // The standard EPUB cover is an <svg> wrapping a raster <image>, so
+            // this must descend rather than bail — bailing is what made every
+            // Gutenberg book open on a blank page. Genuine vector drawing is
+            // counted as complexity; a bare raster wrapper is not.
+            if Self.containsVectorDrawing(node) {
+                complexity.hasVectorArt = true
+            }
 
         case "table":
             complexity.hasTables = true
@@ -167,6 +194,46 @@ public struct HTMLContentParser: Sendable {
         }
     }
 
+    /// Reserves space for an illustration and records where to draw it.
+    ///
+    /// A U+FFFC object-replacement character carries an attachment whose bounds
+    /// give the image its place in the flow. The renderer draws the picture
+    /// itself from the recorded href, so no text view or attachment view
+    /// provider is involved.
+    private func appendImage(
+        node: EPUBXMLNode, to output: NSMutableAttributedString, context: Context,
+    ) {
+        guard let src = node["src"] ?? node["href"], !src.isEmpty else { return }
+        let href = EPUBPackage.resolve(src, relativeTo: context.baseHref)
+        guard let image = loadImage?(href) else { return }
+        let pixelSize = image.size
+        guard pixelSize.width > 0, pixelSize.height > 0 else { return }
+
+        // Scale to the column, never up: an upscaled 60px decoration looks worse
+        // than a small one.
+        let scale = min(1, maxImageWidth / pixelSize.width)
+        let displaySize = CGSize(width: pixelSize.width * scale, height: pixelSize.height * scale)
+
+        let attachment = ImageAttachment(displaySize: displaySize, image: image)
+
+        var attributes = attributes(for: context)
+        attributes[.attachment] = attachment
+        attributes[.issaImageHref] = href
+        // Centre the illustration in the column and give it room to breathe.
+        if let paragraph = (attributes[.paragraphStyle] as? NSParagraphStyle)?
+            .mutableCopy() as? NSMutableParagraphStyle {
+            paragraph.alignment = .center
+            paragraph.firstLineHeadIndent = 0
+            paragraph.headIndent = 0
+            paragraph.paragraphSpacing = style.fontSize
+            paragraph.paragraphSpacingBefore = style.fontSize
+            attributes[.paragraphStyle] = paragraph
+        }
+
+        output.append(NSAttributedString(string: "\u{FFFC}", attributes: attributes))
+        output.append(NSAttributedString(string: "\n", attributes: attributes))
+    }
+
     private func appendParagraphBreak(to output: NSMutableAttributedString, context: Context) {
         guard output.length > 0 else { return }
         let existing = (output.string as NSString)
@@ -206,6 +273,17 @@ public struct HTMLContentParser: Sendable {
     }
 
     // MARK: - Text handling
+
+    /// Whether an `<svg>` actually draws vectors, as opposed to merely wrapping
+    /// a bitmap the way cover pages do.
+    static func containsVectorDrawing(_ node: EPUBXMLNode) -> Bool {
+        let drawing: Set<String> = [
+            "path", "rect", "circle", "ellipse", "line", "polyline",
+            "polygon", "text", "use",
+        ]
+        if drawing.contains(node.name.lowercased()) { return true }
+        return node.children.contains { containsVectorDrawing($0) }
+    }
 
     private static let blockElements: Set<String> = [
         "p", "div", "section", "article", "h1", "h2", "h3", "h4", "h5", "h6",
@@ -319,13 +397,15 @@ public struct ChapterComplexity: Sendable, Hashable {
     public var hasTables = false
     public var hasEmbeddedMedia = false
     public var hasScripting = false
+    /// Genuine vector drawing, as opposed to an `<svg>` merely wrapping a bitmap.
+    public var hasVectorArt = false
     public var imageCount = 0
 
     public init() {}
 
-    /// Images alone are common and harmless; structure the layout engine cannot
-    /// express is what forces a fallback.
+    /// Raster images are drawn natively now, so they no longer force a
+    /// fallback; structure the layout engine cannot express does.
     public var requiresWebView: Bool {
-        hasTables || hasEmbeddedMedia || hasScripting
+        hasTables || hasEmbeddedMedia || hasScripting || hasVectorArt
     }
 }

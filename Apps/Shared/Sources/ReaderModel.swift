@@ -221,6 +221,27 @@ public final class ReaderModel {
         await relayoutCurrentChapter()
     }
 
+    /// Decodes and caches a chapter's artwork, keyed by archive path.
+    ///
+    /// A chapter asks once per plate, and the cache lives as long as the chapter
+    /// does, so reflowing on a font change costs no re-decoding.
+    final class ChapterImageSource {
+        private let archive: EPUBArchive
+        private var decoded: [String: PlatformImage?] = [:]
+
+        init(archive: EPUBArchive) { self.archive = archive }
+
+        func image(for href: String) -> PlatformImage? {
+            if let cached = decoded[href] { return cached }
+            var result: PlatformImage?
+            if let data = try? archive.read(href) {
+                result = PlatformImage(data: data)
+            }
+            decoded[href] = result
+            return result
+        }
+    }
+
     private func relayoutCurrentChapter() async {
         guard let layout, pageSize != .zero else { return }
         // Keep the reader on the same words across a reflow rather than the same
@@ -238,7 +259,12 @@ public final class ReaderModel {
         let item = package.spine[index]
         do {
             let data = try package.archive.read(item.href)
-            let parsed = try HTMLContentParser(style: style).parse(xhtml: data, baseHref: item.href)
+            let images = ChapterImageSource(archive: package.archive)
+            let parsed = try HTMLContentParser(
+                style: style,
+                maxImageWidth: max(pageSize.width, 1),
+                loadImage: { images.image(for: $0) },
+            ).parse(xhtml: data, baseHref: item.href)
             let layout = ChapterLayout(text: parsed.text, fragmentRanges: parsed.fragmentRanges)
             layout.layout(pageSize: pageSize)
             self.layout = layout
@@ -288,9 +314,13 @@ public final class ReaderModel {
         scheduleSave()
     }
 
+    /// A chapter is empty only if it has neither prose nor an illustration.
+    /// Now that plates render, a full-page image is content worth stopping on.
     private var isCurrentChapterEmpty: Bool {
         guard let layout else { return true }
-        return layout.attributedText.string.trimmingCharacters(in: .whitespacesAndNewlines).count < 4
+        let text = layout.attributedText.string
+        if text.contains("\u{FFFC}") { return false }
+        return text.trimmingCharacters(in: .whitespacesAndNewlines).count < 4
     }
 
     public func go(toChapter index: Int) async {
