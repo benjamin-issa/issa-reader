@@ -34,7 +34,19 @@ public final class ReaderModel {
     public var isPlaying: Bool { readalong?.player.isPlaying ?? false }
 
     public var style: ReaderStyle {
-        didSet { if style != oldValue { Task { await relayoutCurrentChapter() } } }
+        didSet {
+            guard style != oldValue else { return }
+            // Typography lives in the attributed text, which is immutable once
+            // built, so a font or spacing change needs the chapter parsed again
+            // — re-flowing alone would keep the old face at the old size. Page
+            // size, and only page size, can be handled by re-flowing.
+            let needsReparse = style.fontFamily != oldValue.fontFamily
+                || style.fontSize != oldValue.fontSize
+                || style.lineSpacing != oldValue.lineSpacing
+                || style.justified != oldValue.justified
+                || style.theme != oldValue.theme
+            Task { await needsReparse ? reloadCurrentChapter() : relayoutCurrentChapter() }
+        }
     }
 
     public let book: Book
@@ -44,6 +56,9 @@ public final class ReaderModel {
     public var readerSession: Session { session }
     private var pageSize: CGSize = .zero
     private var saveTask: Task<Void, Never>?
+
+    /// Playback rate to start narration at, supplied by the app's preferences.
+    public var preferredRate: Double = 1.0
 
     public init(book: Book, session: Session, style: ReaderStyle = ReaderStyle()) {
         self.book = book
@@ -86,13 +101,13 @@ public final class ReaderModel {
             let stored = try? await ProgressService(client: session.client).current(for: book.uuid)
             let resumeHref = stored?.locator.href
             chapterIndex = package.spine.firstIndex { $0.href == resumeHref }
-                ?? Self.firstReadableChapter(in: package)
+                ?? Self.firstReadableChapter(in: package, style: style)
 
             await loadChapter(chapterIndex, restoring: stored?.locator)
             await prepareNarration(package: package)
             phase = .ready
         } catch {
-            phase = .failed(String(describing: error))
+            phase = .failed(AppModel.message(for: error))
         }
     }
 
@@ -102,8 +117,7 @@ public final class ReaderModel {
     /// and no text — Gutenberg EPUBs all do. Opening on spine item zero would
     /// therefore show a blank page, and the reader would look broken before it
     /// had rendered a word.
-    static func firstReadableChapter(in package: EPUBPackage) -> Int {
-        let style = ReaderStyle()
+    static func firstReadableChapter(in package: EPUBPackage, style: ReaderStyle = ReaderStyle()) -> Int {
         for (index, item) in package.spine.enumerated() {
             guard let data = try? package.archive.read(item.href),
                   let parsed = try? HTMLContentParser(style: style).parse(xhtml: data, baseHref: item.href)
@@ -127,9 +141,15 @@ public final class ReaderModel {
         ), !files.isEmpty else { return }
 
         let coordinator = ReadalongCoordinator(timeline: timeline, audioFiles: files)
+        // The saved rate is otherwise written to preferences and never applied,
+        // so every book starts at 1x however the reader left it.
+        coordinator.player.rate = Float(preferredRate)
         coordinator.onFragmentChange = { [weak self] fragment in
             guard let self else { return }
             activeFragmentID = fragment
+            // Listening moves the position as surely as turning pages does;
+            // without this an hour of narration is lost on every other device.
+            scheduleSave()
             guard style.followNarration else { return }
             // Keep the narrated sentence on screen. If it is already visible,
             // do not fight the reader by turning the page underneath them.
@@ -242,6 +262,23 @@ public final class ReaderModel {
         }
     }
 
+    /// Re-parses the current chapter under the current style, holding position.
+    ///
+    /// The anchor is the narrated fragment when there is one, and the character
+    /// offset otherwise — a page number would move the reader arbitrarily, since
+    /// a larger font means more pages.
+    private func reloadCurrentChapter() async {
+        let fragment = firstFragmentOnCurrentPage()
+        let anchor = currentPage?.characterRange.location ?? 0
+        await loadChapter(chapterIndex)
+        guard let layout else { return }
+        if let fragment, let page = layout.page(containingFragment: fragment) {
+            pageIndex = page.index
+        } else {
+            pageIndex = layout.pages.firstIndex { NSLocationInRange(anchor, $0.characterRange) } ?? 0
+        }
+    }
+
     private func relayoutCurrentChapter() async {
         guard let layout, pageSize != .zero else { return }
         // Keep the reader on the same words across a reflow rather than the same
@@ -281,7 +318,7 @@ public final class ReaderModel {
                 pageIndex = 0
             }
         } catch {
-            phase = .failed("Couldn't open chapter: \(error)")
+            phase = .failed("Couldn't open this chapter. " + AppModel.message(for: error))
         }
     }
 

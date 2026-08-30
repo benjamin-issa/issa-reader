@@ -40,7 +40,7 @@ public final class DeviceSignInModel {
                 }
             }
         } catch {
-            stage = .failed(String(describing: error))
+            stage = .failed(AppModel.message(for: error))
         }
     }
 

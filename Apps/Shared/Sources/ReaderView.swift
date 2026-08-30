@@ -13,6 +13,7 @@ public struct ReaderView: View {
     @State private var showsContents = false
     @Environment(\.dismiss) private var dismiss
     @Environment(NowPlayingController.self) private var nowPlaying
+    @Environment(PlaybackSettings.self) private var settings
 
     public init(book: Book, session: Session) {
         _model = State(initialValue: ReaderModel(book: book, session: session))
@@ -101,9 +102,14 @@ public struct ReaderView: View {
             footer
         }
         .onAppear {
+            // Seed from the shared preferences, then follow them: the Reading
+            // settings screen is otherwise writing to a value nothing reads.
+            model.style = settings.readerStyle
+            model.preferredRate = settings.playbackRate
             model.setReaderVisible(true)
             nowPlaying.attach(coordinator: model.readalong, book: model.book)
         }
+        .onChange(of: settings.readerStyle) { _, style in model.style = style }
         .onDisappear { model.setReaderVisible(false) }
     }
 

@@ -20,6 +20,10 @@ public enum AudioExtraction {
     ) throws -> [String: URL] {
         let base = directory ?? defaultDirectory(for: bookID)
         try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        var mutable = base
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try? mutable.setResourceValues(values)
 
         var result: [String: URL] = [:]
         // One entry per distinct file; a book has a handful of tracks but tens
@@ -37,9 +41,12 @@ public enum AudioExtraction {
         return result
     }
 
+    /// Application Support rather than Caches, for the same reason the books
+    /// are: narration extracted for offline listening must survive the system
+    /// reclaiming space.
     public static func defaultDirectory(for bookID: String) -> URL {
-        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-        return caches.appending(path: "Audio/\(bookID)", directoryHint: .isDirectory)
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        return support.appending(path: "Audio/\(bookID)", directoryHint: .isDirectory)
     }
 
     public static func removeExtractedAudio(for bookID: String) {

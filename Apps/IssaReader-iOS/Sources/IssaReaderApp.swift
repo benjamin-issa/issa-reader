@@ -12,6 +12,8 @@ struct IssaReaderApp: App {
         // Package-bundled fonts are not registered automatically the way an
         // app's UIAppFonts entry would be, so this must run before first render.
         IssaFonts.register()
+        // Early builds put downloads in Caches, which iOS purges.
+        BookContentService.migrateFromCachesIfNeeded()
     }
 
     var body: some Scene {

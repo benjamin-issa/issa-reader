@@ -13,13 +13,49 @@ public struct BookContentService: Sendable {
 
     public init(client: APIClient, cacheDirectory: URL? = nil) {
         self.client = client
-        if let cacheDirectory {
-            self.cacheDirectory = cacheDirectory
-        } else {
-            let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-            self.cacheDirectory = caches.appending(path: "Books", directoryHint: .isDirectory)
-        }
+        self.cacheDirectory = cacheDirectory ?? Self.defaultDirectory()
         try? FileManager.default.createDirectory(at: self.cacheDirectory, withIntermediateDirectories: true)
+        Self.excludeFromBackup(self.cacheDirectory)
+    }
+
+    /// Where downloaded books live.
+    ///
+    /// Application Support, not Caches: iOS purges Caches under storage
+    /// pressure, and a reader who downloaded a book for a flight would find it
+    /// gone at exactly the moment there is no network to fetch it again. Marked
+    /// as excluded from backup all the same — these are re-downloadable, and a
+    /// library of readaloud editions would otherwise bloat every iCloud backup
+    /// by gigabytes.
+    public static func defaultDirectory() -> URL {
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        return support.appending(path: "Books", directoryHint: .isDirectory)
+    }
+
+    static func excludeFromBackup(_ url: URL) {
+        var mutable = url
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try? mutable.setResourceValues(values)
+    }
+
+    /// Moves anything left in the old Caches location.
+    ///
+    /// Early builds wrote here; without this, an existing install silently loses
+    /// every download it already had.
+    public static func migrateFromCachesIfNeeded() {
+        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appending(path: "Books", directoryHint: .isDirectory)
+        guard FileManager.default.fileExists(atPath: caches.path) else { return }
+        let destination = defaultDirectory()
+        try? FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+        for file in (try? FileManager.default.contentsOfDirectory(at: caches, includingPropertiesForKeys: nil)) ?? [] {
+            let target = destination.appending(path: file.lastPathComponent)
+            if !FileManager.default.fileExists(atPath: target.path) {
+                try? FileManager.default.moveItem(at: file, to: target)
+            }
+        }
+        try? FileManager.default.removeItem(at: caches)
+        excludeFromBackup(destination)
     }
 
     /// Which file to ask the server for. `readaloud` is the aligned EPUB with

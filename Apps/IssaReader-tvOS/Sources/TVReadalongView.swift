@@ -11,6 +11,7 @@ import SwiftUI
 /// not reading position.
 struct TVReadalongView: View {
     @State private var model: ReaderModel
+    @Environment(PlaybackSettings.self) private var settings
     let book: Book
 
     init(book: Book, session: Session) {
@@ -39,6 +40,7 @@ struct TVReadalongView: View {
             }
         }
         .task {
+            model.style = settings.readerStyle
             // Layout still needs a page size to resolve fragment ranges, even
             // though pages are never shown here.
             await model.open(pageSize: CGSize(width: 1400, height: 900))
@@ -46,6 +48,7 @@ struct TVReadalongView: View {
         }
         .onDisappear { Task { await model.saveProgress() } }
         .onPlayPauseCommand { Task { await model.togglePlayback() } }
+        .onChange(of: settings.readerStyle) { _, style in model.style = style }
     }
 
     private var content: some View {

@@ -14,6 +14,14 @@ public struct RenderedPage: Sendable, Hashable, Identifiable {
     /// is a translation, never a re-layout.
     public let yOffset: CGFloat
     public let height: CGFloat
+    /// Y offset where the NEXT page begins, or `.infinity` on the last page.
+    ///
+    /// Drawing uses this rather than `yOffset + height` to decide what belongs
+    /// on the page. The two are not the same: pagination refuses to split a line
+    /// across a boundary, so a page's content usually stops short of its height,
+    /// and bounding the draw by height instead pulls in the following page's
+    /// opening line and clips it mid-glyph.
+    public let contentBottom: CGFloat
     /// Character range of the text on this page.
     public let characterRange: NSRange
 
@@ -66,9 +74,8 @@ public final class ChapterLayout {
     }
 
     private func computePages(pageHeight: CGFloat) -> [RenderedPage] {
-        var result: [RenderedPage] = []
-        var pageTop: CGFloat = 0
-        var pageStartOffset = 0
+        struct Boundary { let top: CGFloat; let startOffset: Int }
+        var boundaries: [Boundary] = [Boundary(top: 0, startOffset: 0)]
         var lastSeenEnd = 0
 
         layoutManager.enumerateTextLayoutFragments(
@@ -76,40 +83,33 @@ public final class ChapterLayout {
             options: [.ensuresLayout, .ensuresExtraLineFragment],
         ) { fragment in
             let frame = fragment.layoutFragmentFrame
-            let fragmentEndOffset = self.offset(of: fragment.rangeInElement.endLocation)
-
             // A fragment that would cross the page boundary starts the next page
-            // instead of being split, so no line is ever cut in half.
-            if frame.maxY > pageTop + pageHeight, frame.minY > pageTop {
-                result.append(RenderedPage(
-                    index: result.count,
-                    yOffset: pageTop,
-                    height: pageHeight,
-                    characterRange: NSRange(
-                        location: pageStartOffset,
-                        length: max(0, lastSeenEnd - pageStartOffset),
-                    ),
-                ))
-                pageTop = frame.minY
-                pageStartOffset = lastSeenEnd
+            // instead of being split, so no line is ever cut in half. The
+            // `minY > top` guard keeps a fragment taller than a whole page — a
+            // full-height plate — on the page it starts, rather than looping.
+            if frame.maxY > (boundaries.last?.top ?? 0) + pageHeight,
+               frame.minY > (boundaries.last?.top ?? 0) {
+                boundaries.append(Boundary(top: frame.minY, startOffset: lastSeenEnd))
             }
-            lastSeenEnd = fragmentEndOffset
+            lastSeenEnd = self.offset(of: fragment.rangeInElement.endLocation)
             return true
         }
 
         let totalLength = (attributedText.string as NSString).length
-        if pageStartOffset < totalLength || result.isEmpty {
-            result.append(RenderedPage(
-                index: result.count,
-                yOffset: pageTop,
+        return boundaries.enumerated().map { index, boundary in
+            let nextTop = index + 1 < boundaries.count ? boundaries[index + 1].top : CGFloat.infinity
+            let endOffset = index + 1 < boundaries.count ? boundaries[index + 1].startOffset : totalLength
+            return RenderedPage(
+                index: index,
+                yOffset: boundary.top,
                 height: pageHeight,
+                contentBottom: nextTop,
                 characterRange: NSRange(
-                    location: pageStartOffset,
-                    length: max(0, totalLength - pageStartOffset),
+                    location: boundary.startOffset,
+                    length: max(0, endOffset - boundary.startOffset),
                 ),
-            ))
+            )
         }
-        return result
     }
 
     // MARK: - Highlighting
@@ -178,6 +178,29 @@ public final class ChapterLayout {
 
     // MARK: - Drawing
 
+    /// The character range the draw pass would actually paint for a page.
+    ///
+    /// Exposed so tests can assert it matches the page's own range: when the two
+    /// disagree, the page paints text that belongs to its neighbour — which is
+    /// visible as a line sliced in half at the bottom of every page.
+    func paintedCharacterRange(for page: RenderedPage) -> NSRange {
+        var lower = Int.max
+        var upper = 0
+        layoutManager.enumerateTextLayoutFragments(
+            from: contentStorage.documentRange.location,
+            options: [.ensuresLayout],
+        ) { fragment in
+            let frame = fragment.layoutFragmentFrame
+            if frame.minY < page.yOffset - 0.5 { return true }
+            if frame.minY >= page.contentBottom { return false }
+            lower = min(lower, self.offset(of: fragment.rangeInElement.location))
+            upper = max(upper, self.offset(of: fragment.rangeInElement.endLocation))
+            return true
+        }
+        guard lower != Int.max else { return NSRange(location: page.characterRange.location, length: 0) }
+        return NSRange(location: lower, length: upper - lower)
+    }
+
     /// Draws one page into the current graphics context.
     ///
     /// Illustrations ride along inside the layout fragments as text attachments
@@ -190,8 +213,12 @@ public final class ChapterLayout {
             options: [.ensuresLayout],
         ) { fragment in
             let frame = fragment.layoutFragmentFrame
-            if frame.maxY < page.yOffset { return true }
-            if frame.minY > page.yOffset + page.height { return false }
+            // Membership is decided by where a fragment STARTS, against the
+            // boundaries pagination chose — not by whether it happens to overlap
+            // the page rectangle. Bounding by the rectangle draws the next
+            // page's opening line and clips it mid-glyph.
+            if frame.minY < page.yOffset - 0.5 { return true }
+            if frame.minY >= page.contentBottom { return false }
             fragment.draw(at: frame.origin, in: context)
             return true
         }

@@ -39,6 +39,15 @@ public final class AppModel {
 
     private static let lastServerKey = "issa.lastServer"
 
+    /// A sentence a person can act on, with the recovery hint appended.
+    static func message(for error: any Error) -> String {
+        guard let described = (error as? LocalizedError)?.errorDescription else {
+            return "Something went wrong."
+        }
+        let hint = (error as? LocalizedError)?.recoverySuggestion
+        return [described, hint].compactMap { $0 }.joined(separator: " ")
+    }
+
     /// Accepts what a person would actually type — "storyteller.home.arpa",
     /// "192.168.1.10:8001", or a full URL — and produces a usable base URL.
     public static func normalizeServerURL(_ input: String) -> URL? {
@@ -103,7 +112,7 @@ public final class AppModel {
             ratings = (try? await service.myRatings()) ?? ratings
             loadError = nil
         } catch {
-            loadError = String(describing: error)
+            loadError = Self.message(for: error)
         }
     }
 
@@ -123,7 +132,7 @@ public final class AppModel {
                 .setStatus(status.uuid, for: book.uuid)
         } catch {
             books[index].status = previous
-            loadError = "Couldn't change the status: \(error)"
+            loadError = "Couldn't change the status. " + Self.message(for: error)
         }
     }
 
@@ -136,7 +145,7 @@ public final class AppModel {
                 .setRating(value, for: book.uuid)
         } catch {
             if let previous { ratings[book.uuid] = previous } else { ratings.removeValue(forKey: book.uuid) }
-            loadError = "Couldn't save the rating: \(error)"
+            loadError = "Couldn't save the rating. " + Self.message(for: error)
         }
     }
 

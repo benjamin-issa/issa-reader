@@ -11,6 +11,7 @@ public struct DownloadsView: View {
     @Environment(AppModel.self) private var app
     @State private var entries: [Entry] = []
     @State private var totalBytes: Int64 = 0
+    @State private var audioBytes: Int64 = 0
 
     public init() {}
 
@@ -25,6 +26,7 @@ public struct DownloadsView: View {
         List {
             Section {
                 LabeledContent("On this device", value: Self.sizeText(totalBytes))
+                LabeledContent("Narration extracted", value: Self.sizeText(audioBytes))
             } footer: {
                 Text("Downloaded books play with no network at all. A readaloud edition carries its narration inside the file, so one download covers both the text and the audio.")
             }
@@ -79,6 +81,10 @@ public struct DownloadsView: View {
         }
         entries = found.sorted { $0.bytes > $1.bytes }
         totalBytes = service.cacheSize()
+        audioBytes = Self.directorySize(
+            FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                .appending(path: "Audio", directoryHint: .isDirectory),
+        )
     }
 
     private func remove(_ entry: Entry) {
@@ -92,6 +98,18 @@ public struct DownloadsView: View {
         refresh()
     }
 
+    /// Recursive, because narration is extracted into a directory per book.
+    static func directorySize(_ url: URL) -> Int64 {
+        guard let walker = FileManager.default.enumerator(
+            at: url, includingPropertiesForKeys: [.fileSizeKey],
+        ) else { return 0 }
+        var total: Int64 = 0
+        for case let file as URL in walker {
+            total += Int64((try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+        }
+        return total
+    }
+
     static func sizeText(_ bytes: Int64) -> String {
         ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
     }
@@ -101,9 +119,11 @@ public struct DownloadsView: View {
 /// package purely to clean up extracted audio.
 enum AudioExtractionCleanup {
     static func removeAudio(for bookID: String) {
-        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        // Must match AudioExtraction.defaultDirectory: Application Support, not
+        // Caches. Pointing at the old path silently freed nothing.
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         try? FileManager.default.removeItem(
-            at: caches.appending(path: "Audio/\(bookID)", directoryHint: .isDirectory),
+            at: support.appending(path: "Audio/\(bookID)", directoryHint: .isDirectory),
         )
     }
 }

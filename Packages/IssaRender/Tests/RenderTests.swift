@@ -234,3 +234,65 @@ struct FragmentNestingTests {
         #expect(inner == "inner-s0")
     }
 }
+
+/// Pagination and drawing have to agree about what is on a page.
+///
+/// They disagreed once: pagination refused to split a line across a boundary,
+/// but drawing bounded itself by the page rectangle, so the next page's opening
+/// line was painted at the bottom of the current one and clipped mid-glyph —
+/// then repeated in full on the turn.
+@MainActor
+struct PageBoundaryTests {
+    static func longChapterLayout() throws -> ChapterLayout {
+        let url = try #require(Bundle.module.url(forResource: "Fixtures/alice", withExtension: "epub"))
+        let package = try EPUBPackage.open(url: url)
+        for item in package.spine {
+            let parsed = try HTMLContentParser(style: ReaderStyle())
+                .parse(xhtml: try package.archive.read(item.href), baseHref: item.href)
+            guard parsed.text.length > 6000 else { continue }
+            let layout = ChapterLayout(text: parsed.text, fragmentRanges: parsed.fragmentRanges)
+            layout.layout(pageSize: CGSize(width: 320, height: 480))
+            return layout
+        }
+        throw NSError(domain: "test", code: 1, userInfo: [NSLocalizedDescriptionKey: "no long chapter"])
+    }
+
+    @Test("a page paints only its own characters")
+    func paintsOnlyItsOwnRange() throws {
+        let layout = try Self.longChapterLayout()
+        #expect(layout.pages.count > 2)
+
+        for page in layout.pages {
+            let painted = layout.paintedCharacterRange(for: page)
+            // The painted span must not reach past what pagination assigned.
+            #expect(painted.location >= page.characterRange.location,
+                    "page \(page.index) paints characters before its own range")
+            #expect(painted.location + painted.length
+                <= page.characterRange.location + page.characterRange.length + 1,
+                "page \(page.index) paints into the next page")
+        }
+    }
+
+    @Test("pages tile the chapter with no gap and no overlap")
+    func pagesTile() throws {
+        let layout = try Self.longChapterLayout()
+        var expected = 0
+        for page in layout.pages {
+            #expect(page.characterRange.location == expected)
+            expected = page.characterRange.location + page.characterRange.length
+        }
+        #expect(expected == layout.attributedText.length)
+    }
+
+    @Test("page tops are strictly increasing, and the last runs to infinity")
+    func boundariesAscend() throws {
+        let layout = try Self.longChapterLayout()
+        var previous = -CGFloat.infinity
+        for page in layout.pages {
+            #expect(page.yOffset > previous || page.index == 0)
+            #expect(page.contentBottom > page.yOffset)
+            previous = page.yOffset
+        }
+        #expect(layout.pages.last?.contentBottom == .infinity)
+    }
+}
