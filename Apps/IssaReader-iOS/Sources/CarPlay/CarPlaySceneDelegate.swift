@@ -16,6 +16,8 @@ import UIKit
 /// separately and tied to App Store distribution.
 final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate {
     private var interfaceController: CPInterfaceController?
+    private var libraryTemplate: CPListTemplate?
+    private var recentTemplate: CPListTemplate?
 
     func templateApplicationScene(
         _ scene: CPTemplateApplicationScene,
@@ -24,6 +26,10 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         self.interfaceController = interfaceController
         CarPlayBridge.shared.surfaceDidConnect()
         interfaceController.setRootTemplate(makeRootTemplate(), animated: false, completion: nil)
+        // Updating sections in place rather than rebuilding the root: replacing
+        // the root template in a moving car dumps the driver back to the first
+        // tab, which is exactly the wrong moment for that.
+        CarPlayBridge.shared.onLibraryChange = { [weak self] in self?.refreshLists() }
     }
 
     func templateApplicationScene(
@@ -31,17 +37,27 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         didDisconnectInterfaceController interfaceController: CPInterfaceController,
     ) {
         self.interfaceController = nil
+        CarPlayBridge.shared.onLibraryChange = nil
+        libraryTemplate = nil
+        recentTemplate = nil
         CarPlayBridge.shared.surfaceDidDisconnect()
+    }
+
+    private func refreshLists() {
+        libraryTemplate?.updateSections([librarySection()])
+        recentTemplate?.updateSections([continueSection()])
     }
 
     private func makeRootTemplate() -> CPTemplate {
         let library = CPListTemplate(title: "Library", sections: [librarySection()])
         library.tabTitle = "Library"
         library.tabImage = UIImage(systemName: "books.vertical")
+        libraryTemplate = library
 
         let recent = CPListTemplate(title: "Recent", sections: [continueSection()])
         recent.tabTitle = "Recent"
         recent.tabImage = UIImage(systemName: "clock")
+        recentTemplate = recent
 
         let nowPlaying = CPNowPlayingTemplate.shared
         nowPlaying.tabTitle = "Now"

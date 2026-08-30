@@ -1,5 +1,6 @@
 import Foundation
 import IssaCore
+import IssaEPUB
 import Testing
 
 @testable import IssaRender
@@ -96,5 +97,60 @@ struct LocatorAnchoringTests {
         // Not so tolerant that two chapters of the same name in different
         // directories collapse into one.
         #expect(!locator.matchesHref("images/chapter 01.xhtml"))
+    }
+}
+
+/// Chapter labelling, which Gutenberg's EPUBs make harder than it looks: a
+/// whole book in one spine file, chapters distinguished only by anchor.
+@Suite("Labelling a place in the book")
+struct ChapterLabellingTests {
+    let text = String(repeating: "a", count: 100)
+        + "Chapter One begins here. " + String(repeating: "b", count: 100)
+        + "Chapter Two begins here. " + String(repeating: "c", count: 100)
+
+    @Test("a hit is labelled with the chapter it falls in, not the file's first")
+    func labelsByAnchor() {
+        let ranges = ["c1": NSRange(location: 100, length: 24), "c2": NSRange(location: 225, length: 24)]
+        let nav = [
+            EPUBPackage.NavPoint(title: "One", href: "book.xhtml", fragment: "c1"),
+            EPUBPackage.NavPoint(title: "Two", href: "book.xhtml", fragment: "c2"),
+        ]
+        let hits = BookSearch.hits(
+            for: "begins here", in: text, chapterIndex: 0, chapterTitle: "The Whole Book",
+            navigation: nav, fragmentRanges: ranges,
+        )
+        #expect(hits.count == 2)
+        #expect(hits[0].chapterTitle == "One")
+        #expect(hits[1].chapterTitle == "Two")
+    }
+
+    /// Before the first anchor there is no chapter yet — the file's own title
+    /// is the honest answer, not the first chapter's.
+    @Test("text before the first anchor keeps the file's title")
+    func beforeFirstAnchor() {
+        let hits = BookSearch.hits(
+            for: "aaaa", in: text, chapterIndex: 0, chapterTitle: "Front Matter",
+            navigation: [EPUBPackage.NavPoint(title: "One", href: "b.xhtml", fragment: "c1")],
+            fragmentRanges: ["c1": NSRange(location: 100, length: 24)],
+        )
+        #expect(hits.first?.chapterTitle == "Front Matter")
+    }
+
+    @Test("a search excerpt points at the match wherever it was clipped")
+    func excerptRange() {
+        let hits = BookSearch.hits(
+            for: "Chapter Two", in: text, chapterIndex: 0, chapterTitle: "Book")
+        let hit = try! #require(hits.first)
+        #expect(hit.excerpt[hit.excerptMatchRange] == "Chapter Two")
+    }
+
+    /// A runaway match count on a common word would build a list nobody can use
+    /// and hold the whole chapter in memory twice over.
+    @Test("matches are capped per chapter")
+    func capped() {
+        let haystack = String(repeating: "the ", count: 500)
+        let hits = BookSearch.hits(
+            for: "the", in: haystack, chapterIndex: 0, chapterTitle: "Book", limitPerChapter: 10)
+        #expect(hits.count == 10)
     }
 }

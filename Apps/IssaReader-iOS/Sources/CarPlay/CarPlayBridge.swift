@@ -20,7 +20,10 @@ final class CarPlayBridge {
     }
 
     /// Set by the app once a session exists.
-    var books: [Book] = []
+    private(set) var books: [Book] = []
+    /// Called when the library changes, so a car connected before the phone
+    /// finished loading does not sit on an empty list.
+    var onLibraryChange: (() -> Void)?
     var onPlay: ((String) -> Void)?
     var onCycleRate: (() -> Void)?
     /// Told to the remote-command centre so bindings resolve against the car's
@@ -28,6 +31,11 @@ final class CarPlayBridge {
     var onSurfaceChange: ((ControlSurface) -> Void)?
 
     private init() {}
+
+    func update(books: [Book]) {
+        self.books = books
+        onLibraryChange?()
+    }
 
     func surfaceDidConnect() { onSurfaceChange?(.carPlay) }
     func surfaceDidDisconnect() { onSurfaceChange?(.phone) }

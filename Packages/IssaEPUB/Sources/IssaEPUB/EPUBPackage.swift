@@ -53,6 +53,13 @@ public struct EPUBPackage: Sendable {
         /// Dropping it collapses a seventeen-chapter book to four entries.
         public let fragment: String?
         public let depth: Int
+
+        public init(title: String, href: String, fragment: String? = nil, depth: Int = 0) {
+            self.title = title
+            self.href = href
+            self.fragment = fragment
+            self.depth = depth
+        }
     }
 }
 

@@ -11,6 +11,12 @@ public struct ReaderView: View {
     @State private var model: ReaderModel
     @State private var showsPlayer = false
     @State private var showsContents = false
+    @State private var showsSearch = false
+    @State private var showsAnnotations = false
+    /// The last place a finger was, so a long press that never moves still
+    /// knows where it happened.
+    @State private var touchPoint: CGPoint = .zero
+    @State private var selecting = false
     @Environment(\.dismiss) private var dismiss
     @Environment(NowPlayingController.self) private var nowPlaying
     @Environment(PlaybackSettings.self) private var settings
@@ -71,6 +77,37 @@ public struct ReaderView: View {
             PlayerView(book: model.book, session: model.readerSession, coordinator: model.readalong)
                 .presentationDetents([.large])
         }
+        .sheet(isPresented: $showsSearch) {
+            NavigationStack {
+                BookSearchView(model: model) { hit in
+                    Task { await model.go(to: hit, matching: hit.excerpt) }
+                }
+            }
+        }
+        .sheet(isPresented: $showsAnnotations) {
+            NavigationStack {
+                AnnotationsView(model: model) { annotation in
+                    Task { await model.go(to: annotation) }
+                }
+            }
+            .presentationDetents([.medium, .large])
+        }
+        .toolbar {
+            ToolbarItemGroup(placement: .primaryAction) {
+                Button { model.toggleBookmark() } label: {
+                    Image(systemName: model.isPageBookmarked ? "bookmark.fill" : "bookmark")
+                }
+                .accessibilityLabel(model.isPageBookmarked ? "Remove bookmark" : "Bookmark this page")
+
+                Menu {
+                    Button("Find in book", systemImage: "magnifyingglass") { showsSearch = true }
+                    Button("Marks", systemImage: "bookmark.square") { showsAnnotations = true }
+                    Button("Contents", systemImage: "list.bullet") { showsContents = true }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+            }
+        }
         #endif
     }
 
@@ -82,6 +119,13 @@ public struct ReaderView: View {
                 .contentShape(Rectangle())
                 #if !os(tvOS)
                 .onTapGesture { location in
+                    // A tap with something selected dismisses the selection,
+                    // the way it does everywhere else — it must not also turn
+                    // the page out from under the reader.
+                    if model.selection != nil {
+                        model.clearSelection()
+                        return
+                    }
                     Task {
                         // In a narrated book, tapping a sentence plays it. The
                         // tap arrives in the padded frame's space, so the margin
@@ -98,19 +142,47 @@ public struct ReaderView: View {
                         else { await model.nextPage() }
                     }
                 }
+                // Press and hold selects the sentence under the finger, then
+                // dragging adjusts it. Two simultaneous gestures rather than a
+                // sequence: a hold that never moves produces no drag value at
+                // all, so a sequenced pair would select nothing until the finger
+                // happened to slide.
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { value in
+                            touchPoint = value.location
+                            guard selecting else { return }
+                            model.extendSelection(to: canvasPoint(value.location))
+                        }
+                        .onEnded { _ in selecting = false },
+                )
+                .simultaneousGesture(
+                    LongPressGesture(minimumDuration: 0.35)
+                        .onEnded { _ in
+                            selecting = true
+                            model.beginSelection(at: canvasPoint(touchPoint))
+                        },
+                )
                 .gesture(
                     DragGesture(minimumDistance: 24)
                         .onEnded { value in
+                            guard model.selection == nil else { return }
                             Task {
                                 if value.translation.width < -24 { await model.nextPage() }
                                 else if value.translation.width > 24 { await model.previousPage() }
                             }
                         },
                 )
+                .overlay(alignment: .bottom) {
+                    if model.selection != nil { selectionMenu }
+                }
                 #endif
 
             footer
         }
+        // A tap outside the menu dismisses the selection, the way every text
+        // selection anywhere else does.
+        .onChange(of: model.pageIndex) { model.clearSelection() }
         .onAppear {
             // Seed from the shared preferences, then follow them: the Reading
             // settings screen is otherwise writing to a value nothing reads.
@@ -122,6 +194,8 @@ public struct ReaderView: View {
                     payload: MutationDrain.PositionPayload(locator: locator, timestamp: timestamp),
                 )
             }
+            model.onSaveAnnotation = { [weak app = app] in app?.save($0) }
+            model.onDeleteAnnotation = { [weak app = app] in app?.delete($0) }
             model.setReaderVisible(true)
             nowPlaying.attach(
                 coordinator: model.readalong,
@@ -130,8 +204,69 @@ public struct ReaderView: View {
                 chapterTitle: { model.chapterTitle },
             )
         }
+        .task { model.loadAnnotations(await app.annotations(for: model.book.uuid)) }
         .onChange(of: settings.readerStyle) { _, style in model.style = style }
         .onDisappear { model.setReaderVisible(false) }
+    }
+
+    /// What to do with the selected text. Copy first, because that is what a
+    /// selection is usually for.
+    #if !os(tvOS)
+    @ViewBuilder
+    private var selectionMenu: some View {
+        HStack(spacing: Metrics.spacing16) {
+            Button {
+                if let text = model.selectedText { Clipboard.copy(text) }
+                model.clearSelection()
+            } label: {
+                Label("Copy", systemImage: "doc.on.doc")
+            }
+
+            Menu {
+                ForEach(Annotation.Tint.allCases, id: \.self) { tint in
+                    Button {
+                        model.annotate(kind: .highlight, tint: tint)
+                    } label: {
+                        Label(tint.title, systemImage: "circle.fill")
+                    }
+                }
+            } label: {
+                Label("Highlight", systemImage: "highlighter")
+            }
+
+            if model.hasNarration {
+                Button {
+                    Task {
+                        await model.playSelection()
+                        model.clearSelection()
+                    }
+                } label: {
+                    Label("Play", systemImage: "play.circle")
+                }
+            }
+
+            Button {
+                model.clearSelection()
+            } label: {
+                Label("Done", systemImage: "xmark")
+            }
+        }
+        .labelStyle(.iconOnly)
+        .font(.system(size: 18))
+        .foregroundStyle(Palette.ink)
+        .padding(.horizontal, Metrics.spacing16)
+        .padding(.vertical, Metrics.spacing12)
+        .background(.regularMaterial, in: Capsule())
+        .shadow(color: .black.opacity(0.15), radius: 12, y: 4)
+        .padding(.bottom, Metrics.spacing24)
+        .transition(.opacity)
+    }
+    #endif
+
+    /// Tap coordinates arrive in the padded frame's space; the layout speaks
+    /// in the canvas's, which starts one margin in.
+    private func canvasPoint(_ point: CGPoint) -> CGPoint {
+        CGPoint(x: point.x - model.style.pageMargin, y: point.y - model.style.pageMargin)
     }
 
     private var footer: some View {
@@ -188,12 +323,24 @@ struct PageCanvas: View {
         Canvas(rendersAsynchronously: false) { context, _ in
             guard let layout = model.layout, let page = model.currentPage else { return }
 
-            // The highlight is drawn beneath the glyphs so it reads as paper
-            // tint rather than a wash over the type.
+            // Everything tinted is drawn beneath the glyphs so it reads as
+            // paper tint rather than a wash over the type.
+            for (rect, tint) in model.highlightRects(on: page) {
+                let rounded = Path(roundedRect: rect.insetBy(dx: -1, dy: -1), cornerRadius: 3)
+                context.fill(rounded, with: .color(ReaderPalette.color(for: tint).opacity(0.30)))
+            }
             if let fragment = model.activeFragmentID {
                 for rect in layout.highlightRects(forFragment: fragment, on: page) {
                     let rounded = Path(roundedRect: rect.insetBy(dx: -2, dy: -1), cornerRadius: 3)
                     context.fill(rounded, with: .color(model.style.theme.highlight))
+                }
+            }
+            if let selection = model.selection {
+                for rect in layout.rects(forRange: selection, on: page) {
+                    context.fill(
+                        Path(roundedRect: rect.insetBy(dx: -1, dy: -1), cornerRadius: 2),
+                        with: .color(Palette.tangerine.opacity(0.28)),
+                    )
                 }
             }
 

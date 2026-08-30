@@ -236,6 +236,28 @@ public final class AppModel {
         await drainPendingWrites()
     }
 
+    // MARK: - Annotations
+
+    /// Saves a mark. Local only: the server has no annotations endpoint in any
+    /// version, so this database is the only copy there is.
+    public func save(_ annotation: Annotation) {
+        // Fire and forget: the reader already holds the mark in memory, and
+        // blocking a highlight on a disk write would be felt.
+        Task { [store] in try? await store?.save(annotation) }
+    }
+
+    public func delete(_ annotation: Annotation) {
+        Task { [store] in try? await store?.deleteAnnotation(id: annotation.id) }
+    }
+
+    public func annotations(for bookUUID: String) async -> [Annotation] {
+        (try? await store?.annotations(for: bookUUID)) ?? []
+    }
+
+    public func allAnnotations() async -> [Annotation] {
+        (try? await store?.allAnnotations()) ?? []
+    }
+
     /// The audiobook currently playing, if any.
     ///
     /// Held here rather than in a view, because playback has to outlive the

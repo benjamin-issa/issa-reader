@@ -61,6 +61,11 @@ public final class ReaderModel {
     public var preferredRate: Double = 1.0
     /// Records a position durably before it is sent. Supplied by the app so the
     /// reader does not need to know about the store.
+    /// Persisting annotations is the app's job, not the reader's: this model
+    /// knows the geometry, the store knows the disk.
+    public var onSaveAnnotation: ((Annotation) -> Void)?
+    public var onDeleteAnnotation: ((Annotation) -> Void)?
+
     public var enqueuePosition: ((ReadiumLocator, Double) async -> Void)?
 
     public init(book: Book, session: Session, style: ReaderStyle = ReaderStyle()) {
@@ -71,8 +76,36 @@ public final class ReaderModel {
 
     public var chapterTitle: String {
         guard let package, chapterIndex < package.spine.count else { return book.title }
-        let href = package.spine[chapterIndex].href
-        return package.navigation.first { $0.href == href }?.title ?? book.title
+        return title(inSpineItem: chapterIndex, atOffset: currentPage?.characterRange.location ?? 0)
+            ?? book.title
+    }
+
+    /// The chapter name for a place inside a spine document.
+    ///
+    /// Gutenberg's EPUBs pack a whole book into a handful of files and
+    /// distinguish chapters only by fragment id, so matching on href alone
+    /// labels every page of a book "Peter and Wendy". This finds the last
+    /// navigation entry whose anchor appears at or before the offset — which is
+    /// the chapter the reader is actually in.
+    func title(inSpineItem index: Int, atOffset offset: Int) -> String? {
+        guard let package, package.spine.indices.contains(index) else { return nil }
+        let href = package.spine[index].href
+        let entries = package.navigation.filter { $0.href == href }
+        guard !entries.isEmpty else { return nil }
+
+        // Only the loaded chapter has ranges to compare against; for any other
+        // spine item the first entry is the best available answer.
+        guard index == chapterIndex, let layout else { return entries.first?.title }
+
+        var best: (title: String, location: Int)?
+        for entry in entries {
+            guard let fragment = entry.fragment,
+                  let range = layout.fragmentRange(for: fragment) else { continue }
+            if range.location <= offset, range.location >= (best?.location ?? -1) {
+                best = (entry.title, range.location)
+            }
+        }
+        return best?.title ?? entries.first?.title
     }
 
     public var pageCount: Int { layout?.pages.count ?? 0 }
@@ -187,6 +220,15 @@ public final class ReaderModel {
         // move the playhead somewhere the reader cannot hear.
         await readalong.seek(toFragment: fragment)
         return true
+    }
+
+    /// Plays the narration for whatever is selected.
+    public func playSelection() async {
+        guard let selection, let layout, let readalong, let timeline else { return }
+        let fragment = layout.attributedText
+            .attribute(.issaFragmentID, at: selection.location, effectiveRange: nil) as? String
+        guard let fragment, timeline.entry(forFragment: fragment) != nil else { return }
+        await readalong.seek(toFragment: fragment)
     }
 
     /// Starts narration from whatever the reader is currently looking at.
@@ -396,6 +438,245 @@ public final class ReaderModel {
             if let id = value as? String { found.insert(id) }
         }
         return found
+    }
+
+    // MARK: - Searching inside the book
+
+    public typealias SearchHit = BookSearch.Hit
+
+    public private(set) var searchHits: [SearchHit] = []
+    public private(set) var isSearching = false
+    private var searchTask: Task<Void, Never>?
+
+    /// Searches the whole book, chapter by chapter, publishing as it goes.
+    ///
+    /// Every chapter has to be parsed to be searched, which for a long book is
+    /// too slow to block on — so results appear progressively and the reader can
+    /// act on the first hit before the last chapter is read.
+    public func search(_ query: String) {
+        searchTask?.cancel()
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard needle.count >= 2, let package else {
+            searchHits = []
+            isSearching = false
+            return
+        }
+
+        searchHits = []
+        isSearching = true
+        let style = style
+        searchTask = Task { [weak self] in
+            for (index, item) in package.spine.enumerated() {
+                if Task.isCancelled { break }
+                guard let data = try? package.archive.read(item.href),
+                      let parsed = try? HTMLContentParser(style: style)
+                          .parse(xhtml: data, baseHref: item.href)
+                else { continue }
+
+                let hits = BookSearch.hits(
+                    for: needle, in: parsed.text.string,
+                    chapterIndex: index,
+                    chapterTitle: package.navigation.first { $0.href == item.href }?.title
+                        ?? "Chapter \(index + 1)",
+                    navigation: package.navigation.filter { $0.href == item.href },
+                    fragmentRanges: parsed.fragmentRanges,
+                )
+                if Task.isCancelled { break }
+                guard let self else { return }
+                searchHits.append(contentsOf: hits)
+                // Yield between chapters so typing stays responsive on a book
+                // with hundreds of spine items.
+                await Task.yield()
+            }
+            self?.isSearching = false
+        }
+    }
+
+    public func cancelSearch() {
+        searchTask?.cancel()
+        searchHits = []
+        isSearching = false
+    }
+
+    /// Jumps to a hit and leaves the matched text selected, so the reader can
+    /// see what was found without hunting for it.
+    public func go(to hit: SearchHit, matching query: String) async {
+        await loadChapter(hit.chapterIndex)
+        guard let layout, let page = layout.page(containingOffset: hit.charOffset) else { return }
+        pageIndex = page.index
+        selection = NSRange(location: hit.charOffset, length: (query as NSString).length)
+        scheduleSave()
+    }
+
+    // MARK: - Selection and annotations
+
+    /// The characters the reader has selected on this page, if any.
+    public private(set) var selection: NSRange?
+    /// Annotations for this book, drawn under the text and listed on demand.
+    public private(set) var annotations: [Annotation] = []
+    private var selectionAnchor: Int?
+
+    public var selectedText: String? {
+        guard let selection, let layout else { return nil }
+        let text = layout.attributedText.string as NSString
+        guard selection.location >= 0, NSMaxRange(selection) <= text.length else { return nil }
+        return text.substring(with: selection).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Starts a selection at a point, selecting the sentence there.
+    ///
+    /// A long press that selected one character would be useless, and a word is
+    /// usually too little to quote — the aligner has already split this text
+    /// into sentences, so that is the unit offered first. Dragging then adjusts
+    /// it a character at a time.
+    public func beginSelection(at point: CGPoint) {
+        guard let layout, let page = currentPage,
+              let index = layout.characterIndex(at: point, on: page) else { return }
+        let range = layout.sentenceRange(at: index) ?? layout.wordRange(at: index)
+        selectionAnchor = index
+        selection = range
+    }
+
+    public func extendSelection(to point: CGPoint) {
+        guard let layout, let page = currentPage, let anchor = selectionAnchor,
+              let index = layout.characterIndex(at: point, on: page) else { return }
+        let lower = min(anchor, index)
+        let upper = max(anchor, index)
+        // Snap the ends outward to whole words: a selection that stops
+        // mid-word looks like a bug, and quoting half a word is never wanted.
+        let start = layout.wordRange(at: lower)?.location ?? lower
+        let end = layout.wordRange(at: upper).map { NSMaxRange($0) } ?? upper
+        selection = NSRange(location: start, length: max(end - start, 1))
+    }
+
+    public func clearSelection() {
+        selection = nil
+        selectionAnchor = nil
+    }
+
+    /// Turns the current selection into a highlight, or drops a bookmark at the
+    /// top of the page when nothing is selected.
+    @discardableResult
+    public func annotate(kind: Annotation.Kind, tint: Annotation.Tint = .tangerine) -> Annotation? {
+        guard let layout, let page = currentPage else { return nil }
+        let range = kind == .bookmark
+            ? NSRange(location: page.characterRange.location, length: min(80, page.characterRange.length))
+            : (selection ?? NSRange(location: page.characterRange.location, length: 0))
+        guard range.length > 0 else { return nil }
+
+        let text = layout.attributedText.string as NSString
+        guard NSMaxRange(range) <= text.length else { return nil }
+        let excerpt = text.substring(with: range)
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let annotation = Annotation(
+            bookUUID: book.uuid,
+            kind: kind,
+            tint: tint,
+            locator: locator(forRange: range),
+            excerpt: excerpt,
+            chapterTitle: chapterTitle,
+        )
+        annotations.append(annotation)
+        annotations.sort(by: Annotation.readingOrder)
+        onSaveAnnotation?(annotation)
+        clearSelection()
+        return annotation
+    }
+
+    /// Opens the page an annotation is on.
+    public func go(to annotation: Annotation) async {
+        guard let package else { return }
+        if let index = package.spine.firstIndex(where: { annotation.locator.matchesHref($0.href) }),
+           index != chapterIndex {
+            await loadChapter(index, restoring: annotation.locator)
+        } else if let layout, let offset = annotation.locator.locations?.charOffset,
+                  let page = layout.page(containingOffset: offset) {
+            pageIndex = page.index
+        }
+        scheduleSave()
+    }
+
+    /// Seeds the marks made in earlier sessions.
+    public func loadAnnotations(_ stored: [Annotation]) {
+        annotations = stored.sorted(by: Annotation.readingOrder)
+    }
+
+    public func remove(_ annotation: Annotation) {
+        annotations.removeAll { $0.id == annotation.id }
+        onDeleteAnnotation?(annotation)
+    }
+
+    /// True when this page already carries a bookmark, so the control can be a
+    /// toggle rather than a way to accumulate duplicates.
+    public var isPageBookmarked: Bool {
+        bookmarkOnCurrentPage != nil
+    }
+
+    public var bookmarkOnCurrentPage: Annotation? {
+        guard let layout, let page = currentPage else { return nil }
+        return annotations.first { annotation in
+            guard annotation.kind == .bookmark,
+                  annotation.locator.matchesHref(package?.spine[chapterIndex].href ?? ""),
+                  let offset = annotation.locator.locations?.charOffset
+            else { return false }
+            _ = layout
+            return NSLocationInRange(offset, page.characterRange)
+        }
+    }
+
+    public func toggleBookmark() {
+        if let existing = bookmarkOnCurrentPage {
+            remove(existing)
+        } else {
+            annotate(kind: .bookmark)
+        }
+    }
+
+    /// Where an annotation on this chapter lives, in the same terms as a
+    /// reading position so the two restore through the same code.
+    private func locator(forRange range: NSRange) -> ReadiumLocator {
+        let href = package?.spine[chapterIndex].href ?? ""
+        let total = max((layout?.attributedText.string as NSString?)?.length ?? 1, 1)
+        let chapterProgress = Double(range.location) / Double(total)
+        let overall = (package?.spine.count ?? 0) > 0
+            ? (Double(chapterIndex) + chapterProgress) / Double(package?.spine.count ?? 1)
+            : chapterProgress
+        let fragment = layout?.attributedText
+            .attribute(.issaFragmentID, at: min(range.location, total - 1), effectiveRange: nil) as? String
+        return ReadiumLocator(
+            href: href,
+            type: "application/xhtml+xml",
+            title: chapterTitle,
+            locations: .init(
+                fragments: fragment.map { [$0] },
+                progression: chapterProgress,
+                totalProgression: overall,
+                charOffset: range.location,
+            ),
+            text: layout.flatMap {
+                LocatorAnchoring.quote(from: $0.attributedText.string, at: range.location,
+                                       length: min(range.length, 200))
+            },
+        )
+    }
+
+    /// Rectangles for stored highlights that fall on the current page.
+    public func highlightRects(on page: RenderedPage) -> [(rect: CGRect, tint: Annotation.Tint)] {
+        guard let layout, let package, package.spine.indices.contains(chapterIndex) else { return [] }
+        let href = package.spine[chapterIndex].href
+        var result: [(CGRect, Annotation.Tint)] = []
+        for annotation in annotations where annotation.kind != .bookmark {
+            guard annotation.locator.matchesHref(href) else { continue }
+            guard let offset = annotation.locator.locations?.charOffset else { continue }
+            let length = (annotation.excerpt as NSString).length
+            let range = NSRange(location: offset, length: length)
+            for rect in layout.rects(forRange: range, on: page) {
+                result.append((rect, annotation.tint))
+            }
+        }
+        return result
     }
 
     // MARK: - Progress

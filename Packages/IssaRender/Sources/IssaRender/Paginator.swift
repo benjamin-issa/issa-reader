@@ -178,6 +178,70 @@ public final class ChapterLayout {
             .key
     }
 
+    /// Rectangles covering an arbitrary character range on a page, for drawing
+    /// a selection or a stored highlight.
+    public func rects(forRange range: NSRange, on page: RenderedPage) -> [CGRect] {
+        guard range.length > 0, let textRange = textRange(from: range) else { return [] }
+        var rects: [CGRect] = []
+        layoutManager.enumerateTextSegments(in: textRange, type: .selection, options: []) { _, frame, _, _ in
+            let translated = frame.offsetBy(dx: 0, dy: -page.yOffset)
+            if translated.maxY > -1, translated.minY < page.height + 1 {
+                rects.append(translated)
+            }
+            return true
+        }
+        return rects
+    }
+
+    /// The word around a character index, for a long press that should select
+    /// something meaningful rather than a single letter.
+    public func wordRange(at index: Int) -> NSRange? {
+        let text = attributedText.string as NSString
+        guard index >= 0, index < text.length else { return nil }
+        let separators = CharacterSet.whitespacesAndNewlines
+            .union(.punctuationCharacters).subtracting(CharacterSet(charactersIn: "'\u{2019}-"))
+
+        var start = index
+        while start > 0 {
+            let previous = text.substring(with: NSRange(location: start - 1, length: 1))
+            if previous.rangeOfCharacter(from: separators) != nil { break }
+            start -= 1
+        }
+        var end = index
+        while end < text.length {
+            let next = text.substring(with: NSRange(location: end, length: 1))
+            if next.rangeOfCharacter(from: separators) != nil { break }
+            end += 1
+        }
+        guard end > start else { return nil }
+        return NSRange(location: start, length: end - start)
+    }
+
+    /// The sentence around a character index.
+    ///
+    /// Uses the narrated fragment when there is one — the aligner already split
+    /// the text into sentences, and its idea of a sentence beats a second
+    /// guess made from punctuation.
+    public func sentenceRange(at index: Int) -> NSRange? {
+        if let range = fragmentRanges.values.filter({ NSLocationInRange(index, $0) })
+            .min(by: { $0.length < $1.length }) {
+            return range
+        }
+        let text = attributedText.string as NSString
+        guard index >= 0, index < text.length else { return nil }
+        var found: NSRange?
+        text.enumerateSubstrings(
+            in: NSRange(location: 0, length: text.length),
+            options: [.bySentences, .substringNotRequired],
+        ) { _, range, _, stop in
+            if NSLocationInRange(index, range) {
+                found = range
+                stop.pointee = true
+            }
+        }
+        return found
+    }
+
     /// The character range a fragment occupies, for reading its text back.
     public func fragmentRange(for fragmentID: String) -> NSRange? {
         fragmentRanges[fragmentID]

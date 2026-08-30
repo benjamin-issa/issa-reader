@@ -20,7 +20,7 @@ import GRDB
 /// across books by tag or series in SQL, it derives those rails in memory from
 /// the whole catalogue, which it already has.
 public actor LibraryStore {
-    private let dbQueue: DatabaseQueue
+    let dbQueue: DatabaseQueue
     public let url: URL
 
     /// Opens, or creates, the store for one server.
@@ -93,6 +93,21 @@ public actor LibraryStore {
                 t.column("attempts", .integer).notNull().defaults(to: 0)
             }
             try db.create(index: "mutation_on_book_kind", on: "mutation", columns: ["bookUUID", "kind"])
+        }
+
+        // Annotations are device-local: the server has no endpoint for them in
+        // any version, so this is the only copy.
+        migrator.registerMigration("v2-annotations") { db in
+            try db.create(table: "annotation") { t in
+                t.primaryKey("id", .text)
+                t.column("bookUUID", .text).notNull()
+                t.column("kind", .text).notNull()
+                t.column("createdAt", .double).notNull()
+                t.column("progression", .double)
+                t.column("excerpt", .text).notNull()
+                t.column("json", .blob).notNull()
+            }
+            try db.create(index: "annotation_on_book", on: "annotation", columns: ["bookUUID"])
         }
         return migrator
     }
@@ -208,5 +223,68 @@ extension Book {
             sql: "DELETE FROM book WHERE uuid NOT IN (\(uuids.map { _ in "?" }.joined(separator: ",")))",
             arguments: StatementArguments(uuids),
         )
+    }
+}
+
+// MARK: - Annotations
+
+public extension LibraryStore {
+    /// Inserts or replaces one annotation.
+    func save(_ annotation: Annotation) throws {
+        let json = try JSONEncoder().encode(annotation)
+        try dbQueue.write { db in
+            try db.execute(
+                sql: """
+                INSERT INTO annotation (id, bookUUID, kind, createdAt, progression, excerpt, json)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    kind = excluded.kind, progression = excluded.progression,
+                    excerpt = excluded.excerpt, json = excluded.json
+                """,
+                arguments: [
+                    annotation.id, annotation.bookUUID, annotation.kind.rawValue,
+                    annotation.createdAt.timeIntervalSince1970,
+                    annotation.locator.locations?.totalProgression
+                        ?? annotation.locator.locations?.progression,
+                    annotation.excerpt, json,
+                ],
+            )
+        }
+    }
+
+    func annotations(for bookUUID: String) throws -> [Annotation] {
+        let rows: [Data] = try dbQueue.read { db in
+            try Data.fetchAll(
+                db, sql: "SELECT json FROM annotation WHERE bookUUID = ? ORDER BY progression",
+                arguments: [bookUUID],
+            )
+        }
+        let decoder = JSONDecoder()
+        return rows.compactMap { try? decoder.decode(Annotation.self, from: $0) }
+    }
+
+    /// Every annotation in the library, newest first, for a single list.
+    func allAnnotations(limit: Int = 500) throws -> [Annotation] {
+        let rows: [Data] = try dbQueue.read { db in
+            try Data.fetchAll(
+                db, sql: "SELECT json FROM annotation ORDER BY createdAt DESC LIMIT ?",
+                arguments: [limit],
+            )
+        }
+        let decoder = JSONDecoder()
+        return rows.compactMap { try? decoder.decode(Annotation.self, from: $0) }
+    }
+
+    func deleteAnnotation(id: String) throws {
+        _ = try dbQueue.write { db in
+            try db.execute(sql: "DELETE FROM annotation WHERE id = ?", arguments: [id])
+        }
+    }
+
+    /// Removes every annotation for a book, for when it is deleted server-side.
+    func deleteAnnotations(forBook bookUUID: String) throws {
+        _ = try dbQueue.write { db in
+            try db.execute(sql: "DELETE FROM annotation WHERE bookUUID = ?", arguments: [bookUUID])
+        }
     }
 }
