@@ -236,6 +236,25 @@ public final class AppModel {
         await drainPendingWrites()
     }
 
+    // MARK: - Arranging the library
+
+    /// How the shelf is sorted and filtered. Persisted, because a reader who
+    /// prefers to sort by author means it next launch too.
+    public var arrangement = LibraryArrangement.restored() {
+        didSet { arrangement.store() }
+    }
+
+    /// The library as arranged, which is what every shelf view should show.
+    public var arrangedBooks: [Book] {
+        guard let session else { return arrangement.apply(to: books) }
+        let content = BookContentService(client: session.client)
+        return arrangement.apply(to: books) { book in
+            // Only the downloaded shelf pays for this, since the closure is not
+            // called at all for the others.
+            BookContentService.Format.allCases.contains { content.isDownloaded(book, format: $0) }
+        }
+    }
+
     // MARK: - Deep links
 
     /// A book the app was asked to open — from a widget, Spotlight or Handoff.

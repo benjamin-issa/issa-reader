@@ -60,7 +60,7 @@ public struct BookContentService: Sendable {
 
     /// Which file to ask the server for. `readaloud` is the aligned EPUB with
     /// embedded audio and SMIL overlays; `ebook` is the plain text-only EPUB.
-    public enum Format: String, Sendable {
+    public enum Format: String, Sendable, CaseIterable {
         case ebook
         case audiobook
         case readaloud

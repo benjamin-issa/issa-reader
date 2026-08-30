@@ -10,9 +10,72 @@ public struct LibraryView: View {
 
     public init() {}
 
+    /// Search results are already the answer to a question; re-sorting them by
+    /// title would bury the best match. Arrangement applies to the shelf only.
     private var books: [Book] {
-        search.isEmpty ? app.books : results
+        search.isEmpty ? app.arrangedBooks : results
     }
+
+    private var heading: String {
+        if !search.isEmpty {
+            return "\(books.count) result\(books.count == 1 ? "" : "s")"
+        }
+        let shelf = app.arrangement.shelf.title
+        return app.arrangement.isFiltering ? "\(shelf) · \(books.count)" : shelf
+    }
+
+    #if !os(tvOS)
+    /// One menu for shelf, sort and tags: three separate controls would crowd
+    /// a phone header, and these are read together anyway.
+    @ViewBuilder
+    private var arrangeMenu: some View {
+        @Bindable var app = app
+        Menu {
+            Picker("Shelf", selection: $app.arrangement.shelf) {
+                ForEach(LibraryArrangement.Shelf.allCases) { shelf in
+                    Text(shelf.title).tag(shelf)
+                }
+            }
+            Picker("Sort by", selection: $app.arrangement.sort) {
+                ForEach(LibraryArrangement.Sort.allCases) { sort in
+                    Text(sort.title).tag(sort)
+                }
+            }
+            Toggle("Reverse order", isOn: $app.arrangement.ascending)
+
+            let tags = app.derivation.tagCounts.prefix(12)
+            if !tags.isEmpty {
+                Menu("Tags") {
+                    if !app.arrangement.tags.isEmpty {
+                        Button("Clear tags") { app.arrangement.tags = [] }
+                        Divider()
+                    }
+                    ForEach(Array(tags), id: \.name) { tag in
+                        Button {
+                            if app.arrangement.tags.contains(tag.name) {
+                                app.arrangement.tags.remove(tag.name)
+                            } else {
+                                app.arrangement.tags.insert(tag.name)
+                            }
+                        } label: {
+                            Label(
+                                "\(tag.name) (\(tag.count))",
+                                systemImage: app.arrangement.tags.contains(tag.name) ? "checkmark" : "",
+                            )
+                        }
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: app.arrangement.isFiltering
+                ? "line.3.horizontal.decrease.circle.fill"
+                : "line.3.horizontal.decrease.circle")
+                .font(.system(size: 17))
+                .foregroundStyle(Palette.tangerine)
+        }
+        .accessibilityLabel("Sort and filter")
+    }
+    #endif
 
     public var body: some View {
         ScrollView {
@@ -22,8 +85,21 @@ public struct LibraryView: View {
                 }
 
                 VStack(alignment: .leading, spacing: Metrics.spacing12) {
-                    Text(search.isEmpty ? "All books" : "\(books.count) result\(books.count == 1 ? "" : "s")")
-                        .overlineStyle()
+                    HStack {
+                        Text(heading).overlineStyle()
+                        Spacer()
+                        #if !os(tvOS)
+                        arrangeMenu
+                        #endif
+                    }
+                    if books.isEmpty, search.isEmpty, app.arrangement.isFiltering {
+                        // A filtered library that matches nothing must not read
+                        // as an empty library.
+                        Text("No books on this shelf.")
+                            .font(Typography.footnote)
+                            .foregroundStyle(Palette.inkTertiary)
+                            .padding(.vertical, Metrics.spacing24)
+                    }
                     BookGrid(books: books, session: app.session)
                 }
             }
