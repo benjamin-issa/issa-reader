@@ -8,12 +8,21 @@ public struct SettingsView: View {
     public init() {}
 
     public var body: some View {
+        list
+            // The design commits to warm paper everywhere; a stock grouped List
+            // would reintroduce system grey behind and between the rows.
+            .scrollContentBackground(.hidden)
+            .background(Palette.paper)
+    }
+
+    private var list: some View {
         List {
             if let session = app.session, case let .signedIn(user) = session.state {
                 Section("Account") {
                     LabeledContent("Signed in as", value: user.username ?? user.name ?? "—")
                     LabeledContent("Server", value: session.serverURL.absoluteString)
                 }
+                .listRowBackground(Palette.surface)
 
                 Section {
                     LabeledContent("Books", value: "\(app.books.count)")
@@ -21,6 +30,7 @@ public struct SettingsView: View {
                 } header: {
                     Text("Library")
                 }
+                .listRowBackground(Palette.surface)
 
                 // Surfacing this makes it obvious which server generation is in
                 // play, and why some rails are computed locally.
@@ -34,6 +44,7 @@ public struct SettingsView: View {
                 } footer: {
                     Text("Features your server does not provide are computed on this device instead.")
                 }
+                .listRowBackground(Palette.surface)
             }
 
             Section {
@@ -41,6 +52,7 @@ public struct SettingsView: View {
                     Task { await app.signOut() }
                 }
             }
+            .listRowBackground(Palette.surface)
         }
     }
 
