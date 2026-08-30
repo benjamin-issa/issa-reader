@@ -20,7 +20,7 @@ public final class ReaderModel {
     }
 
     public private(set) var phase: Phase = .loading("Opening…")
-    public private(set) var package: EPUBPackage?
+    public internal(set) var package: EPUBPackage?
     public private(set) var timeline: SMILTimeline?
     public private(set) var layout: ChapterLayout?
     public private(set) var chapterIndex = 0

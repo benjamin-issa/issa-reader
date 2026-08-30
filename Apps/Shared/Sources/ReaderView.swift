@@ -10,6 +10,7 @@ import SwiftUI
 public struct ReaderView: View {
     @State private var model: ReaderModel
     @State private var showsPlayer = false
+    @State private var showsContents = false
     @Environment(\.dismiss) private var dismiss
     @Environment(NowPlayingController.self) private var nowPlaying
 
@@ -56,6 +57,14 @@ public struct ReaderView: View {
         #endif
         .onDisappear { Task { await model.saveProgress() } }
         #if !os(tvOS)
+        .sheet(isPresented: $showsContents) {
+            NavigationStack {
+                ChapterListView(model: model) { index in
+                    Task { await model.go(toChapter: index) }
+                }
+            }
+            .presentationDetents([.medium, .large])
+        }
         .sheet(isPresented: $showsPlayer) {
             PlayerView(book: model.book, session: model.readerSession, coordinator: model.readalong)
                 .presentationDetents([.large])
@@ -118,10 +127,19 @@ public struct ReaderView: View {
                 }
                 .buttonStyle(.plain)
             }
-            Text(model.chapterTitle)
-                .font(Typography.caption)
+            Button {
+                showsContents = true
+            } label: {
+                HStack(spacing: Metrics.spacing4) {
+                    Image(systemName: "list.bullet")
+                        .font(.system(size: 13))
+                    Text(model.chapterTitle)
+                        .font(Typography.caption)
+                        .lineLimit(1)
+                }
                 .foregroundStyle(model.style.theme.text.opacity(0.55))
-                .lineLimit(1)
+            }
+            .buttonStyle(.plain)
             Spacer()
             if model.pageCount > 0 {
                 Text("\(model.pageIndex + 1) / \(model.pageCount)")
