@@ -22,6 +22,31 @@
   <string>$(CURRENT_PROJECT_VERSION)</string>
   <key>UILaunchScreen</key>
   <dict/>
+  <!-- CarPlay runs as a second scene alongside the SwiftUI window scene.
+       Declaring the CarPlay configuration here is what lets the CarPlay
+       Simulator attach; activating in a real vehicle additionally requires the
+       com.apple.developer.carplay-audio entitlement, which Apple grants on
+       request and which is deliberately not in the entitlements file until it
+       is granted — an ungranted entitlement fails provisioning. -->
+  <key>UIApplicationSceneManifest</key>
+  <dict>
+    <key>UIApplicationSupportsMultipleScenes</key>
+    <true/>
+    <key>UISceneConfigurations</key>
+    <dict>
+      <key>CPTemplateApplicationSceneSessionRoleApplication</key>
+      <array>
+        <dict>
+          <key>UISceneClassName</key>
+          <string>CPTemplateApplicationScene</string>
+          <key>UISceneConfigurationName</key>
+          <string>IssaReaderCarPlay</string>
+          <key>UISceneDelegateClassName</key>
+          <string>$(PRODUCT_MODULE_NAME).CarPlaySceneDelegate</string>
+        </dict>
+      </array>
+    </dict>
+  </dict>
   <key>UIBackgroundModes</key>
   <array>
     <string>audio</string>

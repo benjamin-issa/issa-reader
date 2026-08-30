@@ -10,7 +10,7 @@ import AppKit
 
 /// Typography and layout the reader applies, matching the design's
 /// "Reading & highlights" controls.
-public struct ReaderStyle: Sendable, Hashable {
+public struct ReaderStyle: Sendable, Hashable, Codable {
     public enum LineSpacing: String, CaseIterable, Sendable, Codable {
         case tight, normal, roomy
 

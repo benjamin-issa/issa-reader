@@ -1,6 +1,7 @@
 import Foundation
 import IssaCore
 import IssaEPUB
+import IssaPlayback
 import IssaRender
 import Observation
 import SwiftUI
@@ -23,6 +24,11 @@ public final class ReaderModel {
     public var pageIndex = 0
     /// Fragment currently narrated, when audio is playing.
     public var activeFragmentID: String?
+    /// Present only when the book has usable media overlays.
+    public private(set) var readalong: ReadalongCoordinator?
+
+    public var hasNarration: Bool { readalong != nil }
+    public var isPlaying: Bool { readalong?.player.isPlaying ?? false }
 
     public var style: ReaderStyle {
         didSet { if style != oldValue { Task { await relayoutCurrentChapter() } } }
@@ -64,6 +70,8 @@ public final class ReaderModel {
             let url = try await content.ensureDownloaded(book, format: format)
             let package = try EPUBPackage.open(url: url)
             self.package = package
+            // A book the server calls ALIGNED can still carry no overlays, so
+            // narration is offered only when the timeline actually has entries.
             let timeline = SMILParser.timeline(for: package)
             self.timeline = timeline.isEmpty ? nil : timeline
 
@@ -75,6 +83,7 @@ public final class ReaderModel {
                 ?? Self.firstReadableChapter(in: package)
 
             await loadChapter(chapterIndex, restoring: stored?.locator)
+            await prepareNarration(package: package)
             phase = .ready
         } catch {
             phase = .failed(String(describing: error))
@@ -98,6 +107,66 @@ public final class ReaderModel {
             }
         }
         return 0
+    }
+
+    /// Extracts the embedded narration and hooks the audio clock to the page.
+    ///
+    /// Only runs when the timeline is non-empty, so a book the server reports as
+    /// ALIGNED but which carries no overlays simply reads as a plain ebook
+    /// rather than showing a player that can never play anything.
+    private func prepareNarration(package: EPUBPackage) async {
+        guard let timeline, !timeline.isEmpty else { return }
+        guard let files = try? AudioExtraction.extractAudio(
+            from: package, timeline: timeline, bookID: book.uuid,
+        ), !files.isEmpty else { return }
+
+        let coordinator = ReadalongCoordinator(timeline: timeline, audioFiles: files)
+        coordinator.onFragmentChange = { [weak self] fragment in
+            guard let self else { return }
+            activeFragmentID = fragment
+            guard style.followNarration else { return }
+            // Keep the narrated sentence on screen. If it is already visible,
+            // do not fight the reader by turning the page underneath them.
+            if let layout, let page = layout.page(containingFragment: fragment),
+               page.index != pageIndex {
+                pageIndex = page.index
+            }
+        }
+        coordinator.onChapterChange = { [weak self] href in
+            guard let self, let package = self.package else { return }
+            guard let index = package.spine.firstIndex(where: { $0.href == href }),
+                  index != chapterIndex else { return }
+            Task { await self.loadChapter(index) }
+        }
+        readalong = coordinator
+    }
+
+    /// Starts narration from whatever the reader is currently looking at.
+    public func startNarration() async {
+        guard let readalong, let layout, let page = currentPage else { return }
+        if let fragment = layout.attributedText.attribute(
+            .issaFragmentID, at: page.characterRange.location, effectiveRange: nil,
+        ) as? String {
+            await readalong.seek(toFragment: fragment)
+        } else {
+            readalong.player.play()
+        }
+    }
+
+    public func togglePlayback() async {
+        guard let readalong else { return }
+        if readalong.player.isPlaying {
+            readalong.player.pause()
+        } else if readalong.activeEntry == nil {
+            await startNarration()
+        } else {
+            readalong.player.play()
+        }
+    }
+
+    /// The fine-grained clock is only worth running while the page is visible.
+    public func setReaderVisible(_ visible: Bool) {
+        readalong?.player.setHighFrequencyUpdates(visible)
     }
 
     public func resize(to size: CGSize) async {

@@ -47,6 +47,16 @@ public struct SettingsView: View {
                 .listRowBackground(Palette.surface)
             }
 
+            Section("Playback & reading") {
+                NavigationLink { ControlsSettingsView() } label: {
+                    Label("Controls & remapping", systemImage: "slider.horizontal.3")
+                }
+                NavigationLink { ReadingSettingsView() } label: {
+                    Label("Reading & highlights", systemImage: "textformat")
+                }
+            }
+            .listRowBackground(Palette.surface)
+
             Section {
                 Button("Sign out", role: .destructive) {
                     Task { await app.signOut() }

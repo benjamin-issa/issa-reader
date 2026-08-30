@@ -5,6 +5,7 @@ import SwiftUI
 @main
 struct IssaReaderTVApp: App {
     @State private var app = AppModel()
+    @State private var settings = PlaybackSettings()
 
     init() {
         // Package-bundled fonts are not registered automatically the way an
@@ -16,6 +17,7 @@ struct IssaReaderTVApp: App {
         WindowGroup {
             TVRootView()
                 .environment(app)
+                .environment(settings)
                 .tint(Palette.tangerine)
         }
     }

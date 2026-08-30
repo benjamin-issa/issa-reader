@@ -84,10 +84,22 @@ public struct ReaderView: View {
 
             footer
         }
+        .onAppear { model.setReaderVisible(true) }
+        .onDisappear { model.setReaderVisible(false) }
     }
 
     private var footer: some View {
-        HStack {
+        HStack(spacing: Metrics.spacing12) {
+            if model.hasNarration {
+                Button {
+                    Task { await model.togglePlayback() }
+                } label: {
+                    Image(systemName: model.isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                        .font(.system(size: 26))
+                        .foregroundStyle(Palette.tangerine)
+                }
+                .buttonStyle(.plain)
+            }
             Text(model.chapterTitle)
                 .font(Typography.caption)
                 .foregroundStyle(model.style.theme.text.opacity(0.55))

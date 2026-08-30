@@ -250,6 +250,16 @@ public struct ReadaloudFormat: Codable, Hashable, Sendable {
     public var createdAt: FlexibleDate?
     public var updatedAt: FlexibleDate?
 
-    /// Only an `ALIGNED` readaloud is playable; the rest are mid-pipeline.
+    /// Only an `ALIGNED` readaloud has finished the pipeline; the rest are
+    /// mid-flight or failed.
+    ///
+    /// Note that this is NOT sufficient to conclude the book has usable
+    /// narration. Observed on a real server: when the aligner cannot locate a
+    /// chapter's text in the transcript — which happens when the audio covers
+    /// only part of the book, or the spine documents are far larger than the
+    /// tracks — it writes the sentence markup, records `media:duration` of
+    /// 00:00:00, attaches no media overlays at all, and still reports ALIGNED.
+    /// The only trustworthy test is whether the downloaded EPUB yields a
+    /// non-empty timeline.
     public var isAligned: Bool { status == "ALIGNED" }
 }
