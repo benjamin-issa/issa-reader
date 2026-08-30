@@ -138,7 +138,13 @@ public struct SignInView: View {
         if address.isEmpty { address = app.serverAddress }
         await app.connect(to: address)
         // A stored token may have signed us straight in.
-        guard app.phase != .ready, let url = AppModel.normalizeServerURL(address) else { return }
+        //
+        // `app.serverAddress`, not the field: connect resolves a bare hostname
+        // by probing, and re-normalising what was typed would throw that away
+        // and start the device flow against the port it just ruled out.
+        guard app.phase != .ready,
+              let url = AppModel.normalizeServerURL(app.serverAddress)
+        else { return }
         flow = DeviceSignInModel(serverURL: url)
         await flow?.begin()
     }

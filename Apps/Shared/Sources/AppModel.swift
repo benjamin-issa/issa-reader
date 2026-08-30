@@ -97,30 +97,50 @@ public final class AppModel {
 
     /// Accepts what a person would actually type — "storyteller.home.arpa",
     /// "192.168.1.10:8001", or a full URL — and produces a usable base URL.
-    public static func normalizeServerURL(_ input: String) -> URL? {
-        var text = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return nil }
-        let hadScheme = text.contains("://")
-        if !hadScheme { text = "http://" + text }
-        guard var components = URLComponents(string: text), let host = components.host, !host.isEmpty
-        else { return nil }
-        // Storyteller's default port, but only when the address was bare. Given
-        // a full URL, guessing a port would break every install behind a proxy
-        // on 80 or 443.
-        if components.port == nil, !hadScheme { components.port = 8001 }
-        // Keep the path: a reverse proxy commonly mounts Storyteller under a
-        // subdirectory, and dropping it made every such server unreachable.
-        // Trailing slashes and a pasted API path are noise, though.
-        var path = components.path
-        if path.hasSuffix("/") { path.removeLast() }
-        for suffix in ["/api/v2", "/api"] where path.hasSuffix(suffix) {
-            path.removeLast(suffix.count)
-            break
+    /// Which candidate actually has a Storyteller behind it.
+    ///
+    /// A short, unauthenticated probe rather than a full connect: building a
+    /// session, a background download session and a store for an address that
+    /// turns out to be wrong is expensive and leaves debris. `server/public` is
+    /// the one endpoint that answers without a token.
+    ///
+    /// The timeout is the point. Connecting to a port with nothing listening
+    /// does not fail fast — it hangs — and the sign-in screen has nothing to
+    /// say while it does.
+    static func firstReachable(of candidates: [URL], timeout: TimeInterval = 6) async -> URL? {
+        guard candidates.count > 1 else { return candidates.first }
+        for candidate in candidates {
+            if await probe(candidate, timeout: timeout) { return candidate }
         }
-        components.path = path
-        components.query = nil
-        components.fragment = nil
-        return components.url
+        // Everything failed: fall back to what the reader typed, so the error
+        // they get is the real one from a full attempt rather than ours.
+        return candidates.first
+    }
+
+    private static func probe(_ url: URL, timeout: TimeInterval) async -> Bool {
+        var request = URLRequest(url: url.appending(path: "api/v2/server/public"))
+        request.timeoutInterval = timeout
+        request.httpMethod = "GET"
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = timeout
+        configuration.timeoutIntervalForResource = timeout
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        guard let (_, response) = try? await session.data(for: request),
+              let http = response as? HTTPURLResponse
+        else { return false }
+        // Any answer at all means something is listening and speaking HTTP;
+        // an unauthenticated probe may legitimately be refused.
+        return (200...499).contains(http.statusCode)
+    }
+
+    /// Every address worth trying for what someone typed. See `ServerAddress`.
+    static func candidateServerURLs(for input: String) -> [URL] {
+        ServerAddress.candidates(for: input)
+    }
+
+    public static func normalizeServerURL(_ input: String) -> URL? {
+        ServerAddress.normalize(input)
     }
 
     /// Reconnects to the last server on launch when a token is already stored,
@@ -144,16 +164,27 @@ public final class AppModel {
         isConnecting = true
         defer { isConnecting = false }
 
-        guard let url = Self.normalizeServerURL(address) else {
+        let candidates = Self.candidateServerURLs(for: address)
+        guard !candidates.isEmpty else {
             loadError = "That doesn't look like a server address."
             return
         }
-        UserDefaults.standard.set(address, forKey: Self.lastServerKey)
+        guard let url = await Self.firstReachable(of: candidates) else {
+            loadError = "Couldn't reach a Storyteller server at that address."
+            return
+        }
+        // The RESOLVED address, not the raw text. Everything downstream —
+        // the device flow, audiobook streaming, the expired notice — re-derives
+        // a URL from `serverAddress`, and re-deriving from a bare hostname
+        // undoes the probe above and lands back on the wrong port. Storing the
+        // absolute URL means every later call is taken at its word.
+        let resolved = url.absoluteString
+        UserDefaults.standard.set(resolved, forKey: Self.lastServerKey)
         // Also in memory. Only UserDefaults was written, so `serverAddress`
         // stayed empty for the whole first launch — which silently broke
         // audiobook playback (startListening guards on it) and left the expired
         // notice showing a blank server name.
-        serverAddress = address
+        serverAddress = resolved
         let session = Session(serverURL: url, keychain: keychain)
         self.session = session
 

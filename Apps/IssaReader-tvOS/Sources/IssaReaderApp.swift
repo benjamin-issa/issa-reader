@@ -60,7 +60,10 @@ struct TVSignInView: View {
     /// Begins the device flow, reusing whatever server is already known.
     private func beginFlow(for text: String) async {
         await app.connect(to: text)
-        guard app.phase != .ready, let url = AppModel.normalizeServerURL(text) else { return }
+        // The resolved address, for the reason SignInView records.
+        guard app.phase != .ready,
+              let url = AppModel.normalizeServerURL(app.serverAddress)
+        else { return }
         let model = DeviceSignInModel(serverURL: url)
         flow = model
         await model.begin()
