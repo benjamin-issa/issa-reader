@@ -54,7 +54,7 @@ public struct ListeningView: View {
             // Square audiobook art, matching the player and the mini player.
             // The grid asked for portrait ebook covers, so one book showed two
             // different artworks six points apart.
-            BookGrid(books: books, session: app.session, shape: .square)
+            BookGrid(books: books, session: app.session, shape: .square, showsFormatMark: false)
         }
     }
 }
