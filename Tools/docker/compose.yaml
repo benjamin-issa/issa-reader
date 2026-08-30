@@ -1,0 +1,56 @@
+# Local test stack for Issa Reader development.
+#
+# Storyteller is pinned to the latest STABLE tag (web-v2.14.21). Do not move this
+# to :latest — that tracks the 3.0.0 experimental line, which is not what the
+# client targets.
+#
+# Keycloak provides a real third-party OIDC provider so the server-driven sign-in
+# flow can be exercised end to end.
+
+name: issa-reader-dev
+
+services:
+  storyteller:
+    image: registry.gitlab.com/storyteller-platform/storyteller:web-v2.14.21
+    container_name: issa-storyteller
+    environment:
+      - STORYTELLER_SECRET_KEY=${STORYTELLER_SECRET_KEY}
+      # Bind the public origin to the LAN address so the device-authorization QR
+      # and verification URL resolve from a phone / Apple TV on the same network.
+      - AUTH_URL=${AUTH_URL:-http://localhost:8001}
+    volumes:
+      - ./data/storyteller:/data:rw
+    ports:
+      - "8001:8001"
+      # Keycloak shares this container's network namespace (see below), so its
+      # port is published here.
+      - "8080:8080"
+    restart: unless-stopped
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.4
+    container_name: issa-keycloak
+    command:
+      - start-dev
+      - --import-realm
+      - --http-port=8080
+      # Storyteller's Readium service already owns :9000 in this shared network
+      # namespace, so move Keycloak's management interface off it.
+      - --http-management-port=9990
+    environment:
+      - KC_BOOTSTRAP_ADMIN_USERNAME=admin
+      - KC_BOOTSTRAP_ADMIN_PASSWORD=admin
+      - KC_HEALTH_ENABLED=true
+      - KC_HOSTNAME=http://localhost:8080
+      - KC_HOSTNAME_BACKCHANNEL_DYNAMIC=false
+    volumes:
+      - ./keycloak/realm-issa.json:/opt/keycloak/data/import/realm-issa.json:ro
+    # Share Storyteller's network namespace so that `http://localhost:8080`
+    # means the same thing to the browser (via the published port) and to the
+    # Storyteller server doing OIDC discovery and code exchange. Without this,
+    # Keycloak would advertise container-internal URLs the browser cannot reach
+    # — the classic split-horizon OIDC-in-Docker failure.
+    network_mode: "service:storyteller"
+    depends_on:
+      - storyteller
+    restart: unless-stopped

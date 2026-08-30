@@ -1,0 +1,12 @@
+{
+  "name": "issa-reader-devstack",
+  "private": true,
+  "type": "module",
+  "description": "Provisioning scripts for the local Storyteller + Keycloak test stack.",
+  "scripts": {
+    "setup": "node setup.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.62.1"
+  }
+}
