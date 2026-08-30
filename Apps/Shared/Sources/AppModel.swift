@@ -491,6 +491,12 @@ public final class AppModel {
             coordinator.player.rate = Float(settings.playbackRate)
             listening = coordinator
             listeningBook = book
+            // Square art, matching what Now Playing already asks for.
+            Task { [session] in
+                await CoverCache.shared.publishCoverToWidget(
+                    for: book, session: session, shape: .square)
+            }
+            publishListeningSnapshot(book: book, coordinator: coordinator)
             nowPlaying.attach(
                 coordinator: coordinator, book: book, session: session,
                 chapterTitle: { [weak coordinator] in coordinator?.chapterTitle },
@@ -533,8 +539,33 @@ public final class AppModel {
                         timestamp: ProgressService.now(),
                     ),
                 )
+                self.publishListeningSnapshot(book: book, coordinator: coordinator)
             }
         }
+    }
+
+    /// Keeps the widget honest while an audiobook plays.
+    ///
+    /// Only the reader ever wrote a snapshot, so a pure audiobook left the
+    /// widget showing whatever was read last — and `isPlaying` came from the
+    /// read-along player, which for an audiobook is always false. That is
+    /// precisely the case the square cover exists for.
+    private func publishListeningSnapshot(book: Book, coordinator: AudiobookCoordinator) {
+        let progress = coordinator.bookProgress
+        guard progress.isFinite else { return }
+        let total = coordinator.totalDuration
+        CurrentBookSnapshotStore.write(CurrentBookSnapshot(
+            bookID: book.uuid,
+            title: book.title,
+            author: book.byline,
+            chapter: coordinator.chapterTitle,
+            progress: progress,
+            remaining: total.isFinite && total > 0 ? total * (1 - progress) : nil,
+            isPlaying: coordinator.player.isPlaying,
+        ))
+        #if canImport(WidgetKit)
+        WidgetCenter.shared.reloadTimelines(ofKind: "CurrentBook")
+        #endif
     }
 
     /// A locator for a position inside an audiobook.

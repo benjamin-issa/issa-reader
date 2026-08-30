@@ -102,11 +102,53 @@ struct CurrentBookView: View {
                 }
                 ProgressView(value: entry.snapshot.progress).tint(.primary)
             }
+        case .systemSmall:
+            small
         case .systemMedium, .systemLarge:
             withCover
         default:
             details
         }
+    }
+
+    /// The small widget: cover-led, with a ring rather than a bar.
+    ///
+    /// It used to fall through to `details`, which draws no cover at all — so
+    /// the one family most people actually place was the only one that did not
+    /// show the book. `details` is shared with `withCover`, so the ring has to
+    /// live in its own layout rather than replacing the bar in place; the bar
+    /// still belongs to medium and large.
+    private var small: some View {
+        VStack(alignment: .leading, spacing: Metrics.spacing8) {
+            HStack(alignment: .top, spacing: Metrics.spacing8) {
+                if let data = entry.cover, let image = Image(widgetCover: data) {
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: 52, height: 52)
+                        .clipShape(RoundedRectangle(cornerRadius: Metrics.radiusSmall))
+                }
+                Spacer(minLength: 0)
+                ProgressRingWidget(value: entry.snapshot.progress)
+            }
+            Spacer(minLength: 0)
+            Text(entry.snapshot.title)
+                .font(Typography.bookTitle)
+                .foregroundStyle(Palette.ink)
+                .lineLimit(2)
+            Text(Self.subtitleLine(entry.snapshot))
+                .font(Typography.caption)
+                .foregroundStyle(Palette.inkSecondary)
+                .lineLimit(1)
+        }
+    }
+
+    /// "2h 18m left · Part 3", dropping whichever half is unknown.
+    static func subtitleLine(_ snapshot: CurrentBookSnapshot) -> String {
+        var parts: [String] = []
+        if let remaining = snapshot.remaining { parts.append(remainingText(remaining) + " left") }
+        if let chapter = snapshot.chapter { parts.append(chapter) }
+        return parts.isEmpty ? snapshot.author : parts.joined(separator: " · ")
     }
 
     /// Medium and large have room for the cover, which is what makes a shelf of
@@ -174,6 +216,27 @@ extension Image {
         #else
         return nil
         #endif
+    }
+}
+
+/// A ring around the percentage, for the small family.
+struct ProgressRingWidget: View {
+    let value: Double
+
+    var body: some View {
+        ZStack {
+            Circle().stroke(Palette.border, lineWidth: 4)
+            Circle()
+                .trim(from: 0, to: min(max(value, 0), 1))
+                .stroke(Palette.tangerine, style: .init(lineWidth: 4, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+            Text("\(Int(value * 100))%")
+                .font(Typography.caption.weight(.semibold))
+                .foregroundStyle(Palette.tangerinePressed)
+                .minimumScaleFactor(0.7)
+                .lineLimit(1)
+        }
+        .frame(width: 40, height: 40)
     }
 }
 

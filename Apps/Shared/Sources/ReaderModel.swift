@@ -939,7 +939,13 @@ public final class ReaderModel {
         if Self.lastPublishedCoverBookID != book.uuid {
             Self.lastPublishedCoverBookID = book.uuid
             Task { [book, session = readerSession] in
-                await CoverCache.shared.publishCoverToWidget(for: book, session: session)
+                // Square art whenever the book has an audiobook edition: the
+                // widget, the mini player and Now Playing are all audio
+                // surfaces, and NowPlayingController already asks for square —
+                // so the two disagreed about the same book.
+                await CoverCache.shared.publishCoverToWidget(
+                    for: book, session: session,
+                    shape: book.audiobook != nil ? .square : .portrait)
             }
         }
         let remaining = (book.readaloud?.duration ?? book.audiobook?.duration)
