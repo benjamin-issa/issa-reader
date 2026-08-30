@@ -30,7 +30,13 @@ public final class AppModel {
     public var phase: Phase = .launching
     public var serverAddress: String = ""
     public var session: Session?
-    public var books: [Book] = []
+    public var books: [Book] = [] { didSet { rebuildDerived() } }
+    /// Books with at least one file on disk, from a single directory read.
+    ///
+    /// The download shelf and its count both need this for the whole library,
+    /// and asking `isDownloaded` per book per format is a `stat` per format per
+    /// book — thousands of syscalls in a scrolled frame.
+    public private(set) var downloadedUUIDs: Set<String> = [] { didSet { rebuildDerived() } }
     /// The shelves this server defines. Fetched once per sign-in; an admin can
     /// add their own beyond the default To read / Reading / Read.
     public var statuses: [Status] = []
@@ -40,8 +46,18 @@ public final class AppModel {
     public var loadError: String?
     public var isLoadingLibrary = false
 
-    /// Derived rails and facets, all computed from the single catalogue fetch.
+    /// Derived rails, computed from the single catalogue fetch.
+    ///
+    /// Still a computed property for its remaining callers (CarPlay, the tvOS
+    /// library); the library screen reads the memoised values below instead,
+    /// because it used to allocate one of these twice per body.
     public var derivation: LibraryDerivation { LibraryDerivation(books: books) }
+
+    /// Shelf and tag counts for the library header. Rebuilt when the catalogue
+    /// or the downloaded set changes, never in a view body.
+    public private(set) var facets: LibraryFacets = .empty
+    /// The book the Continue card offers, if any.
+    public private(set) var continueBook: Book?
 
     private let keychain: any TokenPersisting
     /// The on-device catalogue. Present as soon as a server is chosen, so the
@@ -63,6 +79,9 @@ public final class AppModel {
         reachability.onBecameOnline = { [weak self] in
             Task { await self?.drainPendingWrites() }
         }
+        // A property initialiser does not fire `didSet`, so without this the
+        // first frame renders empty facets and an unarranged shelf.
+        rebuildDerived()
     }
 
     private static let lastServerKey = "issa.lastServer"
@@ -158,6 +177,10 @@ public final class AppModel {
             BookContentService.defaultDirectory()
                 .appending(path: "\(job.bookUUID)-\(job.format.rawValue).epub")
         }
+        // Declared on DownloadManager and never assigned until now, which is
+        // why a finished download did not refresh anything that reads the disk.
+        downloads?.onFinished = { [weak self] _ in self?.refreshDownloadedSet() }
+        refreshDownloadedSet()
         Task { [weak self] in await self?.downloads?.reattach() }
 
         if phase != .ready { phase = .signingIn }
@@ -204,6 +227,7 @@ public final class AppModel {
     public func signOut(keepDownloads: Bool = false) async {
         await session?.signOut()
         books = []
+        downloadedUUIDs = []
         statuses = []
         ratings = [:]
         loadError = nil
@@ -317,18 +341,50 @@ public final class AppModel {
     /// How the shelf is sorted and filtered. Persisted, because a reader who
     /// prefers to sort by author means it next launch too.
     public var arrangement = LibraryArrangement.restored() {
-        didSet { arrangement.store() }
+        didSet {
+            arrangement.store()
+            rebuildArranged()
+        }
     }
 
     /// The library as arranged, which is what every shelf view should show.
-    public var arrangedBooks: [Book] {
-        guard let session else { return arrangement.apply(to: books) }
-        let content = BookContentService(client: session.client)
-        return arrangement.apply(to: books) { book in
-            // Only the downloaded shelf pays for this, since the closure is not
-            // called at all for the others.
-            BookContentService.Format.allCases.contains { content.isDownloaded(book, format: $0) }
-        }
+    ///
+    /// Stored rather than computed: it was rebuilding a `BookContentService`
+    /// and, for the downloaded shelf, stat-ing every book on every access — and
+    /// a SwiftUI body reads it more than once per frame.
+    public private(set) var arrangedBooks: [Book] = []
+
+    /// Recomputes everything derived from the catalogue.
+    func rebuildDerived() {
+        facets = LibraryFacets(books: books, downloadedUUIDs: downloadedUUIDs)
+        continueBook = LibraryDerivation(books: books).continueReading.first
+        rebuildArranged()
+    }
+
+    private func rebuildArranged() {
+        arrangedBooks = arrangement.apply(to: books) { downloadedUUIDs.contains($0.uuid) }
+    }
+
+    /// Deletes one downloaded edition, everything that came with it, and the
+    /// record that it was ever downloading.
+    ///
+    /// Shared, because readaloud audio is extracted alongside the file and
+    /// forgetting it silently orphans hundreds of megabytes — a second copy of
+    /// this in another screen is a second chance to forget.
+    public func removeDownload(_ book: Book, format: BookContentService.Format) {
+        guard let session else { return }
+        BookContentService(client: session.client).removeDownload(book, format: format)
+        if format == .readaloud { AudioExtractionCleanup.removeAudio(for: book.uuid) }
+        downloads?.clear(.init(bookUUID: book.uuid, format: format))
+        refreshDownloadedSet()
+    }
+
+    /// Re-reads which books have files on disk.
+    ///
+    /// Called when a download finishes, when one is deleted, on sign-out, and
+    /// when the app comes forward — a transfer can complete while backgrounded.
+    public func refreshDownloadedSet() {
+        downloadedUUIDs = BookContentService.downloadedBookUUIDs()
     }
 
     // MARK: - Deep links

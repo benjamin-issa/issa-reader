@@ -262,14 +262,9 @@ public struct DownloadsView: View {
     }
 
     private func remove(_ entry: Entry) {
-        guard let session = app.session else { return }
-        BookContentService(client: session.client).removeDownload(entry.book, format: entry.format)
-        // Readaloud audio is extracted alongside the file; leaving it behind
-        // would report a smaller total than the disk actually holds.
-        if entry.format == .readaloud {
-            AudioExtractionCleanup.removeAudio(for: entry.book.uuid)
-        }
-        app.downloads?.clear(.init(bookUUID: entry.book.uuid, format: entry.format))
+        // Shared with the book screen, so the readaloud audio cleanup cannot be
+        // remembered in one place and forgotten in the other.
+        app.removeDownload(entry.book, format: entry.format)
         refresh()
     }
 

@@ -147,7 +147,11 @@ struct LibraryTabs: View {
         // An intent runs outside the scene and cannot navigate, so it leaves
         // the book in an inbox for the scene to collect when it appears.
         .onChange(of: scenePhase) { _, phase in
-            guard phase == .active, let id = AppIntentInbox.shared.bookID else { return }
+            guard phase == .active else { return }
+            // A download can finish while the app is in the background, and the
+            // finish hook only fires in-process.
+            app.refreshDownloadedSet()
+            guard let id = AppIntentInbox.shared.bookID else { return }
             AppIntentInbox.shared.bookID = nil
             app.pendingBookID = id
         }
