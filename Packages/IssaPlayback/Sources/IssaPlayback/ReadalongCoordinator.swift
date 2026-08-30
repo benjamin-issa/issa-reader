@@ -176,3 +176,10 @@ public final class ReadalongCoordinator {
         await play(from: entry)
     }
 }
+
+extension ReadalongCoordinator: PlaybackDriving {
+    /// A readaloud's chapter name lives in the book's navigation document, not
+    /// in the timeline, so the reader supplies it; the timeline knows only
+    /// which text document is playing.
+    public var currentChapterTitle: String { activeEntry?.textHref ?? "" }
+}

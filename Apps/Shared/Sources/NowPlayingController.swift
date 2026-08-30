@@ -20,7 +20,7 @@ private typealias PlatformImage = NSImage
 @Observable
 @MainActor
 public final class NowPlayingController {
-    public private(set) var coordinator: ReadalongCoordinator?
+    public private(set) var coordinator: (any PlaybackDriving)?
     public private(set) var book: Book?
     /// Owned here rather than by the player sheet: a sleep timer that dies when
     /// the sheet is dismissed is a sleep timer that never once worked, since
@@ -62,7 +62,7 @@ public final class NowPlayingController {
 
     /// Called when a book starts playing, and again when it stops.
     public func attach(
-        coordinator: ReadalongCoordinator?,
+        coordinator: (any PlaybackDriving)?,
         book: Book?,
         session: Session? = nil,
         chapterTitle: @escaping () -> String? = { nil },
@@ -89,7 +89,17 @@ public final class NowPlayingController {
         sleepTimer = timer
         // "End of chapter" is driven by the narration crossing a boundary, not
         // by a clock, so it has to be told.
-        coordinator.onChapterChangeObserved = { [weak timer] in timer?.chapterDidEnd() }
+        // "End of chapter" is only meaningful where chapters are observable.
+        // A readaloud knows when narration crosses a boundary; an audiobook
+        // knows when a track ends.
+        if let readalong = coordinator as? ReadalongCoordinator {
+            readalong.onChapterChangeObserved = { [weak timer] in timer?.chapterDidEnd() }
+        } else if let audiobook = coordinator as? AudiobookCoordinator {
+            audiobook.onChapterChange = { [weak timer, weak self] _ in
+                timer?.chapterDidEnd()
+                self?.publish()
+            }
+        }
         // Publish the moment anything changes, rather than waiting up to five
         // seconds for the poll — a lock screen that lags a play tap looks broken.
         coordinator.player.onRateChange = { [weak self] _ in self?.publish() }

@@ -163,11 +163,21 @@ public final class AudioPlayer {
         }
     }
 
-    /// Loads a local audio file. Readaloud audio lives inside the EPUB, so the
-    /// caller extracts it first; this never sees the archive.
-    public func load(url: URL, href: String, startAt offset: TimeInterval = 0) async {
+    /// Loads an audio file, local or streamed.
+    ///
+    /// Readaloud audio lives inside the EPUB, so the caller extracts it first;
+    /// this never sees the archive. A streamed audiobook track instead needs
+    /// credentials, and `cookies` is how they travel: Storyteller accepts its
+    /// session token as an `st_token` cookie, and `AVURLAssetHTTPCookiesKey` is
+    /// public API, unlike the header field key everyone reaches for first.
+    public func load(
+        url: URL, href: String, startAt offset: TimeInterval = 0, cookies: [HTTPCookie] = [],
+    ) async {
         currentAudioHref = href
-        let asset = AVURLAsset(url: url)
+        let asset = AVURLAsset(
+            url: url,
+            options: cookies.isEmpty ? nil : [AVURLAssetHTTPCookiesKey: cookies],
+        )
         let item = AVPlayerItem(asset: asset)
         item.audioTimePitchAlgorithm = .timeDomain
 

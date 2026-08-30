@@ -1,5 +1,6 @@
 import Foundation
 import IssaCore
+import IssaPlayback
 import Observation
 import SwiftUI
 #if canImport(WidgetKit)
@@ -42,6 +43,7 @@ public final class AppModel {
     public private(set) var store: LibraryStore?
     private var mutations: MutationQueue?
     public let reachability = Reachability()
+    private var listeningProgressTask: Task<Void, Never>?
     /// Streams books to disk in the background. Created with the session, since
     /// it needs the server URL and the bearer token.
     public private(set) var downloads: DownloadManager?
@@ -232,6 +234,117 @@ public final class AppModel {
         try? await mutations.enqueue(kind, bookUUID: bookUUID, payload: data)
         pendingWrites = (try? await mutations.count) ?? 0
         await drainPendingWrites()
+    }
+
+    /// The audiobook currently playing, if any.
+    ///
+    /// Held here rather than in a view, because playback has to outlive the
+    /// screen that started it — that is the whole point of an audiobook.
+    public private(set) var listening: AudiobookCoordinator?
+    public private(set) var listeningBook: Book?
+    public private(set) var listeningError: String?
+
+    /// Starts a plain audiobook: fetch the manifest, resume where the server
+    /// says we were, and hand it to the Now Playing centre.
+    public func startListening(
+        to book: Book, nowPlaying: NowPlayingController, settings: PlaybackSettings,
+    ) async {
+        guard let session, let url = Self.normalizeServerURL(serverAddress) else { return }
+        if listeningBook?.uuid == book.uuid, listening != nil {
+            listening?.player.play()
+            return
+        }
+        listeningError = nil
+        let service = AudiobookService(client: session.client, baseURL: url, tokens: session.tokenProvider)
+        do {
+            let manifest = try await service.manifest(for: book.uuid)
+            guard !manifest.playableTracks.isEmpty else {
+                listeningError = "This audiobook has no playable tracks on the server."
+                return
+            }
+            // Play the downloaded file when there is one; otherwise stream, with
+            // the token travelling as a cookie because AVFoundation makes its
+            // own requests and never sees our headers.
+            let content = BookContentService(client: session.client)
+            let source: AudiobookCoordinator.Source = content.isDownloaded(book, format: .audiobook)
+                ? .local(content.localURL(for: book, format: .audiobook))
+                : .streaming(
+                    base: service.trackBase(for: book.uuid),
+                    cookies: await service.playbackCookies(for: book.uuid),
+                )
+
+            let coordinator = AudiobookCoordinator(manifest: manifest, source: source)
+            coordinator.player.rate = Float(settings.playbackRate)
+            listening = coordinator
+            listeningBook = book
+            nowPlaying.attach(
+                coordinator: coordinator, book: book, session: session,
+                chapterTitle: { [weak coordinator] in coordinator?.chapterTitle },
+            )
+            await coordinator.start(atProgress: book.progress ?? 0)
+            watchListeningProgress(book: book, coordinator: coordinator)
+        } catch {
+            listeningError = Self.message(for: error)
+        }
+    }
+
+    public func stopListening(nowPlaying: NowPlayingController) {
+        listening?.player.pause()
+        listeningProgressTask?.cancel()
+        listening = nil
+        listeningBook = nil
+        nowPlaying.attach(coordinator: nil, book: nil)
+    }
+
+    /// Writes the listening position back periodically.
+    ///
+    /// An hour of listening is as much progress as an hour of reading, and
+    /// losing it on a crash or a battery death is just as annoying.
+    private func watchListeningProgress(book: Book, coordinator: AudiobookCoordinator) {
+        listeningProgressTask?.cancel()
+        listeningProgressTask = Task { [weak self, weak coordinator] in
+            var lastWritten: Double = -1
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(15))
+                guard let self, let coordinator else { return }
+                let progress = coordinator.bookProgress
+                // Only when it actually moved: a paused book must not generate
+                // a write every fifteen seconds forever.
+                guard abs(progress - lastWritten) > 0.0005 else { continue }
+                lastWritten = progress
+                await enqueue(
+                    .position, bookUUID: book.uuid,
+                    payload: MutationDrain.PositionPayload(
+                        locator: Self.audioLocator(for: coordinator, book: book),
+                        timestamp: ProgressService.now(),
+                    ),
+                )
+            }
+        }
+    }
+
+    /// A locator for a position inside an audiobook.
+    ///
+    /// The href is the track, since that is the only resource an audiobook has,
+    /// and `totalProgression` is what every other client reads to show percent
+    /// complete — including Storyteller's own web player.
+    static func audioLocator(for coordinator: AudiobookCoordinator, book: Book) -> ReadiumLocator {
+        let tracks = coordinator.tracks
+        let index = min(coordinator.trackIndex, max(tracks.count - 1, 0))
+        let track = tracks.indices.contains(index) ? tracks[index] : nil
+        let trackStart = coordinator.manifest.startTime(ofTrackAt: index)
+        let within = (track?.duration ?? 0) > 0
+            ? (coordinator.bookProgress * coordinator.totalDuration - trackStart) / (track?.duration ?? 1)
+            : 0
+        return ReadiumLocator(
+            href: track?.href ?? "",
+            type: track?.type ?? "audio/mpeg",
+            title: track.map { coordinator.manifest.title(of: $0, at: index) },
+            locations: .init(
+                progression: min(max(within, 0), 1),
+                totalProgression: coordinator.bookProgress,
+            ),
+        )
     }
 
     /// Pending transfers, in a form the Downloads screen can list.

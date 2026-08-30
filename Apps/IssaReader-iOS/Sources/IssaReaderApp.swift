@@ -66,5 +66,8 @@ struct LibraryTabs: View {
             }
             .tabItem { Label("Settings", systemImage: "gearshape") }
         }
+        // Above the tab bar, so an audiobook started on one screen can still be
+        // paused from any other.
+        .safeAreaInset(edge: .bottom, spacing: 0) { MiniPlayer() }
     }
 }

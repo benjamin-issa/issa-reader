@@ -10,13 +10,13 @@ public struct PlayerView: View {
     @Environment(PlaybackSettings.self) private var settings
     let book: Book
     let session: Session?
-    let coordinator: ReadalongCoordinator?
+    let coordinator: (any PlaybackDriving)?
 
     @Environment(NowPlayingController.self) private var nowPlaying
     @State private var scrubbing = false
     @State private var scrubValue: Double = 0
 
-    public init(book: Book, session: Session?, coordinator: ReadalongCoordinator?) {
+    public init(book: Book, session: Session?, coordinator: (any PlaybackDriving)?) {
         self.book = book
         self.session = session
         self.coordinator = coordinator
@@ -24,6 +24,15 @@ public struct PlayerView: View {
 
     private var progress: Double {
         scrubbing ? scrubValue : (coordinator?.bookProgress ?? book.progress ?? 0)
+    }
+
+    /// Shown under the title while a chapter is actually playing: an audiobook
+    /// has real chapter names and it is the one place they belong.
+    private var nowPlayingChapter: String? {
+        guard let title = coordinator?.currentChapterTitle, !title.isEmpty,
+              !title.contains("/"), !title.hasSuffix(".xhtml")
+        else { return nil }
+        return title
     }
 
     private var total: TimeInterval {
@@ -46,6 +55,12 @@ public struct PlayerView: View {
                 Text(byline)
                     .font(Typography.footnote)
                     .foregroundStyle(Palette.inkTertiary)
+                if let nowPlayingChapter {
+                    Text(nowPlayingChapter)
+                        .font(Typography.caption)
+                        .foregroundStyle(Palette.inkQuaternary)
+                        .padding(.top, 2)
+                }
             }
 
             scrubber

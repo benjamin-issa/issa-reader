@@ -10,6 +10,8 @@ import SwiftUI
 /// per-user status and position. None of it costs an extra request.
 public struct BookDetailView: View {
     @Environment(AppModel.self) private var app
+    @Environment(NowPlayingController.self) private var nowPlaying
+    @Environment(PlaybackSettings.self) private var settings
     let book: Book
 
     public init(book: Book) {
@@ -72,7 +74,10 @@ public struct BookDetailView: View {
                         .font(Typography.caption)
                         .foregroundStyle(Palette.inkTertiary)
                 }
-                readButton
+                HStack(spacing: Metrics.spacing12) {
+                    readButton
+                    listenButton
+                }
             }
             Spacer(minLength: 0)
         }
@@ -94,6 +99,35 @@ public struct BookDetailView: View {
                 .buttonStyle(.plain)
                 .padding(.top, Metrics.spacing4)
             }
+        }
+    }
+
+    /// Plays the audiobook without opening the reader.
+    ///
+    /// Offered for readaloud books too: wanting to hear a book while driving or
+    /// walking is not the same as wanting the text on screen, and it is the
+    /// only mode CarPlay can offer at all.
+    @ViewBuilder
+    private var listenButton: some View {
+        if book.audiobook != nil, book.audiobook?.missing != true {
+            Button {
+                Task {
+                    await app.startListening(to: book, nowPlaying: nowPlaying, settings: settings)
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "headphones").font(.system(size: 14, weight: .semibold))
+                    Text(app.listeningBook?.uuid == book.uuid ? "Playing" : "Listen")
+                }
+                .font(Typography.headline)
+                .padding(.horizontal, Metrics.spacing16)
+                .padding(.vertical, Metrics.spacing8)
+                .background(Palette.surface, in: Capsule())
+                .overlay(Capsule().stroke(Palette.borderStrong, lineWidth: 1))
+                .foregroundStyle(Palette.ink)
+            }
+            .buttonStyle(.plain)
+            .padding(.top, Metrics.spacing4)
         }
     }
 
