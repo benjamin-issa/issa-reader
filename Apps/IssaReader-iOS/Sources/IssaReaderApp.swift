@@ -95,7 +95,13 @@ struct RootView: View {
     }
 }
 
-/// The design's three-tab structure: Library, Listening, Settings.
+/// Library and Settings.
+///
+/// There was a Listening tab between them, over the same catalogue minus the
+/// text-only books — which testers read as two libraries rather than one
+/// filtered view. Its job is a shelf chip now. Playback is unaffected: the mini
+/// player is an inset on the TabView, not a tab, so it survives from anywhere.
+/// (`ListeningView` itself stays — the macOS sidebar and tvOS still use it.)
 struct LibraryTabs: View {
     @Environment(AppModel.self) private var app
     @Environment(\.scenePhase) private var scenePhase
@@ -122,16 +128,10 @@ struct LibraryTabs: View {
             .tag(0)
 
             NavigationStack {
-                ListeningView().navigationTitle("Listening")
-            }
-            .tabItem { Label("Listening", systemImage: "headphones") }
-            .tag(1)
-
-            NavigationStack {
                 SettingsView().navigationTitle("Settings")
             }
             .tabItem { Label("Settings", systemImage: "gearshape") }
-            .tag(2)
+            .tag(1)
         }
         // Above the tab bar, so an audiobook started on one screen can still be
         // paused from any other.
