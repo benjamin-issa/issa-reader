@@ -104,7 +104,7 @@ struct MutationQueueTests {
     private func makeQueue() async throws -> (MutationQueue, URL) {
         let directory = temporaryDirectory()
         let store = try LibraryStore(serverKey: "http://example.test", directory: directory)
-        return (try await MutationQueue(store: store), directory)
+        return (try MutationQueue(store: store), directory)
     }
 
     @Test("holds a write and gives it back")
@@ -167,7 +167,7 @@ struct MutationQueueTests {
         defer { try? FileManager.default.removeItem(at: directory) }
 
         let store = try LibraryStore(serverKey: "http://example.test", directory: directory)
-        let queue = try await MutationQueue(store: store)
+        let queue = try MutationQueue(store: store)
         try await queue.enqueue(.position, bookUUID: "book-1", payload: Data("x".utf8))
 
         let reopened = try await MutationQueue(

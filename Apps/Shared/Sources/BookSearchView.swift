@@ -61,12 +61,16 @@ struct BookSearchView: View {
 
     /// The match itself in the app's accent, its context in ordinary ink, so a
     /// long excerpt is still scannable.
+    ///
+    /// Built as one attributed string rather than three concatenated `Text`s,
+    /// which 26 deprecates — and which VoiceOver reads as three separate runs.
     private func excerpt(_ hit: ReaderModel.SearchHit) -> Text {
-        let full = hit.excerpt
-        let range = hit.excerptMatchRange
-        return Text(full[full.startIndex ..< range.lowerBound])
-            + Text(full[range]).foregroundColor(Palette.tangerine).bold()
-            + Text(full[range.upperBound ..< full.endIndex])
+        var attributed = AttributedString(hit.excerpt)
+        if let match = attributed.range(of: String(hit.excerpt[hit.excerptMatchRange])) {
+            attributed[match].foregroundColor = Palette.tangerine
+            attributed[match].font = Typography.footnote.bold()
+        }
+        return Text(attributed)
     }
 }
 

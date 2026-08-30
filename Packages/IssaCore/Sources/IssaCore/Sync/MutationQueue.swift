@@ -28,8 +28,8 @@ public actor MutationQueue {
 
     private let dbQueue: DatabaseQueue
 
-    public init(store: LibraryStore) async throws {
-        dbQueue = try DatabaseQueue(path: await store.url.path)
+    public init(store: LibraryStore) throws {
+        dbQueue = try DatabaseQueue(path: store.url.path)
     }
 
     /// Records an intent. Positions replace any earlier pending position for the

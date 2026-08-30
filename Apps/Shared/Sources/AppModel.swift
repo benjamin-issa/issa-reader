@@ -124,7 +124,7 @@ public final class AppModel {
 
         store = try? LibraryStore(serverKey: url.absoluteString)
         if let store {
-            mutations = try? await MutationQueue(store: store)
+            mutations = try? MutationQueue(store: store)
             if let cached = try? await store.allBooks(), !cached.isEmpty {
                 books = cached
                 phase = .ready
