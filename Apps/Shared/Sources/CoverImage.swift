@@ -26,6 +26,29 @@ public final class CoverCache {
 
     public func cached(_ uuid: String) -> Image? { memory[uuid] }
 
+    /// Copies a book's cover into the App Group so the widget can draw it.
+    ///
+    /// The widget cannot reach the app's Caches directory, and a cover fetched
+    /// inside the extension would spend its 30 MB budget on a network decode.
+    /// One small file, written when the current book changes.
+    public func publishCoverToWidget(
+        for book: Book, session: Session, shape: LibraryService.CoverShape = .portrait,
+    ) async {
+        let key = shape == .square ? book.uuid + "-square" : book.uuid
+        let fileURL = diskDirectory.appending(path: "\(key).jpg")
+        var data = await Task.detached(priority: .utility) {
+            try? Data(contentsOf: fileURL)
+        }.value
+        if data == nil {
+            data = try? await LibraryService(client: session.client).coverData(
+                for: book.uuid, shape: shape, pixelWidth: 320, version: book.updatedAt?.value)
+        }
+        guard let data else { return }
+        await Task.detached(priority: .utility) {
+            CurrentBookSnapshotStore.writeCover(data)
+        }.value
+    }
+
     /// Drops everything, for sign-out.
     public func clear() {
         memory.removeAll()

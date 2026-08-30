@@ -64,6 +64,16 @@ public struct ReaderView: View {
         .navigationBarBackButtonHidden(false)
         #endif
         .onDisappear { Task { await model.saveProgress() } }
+        #if os(iOS) || os(macOS)
+        // Handoff: the same book, at the same place, on the Mac or the iPad.
+        .userActivity(BookActivity.type) { activity in
+            let made = BookActivity.make(book: model.book, progress: model.bookProgress)
+            activity.title = made.title
+            activity.userInfo = made.userInfo
+            activity.requiredUserInfoKeys = made.requiredUserInfoKeys
+            activity.isEligibleForHandoff = true
+        }
+        #endif
         #if !os(tvOS)
         .sheet(isPresented: $showsContents) {
             NavigationStack {

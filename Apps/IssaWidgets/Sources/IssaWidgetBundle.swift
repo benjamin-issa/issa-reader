@@ -22,29 +22,45 @@ struct CurrentBookWidget: Widget {
         StaticConfiguration(kind: "CurrentBook", provider: CurrentBookProvider()) { entry in
             CurrentBookView(entry: entry)
                 .containerBackground(Palette.surface, for: .widget)
+                // Tapping the widget opens the book it is showing, not the
+                // library — the widget exists because that is the book you are
+                // in.
+                .widgetURL(CurrentBookSnapshotStore.deepLink(bookID: entry.snapshot.bookID))
         }
         .configurationDisplayName("Currently Reading")
         .description("The book you're in, and how far through you are.")
-        .supportedFamilies([.systemSmall, .systemMedium, .accessoryRectangular])
+        .supportedFamilies([
+            .systemSmall, .systemMedium, .systemLarge,
+            .accessoryRectangular, .accessoryCircular, .accessoryInline,
+        ])
     }
 }
 
 struct CurrentBookEntry: TimelineEntry {
     let date: Date
     let snapshot: CurrentBookSnapshot
+    let cover: Data?
 }
 
 struct CurrentBookProvider: TimelineProvider {
     func placeholder(in context: Context) -> CurrentBookEntry {
-        CurrentBookEntry(date: .now, snapshot: CurrentBookSnapshot(
-            bookID: "placeholder", title: "Piranesi", author: "Susanna Clarke",
-            chapter: "Part 3 · The Tides", progress: 0.42, remaining: 8_280,
-        ))
+        CurrentBookEntry(
+            date: .now,
+            snapshot: CurrentBookSnapshot(
+                bookID: "placeholder", title: "Piranesi", author: "Susanna Clarke",
+                chapter: "Part 3 · The Tides", progress: 0.42, remaining: 8_280,
+            ),
+            cover: nil,
+        )
     }
 
     private func currentEntry(fallback: CurrentBookEntry) -> CurrentBookEntry {
         guard let snapshot = CurrentBookSnapshotStore.read() else { return fallback }
-        return CurrentBookEntry(date: snapshot.updatedAt, snapshot: snapshot)
+        // Only the families that draw the cover pay to load it.
+        return CurrentBookEntry(
+            date: snapshot.updatedAt, snapshot: snapshot,
+            cover: CurrentBookSnapshotStore.readCover(),
+        )
     }
 
     func getSnapshot(in context: Context, completion: @escaping (CurrentBookEntry) -> Void) {
@@ -62,9 +78,53 @@ struct CurrentBookProvider: TimelineProvider {
 }
 
 struct CurrentBookView: View {
+    @Environment(\.widgetFamily) private var family
     let entry: CurrentBookEntry
 
     var body: some View {
+        switch family {
+        case .accessoryInline:
+            // One line, no room for anything but the fact.
+            Text("\(Int(entry.snapshot.progress * 100))% · \(entry.snapshot.title)")
+        case .accessoryCircular:
+            ZStack {
+                AccessoryWidgetBackground()
+                Gauge(value: entry.snapshot.progress) {
+                    Image(systemName: entry.snapshot.isPlaying ? "headphones" : "book")
+                }
+                .gaugeStyle(.accessoryCircularCapacity)
+            }
+        case .accessoryRectangular:
+            VStack(alignment: .leading, spacing: 2) {
+                Text(entry.snapshot.title).font(.headline).lineLimit(1)
+                if let chapter = entry.snapshot.chapter {
+                    Text(chapter).font(.caption).lineLimit(1)
+                }
+                ProgressView(value: entry.snapshot.progress).tint(.primary)
+            }
+        case .systemMedium, .systemLarge:
+            withCover
+        default:
+            details
+        }
+    }
+
+    /// Medium and large have room for the cover, which is what makes a shelf of
+    /// widgets recognisable at a glance.
+    private var withCover: some View {
+        HStack(alignment: .top, spacing: Metrics.spacing12) {
+            if let data = entry.cover, let image = Image(widgetCover: data) {
+                image
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: family == .systemLarge ? 116 : 74)
+                    .clipShape(RoundedRectangle(cornerRadius: Metrics.radiusSmall))
+            }
+            details
+        }
+    }
+
+    private var details: some View {
         VStack(alignment: .leading, spacing: Metrics.spacing4) {
             Text(entry.snapshot.title)
                 .font(Typography.bookTitle)
@@ -79,7 +139,7 @@ struct CurrentBookView: View {
                 Text(chapter)
                     .font(Typography.caption)
                     .foregroundStyle(Palette.inkSecondary)
-                    .lineLimit(1)
+                    .lineLimit(family == .systemLarge ? 3 : 1)
             }
             ProgressBarWidget(value: entry.snapshot.progress)
             HStack {
@@ -101,6 +161,19 @@ extension CurrentBookView {
         let hours = total / 3600
         let minutes = (total % 3600) / 60
         return hours > 0 ? "\(hours)h \(minutes)m" : "\(minutes)m"
+    }
+}
+
+extension Image {
+    /// Decodes the shared cover, failing quietly: a widget that traps on a
+    /// half-written file is worse than one with no picture.
+    init?(widgetCover data: Data) {
+        #if canImport(UIKit)
+        guard let image = UIImage(data: data) else { return nil }
+        self.init(uiImage: image)
+        #else
+        return nil
+        #endif
     }
 }
 

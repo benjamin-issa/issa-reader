@@ -67,6 +67,7 @@ public final class ReaderModel {
     public var onDeleteAnnotation: ((Annotation) -> Void)?
 
     public var enqueuePosition: ((ReadiumLocator, Double) async -> Void)?
+    private static var lastPublishedCoverBookID: String?
 
     public init(book: Book, session: Session, style: ReaderStyle = ReaderStyle()) {
         self.book = book
@@ -106,6 +107,15 @@ public final class ReaderModel {
             }
         }
         return best?.title ?? entries.first?.title
+    }
+
+    /// How far through the whole book the reader is, for Handoff and the
+    /// widget snapshot.
+    public var bookProgress: Double {
+        guard let package, !package.spine.isEmpty, let layout, let page = currentPage else {
+            return book.progress ?? 0
+        }
+        return (Double(chapterIndex) + layout.progression(of: page)) / Double(package.spine.count)
     }
 
     public var pageCount: Int { layout?.pages.count ?? 0 }
@@ -741,6 +751,14 @@ public final class ReaderModel {
     /// widget's own reload budget is the scarce resource, and a snapshot the
     /// widget never reads costs a disk write for nothing.
     private func publishSnapshot(progress: Double) {
+        // Only when the book changes, not on every page turn: the cover is the
+        // same file each time and rewriting it costs a disk write for nothing.
+        if Self.lastPublishedCoverBookID != book.uuid {
+            Self.lastPublishedCoverBookID = book.uuid
+            Task { [book, session = readerSession] in
+                await CoverCache.shared.publishCoverToWidget(for: book, session: session)
+            }
+        }
         let remaining = (book.readaloud?.duration ?? book.audiobook?.duration)
             .map { $0 * (1 - progress) }
         CurrentBookSnapshotStore.write(CurrentBookSnapshot(

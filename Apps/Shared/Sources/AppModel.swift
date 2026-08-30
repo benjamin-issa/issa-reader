@@ -236,6 +236,37 @@ public final class AppModel {
         await drainPendingWrites()
     }
 
+    // MARK: - Deep links
+
+    /// A book the app was asked to open — from a widget, Spotlight or Handoff.
+    ///
+    /// Held rather than acted on directly, because the link can arrive before
+    /// the library has loaded, or before anyone is even signed in.
+    public var pendingBookID: String?
+
+    /// Accepts `issareader://book/{uuid}`.
+    @discardableResult
+    public func open(_ url: URL) -> Bool {
+        guard url.scheme == "issareader" else { return false }
+        let components = url.pathComponents.filter { $0 != "/" }
+        switch url.host() {
+        case "book":
+            guard let uuid = components.first else { return false }
+            pendingBookID = uuid
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// The book a pending link refers to, once the library can answer.
+    public func consumePendingBook() -> Book? {
+        guard let pendingBookID else { return nil }
+        guard let book = books.first(where: { $0.uuid == pendingBookID }) else { return nil }
+        self.pendingBookID = nil
+        return book
+    }
+
     // MARK: - Annotations
 
     /// Saves a mark. Local only: the server has no annotations endpoint in any

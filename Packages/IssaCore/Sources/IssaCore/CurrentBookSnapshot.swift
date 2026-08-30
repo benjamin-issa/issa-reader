@@ -38,11 +38,30 @@ public enum CurrentBookSnapshotStore {
     /// Must match the App Group in every target's entitlements.
     public static let appGroup = "group.com.benjaminissa.issareader"
     private static let filename = "current-book.json"
+    private static let coverFilename = "current-cover.jpg"
 
-    private static var url: URL? {
+    private static func containerURL(_ name: String) -> URL? {
         FileManager.default
             .containerURL(forSecurityApplicationGroupIdentifier: appGroup)?
-            .appending(path: filename)
+            .appending(path: name)
+    }
+
+    private static var url: URL? { containerURL(filename) }
+    /// Where the app leaves a small cover for the widget to draw.
+    ///
+    /// A file rather than bytes inside the snapshot: JSON with a base64 image
+    /// in it would be re-read and re-decoded on every timeline request, and the
+    /// widget's memory ceiling is the scarce resource here.
+    public static var coverURL: URL? { containerURL(coverFilename) }
+
+    public static func writeCover(_ data: Data) {
+        guard let coverURL else { return }
+        try? data.write(to: coverURL, options: .atomic)
+    }
+
+    public static func readCover() -> Data? {
+        guard let coverURL else { return nil }
+        return try? Data(contentsOf: coverURL)
     }
 
     public static func write(_ snapshot: CurrentBookSnapshot) {
@@ -56,7 +75,15 @@ public enum CurrentBookSnapshotStore {
     }
 
     public static func clear() {
-        guard let url else { return }
-        try? FileManager.default.removeItem(at: url)
+        if let url { try? FileManager.default.removeItem(at: url) }
+        if let coverURL { try? FileManager.default.removeItem(at: coverURL) }
+    }
+
+    /// The URL that opens a book from a widget, a Spotlight result or Handoff.
+    ///
+    /// A custom scheme rather than a universal link: this app talks to whatever
+    /// server its owner runs, so there is no domain to associate with.
+    public static func deepLink(bookID: String) -> URL? {
+        URL(string: "issareader://book/\(bookID)")
     }
 }

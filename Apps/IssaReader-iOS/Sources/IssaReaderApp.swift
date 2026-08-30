@@ -1,3 +1,4 @@
+import CoreSpotlight
 import IssaCore
 import IssaUI
 import SwiftUI
@@ -55,6 +56,18 @@ struct IssaReaderApp: App {
                 // rather than only at connect.
                 .onChange(of: app.books) { _, books in CarPlayBridge.shared.update(books: books) }
                 .tint(Palette.tangerine)
+                .onOpenURL { app.open($0) }
+                // A Spotlight result carries the book's uuid as its identifier,
+                // which is the same handle a deep link uses.
+                .onContinueUserActivity(CSSearchableItemActionType) { activity in
+                    guard let id = activity.userInfo?[CSSearchableItemActivityIdentifier] as? String
+                    else { return }
+                    app.pendingBookID = id
+                }
+                .onContinueUserActivity(BookActivity.type) { activity in
+                    guard let id = activity.userInfo?[BookActivity.bookIDKey] as? String else { return }
+                    app.pendingBookID = id
+                }
         }
     }
 }
@@ -79,26 +92,58 @@ struct RootView: View {
 /// The design's three-tab structure: Library, Listening, Settings.
 struct LibraryTabs: View {
     @Environment(AppModel.self) private var app
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var libraryPath = NavigationPath()
+    @State private var selectedTab = 0
+
+    private func openPendingBook() {
+        guard let book = app.consumePendingBook() else { return }
+        selectedTab = 0
+        libraryPath = NavigationPath()
+        libraryPath.append(book)
+    }
 
     var body: some View {
-        TabView {
-            NavigationStack {
-                LibraryView().navigationTitle("Library")
+        TabView(selection: $selectedTab) {
+            NavigationStack(path: $libraryPath) {
+                LibraryView()
+                    .navigationTitle("Library")
+                    .navigationDestination(for: Book.self) { book in
+                        BookDetailView(book: book)
+                    }
             }
             .tabItem { Label("Library", systemImage: "books.vertical") }
+            .tag(0)
 
             NavigationStack {
                 ListeningView().navigationTitle("Listening")
             }
             .tabItem { Label("Listening", systemImage: "headphones") }
+            .tag(1)
 
             NavigationStack {
                 SettingsView().navigationTitle("Settings")
             }
             .tabItem { Label("Settings", systemImage: "gearshape") }
+            .tag(2)
         }
         // Above the tab bar, so an audiobook started on one screen can still be
         // paused from any other.
         .safeAreaInset(edge: .bottom, spacing: 0) { MiniPlayer() }
+        // A link can arrive before the library has loaded, so this waits for
+        // the book to exist rather than dropping the request on the floor.
+        .onChange(of: app.pendingBookID) { openPendingBook() }
+        .onChange(of: app.books) { openPendingBook() }
+        // Indexed off the main path: a large library should not delay the
+        // first frame to make itself searchable.
+        .task(id: app.books.count) { await SpotlightIndex.index(app.books) }
+        .task { openPendingBook() }
+        // An intent runs outside the scene and cannot navigate, so it leaves
+        // the book in an inbox for the scene to collect when it appears.
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active, let id = AppIntentInbox.shared.bookID else { return }
+            AppIntentInbox.shared.bookID = nil
+            app.pendingBookID = id
+        }
     }
 }
