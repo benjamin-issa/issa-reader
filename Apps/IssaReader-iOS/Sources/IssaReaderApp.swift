@@ -133,9 +133,12 @@ struct LibraryTabs: View {
             .tabItem { Label("Settings", systemImage: "gearshape") }
             .tag(1)
         }
-        // Above the tab bar, so an audiobook started on one screen can still be
-        // paused from any other.
-        .safeAreaInset(edge: .bottom, spacing: 0) { MiniPlayer() }
+        // The tab bar's own accessory slot, which is what iOS 26 provides for
+        // exactly this. As a `.safeAreaInset` the mini player was drawn over
+        // the floating tab bar rather than above it, so starting an audiobook
+        // hid Library and Settings entirely — there was no way back to Settings
+        // without stopping playback.
+        .tabViewBottomAccessory { MiniPlayer() }
         // A link can arrive before the library has loaded, so this waits for
         // the book to exist rather than dropping the request on the floor.
         .onChange(of: app.pendingBookID) { openPendingBook() }
