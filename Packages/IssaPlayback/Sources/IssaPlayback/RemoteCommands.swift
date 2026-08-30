@@ -23,6 +23,10 @@ public final class RemoteCommandCenter {
     /// Which surface a command should be interpreted as coming from.
     public var activeSurface: ControlSurface = .phone
     public var onAction: ((PlaybackAction) -> Void)?
+    /// Absolute seek in seconds, from the Lock Screen or CarPlay scrubber.
+    public var onSeek: ((TimeInterval) -> Void)?
+    /// Rate chosen from the system's own speed control.
+    public var onRateChange: ((Float) -> Void)?
 
     public init(commandMap: CommandMap = CommandMap()) {
         self.commandMap = commandMap
@@ -51,6 +55,21 @@ public final class RemoteCommandCenter {
 
         center.changePlaybackRateCommand.supportedPlaybackRates =
             [0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0].map { NSNumber(value: $0) }
+        center.changePlaybackRateCommand.isEnabled = true
+        center.changePlaybackRateCommand.addTarget { [weak self] event in
+            guard let event = event as? MPChangePlaybackRateCommandEvent else { return .commandFailed }
+            MainActor.assumeIsolated { self?.onRateChange?(event.playbackRate) }
+            return .success
+        }
+
+        // Without this the Lock Screen scrubber is a read-only progress bar;
+        // with it, dragging seeks. CarPlay surfaces the same control.
+        center.changePlaybackPositionCommand.isEnabled = true
+        center.changePlaybackPositionCommand.addTarget { [weak self] event in
+            guard let event = event as? MPChangePlaybackPositionCommandEvent else { return .commandFailed }
+            MainActor.assumeIsolated { self?.onSeek?(event.positionTime) }
+            return .success
+        }
     }
 
     private func fire(_ control: PlaybackControl) {

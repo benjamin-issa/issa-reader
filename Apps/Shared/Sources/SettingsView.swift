@@ -4,6 +4,7 @@ import SwiftUI
 
 public struct SettingsView: View {
     @Environment(AppModel.self) private var app
+    @State private var confirmingSignOut = false
 
     public init() {}
 
@@ -60,11 +61,18 @@ public struct SettingsView: View {
             .listRowBackground(Palette.surface)
 
             Section {
-                Button("Sign out", role: .destructive) {
-                    Task { await app.signOut() }
-                }
+                Button("Sign out", role: .destructive) { confirmingSignOut = true }
             }
             .listRowBackground(Palette.surface)
+            .confirmationDialog("Sign out?", isPresented: $confirmingSignOut, titleVisibility: .visible) {
+                // Downloaded books are expensive to fetch again, so this is a
+                // choice rather than an assumption.
+                Button("Sign out and keep downloads") { Task { await app.signOut(keepDownloads: true) } }
+                Button("Sign out and delete downloads", role: .destructive) {
+                    Task { await app.signOut(keepDownloads: false) }
+                }
+                Button("Cancel", role: .cancel) {}
+            }
         }
     }
 

@@ -12,9 +12,9 @@ public struct PlayerView: View {
     let session: Session?
     let coordinator: ReadalongCoordinator?
 
+    @Environment(NowPlayingController.self) private var nowPlaying
     @State private var scrubbing = false
     @State private var scrubValue: Double = 0
-    @State private var sleepTimer: SleepTimer?
 
     public init(book: Book, session: Session?, coordinator: ReadalongCoordinator?) {
         self.book = book
@@ -34,7 +34,7 @@ public struct PlayerView: View {
         VStack(spacing: Metrics.spacing24) {
             // Square art on the player, portrait on the shelf — the design uses
             // the two covers Storyteller stores by context.
-            CoverImage(book: book, session: session, aspect: 1)
+            CoverImage(book: book, session: session, aspect: 1, shape: .square)
                 .frame(maxWidth: 320)
                 .shadow(color: Palette.ink.opacity(0.18), radius: 24, y: 12)
 
@@ -164,6 +164,10 @@ public struct PlayerView: View {
         .disabled(coordinator == nil)
     }
 
+    /// The timer belongs to the Now Playing controller, not this sheet — it has
+    /// to keep running after the sheet is dismissed, which is the entire point.
+    private var sleepTimer: SleepTimer? { nowPlaying.sleepTimer }
+
     private var sleepTimerControl: some View {
         Menu {
             ForEach(SleepTimer.presets, id: \.self) { mode in
@@ -184,14 +188,6 @@ public struct PlayerView: View {
             .foregroundStyle(sleepTimer?.mode == SleepTimer.Mode.off ? Palette.inkTertiary : Palette.tangerine)
         }
         .disabled(coordinator == nil)
-        .task {
-            guard sleepTimer == nil, let coordinator else { return }
-            sleepTimer = SleepTimer(
-                onExpire: { coordinator.player.pause() },
-                // Fade the last seconds rather than cutting off mid-word.
-                fade: { level in coordinator.player.volume = level },
-            )
-        }
     }
 
     static func rateText(_ rate: Double) -> String {

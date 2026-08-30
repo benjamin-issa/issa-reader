@@ -6,6 +6,7 @@ import SwiftUI
 struct IssaReaderTVApp: App {
     @State private var app = AppModel()
     @State private var settings = PlaybackSettings()
+    @State private var nowPlaying = NowPlayingController()
 
     init() {
         // Package-bundled fonts are not registered automatically the way an
@@ -20,6 +21,8 @@ struct IssaReaderTVApp: App {
             TVRootView()
                 .environment(app)
                 .environment(settings)
+                .environment(nowPlaying)
+                .task { nowPlaying.configure(settings: settings) }
                 .tint(Palette.tangerine)
         }
     }
@@ -30,7 +33,7 @@ struct TVRootView: View {
 
     var body: some View {
         switch app.phase {
-        case .chooseServer, .signingIn:
+        case .chooseServer, .signingIn, .expired:
             TVSignInView().task { await app.restoreIfPossible() }
         case .ready:
             TabView {

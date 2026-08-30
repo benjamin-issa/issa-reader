@@ -28,7 +28,9 @@ public struct SignInView: View {
 
     @ViewBuilder
     private var content: some View {
-        if let flow {
+        if app.phase == .expired, flow == nil {
+            expiredNotice
+        } else if let flow {
             DeviceCodeView(model: flow) { token in
                 Task { await app.adopt(token: token); self.flow = nil }
             } onCancel: {
@@ -36,6 +38,34 @@ public struct SignInView: View {
             }
         } else {
             serverForm
+        }
+    }
+
+    /// Shown when a token has gone stale, rather than dropping the reader back
+    /// to a blank address field.
+    private var expiredNotice: some View {
+        VStack(alignment: .leading, spacing: Metrics.spacing24) {
+            Text("Signed out").overlineStyle(Palette.tangerine)
+            Text("Your session has ended.")
+                .font(Typography.displayLarge)
+                .foregroundStyle(Palette.ink)
+            Text("Sessions last about a month. Your library and downloads are still here — sign in again to carry on.")
+                .font(Typography.body)
+                .foregroundStyle(Palette.inkSecondary)
+            Text(app.serverAddress)
+                .font(Typography.body.monospaced())
+                .foregroundStyle(Palette.inkTertiary)
+            Button {
+                Task { await startSignIn() }
+            } label: {
+                Text("Sign in again")
+                    .font(Typography.headline)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, Metrics.spacing12)
+                    .background(Palette.tangerine, in: RoundedRectangle(cornerRadius: Metrics.radiusMedium))
+                    .foregroundStyle(.white)
+            }
+            .buttonStyle(.plain)
         }
     }
 
@@ -100,6 +130,7 @@ public struct SignInView: View {
     private func startSignIn() async {
         connecting = true
         defer { connecting = false }
+        if address.isEmpty { address = app.serverAddress }
         await app.connect(to: address)
         // A stored token may have signed us straight in.
         guard app.phase != .ready, let url = AppModel.normalizeServerURL(address) else { return }

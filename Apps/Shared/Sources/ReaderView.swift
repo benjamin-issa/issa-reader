@@ -107,7 +107,12 @@ public struct ReaderView: View {
             model.style = settings.readerStyle
             model.preferredRate = settings.playbackRate
             model.setReaderVisible(true)
-            nowPlaying.attach(coordinator: model.readalong, book: model.book)
+            nowPlaying.attach(
+                coordinator: model.readalong,
+                book: model.book,
+                session: model.readerSession,
+                chapterTitle: { model.chapterTitle },
+            )
         }
         .onChange(of: settings.readerStyle) { _, style in model.style = style }
         .onDisappear { model.setReaderVisible(false) }

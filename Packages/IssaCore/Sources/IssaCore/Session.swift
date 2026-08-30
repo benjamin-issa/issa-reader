@@ -13,6 +13,10 @@ public final class Session {
         case signedOut
         case signingIn
         case signedIn(User)
+        /// Signed in once, but the token stopped working. Distinct from
+        /// `signedOut` so the app can keep the server and say what happened
+        /// rather than dropping the reader back to a blank form.
+        case expired
         case failed(String)
     }
 
@@ -28,6 +32,15 @@ public final class Session {
         let store = TokenStore(serverKey: serverURL.absoluteString, keychain: keychain)
         tokens = store
         client = APIClient(baseURL: serverURL, tokens: store)
+
+        Task { [weak self] in
+            await store.setInvalidationHandler { [weak self] in
+                Task { @MainActor in
+                    guard let self, case .signedIn = self.state else { return }
+                    self.state = .expired
+                }
+            }
+        }
     }
 
     /// Adopts a token obtained from either sign-in path and confirms it works.

@@ -40,8 +40,15 @@ public final class AudioPlayer {
     /// nonisolated under Swift 6 — can still tear them down.
     private let observers = ObserverTokens()
 
+    /// Fired when the system interrupts playback and again when it is safe to
+    /// resume, so the app can decide rather than guess.
+    public var onInterruption: ((Bool) -> Void)?
+    /// Fired when headphones are unplugged or a Bluetooth device disappears.
+    public var onRouteLoss: (() -> Void)?
+
     public init() {
         Self.configureAudioSession()
+        observeSession()
         player.actionAtItemEnd = .pause
         // Spoken audio at 1.5–3x is unlistenable without pitch correction, and
         // the time-domain algorithm is the one tuned for speech rather than
@@ -68,6 +75,67 @@ public final class AudioPlayer {
         try? session.setActive(true)
         #endif
     }
+
+    /// Handles the two things that stop audio without the app asking.
+    ///
+    /// A phone call interrupts; the system says when it is over and whether it
+    /// expects playback to resume. Unplugging headphones is a route change, and
+    /// the convention — which every audio app is judged against — is to pause
+    /// rather than start playing a book out loud in a quiet room.
+    private func observeSession() {
+        #if os(iOS) || os(tvOS)
+        let center = NotificationCenter.default
+        observers.interruption = center.addObserver(
+            forName: AVAudioSession.interruptionNotification,
+            object: AVAudioSession.sharedInstance(), queue: .main,
+        ) { [weak self] note in
+            // Read the primitives out of the notification here: Notification is
+            // not Sendable, so carrying it across the actor boundary is a race.
+            let rawType = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
+            let rawOptions = note.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt
+            MainActor.assumeIsolated {
+                guard let self, let rawType,
+                      let type = AVAudioSession.InterruptionType(rawValue: rawType)
+                else { return }
+                switch type {
+                case .began:
+                    self.wasPlayingBeforeInterruption = self.isPlaying
+                    self.pause()
+                    self.onInterruption?(false)
+                case .ended:
+                    let options = rawOptions.map(AVAudioSession.InterruptionOptions.init) ?? []
+                    let shouldResume = options.contains(.shouldResume)
+                        && self.wasPlayingBeforeInterruption
+                    if shouldResume {
+                        try? AVAudioSession.sharedInstance().setActive(true)
+                        self.play()
+                    }
+                    self.onInterruption?(shouldResume)
+                @unknown default:
+                    break
+                }
+            }
+        }
+
+        observers.route = center.addObserver(
+            forName: AVAudioSession.routeChangeNotification,
+            object: AVAudioSession.sharedInstance(), queue: .main,
+        ) { [weak self] note in
+            let rawReason = note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt
+            MainActor.assumeIsolated {
+                guard let self, let rawReason,
+                      AVAudioSession.RouteChangeReason(rawValue: rawReason) == .oldDeviceUnavailable
+                else { return }
+                self.pause()
+                self.onRouteLoss?()
+            }
+        }
+        #endif
+    }
+
+    /// Whether the interruption arrived mid-playback, so a resume is only
+    /// offered to someone who was actually listening.
+    private var wasPlayingBeforeInterruption = false
 
     /// Coarse cadence, used when nothing is watching the highlight closely.
     static let idleObservationInterval: TimeInterval = 1.0
@@ -153,6 +221,8 @@ public final class AudioPlayer {
 private final class ObserverTokens: @unchecked Sendable {
     var time: Any?
     var end: (any NSObjectProtocol)?
+    var interruption: (any NSObjectProtocol)?
+    var route: (any NSObjectProtocol)?
 
     func removeTimeObserver(from player: AVPlayer) {
         if let time { player.removeTimeObserver(time) }
@@ -167,5 +237,10 @@ private final class ObserverTokens: @unchecked Sendable {
     func tearDown(player: AVPlayer) {
         removeTimeObserver(from: player)
         removeEndObserver()
+        for token in [interruption, route].compactMap({ $0 }) {
+            NotificationCenter.default.removeObserver(token)
+        }
+        interruption = nil
+        route = nil
     }
 }

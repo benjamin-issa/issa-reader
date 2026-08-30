@@ -2,6 +2,9 @@ import Foundation
 import IssaCore
 import Observation
 import SwiftUI
+#if canImport(WidgetKit)
+import WidgetKit
+#endif
 
 /// Top-level app state: which server we are talking to, whether we are signed
 /// in, and the catalogue once we are.
@@ -12,6 +15,9 @@ public final class AppModel {
         case chooseServer
         case signingIn
         case ready
+        /// The token expired mid-use. The server is remembered, so signing in
+        /// again is one tap rather than retyping an address.
+        case expired
     }
 
     public var phase: Phase = .chooseServer
@@ -90,15 +96,54 @@ public final class AppModel {
         if case .signedIn = session.state { await enterLibrary() }
     }
 
-    public func signOut() async {
+    /// Signs out and leaves nothing behind.
+    ///
+    /// - Parameter keepDownloads: books already on the device are expensive to
+    ///   fetch again, so the choice is offered rather than assumed.
+    public func signOut(keepDownloads: Bool = false) async {
         await session?.signOut()
         books = []
+        statuses = []
+        ratings = [:]
+        loadError = nil
+
+        CoverCache.shared.clear()
+        // The widget keeps showing the last book on a signed-out device unless
+        // its snapshot is cleared and its timeline reloaded.
+        CurrentBookSnapshotStore.clear()
+        #if canImport(WidgetKit)
+        WidgetCenter.shared.reloadAllTimelines()
+        #endif
+
+        if !keepDownloads {
+            let manager = FileManager.default
+            let support = manager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            for folder in ["Books", "Audio"] {
+                try? manager.removeItem(at: support.appending(path: folder, directoryHint: .isDirectory))
+            }
+        }
         phase = .chooseServer
     }
 
     private func enterLibrary() async {
         phase = .ready
         await refreshLibrary()
+    }
+
+    /// Watches for the token going stale while the app is in use.
+    ///
+    /// The device grant's token lasts 30 days and there is nothing to refresh
+    /// it with, so this happens to every install eventually. Without it the
+    /// library simply stops loading and nothing explains why.
+    public func watchForExpiry() async {
+        guard let session else { return }
+        while !Task.isCancelled {
+            if session.state == .expired, phase == .ready {
+                phase = .expired
+                loadError = nil
+            }
+            try? await Task.sleep(for: .seconds(2))
+        }
     }
 
     public func refreshLibrary() async {

@@ -20,6 +20,11 @@ public final class ReadalongCoordinator {
     /// Called when the highlight moves to a fragment in a different chapter, so
     /// the reader can load and turn to it.
     public var onChapterChange: ((String) -> Void)?
+    /// A second, independent chapter-boundary hook.
+    ///
+    /// The reader owns `onChapterChange` to turn the page; the sleep timer needs
+    /// the same signal for "end of chapter" and must not have to fight it.
+    public var onChapterChangeObserved: (() -> Void)?
     /// Called whenever the highlighted fragment changes.
     public var onFragmentChange: ((String) -> Void)?
 
@@ -62,6 +67,8 @@ public final class ReadalongCoordinator {
             onFragmentChange?(entry.fragmentID)
             if entry.textHref != previousDocument {
                 onChapterChange?(entry.textHref)
+                // Only a real boundary, not the first fragment of a session.
+                if previousDocument != nil { onChapterChangeObserved?() }
             }
         }
         // Book progress uses the virtual timeline so it advances smoothly across

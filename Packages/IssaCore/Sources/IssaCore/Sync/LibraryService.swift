@@ -39,8 +39,47 @@ public struct LibraryService: Sendable {
         try await client.get(Endpoint.book(uuid))
     }
 
-    public func coverData(for uuid: String) async throws -> Data {
-        try await client.getData(Endpoint.cover(uuid))
+    /// Storyteller keeps two covers per book and serves them from one route.
+    public enum CoverShape: Sendable {
+        /// The portrait ebook cover, for shelves and the book hero.
+        case portrait
+        /// The square audiobook cover, for the player, Now Playing and widgets,
+        /// where a portrait image would be letterboxed.
+        case square
+    }
+
+    /// Fetches a cover, letting the server do the resizing.
+    ///
+    /// Asking for the size actually needed saves both the transfer and the
+    /// decode: a 3 MB 2000px cover drawn into a 108pt grid cell is most of what
+    /// makes a library scroll badly. `version` is the book's `updatedAt` in
+    /// epoch milliseconds — supplying it makes the response immutably
+    /// cacheable, and changes the URL when a cover is replaced.
+    public func coverData(
+        for uuid: String,
+        shape: CoverShape = .portrait,
+        pixelWidth: Int? = nil,
+        pixelHeight: Int? = nil,
+        version: Date? = nil,
+    ) async throws -> Data {
+        var query: [URLQueryItem] = []
+        if shape == .square { query.append(URLQueryItem(name: "audio", value: "")) }
+        if let pixelWidth { query.append(URLQueryItem(name: "w", value: String(pixelWidth))) }
+        if let pixelHeight { query.append(URLQueryItem(name: "h", value: String(pixelHeight))) }
+        if let version {
+            query.append(URLQueryItem(name: "v", value: String(Int(version.timeIntervalSince1970 * 1000))))
+        }
+
+        do {
+            return try await client.getData(Endpoint.cover(uuid), query: query)
+        } catch StorytellerError.notFound where shape == .portrait {
+            // An audiobook-only book has no text cover. Falling back is the
+            // difference between artwork and a letter tile forever.
+            return try await coverData(
+                for: uuid, shape: .square,
+                pixelWidth: pixelWidth, pixelHeight: pixelHeight, version: version,
+            )
+        }
     }
 }
 

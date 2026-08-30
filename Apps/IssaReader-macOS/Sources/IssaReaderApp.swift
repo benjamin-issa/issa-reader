@@ -6,6 +6,7 @@ import SwiftUI
 struct IssaReaderMacApp: App {
     @State private var app = AppModel()
     @State private var settings = PlaybackSettings()
+    @State private var nowPlaying = NowPlayingController()
 
     init() {
         // Package-bundled fonts are not registered automatically the way an
@@ -20,6 +21,8 @@ struct IssaReaderMacApp: App {
             MacRootView()
                 .environment(app)
                 .environment(settings)
+                .environment(nowPlaying)
+                .task { nowPlaying.configure(settings: settings) }
                 .tint(Palette.tangerine)
                 .frame(minWidth: 900, minHeight: 560)
         }
@@ -38,6 +41,8 @@ struct IssaReaderMacApp: App {
             ReaderWindow(bookID: bookID)
                 .environment(app)
                 .environment(settings)
+                .environment(nowPlaying)
+                .task { nowPlaying.configure(settings: settings) }
                 .tint(Palette.tangerine)
                 .frame(minWidth: 520, minHeight: 640)
         }
@@ -85,7 +90,7 @@ struct MacRootView: View {
 
     var body: some View {
         switch app.phase {
-        case .chooseServer, .signingIn:
+        case .chooseServer, .signingIn, .expired:
             SignInView().task { await app.restoreIfPossible() }
         case .ready:
             NavigationSplitView {

@@ -34,13 +34,14 @@ struct RootView: View {
     var body: some View {
         Group {
             switch app.phase {
-            case .chooseServer, .signingIn:
+            case .chooseServer, .signingIn, .expired:
                 SignInView()
             case .ready:
                 LibraryTabs()
             }
         }
         .task { await app.restoreIfPossible() }
+        .task { await app.watchForExpiry() }
     }
 }
 

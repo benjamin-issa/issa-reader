@@ -26,26 +26,55 @@ public final class CoverCache {
 
     public func cached(_ uuid: String) -> Image? { memory[uuid] }
 
-    public func image(for book: Book, session: Session, maxPixel: CGFloat = 600) async -> Image? {
-        if let hit = memory[book.uuid] { return hit }
-        if let existing = inFlight[book.uuid] { return await existing.value }
+    /// Drops everything, for sign-out.
+    public func clear() {
+        memory.removeAll()
+        try? FileManager.default.removeItem(at: diskDirectory)
+        try? FileManager.default.createDirectory(at: diskDirectory, withIntermediateDirectories: true)
+    }
+
+    public func image(
+        for book: Book, session: Session,
+        shape: LibraryService.CoverShape = .portrait,
+        maxPixel: CGFloat = 600,
+    ) async -> Image? {
+        let key = shape == .square ? book.uuid + "-square" : book.uuid
+        if let hit = memory[key] { return hit }
+        if let existing = inFlight[key] { return await existing.value }
 
         let task = Task<Image?, Never> { [diskDirectory] in
-            let fileURL = diskDirectory.appending(path: "\(book.uuid).jpg")
+            let fileURL = diskDirectory.appending(path: "\(key).jpg")
 
-            var data = try? Data(contentsOf: fileURL)
+            // Disk I/O off the main actor: a cold grid otherwise reads dozens of
+            // files on the thread that is trying to scroll.
+            var data = await Task.detached(priority: .utility) {
+                try? Data(contentsOf: fileURL)
+            }.value
+
             if data == nil {
-                data = try? await LibraryService(client: session.client).coverData(for: book.uuid)
-                if let data { try? data.write(to: fileURL, options: .atomic) }
+                // Ask the server for the size actually drawn, and key the URL on
+                // updatedAt so a replaced cover appears instead of the old one.
+                data = try? await LibraryService(client: session.client).coverData(
+                    for: book.uuid,
+                    shape: shape,
+                    pixelWidth: Int(maxPixel),
+                    version: book.updatedAt?.value,
+                )
+                if let data {
+                    let payload = data
+                    await Task.detached(priority: .utility) {
+                        try? payload.write(to: fileURL, options: .atomic)
+                    }.value
+                }
             }
             guard let data else { return nil }
             guard let image = await Self.downsample(data, maxPixel: maxPixel) else { return nil }
             return image
         }
-        inFlight[book.uuid] = task
+        inFlight[key] = task
         let result = await task.value
-        inFlight[book.uuid] = nil
-        if let result { memory[book.uuid] = result }
+        inFlight[key] = nil
+        if let result { memory[key] = result }
         return result
     }
 
@@ -73,13 +102,19 @@ public struct CoverImage: View {
     let book: Book
     let session: Session?
     var aspect: CGFloat = Metrics.coverAspect
+    var shape: LibraryService.CoverShape = .portrait
 
     @State private var image: Image?
 
-    public init(book: Book, session: Session?, aspect: CGFloat = Metrics.coverAspect) {
+    public init(
+        book: Book, session: Session?,
+        aspect: CGFloat = Metrics.coverAspect,
+        shape: LibraryService.CoverShape = .portrait,
+    ) {
         self.book = book
         self.session = session
         self.aspect = aspect
+        self.shape = shape
     }
 
     public var body: some View {
@@ -98,7 +133,7 @@ public struct CoverImage: View {
         )
         .task(id: book.uuid) {
             guard let session else { return }
-            image = await CoverCache.shared.image(for: book, session: session)
+            image = await CoverCache.shared.image(for: book, session: session, shape: shape)
         }
     }
 
