@@ -77,8 +77,11 @@ public struct MiniPlayer: View {
                     coordinator.player.togglePlayPause()
                     nowPlaying.publish()
                 } label: {
+                    // Tangerine, as in the full player. The same control was ink
+                    // here and tangerine there, on the same tab.
                     Image(systemName: coordinator.player.isPlaying ? "pause.fill" : "play.fill")
                         .font(.system(size: 20))
+                        .foregroundStyle(Palette.tangerine)
                         .frame(width: 32, height: 32)
                 }
                 .accessibilityLabel(coordinator.player.isPlaying ? "Pause" : "Play")
@@ -88,7 +91,10 @@ public struct MiniPlayer: View {
             .padding(.horizontal, Metrics.spacing12)
             .padding(.vertical, Metrics.spacing8)
         }
-        .background(.regularMaterial)
+        // Palette.surface, not .regularMaterial: system grey sat against warm
+        // paper and was the only surface in the app not made from the palette.
+        .background(Palette.surface)
+        .overlay(alignment: .top) { Palette.border.frame(height: 0.5) }
         .contentShape(Rectangle())
         .onTapGesture { showsPlayer = true }
         .accessibilityElement(children: .contain)

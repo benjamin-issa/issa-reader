@@ -180,7 +180,9 @@ public struct ReaderView: View {
                         model.clearSelection()
                         return
                     }
-                    switch Self.zone(for: location, pageWidth: size.width, margin: model.style.pageMargin) {
+                    switch ReaderTapZone.of(
+                        x: location.x, pageWidth: size.width, margin: model.style.pageMargin,
+                    ) {
                     case .back: Task { await model.previousPage() }
                     case .forward: Task { await model.nextPage() }
                     case .middle: model.toggleChrome()
@@ -408,24 +410,6 @@ public struct ReaderView: View {
 
     static func sizeText(_ bytes: Int64) -> String {
         ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
-    }
-
-    /// Which third of the page a tap landed in.
-    ///
-    /// The sides turn pages and the middle shows or hides the chrome, which is
-    /// what upstream Storyteller and Kindle both do. Measured against the padded
-    /// frame the tap actually arrives in — the old test compared a padded-frame
-    /// x against the canvas width, so the back zone was a margin narrower than
-    /// intended and shifted inward.
-    enum TapZone { case back, middle, forward }
-
-    static func zone(for point: CGPoint, pageWidth: CGFloat, margin: CGFloat) -> TapZone {
-        let full = pageWidth + margin * 2
-        guard full > 0 else { return .middle }
-        let fraction = point.x / full
-        if fraction < 0.25 { return .back }
-        if fraction > 0.75 { return .forward }
-        return .middle
     }
 
     /// Tap coordinates arrive in the padded frame's space; the layout speaks

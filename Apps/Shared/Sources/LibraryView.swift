@@ -147,9 +147,14 @@ public struct BookGrid: View {
     let books: [Book]
     let session: Session?
 
-    public init(books: [Book], session: Session?) {
+    /// Which cover to ask for. The Listening screen is all audio, so it wants
+    /// the square audiobook art the players use.
+    let shape: LibraryService.CoverShape
+
+    public init(books: [Book], session: Session?, shape: LibraryService.CoverShape = .portrait) {
         self.books = books
         self.session = session
+        self.shape = shape
     }
 
     private let columns = [GridItem(.adaptive(minimum: 108, maximum: 160), spacing: Metrics.spacing16)]
@@ -157,7 +162,7 @@ public struct BookGrid: View {
     public var body: some View {
         LazyVGrid(columns: columns, alignment: .leading, spacing: Metrics.spacing24) {
             ForEach(books) { book in
-                BookGridItem(book: book, session: session)
+                BookGridItem(book: book, session: session, shape: shape)
                     // Rows size to their tallest cell and centre vertically —
                     // LazyVGrid's alignment is horizontal only — so a title
                     // wrapping to two lines pushed its neighbours down.
@@ -172,6 +177,7 @@ public struct BookGrid: View {
 struct BookGridItem: View {
     let book: Book
     let session: Session?
+    var shape: LibraryService.CoverShape = .portrait
     #if os(macOS)
     @Environment(\.openWindow) private var openWindow
     #endif
@@ -182,19 +188,19 @@ struct BookGridItem: View {
             Button {
                 openWindow(id: "Reader", value: book.uuid)
             } label: {
-                BookCell(book: book, session: session)
+                BookCell(book: book, session: session, shape: shape)
             }
             .buttonStyle(.plain)
             #else
             NavigationLink {
                 BookDetailView(book: book)
             } label: {
-                BookCell(book: book, session: session)
+                BookCell(book: book, session: session, shape: shape)
             }
             .buttonStyle(.plain)
             #endif
         } else {
-            BookCell(book: book, session: session)
+            BookCell(book: book, session: session, shape: shape)
         }
     }
 }
@@ -202,11 +208,14 @@ struct BookGridItem: View {
 public struct BookCell: View {
     let book: Book
     let session: Session?
+    var shape: LibraryService.CoverShape = .portrait
 
     public var body: some View {
         VStack(alignment: .leading, spacing: Metrics.spacing8) {
             ZStack(alignment: .bottomLeading) {
-                CoverImage(book: book, session: session)
+                CoverImage(
+                    book: book, session: session,
+                    aspect: shape == .square ? 1 : Metrics.coverAspect, shape: shape)
                 if let progress = book.progress, progress > 0 {
                     ProgressBar(value: progress)
                         .padding(Metrics.spacing4)

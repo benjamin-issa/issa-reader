@@ -28,11 +28,22 @@ public struct ListeningView: View {
         .background(Palette.paper)
         .overlay {
             if readalongs.isEmpty, audiobooks.isEmpty {
-                ContentUnavailableView(
-                    "Nothing to listen to yet",
-                    systemImage: "headphones",
-                    description: Text("Books with narration will appear here once your server has aligned them."),
-                )
+                // Styled from the palette: on this tab it is the entire screen
+                // for a library with no aligned narration, so system greys on
+                // warm paper is the whole first impression.
+                VStack(spacing: Metrics.spacing12) {
+                    Image(systemName: "headphones")
+                        .font(.system(size: 44))
+                        .foregroundStyle(Palette.inkQuaternary)
+                    Text("Nothing to listen to yet")
+                        .font(Typography.title)
+                        .foregroundStyle(Palette.ink)
+                    Text("Books with narration will appear here once your server has aligned them.")
+                        .font(Typography.body)
+                        .foregroundStyle(Palette.inkTertiary)
+                        .multilineTextAlignment(.center)
+                }
+                .padding(Metrics.spacing32)
             }
         }
     }
@@ -40,7 +51,10 @@ public struct ListeningView: View {
     private func section(_ title: String, books: [Book]) -> some View {
         VStack(alignment: .leading, spacing: Metrics.spacing12) {
             Text(title).overlineStyle()
-            BookGrid(books: books, session: app.session)
+            // Square audiobook art, matching the player and the mini player.
+            // The grid asked for portrait ebook covers, so one book showed two
+            // different artworks six points apart.
+            BookGrid(books: books, session: app.session, shape: .square)
         }
     }
 }

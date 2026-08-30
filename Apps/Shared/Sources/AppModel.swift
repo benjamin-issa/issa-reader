@@ -261,12 +261,30 @@ public final class AppModel {
         defer { isLoadingLibrary = false }
         do {
             let service = LibraryService(client: session.client)
+            // Everything fetched into locals and published in ONE assignment at
+            // the end. Publishing `books` first and then continuing for two more
+            // round trips rebuilt the scroll content — including whether the
+            // Continue card exists, which is the first item and therefore
+            // exactly where the refresh control's inset lives — while that
+            // control was still expanded. The scroll view then re-measured and
+            // adopted the inflated inset as its resting layout, leaving the
+            // words permanently pushed down.
             let fetched = try await service.allBooks()
+            let fetchedStatuses = (try? await service.statuses()) ?? statuses
+            let fetchedRatings = (try? await service.myRatings()) ?? ratings
+
             books = fetched
-            statuses = (try? await service.statuses()) ?? statuses
-            ratings = (try? await service.myRatings()) ?? ratings
+            statuses = fetchedStatuses
+            ratings = fetchedRatings
             loadError = nil
-            try? await store?.replaceCatalogue(fetched)
+
+            // Off the refresh gesture entirely: a full catalogue rewrite and a
+            // serial drain of queued writes have no business holding the
+            // spinner open.
+            Task { [store, weak self] in
+                try? await store?.replaceCatalogue(fetched)
+                await self?.drainPendingWrites()
+            }
         } catch {
             // A failed refresh is not an empty library when something is cached.
             if books.isEmpty, let cached = try? await store?.allBooks(), !cached.isEmpty {
@@ -274,7 +292,6 @@ public final class AppModel {
             }
             loadError = books.isEmpty ? Self.message(for: error) : nil
         }
-        await drainPendingWrites()
     }
 
     /// Sends anything written while there was no connection.

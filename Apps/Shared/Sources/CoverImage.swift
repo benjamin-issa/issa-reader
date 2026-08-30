@@ -170,10 +170,17 @@ public struct CoverImage: View {
     }
 
     private var placeholder: some View {
-        // Deterministic tint per book so the same title always looks the same.
-        let hue = Double(abs(book.uuid.hashValue % 360)) / 360.0
+        // Drawn from the palette, and stable. `hashValue` is seeded per process,
+        // so the "deterministic" tint this comment used to promise actually
+        // changed on every launch — the same defect already fixed in
+        // LibraryStore.filename.
+        let tints: [Color] = [
+            Palette.tangerine, Palette.moss, Palette.slate,
+            Color(hex: 0xC46A6A), Color(hex: 0x8A6AA8), Palette.borderStrong,
+        ]
+        let index = book.uuid.utf8.reduce(0) { ($0 &* 31 &+ Int($1)) % 4_096 } % tints.count
         return ZStack {
-            Color(hue: hue, saturation: 0.18, brightness: 0.86)
+            tints[index].opacity(0.28)
             Text(initial)
                 .font(Typography.serif(34, weight: .medium))
                 .foregroundStyle(Palette.ink.opacity(0.55))

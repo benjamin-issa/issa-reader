@@ -154,3 +154,45 @@ struct ChapterLabellingTests {
         #expect(hits.count == 10)
     }
 }
+
+/// Where a tap lands. The old test compared a padded-frame x against the canvas
+/// width, so the back zone was a margin narrower than intended and shifted
+/// inward — and over narrated text it was unreachable altogether.
+@Suite("Tap zones")
+struct TapZoneTests {
+    typealias Zone = ReaderTapZone
+
+    @Test("the outer quarters turn pages and the middle half toggles chrome")
+    func zones() {
+        let width: CGFloat = 300
+        let margin: CGFloat = 24
+        let full = width + margin * 2   // 348
+
+        #expect(Zone.of(x: 0, pageWidth: width, margin: margin) == .back)
+        #expect(Zone.of(x: full * 0.1, pageWidth: width, margin: margin) == .back)
+        #expect(Zone.of(x: full * 0.5, pageWidth: width, margin: margin) == .middle)
+        #expect(Zone.of(x: full * 0.9, pageWidth: width, margin: margin) == .forward)
+        #expect(Zone.of(x: full, pageWidth: width, margin: margin) == .forward)
+    }
+
+    /// The boundaries are measured against the frame the tap arrives in — the
+    /// padded one — not the canvas inside it.
+    @Test("boundaries account for the page margin")
+    func boundariesIncludeMargin() {
+        let width: CGFloat = 300
+        let margin: CGFloat = 24
+        let full = width + margin * 2
+
+        // Just inside a quarter of the FULL width is still back; just outside is
+        // middle. Measured against the canvas alone these would both be wrong.
+        #expect(Zone.of(x: full * 0.25 - 1, pageWidth: width, margin: margin) == .back)
+        #expect(Zone.of(x: full * 0.25 + 1, pageWidth: width, margin: margin) == .middle)
+        #expect(Zone.of(x: full * 0.75 - 1, pageWidth: width, margin: margin) == .middle)
+        #expect(Zone.of(x: full * 0.75 + 1, pageWidth: width, margin: margin) == .forward)
+    }
+
+    @Test("a degenerate width does not turn pages")
+    func degenerate() {
+        #expect(Zone.of(x: 10, pageWidth: 0, margin: 0) == .middle)
+    }
+}
