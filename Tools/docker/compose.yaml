@@ -41,7 +41,7 @@ services:
       - KC_BOOTSTRAP_ADMIN_USERNAME=admin
       - KC_BOOTSTRAP_ADMIN_PASSWORD=admin
       - KC_HEALTH_ENABLED=true
-      - KC_HOSTNAME=http://localhost:8080
+      - KC_HOSTNAME=http://${PUBLIC_HOST:-localhost}:8080
       - KC_HOSTNAME_BACKCHANNEL_DYNAMIC=false
     volumes:
       - ./keycloak/realm-issa.json:/opt/keycloak/data/import/realm-issa.json:ro

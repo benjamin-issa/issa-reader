@@ -48,6 +48,7 @@ let package = Package(
             name: "IssaCoreTests",
             dependencies: ["IssaCore"],
             path: "Packages/IssaCore/Tests",
+            resources: [.copy("Fixtures")],
         ),
         .testTarget(
             name: "IssaEPUBTests",

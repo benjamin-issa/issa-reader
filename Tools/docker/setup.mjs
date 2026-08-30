@@ -8,8 +8,13 @@
 
 import { chromium } from "playwright"
 
-const STORYTELLER = process.env.STORYTELLER_URL ?? "http://localhost:8001"
-const KEYCLOAK = process.env.KEYCLOAK_URL ?? "http://localhost:8080"
+// Everything must agree on ONE host. Auth.js sets the PKCE `state` cookie on
+// the origin that starts the OIDC redirect and reads it back on the callback,
+// so mixing localhost and the LAN address fails with "state value could not be
+// parsed". The LAN address is also the only one a phone or Apple TV can reach.
+const HOST = process.env.PUBLIC_HOST ?? "localhost"
+const STORYTELLER = process.env.STORYTELLER_URL ?? `http://${HOST}:8001`
+const KEYCLOAK = process.env.KEYCLOAK_URL ?? `http://${HOST}:8080`
 
 const ADMIN = {
   username: "admin",
