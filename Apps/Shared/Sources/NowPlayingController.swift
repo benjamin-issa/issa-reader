@@ -159,8 +159,7 @@ public final class NowPlayingController {
     /// a Bluetooth head unit asks for the artwork. The closure touches nothing
     /// but the image it was handed.
     private nonisolated static func artwork(from image: PlatformImage, size: CGSize) -> MPMediaItemArtwork {
-        nonisolated(unsafe) let image = image
-        return MPMediaItemArtwork(boundsSize: size) { _ in image }
+        MPMediaItemArtwork(boundsSize: size) { _ in image }
     }
 
     private func loadArtwork(for book: Book) {
