@@ -57,7 +57,7 @@ public extension EPUBPackage {
 
     static func open(archive: EPUBArchive) throws -> EPUBPackage {
         let containerData = try archive.read("META-INF/container.xml")
-        let container = try XML.parse(containerData)
+        let container = try EPUBXML.parse(containerData)
         guard let rootfile = container.descendants("rootfile").first,
               let opfPath = rootfile["full-path"]
         else {
@@ -65,7 +65,7 @@ public extension EPUBPackage {
         }
 
         let rootDirectory = (opfPath as NSString).deletingLastPathComponent
-        let opf = try XML.parse(archive.read(opfPath))
+        let opf = try EPUBXML.parse(archive.read(opfPath))
 
         let metadata = parseMetadata(opf)
         let manifest = parseManifest(opf, rootDirectory: rootDirectory)
@@ -95,23 +95,23 @@ public extension EPUBPackage {
 
     // MARK: - Parsing
 
-    private static func parseMetadata(_ opf: XMLNode) -> Metadata {
+    private static func parseMetadata(_ opf: EPUBXMLNode) -> Metadata {
         var metadata = Metadata()
         guard let node = opf.firstChild("metadata") ?? opf.descendants("metadata").first else {
             return metadata
         }
-        metadata.title = node.descendants("title").first?.text
-        metadata.language = node.descendants("language").first?.text
-        metadata.identifier = node.descendants("identifier").first?.text
-        metadata.authors = node.descendants("creator").map(\.text).filter { !$0.isEmpty }
+        metadata.title = node.descendants("title").first?.trimmedText
+        metadata.language = node.descendants("language").first?.trimmedText
+        metadata.identifier = node.descendants("identifier").first?.trimmedText
+        metadata.authors = node.descendants("creator").map(\.trimmedText).filter { !$0.isEmpty }
 
         for meta in node.descendants("meta") {
             guard let property = meta["property"] else { continue }
             switch property {
             case "media:duration" where meta["refines"] == nil:
-                metadata.mediaDuration = SMILClock.seconds(from: meta.text)
+                metadata.mediaDuration = SMILClock.seconds(from: meta.trimmedText)
             case "media:active-class":
-                metadata.mediaActiveClass = meta.text
+                metadata.mediaActiveClass = meta.trimmedText
             default:
                 continue
             }
@@ -119,7 +119,7 @@ public extension EPUBPackage {
         return metadata
     }
 
-    private static func parseManifest(_ opf: XMLNode, rootDirectory: String) -> [String: ManifestItem] {
+    private static func parseManifest(_ opf: EPUBXMLNode, rootDirectory: String) -> [String: ManifestItem] {
         guard let manifestNode = opf.descendants("manifest").first else { return [:] }
         var items: [String: ManifestItem] = [:]
         for item in manifestNode.children("item") {
@@ -138,7 +138,7 @@ public extension EPUBPackage {
         return items
     }
 
-    private static func parseSpine(_ opf: XMLNode, manifest: [String: ManifestItem]) -> [SpineItem] {
+    private static func parseSpine(_ opf: EPUBXMLNode, manifest: [String: ManifestItem]) -> [SpineItem] {
         guard let spineNode = opf.descendants("spine").first else { return [] }
         return spineNode.children("itemref").compactMap { ref in
             guard let idref = ref["idref"], let item = manifest[idref] else { return nil }
@@ -153,21 +153,21 @@ public extension EPUBPackage {
     }
 
     private static func parseNavigation(
-        opf: XMLNode, archive: EPUBArchive,
+        opf: EPUBXMLNode, archive: EPUBArchive,
         manifest: [String: ManifestItem], rootDirectory: String,
     ) throws -> [NavPoint] {
         // EPUB 3 navigation document first, NCX as the fallback for older books.
         if let nav = manifest.values.first(where: { $0.properties.contains("nav") }) {
-            let document = try XML.parse(archive.read(nav.href))
+            let document = try EPUBXML.parse(archive.read(nav.href))
             for navElement in document.descendants("nav") {
                 guard navElement["type"] == "toc" || navElement["epub:type"] == "toc" else { continue }
                 return flatten(list: navElement.descendants("ol").first, base: nav.href, depth: 0)
             }
         }
         if let ncx = manifest.values.first(where: { $0.mediaType == "application/x-dtbncx+xml" }) {
-            let document = try XML.parse(archive.read(ncx.href))
+            let document = try EPUBXML.parse(archive.read(ncx.href))
             return document.descendants("navPoint").compactMap { point in
-                guard let label = point.descendants("text").first?.text,
+                guard let label = point.descendants("text").first?.trimmedText,
                       let href = point.descendants("content").first?["src"] else { return nil }
                 return NavPoint(title: label, href: resolve(href, relativeTo: ncx.href), depth: 0)
             }
@@ -175,14 +175,13 @@ public extension EPUBPackage {
         return []
     }
 
-    private static func flatten(list: XMLNode?, base: String, depth: Int) -> [NavPoint] {
+    private static func flatten(list: EPUBXMLNode?, base: String, depth: Int) -> [NavPoint] {
         guard let list else { return [] }
         var points: [NavPoint] = []
         for item in list.children("li") {
             if let anchor = item.firstChild("a"), let href = anchor["href"] {
-                let title = anchor.text.isEmpty
-                    ? anchor.descendants("span").first?.text ?? ""
-                    : anchor.text
+                // An anchor's label may be plain text or wrapped in a span.
+                let title = anchor.allText.trimmingCharacters(in: .whitespacesAndNewlines)
                 points.append(NavPoint(
                     title: title,
                     href: resolve(href, relativeTo: base),

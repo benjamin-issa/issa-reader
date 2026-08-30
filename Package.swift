@@ -31,7 +31,8 @@ let package = Package(
         ),
         .target(
             name: "IssaRender",
-            dependencies: ["IssaCore", "IssaEPUB"],
+            // IssaUI owns the reading themes and type ramp; the renderer applies them.
+            dependencies: ["IssaCore", "IssaEPUB", "IssaUI"],
             path: "Packages/IssaRender/Sources/IssaRender",
         ),
         .target(
@@ -58,8 +59,9 @@ let package = Package(
         ),
         .testTarget(
             name: "IssaRenderTests",
-            dependencies: ["IssaRender"],
+            dependencies: ["IssaRender", "IssaEPUB"],
             path: "Packages/IssaRender/Tests",
+            resources: [.copy("Fixtures")],
         ),
         .testTarget(
             name: "IssaPlaybackTests",

@@ -135,10 +135,10 @@ public enum SMILParser {
     public static func parse(
         data: Data, overlayHref: String,
     ) throws -> [(fragmentID: String, textHref: String, audioHref: String, start: TimeInterval, end: TimeInterval)] {
-        let root = try XML.parse(data)
+        let root = try EPUBXML.parse(data)
         var results: [(String, String, String, TimeInterval, TimeInterval)] = []
 
-        func walk(_ node: XMLNode) {
+        func walk(_ node: EPUBXMLNode) {
             for child in node.children {
                 switch child.name {
                 case "par":
