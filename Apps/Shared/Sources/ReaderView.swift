@@ -2,6 +2,9 @@ import IssaCore
 import IssaRender
 import IssaUI
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// The reading surface.
 ///
@@ -214,9 +217,14 @@ public struct ReaderView: View {
             // settings screen is otherwise writing to a value nothing reads.
             model.style = settings.readerStyle
             model.preferredRate = settings.playbackRate
+            // The book id is captured by value. Reaching through `model` inside
+            // a closure the model itself stores would retain it for the life of
+            // the process, pinning the chapter layout, the decoded plates and
+            // the readalong coordinator with it.
+            let bookUUID = model.book.uuid
             model.enqueuePosition = { [weak app = app] locator, timestamp in
                 await app?.enqueue(
-                    .position, bookUUID: model.book.uuid,
+                    .position, bookUUID: bookUUID,
                     payload: MutationDrain.PositionPayload(locator: locator, timestamp: timestamp),
                 )
             }
@@ -227,7 +235,10 @@ public struct ReaderView: View {
                 coordinator: model.readalong,
                 book: model.book,
                 session: model.readerSession,
-                chapterTitle: { model.chapterTitle },
+                // Weak for the same reason: the Now Playing controller outlives
+                // this screen deliberately, and holding the reader through it
+                // would keep an entire book in memory after it closed.
+                chapterTitle: { [weak model] in model?.chapterTitle },
             )
         }
         .task { model.loadAnnotations(await app.annotations(for: model.book.uuid)) }
@@ -260,7 +271,13 @@ public struct ReaderView: View {
         }
         #endif
         .onChange(of: settings.readerStyle) { _, style in model.style = style }
-        .onDisappear { model.setReaderVisible(false) }
+        .onDisappear {
+            model.setReaderVisible(false)
+            // Break the closures the model holds back to this screen's world.
+            model.enqueuePosition = nil
+            model.onSaveAnnotation = nil
+            model.onDeleteAnnotation = nil
+        }
     }
 
     /// What to do with the selected text. Copy first, because that is what a
@@ -361,6 +378,9 @@ public struct ReaderView: View {
                 Text("\(model.pageIndex + 1) / \(model.pageCount)")
                     .font(Typography.caption.monospacedDigit())
                     .foregroundStyle(model.style.theme.text.opacity(0.55))
+                    // The page element already says where the reader is, in
+                    // words. Left visible, this would follow it as "3 slash 12".
+                    .accessibilityHidden(true)
             }
         }
         .padding(.horizontal, model.style.pageMargin)
@@ -374,22 +394,33 @@ struct PageCanvas: View {
     let pageSize: CGSize
 
     var body: some View {
+        // Read in the body, not inside the renderer closure. Observation tracks
+        // what a view's body touches; the Canvas closure runs during the render
+        // pass and is not tracked, so reading the narrated fragment only in
+        // there left the highlight frozen on one sentence for the whole page —
+        // the audio moved and the drawing did not.
+        let activeFragment = model.activeFragmentID
+        let selection = model.selection
+        let page = model.currentPage
+        let highlights = page.map { model.highlightRects(on: $0) } ?? []
+        let theme = model.style.theme
+
         Canvas(rendersAsynchronously: false) { context, _ in
-            guard let layout = model.layout, let page = model.currentPage else { return }
+            guard let layout = model.layout, let page else { return }
 
             // Everything tinted is drawn beneath the glyphs so it reads as
             // paper tint rather than a wash over the type.
-            for (rect, tint) in model.highlightRects(on: page) {
+            for (rect, tint) in highlights {
                 let rounded = Path(roundedRect: rect.insetBy(dx: -1, dy: -1), cornerRadius: 3)
                 context.fill(rounded, with: .color(ReaderPalette.color(for: tint).opacity(0.30)))
             }
-            if let fragment = model.activeFragmentID {
-                for rect in layout.highlightRects(forFragment: fragment, on: page) {
+            if let activeFragment {
+                for rect in layout.highlightRects(forFragment: activeFragment, on: page) {
                     let rounded = Path(roundedRect: rect.insetBy(dx: -2, dy: -1), cornerRadius: 3)
-                    context.fill(rounded, with: .color(model.style.theme.highlight))
+                    context.fill(rounded, with: .color(theme.highlight))
                 }
             }
-            if let selection = model.selection {
+            if let selection {
                 for rect in layout.rects(forRange: selection, on: page) {
                     context.fill(
                         Path(roundedRect: rect.insetBy(dx: -1, dy: -1), cornerRadius: 2),
@@ -404,18 +435,93 @@ struct PageCanvas: View {
         }
         .frame(width: pageSize.width, height: pageSize.height)
         .clipped()
-        // A Canvas is a drawing: to VoiceOver the page is blank unless the text
-        // is stated. Reading the page as one element rather than per paragraph
-        // matches how the page turns — there is nothing to navigate between,
-        // because the next paragraph may be on the next page.
-        .accessibilityElement()
-        .accessibilityLabel(model.currentPageText)
-        .accessibilityValue(
-            model.pageCount > 0 ? "Page \(model.pageIndex + 1) of \(model.pageCount)" : "")
-        .accessibilityHint("Swipe up or down to turn the page")
-        .accessibilityAddTraits(.isStaticText)
-        .accessibilityAction(named: "Next page") { Task { await model.nextPage() } }
-        .accessibilityAction(named: "Previous page") { Task { await model.previousPage() } }
-        .accessibilityAction(named: "Bookmark this page") { model.toggleBookmark() }
+        .modifier(PageAccessibility(model: model))
+    }
+}
+
+/// What VoiceOver makes of a drawn page.
+///
+/// Split out because it is the whole accessible surface of the reader: a Canvas
+/// is a picture, so unless the text and every action are stated here, none of
+/// them exist for a reader using VoiceOver.
+struct PageAccessibility: ViewModifier {
+    let model: ReaderModel
+
+    func body(content: Content) -> some View {
+        content
+            .accessibilityElement()
+            .accessibilityLabel(model.spokenPageText)
+            .accessibilityValue(model.spokenPagePosition)
+            // Naming the rotor, because that is the gesture that actually works
+            // here. An earlier version promised a vertical swipe, which turns no
+            // page on any platform this ships to.
+            .accessibilityHint("Use the Actions rotor to turn pages or mark this one")
+            .accessibilityTextContentType(.narrative)
+            // A three-finger swipe is what people try in every other paged app.
+            .accessibilityScrollAction { edge in
+                Task {
+                    switch edge {
+                    case .top, .leading: await model.previousPage()
+                    default: await model.nextPage()
+                    }
+                    Self.announcePage(model)
+                }
+            }
+            // The canvas still carries a tap gesture for sighted readers, and
+            // SwiftUI would otherwise synthesise activation from it — a
+            // double-tap would start narration at the page's centre. Claiming
+            // the default action makes activation mean something sensible.
+            .accessibilityAction {
+                Task {
+                    await model.nextPage()
+                    Self.announcePage(model)
+                }
+            }
+            .accessibilityAction(named: "Next page") {
+                Task {
+                    await model.nextPage()
+                    Self.announcePage(model)
+                }
+            }
+            .accessibilityAction(named: "Previous page") {
+                Task {
+                    await model.previousPage()
+                    Self.announcePage(model)
+                }
+            }
+            // Named for what it will actually do, since it is a toggle: an
+            // action offered as "Bookmark this page" that silently deletes the
+            // bookmark already there is the worst kind of surprise.
+            .accessibilityAction(named: model.isPageBookmarked ? "Remove bookmark" : "Bookmark this page") {
+                model.toggleBookmark()
+            }
+            .accessibilityAction(named: "Copy page") {
+                Clipboard.copy(model.spokenPageText)
+            }
+            .accessibilityActions {
+                // Selection is made with a long press and a drag, which
+                // VoiceOver consumes — so highlighting, and playing a sentence,
+                // are otherwise unreachable. These act on the top of the page.
+                if model.hasNarration {
+                    Button("Play from this page") { Task { await model.playFirstSentenceOnPage() } }
+                }
+                ForEach(Annotation.Tint.allCases, id: \.self) { tint in
+                    Button("Highlight page in \(tint.title)") {
+                        model.annotatePage(tint: tint)
+                    }
+                }
+            }
+    }
+
+    /// Says where the reader has landed.
+    ///
+    /// A label that changes under an already-focused element is not spoken —
+    /// that is what `updatesFrequently` exists for — so a page turn made from
+    /// the rotor would otherwise be met with silence.
+    @MainActor
+    static func announcePage(_ model: ReaderModel) {
+        #if canImport(UIKit) && !os(tvOS)
+        UIAccessibility.post(notification: .pageScrolled, argument: model.spokenPagePosition)
+        #endif
     }
 }

@@ -293,7 +293,7 @@ public final class ChapterLayout {
     /// Exposed so tests can assert it matches the page's own range: when the two
     /// disagree, the page paints text that belongs to its neighbour — which is
     /// visible as a line sliced in half at the bottom of every page.
-    func paintedCharacterRange(for page: RenderedPage) -> NSRange {
+    public func paintedCharacterRange(for page: RenderedPage) -> NSRange {
         var lower = Int.max
         var upper = 0
         layoutManager.enumerateTextLayoutFragments(
@@ -309,6 +309,38 @@ public final class ChapterLayout {
         }
         guard lower != Int.max else { return NSRange(location: page.characterRange.location, length: 0) }
         return NSRange(location: lower, length: upper - lower)
+    }
+
+    /// The page as words, for reading it aloud.
+    ///
+    /// Built from the painted range rather than `characterRange`, because a
+    /// fragment that began on an earlier page is not on this one — and every
+    /// illustration is replaced by its alt text, since the object-replacement
+    /// character it leaves behind is silent.
+    public func spokenText(on page: RenderedPage) -> String {
+        let range = paintedCharacterRange(for: page)
+        guard range.length > 0,
+              NSMaxRange(range) <= (attributedText.string as NSString).length
+        else { return "" }
+
+        let slice = attributedText.attributedSubstring(from: range)
+        let result = NSMutableString(string: slice.string)
+        // Back to front, so replacing one does not move the next.
+        var replacements: [(NSRange, String)] = []
+        slice.enumerateAttribute(.issaImageAlt, in: NSRange(location: 0, length: slice.length)) {
+            value, subrange, _ in
+            guard let alt = value as? String else { return }
+            replacements.append((subrange, alt))
+        }
+        for (subrange, alt) in replacements.reversed() {
+            result.replaceCharacters(in: subrange, with: "Image: \(alt). ")
+        }
+        // Anything still unlabelled is an illustration the book gave no alt
+        // text for; saying so beats a silent gap in the middle of a sentence.
+        result.replaceOccurrences(
+            of: "\u{FFFC}", with: "Image. ", options: [],
+            range: NSRange(location: 0, length: result.length))
+        return (result as String).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// Draws one page into the current graphics context.

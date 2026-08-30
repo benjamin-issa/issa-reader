@@ -21,6 +21,8 @@ public extension NSAttributedString.Key {
     /// range and therefore the exact rectangles to highlight, with no DOM, no
     /// JavaScript bridge, and no layout round-trip.
     static let issaFragmentID = NSAttributedString.Key("issaFragmentID")
+    /// An illustration's alternative text, kept so the page can be spoken.
+    static let issaImageAlt = NSAttributedString.Key("issaImageAlt")
     /// Nesting depth of block quotes, used for indentation.
     static let issaBlockquoteDepth = NSAttributedString.Key("issaBlockquoteDepth")
     /// Archive path of an image occupying this run.

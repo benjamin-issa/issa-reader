@@ -68,6 +68,8 @@ public final class ReaderModel {
 
     public var enqueuePosition: ((ReadiumLocator, Double) async -> Void)?
     private static var lastPublishedCoverBookID: String?
+    /// When the oldest unwritten change happened, for the debounce ceiling.
+    private var firstUnsavedChangeAt: Date?
 
     public init(book: Book, session: Session, style: ReaderStyle = ReaderStyle()) {
         self.book = book
@@ -118,13 +120,37 @@ public final class ReaderModel {
         return (Double(chapterIndex) + layout.progression(of: page)) / Double(package.spine.count)
     }
 
-    /// The words on the current page, for VoiceOver and for copying the page.
+    /// The words actually on the current page.
+    ///
+    /// Painted range, not `characterRange`: a paragraph taller than the page
+    /// stays whole on the page it begins on and the draw pass clips the
+    /// overflow, so the two differ — and reading a sighted reader's clipped
+    /// text aloud describes a page they are not looking at.
     public var currentPageText: String {
         guard let layout, let page = currentPage else { return "" }
-        let text = layout.attributedText.string as NSString
-        guard NSMaxRange(page.characterRange) <= text.length else { return "" }
-        return text.substring(with: page.characterRange)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return layout.spokenText(on: page)
+    }
+
+    /// The label VoiceOver reads for the page, never empty: a focusable element
+    /// that says nothing is worse than one that admits there is nothing.
+    public var spokenPageText: String {
+        let text = currentPageText
+        if !text.isEmpty { return text }
+        switch phase {
+        case let .failed(reason): return reason
+        case .loading: return "Opening the book"
+        case .ready: return "This page has no text on it."
+        }
+    }
+
+    /// Where the reader is, said the way the footer shows it: the page number
+    /// is per chapter, so quoting it alone reads as though the book were twelve
+    /// pages long.
+    public var spokenPagePosition: String {
+        guard pageCount > 0 else { return chapterTitle }
+        let place = "Page \(pageIndex + 1) of \(pageCount)"
+        let title = chapterTitle
+        return title.isEmpty ? place : "\(place) in \(title)"
     }
 
     public var pageCount: Int { layout?.pages.count ?? 0 }
@@ -158,7 +184,9 @@ public final class ReaderModel {
                 package.spine.firstIndex { position.locator.matchesHref($0.href) }
             } ?? Self.firstReadableChapter(in: package, style: style)
 
-            await loadChapter(chapterIndex, restoring: stored?.locator)
+            // A chapter that failed to parse already set `.failed`; overwriting
+            // it with `.ready` showed a blank page and no explanation at all.
+            guard await loadChapter(chapterIndex, restoring: stored?.locator) else { return }
             await prepareNarration(package: package)
             phase = .ready
         } catch {
@@ -239,6 +267,25 @@ public final class ReaderModel {
         // move the playhead somewhere the reader cannot hear.
         await readalong.seek(toFragment: fragment)
         return true
+    }
+
+    /// Highlights the whole of the current page.
+    ///
+    /// A selection is made by holding and dragging, which VoiceOver consumes,
+    /// so without this the highlight feature does not exist for anyone using
+    /// it. The page is the unit that a reader there can actually refer to.
+    @discardableResult
+    public func annotatePage(tint: Annotation.Tint) -> Annotation? {
+        guard let page = currentPage else { return nil }
+        selection = page.characterRange
+        defer { clearSelection() }
+        return annotate(kind: .highlight, tint: tint)
+    }
+
+    /// Starts narration at the first narrated sentence on this page.
+    public func playFirstSentenceOnPage() async {
+        guard let readalong, let fragment = firstFragmentOnCurrentPage() else { return }
+        await readalong.seek(toFragment: fragment)
     }
 
     /// Plays the narration for whatever is selected.
@@ -373,9 +420,19 @@ public final class ReaderModel {
         pageIndex = layout.pages.firstIndex { NSLocationInRange(anchor, $0.characterRange) } ?? 0
     }
 
-    private func loadChapter(_ index: Int, restoring locator: ReadiumLocator? = nil) async {
-        guard let package, package.spine.indices.contains(index) else { return }
-        chapterIndex = index
+    /// Loads a chapter, leaving the model untouched if it cannot be read.
+    ///
+    /// - Returns: whether it loaded.
+    ///
+    /// Nothing is assigned until the whole chapter has parsed and laid out.
+    /// Advancing `chapterIndex` first and then failing left the index pointing
+    /// at the new chapter while `layout` still held the old one, and every
+    /// caller carried on: the next position write named the new chapter's href
+    /// and quoted the old chapter's text, then persisted it. Turning back a page
+    /// from that state moved the reader forwards.
+    @discardableResult
+    private func loadChapter(_ index: Int, restoring locator: ReadiumLocator? = nil) async -> Bool {
+        guard let package, package.spine.indices.contains(index) else { return false }
         let item = package.spine[index]
         do {
             let data = try package.archive.read(item.href)
@@ -387,8 +444,10 @@ public final class ReaderModel {
             ).parse(xhtml: data, baseHref: item.href)
             let layout = ChapterLayout(text: parsed.text, fragmentRanges: parsed.fragmentRanges)
             layout.layout(pageSize: pageSize)
-            self.layout = layout
 
+            // Everything committed together, once nothing can still throw.
+            self.layout = layout
+            chapterIndex = index
             if let locator, let offset = LocatorAnchoring.characterOffset(
                 for: locator, in: parsed.text.string, fragmentRanges: parsed.fragmentRanges,
             ), let page = layout.page(containingOffset: offset) {
@@ -396,8 +455,10 @@ public final class ReaderModel {
             } else {
                 pageIndex = 0
             }
+            return true
         } catch {
             phase = .failed("Couldn't open this chapter. " + AppModel.message(for: error))
+            return false
         }
     }
 
@@ -408,13 +469,7 @@ public final class ReaderModel {
         if pageIndex + 1 < layout.pages.count {
             pageIndex += 1
         } else if let package, chapterIndex + 1 < package.spine.count {
-            await loadChapter(chapterIndex + 1)
-            pageIndex = 0
-            // A full-page illustration renders as an empty chapter today; step
-            // over it rather than stranding the reader on a blank page.
-            if isCurrentChapterEmpty, chapterIndex + 1 < package.spine.count {
-                await loadChapter(chapterIndex + 1)
-            }
+            await move(toChapter: chapterIndex + 1, landingOnLastPage: false)
         }
         scheduleSave()
     }
@@ -424,10 +479,34 @@ public final class ReaderModel {
         if pageIndex > 0 {
             pageIndex -= 1
         } else if chapterIndex > 0 {
-            await loadChapter(chapterIndex - 1)
-            pageIndex = max((layout?.pages.count ?? 1) - 1, 0)
+            await move(toChapter: chapterIndex - 1, landingOnLastPage: true)
         }
         scheduleSave()
+    }
+
+    /// How many empty spine items in a row to step over before giving up.
+    ///
+    /// Gutenberg EPUBs routinely put wrapper items between chapters, and more
+    /// than one can sit together. A bound rather than a loop, so a book that is
+    /// empty from here on cannot spin.
+    private static let emptyChapterSkipLimit = 8
+
+    /// Moves to a chapter, stepping over ones with nothing on them.
+    ///
+    /// Both directions skip. Only forward did before, which meant paging back
+    /// into a wrapper item stranded the reader on a blank page — and for a
+    /// VoiceOver reader, on a silent one.
+    private func move(toChapter index: Int, landingOnLastPage: Bool) async {
+        guard let package else { return }
+        let step = landingOnLastPage ? -1 : 1
+        var target = index
+        for _ in 0 ..< Self.emptyChapterSkipLimit {
+            guard package.spine.indices.contains(target) else { return }
+            guard await loadChapter(target) else { return }
+            if !isCurrentChapterEmpty { break }
+            target += step
+        }
+        pageIndex = landingOnLastPage ? max((layout?.pages.count ?? 1) - 1, 0) : 0
     }
 
     /// A chapter is empty only if it has neither prose nor an illustration.
@@ -581,13 +660,18 @@ public final class ReaderModel {
         let range = kind == .bookmark
             ? NSRange(location: page.characterRange.location, length: min(80, page.characterRange.length))
             : (selection ?? NSRange(location: page.characterRange.location, length: 0))
-        guard range.length > 0 else { return nil }
+        // A bookmark is a place, so it is legal on a page with no text — a
+        // full-page plate, or a chapter whose cover image failed to decode.
+        // A highlight is a piece of text, and there is none, so it is not.
+        guard kind == .bookmark || range.length > 0 else { return nil }
 
         let text = layout.attributedText.string as NSString
         guard NSMaxRange(range) <= text.length else { return nil }
-        let excerpt = text.substring(with: range)
-            .replacingOccurrences(of: "\n", with: " ")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let excerpt = range.length > 0
+            ? text.substring(with: range)
+                .replacingOccurrences(of: "\n", with: " ")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            : chapterTitle
 
         let annotation = Annotation(
             bookUUID: book.uuid,
@@ -703,11 +787,30 @@ public final class ReaderModel {
     /// Position writes are debounced: a reader turning pages quickly should not
     /// generate a request per page, and the server treats rapid equal-timestamp
     /// writes as conflicts.
+    ///
+    /// With a ceiling, though. A pure trailing-edge debounce is starved by
+    /// anything that keeps resetting it, and narration does exactly that —
+    /// dialogue-heavy passages cross a sentence boundary faster than every two
+    /// seconds, so an hour of listening would have written nothing at all,
+    /// which is the loss the debounce exists to prevent.
+    private static let saveDebounce: Duration = .seconds(2)
+    private static let saveMaximumWait: TimeInterval = 20
+
     private func scheduleSave() {
+        let now = Date()
+        if let first = firstUnsavedChangeAt, now.timeIntervalSince(first) >= Self.saveMaximumWait {
+            saveTask?.cancel()
+            firstUnsavedChangeAt = nil
+            saveTask = Task { [weak self] in await self?.saveProgress() }
+            return
+        }
+        if firstUnsavedChangeAt == nil { firstUnsavedChangeAt = now }
+
         saveTask?.cancel()
         saveTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(2))
+            try? await Task.sleep(for: Self.saveDebounce)
             guard !Task.isCancelled else { return }
+            self?.firstUnsavedChangeAt = nil
             await self?.saveProgress()
         }
     }

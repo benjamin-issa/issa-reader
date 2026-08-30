@@ -219,6 +219,14 @@ public struct HTMLContentParser {
         var attributes = attributes(for: context)
         attributes[.attachment] = attachment
         attributes[.issaImageHref] = href
+        // Alt text is the only thing a reader using VoiceOver gets from a
+        // picture. Dropping it at parse time left an object-replacement
+        // character that no screen reader can say, and a full-page plate became
+        // a page with one unspeakable glyph on it.
+        if let alt = (node["alt"] ?? node["title"])?
+            .trimmingCharacters(in: .whitespacesAndNewlines), !alt.isEmpty {
+            attributes[.issaImageAlt] = alt
+        }
         // Centre the illustration in the column and give it room to breathe.
         if let paragraph = (attributes[.paragraphStyle] as? NSParagraphStyle)?
             .mutableCopy() as? NSMutableParagraphStyle {
