@@ -5,6 +5,9 @@ import IssaPlayback
 import IssaRender
 import Observation
 import SwiftUI
+#if canImport(WidgetKit)
+import WidgetKit
+#endif
 
 /// Drives one open book: downloads it, lays out chapters, tracks position.
 @Observable
@@ -36,6 +39,9 @@ public final class ReaderModel {
 
     public let book: Book
     private let session: Session
+
+    /// Exposed so the player sheet can load cover art through the same client.
+    public var readerSession: Session { session }
     private var pageSize: CGSize = .zero
     private var saveTask: Task<Void, Never>?
 
@@ -291,5 +297,28 @@ public final class ReaderModel {
             ),
         )
         _ = try? await ProgressService(client: session.client).save(locator, for: book.uuid)
+        publishSnapshot(progress: overall)
+    }
+
+    /// Publishes the small record the widget reads.
+    ///
+    /// Written only when progress meaningfully moves, not on every tick: the
+    /// widget's own reload budget is the scarce resource, and a snapshot the
+    /// widget never reads costs a disk write for nothing.
+    private func publishSnapshot(progress: Double) {
+        let remaining = (book.readaloud?.duration ?? book.audiobook?.duration)
+            .map { $0 * (1 - progress) }
+        CurrentBookSnapshotStore.write(CurrentBookSnapshot(
+            bookID: book.uuid,
+            title: book.title,
+            author: book.byline,
+            chapter: chapterTitle,
+            progress: progress,
+            remaining: remaining,
+            isPlaying: isPlaying,
+        ))
+        #if canImport(WidgetKit)
+        WidgetCenter.shared.reloadTimelines(ofKind: "CurrentBook")
+        #endif
     }
 }

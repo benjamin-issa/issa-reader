@@ -9,7 +9,7 @@ import SwiftUI
 /// turning a page translates geometry rather than laying anything out again.
 public struct ReaderView: View {
     @State private var model: ReaderModel
-    @State private var showsControls = true
+    @State private var showsPlayer = false
     @Environment(\.dismiss) private var dismiss
 
     public init(book: Book, session: Session) {
@@ -54,6 +54,12 @@ public struct ReaderView: View {
         .navigationBarBackButtonHidden(false)
         #endif
         .onDisappear { Task { await model.saveProgress() } }
+        #if !os(tvOS)
+        .sheet(isPresented: $showsPlayer) {
+            PlayerView(book: model.book, session: model.readerSession, coordinator: model.readalong)
+                .presentationDetents([.large])
+        }
+        #endif
     }
 
     @ViewBuilder
@@ -97,6 +103,14 @@ public struct ReaderView: View {
                     Image(systemName: model.isPlaying ? "pause.circle.fill" : "play.circle.fill")
                         .font(.system(size: 26))
                         .foregroundStyle(Palette.tangerine)
+                }
+                .buttonStyle(.plain)
+                Button {
+                    showsPlayer = true
+                } label: {
+                    Image(systemName: "waveform")
+                        .font(.system(size: 17))
+                        .foregroundStyle(Palette.inkTertiary)
                 }
                 .buttonStyle(.plain)
             }
