@@ -102,7 +102,7 @@ public struct SignInView: View {
             if let error = app.loadError {
                 Text(error)
                     .font(Typography.footnote)
-                    .foregroundStyle(Color(hex: 0x7A2F2A))
+                    .foregroundStyle(Palette.alert)
             }
 
             Button {

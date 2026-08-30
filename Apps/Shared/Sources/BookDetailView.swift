@@ -12,6 +12,10 @@ public struct BookDetailView: View {
     @Environment(AppModel.self) private var app
     @Environment(NowPlayingController.self) private var nowPlaying
     @Environment(PlaybackSettings.self) private var settings
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    /// Which editions are on disk, recomputed on appear and whenever a download
+    /// finishes or is deleted anywhere in the app.
+    @State private var downloaded: Set<BookContentService.Format> = []
     /// The book as it was when this screen opened. Identity only — everything
     /// drawn comes from `book` below.
     private let initialBook: Book
@@ -33,7 +37,13 @@ public struct BookDetailView: View {
     public var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Metrics.spacing32) {
-                hero
+                // The hero and the action row read as one block, but the row is
+                // full width rather than trapped in the ~212pt column beside a
+                // 130pt cover, where its labels broke mid-word.
+                VStack(alignment: .leading, spacing: Metrics.spacing16) {
+                    hero
+                    actionRow
+                }
                 if let description = book.description, !description.isEmpty {
                     // Server descriptions carry markup. Rendered as a raw
                     // string, <p> and &amp; showed up on screen verbatim.
@@ -45,6 +55,7 @@ public struct BookDetailView: View {
                 if !book.tags.isEmpty { tags }
                 editions
                 facts
+                externalRatings
                 relatedRails
             }
             .padding(Metrics.spacing16)
@@ -54,6 +65,7 @@ public struct BookDetailView: View {
         // Writing a position moves the status server-side, so the shelf shown
         // here is stale after a reading session unless it is re-read.
         .task { await app.refresh(book: book) }
+        .onChange(of: app.downloadedUUIDs, initial: true) { refreshDownloaded() }
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
@@ -89,31 +101,92 @@ public struct BookDetailView: View {
                         .font(Typography.caption)
                         .foregroundStyle(Palette.inkTertiary)
                 }
-                HStack(spacing: Metrics.spacing12) {
-                    readButton
-                    listenButton
-                }
             }
             Spacer(minLength: 0)
         }
     }
 
-    private var readButton: some View {
-        Group {
-            if let session = app.session {
+    /// What the book screen offers, and why it is not a fixed pair of buttons.
+    ///
+    /// `FlowRow` rather than an `HStack`: it proposes an unspecified width to
+    /// each child, so a capsule renders at its natural size and wraps to the
+    /// next line when there is no room — which is what has to happen at an
+    /// accessibility text size, where a fixed row would simply clip.
+    private var actionRow: some View {
+        VStack(alignment: .leading, spacing: Metrics.spacing8) {
+            FlowRow(spacing: Metrics.spacing12) {
+                primaryControl
+                listenButton
+            }
+            // The reason a download failed existed only in an accessibility
+            // label; a sighted reader saw a button that did nothing twice.
+            if let detail = primaryAction?.detail {
+                Text(detail).font(Typography.caption).foregroundStyle(Palette.alert)
+            }
+            // Set in AppModel and, until now, rendered by nothing at all — so a
+            // Listen tap that failed was completely silent.
+            if let error = app.listeningError {
+                Text(error).font(Typography.caption).foregroundStyle(Palette.alert)
+            }
+        }
+    }
+
+    /// The one control whose label follows the download state.
+    private var primaryAction: BookPrimaryAction? {
+        BookPrimaryAction.resolve(
+            book: book,
+            state: app.downloads.flatMap { $0.state(for: .init(bookUUID: book.uuid, format: preferredFormat ?? .ebook)) },
+            isDownloaded: preferredFormat.map { downloaded.contains($0) } ?? false,
+        )
+    }
+
+    private var preferredFormat: BookContentService.Format? {
+        BookContentService.preferredReadingFormat(for: book)
+    }
+
+    /// Which editions are on disk.
+    ///
+    /// Held rather than asked per render: `isDownloaded` is a `fileExists` and
+    /// is not observable, so a delete performed on the downloads screen would
+    /// otherwise never reach an already-open book screen — and asking inside
+    /// the body meant a syscall per edition per frame.
+    private func refreshDownloaded() {
+        guard let session = app.session else { downloaded = []; return }
+        let content = BookContentService(client: session.client)
+        downloaded = Set(BookContentService.Format.allCases.filter {
+            content.isDownloaded(book, format: $0)
+        })
+    }
+
+    @ViewBuilder
+    private var primaryControl: some View {
+        if let action = primaryAction, let session = app.session {
+            switch action.intent {
+            case .openReader:
                 NavigationLink {
                     ReaderView(book: book, session: session)
                 } label: {
-                    Text(book.progress ?? 0 > 0 ? "Resume" : "Read")
-                        .font(Typography.headline)
-                        .padding(.horizontal, Metrics.spacing24)
-                        .padding(.vertical, Metrics.spacing8)
-                        .background(Palette.tangerine, in: Capsule())
-                        .foregroundStyle(.white)
+                    PrimaryCapsule(action: action)
                 }
                 .buttonStyle(.plain)
-                .padding(.top, Metrics.spacing4)
+            case .startDownload, .pauseDownload, .resumeDownload:
+                Button {
+                    perform(action)
+                } label: {
+                    PrimaryCapsule(action: action)
+                }
+                .buttonStyle(.plain)
             }
+        }
+    }
+
+    private func perform(_ action: BookPrimaryAction) {
+        let job = DownloadManager.Job(bookUUID: book.uuid, format: action.format)
+        switch action.intent {
+        case .openReader: break
+        case .startDownload: Task { await app.download(book, format: action.format) }
+        case .pauseDownload: app.downloads?.pause(job)
+        case .resumeDownload: Task { await app.resumeDownload(job) }
         }
     }
 
@@ -124,7 +197,10 @@ public struct BookDetailView: View {
     /// only mode CarPlay can offer at all.
     @ViewBuilder
     private var listenButton: some View {
-        if book.audiobook != nil, book.audiobook?.missing != true {
+        // Readaloud counts: the doc comment above has always claimed it did,
+        // but the gate only ever looked at `audiobook`, so a readaloud-only
+        // book got no Listen button at all.
+        if book.servableFormats.contains(.audiobook) || book.servableFormats.contains(.readaloud) {
             Button {
                 Task {
                     await app.startListening(to: book, nowPlaying: nowPlaying, settings: settings)
@@ -142,7 +218,42 @@ public struct BookDetailView: View {
                 .foregroundStyle(Palette.ink)
             }
             .buttonStyle(.plain)
-            .padding(.top, Metrics.spacing4)
+        }
+    }
+
+    /// The primary control's face. One definition, used by both the
+    /// `NavigationLink` that opens the reader and the `Button` that does
+    /// everything else.
+    private struct PrimaryCapsule: View {
+        let action: BookPrimaryAction
+        @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+        var body: some View {
+            HStack(spacing: Metrics.spacing8) {
+                if let fraction = action.fraction, action.isDeterminate {
+                    ZStack {
+                        Circle().stroke(Color.white.opacity(0.35), lineWidth: 2)
+                        Circle()
+                            .trim(from: 0, to: fraction)
+                            .stroke(.white, style: .init(lineWidth: 2, lineCap: .round))
+                            .rotationEffect(.degrees(-90))
+                    }
+                    .frame(width: 16, height: 16)
+                } else if !action.isDeterminate {
+                    ProgressView().controlSize(.mini).tint(.white)
+                }
+                // At an accessibility size "Download · 312 MB" is wider than the
+                // screen. Dropping the suffix is honest; shrinking the type of a
+                // primary action is not.
+                Text(action.title(compact: dynamicTypeSize.isAccessibilitySize))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .font(Typography.headline)
+            .padding(.horizontal, Metrics.spacing24)
+            .padding(.vertical, Metrics.spacing8)
+            .background(Palette.tangerine, in: Capsule())
+            .foregroundStyle(.white)
+            .accessibilityLabel(action.accessibilityLabel)
         }
     }
 
@@ -210,14 +321,17 @@ public struct BookDetailView: View {
         }
     }
 
+    /// Reads from `servableFormats`, so a badge cannot promise a "Readaloud ·
+    /// 5h 4m" two inches above an Editions row saying "Missing on server".
     @ViewBuilder
     private var formatBadges: some View {
-        if book.hasReadalong {
+        let formats = book.servableFormats
+        if formats.contains(.readaloud) {
             badge("Readaloud", duration: book.readaloud?.duration)
-        } else if book.audiobook != nil {
+        } else if formats.contains(.audiobook) {
             badge("Audiobook", duration: book.audiobook?.duration)
         }
-        if book.ebook != nil {
+        if formats.contains(.ebook) {
             badge("Ebook", pages: book.ebook?.pageCount)
         }
     }
@@ -258,6 +372,12 @@ public struct BookDetailView: View {
         VStack(alignment: .leading, spacing: Metrics.spacing8) {
             Text("Editions").overlineStyle()
             VStack(spacing: 1) {
+                if book.availableFormats.isEmpty {
+                    // Was a header over a blank rounded rectangle.
+                    editionNote("This book has no editions on the server yet.")
+                } else if book.servableFormats.isEmpty {
+                    editionNote("Every edition is missing on the server.")
+                }
                 if let ebook = book.ebook {
                     editionRow("Ebook", format: .ebook,
                                detail: ebook.isEpub2 == true ? "EPUB 2" : "EPUB 3",
@@ -294,69 +414,81 @@ public struct BookDetailView: View {
                 // beats a download that fails for no visible reason.
                 Text("Missing on server")
                     .font(Typography.caption)
-                    .foregroundStyle(Color(hex: 0x7A2F2A))
+                    .foregroundStyle(Palette.alert)
             } else {
                 Text(detail).font(Typography.caption).foregroundStyle(Palette.inkSecondary)
                 if let size {
                     Text(Self.sizeText(size)).font(Typography.caption).foregroundStyle(Palette.inkQuaternary)
                 }
-                downloadControl(for: format)
+                // State, not a control. The 17pt glyph that used to sit here
+                // was the only way to fetch a book and had a tap target under
+                // 44pt — which is what testers were describing.
+                Text(DownloadStatusText.short(
+                    app.downloads?.state(for: .init(bookUUID: book.uuid, format: format)),
+                    isDownloaded: downloaded.contains(format)))
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.inkTertiary)
+                editionMenu(for: format)
             }
         }
         .padding(Metrics.spacing12)
     }
 
-    /// One control that reads as its own state: download, progress, or done.
+    private func editionNote(_ text: String) -> some View {
+        Text(text)
+            .font(Typography.footnote)
+            .foregroundStyle(Palette.inkSecondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(Metrics.spacing12)
+    }
+
+    /// Per-edition control, behind a visible affordance.
+    ///
+    /// A context menu alone would have been the only route anywhere in the app
+    /// to fetch the audiobook edition for offline listening — the downloads
+    /// screen only lists and removes — and the primary always acts on the
+    /// reading edition. An invisible gesture is not an answer to a complaint
+    /// that the control was impossible to find.
     @ViewBuilder
-    private func downloadControl(for format: BookContentService.Format) -> some View {
+    private func editionMenu(for format: BookContentService.Format) -> some View {
+        #if !os(tvOS)
         let job = DownloadManager.Job(bookUUID: book.uuid, format: format)
         let state = app.downloads?.state(for: job)
-        let onDisk = app.session.map {
-            BookContentService(client: $0.client).isDownloaded(book, format: format)
-        } ?? false
+        let onDisk = downloaded.contains(format)
 
-        if onDisk, state == nil || state == .finished {
-            Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 17))
-                .foregroundStyle(Palette.moss)
-                .accessibilityLabel("Downloaded")
-        } else if let state, state.isActive {
-            Button {
-                app.downloads?.pause(job)
-            } label: {
-                ZStack {
-                    Circle().stroke(Palette.border, lineWidth: 2).frame(width: 20, height: 20)
-                    Circle()
-                        .trim(from: 0, to: state.fraction)
-                        .stroke(Palette.tangerine, style: .init(lineWidth: 2, lineCap: .round))
-                        .rotationEffect(.degrees(-90))
-                        .frame(width: 20, height: 20)
-                    Image(systemName: "stop.fill").font(.system(size: 7)).foregroundStyle(Palette.inkTertiary)
+        Menu {
+            if let state, state.isActive {
+                Button("Pause download", systemImage: "pause.circle") { app.downloads?.pause(job) }
+            } else if case .paused = state {
+                Button("Resume download", systemImage: "play.circle") {
+                    Task { await app.resumeDownload(job) }
+                }
+            } else if !onDisk {
+                Button("Download", systemImage: "arrow.down.circle") {
+                    Task { await app.download(book, format: format) }
                 }
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Pause download, \(Int(state.fraction * 100)) percent")
-        } else if case let .failed(reason) = state {
-            Button {
-                Task { await app.download(book, format: format) }
-            } label: {
-                Image(systemName: "exclamationmark.arrow.trianglehead.2.clockwise.rotate.90")
-                    .font(.system(size: 15))
-                    .foregroundStyle(Color(hex: 0x7A2F2A))
+            if state?.isFailure == true {
+                Button("Try again", systemImage: "arrow.clockwise") {
+                    Task { await app.download(book, format: format) }
+                }
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Download failed: \(reason). Try again")
-        } else {
-            Button {
-                Task { await app.download(book, format: format) }
-            } label: {
-                Image(systemName: state == nil ? "arrow.down.circle" : "play.circle")
-                    .font(.system(size: 17))
-                    .foregroundStyle(Palette.tangerine)
+            if onDisk {
+                Button("Remove download", systemImage: "trash", role: .destructive) {
+                    app.removeDownload(book, format: format)
+                }
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Download \(format.rawValue)")
+        } label: {
+            Image(systemName: "ellipsis.circle")
+                .font(.system(size: 17))
+                .foregroundStyle(Palette.tangerine)
+                // The row's own padding sits outside the control, so without
+                // this the tap target was the glyph's 17pt bounds.
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
         }
+        .accessibilityLabel("\(format.rawValue.capitalized) options")
+        #endif
     }
 
     private var facts: some View {

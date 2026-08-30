@@ -137,7 +137,7 @@ public struct DownloadsView: View {
                         .lineLimit(1)
                     Text(Self.statusText(job, state))
                         .font(Typography.caption)
-                        .foregroundStyle(state.isFailure ? Color(hex: 0x7A2F2A) : Palette.inkTertiary)
+                        .foregroundStyle(state.isFailure ? Palette.alert : Palette.inkTertiary)
                         .monospacedDigit()
                 }
                 Spacer()
@@ -216,7 +216,7 @@ public struct DownloadsView: View {
                         Button("Remove", role: .destructive) { remove(entry) }
                             .font(Typography.caption)
                             .buttonStyle(.plain)
-                            .foregroundStyle(Color(hex: 0x7A2F2A))
+                            .foregroundStyle(Palette.alert)
                     }
                 }
             }

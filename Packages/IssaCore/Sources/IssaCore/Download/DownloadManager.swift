@@ -180,6 +180,18 @@ public final class DownloadManager: NSObject {
         task.resume()
     }
 
+    /// A sentence worth showing someone.
+    ///
+    /// `localizedDescription` for `NSURLErrorUnknown` is literally "unknown
+    /// error", which now that the reason is drawn beneath the button is a
+    /// dead end printed on screen rather than a hint.
+    nonisolated static func readableReason(for error: any Error) -> String {
+        let error = error as NSError
+        let described = error.localizedDescription
+        guard error.code == NSURLErrorUnknown || described.isEmpty else { return described }
+        return "The download could not start. Tap to try again."
+    }
+
     public func pause(_ job: Job) {
         guard let task = tasks[job] else {
             // A job is `.queued` from the moment it is asked for until its
@@ -320,7 +332,7 @@ extension DownloadManager: URLSessionDownloadDelegate {
         guard let error, let description = task.taskDescription,
               let job = Self.decode(description) else { return }
         let resume = (error as NSError).userInfo[NSURLSessionDownloadTaskResumeData] as? Data
-        let message = error.localizedDescription
+        let message = Self.readableReason(for: error)
         let cancelled = (error as NSError).code == NSURLErrorCancelled
 
         Task { @MainActor [weak self] in

@@ -103,6 +103,29 @@ struct DownloadInterruptionTests {
     }
 }
 
+/// What a failure says, now that it is drawn on screen rather than living in
+/// an accessibility label.
+@Suite("Reporting a failed download")
+struct DownloadReasonTests {
+    @Test("a server's own explanation is passed through")
+    func realReasonSurvives() {
+        let error = NSError(
+            domain: NSURLErrorDomain, code: NSURLErrorTimedOut,
+            userInfo: [NSLocalizedDescriptionKey: "The request timed out."])
+        #expect(DownloadManager.readableReason(for: error) == "The request timed out.")
+    }
+
+    @Test("the system's \"unknown error\" is replaced with something actionable")
+    func unknownBecomesActionable() {
+        let error = NSError(
+            domain: NSURLErrorDomain, code: NSURLErrorUnknown,
+            userInfo: [NSLocalizedDescriptionKey: "unknown error"])
+        let reason = DownloadManager.readableReason(for: error)
+        #expect(!reason.lowercased().contains("unknown error"))
+        #expect(reason.contains("try again"))
+    }
+}
+
 private struct StubTokens: TokenProviding {
     func currentToken() async -> String? { "test-token" }
     func invalidate() async {}

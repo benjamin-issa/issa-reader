@@ -23,6 +23,9 @@ public enum Palette {
     public static let tangerinePressed = Color(hex: 0xC26A25)
     public static let moss = Color(hex: 0x7C8A5A)
     public static let slate = Color(hex: 0x2F3A3F)
+    /// Something went wrong, or is missing. Was copy-pasted as a literal in
+    /// five places before it had a name.
+    public static let alert = Color(hex: 0x7A2F2A)
 
     // Dark — the canvas's reader themes double as the app's dark surfaces.
     public static let paperDark = Color(hex: 0x17150F)
