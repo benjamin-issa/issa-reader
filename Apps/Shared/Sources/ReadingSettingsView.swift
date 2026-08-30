@@ -28,9 +28,15 @@ public struct ReadingSettingsView: View {
                     Text("Newsreader").tag("Newsreader")
                     Text("Public Sans").tag("Public Sans")
                 }
-                Stepper(
-                    "Text size: \(Int(settings.readerStyle.fontSize))pt",
-                    value: $settings.readerStyle.fontSize, in: 12 ... 32, step: 1,
+                // fontSize is a CGFloat for TextKit; bridge rather than
+                // widening ValueStepper's API to every float type.
+                ValueStepper(
+                    "Text size",
+                    value: Binding(
+                        get: { Double(settings.readerStyle.fontSize) },
+                        set: { settings.readerStyle.fontSize = CGFloat($0) },
+                    ),
+                    in: 12 ... 32, format: { "\(Int($0))pt" },
                 )
                 Picker("Line spacing", selection: $settings.readerStyle.lineSpacing) {
                     ForEach(ReaderStyle.LineSpacing.allCases, id: \.self) { spacing in
@@ -58,8 +64,7 @@ public struct ReadingSettingsView: View {
             }
             .listRowBackground(Palette.surface)
         }
-        .scrollContentBackground(.hidden)
-        .background(Palette.paper)
+        .paperListBackground()
         .navigationTitle("Reading")
     }
 }

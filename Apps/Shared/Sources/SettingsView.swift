@@ -11,8 +11,7 @@ public struct SettingsView: View {
         list
             // The design commits to warm paper everywhere; a stock grouped List
             // would reintroduce system grey behind and between the rows.
-            .scrollContentBackground(.hidden)
-            .background(Palette.paper)
+            .paperListBackground()
     }
 
     private var list: some View {

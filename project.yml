@@ -88,7 +88,6 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.benjaminissa.issareader
         INFOPLIST_FILE: Apps/IssaReader-macOS/Info.plist
-        CODE_SIGN_ENTITLEMENTS: Apps/IssaReader-macOS/IssaReader.entitlements
         # Ad-hoc "sign to run locally". Automatic provisioning needs an Apple ID
         # signed in to Xcode, which a headless build does not have. Switch to
         # Automatic once the account is added and the App Group is registered.
@@ -96,6 +95,11 @@ targets:
         CODE_SIGN_IDENTITY: "-"
         PROVISIONING_PROFILE_SPECIFIER: ""
         DEVELOPMENT_TEAM: ""
+      configs:
+        Debug:
+          CODE_SIGN_ENTITLEMENTS: Apps/IssaReader-macOS/IssaReader-Debug.entitlements
+        Release:
+          CODE_SIGN_ENTITLEMENTS: Apps/IssaReader-macOS/IssaReader.entitlements
 
   IssaReader-tvOS:
     type: application

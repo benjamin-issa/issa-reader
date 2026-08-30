@@ -50,15 +50,13 @@ public struct ControlsSettingsView: View {
             .listRowBackground(Palette.surface)
 
             Section("Skip amount") {
-                Stepper(
-                    "Forward: \(Int(settings.commandMap.skipForwardInterval))s",
-                    value: $settings.commandMap.skipForwardInterval,
-                    in: 5 ... 120, step: 5,
+                ValueStepper(
+                    "Forward", value: $settings.commandMap.skipForwardInterval,
+                    in: 5 ... 120, step: 5, format: { "\(Int($0))s" },
                 )
-                Stepper(
-                    "Back: \(Int(settings.commandMap.skipBackwardInterval))s",
-                    value: $settings.commandMap.skipBackwardInterval,
-                    in: 5 ... 120, step: 5,
+                ValueStepper(
+                    "Back", value: $settings.commandMap.skipBackwardInterval,
+                    in: 5 ... 120, step: 5, format: { "\(Int($0))s" },
                 )
             }
             .listRowBackground(Palette.surface)
@@ -70,8 +68,7 @@ public struct ControlsSettingsView: View {
             }
             .listRowBackground(Palette.surface)
         }
-        .scrollContentBackground(.hidden)
-        .background(Palette.paper)
+        .paperListBackground()
         .navigationTitle("Controls")
     }
 

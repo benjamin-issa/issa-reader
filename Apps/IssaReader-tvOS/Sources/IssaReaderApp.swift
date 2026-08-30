@@ -61,14 +61,25 @@ struct TVSignInView: View {
                 }
                 .frame(maxWidth: 900)
             } else {
-                VStack(alignment: .leading, spacing: Metrics.spacing24) {
-                    Text("Issa Reader").overlineStyle(Palette.tangerine)
+                // Ten-foot type: everything here is roughly double what the
+                // phone uses, because the viewer is across a room.
+                VStack(alignment: .leading, spacing: 36) {
+                    Text("Issa Reader")
+                        .font(Typography.sans(24, weight: .semibold))
+                        .textCase(.uppercase)
+                        .tracking(3)
+                        .foregroundStyle(Palette.tangerine)
                     Text("Sign in to your server")
-                        .font(Typography.displayLarge)
+                        .font(Typography.serif(64, weight: .medium))
                         .foregroundStyle(Palette.ink)
+                    Text("We'll show a code to approve on your phone. Your server decides which sign-in it offers.")
+                        .font(Typography.sans(28))
+                        .foregroundStyle(Palette.inkSecondary)
+                        .frame(maxWidth: 1100, alignment: .leading)
                     TextField("storyteller.home.arpa", text: $address)
-                        .frame(maxWidth: 700)
-                    Button("Continue") {
+                        .font(Typography.sans(30))
+                        .frame(maxWidth: 900)
+                    Button {
                         Task {
                             await app.connect(to: address)
                             guard app.phase != .ready,
@@ -76,10 +87,19 @@ struct TVSignInView: View {
                             flow = DeviceSignInModel(serverURL: url)
                             await flow?.begin()
                         }
+                    } label: {
+                        // Explicit colours: the app-level tint would otherwise
+                        // paint the label the same orange as the fill, and the
+                        // disabled state dims it into invisibility.
+                        Text("Continue")
+                            .font(Typography.sans(30, weight: .semibold))
+                            .foregroundStyle(address.isEmpty ? Palette.inkTertiary : Palette.ink)
+                            .padding(.horizontal, 24)
+                            .padding(.vertical, 6)
                     }
                     .disabled(address.isEmpty)
                 }
-                .frame(maxWidth: 900)
+                .frame(maxWidth: 1400, alignment: .leading)
             }
         }
     }

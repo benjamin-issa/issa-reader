@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Debug builds sign ad-hoc, and an ad-hoc signature gives the bundle a hash
+       identifier rather than its real one. The sandbox then cannot create a
+       container and the app traps on launch with "Unable to get bundle
+       identifier for container id". The sandbox is therefore off for local
+       Debug runs and on for Release, which is what ships. -->
+  <key>com.apple.security.network.client</key>
+  <true/>
+  <key>com.apple.security.files.user-selected.read-write</key>
+  <true/>
+</dict>
+</plist>
