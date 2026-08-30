@@ -53,6 +53,9 @@ public struct Book: Codable, Hashable, Sendable, Identifiable {
 
     /// Per-user reading status ("To read" / "Reading" / "Read"). Present only
     /// when the request is authenticated.
+    ///
+    /// The server also changes this on its own when a reading position is
+    /// written, so a locally-set value can be superseded by simply reading on.
     public var status: Status?
     /// Per-user reading position. Present only when authenticated, and `nil`
     /// until the book has been opened at least once.

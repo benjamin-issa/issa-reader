@@ -23,6 +23,18 @@ public struct LibraryService: Sendable {
         try await client.get(Endpoint.statuses)
     }
 
+    /// This user's ratings, as book uuid to score.
+    ///
+    /// One request for the whole library rather than one per book — the detail
+    /// screen and the library grid both want them.
+    public func myRatings() async throws -> [String: Double] {
+        struct Row: Decodable { let bookUuid: String?; let rating: Double? }
+        let rows: [Row] = try await client.get(Endpoint.userRatings)
+        return rows.reduce(into: [:]) { result, row in
+            if let uuid = row.bookUuid, let rating = row.rating { result[uuid] = rating }
+        }
+    }
+
     public func book(_ uuid: String) async throws -> Book {
         try await client.get(Endpoint.book(uuid))
     }

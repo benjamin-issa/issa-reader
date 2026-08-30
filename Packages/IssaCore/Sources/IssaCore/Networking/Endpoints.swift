@@ -38,6 +38,8 @@ public enum Endpoint {
     public static func positions(_ uuid: String) -> String { "/api/v2/books/\(uuid)/positions" }
     public static func rating(_ uuid: String) -> String { "/api/v2/books/\(uuid)/rating" }
     public static func status(_ uuid: String) -> String { "/api/v2/books/\(uuid)/status" }
+    /// Bulk status change, for multi-select in the library.
+    public static let bulkStatus = "/api/v2/books/status"
 
     /// Whole-file download. `format` is one of ebook / audiobook / audiobook-rpf / readaloud.
     public static func files(_ uuid: String) -> String { "/api/v2/books/\(uuid)/files" }

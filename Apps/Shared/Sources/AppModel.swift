@@ -18,6 +18,12 @@ public final class AppModel {
     public var serverAddress: String = ""
     public var session: Session?
     public var books: [Book] = []
+    /// The shelves this server defines. Fetched once per sign-in; an admin can
+    /// add their own beyond the default To read / Reading / Read.
+    public var statuses: [Status] = []
+    /// This user's own ratings, keyed by book, kept alongside the catalogue so
+    /// the library and detail screens agree without extra requests.
+    public var ratings: [String: Double] = [:]
     public var loadError: String?
     public var isLoadingLibrary = false
 
@@ -91,10 +97,58 @@ public final class AppModel {
         isLoadingLibrary = true
         defer { isLoadingLibrary = false }
         do {
-            books = try await LibraryService(client: session.client).allBooks()
+            let service = LibraryService(client: session.client)
+            books = try await service.allBooks()
+            statuses = (try? await service.statuses()) ?? statuses
+            ratings = (try? await service.myRatings()) ?? ratings
             loadError = nil
         } catch {
             loadError = String(describing: error)
         }
+    }
+
+    // MARK: - Per-user state
+
+    /// Moves a book to a shelf.
+    ///
+    /// The local copy is updated first so the shelf changes under the finger,
+    /// and rolled back if the server refuses — a status that silently reverts on
+    /// the next refresh is worse than one that never appeared to change.
+    public func setStatus(_ status: Status, for book: Book) async {
+        guard let session, let index = books.firstIndex(where: { $0.uuid == book.uuid }) else { return }
+        let previous = books[index].status
+        books[index].status = status
+        do {
+            try await LibraryMutationService(client: session.client)
+                .setStatus(status.uuid, for: book.uuid)
+        } catch {
+            books[index].status = previous
+            loadError = "Couldn't change the status: \(error)"
+        }
+    }
+
+    public func setRating(_ value: Double?, for book: Book) async {
+        guard let session else { return }
+        let previous = ratings[book.uuid]
+        if let value { ratings[book.uuid] = value } else { ratings.removeValue(forKey: book.uuid) }
+        do {
+            try await LibraryMutationService(client: session.client)
+                .setRating(value, for: book.uuid)
+        } catch {
+            if let previous { ratings[book.uuid] = previous } else { ratings.removeValue(forKey: book.uuid) }
+            loadError = "Couldn't save the rating: \(error)"
+        }
+    }
+
+    /// Re-reads one book after something changed it server-side.
+    ///
+    /// Writing a reading position moves the status on the server, so after a
+    /// reading session the local copy is stale in a way the user can see.
+    public func refresh(book: Book) async {
+        guard let session,
+              let index = books.firstIndex(where: { $0.uuid == book.uuid }),
+              let fresh = try? await LibraryService(client: session.client).book(book.uuid)
+        else { return }
+        books[index] = fresh
     }
 }

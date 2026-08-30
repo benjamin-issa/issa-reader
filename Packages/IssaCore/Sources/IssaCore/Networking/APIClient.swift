@@ -59,6 +59,11 @@ public actor APIClient {
         return try await send(req).0
     }
 
+    @discardableResult
+    public func delete(_ path: String) async throws -> Data {
+        try await send(request(path, method: "DELETE")).0
+    }
+
     /// Returns the raw status without throwing, for capability probing.
     public func probeStatus(_ path: String) async -> Int {
         var req = request(path, method: "GET")

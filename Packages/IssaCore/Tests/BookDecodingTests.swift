@@ -130,3 +130,31 @@ struct StorytellerDateFormatRegressionTests {
         #expect(book.alignedAt != nil)
     }
 }
+
+/// The rating endpoint has an unusual contract worth pinning down.
+struct RatingContractTests {
+    @Test("a rating write encodes only the fields that were set")
+    func encodesSparsely() throws {
+        let onlyScore = LibraryMutationService.Rating(rating: 4)
+        let json = try JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(onlyScore),
+        ) as? [String: Any]
+        #expect(json?["rating"] as? Double == 4)
+        // The server answers 405, not 400, for a body it dislikes, so sending
+        // an explicit null review where none was given is worth avoiding.
+        #expect(json?["review"] == nil)
+    }
+
+    @Test("decodes the full row the server returns")
+    func decodesServerRow() throws {
+        // Captured from a live PUT: the response carries more than it accepts.
+        let json = Data("""
+        {"uuid":"f4b40e3d","userId":"229a0d40","bookUuid":"35f8896e",
+         "rating":4,"review":null,
+         "createdAt":"2026-08-30 09:13:48","updatedAt":"2026-08-30 09:13:48"}
+        """.utf8)
+        let rating = try JSONDecoder().decode(LibraryMutationService.Rating.self, from: json)
+        #expect(rating.rating == 4)
+        #expect(rating.review == nil)
+    }
+}

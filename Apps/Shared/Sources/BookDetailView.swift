@@ -34,6 +34,9 @@ public struct BookDetailView: View {
         }
         .background(Palette.paper)
         .navigationTitle(book.title)
+        // Writing a position moves the status server-side, so the shelf shown
+        // here is stale after a reading session unless it is re-read.
+        .task { await app.refresh(book: book) }
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
@@ -56,8 +59,13 @@ public struct BookDetailView: View {
                         .font(Typography.footnote)
                         .foregroundStyle(Palette.inkTertiary)
                 }
-                if let rating = book.rating { stars(rating) }
-                formatBadge
+                ratingControl
+                // Wrapping, not a fixed row: "Readaloud · 5h 4m" beside a
+                // status pill overflows a phone column and breaks mid-word.
+                FlowRow(spacing: Metrics.spacing8) {
+                    statusControl
+                    formatBadges
+                }
                 if let progress = book.progress, progress > 0 {
                     ProgressBar(value: progress).frame(maxWidth: 200)
                     Text("\(Int(progress * 100))% complete")
@@ -89,29 +97,79 @@ public struct BookDetailView: View {
         }
     }
 
-    private func stars(_ rating: Double) -> some View {
-        HStack(spacing: 2) {
-            ForEach(0 ..< 5, id: \.self) { index in
-                Image(systemName: Double(index) + 0.5 < rating ? "star.fill" : "star")
-                    .font(.system(size: 11))
-                    .foregroundStyle(Palette.tangerine)
+    /// This user's own rating, tappable. Tapping the current score clears it,
+    /// which is the only way to un-rate something without a separate control.
+    private var ratingControl: some View {
+        let mine = app.ratings[book.uuid]
+        return HStack(spacing: Metrics.spacing4) {
+            ForEach(1 ... 5, id: \.self) { star in
+                Button {
+                    Task { await app.setRating(mine == Double(star) ? nil : Double(star), for: book) }
+                } label: {
+                    Image(systemName: Double(star) <= (mine ?? 0) ? "star.fill" : "star")
+                        .font(.system(size: 14))
+                        .foregroundStyle(mine == nil ? Palette.inkQuaternary : Palette.tangerine)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Rate \(star) star\(star == 1 ? "" : "s")")
             }
-            Text(String(format: "%.1f", rating))
-                .font(Typography.caption)
-                .foregroundStyle(Palette.inkTertiary)
+            if let serverAverage = book.rating, mine == nil {
+                Text(String(format: "%.1f average", serverAverage))
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.inkTertiary)
+            }
         }
     }
 
-    private var formatBadge: some View {
-        HStack(spacing: Metrics.spacing8) {
-            if book.hasReadalong {
-                badge("Readaloud", duration: book.readaloud?.duration)
-            } else if book.audiobook != nil {
-                badge("Audiobook", duration: book.audiobook?.duration)
+    /// The shelf this book sits on, changeable in place.
+    private var statusControl: some View {
+        Menu {
+            ForEach(app.statuses) { status in
+                Button {
+                    Task { await app.setStatus(status, for: book) }
+                } label: {
+                    if status.uuid == book.status?.uuid {
+                        Label(status.name, systemImage: "checkmark")
+                    } else {
+                        Text(status.name)
+                    }
+                }
             }
-            if book.ebook != nil {
-                badge("Ebook", pages: book.ebook?.pageCount)
+        } label: {
+            HStack(spacing: Metrics.spacing4) {
+                Image(systemName: Self.symbol(for: book.status?.name))
+                    .font(.system(size: 11))
+                Text(book.status?.name ?? "Set status")
+                    .font(Typography.caption)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 8))
             }
+            .fixedSize()
+            .padding(.horizontal, Metrics.spacing8)
+            .padding(.vertical, 4)
+            .background(Palette.surfaceRaised, in: Capsule())
+            .foregroundStyle(Palette.inkSecondary)
+        }
+        .disabled(app.statuses.isEmpty)
+    }
+
+    static func symbol(for status: String?) -> String {
+        switch status {
+        case Status.readingName: "book"
+        case Status.readName: "checkmark.circle"
+        default: "bookmark"
+        }
+    }
+
+    @ViewBuilder
+    private var formatBadges: some View {
+        if book.hasReadalong {
+            badge("Readaloud", duration: book.readaloud?.duration)
+        } else if book.audiobook != nil {
+            badge("Audiobook", duration: book.audiobook?.duration)
+        }
+        if book.ebook != nil {
+            badge("Ebook", pages: book.ebook?.pageCount)
         }
     }
 
@@ -121,6 +179,7 @@ public struct BookDetailView: View {
         if let pages { text += " · \(pages) pages" }
         return Text(text)
             .font(Typography.caption)
+            .fixedSize()
             .padding(.horizontal, Metrics.spacing8)
             .padding(.vertical, 3)
             .background(Palette.surfaceRaised, in: Capsule())
@@ -206,7 +265,6 @@ public struct BookDetailView: View {
                 if !book.collections.isEmpty {
                     factRow("Collections", book.collections.map(\.name).joined(separator: ", "))
                 }
-                if let status = book.status { factRow("Status", status.name) }
                 if let alignedWith = book.alignedWith { factRow("Aligned with", alignedWith) }
                 ForEach(namedIdentifiers, id: \.label) { identifier in
                     factRow(identifier.label, identifier.value)
