@@ -46,10 +46,22 @@ public final class AudioPlayer {
     /// screen, so a play tap is not up to five seconds stale, and the widget,
     /// so a paused book stops claiming to be playing — and a single slot meant
     /// whichever attached second silently replaced the first.
-    private var rateObservers: [(Float) -> Void] = []
+    private var rateObservers: [ObjectIdentifier: (Float) -> Void] = [:]
 
-    public func addRateObserver(_ observer: @escaping (Float) -> Void) {
-        rateObservers.append(observer)
+    /// Registers an observer against an owner.
+    ///
+    /// Keyed rather than appended: `NowPlayingController.attach` runs every
+    /// time the reader appears — a tab switch, a pop back from Contents — and
+    /// appending meant one play tap eventually performed a dozen Now Playing
+    /// rebuilds, with every closure retained for the life of the player.
+    /// Registering twice for the same owner replaces, which is what the call
+    /// sites have always assumed.
+    public func setRateObserver(for owner: AnyObject, _ observer: @escaping (Float) -> Void) {
+        rateObservers[ObjectIdentifier(owner)] = observer
+    }
+
+    public func removeRateObserver(for owner: AnyObject) {
+        rateObservers[ObjectIdentifier(owner)] = nil
     }
 
     /// Drops every observer, for a coordinator being torn down.
@@ -58,7 +70,7 @@ public final class AudioPlayer {
     }
 
     private func notifyRateObservers(_ rate: Float) {
-        for observer in rateObservers { observer(rate) }
+        for observer in rateObservers.values { observer(rate) }
     }
     public var onFinishedFile: (() -> Void)?
 

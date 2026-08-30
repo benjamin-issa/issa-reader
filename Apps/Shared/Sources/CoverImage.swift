@@ -30,30 +30,51 @@ public final class CoverCache {
     ///
     /// The widget cannot reach the app's Caches directory, and a cover fetched
     /// inside the extension would spend its 30 MB budget on a network decode.
-    /// One small file, written when the current book changes.
+    /// So the app fetches it; the publisher decides where it goes.
     /// Fetches the bytes without deciding what to do with them.
     ///
     /// Returning the data rather than writing it lets the caller record which
     /// shape actually landed — a square request 404s for a book with no
     /// audiobook edition, and the widget needs to know which aspect it got.
-    public func coverDataForWidget(
-        for book: Book, session: Session, shape: LibraryService.CoverShape = .portrait,
-    ) async -> Data? {
-        let key = shape == .square ? book.uuid + "-square" : book.uuid
-        let fileURL = diskDirectory.appending(path: "\(key).jpg")
-        var data = await Task.detached(priority: .utility) {
+    /// The cover the widget should draw, and which shape it turned out to be.
+    ///
+    /// Returns the shape as well as the bytes because the caller cannot infer
+    /// it: `LibraryService.coverData` has its own fallback from portrait to
+    /// square, so asking for one can quietly return the other — and the widget
+    /// crops by a third if it frames square art at the portrait aspect.
+    public func widgetCover(
+        for book: Book, session: Session,
+        preferring shape: LibraryService.CoverShape,
+    ) async -> (data: Data, isSquare: Bool)? {
+        // Its own cache key. The widget asks for 320px and the app asks for
+        // 600px through the same directory, so sharing a key let whichever
+        // landed first serve the other — an upscaled 320px cover in the library
+        // grid for the life of the cache.
+        let name = "\(book.uuid)-widget-\(shape == .square ? "square" : "portrait").jpg"
+        let fileURL = diskDirectory.appending(path: name)
+        if let cached = await Task.detached(priority: .utility, operation: {
             try? Data(contentsOf: fileURL)
-        }.value
-        if data == nil {
-            data = try? await LibraryService(client: session.client).coverData(
-                for: book.uuid, shape: shape, pixelWidth: 320, version: book.updatedAt?.value)
-            // Warm the cache the next request would otherwise miss again.
-            if let data {
-                let url = fileURL
-                await Task.detached(priority: .utility) { try? data.write(to: url) }.value
-            }
+        }).value {
+            return (cached, shape == .square)
         }
-        return data
+
+        let service = LibraryService(client: session.client)
+        // Try what the book wants, then the other one. A square request 404s
+        // for a book with no audiobook edition, and portrait can be missing
+        // too — either way the previous book's art must not be left in place.
+        for candidate in [shape, shape == .square ? .portrait : .square] {
+            guard let data = try? await service.coverData(
+                for: book.uuid, shape: candidate, pixelWidth: 320,
+                version: book.updatedAt?.value)
+            else { continue }
+            let url = diskDirectory.appending(
+                path: "\(book.uuid)-widget-\(candidate == .square ? "square" : "portrait").jpg")
+            await Task.detached(priority: .utility) {
+                try? data.write(to: url, options: .atomic)
+            }.value
+            return (data, candidate == .square)
+        }
+        return nil
     }
 
     /// Drops everything, for sign-out.

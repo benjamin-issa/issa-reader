@@ -102,7 +102,7 @@ public final class NowPlayingController {
         }
         // Publish the moment anything changes, rather than waiting up to five
         // seconds for the poll — a lock screen that lags a play tap looks broken.
-        coordinator.player.addRateObserver { [weak self] _ in self?.publish() }
+        coordinator.player.setRateObserver(for: self) { [weak self] _ in self?.publish() }
 
         loadArtwork(for: book)
         // The system reads Now Playing on a pull, but the elapsed time it shows

@@ -16,6 +16,14 @@ public struct CurrentBookSnapshot: Codable, Sendable, Hashable {
     /// Seconds of narration left, when the book has audio.
     public var remaining: TimeInterval?
     public var isPlaying: Bool
+    /// Which book the cover file on disk actually belongs to.
+    ///
+    /// The cover is one shared file with no identity of its own, so without
+    /// this the widget cannot tell that it is drawing the previous book's
+    /// jacket under this book's title — and the publisher cannot tell whether
+    /// it still needs to fetch. Kept beside the snapshot rather than in memory
+    /// so it survives a cold launch, which in-memory state did not.
+    public var coverBookID: String?
     /// Whether the cover beside this snapshot is the square audiobook art.
     ///
     /// The widget has one cover file and no other way to know its shape, so
@@ -28,9 +36,10 @@ public struct CurrentBookSnapshot: Codable, Sendable, Hashable {
     public init(
         bookID: String, title: String, author: String, chapter: String? = nil,
         progress: Double, remaining: TimeInterval? = nil, isPlaying: Bool = false,
-        coverIsSquare: Bool = false,
+        coverBookID: String? = nil, coverIsSquare: Bool = false,
         updatedAt: Date = .now,
     ) {
+        self.coverBookID = coverBookID
         self.bookID = bookID
         self.title = title
         self.author = author
@@ -50,15 +59,29 @@ public struct CurrentBookSnapshot: Codable, Sendable, Hashable {
     /// spine document — which is every plain EPUB — so an unfiltered chapter
     /// printed the title twice. An empty one is reachable too, from a table of
     /// contents anchor with no text, and left a dangling separator.
+    /// Whether the cover file on disk belongs to this snapshot's book.
+    public var hasMatchingCover: Bool { coverBookID == bookID }
+
+    /// Rounded, once, for every surface. Truncating showed 99% beside a ring
+    /// that had visibly closed.
+    public var percent: Int { Int((progress * 100).rounded()) }
+
+    /// The chapter worth showing, or nil. See `subtitle` for why it is filtered.
+    public var displayChapter: String? {
+        guard let chapter else { return nil }
+        let trimmed = chapter.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty || trimmed == title ? nil : trimmed
+    }
+
+    /// "2h 18m left", or nil when there is less than a minute of it — below
+    /// which `durationText` floors to "0m".
+    public var remainingText: String? {
+        guard let remaining, remaining.isFinite, remaining >= 60 else { return nil }
+        return Self.durationText(remaining) + " left"
+    }
+
     public var subtitle: String {
-        var parts: [String] = []
-        if let remaining, remaining.isFinite, remaining > 0 {
-            parts.append(Self.durationText(remaining) + " left")
-        }
-        if let chapter {
-            let trimmed = chapter.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty, trimmed != title { parts.append(trimmed) }
-        }
+        let parts = [remainingText, displayChapter].compactMap { $0 }
         return parts.isEmpty ? author : parts.joined(separator: " · ")
     }
 
@@ -72,7 +95,7 @@ public struct CurrentBookSnapshot: Codable, Sendable, Hashable {
     // Spelled out because the decoder below names them.
     enum CodingKeys: String, CodingKey {
         case bookID, title, author, chapter, progress, remaining, isPlaying
-        case coverIsSquare, updatedAt
+        case coverBookID, coverIsSquare, updatedAt
     }
 
     /// Decoded field by field, so a snapshot written by an older build still
@@ -89,6 +112,7 @@ public struct CurrentBookSnapshot: Codable, Sendable, Hashable {
         progress = try container.decodeIfPresent(Double.self, forKey: .progress) ?? 0
         remaining = try container.decodeIfPresent(TimeInterval.self, forKey: .remaining)
         isPlaying = try container.decodeIfPresent(Bool.self, forKey: .isPlaying) ?? false
+        coverBookID = try container.decodeIfPresent(String.self, forKey: .coverBookID)
         coverIsSquare = try container.decodeIfPresent(Bool.self, forKey: .coverIsSquare) ?? false
         updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? .now
     }
@@ -97,6 +121,9 @@ public struct CurrentBookSnapshot: Codable, Sendable, Hashable {
 public enum CurrentBookSnapshotStore {
     /// Must match the App Group in every target's entitlements.
     public static let appGroup = "group.com.benjaminissa.issareader"
+    /// The widget's kind, which the app has to name to reload it. A bare
+    /// literal in two targets is a typo waiting to stop the widget updating.
+    public static let widgetKind = "CurrentBook"
     private static let filename = "current-book.json"
     private static let coverFilename = "current-cover.jpg"
 
@@ -117,6 +144,13 @@ public enum CurrentBookSnapshotStore {
     public static func writeCover(_ data: Data) {
         guard let coverURL else { return }
         try? data.write(to: coverURL, options: .atomic)
+    }
+
+    /// The same write, off the main thread. A JPEG landing in the App Group
+    /// container is a temp-file create, a write and a rename; doing that on the
+    /// thread laying out pages is what the detached wrapper here was for.
+    public static func writeCoverOffMain(_ data: Data) async {
+        await Task.detached(priority: .utility) { writeCover(data) }.value
     }
 
     public static func readCover() -> Data? {

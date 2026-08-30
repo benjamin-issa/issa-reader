@@ -26,6 +26,7 @@ struct MacSettingsView: View {
 /// Signing out, and what the server is — the two account facts worth a screen.
 struct AccountSettingsView: View {
     @Environment(AppModel.self) private var app
+    @Environment(NowPlayingController.self) private var nowPlaying
     @State private var confirmingSignOut = false
 
     var body: some View {
@@ -46,10 +47,10 @@ struct AccountSettingsView: View {
             isPresented: $confirmingSignOut, titleVisibility: .visible,
         ) {
             Button("Sign Out and Keep Downloads") {
-                Task { await app.signOut(keepDownloads: true) }
+                Task { await app.signOut(keepDownloads: true, nowPlaying: nowPlaying) }
             }
             Button("Sign Out and Delete Downloads", role: .destructive) {
-                Task { await app.signOut() }
+                Task { await app.signOut(nowPlaying: nowPlaying) }
             }
             Button("Cancel", role: .cancel) {}
         } message: {

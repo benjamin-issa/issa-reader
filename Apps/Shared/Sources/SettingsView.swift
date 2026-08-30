@@ -4,6 +4,7 @@ import SwiftUI
 
 public struct SettingsView: View {
     @Environment(AppModel.self) private var app
+    @Environment(NowPlayingController.self) private var nowPlaying
     @State private var confirmingSignOut = false
 
     public init() {}
@@ -67,9 +68,9 @@ public struct SettingsView: View {
             .confirmationDialog("Sign out?", isPresented: $confirmingSignOut, titleVisibility: .visible) {
                 // Downloaded books are expensive to fetch again, so this is a
                 // choice rather than an assumption.
-                Button("Sign out and keep downloads") { Task { await app.signOut(keepDownloads: true) } }
+                Button("Sign out and keep downloads") { Task { await app.signOut(keepDownloads: true, nowPlaying: nowPlaying) } }
                 Button("Sign out and delete downloads", role: .destructive) {
-                    Task { await app.signOut(keepDownloads: false) }
+                    Task { await app.signOut(keepDownloads: false, nowPlaying: nowPlaying) }
                 }
                 Button("Cancel", role: .cancel) {}
             }

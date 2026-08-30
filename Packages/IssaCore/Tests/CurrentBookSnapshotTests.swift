@@ -54,6 +54,50 @@ struct CurrentBookSnapshotTests {
         #expect(snapshot(remaining: 900).subtitle == "15m left")
     }
 
+    /// `durationText` floors, so anything under a minute rendered as "0m left"
+    /// — for the whole final minute of every audiobook.
+    @Test("less than a minute left is not reported as 0m")
+    func subMinuteIsNotZeroMinutes() {
+        for seconds in [0.0, 20, 45, 59.4] {
+            let line = snapshot(chapter: "Part 3", remaining: seconds).subtitle
+            #expect(!line.contains("0m"), "\(seconds)s rendered as \(line)")
+            #expect(line == "Part 3")
+        }
+        // A full minute is worth saying.
+        #expect(snapshot(chapter: "Part 3", remaining: 60).subtitle == "1m left · Part 3")
+    }
+
+    /// Every surface reads the same number. They disagreed: the ring rounded
+    /// and the bar truncated, so at 99.6% two widgets showed 100% and 99% at
+    /// the same instant.
+    @Test("the percentage is rounded, once, for everything")
+    func percentIsRounded() {
+        #expect(CurrentBookSnapshot(bookID: "u", title: "T", author: "A", progress: 0.996).percent == 100)
+        #expect(CurrentBookSnapshot(bookID: "u", title: "T", author: "A", progress: 0.994).percent == 99)
+    }
+
+    // MARK: - Whose cover is on disk
+
+    /// The cover is one shared file written after the snapshot, so between the
+    /// two writes it holds the previous book's jacket.
+    @Test("a cover belonging to another book is not this book's")
+    func coverIdentityIsChecked() {
+        var subject = snapshot()
+        #expect(!subject.hasMatchingCover)      // nothing claimed yet
+        subject.coverBookID = "someone-else"
+        #expect(!subject.hasMatchingCover)
+        subject.coverBookID = subject.bookID
+        #expect(subject.hasMatchingCover)
+    }
+
+    @Test("a snapshot from a build without cover identity still decodes")
+    func decodesWithoutCoverIdentity() throws {
+        let json = #"{"bookID":"u","title":"T","author":"A","progress":0.5}"#
+        let restored = try JSONDecoder().decode(CurrentBookSnapshot.self, from: Data(json.utf8))
+        #expect(restored.coverBookID == nil)
+        #expect(!restored.hasMatchingCover)     // so the widget draws no stale art
+    }
+
     // MARK: - Reading what an older build wrote
 
     @Test("a snapshot from a build without the cover shape still decodes")

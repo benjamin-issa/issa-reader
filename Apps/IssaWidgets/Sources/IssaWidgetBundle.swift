@@ -24,7 +24,7 @@ struct IssaWidgetBundle: WidgetBundle {
 /// spacing of about five minutes between reloads even while audio is playing.
 struct CurrentBookWidget: Widget {
     var body: some WidgetConfiguration {
-        StaticConfiguration(kind: "CurrentBook", provider: CurrentBookProvider()) { entry in
+        StaticConfiguration(kind: CurrentBookSnapshotStore.widgetKind, provider: CurrentBookProvider()) { entry in
             CurrentBookView(entry: entry)
                 .containerBackground(Palette.surface, for: .widget)
                 // Tapping the widget opens the book it is showing, not the
@@ -64,7 +64,12 @@ struct CurrentBookProvider: TimelineProvider {
         // Only the families that draw the cover pay to load it.
         return CurrentBookEntry(
             date: snapshot.updatedAt, snapshot: snapshot,
-            cover: CurrentBookSnapshotStore.readCover(),
+            // Only if it is this book's. The cover is one shared file with no
+            // identity of its own, and it is written after the snapshot — so
+            // between the two writes it still holds the previous book's
+            // jacket, and drawing it would put one book's text over another's
+            // artwork. The placeholder is the honest answer for that moment.
+            cover: snapshot.hasMatchingCover ? CurrentBookSnapshotStore.readCover() : nil,
         )
     }
 
@@ -90,7 +95,7 @@ struct CurrentBookView: View {
         switch family {
         case .accessoryInline:
             // One line, no room for anything but the fact.
-            Text("\(Int(entry.snapshot.progress * 100))% · \(entry.snapshot.title)")
+            Text("\(entry.snapshot.percent)% · \(entry.snapshot.title)")
         case .accessoryCircular:
             ZStack {
                 AccessoryWidgetBackground()
@@ -102,7 +107,7 @@ struct CurrentBookView: View {
         case .accessoryRectangular:
             VStack(alignment: .leading, spacing: 2) {
                 Text(entry.snapshot.title).font(.headline).lineLimit(1)
-                if let chapter = entry.snapshot.chapter {
+                if let chapter = entry.snapshot.displayChapter {
                     Text(chapter).font(.caption).lineLimit(1)
                 }
                 ProgressView(value: entry.snapshot.progress).tint(.primary)
@@ -152,20 +157,14 @@ struct CurrentBookView: View {
     /// makes a shelf of widgets recognisable at a glance.
     private var withCover: some View {
         HStack(alignment: .top, spacing: Metrics.spacing12) {
-            if let data = entry.cover, let image = Image(widgetCover: data) {
-                let width: CGFloat = family == .systemLarge ? 116 : 74
-                image
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    // Height as well as width. Fixing width alone let the row's
-                    // height decide the rest, so a square jacket was scaled to
-                    // cover it and then clipped — about 40% of the artwork on
-                    // medium and 60% on large.
-                    .frame(
-                        width: width,
-                        height: entry.snapshot.coverIsSquare ? width : width / Metrics.coverAspect)
-                    .clipShape(RoundedRectangle(cornerRadius: Metrics.radiusSmall))
-            }
+            // Height as well as width. Fixing width alone let the row's height
+            // decide the rest, so a square jacket was scaled to cover it and
+            // then clipped — about 40% of the artwork on medium, 60% on large.
+            // And a placeholder rather than nothing: an absent cover is the
+            // normal state on a first render and after a sign-out.
+            CoverThumb(
+                data: entry.cover, isSquare: entry.snapshot.coverIsSquare,
+                height: family == .systemLarge ? 174 : 111)
             details
         }
     }
@@ -181,7 +180,7 @@ struct CurrentBookView: View {
                 .foregroundStyle(Palette.inkTertiary)
                 .lineLimit(1)
             Spacer(minLength: 0)
-            if let chapter = entry.snapshot.chapter {
+            if let chapter = entry.snapshot.displayChapter {
                 Text(chapter)
                     .font(Typography.caption)
                     .foregroundStyle(Palette.inkSecondary)
@@ -189,24 +188,19 @@ struct CurrentBookView: View {
             }
             ProgressBarWidget(value: entry.snapshot.progress)
             HStack {
-                Text("\(Int(entry.snapshot.progress * 100))%")
+                // The same rules the small family uses. They disagreed: one
+                // rounded and the other truncated, so at 99.6% the two widgets
+                // read 100% and 99% at the same instant; and this one printed
+                // "0m left" beside a full bar at the end of a book.
+                Text("\(entry.snapshot.percent)%")
                 Spacer()
-                if let remaining = entry.snapshot.remaining {
-                    Text(Self.remainingText(remaining) + " left")
+                if let left = entry.snapshot.remainingText {
+                    Text(left)
                 }
             }
             .font(Typography.caption)
             .foregroundStyle(Palette.inkSecondary)
         }
-    }
-}
-
-extension CurrentBookView {
-    static func remainingText(_ seconds: TimeInterval) -> String {
-        let total = Int(seconds.rounded())
-        let hours = total / 3600
-        let minutes = (total % 3600) / 60
-        return hours > 0 ? "\(hours)h \(minutes)m" : "\(minutes)m"
     }
 }
 
@@ -231,9 +225,15 @@ extension Image {
 struct CoverThumb: View {
     let data: Data?
     let isSquare: Bool
+    var height: CGFloat = 52
 
     private var size: CGSize {
-        isSquare ? CGSize(width: 52, height: 52) : CGSize(width: 40, height: 52)
+        // Portrait uses the same ratio as every other cover in the app.
+        // Hardcoding 40x52 was 0.77, so a 2:3 jacket lost about an eighth of
+        // its height to the crop — the very thing the aspect was added to stop.
+        isSquare
+            ? CGSize(width: height, height: height)
+            : CGSize(width: height * Metrics.coverAspect, height: height)
     }
 
     var body: some View {
@@ -242,10 +242,13 @@ struct CoverThumb: View {
                 image.resizable().aspectRatio(contentMode: .fill)
             } else {
                 ZStack {
-                    Palette.surfaceRaised
+                    // border, not surfaceRaised: the latter is ~1.1:1 against
+                    // the widget's own surface, so the placeholder was
+                    // effectively invisible.
+                    Palette.border
                     Image(systemName: "book.closed")
                         .font(.system(size: 16))
-                        .foregroundStyle(Palette.inkQuaternary)
+                        .foregroundStyle(Palette.inkSecondary)
                 }
             }
         }

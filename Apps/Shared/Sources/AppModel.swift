@@ -260,19 +260,19 @@ public final class AppModel {
     ///
     /// - Parameter keepDownloads: books already on the device are expensive to
     ///   fetch again, so the choice is offered rather than assumed.
-    public func signOut(keepDownloads: Bool = false) async {
+    public func signOut(keepDownloads: Bool = false, nowPlaying: NowPlayingController? = nil) async {
         await session?.signOut()
-        // Stop the audio first. The progress loop holds the coordinator
-        // strongly and publishes the widget snapshot every fifteen seconds, so
-        // signing out while a book played wrote the ex-account's title and
-        // position straight back into the App Group container — after the
-        // clear below had already run.
-        listeningProgressTask?.cancel()
-        listeningProgressTask = nil
-        listening?.player.pause()
-        listening?.player.removeRateObservers()
-        listening = nil
-        listeningBook = nil
+        // Stop the audio, and stop anything listening for it, before the
+        // stopping itself is announced.
+        //
+        // Order matters twice over. `pause()` notifies its rate observers
+        // synchronously, so pausing first republished the ex-account's book to
+        // the App Group and to the lock screen — using a session whose token
+        // had just been revoked. And detaching Now Playing is not optional:
+        // it holds the coordinator strongly, so without this its refresh loop
+        // kept the signed-out account's book on the lock screen and its Play
+        // button resumed it.
+        stopListening(nowPlaying: nowPlaying)
         // The catalogue belongs to the account, so it goes with it. Annotations
         // do not: they are device-local and this is their only copy.
         try? await store?.clearAccountData()
@@ -295,10 +295,9 @@ public final class AppModel {
         // Through the publisher, so the cover latch is forgotten too — leaving
         // it set meant signing back in and reopening the same book skipped the
         // cover fetch and left the widget with no art at all.
+        // Reloads the CurrentBook timeline itself; the accessory families
+        // share it, so a second reloadAllTimelines here was redundant.
         CurrentBookPublisher.shared.clear()
-        #if canImport(WidgetKit)
-        WidgetCenter.shared.reloadAllTimelines()
-        #endif
 
         if !keepDownloads {
             let manager = FileManager.default
@@ -543,7 +542,7 @@ public final class AppModel {
             // recurring publish is behind a "progress moved" guard that a
             // paused book never passes — so isPlaying could be set true and
             // never set false again.
-            coordinator.player.addRateObserver { [weak self, weak coordinator] rate in
+            coordinator.player.setRateObserver(for: self) { [weak self, weak coordinator] rate in
                 guard let self, let coordinator else { return }
                 // The rate the player just reported, not `effectiveRate`.
                 // `play()` notifies before AVPlayer's timeControlStatus leaves
@@ -568,12 +567,23 @@ public final class AppModel {
         }
     }
 
-    public func stopListening(nowPlaying: NowPlayingController) {
-        listening?.player.pause()
+    /// Stops playback and lets go of everything holding onto it.
+    ///
+    /// Order matters twice over. `pause()` notifies its rate observers
+    /// synchronously, so pausing before dropping them republished the book —
+    /// to the App Group and to the lock screen — which on sign-out meant doing
+    /// so with a token that had just been revoked. And detaching Now Playing is
+    /// not optional: it holds the coordinator strongly, so without it the
+    /// refresh loop kept the book on the lock screen and its Play button
+    /// resumed it.
+    public func stopListening(nowPlaying: NowPlayingController?) {
         listeningProgressTask?.cancel()
+        listeningProgressTask = nil
+        listening?.player.removeRateObservers()
+        nowPlaying?.attach(coordinator: nil, book: nil)
+        listening?.player.pause()
         listening = nil
         listeningBook = nil
-        nowPlaying.attach(coordinator: nil, book: nil)
     }
 
     /// Writes the listening position back periodically.
