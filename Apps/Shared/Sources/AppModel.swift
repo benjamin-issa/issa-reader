@@ -13,6 +13,12 @@ import WidgetKit
 @MainActor
 public final class AppModel {
     public enum Phase: Equatable {
+        /// Before anything has been decided. Distinct from `chooseServer`,
+        /// which means "this reader has no server" — conflating the two forced
+        /// the initial value to claim there was no server before anyone had
+        /// looked, so the sign-in form was committed to the very first frame of
+        /// every launch and flashed before the library replaced it.
+        case launching
         case chooseServer
         case signingIn
         case ready
@@ -21,7 +27,7 @@ public final class AppModel {
         case expired
     }
 
-    public var phase: Phase = .chooseServer
+    public var phase: Phase = .launching
     public var serverAddress: String = ""
     public var session: Session?
     public var books: [Book] = []
@@ -101,7 +107,12 @@ public final class AppModel {
     /// Reconnects to the last server on launch when a token is already stored,
     /// so a returning reader lands in their library rather than on a form.
     public func restoreIfPossible() async {
-        guard !serverAddress.isEmpty, phase == .chooseServer else { return }
+        guard !serverAddress.isEmpty, phase == .launching || phase == .chooseServer else {
+            // Nothing stored: this really is a first run, so stop holding the
+            // launch state and show the form.
+            if phase == .launching { phase = .chooseServer }
+            return
+        }
         await connect(to: serverAddress)
     }
 
@@ -130,12 +141,6 @@ public final class AppModel {
         // Open the local store first and show what is already known. A reader
         // opening the app on a train should see their shelf, not a spinner that
         // resolves to an error.
-        downloads = DownloadManager(baseURL: url, tokens: session.tokenProvider) { job in
-            BookContentService.defaultDirectory()
-                .appending(path: "\(job.bookUUID)-\(job.format.rawValue).epub")
-        }
-        await downloads?.reattach()
-
         store = try? LibraryStore(serverKey: url.absoluteString)
         if let store {
             mutations = try? MutationQueue(store: store)
@@ -144,6 +149,16 @@ public final class AppModel {
                 phase = .ready
             }
         }
+
+        // After the shelf is on screen, not before it. Building a background
+        // URLSession is an XPC handshake and `reattach()` is a second round trip
+        // to a daemon that may need waking — both used to run ahead of the few
+        // milliseconds of SQLite that could have shown the library immediately.
+        downloads = DownloadManager(baseURL: url, tokens: session.tokenProvider) { job in
+            BookContentService.defaultDirectory()
+                .appending(path: "\(job.bookUUID)-\(job.format.rawValue).epub")
+        }
+        Task { [weak self] in await self?.downloads?.reattach() }
 
         if phase != .ready { phase = .signingIn }
         await session.restore()

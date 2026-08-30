@@ -193,6 +193,8 @@ struct MacRootView: View {
 
     var body: some View {
         switch app.phase {
+        case .launching:
+            Palette.paper.ignoresSafeArea().task { await app.restoreIfPossible() }
         case .chooseServer, .signingIn, .expired:
             SignInView().task { await app.restoreIfPossible() }
         case .ready:

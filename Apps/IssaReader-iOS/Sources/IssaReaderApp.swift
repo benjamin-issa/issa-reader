@@ -78,6 +78,12 @@ struct RootView: View {
     var body: some View {
         Group {
             switch app.phase {
+            case .launching:
+                // Deliberately no content — but painted in the app's own ground
+                // so the launch image, this, and the library are one continuous
+                // colour. A returning reader never sees the sign-in form flash
+                // past on the way to their shelf.
+                Palette.paper.ignoresSafeArea()
             case .chooseServer, .signingIn, .expired:
                 SignInView()
             case .ready:
