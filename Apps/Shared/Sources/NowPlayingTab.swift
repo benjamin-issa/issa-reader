@@ -22,7 +22,10 @@ public struct NowPlayingTab: View {
     public var body: some View {
         Group {
             if let book = app.playbackBook {
-                PlayerView(book: book, session: app.session, coordinator: app.playback)
+                PlayerView(
+                    book: book, session: app.session, coordinator: app.playback,
+                    chapterTitle: app.playbackChapterTitle,
+                )
             } else if let book = app.continueBook, book.canBeListenedTo {
                 idle(book)
             } else {

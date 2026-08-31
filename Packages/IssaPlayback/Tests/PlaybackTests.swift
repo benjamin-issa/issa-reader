@@ -235,3 +235,36 @@ struct ReadalongLookupTests {
         }
     }
 }
+
+/// What counts as a chapter name.
+///
+/// A read-along coordinator has no table of contents — only the text document
+/// the current sentence lives in — so asking it for "the chapter" hands back an
+/// archive path. The player sheet knew to hide that; the mini bar did not, and
+/// printed `OEBPS/8960978148133687104_chapter_11.xhtml` under the book's title
+/// where the chapter name belongs.
+struct ChapterNamingTests {
+    @Test("a document href is not a chapter name", arguments: [
+        "OEBPS/8960978148133687104_chapter_11.xhtml",
+        "OEBPS/ch01.xhtml",
+        "chapter_11.xhtml",
+        "text/part1.html",
+        "content.xml",
+        "",
+        "   ",
+    ])
+    func rejectsHrefs(_ candidate: String) {
+        #expect(ChapterNaming.isDisplayable(candidate) == false)
+    }
+
+    @Test("a name somebody wrote is a chapter name", arguments: [
+        "The Flight",
+        "Chapter 11",
+        "17. The When Wendy Grew Up",
+        "Peter Breaks Through",
+        "Épilogue",
+    ])
+    func acceptsNames(_ candidate: String) {
+        #expect(ChapterNaming.isDisplayable(candidate))
+    }
+}

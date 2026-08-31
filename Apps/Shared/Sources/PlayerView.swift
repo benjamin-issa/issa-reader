@@ -11,15 +11,25 @@ public struct PlayerView: View {
     let book: Book
     let session: Session?
     let coordinator: (any PlaybackDriving)?
+    /// The chapter's real name, where the caller has one.
+    ///
+    /// A read-along coordinator only knows which text document it is in, so
+    /// left to itself this line is an archive path or nothing at all. The
+    /// reader has the book's table of contents.
+    let chapterTitle: String?
 
     @Environment(NowPlayingController.self) private var nowPlaying
     @State private var scrubbing = false
     @State private var scrubValue: Double = 0
 
-    public init(book: Book, session: Session?, coordinator: (any PlaybackDriving)?) {
+    public init(
+        book: Book, session: Session?, coordinator: (any PlaybackDriving)?,
+        chapterTitle: String? = nil,
+    ) {
         self.book = book
         self.session = session
         self.coordinator = coordinator
+        self.chapterTitle = chapterTitle
     }
 
     private var progress: Double {
@@ -29,10 +39,8 @@ public struct PlayerView: View {
     /// Shown under the title while a chapter is actually playing: an audiobook
     /// has real chapter names and it is the one place they belong.
     private var nowPlayingChapter: String? {
-        guard let title = coordinator?.currentChapterTitle, !title.isEmpty,
-              !title.contains("/"), !title.hasSuffix(".xhtml")
-        else { return nil }
-        return title
+        if let chapterTitle, ChapterNaming.isDisplayable(chapterTitle) { return chapterTitle }
+        return coordinator?.displayChapterTitle
     }
 
     private var total: TimeInterval {

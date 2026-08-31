@@ -555,6 +555,20 @@ public final class AppModel {
         return nil
     }
 
+    /// The chapter playing now, named the way the book names it.
+    ///
+    /// The read-along coordinator only knows which text document the sentence
+    /// lives in, so asking it gives an archive path. The reader has the book's
+    /// own table of contents, and while narration is what is playing the reader
+    /// is alive — that is the whole point of holding it.
+    public var playbackChapterTitle: String? {
+        if readalongIsActive, let title = reader?.chapterTitle,
+           ChapterNaming.isDisplayable(title) {
+            return title
+        }
+        return playback?.displayChapterTitle
+    }
+
     public var playbackBook: Book? {
         if listening != nil { return listeningBook }
         if readalongIsActive { return reader?.book }

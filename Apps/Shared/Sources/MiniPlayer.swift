@@ -55,10 +55,16 @@ public struct MiniPlayer: View {
                         .font(Typography.callout)
                         .foregroundStyle(Palette.ink)
                         .lineLimit(1)
-                    Text(coordinator.currentChapterTitle)
-                        .font(Typography.caption)
-                        .foregroundStyle(Palette.inkTertiary)
-                        .lineLimit(1)
+                    // Only when the book actually names it. The coordinator's
+                    // own answer for a read-along is the text document's
+                    // archive path, which was printed here as though it were a
+                    // chapter.
+                    if let chapter = app.playbackChapterTitle {
+                        Text(chapter)
+                            .font(Typography.caption)
+                            .foregroundStyle(Palette.inkTertiary)
+                            .lineLimit(1)
+                    }
                 }
                 Spacer(minLength: 0)
 

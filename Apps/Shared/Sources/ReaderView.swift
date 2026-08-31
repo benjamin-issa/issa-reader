@@ -22,7 +22,14 @@ public struct ReaderView: View {
     @State private var touchPoint: CGPoint = .zero
     @State private var selecting = false
     /// The device's unsafe edges, sampled once. See `ReaderInsets`.
-    @State private var deviceInsets = EdgeInsets()
+    ///
+    /// Sampled at construction rather than left empty until the first
+    /// `onChange`. Starting at zero means the first page size is wrong by the
+    /// whole notch, and since the layout task is keyed on that size, the book
+    /// was opened twice — the first attempt cancelled mid-flight, taking its
+    /// position fetch with it and logging a failure for something nothing was
+    /// waiting on any more.
+    @State private var deviceInsets = ReaderInsets.current()
     /// Whether a finger is currently down, so `selecting` can be cleared at the
     /// start of a touch rather than the end of one.
     @State private var touching = false
@@ -171,7 +178,10 @@ public struct ReaderView: View {
             .presentationDetents([.medium, .large])
         }
         .sheet(isPresented: $showsPlayer) {
-            PlayerView(book: model.book, session: model.readerSession, coordinator: model.readalong)
+            PlayerView(
+                book: model.book, session: model.readerSession,
+                coordinator: model.readalong, chapterTitle: model.chapterTitle,
+            )
                 .presentationDetents([.large])
         }
         .sheet(isPresented: $showsSearch) {

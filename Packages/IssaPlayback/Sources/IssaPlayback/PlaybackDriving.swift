@@ -26,3 +26,30 @@ extension AudiobookCoordinator: PlaybackDriving {
         await seek(toProgress: progress)
     }
 }
+
+/// Whether a coordinator's idea of "the chapter" is something to show a reader.
+///
+/// It often is not. A read-along coordinator has no table of contents — only the
+/// text document the current sentence lives in — so `currentChapterTitle` hands
+/// back an archive path like `OEBPS/8960978148133687104_chapter_11.xhtml`. The
+/// player sheet already knew to hide that; the mini bar did not, and printed it
+/// under the book's title where the chapter name belongs.
+public enum ChapterNaming {
+    public static func isDisplayable(_ title: String) -> Bool {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        // A path, or a file. Both are how a document href looks, and neither is
+        // a name anybody wrote.
+        guard !trimmed.contains("/"), !trimmed.hasSuffix(".xhtml"),
+              !trimmed.hasSuffix(".html"), !trimmed.hasSuffix(".xml")
+        else { return false }
+        return true
+    }
+}
+
+public extension PlaybackDriving {
+    /// The chapter now playing, when there is a real name for it.
+    var displayChapterTitle: String? {
+        ChapterNaming.isDisplayable(currentChapterTitle) ? currentChapterTitle : nil
+    }
+}
