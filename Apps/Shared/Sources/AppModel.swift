@@ -273,6 +273,9 @@ public final class AppModel {
         // kept the signed-out account's book on the lock screen and its Play
         // button resumed it.
         stopListening(nowPlaying: nowPlaying)
+        // And the open book, which since it outlives its screen would otherwise
+        // keep narrating the signed-out account's library out loud.
+        releaseReader()
         // The catalogue belongs to the account, so it goes with it. Annotations
         // do not: they are device-local and this is their only copy.
         try? await store?.clearAccountData()
@@ -512,12 +515,149 @@ public final class AppModel {
     public private(set) var listeningBook: Book?
     public private(set) var listeningError: String?
 
+    /// The open book, held so that listening to it outlives the screen showing it.
+    ///
+    /// Narration used to be owned by `ReaderModel`, which was `@State` inside a
+    /// view presented as a full-screen cover — so the back chevron destroyed the
+    /// model, the coordinator and the player with it. What made that worse than
+    /// a clean stop is that it did not actually stop: `NowPlayingController`
+    /// holds its coordinator strongly, so the audio carried on while every
+    /// callback into the model early-returned through a dead `weak self`. The
+    /// book advanced and not one position was written for it.
+    ///
+    /// Keeping the whole model rather than writing a second, leaner off-screen
+    /// writer is deliberate. The alternative means re-deriving the
+    /// chosen/derived classification that `PositionGuard` depends on, in a
+    /// second place, for the same book — and a position written with the wrong
+    /// provenance is exactly what lost a place in a part-read novel once
+    /// already. This way there is one classified path, one high-water mark, and
+    /// the cost is a single chapter's layout held while the reader browses.
+    public private(set) var reader: ReaderModel?
+
+    /// Whether the open book's narration is what is playing.
+    ///
+    /// Distinct from `reader?.readalong != nil`, which is true of any narrated
+    /// book merely opened. Only a book that has actually started belongs on the
+    /// mini bar, and only it may claim the lock screen.
+    private var readalongIsActive = false
+
+    /// The Now Playing surface, handed over at launch.
+    ///
+    /// Weak, and a property rather than a parameter, because playback now
+    /// starts and stops from places that have no view context to thread it
+    /// through — a CarPlay list item, the end of a book, the reader closing.
+    public weak var nowPlayingController: NowPlayingController?
+
+    /// Whatever is playing, of either kind. Nil when nothing is.
+    public var playback: (any PlaybackDriving)? {
+        if let listening { return listening }
+        if readalongIsActive, let readalong = reader?.readalong { return readalong }
+        return nil
+    }
+
+    public var playbackBook: Book? {
+        if listening != nil { return listeningBook }
+        if readalongIsActive { return reader?.book }
+        return nil
+    }
+
+    /// The model for an open book, created once and kept.
+    ///
+    /// Idempotent, so re-presenting the reader hands back the same instance
+    /// rather than a fresh one that would replace the coordinator and cut the
+    /// audio off mid-sentence. This is also where the model's closures are
+    /// installed — permanently, rather than in the view's `onAppear`, which had
+    /// a matching `onDisappear` that broke them and left `saveProgress` writing
+    /// straight to the network with no queue and no guard.
+    public func reader(for book: Book, session: Session) -> ReaderModel {
+        if let existing = reader, existing.book.uuid == book.uuid { return existing }
+        // A different book. Let the old one go, and its narration with it —
+        // two coordinators alive at once are two audible players.
+        releaseReader()
+
+        let model = ReaderModel(book: book, session: session)
+        model.downloadHost = self
+        // The uuid by value, never `model` itself: reaching back through a
+        // closure the model stores would retain it for the life of the process,
+        // pinning the chapter layout, the decoded plates and the coordinator.
+        let bookUUID = book.uuid
+        model.enqueuePosition = { [weak self] locator, timestamp, origin in
+            await self?.writePosition(
+                locator, timestamp: timestamp, for: bookUUID, origin: origin)
+        }
+        model.onSaveAnnotation = { [weak self] in self?.save($0) }
+        model.onDeleteAnnotation = { [weak self] in self?.delete($0) }
+        // Every route into playback — the reader's own button, a tapped
+        // sentence, the player sheet, a remote command — ends at the player's
+        // rate, so watching that is what catches all of them. A callback on the
+        // one method that happens to be named `startNarration` would not.
+        model.onNarrationReady = { [weak self] coordinator in
+            coordinator.player.setRateObserver(for: self as AnyObject) { [weak self] rate in
+                guard rate > 0 else { return }
+                self?.narrationDidStart()
+            }
+        }
+        reader = model
+        return model
+    }
+
+    /// Lets the open book go once the reader has left it and it is not playing.
+    ///
+    /// A book that is merely read should not pin its chapter layout for the rest
+    /// of the session; one that is still being listened to must. Identity is
+    /// checked because the Mac can have two reader windows open: closing the
+    /// first must not evict the model the second is using.
+    public func readerDidClose(_ model: ReaderModel) {
+        guard reader === model, !readalongIsActive else { return }
+        reader = nil
+    }
+
+    private func releaseReader() {
+        stopNarration()
+        reader = nil
+    }
+
+    /// Silences narration and gives up the lock screen, if it held it.
+    public func stopNarration() {
+        guard readalongIsActive else { return }
+        readalongIsActive = false
+        reader?.readalong?.player.pause()
+        nowPlayingController?.attach(coordinator: nil, book: nil)
+    }
+
+    /// Called when the open book's narration actually begins.
+    ///
+    /// Playback is exclusive: each coordinator owns its own `AVQueuePlayer`, so
+    /// leaving the audiobook running here would put two voices in the room.
+    private func narrationDidStart() {
+        // Fires on every play, and most of them change nothing: re-attaching
+        // would cancel the refresh loop and refetch the cover each time.
+        guard !readalongIsActive else { return }
+        guard let model = reader, let coordinator = model.readalong else { return }
+        if listening != nil { stopListening(nowPlaying: nil) }
+        readalongIsActive = true
+        nowPlayingController?.attach(
+            coordinator: coordinator,
+            book: model.book,
+            session: model.readerSession,
+            // Weak: the controller outlives the screen deliberately, and holding
+            // the reader through it would keep a whole book alive after the app
+            // had let go of it.
+            chapterTitle: { [weak model] in model?.chapterTitle },
+        )
+    }
+
     /// Starts a plain audiobook: fetch the manifest, resume where the server
     /// says we were, and hand it to the Now Playing centre.
     public func startListening(
         to book: Book, nowPlaying: NowPlayingController, settings: PlaybackSettings,
     ) async {
         guard let session, let url = Self.normalizeServerURL(serverAddress) else { return }
+        // One player at a time. Each coordinator owns its own AVQueuePlayer, so
+        // starting an audiobook over running narration is two voices at once —
+        // and whichever attached to Now Playing second silently released the
+        // other, which is the second way audio "disappeared".
+        stopNarration()
         if listeningBook?.uuid == book.uuid, let coordinator = listening {
             coordinator.player.play()
             // The reader may have taken the snapshot and the cover while this

@@ -5,36 +5,35 @@ import SwiftUI
 
 /// The bar that says something is playing, from anywhere in the app.
 ///
-/// Without it, starting an audiobook and navigating away leaves audio coming
-/// out of the phone with nothing on screen to stop it — the listener's only
-/// recourse being the lock screen. It sits above the tab bar, shows real
-/// progress, and opens the full player.
+/// Without it, starting a book and navigating away leaves audio coming out of
+/// the phone with nothing on screen to stop it — the listener's only recourse
+/// being the lock screen. It sits above the tab bar, shows real progress, and
+/// opens the Playing tab.
+///
+/// Driven by `PlaybackDriving` rather than by the audiobook coordinator, so it
+/// covers narration too. It did not before, which meant a read-along left
+/// running behind the library had no in-app surface at all: no bar, no
+/// transport, and no way to tell it was still going.
 public struct MiniPlayer: View {
     @Environment(AppModel.self) private var app
     @Environment(NowPlayingController.self) private var nowPlaying
     @Environment(PlaybackSettings.self) private var settings
-    @State private var showsPlayer = false
 
-    public init() {}
+    /// Shows the full player. A tab rather than a sheet, so there is one
+    /// expanded player in the app and not two that can disagree.
+    private let onExpand: () -> Void
+
+    public init(onExpand: @escaping () -> Void = {}) {
+        self.onExpand = onExpand
+    }
 
     public var body: some View {
-        if let book = app.listeningBook, let coordinator = app.listening {
+        if let book = app.playbackBook, let coordinator = app.playback {
             content(book: book, coordinator: coordinator)
-                .sheet(isPresented: $showsPlayer) {
-                    NavigationStack {
-                        PlayerView(book: book, session: app.session, coordinator: coordinator)
-                            .toolbar {
-                                ToolbarItem(placement: .confirmationAction) {
-                                    Button("Done") { showsPlayer = false }
-                                }
-                            }
-                    }
-                    .presentationDetents([.large])
-                }
         }
     }
 
-    private func content(book: Book, coordinator: AudiobookCoordinator) -> some View {
+    private func content(book: Book, coordinator: any PlaybackDriving) -> some View {
         VStack(spacing: 0) {
             // A hairline of progress along the top edge: enough to see the book
             // moving without spending height the tab bar needs.
@@ -56,22 +55,14 @@ public struct MiniPlayer: View {
                         .font(Typography.callout)
                         .foregroundStyle(Palette.ink)
                         .lineLimit(1)
-                    Text(coordinator.chapterTitle)
+                    Text(coordinator.currentChapterTitle)
                         .font(Typography.caption)
                         .foregroundStyle(Palette.inkTertiary)
                         .lineLimit(1)
                 }
                 Spacer(minLength: 0)
 
-                Button {
-                    Task {
-                        await coordinator.perform(.skipBackward, using: settings.commandMap)
-                        nowPlaying.publish()
-                    }
-                } label: {
-                    Image(systemName: "gobackward").font(.system(size: 18))
-                }
-                .accessibilityLabel("Skip back")
+                skip(.skipBackward, symbol: "gobackward", label: "Skip back", on: coordinator)
 
                 Button {
                     coordinator.player.togglePlayPause()
@@ -85,6 +76,8 @@ public struct MiniPlayer: View {
                         .frame(width: 32, height: 32)
                 }
                 .accessibilityLabel(coordinator.player.isPlaying ? "Pause" : "Play")
+
+                skip(.skipForward, symbol: "goforward", label: "Skip forward", on: coordinator)
             }
             .buttonStyle(.plain)
             .foregroundStyle(Palette.ink)
@@ -96,8 +89,25 @@ public struct MiniPlayer: View {
         .background(Palette.surface)
         .overlay(alignment: .top) { Palette.border.frame(height: 0.5) }
         .contentShape(Rectangle())
-        .onTapGesture { showsPlayer = true }
+        .onTapGesture(perform: onExpand)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Now playing: \(book.title)")
+    }
+
+    /// Both directions, because one of them is the button a listener reaches for
+    /// most and the other is the one that gets them past something.
+    private func skip(
+        _ action: PlaybackAction, symbol: String, label: String,
+        on coordinator: any PlaybackDriving,
+    ) -> some View {
+        Button {
+            Task {
+                await coordinator.perform(action, using: settings.commandMap)
+                nowPlaying.publish()
+            }
+        } label: {
+            Image(systemName: symbol).font(.system(size: 18))
+        }
+        .accessibilityLabel(label)
     }
 }

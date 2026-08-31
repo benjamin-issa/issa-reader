@@ -61,7 +61,13 @@ struct IssaReaderApp: App {
                 .environment(app)
                 .environment(settings)
                 .environment(nowPlaying)
-                .task { nowPlaying.configure(settings: settings) }
+                .task {
+                    nowPlaying.configure(settings: settings)
+                    // Playback now starts and stops from places with no view to
+                    // thread this through: a CarPlay list item, the reader
+                    // closing, one kind of book displacing the other.
+                    app.nowPlayingController = nowPlaying
+                }
                 .task { connectCarPlay() }
                 // CarPlay's list is built from whatever the bridge holds, and
                 // the car can connect before the phone app has ever loaded a
@@ -108,27 +114,30 @@ struct RootView: View {
     }
 }
 
-/// Library and Settings.
+/// Library, Playing and Settings.
 ///
-/// There was a Listening tab between them, over the same catalogue minus the
-/// text-only books — which testers read as two libraries rather than one
-/// filtered view. Its job is a shelf chip now. Playback is unaffected: the mini
-/// player is an inset on the TabView, not a tab, so it survives from anywhere.
-/// (`ListeningView` itself stays — the macOS sidebar and tvOS still use it.)
+/// There was once a Listening tab over the same catalogue minus the text-only
+/// books, which testers read as two libraries rather than one filtered view.
+/// Its job is a shelf chip now. The Playing tab is a different thing: not
+/// another way to browse, but the one place the expanded player lives, which
+/// the mini bar opens into.
+/// (`ListeningView` stays — the macOS sidebar and tvOS still use it.)
 struct LibraryTabs: View {
     @Environment(AppModel.self) private var app
     @Environment(\.scenePhase) private var scenePhase
     @State private var libraryPath = NavigationPath()
-    @State private var selectedTab = 0
+    @State private var selectedTab = Tab.library
+
+    enum Tab: Hashable { case library, playing, settings }
 
     private func openPendingBook() {
         guard let book = app.consumePendingBook() else { return }
-        selectedTab = 0
+        selectedTab = .library
         libraryPath = NavigationPath()
         libraryPath.append(book)
     }
 
-    var body: some View {
+    private var tabs: some View {
         TabView(selection: $selectedTab) {
             NavigationStack(path: $libraryPath) {
                 LibraryView()
@@ -138,20 +147,56 @@ struct LibraryTabs: View {
                     }
             }
             .tabItem { Label("Library", systemImage: "books.vertical") }
-            .tag(0)
+            .tag(Tab.library)
+
+            NavigationStack {
+                NowPlayingTab().navigationTitle("Playing")
+            }
+            .tabItem { Label("Playing", systemImage: "play.circle") }
+            .tag(Tab.playing)
 
             NavigationStack {
                 SettingsView().navigationTitle("Settings")
             }
             .tabItem { Label("Settings", systemImage: "gearshape") }
-            .tag(1)
+            .tag(Tab.settings)
         }
-        // The tab bar's own accessory slot, which is what iOS 26 provides for
-        // exactly this. As a `.safeAreaInset` the mini player was drawn over
-        // the floating tab bar rather than above it, so starting an audiobook
-        // hid Library and Settings entirely — there was no way back to Settings
-        // without stopping playback.
-        .tabViewBottomAccessory { MiniPlayer() }
+    }
+
+    /// The tab bar's accessory slot, which is what iOS 26 provides for exactly
+    /// this. As a `.safeAreaInset` the mini player was drawn over the floating
+    /// tab bar rather than above it, so starting an audiobook hid Library and
+    /// Settings entirely.
+    ///
+    /// It has to be gated on there being something to show. The slot is placed
+    /// whether or not its content draws anything, so a `MiniPlayer` that
+    /// returned nothing still got a glass capsule at its minimum height, plus
+    /// the bottom safe area it reserves — an empty second bar above the tab bar
+    /// on every screen, with the library scrolling behind it.
+    ///
+    /// `isEnabled:` arrived in iOS 26.1 and the deployment target is 26.0, so
+    /// the older path applies the modifier conditionally instead. `#available`
+    /// is fixed for the life of the process, so the branch it picks never
+    /// changes and the 26.1 path never churns view identity; only the fallback
+    /// can, and losing the library's scroll position when playback starts is
+    /// still better than a bar that is always there and always empty.
+    @ViewBuilder
+    private var shell: some View {
+        if #available(iOS 26.1, *) {
+            tabs.tabViewBottomAccessory(isEnabled: app.playback != nil) { miniPlayer }
+        } else if app.playback != nil {
+            tabs.tabViewBottomAccessory { miniPlayer }
+        } else {
+            tabs
+        }
+    }
+
+    private var miniPlayer: some View {
+        MiniPlayer { selectedTab = .playing }
+    }
+
+    var body: some View {
+        shell
         // A link can arrive before the library has loaded, so this waits for
         // the book to exist rather than dropping the request on the floor.
         .onChange(of: app.pendingBookID) { openPendingBook() }

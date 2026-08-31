@@ -71,7 +71,7 @@ public struct BookDetailView: View {
         #if os(iOS)
         .fullScreenCover(isPresented: $showsReader) {
             if let session = app.session {
-                ReaderView(book: book, session: session)
+                ReaderView(model: app.reader(for: book, session: session))
             }
         }
         #endif
@@ -187,7 +187,7 @@ public struct BookDetailView: View {
                 .buttonStyle(.plain)
                 #else
                 NavigationLink {
-                    ReaderView(book: book, session: session)
+                    ReaderView(model: app.reader(for: book, session: session))
                 } label: {
                     PrimaryCapsule(action: action)
                 }

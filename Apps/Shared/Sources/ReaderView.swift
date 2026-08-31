@@ -27,7 +27,6 @@ public struct ReaderView: View {
     /// start of a touch rather than the end of one.
     @State private var touching = false
     @Environment(\.dismiss) private var dismiss
-    @Environment(NowPlayingController.self) private var nowPlaying
     @Environment(PlaybackSettings.self) private var settings
     @Environment(AppModel.self) private var app
     #if os(macOS)
@@ -35,8 +34,14 @@ public struct ReaderView: View {
     private var isActiveScene: Bool { controlActiveState == .key }
     #endif
 
-    public init(book: Book, session: Session) {
-        _model = State(initialValue: ReaderModel(book: book, session: session))
+    /// Takes the model rather than making one.
+    ///
+    /// It belongs to `AppModel` now, so that listening to a book outlives the
+    /// screen showing it — and so that re-presenting the reader hands back the
+    /// same instance instead of a fresh one whose new coordinator would cut the
+    /// audio off mid-sentence.
+    public init(model: ReaderModel) {
+        _model = State(initialValue: model)
     }
 
     public var body: some View {
@@ -345,11 +350,11 @@ public struct ReaderView: View {
                             // A press-and-drag that was adjusting a selection is
                             // not a page turn.
                             if selecting { return }
-                            // The leading edge belongs to the navigation stack.
-                            // The reader is pushed (BookDetailView's Read
-                            // button), so a back-swipe starting there pops the
-                            // book shut — unguarded it did that AND turned the
-                            // page on the way out.
+                            // The leading edge belongs to the system's own
+                            // dismiss gesture — the reader is presented as a
+                            // full-screen cover — so a back-swipe starting
+                            // there shuts the book. Unguarded it did that AND
+                            // turned the page on the way out.
                             guard value.startLocation.x > 20 else { return }
                             guard abs(value.translation.width) >= 24 else { return }
                             // Clear a selection and turn the page in one motion.
@@ -406,34 +411,21 @@ public struct ReaderView: View {
             // a closure the model itself stores would retain it for the life of
             // the process, pinning the chapter layout, the decoded plates and
             // the readalong coordinator with it.
-            let bookUUID = model.book.uuid
-            model.enqueuePosition = { [weak app = app] locator, timestamp, origin in
-                // One choke point, which also updates the library's own copy so
-                // the Continue card and the book screen move with the reader
-                // rather than with the next fetch — and which refuses a write
-                // that would walk the reader backwards without being asked.
-                await app?.writePosition(
-                    locator, timestamp: timestamp, for: bookUUID, origin: origin)
-            }
-            model.onSaveAnnotation = { [weak app = app] in app?.save($0) }
-            model.onDeleteAnnotation = { [weak app = app] in app?.delete($0) }
             model.setReaderVisible(true)
-            // Only claim Now Playing if this book actually has narration.
-            // Opening a plain ebook used to attach a nil coordinator, which
-            // cleared nowPlayingInfo entirely — silencing the lock screen for an
-            // audiobook that was still playing in the background.
-            if model.readalong != nil {
-                nowPlaying.attach(
-                    coordinator: model.readalong,
-                    book: model.book,
-                    session: model.readerSession,
-                    // Weak: the controller outlives this screen deliberately,
-                    // and holding the reader through it would keep an entire
-                    // book in memory after it closed.
-                    chapterTitle: { [weak model] in model?.chapterTitle },
-                )
-            }
+            // `enqueuePosition` and the annotation hooks are installed by
+            // `AppModel.reader(for:session:)` and stay installed. They used to
+            // be set here and broken again in `onDisappear`, which left
+            // `saveProgress` falling through to writing straight to the network
+            // — no queue, no position guard — on a path whose ordering against
+            // the flush in the other `onDisappear` was never defined.
+            //
+            // Now Playing is claimed when narration actually starts, not when a
+            // narrated book is merely opened: opening one while an audiobook
+            // played used to take the lock screen away from it.
         }
+        // Land on the page being spoken, if the book carried on while the
+        // reader was elsewhere in the app.
+        .task { await model.syncToNarration() }
         .task { model.loadAnnotations(await app.annotations(for: model.book.uuid)) }
         #if os(macOS)
         // Menu commands arrive as notifications; only the frontmost reader
@@ -476,11 +468,15 @@ public struct ReaderView: View {
             )
         }
         .onDisappear {
+            // Not a teardown any more. The model belongs to the app, and its
+            // closures stay wired, so narration keeps playing and keeps writing
+            // its position while the reader browses the library. All that
+            // changes here is the clock: the fine-grained tick is only worth
+            // running while there is a page to move.
             model.setReaderVisible(false)
-            // Break the closures the model holds back to this screen's world.
-            model.enqueuePosition = nil
-            model.onSaveAnnotation = nil
-            model.onDeleteAnnotation = nil
+            // Released only if nothing is playing it, so a book that is merely
+            // read does not pin its chapter layout for the rest of the session.
+            app.readerDidClose(model)
         }
     }
 

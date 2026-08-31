@@ -104,6 +104,14 @@ public final class ReaderModel {
     public var onSaveAnnotation: ((Annotation) -> Void)?
     public var onDeleteAnnotation: ((Annotation) -> Void)?
 
+    /// Told once the book turns out to have usable narration.
+    ///
+    /// The app takes ownership from here: it is what decides that narration and
+    /// an audiobook cannot both be audible, what claims the lock screen, and
+    /// what keeps this model — and so this book's position writes — alive after
+    /// the screen showing it has gone.
+    public var onNarrationReady: ((ReadalongCoordinator) -> Void)?
+
     public var enqueuePosition: ((ReadiumLocator, Double, PositionOrigin) async -> Void)?
     /// When the oldest unwritten change happened, for the debounce ceiling.
     private var firstUnsavedChangeAt: Date?
@@ -403,6 +411,7 @@ public final class ReaderModel {
         }
         coordinator.onSeek = { [weak self] in self?.positionOrigin = .chosen }
         readalong = coordinator
+        onNarrationReady?(coordinator)
     }
 
     /// Starts narration at the sentence under a point on the page.
@@ -553,6 +562,29 @@ public final class ReaderModel {
         IssaLog.info("narration crossed chapter", [
             "book": book.title, "to": String(index),
             "fragment": fragment ?? "none", "page": String(pageIndex),
+        ])
+    }
+
+    /// Turns the book to the page being spoken, wherever that has got to.
+    ///
+    /// Called when a reader comes back to a book that carried on playing while
+    /// they were somewhere else in the app. Deliberately unconditional, unlike
+    /// the page-following in `onFragmentChange`: `followNarration` governs
+    /// whether the page turns *under someone who is reading it*, and this is a
+    /// fresh open. Landing on the page they left, an hour behind the voice, with
+    /// nothing to say why, is the same lost place by a different route.
+    public func syncToNarration() async {
+        guard let entry = readalong?.activeEntry else { return }
+        await followNarration(toDocument: entry.textHref, fragment: entry.fragmentID)
+        // `followNarration` returns early when the chapter is already loaded,
+        // which is the common case — the page still has to move.
+        guard let layout, let page = layout.page(containingFragment: entry.fragmentID),
+              page.index != pageIndex
+        else { return }
+        pageIndex = page.index
+        IssaLog.info("returned to narration", [
+            "book": book.title, "chapter": String(chapterIndex),
+            "page": String(pageIndex), "fragment": entry.fragmentID,
         ])
     }
 

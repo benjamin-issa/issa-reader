@@ -27,7 +27,10 @@ struct IssaReaderMacApp: App {
                 .environment(app)
                 .environment(settings)
                 .environment(nowPlaying)
-                .task { nowPlaying.configure(settings: settings) }
+                .task {
+                    nowPlaying.configure(settings: settings)
+                    app.nowPlayingController = nowPlaying
+                }
                 .tint(Palette.tangerine)
                 .frame(minWidth: 900, minHeight: 560)
         }
@@ -41,7 +44,10 @@ struct IssaReaderMacApp: App {
                 .environment(app)
                 .environment(settings)
                 .environment(nowPlaying)
-                .task { nowPlaying.configure(settings: settings) }
+                .task {
+                    nowPlaying.configure(settings: settings)
+                    app.nowPlayingController = nowPlaying
+                }
                 .tint(Palette.tangerine)
                 .frame(minWidth: 520, minHeight: 640)
         }
@@ -149,7 +155,7 @@ struct ReaderWindow: View {
         if let bookID,
            let book = app.books.first(where: { $0.uuid == bookID }),
            let session = app.session {
-            ReaderView(book: book, session: session)
+            ReaderView(model: app.reader(for: book, session: session))
                 .navigationTitle(book.title)
         } else {
             ContentUnavailableView(

@@ -22,7 +22,10 @@ struct IssaReaderTVApp: App {
                 .environment(app)
                 .environment(settings)
                 .environment(nowPlaying)
-                .task { nowPlaying.configure(settings: settings) }
+                .task {
+                    nowPlaying.configure(settings: settings)
+                    app.nowPlayingController = nowPlaying
+                }
                 .tint(Palette.tangerine)
         }
     }
