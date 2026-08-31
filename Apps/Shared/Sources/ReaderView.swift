@@ -370,6 +370,10 @@ public struct ReaderView: View {
                     .position, bookUUID: bookUUID,
                     payload: MutationDrain.PositionPayload(locator: locator, timestamp: timestamp),
                 )
+                // And into the library's own copy, so the Continue card and the
+                // book screen move with the reader rather than with the next
+                // fetch.
+                app?.recordPosition(locator, timestamp: timestamp, for: bookUUID)
             }
             model.onSaveAnnotation = { [weak app = app] in app?.save($0) }
             model.onDeleteAnnotation = { [weak app = app] in app?.delete($0) }

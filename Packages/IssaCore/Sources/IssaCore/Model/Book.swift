@@ -117,6 +117,18 @@ public extension Book {
     /// Book-level completion, 0...1, from the stored Readium locator.
     var progress: Double? { position?.locator.totalProgression }
 
+    /// Adopts a position the app has just written itself.
+    ///
+    /// Refuses one older than the position already held. The server applies
+    /// exactly this rule to a write, and without it here a save completing out
+    /// of order — the mutation queue draining an earlier page after a later one
+    /// — makes the Continue card walk backwards.
+    mutating func adopt(position locator: ReadiumLocator, timestamp: Double) {
+        if let position, position.timestamp > timestamp { return }
+        position = StoredPosition(
+            uuid: position?.uuid, locator: locator, timestamp: timestamp)
+    }
+
     /// Display byline. Falls back to narrators only if there is no author at all.
     var byline: String {
         let names = authors.isEmpty ? narrators.map(\.name) : authors.map(\.name)
@@ -282,6 +294,23 @@ public struct StoredPosition: Codable, Hashable, Sendable {
     public var timestamp: Double
     public var createdAt: FlexibleDate?
     public var updatedAt: FlexibleDate?
+
+    /// Spelled out because the app builds one itself: a position the app has
+    /// just written is already known locally, and asking the server to read it
+    /// back is both a round trip and a chance to read a staler value.
+    public init(
+        uuid: String? = nil,
+        locator: ReadiumLocator,
+        timestamp: Double,
+        createdAt: FlexibleDate? = nil,
+        updatedAt: FlexibleDate? = nil,
+    ) {
+        self.uuid = uuid
+        self.locator = locator
+        self.timestamp = timestamp
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
 }
 
 // MARK: - Formats

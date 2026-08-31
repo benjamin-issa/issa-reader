@@ -787,6 +787,23 @@ public final class AppModel {
     ///
     /// Writing a reading position moves the status on the server, so after a
     /// reading session the local copy is stale in a way the user can see.
+    /// Records a position the app has just written, without asking the server.
+    ///
+    /// The Continue card, the library row and the book screen all read
+    /// `book.progress`, which comes from `position` — and that was only ever
+    /// updated by fetching the book again, from `BookDetailView`'s `.task`. So
+    /// a whole reading session could pass with the card still showing where the
+    /// reader started.
+    ///
+    /// Fetching on close would not have fixed it: the write is queued, so the
+    /// server can legitimately still be a session behind, and the card would
+    /// visibly walk backwards. The app wrote this locator; it does not need to
+    /// be told what it is.
+    public func recordPosition(_ locator: ReadiumLocator, timestamp: Double, for bookUUID: String) {
+        guard let index = books.firstIndex(where: { $0.uuid == bookUUID }) else { return }
+        books[index].adopt(position: locator, timestamp: timestamp)
+    }
+
     public func refresh(book: Book) async {
         guard let session,
               let index = books.firstIndex(where: { $0.uuid == book.uuid }),

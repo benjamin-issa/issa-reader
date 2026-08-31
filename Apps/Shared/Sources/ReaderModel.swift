@@ -235,6 +235,11 @@ public final class ReaderModel {
             guard await loadChapter(chapterIndex, restoring: stored?.locator) else { return }
             await prepareNarration(package: package)
             phase = .ready
+            // The widget reads a file that was written only by `saveProgress`,
+            // and nothing saves on open — so a reader who opened a book and put
+            // the phone down left the widget showing the previous session, or
+            // the previous book.
+            publishSnapshot(progress: bookProgress)
         } catch is CancellationError {
             // The view task was replaced, not the reader's intent. The transfer
             // is still running in the background session and the next pass
