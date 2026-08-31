@@ -56,6 +56,7 @@ public struct HTTPDeviceGrantTransport: DeviceGrantTransport {
             }
             return .transportFailure("Unexpected \(http.statusCode) \(code ?? "")")
         } catch {
+            IssaLog.failure("device grant poll", error)
             return .transportFailure(error.localizedDescription)
         }
     }

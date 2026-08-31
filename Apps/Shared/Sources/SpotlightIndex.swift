@@ -67,6 +67,7 @@ enum SpotlightIndex {
             try await CSSearchableIndex.default().indexSearchableItems(items)
             UserDefaults.standard.set(version, forKey: versionKey)
         } catch {
+            IssaLog.failure("spotlight index", error, ["items": String(items.count)])
             // Indexing is a convenience; failing it must never surface as an
             // error the reader has to dismiss.
             UserDefaults.standard.removeObject(forKey: versionKey)

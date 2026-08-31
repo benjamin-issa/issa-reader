@@ -235,6 +235,12 @@ public final class ReaderModel {
             guard await loadChapter(chapterIndex, restoring: stored?.locator) else { return }
             await prepareNarration(package: package)
             phase = .ready
+            IssaLog.info("book opened", [
+                "book": book.title,
+                "chapter": String(chapterIndex),
+                "narration": String(timeline.isEmpty ? false : true),
+                "resumed": String(stored != nil),
+            ])
             // The widget reads a file that was written only by `saveProgress`,
             // and nothing saves on open — so a reader who opened a book and put
             // the phone down left the widget showing the previous session, or
@@ -246,6 +252,8 @@ public final class ReaderModel {
             // picks the wait back up, so leave the phase exactly as it is.
             return
         } catch {
+            IssaLog.failure("open book", error,
+                            ["book": book.title, "format": String(describing: format)])
             // Distinguish "the file never arrived" from "the server is down".
             // Both used to render as "Couldn't reach your server", which sent
             // people looking at their network for a book that simply had not
@@ -534,6 +542,8 @@ public final class ReaderModel {
             }
             return true
         } catch {
+            IssaLog.failure("load chapter", error,
+                            ["book": book.title, "chapter": String(index)])
             phase = .failed("Couldn't open this chapter. " + AppModel.message(for: error))
             return false
         }

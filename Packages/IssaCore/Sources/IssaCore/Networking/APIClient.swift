@@ -79,6 +79,8 @@ public actor APIClient {
         do {
             (location, response) = try await session.download(for: req)
         } catch {
+            // The path, never the query: a device-grant poll carries the code.
+            IssaLog.failure("download", error, ["path": req.url?.path ?? "?"])
             throw StorytellerError.transport(error.localizedDescription)
         }
 
@@ -136,6 +138,7 @@ public actor APIClient {
         do {
             (data, response) = try await session.data(for: req)
         } catch {
+            IssaLog.failure("request", error, ["path": req.url?.path ?? "?"])
             throw StorytellerError.transport(error.localizedDescription)
         }
 
@@ -164,6 +167,10 @@ public actor APIClient {
         do {
             return try decoder.decode(type, from: data)
         } catch {
+            // The shape the server sent is the thing worth knowing here, and it
+            // is exactly what the reader-facing message throws away.
+            IssaLog.failure("decode", error,
+                            ["type": String(describing: type), "bytes": String(data.count)])
             throw StorytellerError.decoding(String(describing: error))
         }
     }

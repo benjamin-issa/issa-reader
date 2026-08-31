@@ -40,6 +40,7 @@ public final class DeviceSignInModel {
                 }
             }
         } catch {
+            IssaLog.failure("device sign-in", error, ["server": serverURL.absoluteString])
             stage = .failed(AppModel.message(for: error))
         }
     }

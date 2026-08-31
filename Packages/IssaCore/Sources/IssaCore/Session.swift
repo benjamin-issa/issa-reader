@@ -119,6 +119,7 @@ public final class Session {
                 && attempt < Self.identityAttempts {
                 try? await Task.sleep(for: .milliseconds(300 * attempt))
             } catch {
+                IssaLog.failure("identity", error, ["attempt": String(attempt)])
                 state = .failed(AppFacingError.text(for: error))
                 return
             }

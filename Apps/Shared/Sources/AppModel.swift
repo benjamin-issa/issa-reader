@@ -355,6 +355,7 @@ public final class AppModel {
             statuses = fetchedStatuses
             ratings = fetchedRatings
             loadError = nil
+            IssaLog.info("library refreshed", ["books": String(fetched.count)])
 
             // Off the refresh gesture entirely: a full catalogue rewrite and a
             // serial drain of queued writes have no business holding the
@@ -364,6 +365,7 @@ public final class AppModel {
                 await self?.drainPendingWrites()
             }
         } catch {
+            IssaLog.failure("library refresh", error, ["server": serverAddress])
             // A failed refresh is not an empty library when something is cached.
             if books.isEmpty, let cached = try? await store?.allBooks(), !cached.isEmpty {
                 books = cached
@@ -563,6 +565,7 @@ public final class AppModel {
             publishListeningSnapshot(book: book, coordinator: coordinator)
             watchListeningProgress(book: book, coordinator: coordinator)
         } catch {
+            IssaLog.failure("start listening", error, ["book": book.title])
             listeningError = Self.message(for: error)
         }
     }

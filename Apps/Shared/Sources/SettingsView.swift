@@ -61,6 +61,13 @@ public struct SettingsView: View {
             }
             .listRowBackground(Palette.surface)
 
+            Section("Diagnostics") {
+                NavigationLink { DiagnosticsView() } label: {
+                    Label("Export logs", systemImage: "doc.text.magnifyingglass")
+                }
+            }
+            .listRowBackground(Palette.surface)
+
             Section {
                 Button("Sign out", role: .destructive) { confirmingSignOut = true }
             }

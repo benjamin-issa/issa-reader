@@ -306,6 +306,8 @@ extension DownloadManager: URLSessionDownloadDelegate {
                 try? FileManager.default.removeItem(at: destination)
                 try FileManager.default.moveItem(at: location, to: destination)
             } catch {
+                IssaLog.failure("move downloaded file", error,
+                                ["to": destination.lastPathComponent])
                 moveError = error.localizedDescription
             }
         } else {

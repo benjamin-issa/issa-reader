@@ -149,6 +149,7 @@ public struct MutationDrain: Sendable {
                 // A refusal that will not change on the next attempt.
                 try? await queue.remove(item.id)
             } catch {
+                IssaLog.failure("sync mutation", error, ["kind": String(describing: item.kind)])
                 // Anything else is worth another go later, up to a limit.
                 _ = try? await queue.recordFailure(item.id)
                 // Stop on the first genuine failure: the connection is probably
