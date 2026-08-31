@@ -113,6 +113,16 @@ public final class DownloadManager: NSObject {
     /// Set when the session has been torn down, so late delegate callbacks from
     /// a superseded session cannot write state the app is no longer showing.
     private var isShutDown = false
+    /// A job cancelled while `start(_:)` was still awaiting a token, before its
+    /// task existed to be cancelled.
+    ///
+    /// `cancel(_:)` has nothing to act on in that window — `tasks[job]` is nil
+    /// — so without this, cancelling did nothing at all: the task was created
+    /// and resumed regardless once the await returned, and the transfer
+    /// completed, moved its file into place and fired `onFinished` as though
+    /// nobody had touched it. `states[job]` being cleared to nil hid it from
+    /// the Downloads screen, but the download itself kept going.
+    private var cancelledBeforeStart: Set<Job> = []
 
     public init(
         baseURL: URL,
@@ -135,6 +145,13 @@ public final class DownloadManager: NSObject {
     }
 
     public func state(for job: Job) -> State? { states[job] }
+
+    /// Whether a live task is currently tracked for this job. Internal, not
+    /// public: nothing outside the module has a legitimate reason to ask, but
+    /// it is what makes the cancel-during-start race actually verifiable —
+    /// `states[job]` alone does not distinguish "the task was never created"
+    /// from "it was, and is running unobserved".
+    func hasTask(for job: Job) -> Bool { tasks[job] != nil }
 
     /// Everything not yet finished, for the Downloads screen.
     public var pending: [(job: Job, state: State)] {
@@ -160,6 +177,7 @@ public final class DownloadManager: NSObject {
         // would otherwise both pass the guard above while the token was being
         // fetched, and start two transfers for one file.
         states[job] = .queued
+        cancelledBeforeStart.remove(job)
 
         var request = URLRequest(url: baseURL.appending(path: Endpoint.files(job.bookUUID)))
         request.url?.append(queryItems: [URLQueryItem(name: "format", value: job.format.rawValue)])
@@ -168,6 +186,11 @@ public final class DownloadManager: NSObject {
         }
         request.setValue(baseURL.absoluteString, forHTTPHeaderField: "Origin")
         request.allowsCellularAccess = !wifiOnly
+
+        // A cancel that arrived during the await above had no task to act on.
+        // Honour it here, before a task is created and resumed for a transfer
+        // the caller already asked to stop.
+        if cancelledBeforeStart.remove(job) != nil { return }
 
         // Resuming from a partial transfer beats starting a 79 MB file again.
         let task = if let data = resumeData.removeValue(forKey: job) {
@@ -215,8 +238,16 @@ public final class DownloadManager: NSObject {
 
     public func cancel(_ job: Job) {
         pausing.insert(job)
-        tasks[job]?.cancel()
-        tasks[job] = nil
+        if let task = tasks[job] {
+            task.cancel()
+            tasks[job] = nil
+        } else {
+            // `start(_:)` may be mid-flight, still awaiting a token, with no
+            // task yet to cancel. Mark the intent so it aborts when the await
+            // returns, instead of resuming a task for a job the caller has
+            // already asked to stop.
+            cancelledBeforeStart.insert(job)
+        }
         resumeData[job] = nil
         states[job] = nil
     }

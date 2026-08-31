@@ -130,3 +130,127 @@ private struct StubTokens: TokenProviding {
     func currentToken() async -> String? { "test-token" }
     func invalidate() async {}
 }
+
+
+/// `cancel(_:)` arriving while `start(_:)` is still awaiting a token, with no
+/// task yet in existence to cancel.
+///
+/// `TokenProviding.currentToken()` is the only await point between "claim the
+/// job" and "create and resume the task", so a gate on it is what makes the
+/// race deterministic instead of a timing guess.
+private actor GatedTokens: TokenProviding {
+    private var releaseContinuation: CheckedContinuation<Void, Never>?
+    private var enteredContinuation: CheckedContinuation<Void, Never>?
+    private var didEnter = false
+    private var released = false
+
+    func currentToken() async -> String? {
+        didEnter = true
+        enteredContinuation?.resume()
+        enteredContinuation = nil
+        if !released {
+            await withCheckedContinuation { (k: CheckedContinuation<Void, Never>) in
+                releaseContinuation = k
+            }
+        }
+        return "test-token"
+    }
+
+    /// Suspends until `currentToken()` has been entered — i.e. until `start(_:)`
+    /// is genuinely inside its one await point, so the race is real rather than
+    /// assumed.
+    func waitUntilEntered() async {
+        guard !didEnter else { return }
+        await withCheckedContinuation { (k: CheckedContinuation<Void, Never>) in
+            enteredContinuation = k
+        }
+    }
+
+    func release() {
+        released = true
+        releaseContinuation?.resume()
+        releaseContinuation = nil
+    }
+
+    func invalidate() async {}
+}
+
+@Suite("Cancelling before a download's task exists")
+@MainActor
+struct CancelBeforeStartTests {
+    /// The regression this exists for. `cancel(_:)` had nothing to act on
+    /// during this window — `tasks[job]` was nil — so it silently did nothing:
+    /// `start(_:)` resumed once the token arrived, created the task, and
+    /// resumed it regardless. The transfer then completed, moved its file into
+    /// place and fired `onFinished` for a download the caller had already
+    /// asked to stop.
+    @Test("a cancel that lands before the task exists is honoured once it would")
+    func cancelDuringTokenFetchStopsTheTask() async {
+        let tokens = GatedTokens()
+        let manager = DownloadManager(
+            baseURL: URL(string: "http://example.test")!,
+            tokens: tokens,
+            identifier: "test.\(UUID().uuidString)",
+            destinationFor: { _ in URL(fileURLWithPath: "/dev/null") },
+        )
+        let job = DownloadManager.Job(bookUUID: "b", format: .ebook)
+
+        let starting = Task { await manager.start(job) }
+        await tokens.waitUntilEntered()
+        // `start(_:)` is now genuinely suspended inside `currentToken()` —
+        // exactly the window the bug lived in.
+        #expect(manager.state(for: job) == .queued)
+
+        manager.cancel(job)
+        #expect(manager.state(for: job) == nil, "cancel should clear the state immediately")
+
+        await tokens.release()
+        await starting.value
+
+        #expect(!manager.hasTask(for: job),
+                "the task must never be created for a job already cancelled")
+        #expect(manager.state(for: job) == nil,
+                "start resuming after the cancel must not resurrect the job")
+    }
+
+    /// The ordinary case, unchanged: a cancel with a real task in flight still
+    /// goes through the task's own `cancel()`.
+    @Test("a cancel after the task exists still cancels it directly")
+    func cancelAfterTaskExistsIsUnaffected() async {
+        let tokens = GatedTokens()
+        let manager = DownloadManager(
+            baseURL: URL(string: "http://example.test")!,
+            tokens: tokens,
+            identifier: "test.\(UUID().uuidString)",
+            destinationFor: { _ in URL(fileURLWithPath: "/dev/null") },
+        )
+        let job = DownloadManager.Job(bookUUID: "b", format: .ebook)
+
+        await tokens.release()
+        await manager.start(job)
+        #expect(manager.hasTask(for: job))
+
+        manager.cancel(job)
+        #expect(!manager.hasTask(for: job))
+        #expect(manager.state(for: job) == nil)
+    }
+
+    /// A cancel with no `start` ever having been called must not leave a
+    /// phantom marker that poisons the *next* job to start.
+    @Test("cancelling a job that never started does not affect a later start of it")
+    func cancelWithoutStartLeavesNoResidue() async {
+        let tokens = GatedTokens()
+        await tokens.release()
+        let manager = DownloadManager(
+            baseURL: URL(string: "http://example.test")!,
+            tokens: tokens,
+            identifier: "test.\(UUID().uuidString)",
+            destinationFor: { _ in URL(fileURLWithPath: "/dev/null") },
+        )
+        let job = DownloadManager.Job(bookUUID: "b", format: .ebook)
+
+        manager.cancel(job)
+        await manager.start(job)
+        #expect(manager.hasTask(for: job), "a later, real start must not be swallowed by a stale cancel marker")
+    }
+}

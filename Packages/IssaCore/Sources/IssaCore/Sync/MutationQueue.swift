@@ -29,7 +29,22 @@ public actor MutationQueue {
     private let dbQueue: DatabaseQueue
 
     public init(store: LibraryStore) throws {
-        dbQueue = try DatabaseQueue(path: store.url.path)
+        // This opens a second connection to the same file `LibraryStore`
+        // already has open — the queue and the catalogue live in one SQLite
+        // database, but as two independent `DatabaseQueue`s there is no shared
+        // in-process lock between them. GRDB's default `busyMode` is
+        // `.immediateError`, so without this, a position write racing a
+        // catalogue refresh (both routinely concurrent: `AppModel` enqueues a
+        // position from the reader while a background `Task` calls
+        // `replaceCatalogue`) throws `SQLITE_BUSY` the instant the two
+        // connections collide — and every caller of `enqueue` wraps it in
+        // `try?`, so the write is discarded with no error and no retry. Giving
+        // this connection the same timeout `LibraryStore` already uses for
+        // exactly this kind of contention turns that into a five-second wait
+        // instead of a silent loss.
+        var configuration = Configuration()
+        configuration.busyMode = .timeout(5)
+        dbQueue = try DatabaseQueue(path: store.url.path, configuration: configuration)
     }
 
     /// Records an intent. Positions replace any earlier pending position for the
@@ -173,8 +188,21 @@ public struct MutationDrain: Sendable {
             } catch StorytellerError.positionConflict {
                 // The server has something newer. Ours is obsolete, not failed.
                 try? await queue.remove(item.id)
+            } catch StorytellerError.notAuthenticated {
+                // Not this item's problem — the whole session is bad, and every
+                // later item would fail identically. Keeping it queued, rather
+                // than falling into the `!isRetryable` branch below and
+                // discarding it, means a write that would have succeeded once
+                // signed in again is not lost. Stopping the loop is what keeps
+                // an expired token from silently emptying the entire backlog in
+                // one pass — the removal below has no `break`, so before this
+                // case existed the first 401 deleted everything behind it too.
+                break
             } catch let error as StorytellerError where !error.isRetryable {
-                // A refusal that will not change on the next attempt.
+                // A refusal specific to this item that will not change on
+                // retry — the book was deleted server-side, or a permission was
+                // revoked for it. Genuinely per-item, unlike the auth case
+                // above, so the rest of the queue still deserves its turn.
                 try? await queue.remove(item.id)
             } catch {
                 IssaLog.failure("sync mutation", error, ["kind": String(describing: item.kind)])

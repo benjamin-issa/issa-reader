@@ -1154,8 +1154,19 @@ public final class ReaderModel {
 
         // Anchor on the first narrated fragment on this page when there is one:
         // it survives a font or margin change, which a page number does not.
-        let fragment = layout.attributedText
-            .attribute(.issaFragmentID, at: page.characterRange.location, effectiveRange: nil) as? String
+        //
+        // Clamped: `.ensuresExtraLineFragment` can append a synthetic
+        // zero-length trailing page whose `characterRange.location` equals the
+        // chapter's length, and `attribute(at:)` requires a valid index —
+        // passing the length itself is out of bounds and crashes. Every other
+        // reader of this offset (`locator(forRange:)`, `firstNarratedFragment`)
+        // already clamps; this was the one that didn't.
+        let textLength = (layout.attributedText.string as NSString).length
+        let fragment = textLength > 0
+            ? layout.attributedText.attribute(
+                .issaFragmentID, at: min(page.characterRange.location, textLength - 1),
+                effectiveRange: nil) as? String
+            : nil
 
         let chapterProgress = layout.progression(of: page)
         let overall = package.bookProgress(spineIndex: chapterIndex, within: chapterProgress)
