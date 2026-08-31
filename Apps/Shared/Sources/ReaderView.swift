@@ -6,6 +6,29 @@ import SwiftUI
 import UIKit
 #endif
 
+/// Opens a book, resolving its model at the moment the screen is really shown.
+///
+/// `ReaderView` takes its model rather than making one, and asking `AppModel`
+/// for it has a side effect: it lets go of whatever book was open before, and
+/// silences it. A `NavigationLink`'s destination closure can be evaluated
+/// before the link is ever followed, so handing `ReaderView` a model from the
+/// call site would let merely glancing at one book's detail screen stop another
+/// one playing. Resolving inside `body` happens only when the screen renders.
+public struct ReaderScreen: View {
+    @Environment(AppModel.self) private var app
+    private let book: Book
+    private let session: Session
+
+    public init(book: Book, session: Session) {
+        self.book = book
+        self.session = session
+    }
+
+    public var body: some View {
+        ReaderView(model: app.reader(for: book, session: session))
+    }
+}
+
 /// The reading surface.
 ///
 /// A page is drawn straight from the chapter's existing TextKit 2 layout, so

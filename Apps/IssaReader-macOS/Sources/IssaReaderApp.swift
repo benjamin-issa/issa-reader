@@ -155,7 +155,7 @@ struct ReaderWindow: View {
         if let bookID,
            let book = app.books.first(where: { $0.uuid == bookID }),
            let session = app.session {
-            ReaderView(model: app.reader(for: book, session: session))
+            ReaderScreen(book: book, session: session)
                 .navigationTitle(book.title)
         } else {
             ContentUnavailableView(
