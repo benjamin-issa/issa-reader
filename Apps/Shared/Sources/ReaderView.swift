@@ -46,12 +46,15 @@ public struct ReaderView: View {
             // every time the chrome was toggled: hiding a bar changes the
             // inset, the inset changes this size, and the size is the id of
             // the task below.
-            let pageSize = CGSize(
-                width: max(geometry.size.width - model.style.pageMargin * 2, 1),
-                height: max(
-                    geometry.size.height - deviceInsets.top - deviceInsets.bottom
-                        - model.style.pageMargin * 2 - 44, 1),
+            // Both bars are reserved, not just the footer. Subtracting a
+            // single 44 left the top bar nothing, so every page laid its first
+            // lines into the strip the toolbar paints over.
+            let chrome = ReaderChrome(
+                safeAreaTop: deviceInsets.top,
+                safeAreaBottom: deviceInsets.bottom,
+                margin: model.style.pageMargin,
             )
+            let pageSize = chrome.pageSize(in: geometry.size)
 
             ZStack {
                 model.style.theme.background.ignoresSafeArea()
@@ -91,7 +94,12 @@ public struct ReaderView: View {
                     pageContent(size: pageSize)
                 }
             }
-            .task(id: geometry.size) {
+            // Keyed on the page size rather than the window's, because the
+            // insets arrive from a separate `onChange` and the ordering between
+            // the two is not defined: whichever ran second, the chapter used to
+            // be laid out against whatever the first one saw, and `resize` — which
+            // guards on the size having changed — could never correct it.
+            .task(id: pageSize) {
                 // Set before open(), not in pageContent's onAppear — that only
                 // renders once the book is already open, so the reader always
                 // fell back to the old blocking foreground download.
@@ -234,16 +242,24 @@ public struct ReaderView: View {
         .font(.system(size: 17, weight: .semibold))
         .foregroundStyle(model.style.theme.text)
         .padding(.horizontal, Metrics.spacing16)
-        .frame(height: 44)
+        .frame(height: ReaderChrome.barHeight)
         .padding(.top, deviceInsets.top)
         .background {
             // The page's own colour, not a material: the reader's theme is
             // independent of the device appearance, and a system material
             // goes dark over a light page.
-            model.style.theme.background
-                .opacity(0.94)
-                .ignoresSafeArea()
+            model.style.theme.background.opacity(0.94)
         }
+        // The bar, not just its background, reaches the top of the window.
+        //
+        // Without this the overlay is laid out inside the live safe area and
+        // the padding above adds the same inset a second time, so the row sat
+        // 59pt too low — floating in the middle of an empty band, with its
+        // backdrop washing out the three lines of text behind it. Extending the
+        // whole bar makes its position depend on the padding alone: the row
+        // occupies exactly `safeAreaTop ..< topReserve`, which is where the page
+        // now starts.
+        .ignoresSafeArea(edges: .top)
         .opacity(model.chromeVisible ? 1 : 0)
         // Untappable when invisible, so a tap in the top strip turns the page
         // like anywhere else rather than hitting a control that is not there.
@@ -255,8 +271,17 @@ public struct ReaderView: View {
     @ViewBuilder
     private func pageContent(size: CGSize) -> some View {
         VStack(spacing: 0) {
+            // The top bar's reserve, held whether or not the chrome is showing,
+            // exactly as the footer holds its own — so toggling can never
+            // re-paginate. It stands in for the page's top margin rather than
+            // adding to it: 44 points of empty bar is already more breathing
+            // room than the margin gave, and stacking both is how the screen
+            // ended up spending a fifth of its height before the first word.
+            Color.clear.frame(height: ReaderChrome.barHeight)
+
             PageCanvas(model: model, pageSize: size)
-                .padding(model.style.pageMargin)
+                .padding(.horizontal, model.style.pageMargin)
+                .padding(.bottom, model.style.pageMargin)
                 .contentShape(Rectangle())
                 #if !os(tvOS)
                 // Double tap first: SwiftUI gives the higher count priority,
@@ -558,15 +583,19 @@ public struct ReaderView: View {
 
     /// Tap coordinates arrive in the padded frame's space; the layout speaks
     /// in the canvas's, which starts one margin in.
+    /// A point in the padded page's coordinates, in the canvas's own.
+    ///
+    /// Horizontal only: the page keeps its side margins, while its top margin is
+    /// now the bar's reserve sitting above it, outside this view entirely.
     private func canvasPoint(_ point: CGPoint) -> CGPoint {
-        CGPoint(x: point.x - model.style.pageMargin, y: point.y - model.style.pageMargin)
+        CGPoint(x: point.x - model.style.pageMargin, y: point.y)
     }
 
     /// The strip below the page.
     ///
-    /// Its 44 pt is reserved whether or not the controls are showing, so
-    /// toggling the chrome never changes the page size and never re-paginates
-    /// the chapter. Only the controls fade; the progress readout stays, because
+    /// Its `ReaderChrome.barHeight` is reserved whether or not the controls are
+    /// showing, so toggling the chrome never changes the page size and never
+    /// re-paginates the chapter. Only the controls fade; the progress readout stays, because
     /// it is the one thing a reader who has hidden everything still wants.
     private var footer: some View {
         HStack(spacing: Metrics.spacing12) {
@@ -616,7 +645,7 @@ public struct ReaderView: View {
             }
         }
         .padding(.horizontal, model.style.pageMargin)
-        .frame(height: 44)
+        .frame(height: ReaderChrome.barHeight)
     }
 }
 
