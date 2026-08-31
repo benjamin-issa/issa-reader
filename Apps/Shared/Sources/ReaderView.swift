@@ -59,7 +59,7 @@ public struct ReaderView: View {
                 case let .loading(message):
                     VStack(spacing: Metrics.spacing12) {
                         ProgressView()
-                        Text(message).font(Typography.footnote).foregroundStyle(Palette.inkTertiary)
+                        Text(message).font(Typography.footnote).foregroundStyle(model.style.theme.textTertiary)
                     }
                 case let .downloading(received, total):
                     downloadingView(received: received, total: total)
@@ -83,7 +83,7 @@ public struct ReaderView: View {
                             Task { await model.retryOpen(pageSize: pageSize) }
                         }
                         .font(Typography.callout.weight(.semibold))
-                        .foregroundStyle(Palette.tangerine)
+                        .foregroundStyle(model.style.theme.accent)
                     }
                     .padding(Metrics.spacing32)
                 case .ready:
@@ -496,28 +496,28 @@ public struct ReaderView: View {
         VStack(spacing: Metrics.spacing16) {
             Text(model.book.title)
                 .font(Typography.title)
-                .foregroundStyle(Palette.ink)
+                .foregroundStyle(model.style.theme.text)
                 .multilineTextAlignment(.center)
 
             if total > 0 {
                 ProgressView(value: Double(received), total: Double(total))
-                    .tint(Palette.tangerine)
+                    .tint(model.style.theme.accent)
                     .frame(maxWidth: 280)
                 Text("\(Self.sizeText(received)) of \(Self.sizeText(total))")
                     .font(Typography.caption.monospacedDigit())
-                    .foregroundStyle(Palette.inkTertiary)
+                    .foregroundStyle(model.style.theme.textTertiary)
             } else {
                 // No Content-Length: an indeterminate bar is honest, where a
                 // bar pinned at zero looks exactly like a stall.
                 ProgressView().frame(maxWidth: 280)
                 Text(received > 0 ? Self.sizeText(received) : "Starting…")
                     .font(Typography.caption.monospacedDigit())
-                    .foregroundStyle(Palette.inkTertiary)
+                    .foregroundStyle(model.style.theme.textTertiary)
             }
 
             Button("Cancel") { model.cancelDownload() }
                 .font(Typography.callout)
-                .foregroundStyle(Palette.inkSecondary)
+                .foregroundStyle(model.style.theme.textSecondary)
         }
         .padding(Metrics.spacing32)
     }
@@ -547,7 +547,7 @@ public struct ReaderView: View {
                     } label: {
                         Image(systemName: model.isPlaying ? "pause.circle.fill" : "play.circle.fill")
                             .font(.system(size: 26))
-                            .foregroundStyle(Palette.tangerine)
+                            .foregroundStyle(model.style.theme.accent)
                     }
                     .buttonStyle(.plain)
                     Button {
@@ -555,7 +555,7 @@ public struct ReaderView: View {
                     } label: {
                         Image(systemName: "waveform")
                             .font(.system(size: 17))
-                            .foregroundStyle(Palette.inkTertiary)
+                            .foregroundStyle(model.style.theme.textTertiary)
                     }
                     .buttonStyle(.plain)
                 }
@@ -648,7 +648,7 @@ struct PageCanvas: View {
                 for rect in layout.rects(forRange: selection, on: page) {
                     context.fill(
                         Path(roundedRect: rect.insetBy(dx: -1, dy: -1), cornerRadius: 2),
-                        with: .color(Palette.tangerine.opacity(0.28)),
+                        with: .color(theme.selection),
                     )
                 }
             }

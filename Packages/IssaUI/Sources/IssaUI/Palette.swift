@@ -49,9 +49,15 @@ public enum ReaderTheme: String, CaseIterable, Sendable, Codable {
     case night
     case slate
 
+    // Fixed values, deliberately not `Palette` tokens. The page's appearance is
+    // the reader's own choice: someone who picks Paper while the system is in
+    // Dark Mode has asked for a light page, and should get one. Drawing these
+    // from the adaptive palette made Paper and Sepia turn dark with the system,
+    // so the four themes collapsed to two and the picker offered a choice that
+    // did nothing.
     public var background: Color {
         switch self {
-        case .paper: Palette.surface
+        case .paper: Color(hex: 0xFFFDF8)
         case .sepia: Color(hex: 0xF4EFE3)
         case .night: Color(hex: 0x17150F)
         case .slate: Color(hex: 0x1C2422)
@@ -60,19 +66,40 @@ public enum ReaderTheme: String, CaseIterable, Sendable, Codable {
 
     public var text: Color {
         switch self {
-        case .paper, .sepia: Palette.ink
+        case .paper, .sepia: Color(hex: 0x221F1A)
         case .night: Color(hex: 0xE0D6C6)
         case .slate: Color(hex: 0x9FB3AF)
+        }
+    }
+
+    /// Quieter inks, for the reader's own furniture.
+    ///
+    /// The progress readout, the controls and the messages shown while a book
+    /// is opening are all drawn *on the page*, so they take their colour from
+    /// the page. A `Palette` token there is white on cream for anyone reading
+    /// `paper` in Dark Mode — the same failure as the themes themselves, one
+    /// layer up.
+    public var textSecondary: Color { text.opacity(0.75) }
+    public var textTertiary: Color { text.opacity(0.55) }
+
+    /// The accent for anything interactive drawn on the page.
+    public var accent: Color {
+        switch self {
+        case .paper, .sepia: Color(hex: 0xE2853A)
+        case .night, .slate: Color(hex: 0xEE9B57)
         }
     }
 
     /// Fill behind the currently-narrated sentence.
     public var highlight: Color {
         switch self {
-        case .paper, .sepia: Palette.tangerine.opacity(0.22)
-        case .night, .slate: Palette.tangerine.opacity(0.30)
+        case .paper, .sepia: accent.opacity(0.22)
+        case .night, .slate: accent.opacity(0.30)
         }
     }
+
+    /// Fill behind selected text.
+    public var selection: Color { accent.opacity(0.28) }
 
     public var isDark: Bool { self == .night || self == .slate }
 }
