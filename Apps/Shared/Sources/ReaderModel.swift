@@ -86,11 +86,12 @@ public final class ReaderModel {
     /// reader does not need to know about the store.
     /// Persisting annotations is the app's job, not the reader's: this model
     /// knows the geometry, the store knows the disk.
-    /// Whether the navigation bar and the footer's controls are showing.
+    /// Whether the reader's own chrome is showing: the top bar, and everything
+    /// in the footer including the progress readout.
     ///
-    /// The progress readout is deliberately not part of this — it is the one
-    /// thing that stays on screen, so a reader who has hidden everything can
-    /// still see how far through they are.
+    /// The readout used to be exempt, on the theory that it is the one thing
+    /// worth keeping. Hiding the controls is a request for a bare page, and a
+    /// percentage in the corner is not that.
     public private(set) var chromeVisible = true
 
     public func toggleChrome() {
@@ -196,7 +197,7 @@ public final class ReaderModel {
         }
     }
 
-    /// The always-visible progress readout, in whichever form the reader chose.
+    /// The footer's progress readout, in whichever form the reader chose.
     public var progressText: String {
         switch style.progressDisplay {
         case .book:

@@ -41,11 +41,13 @@ struct IssaReaderApp: App {
                 .onContinueUserActivity(CSSearchableItemActionType) { activity in
                     guard let id = activity.userInfo?[CSSearchableItemActivityIdentifier] as? String
                     else { return }
-                    services.app.pendingBookID = id
+                    // A search result is browsing, not resuming.
+                    services.app.requestBook(id, .details)
                 }
                 .onContinueUserActivity(BookActivity.type) { activity in
                     guard let id = activity.userInfo?[BookActivity.bookIDKey] as? String else { return }
-                    services.app.pendingBookID = id
+                    // Handoff carries a reading position; it means carry on.
+                    services.app.requestBook(id, .read)
                 }
         }
     }
@@ -92,10 +94,13 @@ struct LibraryTabs: View {
     enum Tab: Hashable { case library, playing, settings }
 
     private func openPendingBook() {
-        guard let book = app.consumePendingBook() else { return }
+        guard let pending = app.consumePendingBook() else { return }
         selectedTab = .library
         libraryPath = NavigationPath()
-        libraryPath.append(book)
+        // Pushed either way, so Back from the reader lands on the book and then
+        // the library. `consumePendingBook` has already recorded whether the
+        // book's own screen should go straight through to the reader.
+        libraryPath.append(pending.book)
     }
 
     private var tabs: some View {
@@ -141,11 +146,17 @@ struct LibraryTabs: View {
     /// changes and the 26.1 path never churns view identity; only the fallback
     /// can, and losing the library's scroll position when playback starts is
     /// still better than a bar that is always there and always empty.
+    /// Not on the Playing tab, where the full player is already on screen and
+    /// the bar repeats it in miniature immediately below.
+    private var showsMiniPlayer: Bool {
+        app.playback != nil && selectedTab != .playing
+    }
+
     @ViewBuilder
     private var shell: some View {
         if #available(iOS 26.1, *) {
-            tabs.tabViewBottomAccessory(isEnabled: app.playback != nil) { miniPlayer }
-        } else if app.playback != nil {
+            tabs.tabViewBottomAccessory(isEnabled: showsMiniPlayer) { miniPlayer }
+        } else if showsMiniPlayer {
             tabs.tabViewBottomAccessory { miniPlayer }
         } else {
             tabs
@@ -160,7 +171,7 @@ struct LibraryTabs: View {
         shell
         // A link can arrive before the library has loaded, so this waits for
         // the book to exist rather than dropping the request on the floor.
-        .onChange(of: app.pendingBookID) { openPendingBook() }
+        .onChange(of: app.pendingBook) { openPendingBook() }
         .onChange(of: app.books) { openPendingBook() }
         // Indexed off the main path: a large library should not delay the
         // first frame to make itself searchable.
@@ -175,7 +186,8 @@ struct LibraryTabs: View {
             app.refreshDownloadedSet()
             guard let id = AppIntentInbox.shared.bookID else { return }
             AppIntentInbox.shared.bookID = nil
-            app.pendingBookID = id
+            // "Continue reading" means exactly that.
+            app.requestBook(id, .read)
         }
     }
 }

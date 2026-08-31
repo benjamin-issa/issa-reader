@@ -69,6 +69,12 @@ public struct BookDetailView: View {
         // here is stale after a reading session unless it is re-read.
         .task { await app.refresh(book: book) }
         #if os(iOS)
+        // A widget tap, a Handoff or a link meant "carry on with this book", so
+        // this screen is a waypoint rather than the destination. One-shot, so
+        // reaching the same book through the library later does not reopen it.
+        .task { if app.consumeReaderRequest(for: book) { showsReader = true } }
+        #endif
+        #if os(iOS)
         .fullScreenCover(isPresented: $showsReader) {
             if let session = app.session {
                 ReaderScreen(book: book, session: session)

@@ -624,8 +624,8 @@ public struct ReaderView: View {
     ///
     /// Its `ReaderChrome.barHeight` is reserved whether or not the controls are
     /// showing, so toggling the chrome never changes the page size and never
-    /// re-paginates the chapter. Only the controls fade; the progress readout stays, because
-    /// it is the one thing a reader who has hidden everything still wants.
+    /// re-paginates the chapter. What the strip *contains* is conditional; its
+    /// height never is.
     private var footer: some View {
         HStack(spacing: Metrics.spacing12) {
             if model.chromeVisible {
@@ -660,17 +660,20 @@ public struct ReaderView: View {
                     .foregroundStyle(model.style.theme.text.opacity(0.55))
                 }
                 .buttonStyle(.plain)
-            }
-            Spacer()
-            // Always on screen, in either form.
-            if !model.progressText.isEmpty {
-                Text(model.progressText)
-                    .font(Typography.caption.monospacedDigit())
-                    .foregroundStyle(model.style.theme.text.opacity(0.55))
-                    .contentTransition(.numericText())
-                    // The page element already says where the reader is, in
-                    // words. Left visible, this would follow it as "3 slash 12".
-                    .accessibilityHidden(true)
+                Spacer()
+                // Inside the chrome, not beside it: hiding everything should
+                // hide everything. It used to stay behind on the grounds that
+                // it is what a reader who has cleared the screen still wants —
+                // which turned out not to be true of the reader.
+                if !model.progressText.isEmpty {
+                    Text(model.progressText)
+                        .font(Typography.caption.monospacedDigit())
+                        .foregroundStyle(model.style.theme.text.opacity(0.55))
+                        .contentTransition(.numericText())
+                        // The page element already says where the reader is, in
+                        // words. Left visible, this would follow it as "3 slash 12".
+                        .accessibilityHidden(true)
+                }
             }
         }
         .padding(.horizontal, model.style.pageMargin)

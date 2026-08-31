@@ -460,7 +460,28 @@ public final class AppModel {
     ///
     /// Held rather than acted on directly, because the link can arrive before
     /// the library has loaded, or before anyone is even signed in.
-    public var pendingBookID: String?
+    /// A book something outside the app asked for, and what it asked for.
+    ///
+    /// The destination matters because the routes in do not mean the same
+    /// thing. A widget tap, a Handoff from another device and an
+    /// `issareader://` link all mean "carry on with this book"; a Spotlight
+    /// result means "here is a book you searched for", where the description,
+    /// the editions and the Listen button are the point.
+    public struct PendingBook: Equatable, Sendable {
+        public enum Destination: Sendable, Equatable { case read, details }
+        public let uuid: String
+        public let destination: Destination
+    }
+
+    public private(set) var pendingBook: PendingBook?
+
+    /// Set when a `.read` request resolves to a book that has text, and
+    /// consumed by that book's screen so it opens the reader straight away.
+    private var readerRequest: String?
+
+    public func requestBook(_ uuid: String, _ destination: PendingBook.Destination) {
+        pendingBook = PendingBook(uuid: uuid, destination: destination)
+    }
 
     /// Accepts `issareader://book/{uuid}`.
     @discardableResult
@@ -470,7 +491,8 @@ public final class AppModel {
         switch url.host() {
         case "book":
             guard let uuid = components.first else { return false }
-            pendingBookID = uuid
+            // A link naming a book is a request to get on with it.
+            requestBook(uuid, .read)
             return true
         default:
             return false
@@ -478,11 +500,29 @@ public final class AppModel {
     }
 
     /// The book a pending link refers to, once the library can answer.
-    public func consumePendingBook() -> Book? {
-        guard let pendingBookID else { return nil }
-        guard let book = books.first(where: { $0.uuid == pendingBookID }) else { return nil }
-        self.pendingBookID = nil
-        return book
+    ///
+    /// Asking to read a book with no text — an audiobook — falls back to its
+    /// page rather than starting audio unasked.
+    public func consumePendingBook() -> (book: Book, destination: PendingBook.Destination)? {
+        guard let pendingBook else { return nil }
+        guard let book = books.first(where: { $0.uuid == pendingBook.uuid }) else { return nil }
+        self.pendingBook = nil
+        let readable = book.servableFormats.contains(.ebook)
+            || book.servableFormats.contains(.readaloud)
+        let destination: PendingBook.Destination =
+            pendingBook.destination == .read && readable ? .read : .details
+        if destination == .read { readerRequest = book.uuid }
+        return (book, destination)
+    }
+
+    /// Whether this book's screen should open the reader as it appears.
+    ///
+    /// One-shot: a later visit to the same book, arrived at by tapping through
+    /// the library, must not reopen the reader on its own.
+    public func consumeReaderRequest(for book: Book) -> Bool {
+        guard readerRequest == book.uuid else { return false }
+        readerRequest = nil
+        return true
     }
 
     // MARK: - Annotations

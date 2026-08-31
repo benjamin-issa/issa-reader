@@ -16,6 +16,9 @@ public struct NowPlayingTab: View {
     @Environment(AppModel.self) private var app
     @Environment(NowPlayingController.self) private var nowPlaying
     @Environment(PlaybackSettings.self) private var settings
+    #if os(iOS)
+    @State private var showsReader = false
+    #endif
 
     public init() {}
 
@@ -38,6 +41,28 @@ public struct NowPlayingTab: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Palette.paper)
+        #if os(iOS)
+        // Getting back to the words should not mean Library, then the book,
+        // then Resume. In the navigation bar rather than beside the transport
+        // because the player is a fixed stack that already fills a phone.
+        .toolbar {
+            if let book = app.playbackBook, book.hasText, let session = app.session {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showsReader = true
+                    } label: {
+                        Label("Read along", systemImage: "book")
+                    }
+                    .accessibilityLabel("Read along")
+                    // Presented from here rather than pushed, so the reader is
+                    // the same full-screen surface it is everywhere else.
+                    .fullScreenCover(isPresented: $showsReader) {
+                        ReaderScreen(book: book, session: session)
+                    }
+                }
+            }
+        }
+        #endif
     }
 
     /// The last book, ready to resume — the player's own layout, greyed of its
@@ -79,5 +104,11 @@ private extension Book {
     /// and over-promises a book the server cannot actually stream.
     var canBeListenedTo: Bool {
         servableFormats.contains(.audiobook) || servableFormats.contains(.readaloud)
+    }
+
+    /// Whether there is anything to read along with. A plain audiobook has no
+    /// text at all, and offering to open it would be a lie.
+    var hasText: Bool {
+        servableFormats.contains(.ebook) || servableFormats.contains(.readaloud)
     }
 }
