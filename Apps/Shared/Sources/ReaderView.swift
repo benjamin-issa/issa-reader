@@ -382,15 +382,13 @@ public struct ReaderView: View {
             // the process, pinning the chapter layout, the decoded plates and
             // the readalong coordinator with it.
             let bookUUID = model.book.uuid
-            model.enqueuePosition = { [weak app = app] locator, timestamp in
-                await app?.enqueue(
-                    .position, bookUUID: bookUUID,
-                    payload: MutationDrain.PositionPayload(locator: locator, timestamp: timestamp),
-                )
-                // And into the library's own copy, so the Continue card and the
-                // book screen move with the reader rather than with the next
-                // fetch.
-                app?.recordPosition(locator, timestamp: timestamp, for: bookUUID)
+            model.enqueuePosition = { [weak app = app] locator, timestamp, origin in
+                // One choke point, which also updates the library's own copy so
+                // the Continue card and the book screen move with the reader
+                // rather than with the next fetch — and which refuses a write
+                // that would walk the reader backwards without being asked.
+                await app?.writePosition(
+                    locator, timestamp: timestamp, for: bookUUID, origin: origin)
             }
             model.onSaveAnnotation = { [weak app = app] in app?.save($0) }
             model.onDeleteAnnotation = { [weak app = app] in app?.delete($0) }

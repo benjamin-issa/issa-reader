@@ -34,6 +34,21 @@ public final class ReaderModel {
     /// Present only when the book has usable media overlays.
     public private(set) var readalong: ReadalongCoordinator?
 
+    /// How the current position came about.
+    ///
+    /// Stored on the model rather than passed per save, so the `.onDisappear`
+    /// flush inherits the classification of the move that produced the position
+    /// rather than being freshly — and wrongly — labelled at the moment it runs.
+    private var positionOrigin: PositionOrigin = .chosen
+
+    /// The narrated sentence the server said we were on.
+    ///
+    /// `loadChapter(_:restoring:)` uses the locator to work out a character
+    /// offset and then drops the id, but the id is the one anchor the audio
+    /// clock can use directly — and the only one that still resolves when a
+    /// chapter's overlay ids never reached the rendered text.
+    private var restoredSentenceID: String?
+
     /// What this book offers by way of its own face, once opened.
     public internal(set) var publisherFont: EPUBFontResolver.Resolution?
 
@@ -89,7 +104,7 @@ public final class ReaderModel {
     public var onSaveAnnotation: ((Annotation) -> Void)?
     public var onDeleteAnnotation: ((Annotation) -> Void)?
 
-    public var enqueuePosition: ((ReadiumLocator, Double) async -> Void)?
+    public var enqueuePosition: ((ReadiumLocator, Double, PositionOrigin) async -> Void)?
     /// When the oldest unwritten change happened, for the debounce ceiling.
     private var firstUnsavedChangeAt: Date?
 
@@ -235,21 +250,44 @@ public final class ReaderModel {
             // Resume where the server says we were, before the first render, so
             // the reader never flashes page one and then jumps.
             let stored = try? await ProgressService(client: session.client).current(for: book.uuid)
-            chapterIndex = stored.flatMap { position in
+            restoredSentenceID = stored?.locator.sentenceID
+            let resumed = stored.flatMap { position in
                 package.spine.firstIndex { position.locator.matchesHref($0.href) }
-            } ?? Self.firstReadableChapter(in: package, style: style)
+            }
+            if stored != nil, resumed == nil {
+                // The reader is about to land at the front of the book, and the
+                // first page turn will save that over their real position.
+                IssaLog.warning("stored position matched no chapter", [
+                    "book": book.title,
+                    "href": stored?.locator.href ?? "none",
+                    "spineItems": String(package.spine.count),
+                ])
+            }
+            chapterIndex = resumed ?? Self.firstReadableChapter(in: package, style: style)
 
             // A chapter that failed to parse already set `.failed`; overwriting
             // it with `.ready` showed a blank page and no explanation at all.
             guard await loadChapter(chapterIndex, restoring: stored?.locator) else { return }
             await prepareNarration(package: package)
             phase = .ready
-            IssaLog.info("book opened", [
-                "book": book.title,
-                "chapter": String(chapterIndex),
-                "narration": String(timeline.isEmpty ? false : true),
-                "resumed": String(stored != nil),
-            ])
+            // Spelled out rather than inline: enough of these and the type
+            // checker gives up on the literal.
+            var opened: [String: String] = [:]
+            opened["book"] = book.title
+            opened["chapter"] = String(chapterIndex)
+            opened["narration"] = String(!timeline.isEmpty)
+            opened["resumed"] = String(stored != nil)
+            // The fields that say *why* a resume went wrong, rather than only
+            // that it did: whether the stored position named a sentence, and
+            // whether this book is aligned everywhere or only in places.
+            opened["storedFragment"] = restoredSentenceID ?? "none"
+            let storedProgress: Double = stored?.locator.totalProgression ?? -1
+            opened["storedProgress"] = String(format: "%.4f", storedProgress)
+            opened["entries"] = String(timeline.entries.count)
+            let narratedDocuments: Set<String> = Set(timeline.entries.map(\.textHref))
+            opened["narratedDocuments"] = String(narratedDocuments.count)
+            opened["spineItems"] = String(package.spine.count)
+            IssaLog.info("book opened", opened)
             // The widget reads a file that was written only by `saveProgress`,
             // and nothing saves on open — so a reader who opened a book and put
             // the phone down left the widget showing the previous session, or
@@ -312,10 +350,23 @@ public final class ReaderModel {
     /// ALIGNED but which carries no overlays simply reads as a plain ebook
     /// rather than showing a player that can never play anything.
     private func prepareNarration(package: EPUBPackage) async {
-        guard let timeline, !timeline.isEmpty else { return }
+        guard let timeline, !timeline.isEmpty else {
+            IssaLog.info("narration unavailable", [
+                "book": book.title, "reason": "emptyTimeline",
+            ])
+            return
+        }
         guard let files = try? AudioExtraction.extractAudio(
             from: package, timeline: timeline, bookID: book.uuid,
-        ), !files.isEmpty else { return }
+        ), !files.isEmpty else {
+            // A book whose play button never appears, with no reason given, is
+            // indistinguishable from one that was never aligned.
+            IssaLog.warning("narration unavailable", [
+                "book": book.title, "reason": "audioExtractionFailed",
+                "entries": String(timeline.entries.count),
+            ])
+            return
+        }
 
         let coordinator = ReadalongCoordinator(timeline: timeline, audioFiles: files)
         // The saved rate is otherwise written to preferences and never applied,
@@ -324,6 +375,10 @@ public final class ReaderModel {
         coordinator.onFragmentChange = { [weak self] fragment in
             guard let self else { return }
             activeFragmentID = fragment
+            // Narration arriving somewhere is not the reader choosing to be
+            // there, so a write derived from it may not overwrite a good
+            // position with a wildly different one.
+            positionOrigin = .derived
             // Listening moves the position as surely as turning pages does;
             // without this an hour of narration is lost on every other device.
             scheduleSave()
@@ -336,11 +391,17 @@ public final class ReaderModel {
             }
         }
         coordinator.onChapterChange = { [weak self] href in
-            guard let self, let package = self.package else { return }
-            guard let index = package.spine.firstIndex(where: { $0.href == href }),
-                  index != chapterIndex else { return }
-            Task { await self.loadChapter(index) }
+            guard let self else { return }
+            // `onFragmentChange` fires first, so this is already the sentence
+            // that crossed the boundary. Loading without it took `pageIndex = 0`
+            // and saved the top of the chapter over the line being spoken — on
+            // every chapter boundary, every session.
+            let fragment = activeFragmentID
+            Task { [weak self] in
+                await self?.followNarration(toDocument: href, fragment: fragment)
+            }
         }
+        coordinator.onSeek = { [weak self] in self?.positionOrigin = .chosen }
         readalong = coordinator
     }
 
@@ -351,6 +412,7 @@ public final class ReaderModel {
     /// keep doing what a tap always did.
     @discardableResult
     public func playSentence(at point: CGPoint) async -> Bool {
+        positionOrigin = .chosen
         guard let readalong, let layout, let page = currentPage else { return false }
         guard let fragment = layout.fragmentID(at: point, on: page) else { return false }
         // A fragment id the timeline does not know is an ordinary element id —
@@ -384,6 +446,7 @@ public final class ReaderModel {
 
     /// Plays the narration for whatever is selected.
     public func playSelection() async {
+        positionOrigin = .chosen
         guard let selection, let layout, let readalong, let timeline else { return }
         let fragment = layout.attributedText
             .attribute(.issaFragmentID, at: selection.location, effectiveRange: nil) as? String
@@ -396,14 +459,101 @@ public final class ReaderModel {
     /// Scans forward for the first narrated fragment on the page rather than
     /// reading only the first character: a page often opens mid-paragraph, or on
     /// a heading that carries no media overlay at all.
-    public func startNarration() async {
-        guard let readalong else { return }
-        if let fragment = firstFragmentOnCurrentPage() {
-            await readalong.seek(toFragment: fragment)
-        } else if let first = timeline?.entries.first {
-            // Nothing narrated on this page; begin at the start of the book.
-            await readalong.play(from: first)
+    /// How far narration may begin from where the reader actually is.
+    ///
+    /// The fallback this replaced was the first sentence of the whole
+    /// audiobook, which on a part-read novel is most of the book away. Every
+    /// legitimate resolution is a page or two out; nothing honest is a tenth of
+    /// a book out.
+    static let narrationProximityLimit = 0.10
+
+    /// Where narration should begin for a reader who is here.
+    ///
+    /// Every rung is anchored to the chapter the reader is in, and the last one
+    /// still only looks *forward* through the spine. There is deliberately no
+    /// rung that can reach the start of the book from the middle of it.
+    private func narrationStart() -> (entry: SMILEntry, via: String)? {
+        guard let timeline, let package, package.spine.indices.contains(chapterIndex) else { return nil }
+        let href = package.spine[chapterIndex].href
+
+        // 1. What the reader can see, or the next narrated sentence after it in
+        //    this chapter: a page often opens on a heading or a plate carrying
+        //    no overlay of its own while the prose beneath it is narrated.
+        if let fragment = firstNarratedFragment(continuingPastPage: true),
+           let entry = timeline.entry(forFragment: fragment) {
+            return (entry, "page")
         }
+        // 2. The sentence the stored position named. An exact audio anchor, and
+        //    the only rung that resolves when a chapter's ids never reached
+        //    `fragmentRanges` — the case rung 1 structurally cannot see. Held to
+        //    this chapter so a stale locator cannot move the reader out of it.
+        if let sentence = restoredSentenceID,
+           let entry = timeline.entry(forFragment: sentence), entry.textHref == href {
+            return (entry, "restored")
+        }
+        // 3. The nearest narration at or after this chapter. On a fully aligned
+        //    book that is the top of this chapter; on a partly aligned one, the
+        //    first chapter ahead that has any. Never behind.
+        if let entry = timeline.firstEntry(inAnyOf: package.spine[chapterIndex...].map(\.href)) {
+            return (entry, entry.textHref == href ? "chapter" : "ahead")
+        }
+        return nil
+    }
+
+    public func startNarration() async {
+        guard let readalong, let timeline else { return }
+        guard let (entry, via) = narrationStart() else {
+            IssaLog.warning("narration has nowhere to start", [
+                "book": book.title, "chapter": String(chapterIndex),
+                "page": String(pageIndex), "entries": String(timeline.entries.count),
+            ])
+            return
+        }
+        // The proximity check, which is the actual fix. Refusing is right:
+        // the alternative on the way in was a position, which plays, and which
+        // is written to the server within two seconds.
+        let at = timeline.bookTime(forFragment: entry.fragmentID).map(timeline.progression(atBookTime:))
+        let distance = at.map { abs($0 - bookProgress) }
+        if let distance, distance > Self.narrationProximityLimit {
+            IssaLog.warning("narration would start too far away", [
+                "book": book.title, "via": via, "chapter": String(chapterIndex),
+                "distance": String(format: "%.4f", distance),
+                "reader": String(format: "%.4f", bookProgress),
+                "candidate": String(format: "%.4f", at ?? -1),
+            ])
+            return
+        }
+        IssaLog.info("narration start", [
+            "book": book.title, "via": via, "chapter": String(chapterIndex),
+            "page": String(pageIndex), "fragment": entry.fragmentID,
+            "distance": String(format: "%.4f", distance ?? -1),
+        ])
+        // `play(from:)`, not `seek(toFragment:)`: a seek is the reader naming a
+        // place, and pressing play is not. Keeping this on the derived side of
+        // the line is what leaves the position guard armed.
+        await readalong.play(from: entry)
+        // The coordinator only notices a document change between two observed
+        // fragments, so a start in another chapter never fires `onChapterChange`
+        // and the page would never follow.
+        await followNarration(toDocument: entry.textHref, fragment: entry.fragmentID)
+    }
+
+    /// Turns the book to the page a narrated fragment is on, loading its chapter.
+    private func followNarration(toDocument href: String, fragment: String?) async {
+        guard let package,
+              let index = package.spine.firstIndex(where: { $0.href == href }),
+              index != chapterIndex else { return }
+        let anchor = fragment.map {
+            ReadiumLocator(
+                href: href, type: "application/xhtml+xml",
+                locations: .init(fragments: [$0]),
+            )
+        }
+        await loadChapter(index, restoring: anchor)
+        IssaLog.info("narration crossed chapter", [
+            "book": book.title, "to": String(index),
+            "fragment": fragment ?? "none", "page": String(pageIndex),
+        ])
     }
 
     /// The text of one media-overlay fragment.
@@ -428,6 +578,29 @@ public final class ReaderModel {
         )
     }
 
+    /// The first narrated fragment at or after the top of the current page.
+    ///
+    /// `continuingPastPage: false` is the page-scoped question;`true` carries on
+    /// to the end of the chapter, which is what "start reading aloud from here"
+    /// wants when the page itself is a heading, a plate or a chapter opening.
+    func firstNarratedFragment(continuingPastPage carryOn: Bool) -> String? {
+        guard let layout, let page = currentPage, let timeline else { return nil }
+        let length = (layout.attributedText.string as NSString).length
+        let start = page.characterRange.location
+        guard start < length else { return nil }
+        let range = carryOn
+            ? NSRange(location: start, length: length - start)
+            : page.characterRange
+        var found: String?
+        layout.attributedText.enumerateAttribute(.issaFragmentID, in: range) { value, _, stop in
+            if let id = value as? String, timeline.entry(forFragment: id) != nil {
+                found = id
+                stop.pointee = true
+            }
+        }
+        return found
+    }
+
     /// The first media-overlay fragment appearing on the current page.
     func firstFragmentOnCurrentPage() -> String? {
         guard let layout, let page = currentPage, let timeline else { return nil }
@@ -446,6 +619,10 @@ public final class ReaderModel {
     public func togglePlayback() async {
         guard let readalong else { return }
         if readalong.player.isPlaying {
+            IssaLog.info("narration paused", [
+                "book": book.title, "chapter": String(chapterIndex),
+                "fragment": activeFragmentID ?? "none",
+            ])
             readalong.player.pause()
         } else if readalong.activeEntry == nil {
             await startNarration()
@@ -565,6 +742,7 @@ public final class ReaderModel {
     // MARK: - Navigation
 
     public func nextPage() async {
+        positionOrigin = .chosen
         guard let layout else { return }
         if pageIndex + 1 < layout.pages.count {
             pageIndex += 1
@@ -575,6 +753,7 @@ public final class ReaderModel {
     }
 
     public func previousPage() async {
+        positionOrigin = .chosen
         guard layout != nil else { return }
         if pageIndex > 0 {
             pageIndex -= 1
@@ -619,6 +798,7 @@ public final class ReaderModel {
     }
 
     public func go(toChapter index: Int, fragment: String? = nil) async {
+        positionOrigin = .chosen
         await loadChapter(index)
         // Books that pack many chapters into one spine file need the fragment to
         // land anywhere useful; without it every entry opens page one.
@@ -699,6 +879,7 @@ public final class ReaderModel {
     /// Jumps to a hit and leaves the matched text selected, so the reader can
     /// see what was found without hunting for it.
     public func go(to hit: SearchHit, matching query: String) async {
+        positionOrigin = .chosen
         await loadChapter(hit.chapterIndex)
         guard let layout, let page = layout.page(containingOffset: hit.charOffset) else { return }
         pageIndex = page.index
@@ -790,6 +971,7 @@ public final class ReaderModel {
 
     /// Opens the page an annotation is on.
     public func go(to annotation: Annotation) async {
+        positionOrigin = .chosen
         guard let package else { return }
         if let index = package.spine.firstIndex(where: { annotation.locator.matchesHref($0.href) }),
            index != chapterIndex {
@@ -916,7 +1098,10 @@ public final class ReaderModel {
     }
 
     public func saveProgress() async {
-        guard let package, let layout, let page = currentPage else { return }
+        guard let package, let layout, let page = currentPage else {
+            IssaLog.info("position not saved", ["book": book.title, "reason": "noPage"])
+            return
+        }
         let href = package.spine[chapterIndex].href
 
         // Anchor on the first narrated fragment on this page when there is one:
@@ -947,7 +1132,7 @@ public final class ReaderModel {
         // lost, and the drain collapses a run of page turns to one write.
         let timestamp = ProgressService.now()
         if let enqueuePosition {
-            await enqueuePosition(locator, timestamp)
+            await enqueuePosition(locator, timestamp, positionOrigin)
         } else {
             _ = try? await ProgressService(client: session.client)
                 .save(locator, for: book.uuid, timestamp: timestamp)

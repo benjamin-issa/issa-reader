@@ -19,6 +19,15 @@ struct IssaReaderApp: App {
         if let fonts = CustomFonts.importedDirectory { CustomFonts.registerAll(in: fonts) }
         // Early builds put downloads in Caches, which iOS purges.
         BookContentService.migrateFromCachesIfNeeded()
+        // A session boundary, and the build a report came from. Without it a
+        // six-hour export runs several launches together with no way to tell
+        // where one ended, and no way to know which build produced it.
+        let info = Bundle.main.infoDictionary
+        IssaLog.info("app launched", [
+            "version": info?["CFBundleShortVersionString"] as? String ?? "?",
+            "build": info?["CFBundleVersion"] as? String ?? "?",
+            "os": ProcessInfo.processInfo.operatingSystemVersionString,
+        ])
     }
 
     /// Hands CarPlay the three things it cannot reach on its own: the library,

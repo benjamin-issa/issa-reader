@@ -351,7 +351,12 @@ public final class AppModel {
             let fetchedStatuses = (try? await service.statuses()) ?? statuses
             let fetchedRatings = (try? await service.myRatings()) ?? ratings
 
-            books = fetched
+            // Reconciled, not assigned: a refetch that predates a write still in
+            // the queue carries a stale position, and `replaceCatalogue` below
+            // would then persist it for the next cold launch to read back.
+            let known = Dictionary(books.map { ($0.uuid, $0) }, uniquingKeysWith: { first, _ in first })
+            let merged = fetched.map { known[$0.uuid]?.reconciled(with: $0) ?? $0 }
+            books = merged
             statuses = fetchedStatuses
             ratings = fetchedRatings
             loadError = nil
@@ -361,7 +366,7 @@ public final class AppModel {
             // serial drain of queued writes have no business holding the
             // spinner open.
             Task { [store, weak self] in
-                try? await store?.replaceCatalogue(fetched)
+                try? await store?.replaceCatalogue(merged)
                 await self?.drainPendingWrites()
             }
         } catch {
@@ -385,9 +390,12 @@ public final class AppModel {
     ///
     /// The queue is written first so that losing the connection mid-request
     /// still leaves the intent recorded.
-    public func enqueue(_ kind: MutationQueue.Kind, bookUUID: String, payload: some Encodable) async {
+    public func enqueue(
+        _ kind: MutationQueue.Kind, bookUUID: String, payload: some Encodable,
+        supersedes ordering: Double? = nil,
+    ) async {
         guard let mutations, let data = try? JSONEncoder().encode(payload) else { return }
-        try? await mutations.enqueue(kind, bookUUID: bookUUID, payload: data)
+        try? await mutations.enqueue(kind, bookUUID: bookUUID, payload: data, supersedes: ordering)
         pendingWrites = (try? await mutations.count) ?? 0
         await drainPendingWrites()
     }
@@ -557,6 +565,11 @@ public final class AppModel {
                 coordinator: coordinator, book: book, session: session,
                 chapterTitle: { [weak coordinator] in coordinator?.chapterTitle },
             )
+            IssaLog.info("listening started", [
+                "book": book.title,
+                "atProgress": String(format: "%.4f", book.progress ?? 0),
+                "source": book.progress == nil ? "noStoredPosition" : "libraryRow",
+            ])
             await coordinator.start(atProgress: book.progress ?? 0)
             // After the seek, never before: a coordinator one line old still
             // reads bookTime 0, so publishing here would have announced every
@@ -605,12 +618,15 @@ public final class AppModel {
                 // a write every fifteen seconds forever.
                 guard abs(progress - lastWritten) > 0.0005 else { continue }
                 lastWritten = progress
-                await enqueue(
-                    .position, bookUUID: book.uuid,
-                    payload: MutationDrain.PositionPayload(
-                        locator: Self.audioLocator(for: coordinator, book: book),
-                        timestamp: ProgressService.now(),
-                    ),
+                // A scrub is the listener naming a place; the clock arriving
+                // somewhere is not. The coordinator owns every seek entry point,
+                // so it is the only thing that can tell them apart.
+                let origin: PositionOrigin = coordinator.consumeSteering() ? .chosen : .derived
+                await writePosition(
+                    Self.audioLocator(for: coordinator, book: book),
+                    timestamp: ProgressService.now(),
+                    for: book.uuid,
+                    origin: origin,
                 )
                 // `enqueue` suspends, and can drain the network for seconds.
                 // Without this a tick belonging to a book the reader has since
@@ -807,11 +823,72 @@ public final class AppModel {
         books[index].adopt(position: locator, timestamp: timestamp)
     }
 
+    /// One high-water mark per book, for the life of the session.
+    private var positionGuards: [String: PositionGuard] = [:]
+
+    /// The single place a reading position is written.
+    ///
+    /// Both writers pass through here — the reader's own saves and the
+    /// audiobook's fifteen-second loop — because the loop is exactly as capable
+    /// of persisting a wrong position as the reader is, and guarding only
+    /// `saveProgress` would leave half the app unprotected.
+    ///
+    /// A refused write is dropped, not deferred. Dropping a legitimate one costs
+    /// a position that stops syncing until the reader touches anything; keeping
+    /// a wrong one costs their place in the book on every device, and nothing
+    /// gets it back. The refusal is self-clearing: it can only ever apply to a
+    /// `.derived` write, and the reader's next deliberate move re-baselines the
+    /// mark unconditionally.
+    @discardableResult
+    public func writePosition(
+        _ locator: ReadiumLocator,
+        timestamp: Double,
+        for bookUUID: String,
+        origin: PositionOrigin,
+    ) async -> Bool {
+        var state = positionGuards[bookUUID]
+            ?? PositionGuard(highWater: books.first { $0.uuid == bookUUID }?.progress ?? 0)
+        let decision = state.decide(locator.locations?.totalProgression, origin: origin)
+        positionGuards[bookUUID] = state
+
+        if case let .refuse(held, candidate) = decision {
+            IssaLog.warning("position write refused", [
+                "book": bookUUID,
+                "held": String(format: "%.4f", held),
+                "candidate": String(format: "%.4f", candidate),
+                "origin": origin.rawValue,
+            ])
+            return false
+        }
+
+        // Only a substantial move earns a line. `onFragmentChange` fires once a
+        // sentence, and the debounce still lets a write through every few
+        // seconds, so logging each one would push the six-hour window out of a
+        // rotating 512 KB file within an afternoon.
+        let previous = books.first { $0.uuid == bookUUID }?.progress
+        if let candidate = locator.locations?.totalProgression,
+           let previous, abs(candidate - previous) > 0.02 {
+            IssaLog.info("position moved", [
+                "book": bookUUID,
+                "from": String(format: "%.4f", previous),
+                "to": String(format: "%.4f", candidate),
+                "origin": origin.rawValue,
+            ])
+        }
+        await enqueue(
+            .position, bookUUID: bookUUID,
+            payload: MutationDrain.PositionPayload(locator: locator, timestamp: timestamp),
+            supersedes: timestamp,
+        )
+        recordPosition(locator, timestamp: timestamp, for: bookUUID)
+        return true
+    }
+
     public func refresh(book: Book) async {
         guard let session,
               let index = books.firstIndex(where: { $0.uuid == book.uuid }),
               let fresh = try? await LibraryService(client: session.client).book(book.uuid)
         else { return }
-        books[index] = fresh
+        books[index] = books[index].reconciled(with: fresh)
     }
 }

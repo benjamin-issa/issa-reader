@@ -78,6 +78,7 @@ public final class AudiobookCoordinator {
 
     /// Starts, or resumes, at a fraction of the whole book.
     public func start(atProgress progress: Double = 0) async {
+        defer { steeredAt = false }
         await seek(toBookTime: totalDuration * min(max(progress, 0), 1))
         player.play()
     }
@@ -92,11 +93,27 @@ public final class AudiobookCoordinator {
         bookTime = manifest.startTime(ofTrackAt: index) + offset
     }
 
+    /// Set when the listener steered, cleared when the answer is read.
+    ///
+    /// The fifteen-second position writer is a timer and cannot know a scrub
+    /// happened, so the coordinator — which owns every seek entry point —
+    /// records it instead. Deliberately not set by `start(atProgress:)`: resuming
+    /// a book is the app choosing a place, not the listener.
+    private var steeredAt: Bool = false
+
+    /// Whether the listener has steered since this was last asked.
+    public func consumeSteering() -> Bool {
+        defer { steeredAt = false }
+        return steeredAt
+    }
+
     public func seek(toProgress progress: Double) async {
+        steeredAt = true
         await seek(toBookTime: totalDuration * min(max(progress, 0), 1))
     }
 
     public func play(chapter index: Int) async {
+        steeredAt = true
         guard tracks.indices.contains(index) else { return }
         await load(track: index, startAt: 0)
         player.play()
@@ -111,6 +128,7 @@ public final class AudiobookCoordinator {
     }
 
     public func previousChapter() async {
+        steeredAt = true
         if player.currentTime > 3 {
             await player.seek(to: 0)
         } else {
@@ -121,6 +139,7 @@ public final class AudiobookCoordinator {
     /// Skips within the book rather than within the file, so a skip near a
     /// chapter boundary crosses it instead of stopping dead at the edge.
     public func skip(by delta: TimeInterval) async {
+        steeredAt = true
         // Refuse rather than guess. With a non-finite clock the clamp below
         // collapsed to exactly 0, so both rewind and fast-forward threw the
         // listener back to the start of the book — and the position writer then

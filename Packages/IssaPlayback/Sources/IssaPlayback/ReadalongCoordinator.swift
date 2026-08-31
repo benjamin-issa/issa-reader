@@ -27,6 +27,15 @@ public final class ReadalongCoordinator {
     public var onChapterChangeObserved: (() -> Void)?
     /// Called whenever the highlighted fragment changes.
     public var onFragmentChange: ((String) -> Void)?
+    /// Called when something other than the clock moved the playhead — a tapped
+    /// sentence, the scrubber, a skip, a chapter command.
+    ///
+    /// The reader uses it to tell a position the listener *chose* from one
+    /// narration merely wandered into. Notably `play(from:)` does not fire it:
+    /// pressing play asks for audio, it does not name a place, and when the app
+    /// has to work out where that is the guess must not be allowed to overwrite
+    /// a known-good position.
+    public var onSeek: (() -> Void)?
 
     public let player: AudioPlayer
     private let timeline: SMILTimeline
@@ -105,6 +114,7 @@ public final class ReadalongCoordinator {
 
     public func seek(toFragment fragmentID: String) async {
         guard let entry = timeline.entry(forFragment: fragmentID) else { return }
+        onSeek?()
         await play(from: entry)
     }
 
@@ -126,6 +136,7 @@ public final class ReadalongCoordinator {
     }
 
     public func seek(toBookProgress progress: Double) async {
+        onSeek?()
         let time = timeline.totalDuration * min(max(progress, 0), 1)
         guard let entry = timeline.entry(atBookTime: time) else { return }
         await play(from: entry)
@@ -137,6 +148,14 @@ public final class ReadalongCoordinator {
     /// goes through — screen, lock screen, headphones, CarPlay and the wheel —
     /// so a remapping applies everywhere at once.
     public func perform(_ action: PlaybackAction, using map: CommandMap) async {
+        // Navigation names a place; playing, speed and the sleep timer do not.
+        switch action {
+        case .skipForward, .skipBackward, .nextSentence, .previousSentence,
+             .nextParagraph, .previousParagraph, .nextChapter, .previousChapter:
+            onSeek?()
+        default:
+            break
+        }
         switch action {
         case .playPause:
             player.togglePlayPause()
