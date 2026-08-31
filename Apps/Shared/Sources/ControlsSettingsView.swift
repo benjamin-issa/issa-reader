@@ -15,10 +15,17 @@ public struct ControlsSettingsView: View {
 
     /// Only the controls that surface actually exposes. Offering a headphone
     /// double-tap binding for CarPlay would be noise.
+    ///
+    /// The wheel belongs on the phone's list too, even though the phone has no
+    /// wheel: `nextTrack` / `previousTrack` is where AirPods' double- and
+    /// triple-press arrive, and where a Bluetooth head unit's buttons arrive.
+    /// Leaving the rows out meant the binding those controls actually use was
+    /// invisible and unchangeable.
     private var controls: [PlaybackControl] {
         switch surface {
         case .phone:
-            [.tapForward, .tapBackward, .doubleTapForward, .doubleTapBackward, .holdForward, .holdBackward]
+            [.tapForward, .tapBackward, .doubleTapForward, .doubleTapBackward,
+             .holdForward, .holdBackward, .wheelNext, .wheelPrevious]
         case .carPlay:
             [.tapForward, .tapBackward, .wheelNext, .wheelPrevious, .holdForward, .holdBackward]
         case .headphones:
@@ -40,11 +47,22 @@ public struct ControlsSettingsView: View {
             }
             .listRowBackground(Palette.surface)
 
-            Section("Buttons") {
+            Section {
                 ForEach(controls, id: \.self) { control in
                     Picker(control.title, selection: binding(for: control)) {
                         ForEach(PlaybackAction.allCases, id: \.self) { Text($0.title).tag($0) }
                     }
+                }
+            } header: {
+                Text("Buttons")
+            } footer: {
+                // Worth saying, because it is the one binding with a visible
+                // side effect elsewhere: iOS draws the skip buttons only while
+                // nothing claims the track buttons.
+                if surface != .carPlay {
+                    Text(wheelIsBound
+                        ? "The Lock Screen shows next and previous track while the wheel is assigned."
+                        : "Leave the wheel unassigned and the Lock Screen shows the skip buttons instead.")
                 }
             }
             .listRowBackground(Palette.surface)
@@ -70,6 +88,10 @@ public struct ControlsSettingsView: View {
         }
         .paperListBackground()
         .navigationTitle("Controls")
+    }
+
+    private var wheelIsBound: Bool {
+        settings.commandMap.usesTrackCommands(on: surface)
     }
 
     private func binding(for control: PlaybackControl) -> Binding<PlaybackAction> {

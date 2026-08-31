@@ -12,8 +12,11 @@ import MediaPlayer
 /// The mapping from hardware to command is worth stating plainly, because it is
 /// the part people get wrong: a steering wheel's `»` and `«` are delivered as
 /// `nextTrack` / `previousTrack`, **not** as skip commands. Registering only
-/// skip handlers leaves the wheel buttons dead. Registering only track handlers
-/// makes the on-screen skip buttons disappear in CarPlay. Both are needed.
+/// skip handlers leaves the wheel buttons dead. Registering *both* sets makes
+/// iOS draw the track buttons and hide the interval skips. So the track pair is
+/// registered per surface, from the bindings — dead on the phone, where nothing
+/// is bound to the wheel and the lock screen should read `⏪15` / `⏩30`, and
+/// live in the car, where the wheel is the control that matters.
 @MainActor
 public final class RemoteCommandCenter {
     private let center = MPRemoteCommandCenter.shared()
@@ -21,7 +24,17 @@ public final class RemoteCommandCenter {
 
     public var commandMap: CommandMap
     /// Which surface a command should be interpreted as coming from.
-    public var activeSurface: ControlSurface = .phone
+    ///
+    /// Re-registers on change, because which commands exist at all depends on
+    /// it: connecting to a car brings the wheel's track buttons into being and
+    /// disconnecting takes them away again. Registering once at launch left the
+    /// car with whichever set the sofa happened to need.
+    public var activeSurface: ControlSurface = .phone {
+        didSet {
+            guard oldValue != activeSurface else { return }
+            activate()
+        }
+    }
     public var onAction: ((PlaybackAction) -> Void)?
     /// Absolute seek in seconds, from the Lock Screen or CarPlay scrubber.
     public var onSeek: ((TimeInterval) -> Void)?
@@ -49,9 +62,24 @@ public final class RemoteCommandCenter {
             self?.fire(.tapBackward)
         }
 
-        // Steering wheel and head-unit next/previous.
-        register(center.nextTrackCommand) { [weak self] in self?.fire(.wheelNext) }
-        register(center.previousTrackCommand) { [weak self] in self?.fire(.wheelPrevious) }
+        // Steering wheel and head-unit next/previous — registered only when
+        // this surface actually binds them.
+        //
+        // This is the switch between the two transports iOS will draw. Enabled,
+        // it shows the track buttons and hides the interval skips; disabled, it
+        // shows the skips. Registering them unconditionally is what made every
+        // remote control on the phone jump a whole chapter, and made the lock
+        // screen advertise that as the only thing it could do.
+        let usesTrack = commandMap.usesTrackCommands(on: activeSurface)
+        // Set explicitly, because tearDown removes targets but leaves isEnabled
+        // where it was: a stale `true` keeps the track buttons on screen with
+        // nothing behind them.
+        center.nextTrackCommand.isEnabled = usesTrack
+        center.previousTrackCommand.isEnabled = usesTrack
+        if usesTrack {
+            register(center.nextTrackCommand) { [weak self] in self?.fire(.wheelNext) }
+            register(center.previousTrackCommand) { [weak self] in self?.fire(.wheelPrevious) }
+        }
 
         center.changePlaybackRateCommand.supportedPlaybackRates =
             [0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0].map { NSNumber(value: $0) }

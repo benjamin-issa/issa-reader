@@ -58,6 +58,29 @@ public final class NowPlayingController {
             self?.settings?.playbackRate = Double(rate)
         }
         remote.activate()
+        observeCommandMap()
+    }
+
+    /// Keeps the system's buttons in step with the reader's choices.
+    ///
+    /// `syncCommandMap()` existed but had no caller, so changing a binding or
+    /// the skip amount in Settings did nothing until the app was relaunched —
+    /// and worse, the new interval reached `perform` (which reads the live
+    /// settings) but not `preferredIntervals`, so the lock screen said "30" and
+    /// jumped by whatever had been typed. One observer here rather than an
+    /// `.onChange` in each of the three app targets, none of which had one.
+    private func observeCommandMap() {
+        guard let settings else { return }
+        withObservationTracking {
+            _ = settings.commandMap
+        } onChange: { [weak self] in
+            // The callback runs before the value changes, so read it back on
+            // the next turn — and re-arm, because tracking is one-shot.
+            Task { @MainActor [weak self] in
+                self?.syncCommandMap()
+                self?.observeCommandMap()
+            }
+        }
     }
 
     /// Called when a book starts playing, and again when it stops.
@@ -118,6 +141,10 @@ public final class NowPlayingController {
 
     /// Bindings resolve against the surface the command came from, so the wheel
     /// can mean one thing in the car and another on the sofa.
+    ///
+    /// Assigning re-registers the commands, because which of them exist depends
+    /// on the surface's own bindings — the car's wheel buttons come into being
+    /// on connect and go away again on disconnect.
     public func setSurface(_ surface: ControlSurface) {
         remote.activeSurface = surface
     }

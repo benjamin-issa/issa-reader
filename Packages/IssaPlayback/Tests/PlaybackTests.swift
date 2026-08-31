@@ -4,24 +4,67 @@ import Testing
 
 @testable import IssaPlayback
 
+/// What a button does when nobody has said otherwise.
+///
+/// The rule these encode is blunt on purpose: **no default on any surface moves
+/// a whole chapter.** A chapter is tens of minutes, and a control that jumps one
+/// unasked — on a lock screen, on AirPods, on a steering wheel — loses a
+/// listener's place outright. Chapter stays one pick away in Settings.
 struct CommandMapTests {
-    @Test("defaults match what an audiobook listener expects")
-    func defaults() {
+    @Test("no default on any surface moves a whole chapter")
+    func noChapterDefaults() {
+        // Asserted as a property rather than as a list of expected values,
+        // because a list is exactly what the next edit to the table outgrows
+        // without anybody noticing.
+        #expect(CommandMap.defaultsIncludeAChapterJump == false)
+    }
+
+    @Test("forward and back are time skips, and the intervals are 15 back / 30 forward")
+    func skipDefaults() {
         let map = CommandMap()
         #expect(map.action(for: .tapForward, on: .phone) == .skipForward)
-        #expect(map.action(for: .holdForward, on: .phone) == .nextChapter)
+        #expect(map.action(for: .tapBackward, on: .phone) == .skipBackward)
+        #expect(map.action(for: .tapForward, on: .carPlay) == .skipForward)
+        #expect(map.action(for: .tapBackward, on: .carPlay) == .skipBackward)
+        #expect(map.action(for: .doubleTapForward, on: .headphones) == .skipForward)
+        #expect(map.action(for: .doubleTapBackward, on: .headphones) == .skipBackward)
         #expect(map.skipForwardInterval == 30)
         #expect(map.skipBackwardInterval == 15)
     }
 
-    @Test("the wheel means something different in the car")
-    func perSurfaceBindings() {
+    @Test("hold moves by paragraph, which is a unit and not a chapter")
+    func holdDefaults() {
         let map = CommandMap()
-        // A chapter is too coarse a jump while driving and a sentence too fine,
-        // so the car defaults to paragraph while the phone defaults to chapter.
-        #expect(map.action(for: .wheelNext, on: .carPlay) == .nextParagraph)
-        #expect(map.action(for: .wheelNext, on: .phone) == .nextChapter)
-        #expect(map.action(for: .tapForward, on: .headphones) == .playPause)
+        #expect(map.action(for: .holdForward, on: .phone) == .nextParagraph)
+        #expect(map.action(for: .holdBackward, on: .phone) == .previousParagraph)
+    }
+
+    @Test("the phone leaves the track buttons alone so the Lock Screen draws the skips")
+    func phoneDoesNotClaimTrackCommands() {
+        let map = CommandMap()
+        // The whole point: with nothing bound to the wheel, iOS has no track
+        // command to draw and falls back to the interval skips.
+        #expect(map.usesTrackCommands(on: .phone) == false)
+        #expect(map.usesTrackCommands(on: .headphones) == false)
+    }
+
+    @Test("the car binds the wheel, because an unbound wheel is a dead button at speed")
+    func carPlayClaimsTrackCommands() {
+        let map = CommandMap()
+        #expect(map.usesTrackCommands(on: .carPlay))
+        #expect(map.action(for: .wheelNext, on: .carPlay) == .skipForward)
+        #expect(map.action(for: .wheelPrevious, on: .carPlay) == .skipBackward)
+    }
+
+    @Test("binding the wheel brings the track commands back")
+    func bindingTheWheelReenablesTrackCommands() {
+        var map = CommandMap()
+        #expect(map.usesTrackCommands(on: .phone) == false)
+        map.bind(.nextChapter, to: .wheelNext, on: .phone)
+        #expect(map.usesTrackCommands(on: .phone))
+        // And unbinding takes them away again.
+        map.bind(.none, to: .wheelNext, on: .phone)
+        #expect(map.usesTrackCommands(on: .phone) == false)
     }
 
     @Test("rebinding one surface leaves the others alone")
@@ -29,7 +72,7 @@ struct CommandMapTests {
         var map = CommandMap()
         map.bind(.nextChapter, to: .wheelNext, on: .carPlay)
         #expect(map.action(for: .wheelNext, on: .carPlay) == .nextChapter)
-        #expect(map.action(for: .wheelNext, on: .phone) == .nextChapter)
+        #expect(map.action(for: .wheelNext, on: .phone) == .none)
         #expect(map.action(for: .tapForward, on: .carPlay) == .skipForward)
     }
 
@@ -50,6 +93,67 @@ struct CommandMapTests {
         #expect(decoded == map)
         #expect(decoded.action(for: .holdBackward, on: .headphones) == .sleepTimer)
         #expect(decoded.skipForwardInterval == 45)
+    }
+
+    // MARK: - Migration
+    //
+    // Anyone who has already opened the app has the old table sitting in the
+    // App Group's defaults, so changing `defaultBindings` alone reaches nobody.
+
+    /// A map as an older build wrote it: the old table, and no version field at
+    /// all — which is the shape that actually exists on the reader's phone.
+    static func storedByOldBuild(_ bindings: CommandMap.Bindings) throws -> Data {
+        let data = try JSONEncoder().encode(
+            CommandMap(bindings: bindings, bindingsVersion: 0))
+        var object = try #require(
+            JSONSerialization.jsonObject(with: data) as? [String: Any])
+        object.removeValue(forKey: "bindingsVersion")
+        return try JSONSerialization.data(withJSONObject: object)
+    }
+
+    @Test("an install carrying the old chapter bindings is moved onto the new ones")
+    func migratesLegacyBindings() throws {
+        let data = try Self.storedByOldBuild(CommandMap.legacyBindings)
+        let map = try JSONDecoder().decode(CommandMap.self, from: data)
+
+        // The reported complaint, gone: nothing reachable jumps a chapter.
+        #expect(map.action(for: .wheelNext, on: .phone) == .none)
+        #expect(map.action(for: .wheelPrevious, on: .phone) == .none)
+        #expect(map.action(for: .wheelNext, on: .headphones) == .none)
+        #expect(map.action(for: .holdForward, on: .phone) == .nextParagraph)
+        #expect(map.usesTrackCommands(on: .phone) == false)
+        #expect(map.bindingsVersion == CommandMap.currentBindingsVersion)
+    }
+
+    @Test("a binding the reader chose themselves survives the migration")
+    func migrationKeepsDeliberateChoices() throws {
+        var legacy = CommandMap.legacyBindings
+        // Two deliberate departures from the old table. The second is itself a
+        // chapter jump, and must survive precisely because they asked for it —
+        // the rule is "never by default", not "never".
+        legacy[.phone]?[.wheelNext] = .sleepTimer
+        legacy[.headphones]?[.wheelNext] = .previousChapter
+        let map = try JSONDecoder().decode(
+            CommandMap.self, from: Self.storedByOldBuild(legacy))
+
+        #expect(map.action(for: .wheelNext, on: .phone) == .sleepTimer)
+        #expect(map.action(for: .wheelNext, on: .headphones) == .previousChapter)
+        // …while the ones they never touched still move to the new defaults.
+        #expect(map.action(for: .holdForward, on: .phone) == .nextParagraph)
+        #expect(map.action(for: .wheelPrevious, on: .phone) == .none)
+        #expect(map.action(for: .wheelPrevious, on: .headphones) == .none)
+        // And having kept a wheel binding, they keep the track buttons too.
+        #expect(map.usesTrackCommands(on: .phone))
+        #expect(map.usesTrackCommands(on: .headphones))
+    }
+
+    @Test("a map already on the current version is not migrated again")
+    func doesNotRemigrate() throws {
+        var map = CommandMap()
+        map.bind(.nextChapter, to: .tapForward, on: .phone)
+        let decoded = try JSONDecoder().decode(
+            CommandMap.self, from: JSONEncoder().encode(map))
+        #expect(decoded.action(for: .tapForward, on: .phone) == .nextChapter)
     }
 }
 
