@@ -1,5 +1,6 @@
 import Foundation
 import IssaEPUB
+import MediaPlayer
 import Testing
 
 @testable import IssaPlayback
@@ -266,5 +267,91 @@ struct ChapterNamingTests {
     ])
     func acceptsNames(_ candidate: String) {
         #expect(ChapterNaming.isDisplayable(candidate))
+    }
+}
+
+/// Which transport the system draws.
+///
+/// This is the part the unit above cannot see on its own: iOS shows `⏮ ⏭` and
+/// hides the interval skips whenever the next/previous **track** commands are
+/// enabled, and shows `⏪15` / `⏩30` when they are not. Registering the track
+/// pair unconditionally is what made every remote control on the phone jump a
+/// whole chapter and made the Lock Screen advertise that as all it could do.
+///
+/// Serialised because `MPRemoteCommandCenter.shared()` is process-wide.
+@Suite(.serialized)
+@MainActor
+struct RemoteCommandRegistrationTests {
+    static var center: MPRemoteCommandCenter { MPRemoteCommandCenter.shared() }
+
+    /// Leaves no enabled commands behind for a later test — or a later run — to
+    /// trip over.
+    static func reset() {
+        let remote = RemoteCommandCenter()
+        remote.tearDown()
+        center.nextTrackCommand.isEnabled = false
+        center.previousTrackCommand.isEnabled = false
+    }
+
+    @Test("by default the system draws the skip buttons, not the track buttons")
+    func defaultsDrawSkipButtons() {
+        Self.reset()
+        let remote = RemoteCommandCenter()
+        remote.activate()
+        defer { Self.reset() }
+
+        #expect(Self.center.nextTrackCommand.isEnabled == false)
+        #expect(Self.center.previousTrackCommand.isEnabled == false)
+        // …while the skips are enabled and carry the intervals they claim.
+        #expect(Self.center.skipForwardCommand.isEnabled)
+        #expect(Self.center.skipBackwardCommand.isEnabled)
+        #expect(Self.center.skipForwardCommand.preferredIntervals == [30])
+        #expect(Self.center.skipBackwardCommand.preferredIntervals == [15])
+    }
+
+    @Test("binding the wheel brings the track buttons back")
+    func bindingTheWheelEnablesTrackCommands() {
+        Self.reset()
+        var map = CommandMap()
+        map.bind(.nextChapter, to: .wheelNext, on: .phone)
+        let remote = RemoteCommandCenter(commandMap: map)
+        remote.activate()
+        defer { Self.reset() }
+
+        #expect(Self.center.nextTrackCommand.isEnabled)
+        #expect(Self.center.previousTrackCommand.isEnabled)
+    }
+
+    @Test("connecting to a car re-registers against the car's own bindings")
+    func surfaceChangeReregisters() {
+        Self.reset()
+        let remote = RemoteCommandCenter()
+        remote.activate()
+        defer { Self.reset() }
+        // Nothing is bound to the wheel on the phone…
+        #expect(Self.center.nextTrackCommand.isEnabled == false)
+
+        // …but the car binds it, so its buttons come into being on connect.
+        remote.activeSurface = .carPlay
+        #expect(Self.center.nextTrackCommand.isEnabled)
+
+        // And go away again on disconnect, which is why assigning the surface
+        // re-registers rather than merely being read at fire time.
+        remote.activeSurface = .phone
+        #expect(Self.center.nextTrackCommand.isEnabled == false)
+    }
+
+    @Test("a changed interval reaches the buttons the system draws")
+    func intervalChangeReachesTheSystem() {
+        Self.reset()
+        var map = CommandMap()
+        map.skipBackwardInterval = 10
+        map.skipForwardInterval = 45
+        let remote = RemoteCommandCenter(commandMap: map)
+        remote.activate()
+        defer { Self.reset() }
+
+        #expect(Self.center.skipBackwardCommand.preferredIntervals == [10])
+        #expect(Self.center.skipForwardCommand.preferredIntervals == [45])
     }
 }
