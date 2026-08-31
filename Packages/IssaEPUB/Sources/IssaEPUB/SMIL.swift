@@ -56,6 +56,8 @@ public struct SMILTimeline: Sendable {
     private let indexByFragment: [String: Int]
     /// Contiguous index range of the entries belonging to each audio file.
     private let fileRanges: [String: Range<Int>]
+    /// The same, per text document — which is what a reader calls a chapter.
+    private let documentRanges: [String: Range<Int>]
 
     public var totalDuration: TimeInterval { entries.last?.cumulativeEnd ?? 0 }
     public var isEmpty: Bool { entries.isEmpty }
@@ -87,6 +89,40 @@ public struct SMILTimeline: Sendable {
             start = end
         }
         fileRanges = ranges
+
+        // The same shape again, keyed by text document. Built here rather than
+        // filtered on demand because a progress bar scoped to the chapter asks
+        // for this on every tick, and `entries.filter` walks the whole book.
+        var documents: [String: Range<Int>] = [:]
+        start = 0
+        while start < entries.count {
+            let href = entries[start].textHref
+            var end = start + 1
+            while end < entries.count, entries[end].textHref == href { end += 1 }
+            if let existing = documents[href] {
+                documents[href] = min(existing.lowerBound, start) ..< max(existing.upperBound, end)
+            } else {
+                documents[href] = start ..< end
+            }
+            start = end
+        }
+        documentRanges = documents
+    }
+
+    /// Where one text document's narration sits on the virtual book timeline.
+    ///
+    /// A "chapter" for a read-along is a spine document. Gutenberg books pack
+    /// several chapters into one file, so this can be coarser than the chapter
+    /// name shown beside it — but it is the only boundary the media overlay
+    /// actually knows.
+    public func span(ofDocument href: String) -> (start: TimeInterval, duration: TimeInterval)? {
+        guard let range = documentRanges[href], !range.isEmpty else { return nil }
+        let first = entries[range.lowerBound]
+        let last = entries[range.upperBound - 1]
+        let start = first.cumulativeEnd - first.duration
+        let duration = last.cumulativeEnd - start
+        guard duration > 0 else { return nil }
+        return (start, duration)
     }
 
     /// The entry playing at `time` on the virtual book timeline.

@@ -32,8 +32,20 @@ public struct PlayerView: View {
         self.chapterTitle = chapterTitle
     }
 
+    /// What the bar stands for, and what a drag on it means. One value, so the
+    /// bar and its two times can never disagree.
+    private var readout: PlaybackProgress {
+        PlaybackProgress(
+            scope: settings.progressScope,
+            bookProgress: coordinator?.bookProgress ?? book.progress ?? 0,
+            totalDuration: coordinator?.totalDuration
+                ?? book.readaloud?.duration ?? book.audiobook?.duration ?? 0,
+            chapterSpan: coordinator?.chapterSpan,
+        )
+    }
+
     private var progress: Double {
-        scrubbing ? scrubValue : (coordinator?.bookProgress ?? book.progress ?? 0)
+        scrubbing ? scrubValue : readout.fraction
     }
 
     /// Shown under the title while a chapter is actually playing: an audiobook
@@ -43,9 +55,8 @@ public struct PlayerView: View {
         return coordinator?.displayChapterTitle
     }
 
-    private var total: TimeInterval {
-        coordinator?.totalDuration ?? book.readaloud?.duration ?? book.audiobook?.duration ?? 0
-    }
+    /// The length of whatever the bar is showing — the chapter, or the book.
+    private var total: TimeInterval { readout.spanDuration }
 
     public var body: some View {
         VStack(spacing: Metrics.spacing24) {
@@ -106,7 +117,11 @@ public struct PlayerView: View {
                 onEditingChanged: { editing in
                     scrubbing = editing
                     if !editing {
-                        Task { await coordinator?.seek(toBookProgress: scrubValue) }
+                        // Through the bar's own inverse, so a drag lands where
+                        // the bar drew it — which for a chapter-scoped bar is
+                        // not the same as the raw fraction.
+                        let target = readout.bookProgress(forFraction: scrubValue)
+                        Task { await coordinator?.seek(toBookProgress: target) }
                     }
                 },
             )

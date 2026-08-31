@@ -15,6 +15,12 @@ public protocol PlaybackDriving: AnyObject {
     var totalDuration: TimeInterval { get }
     /// The chapter now playing, or an empty string when there is no structure.
     var currentChapterTitle: String { get }
+    /// Where the current chapter begins on the book clock, and how long it runs.
+    ///
+    /// Nil where the book has no chapters the coordinator can describe — a
+    /// single-file audiobook, a read-along in an unaligned document — and every
+    /// caller falls back to the whole book rather than guessing.
+    var chapterSpan: (start: TimeInterval, duration: TimeInterval)? { get }
     func seek(toBookProgress progress: Double) async
     func perform(_ action: PlaybackAction, using map: CommandMap) async
 }
@@ -22,6 +28,7 @@ public protocol PlaybackDriving: AnyObject {
 extension AudiobookCoordinator: PlaybackDriving {
     public var bookProgress: Double { progress }
     public var currentChapterTitle: String { chapterTitle }
+    public var chapterSpan: (start: TimeInterval, duration: TimeInterval)? { trackSpan }
     public func seek(toBookProgress progress: Double) async {
         await seek(toProgress: progress)
     }

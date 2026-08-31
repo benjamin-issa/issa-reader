@@ -47,9 +47,14 @@ public final class NowPlayingController {
             }
         }
         remote.onSeek = { [weak self] seconds in
-            guard let self, let coordinator, coordinator.totalDuration > 0 else { return }
+            guard let self, let coordinator else { return }
+            // iOS reports the drag in the same units as the duration it was
+            // given, so this must invert exactly what `publish` sent. Dividing
+            // by the whole book while a chapter-scoped bar was on screen lands
+            // the listener somewhere else entirely.
+            let target = readout(for: coordinator).bookProgress(forSeconds: seconds)
             Task {
-                await coordinator.seek(toBookProgress: seconds / coordinator.totalDuration)
+                await coordinator.seek(toBookProgress: target)
                 self.publish()
             }
         }
@@ -73,11 +78,16 @@ public final class NowPlayingController {
         guard let settings else { return }
         withObservationTracking {
             _ = settings.commandMap
+            // The scope changes what the Lock Screen's numbers mean, so it has
+            // to be republished the moment it is changed rather than at the
+            // next five-second tick.
+            _ = settings.progressScope
         } onChange: { [weak self] in
             // The callback runs before the value changes, so read it back on
             // the next turn — and re-arm, because tracking is one-shot.
             Task { @MainActor [weak self] in
                 self?.syncCommandMap()
+                self?.publish()
                 self?.observeCommandMap()
             }
         }
@@ -116,7 +126,14 @@ public final class NowPlayingController {
         // A readaloud knows when narration crosses a boundary; an audiobook
         // knows when a track ends.
         if let readalong = coordinator as? ReadalongCoordinator {
-            readalong.onChapterChangeObserved = { [weak timer] in timer?.chapterDidEnd() }
+            readalong.onChapterChangeObserved = { [weak timer, weak self] in
+                timer?.chapterDidEnd()
+                // iOS extrapolates elapsed from the last publish, so a
+                // chapter-scoped bar keeps counting past the chapter's end
+                // unless the boundary is announced. The audiobook path below
+                // already did this; the read-along one did not.
+                self?.publish()
+            }
         } else if let audiobook = coordinator as? AudiobookCoordinator {
             audiobook.onChapterChange = { [weak timer, weak self] _ in
                 timer?.chapterDidEnd()
@@ -159,10 +176,22 @@ public final class NowPlayingController {
 
     private var currentChapterTitle: () -> String? = { nil }
 
+    /// What the system's bar should show for a coordinator, under the reader's
+    /// chosen scope. The same value the in-app player and the mini bar use.
+    private func readout(for coordinator: any PlaybackDriving) -> PlaybackProgress {
+        PlaybackProgress(
+            scope: settings?.progressScope ?? .book,
+            bookProgress: coordinator.bookProgress,
+            totalDuration: coordinator.totalDuration,
+            chapterSpan: coordinator.chapterSpan,
+        )
+    }
+
     public func publish() {
         guard let coordinator, let book else { return }
-        let total = coordinator.totalDuration
-        let elapsed = total * coordinator.bookProgress
+        let progress = readout(for: coordinator)
+        let total = progress.spanDuration
+        let elapsed = progress.elapsed
         // Never hand iOS a number it cannot hold. It stores a non-finite
         // elapsed as zero and then extrapolates from there at the published
         // rate — which is exactly the lock screen counting 0:01, 0:02 while the

@@ -40,7 +40,7 @@ public struct MiniPlayer: View {
             GeometryReader { proxy in
                 Rectangle()
                     .fill(Palette.tangerine)
-                    .frame(width: proxy.size.width * coordinator.bookProgress)
+                    .frame(width: proxy.size.width * fraction(of: coordinator))
             }
             .frame(height: 2)
             .background(Palette.border)
@@ -98,6 +98,17 @@ public struct MiniPlayer: View {
         .onTapGesture(perform: onExpand)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Now playing: \(book.title)")
+    }
+
+    /// The same scope the player and the Lock Screen are using, so the hairline
+    /// agrees with the bar it is a miniature of.
+    private func fraction(of coordinator: any PlaybackDriving) -> Double {
+        PlaybackProgress(
+            scope: settings.progressScope,
+            bookProgress: coordinator.bookProgress,
+            totalDuration: coordinator.totalDuration,
+            chapterSpan: coordinator.chapterSpan,
+        ).fraction
     }
 
     /// Both directions, because one of them is the button a listener reaches for

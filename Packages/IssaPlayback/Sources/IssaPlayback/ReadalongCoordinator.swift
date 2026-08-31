@@ -217,4 +217,13 @@ extension ReadalongCoordinator: PlaybackDriving {
     /// in the timeline, so the reader supplies it; the timeline knows only
     /// which text document is playing.
     public var currentChapterTitle: String { activeEntry?.textHref ?? "" }
+
+    /// The current text document's extent on the virtual book timeline.
+    ///
+    /// The timeline precomputes these, so this is a dictionary lookup rather
+    /// than a walk over every entry in the book.
+    public var chapterSpan: (start: TimeInterval, duration: TimeInterval)? {
+        guard let href = activeEntry?.textHref else { return nil }
+        return timeline.span(ofDocument: href)
+    }
 }

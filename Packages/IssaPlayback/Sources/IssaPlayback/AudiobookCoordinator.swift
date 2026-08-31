@@ -69,6 +69,26 @@ public final class AudiobookCoordinator {
         return min(max(bookTime / totalDuration, 0), 1)
     }
 
+    /// The current track's extent on the book clock.
+    ///
+    /// Cached against the track index because `startTime(ofTrackAt:)` reduces
+    /// over a computed filter — O(n) and allocating — and a scrubber asks for
+    /// this on every tick.
+    private var cachedTrackSpan: (index: Int, start: TimeInterval, duration: TimeInterval)?
+
+    var trackSpan: (start: TimeInterval, duration: TimeInterval)? {
+        let index = trackIndex
+        guard tracks.indices.contains(index),
+              let duration = tracks[index].duration, duration > 0
+        else { return nil }
+        if let cached = cachedTrackSpan, cached.index == index {
+            return (cached.start, cached.duration)
+        }
+        let start = manifest.startTime(ofTrackAt: index)
+        cachedTrackSpan = (index, start, duration)
+        return (start, duration)
+    }
+
     public var chapterTitle: String {
         guard tracks.indices.contains(trackIndex) else { return "" }
         return manifest.title(of: tracks[trackIndex], at: trackIndex)

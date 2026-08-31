@@ -15,6 +15,16 @@ public final class PlaybackSettings {
     public var readerStyle: ReaderStyle { didSet { persist(readerStyle, as: Self.readerStyleKey) } }
     public var playbackRate: Double { didSet { defaults.set(playbackRate, forKey: Self.rateKey) } }
 
+    /// Whether a progress bar stands for the whole book or the current chapter.
+    ///
+    /// Stored as a raw string beside `playbackRate` rather than folded into
+    /// `readerStyle` or `commandMap`: the first re-paginates the open book on
+    /// any change, and the second tears down and re-registers every remote
+    /// command. This is a display choice and should cost nothing.
+    public var progressScope: ProgressScope {
+        didSet { defaults.set(progressScope.rawValue, forKey: Self.progressScopeKey) }
+    }
+
     /// Per-book departures from `readerStyle`, keyed by book uuid.
     ///
     /// Device-local and deliberately not synced: a size that suits a phone is
@@ -28,6 +38,7 @@ public final class PlaybackSettings {
     private static let readerStyleKey = "issa.readerStyle"
     private static let bookStylesKey = "issa.bookStyles"
     private static let rateKey = "issa.playbackRate"
+    private static let progressScopeKey = "issa.progressScope"
 
     private let defaults: UserDefaults
 
@@ -40,6 +51,8 @@ public final class PlaybackSettings {
             [String: ReaderStyleOverride].self, from: store, key: Self.bookStylesKey) ?? [:]
         let storedRate = store.double(forKey: Self.rateKey)
         playbackRate = storedRate > 0 ? storedRate : 1.0
+        progressScope = store.string(forKey: Self.progressScopeKey)
+            .flatMap(ProgressScope.init(rawValue:)) ?? .book
     }
 
     /// The style to set this book in: the global settings, with the book's own

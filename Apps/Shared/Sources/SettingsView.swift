@@ -1,10 +1,12 @@
 import IssaCore
+import IssaPlayback
 import IssaUI
 import SwiftUI
 
 public struct SettingsView: View {
     @Environment(AppModel.self) private var app
     @Environment(NowPlayingController.self) private var nowPlaying
+    @Environment(PlaybackSettings.self) private var settings
     @State private var confirmingSignOut = false
 
     public init() {}
@@ -17,7 +19,9 @@ public struct SettingsView: View {
     }
 
     private var list: some View {
-        List {
+        @Bindable var settings = settings
+
+        return List {
             if let session = app.session, case let .signedIn(user) = session.state {
                 Section("Account") {
                     LabeledContent("Signed in as", value: user.username ?? user.name ?? "—")
@@ -48,7 +52,13 @@ public struct SettingsView: View {
                 .listRowBackground(Palette.surface)
             }
 
-            Section("Playback & reading") {
+            Section {
+                // Inline rather than a level down: it is one control, and the
+                // people who want it are the ones staring at a five-hour bar
+                // wondering where their chapter is.
+                Picker("Progress bar", selection: $settings.progressScope) {
+                    ForEach(ProgressScope.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
                 NavigationLink { ControlsSettingsView() } label: {
                     Label("Controls & remapping", systemImage: "slider.horizontal.3")
                 }
@@ -58,6 +68,12 @@ public struct SettingsView: View {
                 NavigationLink { DownloadsView() } label: {
                     Label("Downloads & storage", systemImage: "arrow.down.circle")
                 }
+            } header: {
+                Text("Playback & reading")
+            } footer: {
+                Text(settings.progressScope == .chapter
+                    ? "The player, the Lock Screen and CarPlay all show the chapter you are in."
+                    : "The player, the Lock Screen and CarPlay all show the whole book.")
             }
             .listRowBackground(Palette.surface)
 
