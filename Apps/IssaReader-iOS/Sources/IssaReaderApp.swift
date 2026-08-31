@@ -4,88 +4,48 @@ import IssaUI
 import SwiftUI
 
 @main
+@MainActor
 struct IssaReaderApp: App {
-    @State private var app = AppModel()
-    @State private var settings = PlaybackSettings()
-    @State private var nowPlaying = NowPlayingController()
+    /// Only so that `AppServices.start()` runs when the *car* is what launched
+    /// the app. There is no other reason for a delegate here.
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var delegate
 
-    init() {
-        // Package-bundled fonts are not registered automatically the way an
-        // app's UIAppFonts entry would be, so this must run before first render.
-        IssaFonts.register()
-        // Faces the reader imported in an earlier session. Registration is
-        // per-process, so without this a book set in an imported face renders
-        // in the fallback and the setting looks forgotten.
-        if let fonts = CustomFonts.importedDirectory { CustomFonts.registerAll(in: fonts) }
-        // Early builds put downloads in Caches, which iOS purges.
-        BookContentService.migrateFromCachesIfNeeded()
-        // A session boundary, and the build a report came from. Without it a
-        // six-hour export runs several launches together with no way to tell
-        // where one ended, and no way to know which build produced it.
-        let info = Bundle.main.infoDictionary
-        IssaLog.info("app launched", [
-            "version": info?["CFBundleShortVersionString"] as? String ?? "?",
-            "build": info?["CFBundleVersion"] as? String ?? "?",
-            "os": ProcessInfo.processInfo.operatingSystemVersionString,
-        ])
-    }
-
-    /// Hands CarPlay the three things it cannot reach on its own: the library,
-    /// somewhere to start a book, and which surface the controls belong to.
-    @MainActor
-    private func connectCarPlay() {
-        let bridge = CarPlayBridge.shared
-        bridge.update(books: app.books)
-        bridge.onPlay = { [app, settings, nowPlaying] bookID in
-            guard let book = app.books.first(where: { $0.uuid == bookID }) else { return }
-            Task { await app.startListening(to: book, nowPlaying: nowPlaying, settings: settings) }
-        }
-        bridge.onCycleRate = { [settings, nowPlaying] in
-            // Through the rates a driver actually wants, wrapping around: there
-            // is no keyboard in a car and no menu on the Now Playing template.
-            let rates: [Double] = [1.0, 1.25, 1.5, 1.75, 2.0]
-            let current = settings.playbackRate
-            let next = rates.first { $0 > current + 0.01 } ?? rates[0]
-            settings.playbackRate = next
-            nowPlaying.coordinator?.player.rate = Float(next)
-            nowPlaying.publish()
-        }
-        bridge.onSurfaceChange = { [nowPlaying] surface in
-            nowPlaying.setSurface(surface)
-        }
-    }
+    private let services = AppServices.shared
 
     var body: some Scene {
         WindowGroup {
             RootView()
-                .environment(app)
-                .environment(settings)
-                .environment(nowPlaying)
-                .task {
-                    nowPlaying.configure(settings: settings)
-                    // Playback now starts and stops from places with no view to
-                    // thread this through: a CarPlay list item, the reader
-                    // closing, one kind of book displacing the other.
-                    app.nowPlayingController = nowPlaying
-                }
-                .task { connectCarPlay() }
+                .environment(services.app)
+                .environment(services.settings)
+                .environment(services.nowPlaying)
+                // Idempotent, and belt-and-braces: the delegate has normally
+                // run by now, but a scene that somehow arrives first must not
+                // find an unstarted app.
+                .task { AppServices.shared.start() }
                 // CarPlay's list is built from whatever the bridge holds, and
                 // the car can connect before the phone app has ever loaded a
                 // library — so it is refreshed whenever the library changes
                 // rather than only at connect.
-                .onChange(of: app.books) { _, books in CarPlayBridge.shared.update(books: books) }
+                .onChange(of: services.app.books) { _, books in
+                    CarPlayBridge.shared.update(
+                        books: books, downloaded: services.app.downloadedUUIDs)
+                }
+                .onChange(of: services.app.downloadedUUIDs) { _, downloaded in
+                    CarPlayBridge.shared.update(
+                        books: services.app.books, downloaded: downloaded)
+                }
                 .tint(Palette.tangerine)
-                .onOpenURL { app.open($0) }
+                .onOpenURL { services.app.open($0) }
                 // A Spotlight result carries the book's uuid as its identifier,
                 // which is the same handle a deep link uses.
                 .onContinueUserActivity(CSSearchableItemActionType) { activity in
                     guard let id = activity.userInfo?[CSSearchableItemActivityIdentifier] as? String
                     else { return }
-                    app.pendingBookID = id
+                    services.app.pendingBookID = id
                 }
                 .onContinueUserActivity(BookActivity.type) { activity in
                     guard let id = activity.userInfo?[BookActivity.bookIDKey] as? String else { return }
-                    app.pendingBookID = id
+                    services.app.pendingBookID = id
                 }
         }
     }
@@ -109,7 +69,8 @@ struct RootView: View {
                 LibraryTabs()
             }
         }
-        .task { await app.restoreIfPossible() }
+        // The session is restored by `AppServices.start()`, so that a car
+        // connecting to a never-foregrounded app finds one.
         .task { await app.watchForExpiry() }
     }
 }
