@@ -304,7 +304,7 @@ public struct ContinueCard: View {
                     .foregroundStyle(Palette.inkTertiary)
                 if let progress = book.progress {
                     ProgressBar(value: progress).frame(maxWidth: 220)
-                    Text("\(Int(progress * 100))% complete")
+                    Text("\(ReadingProgress.percent(progress))% complete")
                         .font(Typography.caption)
                         .foregroundStyle(Palette.inkSecondary)
                 }

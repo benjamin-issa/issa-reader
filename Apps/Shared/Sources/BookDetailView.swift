@@ -97,7 +97,7 @@ public struct BookDetailView: View {
                 }
                 if let progress = book.progress, progress > 0 {
                     ProgressBar(value: progress).frame(maxWidth: 200)
-                    Text("\(Int(progress * 100))% complete")
+                    Text("\(ReadingProgress.percent(progress))% complete")
                         .font(Typography.caption)
                         .foregroundStyle(Palette.inkTertiary)
                 }

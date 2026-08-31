@@ -121,7 +121,7 @@ public struct BookPrimaryAction: Equatable, Sendable {
         case .read:
             return "Read"
         case let .resume(progress):
-            let percent = Int(progress * 100)
+            let percent = ReadingProgress.percent(progress)
             guard percent >= 1, !compact else { return "Resume" }
             return "Resume · \(percent)%"
         case .retry:

@@ -172,7 +172,7 @@ public final class ReaderModel {
     public var progressText: String {
         switch style.progressDisplay {
         case .book:
-            return "\(Int((bookProgress * 100).rounded()))%"
+            return ReadingProgress.percentText(bookProgress)
         case .chapterPage:
             guard pageCount > 0 else { return "" }
             return "\(pageIndex + 1) / \(pageCount)"

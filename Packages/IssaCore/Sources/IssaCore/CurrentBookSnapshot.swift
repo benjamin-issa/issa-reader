@@ -64,7 +64,7 @@ public struct CurrentBookSnapshot: Codable, Sendable, Hashable {
 
     /// Rounded, once, for every surface. Truncating showed 99% beside a ring
     /// that had visibly closed.
-    public var percent: Int { Int((progress * 100).rounded()) }
+    public var percent: Int { ReadingProgress.percent(progress) }
 
     /// The chapter worth showing, or nil. See `subtitle` for why it is filtered.
     public var displayChapter: String? {
