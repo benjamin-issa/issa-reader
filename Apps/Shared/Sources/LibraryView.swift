@@ -71,18 +71,18 @@ public struct LibraryView: View {
             } else if app.books.isEmpty, let error = app.loadError {
                 // A failed fetch is not an empty library, and showing "no books"
                 // for a decode error sends you looking in entirely the wrong place.
-                ContentUnavailableView {
-                    Label("Couldn't load your library", systemImage: "exclamationmark.triangle")
-                } description: {
-                    Text(error)
-                } actions: {
-                    Button("Try again") { Task { await app.refreshLibrary() } }
-                }
+                PalettePlaceholder(
+                    symbol: "exclamationmark.triangle",
+                    title: "Couldn't load your library",
+                    message: error,
+                    actionTitle: "Try again",
+                    action: { Task { await app.refreshLibrary() } },
+                )
             } else if app.books.isEmpty {
-                ContentUnavailableView(
-                    "No books yet",
-                    systemImage: "books.vertical",
-                    description: Text("Add books to your Storyteller server and they'll appear here."),
+                PalettePlaceholder(
+                    symbol: "books.vertical",
+                    title: "No books yet",
+                    message: "Add books to your Storyteller server and they'll appear here.",
                 )
             }
         }

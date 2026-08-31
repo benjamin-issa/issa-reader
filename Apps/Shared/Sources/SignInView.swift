@@ -86,6 +86,10 @@ public struct SignInView: View {
             VStack(alignment: .leading, spacing: Metrics.spacing8) {
                 Text("Server").overlineStyle()
                 TextField("storyteller.home.arpa", text: $address)
+                    // Explicit, the way LibrarySearchField is: a field that
+                    // sets no colour takes the system label, which is white in
+                    // Dark Mode.
+                    .foregroundStyle(Palette.ink)
                     .textFieldStyle(.plain)
                     .font(Typography.body)
                     .padding(Metrics.spacing12)

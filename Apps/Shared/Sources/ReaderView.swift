@@ -55,15 +55,28 @@ public struct ReaderView: View {
                 case let .downloading(received, total):
                     downloadingView(received: received, total: total)
                 case let .failed(reason):
-                    ContentUnavailableView {
-                        Label("Couldn't open this book", systemImage: "book.closed")
-                    } description: {
+                    // Coloured from the page's own theme, not the system's.
+                    // The reader's themes deliberately ignore the device
+                    // appearance, so a system-coloured view here is white on
+                    // cream for anyone reading `paper` in Dark Mode.
+                    VStack(spacing: Metrics.spacing12) {
+                        Image(systemName: "book.closed")
+                            .font(.system(size: 34))
+                            .foregroundStyle(model.style.theme.text.opacity(0.45))
+                        Text("Couldn't open this book")
+                            .font(Typography.headline)
+                            .foregroundStyle(model.style.theme.text)
                         Text(reason)
-                    } actions: {
+                            .font(Typography.footnote)
+                            .foregroundStyle(model.style.theme.text.opacity(0.7))
+                            .multilineTextAlignment(.center)
                         Button("Try Again") {
                             Task { await model.retryOpen(pageSize: pageSize) }
                         }
+                        .font(Typography.callout.weight(.semibold))
+                        .foregroundStyle(Palette.tangerine)
                     }
+                    .padding(Metrics.spacing32)
                 case .ready:
                     pageContent(size: pageSize)
                 }
@@ -397,10 +410,14 @@ public struct ReaderView: View {
         }
         .labelStyle(.iconOnly)
         .font(.system(size: 18))
-        .foregroundStyle(Palette.ink)
+        .foregroundStyle(model.style.theme.text)
         .padding(.horizontal, Metrics.spacing16)
         .padding(.vertical, Metrics.spacing12)
-        .background(.regularMaterial, in: Capsule())
+        // The page's own surface, not `.regularMaterial`. A system material
+        // goes dark against a light page whenever the device is in Dark Mode,
+        // and the reader's theme has nothing to do with the device's.
+        .background(model.style.theme.background, in: Capsule())
+        .overlay(Capsule().stroke(model.style.theme.text.opacity(0.15), lineWidth: 1))
         .shadow(color: .black.opacity(0.15), radius: 12, y: 4)
         .padding(.bottom, Metrics.spacing24)
         .transition(.opacity)

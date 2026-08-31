@@ -261,22 +261,48 @@ struct EmptyShelfView: View {
     let showAll: () -> Void
 
     var body: some View {
+        PalettePlaceholder(
+            symbol: "books.vertical",
+            title: "Nothing on \(shelf)",
+            message: "No books match this shelf right now.",
+            actionTitle: "Show all books",
+            action: showAll,
+        )
+    }
+}
+
+/// An empty or failed state, drawn from the palette.
+///
+/// `ContentUnavailableView` is entirely system-coloured, which on warm paper
+/// reads as a different app — the reason `ListeningView` hand-rolled its own
+/// long before this existed. One shape now, so they cannot drift again.
+struct PalettePlaceholder: View {
+    let symbol: String
+    let title: String
+    let message: String
+    var actionTitle: String?
+    var action: (() -> Void)?
+
+    var body: some View {
         VStack(spacing: Metrics.spacing12) {
-            Image(systemName: "books.vertical")
+            Image(systemName: symbol)
                 .font(.system(size: 34))
                 .foregroundStyle(Palette.inkQuaternary)
-            Text("Nothing on \(shelf)")
+            Text(title)
                 .font(Typography.headline)
                 .foregroundStyle(Palette.ink)
-            Text("No books match this shelf right now.")
+                .multilineTextAlignment(.center)
+            Text(message)
                 .font(Typography.footnote)
                 .foregroundStyle(Palette.inkTertiary)
                 .multilineTextAlignment(.center)
-            Button("Show all books", action: showAll)
-                .font(Typography.callout.weight(.semibold))
-                .foregroundStyle(Palette.tangerinePressed)
+            if let actionTitle, let action {
+                Button(actionTitle, action: action)
+                    .font(Typography.callout.weight(.semibold))
+                    .foregroundStyle(Palette.tangerinePressed)
+            }
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, Metrics.spacing32)
+        .padding(Metrics.spacing32)
     }
 }

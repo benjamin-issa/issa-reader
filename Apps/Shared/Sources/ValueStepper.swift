@@ -30,7 +30,7 @@ public struct ValueStepper: View {
     public var body: some View {
         #if os(tvOS)
         HStack {
-            Text(title)
+            Text(title).foregroundStyle(Palette.ink)
             Spacer()
             Button("−") { adjust(-step) }
                 .disabled(value - step < range.lowerBound)
@@ -43,7 +43,9 @@ public struct ValueStepper: View {
         #else
         Stepper(value: $value, in: range, step: step) {
             HStack {
-                Text(title)
+                // The value beside it was always coloured; the title was not,
+                // so it took the system label and disappeared in Dark Mode.
+                Text(title).foregroundStyle(Palette.ink)
                 Spacer()
                 Text(format(value))
                     .font(Typography.body.monospacedDigit())
