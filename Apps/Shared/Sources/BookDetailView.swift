@@ -16,6 +16,9 @@ public struct BookDetailView: View {
     /// Which editions are on disk, recomputed on appear and whenever a download
     /// finishes or is deleted anywhere in the app.
     @State private var downloaded: Set<BookContentService.Format> = []
+    #if os(iOS)
+    @State private var showsReader = false
+    #endif
     /// The book as it was when this screen opened. Identity only — everything
     /// drawn comes from `book` below.
     private let initialBook: Book
@@ -65,6 +68,13 @@ public struct BookDetailView: View {
         // Writing a position moves the status server-side, so the shelf shown
         // here is stale after a reading session unless it is re-read.
         .task { await app.refresh(book: book) }
+        #if os(iOS)
+        .fullScreenCover(isPresented: $showsReader) {
+            if let session = app.session {
+                ReaderView(book: book, session: session)
+            }
+        }
+        #endif
         .onChange(of: app.downloadedUUIDs, initial: true) { refreshDownloaded() }
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
@@ -163,12 +173,26 @@ public struct BookDetailView: View {
         if let action = primaryAction, let session = app.session {
             switch action.intent {
             case .openReader:
+                #if os(iOS)
+                // Presented, not pushed. Inside the tab's NavigationStack the
+                // reader inherits the tab bar and its accessory slot, whose
+                // glass capsule draws over the page's own footer — and the
+                // navigation stack's edge-swipe pops the book shut mid-page.
+                // Outside it, the page owns the whole screen.
+                Button {
+                    showsReader = true
+                } label: {
+                    PrimaryCapsule(action: action)
+                }
+                .buttonStyle(.plain)
+                #else
                 NavigationLink {
                     ReaderView(book: book, session: session)
                 } label: {
                     PrimaryCapsule(action: action)
                 }
                 .buttonStyle(.plain)
+                #endif
             case .startDownload, .pauseDownload, .resumeDownload:
                 Button {
                     perform(action)

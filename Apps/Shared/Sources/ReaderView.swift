@@ -20,6 +20,8 @@ public struct ReaderView: View {
     /// knows where it happened.
     @State private var touchPoint: CGPoint = .zero
     @State private var selecting = false
+    /// The device's unsafe edges, sampled once. See `ReaderInsets`.
+    @State private var deviceInsets = EdgeInsets()
     /// Whether a finger is currently down, so `selecting` can be cleared at the
     /// start of a touch rather than the end of one.
     @State private var touching = false
@@ -38,9 +40,16 @@ public struct ReaderView: View {
 
     public var body: some View {
         GeometryReader { geometry in
+            // The whole window, not the safe-area content box. Measuring
+            // against the live safe area is what made the page re-paginate
+            // every time the chrome was toggled: hiding a bar changes the
+            // inset, the inset changes this size, and the size is the id of
+            // the task below.
             let pageSize = CGSize(
                 width: max(geometry.size.width - model.style.pageMargin * 2, 1),
-                height: max(geometry.size.height - model.style.pageMargin * 2 - 44, 1),
+                height: max(
+                    geometry.size.height - deviceInsets.top - deviceInsets.bottom
+                        - model.style.pageMargin * 2 - 44, 1),
             )
 
             ZStack {
@@ -104,15 +113,28 @@ public struct ReaderView: View {
                     break
                 }
             }
+            // The page sits inside the device's own unsafe edges, held rather
+            // than observed, so nothing the chrome does can move it.
+            .padding(.top, deviceInsets.top)
+            .padding(.bottom, deviceInsets.bottom)
+            // Re-sample on a genuine size change — a rotation or a split view
+            // — where the unsafe edges really are different. A chrome toggle
+            // does not change the window's size, so it never lands here.
+            .onChange(of: geometry.size, initial: true) { deviceInsets = ReaderInsets.current() }
         }
+        // Measure the window, not the safe-area content box.
+        .ignoresSafeArea()
         #if os(iOS)
-        // The bar goes with the footer's controls. This is the one part of the
-        // toggle that changes the safe area, so the chapter reflows once — which
-        // is position-preserving, since relayout anchors on the character offset.
-        .toolbar(model.chromeVisible ? .visible : .hidden, for: .navigationBar)
-        .toolbar(model.chromeVisible ? .visible : .hidden, for: .tabBar)
+        // Hidden for the whole screen rather than toggled. Toggling them is
+        // what changed the safe area, and the safe area is what re-paginated
+        // the chapter — so the reader's own chrome is drawn over the page
+        // instead, and these never move again. Both Storyteller and Silveran
+        // Reader take the bars out of the reader entirely for the same reason.
+        .toolbar(.hidden, for: .navigationBar)
+        .toolbar(.hidden, for: .tabBar)
         .statusBarHidden(!model.chromeVisible)
-        .animation(.easeInOut(duration: 0.2), value: model.chromeVisible)
+        // Dismisses the home indicator with the rest of it.
+        .persistentSystemOverlays(model.chromeVisible ? .automatic : .hidden)
         #endif
         .onDisappear { Task { await model.saveProgress() } }
         #if os(iOS) || os(macOS)
@@ -153,24 +175,65 @@ public struct ReaderView: View {
             }
             .presentationDetents([.medium, .large])
         }
-        .toolbar {
-            ToolbarItemGroup(placement: .primaryAction) {
-                Button { model.toggleBookmark() } label: {
-                    Image(systemName: model.isPageBookmarked ? "bookmark.fill" : "bookmark")
-                }
-                .accessibilityLabel(model.isPageBookmarked ? "Remove bookmark" : "Bookmark this page")
-
-                Menu {
-                    Button("Find in book", systemImage: "magnifyingglass") { showsSearch = true }
-                    Button("Marks", systemImage: "bookmark.square") { showsAnnotations = true }
-                    Button("Contents", systemImage: "list.bullet") { showsContents = true }
-                } label: {
-                    Image(systemName: "ellipsis.circle")
-                }
-            }
-        }
+        #if os(macOS)
+        // The Mac keeps a real toolbar: its window chrome never moved the page.
+        .toolbar { ToolbarItemGroup(placement: .primaryAction) { readerActions } }
+        #else
+        // Drawn over the page rather than above it, so showing it cannot
+        // change the page's size.
+        .overlay(alignment: .top) { topBar }
+        #endif
         #endif
     }
+
+    /// Bookmark, and the rest behind an ellipsis.
+    @ViewBuilder
+    private var readerActions: some View {
+        Button { model.toggleBookmark() } label: {
+            Image(systemName: model.isPageBookmarked ? "bookmark.fill" : "bookmark")
+        }
+        .accessibilityLabel(model.isPageBookmarked ? "Remove bookmark" : "Bookmark this page")
+
+        Menu {
+            Button("Find in book", systemImage: "magnifyingglass") { showsSearch = true }
+            Button("Marks", systemImage: "bookmark.square") { showsAnnotations = true }
+            Button("Contents", systemImage: "list.bullet") { showsContents = true }
+        } label: {
+            Image(systemName: "ellipsis.circle")
+        }
+    }
+
+    #if os(iOS)
+    /// The reader's own top bar, floating over the page.
+    private var topBar: some View {
+        HStack(spacing: Metrics.spacing16) {
+            Button { dismiss() } label: {
+                Image(systemName: "chevron.left")
+            }
+            .accessibilityLabel("Back to the book")
+            Spacer()
+            readerActions
+        }
+        .font(.system(size: 17, weight: .semibold))
+        .foregroundStyle(model.style.theme.text)
+        .padding(.horizontal, Metrics.spacing16)
+        .frame(height: 44)
+        .padding(.top, deviceInsets.top)
+        .background {
+            // The page's own colour, not a material: the reader's theme is
+            // independent of the device appearance, and a system material
+            // goes dark over a light page.
+            model.style.theme.background
+                .opacity(0.94)
+                .ignoresSafeArea()
+        }
+        .opacity(model.chromeVisible ? 1 : 0)
+        // Untappable when invisible, so a tap in the top strip turns the page
+        // like anywhere else rather than hitting a control that is not there.
+        .allowsHitTesting(model.chromeVisible)
+        .animation(.easeInOut(duration: 0.2), value: model.chromeVisible)
+    }
+    #endif
 
     @ViewBuilder
     private func pageContent(size: CGSize) -> some View {
