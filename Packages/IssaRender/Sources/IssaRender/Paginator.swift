@@ -162,7 +162,12 @@ public final class ChapterLayout {
         // not the line's, so the line's own offset must not be added again —
         // doing so lands a tap on the sentence after the one that was tapped.
         let indexInFragment = line.characterIndex(for: inLine)
-        guard indexInFragment >= 0 else { return nil }
+        // `>= 0` alone lets NSNotFound through, and adding it to the fragment's
+        // offset yields a garbage index that matches no range — a silent miss
+        // rather than an honest one.
+        guard indexInFragment >= 0, indexInFragment != NSNotFound,
+              indexInFragment <= attributedText.length
+        else { return nil }
         return offset(of: fragment.rangeInElement.location) + indexInFragment
     }
 
@@ -170,12 +175,58 @@ public final class ChapterLayout {
     ///
     /// Nearest-enclosing wins: fragment ranges nest when a sentence contains
     /// marked-up spans, and the reader means the innermost thing they tapped.
-    public func fragmentID(at point: CGPoint, on page: RenderedPage) -> String? {
+    ///
+    /// - Parameter isUsable: which ids the caller can actually do something
+    ///   with. **Not every element id is a sentence** — a chapter heading, a
+    ///   page-break anchor and a publisher's own paragraph wrapper all carry
+    ///   one, and which of those a book contains varies entirely by who made
+    ///   it. Without this filter the nearest-enclosing answer can be an id the
+    ///   caller has no use for, and the tap does nothing at all rather than
+    ///   falling through to the sentence that is right there.
+    ///
+    /// Falls back to the nearest usable fragment *on the same page* when the
+    /// point encloses none. A tap past the end of a short last line, or in the
+    /// space between paragraphs, lands on characters that belong to no
+    /// sentence — in some books a great many characters do — and answering
+    /// "nothing" there is never what the reader meant by pointing at a page.
+    public func fragmentID(
+        at point: CGPoint, on page: RenderedPage,
+        matching isUsable: (String) -> Bool = { _ in true },
+    ) -> String? {
         guard let index = characterIndex(at: point, on: page) else { return nil }
-        return fragmentRanges
-            .filter { NSLocationInRange(index, $0.value) }
-            .min { $0.value.length < $1.value.length }?
+        let enclosing = fragmentRanges
+            .filter { isUsable($0.key) && NSLocationInRange(index, $0.value) }
+            // Length first, then the id, because `Dictionary.filter` has no
+            // defined iteration order and two equal-length ranges would
+            // otherwise resolve differently from one run to the next.
+            .min { ($0.value.length, $0.key) < ($1.value.length, $1.key) }?
             .key
+        if let enclosing { return enclosing }
+        return nearestFragment(toIndex: index, on: page, matching: isUsable)
+    }
+
+    /// The usable fragment whose characters come closest to an index, within
+    /// the page the reader is looking at.
+    ///
+    /// Page-bounded on purpose: without it a tap on a blank half-page at the
+    /// end of a chapter would reach back into the previous page's text.
+    private func nearestFragment(
+        toIndex index: Int, on page: RenderedPage, matching isUsable: (String) -> Bool,
+    ) -> String? {
+        var best: (id: String, distance: Int)?
+        for (id, range) in fragmentRanges where isUsable(id) {
+            guard range.length > 0, NSIntersectionRange(range, page.characterRange).length > 0
+            else { continue }
+            let distance = index < range.location
+                ? range.location - index
+                : (index >= range.location + range.length ? index - (range.location + range.length - 1) : 0)
+            // Ties broken by id, again for determinism.
+            if best == nil || distance < best!.distance
+                || (distance == best!.distance && id < best!.id) {
+                best = (id, distance)
+            }
+        }
+        return best?.id
     }
 
     /// Rectangles covering an arbitrary character range on a page, for drawing

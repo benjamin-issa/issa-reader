@@ -422,11 +422,26 @@ public final class ReaderModel {
     @discardableResult
     public func playSentence(at point: CGPoint) async -> Bool {
         positionOrigin = .chosen
-        guard let readalong, let layout, let page = currentPage else { return false }
-        guard let fragment = layout.fragmentID(at: point, on: page) else { return false }
-        // A fragment id the timeline does not know is an ordinary element id —
-        // a chapter heading, say — not a narrated sentence.
-        guard timeline?.entry(forFragment: fragment) != nil else { return false }
+        guard let readalong, let layout, let page = currentPage else {
+            IssaLog.warning("tap to play refused", ["why": "noReadalongOrPage"])
+            return false
+        }
+        // Ask only for ids the narration actually knows. Element ids are not
+        // all sentences — headings, page anchors and a publisher's own
+        // paragraph wrappers carry them too, and which of those exist depends
+        // entirely on who made the book. Filtering here rather than rejecting
+        // afterwards means a wrapper can never shadow the sentence inside it,
+        // and a tap in the space a sentence does not own still finds the
+        // nearest one on the page.
+        guard let fragment = layout.fragmentID(at: point, on: page, matching: { id in
+            timeline?.entry(forFragment: id) != nil
+        }) else {
+            IssaLog.warning("tap to play found nothing", [
+                "book": book.title, "chapter": String(chapterIndex), "page": String(pageIndex),
+                "x": String(format: "%.1f", point.x), "y": String(format: "%.1f", point.y),
+            ])
+            return false
+        }
         // seek(toFragment:) starts playback, which is the point: tapping a
         // sentence in a paused book should begin reading it aloud, not merely
         // move the playhead somewhere the reader cannot hear.
