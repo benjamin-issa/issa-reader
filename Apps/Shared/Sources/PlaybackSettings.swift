@@ -15,8 +15,18 @@ public final class PlaybackSettings {
     public var readerStyle: ReaderStyle { didSet { persist(readerStyle, as: Self.readerStyleKey) } }
     public var playbackRate: Double { didSet { defaults.set(playbackRate, forKey: Self.rateKey) } }
 
+    /// Per-book departures from `readerStyle`, keyed by book uuid.
+    ///
+    /// Device-local and deliberately not synced: a size that suits a phone is
+    /// wrong on a Mac, and the server's `/api/v2/user/settings` is for
+    /// preferences that should travel.
+    public private(set) var bookStyles: [String: ReaderStyleOverride] {
+        didSet { persist(bookStyles, as: Self.bookStylesKey) }
+    }
+
     private static let commandMapKey = "issa.commandMap"
     private static let readerStyleKey = "issa.readerStyle"
+    private static let bookStylesKey = "issa.bookStyles"
     private static let rateKey = "issa.playbackRate"
 
     private let defaults: UserDefaults
@@ -26,8 +36,33 @@ public final class PlaybackSettings {
         defaults = store
         commandMap = Self.load(CommandMap.self, from: store, key: Self.commandMapKey) ?? CommandMap()
         readerStyle = Self.load(ReaderStyle.self, from: store, key: Self.readerStyleKey) ?? ReaderStyle()
+        bookStyles = Self.load(
+            [String: ReaderStyleOverride].self, from: store, key: Self.bookStylesKey) ?? [:]
         let storedRate = store.double(forKey: Self.rateKey)
         playbackRate = storedRate > 0 ? storedRate : 1.0
+    }
+
+    /// The style to set this book in: the global settings, with the book's own
+    /// choices laid over them.
+    public func style(for bookUUID: String) -> ReaderStyle {
+        readerStyle.applying(bookStyles[bookUUID])
+    }
+
+    public func override(for bookUUID: String) -> ReaderStyleOverride? {
+        bookStyles[bookUUID]
+    }
+
+    /// Records what this book departs from the defaults in.
+    ///
+    /// An override with nothing left in it is removed rather than stored: a
+    /// book that has been returned to the defaults should follow them from then
+    /// on, including changes made later.
+    public func setOverride(_ override: ReaderStyleOverride?, for bookUUID: String) {
+        if let override, !override.isEmpty {
+            bookStyles[bookUUID] = override
+        } else {
+            bookStyles.removeValue(forKey: bookUUID)
+        }
     }
 
     private func persist(_ value: some Encodable, as key: String) {

@@ -13,6 +13,10 @@ struct IssaReaderApp: App {
         // Package-bundled fonts are not registered automatically the way an
         // app's UIAppFonts entry would be, so this must run before first render.
         IssaFonts.register()
+        // Faces the reader imported in an earlier session. Registration is
+        // per-process, so without this a book set in an imported face renders
+        // in the fallback and the setting looks forgotten.
+        if let fonts = CustomFonts.importedDirectory { CustomFonts.registerAll(in: fonts) }
         // Early builds put downloads in Caches, which iOS purges.
         BookContentService.migrateFromCachesIfNeeded()
     }

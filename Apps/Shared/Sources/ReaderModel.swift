@@ -3,6 +3,7 @@ import IssaCore
 import IssaEPUB
 import IssaPlayback
 import IssaRender
+import IssaUI
 import Observation
 import SwiftUI
 #if canImport(WidgetKit)
@@ -33,6 +34,9 @@ public final class ReaderModel {
     /// Present only when the book has usable media overlays.
     public private(set) var readalong: ReadalongCoordinator?
 
+    /// What this book offers by way of its own face, once opened.
+    public internal(set) var publisherFont: EPUBFontResolver.Resolution?
+
     public var hasNarration: Bool { readalong != nil }
     public var isPlaying: Bool { readalong?.player.isPlaying ?? false }
 
@@ -43,7 +47,8 @@ public final class ReaderModel {
             // built, so a font or spacing change needs the chapter parsed again
             // — re-flowing alone would keep the old face at the old size. Page
             // size, and only page size, can be handled by re-flowing.
-            let needsReparse = style.fontFamily != oldValue.fontFamily
+            let needsReparse = style.typeface != oldValue.typeface
+                || style.publisherFamily != oldValue.publisherFamily
                 || style.fontSize != oldValue.fontSize
                 || style.lineSpacing != oldValue.lineSpacing
                 || style.justified != oldValue.justified
@@ -222,6 +227,10 @@ public final class ReaderModel {
             // narration is offered only when the timeline actually has entries.
             let timeline = SMILParser.timeline(for: package)
             self.timeline = timeline.isEmpty ? nil : timeline
+
+            // Before the first parse, so a book set in its own face is set in
+            // it from the first page rather than re-flowing into it.
+            resolvePublisherFont(in: package)
 
             // Resume where the server says we were, before the first render, so
             // the reader never flashes page one and then jumps.
@@ -483,6 +492,10 @@ public final class ReaderModel {
     /// offset otherwise — a page number would move the reader arbitrarily, since
     /// a larger font means more pages.
     private func reloadCurrentChapter() async {
+        // A style change can land before the book is open — the publisher's
+        // face is resolved during `open`, and assigning it fires this. There is
+        // no chapter to reload yet, and `open` is about to parse one anyway.
+        guard package != nil else { return }
         let fragment = firstFragmentOnCurrentPage()
         let anchor = currentPage?.characterRange.location ?? 0
         await loadChapter(chapterIndex)
@@ -963,4 +976,62 @@ public final class ReaderModel {
             as: .reading(book.uuid),
         )
     }
+}
+
+// MARK: - The publisher's font
+
+extension ReaderModel {
+    /// Finds the face this book asks to be set in, and makes it usable.
+    ///
+    /// Extracted rather than read in place: `CTFontManagerRegisterFontsForURL`
+    /// wants a file, and the font is a member of a zip. It lands in the app's
+    /// own font directory under the book's uuid, so two books shipping
+    /// different files both called "Minion Pro" cannot collide — registration
+    /// is process-wide, and the second would otherwise render in the first's
+    /// face.
+    func resolvePublisherFont(in package: EPUBPackage) {
+        let resolution = EPUBFontResolver.resolve(in: package)
+        publisherFont = resolution
+        guard case let .found(face) = resolution else {
+            style.publisherFamily = nil
+            if case let .unavailable(reason) = resolution, reason != .noEmbeddedFont {
+                IssaLog.info("publisher font unusable", [
+                    "book": book.title, "reason": String(describing: reason),
+                ])
+            }
+            return
+        }
+        guard let directory = CustomFonts.directory(named: "Fonts/\(book.uuid)"),
+              let data = try? package.archive.read(face.path)
+        else { style.publisherFamily = nil; return }
+
+        let url = directory.appendingPathComponent((face.path as NSString).lastPathComponent)
+        if !FileManager.default.fileExists(atPath: url.path) {
+            try? data.write(to: url, options: .atomic)
+        }
+        let family = CustomFonts.register(url)
+        style.publisherFamily = family
+        IssaLog.info("publisher font", [
+            "book": book.title,
+            "declared": face.family,
+            "family": family ?? "unavailable",
+        ])
+    }
+
+    /// What to tell the reader about this book's own face.
+    public var publisherFontDescription: String {
+        switch publisherFont {
+        case let .found(face):
+            style.publisherFamily.map { _ in face.family } ?? "This book's font couldn't be read."
+        case .unavailable(.noEmbeddedFont), .none:
+            "This book doesn't include a font."
+        case let .unavailable(.unreadableFormat(format)):
+            "This book's font is \(format.uppercased()), which iOS can't display."
+        case .unavailable(.obfuscated):
+            "This book's font is locked by its publisher."
+        }
+    }
+
+    /// Whether choosing the publisher's font would actually change anything.
+    public var hasPublisherFont: Bool { style.publisherFamily != nil }
 }

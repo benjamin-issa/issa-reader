@@ -16,6 +16,7 @@ public struct ReaderView: View {
     @State private var showsContents = false
     @State private var showsSearch = false
     @State private var showsAnnotations = false
+    @State private var showsTypography = false
     /// The last place a finger was, so a long press that never moves still
     /// knows where it happened.
     @State private var touchPoint: CGPoint = .zero
@@ -186,9 +187,25 @@ public struct ReaderView: View {
         #endif
     }
 
+    /// Puts the settings, this book's own departures from them, and the face
+    /// found inside the book together into the style the page is set in.
+    ///
+    /// `publisherFamily` is carried across by hand: it is discovered while
+    /// opening and belongs to the book, so it is not in either stored value.
+    private func applyStyle() {
+        var resolved = settings.style(for: model.book.uuid)
+        resolved.publisherFamily = model.style.publisherFamily
+        model.style = resolved
+    }
+
     /// Bookmark, and the rest behind an ellipsis.
     @ViewBuilder
     private var readerActions: some View {
+        Button { showsTypography = true } label: {
+            Image(systemName: "textformat.size")
+        }
+        .accessibilityLabel("Text options for this book")
+
         Button { model.toggleBookmark() } label: {
             Image(systemName: model.isPageBookmarked ? "bookmark.fill" : "bookmark")
         }
@@ -358,7 +375,7 @@ public struct ReaderView: View {
         .onAppear {
             // Seed from the shared preferences, then follow them: the Reading
             // settings screen is otherwise writing to a value nothing reads.
-            model.style = settings.readerStyle
+            applyStyle()
             model.preferredRate = settings.playbackRate
             // The book id is captured by value. Reaching through `model` inside
             // a closure the model itself stores would retain it for the life of
@@ -423,7 +440,18 @@ public struct ReaderView: View {
             Task { await model.previousPage() }
         }
         #endif
-        .onChange(of: settings.readerStyle) { _, style in model.style = style }
+        // A re-resolve, not an assignment: `model.style = settings.readerStyle`
+        // would throw away this book's own settings the moment the reader
+        // changed a default, mid-page.
+        .onChange(of: settings.readerStyle) { _, _ in applyStyle() }
+        .sheet(isPresented: $showsTypography) {
+            BookTypographyView(
+                book: model.book,
+                publisherFamily: model.style.publisherFamily,
+                publisherNote: model.publisherFontDescription,
+                onChange: applyStyle,
+            )
+        }
         .onDisappear {
             model.setReaderVisible(false)
             // Break the closures the model holds back to this screen's world.

@@ -7,6 +7,9 @@ import SwiftUI
 public struct ReadingSettingsView: View {
     @Environment(PlaybackSettings.self) private var settings
 
+    @State private var customFamilies: [String] = []
+    @State private var importing = false
+
     public init() {}
 
     public var body: some View {
@@ -23,28 +26,21 @@ public struct ReadingSettingsView: View {
             }
             .listRowBackground(Palette.surface)
 
-            Section("Type") {
-                Picker("Typeface", selection: $settings.readerStyle.fontFamily) {
-                    Text("Newsreader").tag("Newsreader")
-                    Text("Public Sans").tag("Public Sans")
-                }
-                // fontSize is a CGFloat for TextKit; bridge rather than
-                // widening ValueStepper's API to every float type.
-                ValueStepper(
-                    "Text size",
-                    value: Binding(
-                        get: { Double(settings.readerStyle.fontSize) },
-                        set: { settings.readerStyle.fontSize = CGFloat($0) },
-                    ),
-                    in: 12 ... 32, format: { "\(Int($0))pt" },
+            Section {
+                // The publisher's font is a per-book choice — there is no book
+                // here — so this picker offers the app's faces and any the
+                // reader imported.
+                TypographyControls(
+                    style: $settings.readerStyle,
+                    publisherFamily: nil,
+                    publisherNote: nil,
+                    customFamilies: customFamilies,
+                    onImport: { importing = true },
                 )
-                Picker("Line spacing", selection: $settings.readerStyle.lineSpacing) {
-                    ForEach(ReaderStyle.LineSpacing.allCases, id: \.self) { spacing in
-                        Text(spacing.rawValue.capitalized).tag(spacing)
-                    }
-                }
-                .pickerStyle(.segmented)
-                Toggle("Justified", isOn: $settings.readerStyle.justified)
+            } header: {
+                Text("Type")
+            } footer: {
+                Text("These are your defaults. Any book can depart from them — open it and tap Aa.")
             }
             .listRowBackground(Palette.surface)
 
@@ -72,5 +68,21 @@ public struct ReadingSettingsView: View {
         }
         .paperListBackground()
         .navigationTitle("Reading")
+        .task { customFamilies = CustomFonts.families() }
+        #if os(iOS) || os(macOS)
+        .fileImporter(
+            isPresented: $importing,
+            allowedContentTypes: FontImport.contentTypes,
+            allowsMultipleSelection: false,
+        ) { result in
+            guard case let .success(urls) = result, let picked = urls.first else { return }
+            if let family = FontImport.adopt(picked) {
+                customFamilies = CustomFonts.families()
+                // Selected straight away: importing a font and then having to
+                // find it in a list is a step with no purpose.
+                settings.readerStyle.typeface = .custom(family)
+            }
+        }
+        #endif
     }
 }

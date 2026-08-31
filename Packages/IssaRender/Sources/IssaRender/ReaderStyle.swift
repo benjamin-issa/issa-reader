@@ -32,7 +32,65 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
         case word, sentence, line
     }
 
-    public var fontFamily: String
+    /// Which face the page is set in.
+    ///
+    /// A choice rather than a family name, because two of the three options
+    /// are not names the app knows in advance: a custom face comes from a file
+    /// the reader supplied, and the publisher's comes from inside the book.
+    public enum Typeface: Sendable, Hashable, Codable {
+        /// Whatever the book itself asks for, where it ships a usable font.
+        case publisher
+        /// One of the faces the app ships.
+        case bundled(String)
+        /// A face the reader installed or imported.
+        case custom(String)
+
+        /// Encoded as one string so an unknown case decodes to a default
+        /// rather than failing the whole settings blob — the same reason
+        /// `ReaderStyle` decodes field by field.
+        public init(from decoder: any Decoder) throws {
+            let raw = try decoder.singleValueContainer().decode(String.self)
+            if raw == "publisher" { self = .publisher }
+            else if raw.hasPrefix("custom:") { self = .custom(String(raw.dropFirst(7))) }
+            else if raw.hasPrefix("bundled:") { self = .bundled(String(raw.dropFirst(8))) }
+            else { self = .bundled(raw) }
+        }
+
+        public func encode(to encoder: any Encoder) throws {
+            var container = encoder.singleValueContainer()
+            try container.encode(raw)
+        }
+
+        var raw: String {
+            switch self {
+            case .publisher: "publisher"
+            case let .bundled(name): "bundled:\(name)"
+            case let .custom(name): "custom:\(name)"
+            }
+        }
+
+        /// The family name to ask CoreText for, where there is one in advance.
+        public var familyName: String? {
+            switch self {
+            case .publisher: nil
+            case let .bundled(name), let .custom(name): name
+            }
+        }
+    }
+
+    public var typeface: Typeface
+
+    /// The family the current book embeds, once found.
+    ///
+    /// Not persisted: it belongs to the book, not to the reader's settings, and
+    /// the reader may open a different book tomorrow. It *is* part of equality,
+    /// so discovering it mid-open re-parses the chapter into the new face,
+    /// which is exactly what should happen.
+    public var publisherFamily: String?
+
+    /// The face the app sets a page in when nothing else is chosen.
+    public static let defaultFamily = "Newsreader"
+
     public var fontSize: CGFloat
     public var lineSpacing: LineSpacing
     public var theme: ReaderTheme
@@ -68,7 +126,7 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
     public var tapToPlay: Bool
 
     public init(
-        fontFamily: String = "Newsreader",
+        typeface: Typeface = .bundled(Self.defaultFamily),
         fontSize: CGFloat = 18,
         lineSpacing: LineSpacing = .normal,
         theme: ReaderTheme = .paper,
@@ -80,7 +138,8 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
         tapToPlay: Bool = true,
         progressDisplay: ProgressDisplay = .book,
     ) {
-        self.fontFamily = fontFamily
+        self.typeface = typeface
+        publisherFamily = nil
         self.fontSize = fontSize
         self.lineSpacing = lineSpacing
         self.theme = theme
@@ -95,7 +154,7 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
 
     // Spelled out rather than synthesised, because the decoder below names them.
     enum CodingKeys: String, CodingKey {
-        case fontFamily, fontSize, lineSpacing, theme, justified, pageMargin
+        case typeface, fontFamily, fontSize, lineSpacing, theme, justified, pageMargin
         case highlightGranularity, followNarration, turnPagesMidSentence
         case tapToPlay, progressDisplay
     }
@@ -110,7 +169,16 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let fallback = ReaderStyle()
-        fontFamily = try container.decodeIfPresent(String.self, forKey: .fontFamily) ?? fallback.fontFamily
+        // `typeface` replaced `fontFamily`. A blob written before it still
+        // names a family, and that family is what the reader chose — so it
+        // becomes a bundled typeface rather than being reset to the default.
+        if let stored = try? container.decodeIfPresent(Typeface.self, forKey: .typeface) {
+            typeface = stored
+        } else if let family = try? container.decodeIfPresent(String.self, forKey: .fontFamily) {
+            typeface = .bundled(family)
+        } else {
+            typeface = fallback.typeface
+        }
         fontSize = try container.decodeIfPresent(CGFloat.self, forKey: .fontSize) ?? fallback.fontSize
         lineSpacing = Self.decodeCase(LineSpacing.self, from: container, key: .lineSpacing)
             ?? fallback.lineSpacing
@@ -127,6 +195,26 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
         tapToPlay = try container.decodeIfPresent(Bool.self, forKey: .tapToPlay) ?? fallback.tapToPlay
         progressDisplay = Self.decodeCase(
             ProgressDisplay.self, from: container, key: .progressDisplay) ?? fallback.progressDisplay
+        // Belongs to the book being read, not to the settings blob.
+        publisherFamily = nil
+    }
+
+    /// Written out by hand because `publisherFamily` must not be persisted:
+    /// it is a property of the open book, and storing it would set the next
+    /// book in the last one's face.
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(typeface, forKey: .typeface)
+        try container.encode(fontSize, forKey: .fontSize)
+        try container.encode(lineSpacing, forKey: .lineSpacing)
+        try container.encode(theme, forKey: .theme)
+        try container.encode(justified, forKey: .justified)
+        try container.encode(pageMargin, forKey: .pageMargin)
+        try container.encode(highlightGranularity, forKey: .highlightGranularity)
+        try container.encode(followNarration, forKey: .followNarration)
+        try container.encode(turnPagesMidSentence, forKey: .turnPagesMidSentence)
+        try container.encode(tapToPlay, forKey: .tapToPlay)
+        try container.encode(progressDisplay, forKey: .progressDisplay)
     }
 
     /// Reads a string-backed case, treating an unrecognised one as absent.
@@ -149,10 +237,26 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
 
     /// Body font, falling back to the system serif when the bundled family is
     /// unavailable so early builds and previews still render.
+    /// The face this book is actually set in, once the choice is resolved.
+    ///
+    /// `nil` for `.publisher` until the book has been opened and its own font
+    /// found — and permanently, for a book that ships none.
+    public var resolvedFamily: String? {
+        switch typeface {
+        case .publisher: publisherFamily
+        case let .bundled(name), let .custom(name): name
+        }
+    }
+
     public func bodyFont(weight: PlatformFont.Weight = .regular, italic: Bool = false, scale: CGFloat = 1) -> PlatformFont {
         let size = fontSize * scale
-        if let custom = PlatformFont(name: fontFamily, size: size) {
-            return italic ? custom.withItalicTrait() : custom
+        // The chosen face, then the app's own, then the system's. A book that
+        // ships no usable font must still be set in something deliberate:
+        // falling straight through to the system face changes the look of the
+        // page for a setting the reader did not touch.
+        for name in [resolvedFamily, Self.defaultFamily].compactMap({ $0 }) {
+            guard let face = PlatformFont(name: name, size: size) else { continue }
+            return italic ? face.withItalicTrait() : face
         }
         let system = PlatformFont.systemFont(ofSize: size, weight: weight)
         return italic ? system.withItalicTrait() : system
