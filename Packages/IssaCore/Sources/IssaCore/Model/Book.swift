@@ -129,6 +129,28 @@ public extension Book {
             uuid: position?.uuid, locator: locator, timestamp: timestamp)
     }
 
+    /// Takes everything the server says about this book except a reading
+    /// position older than the one already held.
+    ///
+    /// The catalogue is refetched wholesale, and a refetch that predates a write
+    /// still sitting in the mutation queue carries a stale `position`. Assigning
+    /// it verbatim walks the Continue card — and the place the reader resumes at
+    /// — backwards by however long the queue has been holding.
+    ///
+    /// Position only. Title, formats, alignment, tags and page counts are all
+    /// newer server truth and are taken as given; a `status` one refresh stale is
+    /// cosmetic, where a position one refresh stale is the bug this exists for.
+    func reconciled(with fresh: Book) -> Book {
+        guard let mine = position else { return fresh }
+        var merged = fresh
+        // A server that has never heard of our position must not clear it: the
+        // write may simply not have drained yet.
+        if fresh.position.map({ mine.timestamp > $0.timestamp }) ?? true {
+            merged.position = mine
+        }
+        return merged
+    }
+
     /// Display byline. Falls back to narrators only if there is no author at all.
     var byline: String {
         let names = authors.isEmpty ? narrators.map(\.name) : authors.map(\.name)

@@ -114,4 +114,46 @@ struct SMILTimelineTests {
         #expect(timeline.bookTime(forFragment: "nope-s99") == nil)
         #expect(timeline.entry(forFragment: "nope-s99") == nil)
     }
+
+    // MARK: - Where narration may begin
+
+    /// The lookup that replaced `entries.first` as the fallback when a reader
+    /// presses play and the visible page carries no narrated sentence. It must
+    /// only ever look *forward*: answering with the start of the book is what
+    /// read a part-read novel back from page one and then saved that position.
+    @Test("finds the first narration at or after a reader's chapter")
+    func findsNarrationAtOrAfterChapter() throws {
+        let package = try Self.package()
+        let timeline = SMILParser.timeline(for: package)
+        let hrefs = package.spine.map(\.href)
+
+        // From the first chapter, the answer is the first entry of the book.
+        let fromStart = try #require(timeline.firstEntry(inAnyOf: hrefs))
+        #expect(fromStart.fragmentID == timeline.entries.first?.fragmentID)
+
+        // From the second chapter onwards it must NOT be the first entry.
+        let laterHrefs = Array(hrefs.dropFirst())
+        let fromLater = try #require(timeline.firstEntry(inAnyOf: laterHrefs))
+        #expect(fromLater.textHref != fromStart.textHref)
+        #expect(fromLater.fragmentID != timeline.entries.first?.fragmentID,
+                "looking forward from chapter two must never answer with chapter one")
+    }
+
+    @Test("returns nothing when no document ahead is narrated")
+    func findsNothingAhead() throws {
+        let timeline = SMILParser.timeline(for: try Self.package())
+        #expect(timeline.firstEntry(inAnyOf: ["OEBPS/not-a-real-document.xhtml"]) == nil)
+        #expect(timeline.firstEntry(inAnyOf: [String]()) == nil)
+    }
+
+    @Test("answers with the earliest of the documents offered, in spine order")
+    func answersInSpineOrder() throws {
+        let package = try Self.package()
+        let timeline = SMILParser.timeline(for: package)
+        let hrefs = package.spine.map(\.href)
+        // Offered in reverse, the answer is still the one that comes first in
+        // the book — the set is a filter, not an ordering.
+        let reversed = try #require(timeline.firstEntry(inAnyOf: hrefs.reversed()))
+        #expect(reversed.fragmentID == timeline.entries.first?.fragmentID)
+    }
 }

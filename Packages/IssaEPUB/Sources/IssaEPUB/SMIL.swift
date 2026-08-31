@@ -182,6 +182,20 @@ public struct SMILTimeline: Sendable {
     public func firstEntry(inDocument href: String) -> SMILEntry? {
         entries.first { $0.textHref == href }
     }
+
+    /// The first narrated entry belonging to any of `documents`.
+    ///
+    /// Entries are built by walking the spine in order, so passing the spine
+    /// *from a reader's chapter onwards* answers "where does narration next
+    /// begin, at or after here" in a single pass — which is the question
+    /// somebody pressing play on a partly aligned book is actually asking.
+    /// Answering it with `entries.first` answers a different question, the start
+    /// of the whole audiobook, and that is what read a reader's book back to
+    /// them from page one and then saved the position.
+    public func firstEntry(inAnyOf documents: some Sequence<String>) -> SMILEntry? {
+        let wanted = Set(documents)
+        return entries.first { wanted.contains($0.textHref) }
+    }
 }
 
 public enum SMILParser {

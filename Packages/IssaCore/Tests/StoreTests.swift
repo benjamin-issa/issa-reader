@@ -177,6 +177,38 @@ struct MutationQueueTests {
         #expect(String(decoding: pending[0].payload, as: UTF8.self) == "40")
     }
 
+    /// A later position supersedes an earlier one, as before.
+    @Test("a later position replaces the one waiting to be sent")
+    func newerPositionReplacesOlder() async throws {
+        let (queue, directory) = try await makeQueue()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        try await queue.enqueue(.position, bookUUID: "b", payload: Data("100".utf8), supersedes: 100)
+        try await queue.enqueue(.position, bookUUID: "b", payload: Data("200".utf8), supersedes: 200)
+        let pending = try await queue.pending()
+        #expect(pending.count == 1)
+        #expect(String(decoding: pending[0].payload, as: UTF8.self) == "200")
+    }
+
+    /// The failure this exists for. A position generated out of order used to
+    /// delete the queued one unconditionally — and while offline the queue is
+    /// the only copy of where the reader is, so the good write was simply gone.
+    @Test("an earlier position does not erase a later one waiting to be sent")
+    func olderPositionDoesNotEraseNewer() async throws {
+        let (queue, directory) = try await makeQueue()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        try await queue.enqueue(.position, bookUUID: "b", payload: Data("200".utf8), supersedes: 200)
+        let recorded = try await queue.enqueue(
+            .position, bookUUID: "b", payload: Data("100".utf8), supersedes: 100)
+
+        #expect(recorded == false, "the older write should be dropped, not queued")
+        let pending = try await queue.pending()
+        #expect(pending.count == 1)
+        #expect(String(decoding: pending[0].payload, as: UTF8.self) == "200",
+                "the newer write must survive")
+    }
+
     @Test("different books and kinds are kept apart")
     func keepsDistinctWrites() async throws {
         let (queue, directory) = try await makeQueue()

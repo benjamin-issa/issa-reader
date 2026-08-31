@@ -34,19 +34,47 @@ public actor MutationQueue {
 
     /// Records an intent. Positions replace any earlier pending position for the
     /// same book; status and rating likewise, since only the latest matters.
-    public func enqueue(_ kind: Kind, bookUUID: String, payload: Data) throws {
+    ///
+    /// - Parameter supersedes: a caller-supplied ordering value — for a position,
+    ///   the timestamp the server will compare. A pending write is replaced only
+    ///   by one at least as new; an older one is dropped rather than allowed to
+    ///   overwrite it. Without this, a write generated out of order erased a good
+    ///   one that had not yet drained, and the queue was the only copy of it.
+    ///   `nil` keeps the unconditional collapse, which is right for status and
+    ///   rating: there the newest call always wins by definition.
+    /// - Returns: whether anything was recorded.
+    @discardableResult
+    public func enqueue(
+        _ kind: Kind, bookUUID: String, payload: Data, supersedes ordering: Double? = nil,
+    ) throws -> Bool {
         try dbQueue.write { db in
+            if let ordering,
+               let existing = try Row.fetchOne(
+                   db,
+                   sql: "SELECT ordering FROM mutation WHERE bookUUID = ? AND kind = ?",
+                   arguments: [bookUUID, kind.rawValue],
+               ),
+               let held = existing["ordering"] as Double?,
+               ordering < held {
+                // The queued write is newer than this one. Keeping it is the
+                // whole point: it may be the only remaining copy of where the
+                // reader actually is.
+                return false
+            }
             try db.execute(
                 sql: "DELETE FROM mutation WHERE bookUUID = ? AND kind = ?",
                 arguments: [bookUUID, kind.rawValue],
             )
             try db.execute(
                 sql: """
-                    INSERT INTO mutation (bookUUID, kind, payload, createdAt, attempts)
-                    VALUES (?, ?, ?, ?, 0)
+                    INSERT INTO mutation (bookUUID, kind, payload, createdAt, attempts, ordering)
+                    VALUES (?, ?, ?, ?, 0, ?)
                     """,
-                arguments: [bookUUID, kind.rawValue, payload, Date().timeIntervalSince1970],
+                arguments: [
+                    bookUUID, kind.rawValue, payload, Date().timeIntervalSince1970, ordering,
+                ],
             )
+            return true
         }
     }
 

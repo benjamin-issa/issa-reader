@@ -173,6 +173,16 @@ public actor LibraryStore {
                 t.column("tags")
             }
         }
+
+        migrator.registerMigration("v4-mutation-ordering") { db in
+            // Lets the queue collapse positions monotonically. `createdAt` is
+            // wall clock at enqueue time, which is not the value the server
+            // compares, so it cannot answer "is this write newer".
+            try db.alter(table: "mutation") { t in
+                t.add(column: "ordering", .double)
+            }
+        }
+
         return migrator
     }
 

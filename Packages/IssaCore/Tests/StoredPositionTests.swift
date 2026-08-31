@@ -77,6 +77,49 @@ struct StoredPositionTests {
         #expect(subject.position?.uuid == "p", "a new uuid would create a second row on the server")
     }
 
+    // MARK: - Reconciling a catalogue refresh
+
+    /// The library is refetched wholesale, and a refetch that predates a write
+    /// still in the mutation queue carries a stale position. Assigning it
+    /// verbatim walks the reader backwards.
+    @Test("a catalogue refresh that predates our own write does not undo it")
+    func refreshDoesNotUndoOurWrite() {
+        let mine = book(progress: 0.62, timestamp: 200)
+        let fresh = book(progress: 0.31, timestamp: 100)
+        #expect(mine.reconciled(with: fresh).progress == 0.62)
+    }
+
+    @Test("a refresh that is ahead of us wins, because another device moved")
+    func refreshFromAnotherDeviceWins() {
+        let mine = book(progress: 0.62, timestamp: 200)
+        let fresh = book(progress: 0.71, timestamp: 300)
+        #expect(mine.reconciled(with: fresh).progress == 0.71)
+    }
+
+    /// Guards the degenerate implementation that just returns `self` and so
+    /// never takes any server news at all.
+    @Test("a refresh brings everything about the book except where we are")
+    func refreshBringsEverythingElse() {
+        var mine = book(progress: 0.62, timestamp: 200)
+        mine.title = "Stale Title"
+        var fresh = book(progress: 0.31, timestamp: 100)
+        fresh.title = "The Real Title"
+        let merged = mine.reconciled(with: fresh)
+        #expect(merged.title == "The Real Title", "the catalogue is newer for everything else")
+        #expect(merged.progress == 0.62, "except our own place in it")
+    }
+
+    @Test("a server that has never heard of our position does not clear it")
+    func refreshWithNoPositionKeepsOurs() {
+        let mine = book(progress: 0.62, timestamp: 200)
+        #expect(mine.reconciled(with: book()).progress == 0.62)
+    }
+
+    @Test("a book we have never opened takes whatever the refresh says")
+    func refreshWinsWhenWeHaveNothing() {
+        #expect(book().reconciled(with: book(progress: 0.4, timestamp: 100)).progress == 0.4)
+    }
+
     /// Both halves of the reported bug, together: the reader's own footer and
     /// every other surface now read from one number *and* one formatter.
     @Test("the library agrees with the reader once the position is adopted")
