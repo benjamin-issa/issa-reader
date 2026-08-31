@@ -232,7 +232,11 @@ public struct BookDetailView: View {
             } label: {
                 HStack(spacing: 6) {
                     Image(systemName: "headphones").font(.system(size: 14, weight: .semibold))
-                    Text(app.listeningBook?.uuid == book.uuid ? "Playing" : "Listen")
+                    // Whichever kind is playing. Reading it off the audiobook
+                    // alone offered "Listen" for a book already narrating in
+                    // the reader — and tapping it would have swapped one for
+                    // the other rather than doing nothing.
+                    Text(app.playbackBook?.uuid == book.uuid ? "Playing" : "Listen")
                 }
                 .font(Typography.headline)
                 .padding(.horizontal, Metrics.spacing16)
