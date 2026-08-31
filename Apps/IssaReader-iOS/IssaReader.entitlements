@@ -2,38 +2,23 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <!-- CarPlay. Uncomment both lines below once the App ID carries the
-       capability, and everything else is already in place: the scene is
-       declared in Info.plist, the delegate is built, and the app is started
-       from its app delegate so a car reaching a never-foregrounded app finds a
-       working library.
+  <!-- Without this the CarPlay scene declared in Info.plist never activates,
+       however correct the delegate is.
 
-       It is commented out rather than present because an entitlement the App ID
-       does not carry does not merely warn — it fails the archive outright:
+       It stayed out of this file until Apple's grant landed, because an
+       entitlement the App ID does not carry does not warn — it fails the
+       archive outright: "Entitlement com.apple.developer.carplay-audio not
+       found and could not be included in profile."
 
-           error: Entitlement com.apple.developer.carplay-audio not found and
-           could not be included in profile.
-
-       Verified against the account on 2026-08-31: the App ID
-       com.benjaminissa.issareader (<bundle id record>) carries only APP_GROUPS and
-       IN_APP_PURCHASE, and its active App Store profile has no carplay-audio
-       entitlement. Apple granting the entitlement to the account is the first
-       half; the App ID has to be given it too.
-
-       No API can do that second half. CarPlay is an "Additional Capability" in
-       the Developer portal, and App Store Connect's own CapabilityType
-       enumeration has no CarPlay value at all — so neither `xcodebuild
-       -allowProvisioningUpdates` nor the API can register it. It is:
-
-           Certificates, Identifiers & Profiles -> Identifiers ->
-           com.benjaminissa.issareader -> Additional Capabilities -> CarPlay
-
-       After ticking it, uncomment, and the next archive regenerates the profile
-       with the entitlement in it.
-
+       The grant is only half of it. The App ID has to be given the capability
+       by hand, and no API can do it: App Store Connect's writable
+       `capabilityType` enumeration has 28 values and none of them is CarPlay
+       (the server itself will list them if you send an invalid one). It is a
+       checkbox, under Identifiers -> the App ID -> Capabilities -> "CarPlay
+       Audio App (CarPlay framework)". Ticked 2026-08-31; the API now reports
+       CARPLAY_PLAYABLE_CONTENT on the App ID. -->
   <key>com.apple.developer.carplay-audio</key>
   <true/>
-  -->
   <key>com.apple.security.application-groups</key>
   <array>
     <string>group.com.benjaminissa.issareader</string>
