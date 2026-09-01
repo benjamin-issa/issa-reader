@@ -275,7 +275,7 @@ public final class AppModel {
         stopListening(nowPlaying: nowPlaying)
         // And the open book, which since it outlives its screen would otherwise
         // keep narrating the signed-out account's library out loud.
-        releaseReader()
+        releaseAllReaders()
         // The catalogue belongs to the account, so it goes with it. Annotations
         // do not: they are device-local and this is their only copy.
         try? await store?.clearAccountData()
@@ -555,7 +555,7 @@ public final class AppModel {
     public private(set) var listeningBook: Book?
     public private(set) var listeningError: String?
 
-    /// The open book, held so that listening to it outlives the screen showing it.
+    /// Every open book's reader model, one per book, keyed by uuid.
     ///
     /// Narration used to be owned by `ReaderModel`, which was `@State` inside a
     /// view presented as a full-screen cover — so the back chevron destroyed the
@@ -571,15 +571,38 @@ public final class AppModel {
     /// second place, for the same book — and a position written with the wrong
     /// provenance is exactly what lost a place in a part-read novel once
     /// already. This way there is one classified path, one high-water mark, and
-    /// the cost is a single chapter's layout held while the reader browses.
-    public private(set) var reader: ReaderModel?
-
-    /// Whether the open book's narration is what is playing.
+    /// the cost is a chapter's layout held per open book while the reader browses.
     ///
-    /// Distinct from `reader?.readalong != nil`, which is true of any narrated
-    /// book merely opened. Only a book that has actually started belongs on the
-    /// mini bar, and only it may claim the lock screen.
-    private var readalongIsActive = false
+    /// Keyed by book rather than a single slot: macOS can have several reader
+    /// windows open at once ("closing one does not disturb the library"), and a
+    /// single slot evicted the wrong window's model the moment a second one was
+    /// opened — pausing its narration out from under it, and if the reader
+    /// swung back to the first window, recreating its model from scratch,
+    /// discarding whatever position and layout it held. Each book keeps its own
+    /// model until its own window closes; only which one is narrating is
+    /// exclusive, tracked separately below.
+    private var readers: [String: ReaderModel] = [:]
+
+    /// Which open book, if any, owns the active narration and Now Playing.
+    ///
+    /// Distinct from a model merely existing in `readers`, which is true of
+    /// every narrated book anyone has opened a window on. Only the one that has
+    /// actually started belongs on the mini bar, and only it may claim the lock
+    /// screen.
+    private var narratingBookUUID: String?
+
+    /// The model backing whichever book is currently narrating, if any.
+    ///
+    /// Not `private`: CarPlay's chapter list (`AppServices.connectCarPlay`)
+    /// reads this to offer chapters for a book playing via the reader's
+    /// `ReadalongCoordinator` rather than a CarPlay-started audiobook — the
+    /// same information `playbackBook`/`playback` already expose, just at the
+    /// model level those two don't reach. `AppServices.swift` compiles into
+    /// this same module, so `internal` is enough; nothing outside the app
+    /// target has a reason to see it.
+    var reader: ReaderModel? {
+        narratingBookUUID.flatMap { readers[$0] }
+    }
 
     /// The Now Playing surface, handed over at launch.
     ///
@@ -591,7 +614,7 @@ public final class AppModel {
     /// Whatever is playing, of either kind. Nil when nothing is.
     public var playback: (any PlaybackDriving)? {
         if let listening { return listening }
-        if readalongIsActive, let readalong = reader?.readalong { return readalong }
+        if let readalong = reader?.readalong { return readalong }
         return nil
     }
 
@@ -602,8 +625,7 @@ public final class AppModel {
     /// own table of contents, and while narration is what is playing the reader
     /// is alive — that is the whole point of holding it.
     public var playbackChapterTitle: String? {
-        if readalongIsActive, let title = reader?.chapterTitle,
-           ChapterNaming.isDisplayable(title) {
+        if let title = reader?.chapterTitle, ChapterNaming.isDisplayable(title) {
             return title
         }
         return playback?.displayChapterTitle
@@ -611,23 +633,22 @@ public final class AppModel {
 
     public var playbackBook: Book? {
         if listening != nil { return listeningBook }
-        if readalongIsActive { return reader?.book }
-        return nil
+        return reader?.book
     }
 
-    /// The model for an open book, created once and kept.
+    /// The model for an open book, created once per book and kept.
     ///
-    /// Idempotent, so re-presenting the reader hands back the same instance
-    /// rather than a fresh one that would replace the coordinator and cut the
-    /// audio off mid-sentence. This is also where the model's closures are
-    /// installed — permanently, rather than in the view's `onAppear`, which had
-    /// a matching `onDisappear` that broke them and left `saveProgress` writing
-    /// straight to the network with no queue and no guard.
+    /// Idempotent, so re-presenting a book's reader hands back the same
+    /// instance rather than a fresh one that would replace the coordinator and
+    /// cut the audio off mid-sentence. Opening a *different* book's window does
+    /// not touch this one's model at all — the two are independent entries in
+    /// `readers`, which is the whole fix for the eviction bug above. This is
+    /// also where the model's closures are installed — permanently, rather than
+    /// in the view's `onAppear`, which had a matching `onDisappear` that broke
+    /// them and left `saveProgress` writing straight to the network with no
+    /// queue and no guard.
     public func reader(for book: Book, session: Session) -> ReaderModel {
-        if let existing = reader, existing.book.uuid == book.uuid { return existing }
-        // A different book. Let the old one go, and its narration with it —
-        // two coordinators alive at once are two audible players.
-        releaseReader()
+        if let existing = readers[book.uuid] { return existing }
 
         let model = ReaderModel(book: book, session: session)
         model.downloadHost = self
@@ -645,51 +666,73 @@ public final class AppModel {
         // sentence, the player sheet, a remote command — ends at the player's
         // rate, so watching that is what catches all of them. A callback on the
         // one method that happens to be named `startNarration` would not.
+        //
+        // Keyed by the coordinator, and carrying its own book uuid, rather than
+        // by `self`: with one model per book there can be several coordinators
+        // alive at once, and `narrationDidStart` has to know *which* book just
+        // started rather than reading whatever the old single `reader` slot
+        // happened to hold — which, with several windows open, was not
+        // necessarily the one whose rate actually changed.
         model.onNarrationReady = { [weak self] coordinator in
-            coordinator.player.setRateObserver(for: self as AnyObject) { [weak self] rate in
+            coordinator.player.setRateObserver(for: coordinator) { [weak self] rate in
                 guard rate > 0 else { return }
-                self?.narrationDidStart()
+                self?.narrationDidStart(for: bookUUID)
             }
         }
-        reader = model
+        readers[bookUUID] = model
         return model
     }
 
-    /// Lets the open book go once the reader has left it and it is not playing.
+    /// Lets one book's reader go once its own screen has left it and it is not
+    /// the one narrating.
     ///
-    /// A book that is merely read should not pin its chapter layout for the rest
-    /// of the session; one that is still being listened to must. Identity is
-    /// checked because the Mac can have two reader windows open: closing the
-    /// first must not evict the model the second is using.
+    /// A book that is merely read should not pin its chapter layout for the
+    /// rest of the session; one that is still being listened to must. Identity
+    /// is checked because the Mac can have several reader windows open: closing
+    /// one must not evict a model a still-open window is using, and must not
+    /// evict a later model already created for the same book uuid.
     public func readerDidClose(_ model: ReaderModel) {
-        guard reader === model, !readalongIsActive else { return }
-        reader = nil
+        guard readers[model.book.uuid] === model, narratingBookUUID != model.book.uuid else { return }
+        readers.removeValue(forKey: model.book.uuid)
     }
 
-    private func releaseReader() {
+    /// Releases every open reader and stops whichever is narrating. Every open
+    /// book belongs to the account being left, unlike the per-window release
+    /// above, which only ever concerns the one book that closed.
+    private func releaseAllReaders() {
         stopNarration()
-        reader = nil
+        readers.removeAll()
     }
 
     /// Silences narration and gives up the lock screen, if it held it.
     public func stopNarration() {
-        guard readalongIsActive else { return }
-        readalongIsActive = false
-        reader?.readalong?.player.pause()
+        guard let uuid = narratingBookUUID else { return }
+        narratingBookUUID = nil
+        readers[uuid]?.readalong?.player.pause()
         nowPlayingController?.attach(coordinator: nil, book: nil)
     }
 
-    /// Called when the open book's narration actually begins.
+    /// Called when one open book's narration actually begins.
     ///
     /// Playback is exclusive: each coordinator owns its own `AVQueuePlayer`, so
-    /// leaving the audiobook running here would put two voices in the room.
-    private func narrationDidStart() {
+    /// letting a second one run would put two voices in the room. With one
+    /// reader model per book there can be several coordinators alive — a
+    /// listener can have two windows open on macOS — so exclusivity is enforced
+    /// here, at the moment a *different* book actually starts, rather than by
+    /// evicting other books' models just for being open.
+    private func narrationDidStart(for bookUUID: String) {
         // Fires on every play, and most of them change nothing: re-attaching
         // would cancel the refresh loop and refetch the cover each time.
-        guard !readalongIsActive else { return }
-        guard let model = reader, let coordinator = model.readalong else { return }
+        guard narratingBookUUID != bookUUID else { return }
+        guard let model = readers[bookUUID], let coordinator = model.readalong else { return }
+        // Silence whatever else was audible — another book's narration, which
+        // this book's window being open must never have paused on its own, or
+        // the plain audiobook path.
+        if let previous = narratingBookUUID, previous != bookUUID {
+            readers[previous]?.readalong?.player.pause()
+        }
         if listening != nil { stopListening(nowPlaying: nil) }
-        readalongIsActive = true
+        narratingBookUUID = bookUUID
         nowPlayingController?.attach(
             coordinator: coordinator,
             book: model.book,
@@ -718,6 +761,15 @@ public final class AppModel {
             // book sat paused, and nothing else republishes on a resume.
             publishListeningSnapshot(book: book, coordinator: coordinator)
             return
+        }
+        // A *different* audiobook already playing has to be stopped too — the
+        // guard above only catches resuming the same one. Without this,
+        // switching books mid-listen built a second AudiobookCoordinator with
+        // its own AVQueuePlayer and left the first one playing, retained by its
+        // own rate observer, with no control anywhere in the UI still pointing
+        // at it.
+        if listening != nil {
+            stopListening(nowPlaying: nowPlaying)
         }
         listeningError = nil
         let service = AudiobookService(client: session.client, baseURL: url, tokens: session.tokenProvider)
@@ -901,7 +953,14 @@ public final class AppModel {
         if content.isDownloaded(book, format: format) { return destination }
 
         let job = DownloadManager.Job(bookUUID: book.uuid, format: format)
-        await download(book, format: format)
+        // `download` can refuse to start at all — the Wi-Fi-only guard, most
+        // often — in which case `states[job]` is never populated and the loop
+        // below would wait on a state that can never arrive. It used to: this
+        // is what left the reader stuck on "Downloading…" forever, with the
+        // real reason sitting unseen in `loadError`.
+        guard await download(book, format: format) else {
+            throw StorytellerError.transport(loadError ?? "Couldn't start the download.")
+        }
 
         while !Task.isCancelled {
             switch downloads.state(for: job) {
@@ -946,8 +1005,15 @@ public final class AppModel {
     }
 
     /// Starts a download, refusing early if it plainly will not fit.
-    public func download(_ book: Book, format: BookContentService.Format) async {
-        guard let downloads else { return }
+    ///
+    /// - Returns: whether a transfer was actually started. `false` means
+    ///   `downloads.start` was never called at all — the Wi-Fi-only guard
+    ///   refused first — so no `DownloadManager.State` will ever exist for this
+    ///   job. A caller waiting on that state, like `downloadAndWait`, has to
+    ///   know the difference between "not yet" and "never coming".
+    @discardableResult
+    public func download(_ book: Book, format: BookContentService.Format) async -> Bool {
+        guard let downloads else { return false }
         let expected: Int64? = switch format {
         case .readaloud: book.readaloud?.fileSize.map(Int64.init)
         case .audiobook: book.audiobook?.fileSize.map(Int64.init)
@@ -955,11 +1021,18 @@ public final class AppModel {
         }
         // Holding back a multi-gigabyte readaloud on cellular is the whole point
         // of the preference; a small ebook is not worth blocking.
-        if downloads.wifiOnly, reachability.isExpensive, (expected ?? 0) > 20_000_000 {
+        //
+        // An unknown size is not a known-small one. The server omits fileSize
+        // occasionally, and `expected ?? 0` treated that exactly like a file of
+        // zero bytes — letting the one case the preference exists for (a
+        // multi-hundred-MB readaloud with no reported size) straight through on
+        // cellular. Unknown fails safe: assumed large until proven otherwise.
+        if downloads.wifiOnly, reachability.isExpensive, expected.map({ $0 > 20_000_000 }) ?? true {
             loadError = "Waiting for Wi-Fi to download this."
-            return
+            return false
         }
         await downloads.start(.init(bookUUID: book.uuid, format: format), expectedBytes: expected)
+        return true
     }
 
     /// Search, using the store's full-text index when there is one.

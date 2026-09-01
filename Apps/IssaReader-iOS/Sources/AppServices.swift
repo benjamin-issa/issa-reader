@@ -96,18 +96,39 @@ final class AppServices {
 
         bridge.playingBookUUID = { [app] in app.playbackBook?.uuid }
 
-        // Chapters come from the audiobook coordinator, which is what CarPlay
-        // always plays through — `startListening` builds one even for a book
-        // whose audio is a read-along.
+        // Chapters come from whichever is actually playing. `app.listening` is
+        // what CarPlay itself starts — `startListening` builds an
+        // AudiobookCoordinator even for a book whose audio is a read-along —
+        // but narration started from the reader on the phone before or during
+        // a drive plays through `app.reader`'s ReadalongCoordinator instead,
+        // and that book has no tracks at all, only a table of contents. The
+        // list used to be hardcoded to the audiobook path alone, so it went
+        // silently empty — and Up Next silently did nothing when tapped — the
+        // moment a book was already narrating that way. `playingBookUUID`
+        // just above already had to make this same distinction.
         bridge.chapters = { [app] in
-            guard let coordinator = app.listening else { return [] }
-            return coordinator.tracks.enumerated().map { index, track in
-                coordinator.manifest.title(of: track, at: index)
+            if let coordinator = app.listening {
+                return coordinator.tracks.enumerated().map { index, track in
+                    coordinator.manifest.title(of: track, at: index)
+                }
             }
+            guard let reader = app.reader, let package = reader.package else { return [] }
+            return CarPlayChapters.entries(for: package).map(\.title)
         }
-        bridge.currentChapter = { [app] in app.listening?.trackIndex }
+        bridge.currentChapter = { [app] in
+            if let coordinator = app.listening { return coordinator.trackIndex }
+            guard let reader = app.reader, let package = reader.package else { return nil }
+            return CarPlayChapters.entries(for: package).firstIndex { $0.spineIndex == reader.chapterIndex }
+        }
         bridge.onPlayChapter = { [app] index in
-            await app.listening?.play(chapter: index)
+            if let coordinator = app.listening {
+                await coordinator.play(chapter: index)
+                return
+            }
+            guard let reader = app.reader, let package = reader.package else { return }
+            let entries = CarPlayChapters.entries(for: package)
+            guard entries.indices.contains(index) else { return }
+            await reader.go(toChapter: entries[index].spineIndex, fragment: entries[index].fragment)
         }
 
         bridge.cover = { [app] bookUUID in

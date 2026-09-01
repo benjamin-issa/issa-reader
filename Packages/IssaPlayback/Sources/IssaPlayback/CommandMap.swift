@@ -49,6 +49,22 @@ public enum PlaybackAction: String, Codable, Sendable, CaseIterable, Hashable {
 }
 
 /// A physical control that can be bound to an action.
+///
+/// `doubleTapForward`/`doubleTapBackward`/`holdForward`/`holdBackward` are
+/// defined and Codable, but **`RemoteCommandCenter` never fires them**, so a
+/// binding on one of these has no effect anywhere and they are not offered in
+/// `ControlsSettingsView`. Kept rather than removed outright so a stored
+/// `CommandMap` from an earlier build — which may still carry a binding on one
+/// — decodes without special-casing; see `CommandMap.migrated(_:)`.
+///
+/// `MPRemoteCommandCenter` has no event distinct from a double tap: AirPods'
+/// double/triple press arrives as `nextTrack`/`previousTrack`, already covered
+/// by `wheelNext`/`wheelPrevious`. A real "hold" *is* reachable —
+/// `seekForwardCommand`/`seekBackwardCommand` deliver `MPSeekCommandEvent` with
+/// `.beginSeeking`/`.endSeeking` — but that command's contract is a continuous,
+/// accelerating scrub while held, not a single discrete action, so wiring it to
+/// fire a `PlaybackAction` once would answer the wrong question. Building the
+/// genuine feature is future work, not this fix.
 public enum PlaybackControl: String, Codable, Sendable, CaseIterable, Hashable {
     case tapForward
     case tapBackward

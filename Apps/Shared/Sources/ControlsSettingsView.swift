@@ -13,23 +13,31 @@ public struct ControlsSettingsView: View {
 
     public init() {}
 
-    /// Only the controls that surface actually exposes. Offering a headphone
-    /// double-tap binding for CarPlay would be noise.
+    /// Only the controls that surface actually exposes, and that this app can
+    /// actually make fire.
     ///
     /// The wheel belongs on the phone's list too, even though the phone has no
     /// wheel: `nextTrack` / `previousTrack` is where AirPods' double- and
     /// triple-press arrive, and where a Bluetooth head unit's buttons arrive.
     /// Leaving the rows out meant the binding those controls actually use was
     /// invisible and unchangeable.
+    ///
+    /// `.doubleTapForward`/`.doubleTapBackward`/`.holdForward`/`.holdBackward`
+    /// are deliberately absent everywhere. `RemoteCommandCenter` never fires
+    /// them — `MPRemoteCommandCenter` has no command representing a double tap
+    /// distinct from `nextTrack`/`previousTrack`, which `wheelNext`/
+    /// `wheelPrevious` already cover, and nothing routes a hold through the
+    /// bindings either. They used to be offered here anyway, so rebinding one
+    /// silently did nothing — a setting that cannot be wrong because it is
+    /// never consulted. See `PlaybackControl` for what a real "hold" would need.
     private var controls: [PlaybackControl] {
         switch surface {
         case .phone:
-            [.tapForward, .tapBackward, .doubleTapForward, .doubleTapBackward,
-             .holdForward, .holdBackward, .wheelNext, .wheelPrevious]
+            [.tapForward, .tapBackward, .wheelNext, .wheelPrevious]
         case .carPlay:
-            [.tapForward, .tapBackward, .wheelNext, .wheelPrevious, .holdForward, .holdBackward]
+            [.tapForward, .tapBackward, .wheelNext, .wheelPrevious]
         case .headphones:
-            [.tapForward, .doubleTapForward, .doubleTapBackward, .wheelNext, .wheelPrevious]
+            [.tapForward, .wheelNext, .wheelPrevious]
         }
     }
 
