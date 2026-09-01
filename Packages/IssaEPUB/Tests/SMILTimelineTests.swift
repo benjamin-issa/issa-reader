@@ -157,3 +157,70 @@ struct SMILTimelineTests {
         #expect(reversed.fragmentID == timeline.entries.first?.fragmentID)
     }
 }
+
+
+/// A file referenced from more than one place in the spine, with a different
+/// file's entries in between — an intro or outro clip shared across chapters.
+///
+/// `entry(inFile:at:)` used to bound its search with a *widened* range
+/// spanning both runs, which included whatever fell between them. Since clip
+/// times restart near zero per file, a `time` that legitimately belongs to the
+/// interloping file could match — silently returning a different file's
+/// sentence for the file actually asked about, while the correct audio kept
+/// playing.
+@Suite("A file appearing in more than one run")
+struct RepeatedAudioFileTests {
+    /// intro.mp3 plays 0-2s, then chapter1.mp3 plays 0-6s while intro.mp3 is
+    /// silent, then intro.mp3 resumes at 5-7s. Time 3 is squarely inside
+    /// chapter1.mp3's second sentence and inside the *gap* between intro.mp3's
+    /// two runs — nowhere in intro.mp3 at all.
+    static func timeline() -> SMILTimeline {
+        SMILTimeline(entries: [
+            SMILEntry(fragmentID: "intro-s0", textHref: "intro.xhtml", audioHref: "intro.mp3",
+                      start: 0, end: 2, cumulativeEnd: 2),
+            SMILEntry(fragmentID: "ch1-s0", textHref: "ch1.xhtml", audioHref: "chapter1.mp3",
+                      start: 0, end: 3, cumulativeEnd: 5),
+            SMILEntry(fragmentID: "ch1-s1", textHref: "ch1.xhtml", audioHref: "chapter1.mp3",
+                      start: 3, end: 6, cumulativeEnd: 8),
+            SMILEntry(fragmentID: "intro-s1", textHref: "intro.xhtml", audioHref: "intro.mp3",
+                      start: 5, end: 7, cumulativeEnd: 10),
+        ])
+    }
+
+    @Test("a time that falls in the gap between two runs of a file is not answered by the interloper's entry there")
+    func doesNotBleedIntoTheGap() {
+        let timeline = Self.timeline()
+        // Squarely chapter1.mp3's second sentence, and in nobody's window in
+        // intro.mp3 — the old widened range covered it anyway, via chapter1's
+        // own entries sitting between intro's two runs.
+        let entry = timeline.entry(inFile: "intro.mp3", at: 3)
+        #expect(entry == nil,
+                "intro.mp3 has nothing at its own time 3 — got \(entry?.fragmentID ?? "nil") instead")
+    }
+
+    @Test("each of the repeated file's own runs is still reachable at its own time")
+    func bothRunsStillWork() {
+        let timeline = Self.timeline()
+        #expect(timeline.entry(inFile: "intro.mp3", at: 1)?.fragmentID == "intro-s0")
+        #expect(timeline.entry(inFile: "intro.mp3", at: 6)?.fragmentID == "intro-s1")
+    }
+
+    @Test("the file in between is entirely unaffected by the file that surrounds it")
+    func theInterlopingFileIsUnaffected() {
+        let timeline = Self.timeline()
+        #expect(timeline.entry(inFile: "chapter1.mp3", at: 1)?.fragmentID == "ch1-s0")
+        #expect(timeline.entry(inFile: "chapter1.mp3", at: 4)?.fragmentID == "ch1-s1")
+    }
+
+    @Test("past the end of the repeated file's last run still falls back to its final entry")
+    func pastTheEndFallsBackToTheLastRun() {
+        let timeline = Self.timeline()
+        #expect(timeline.entry(inFile: "intro.mp3", at: 999)?.fragmentID == "intro-s1")
+    }
+
+    @Test("an unknown file matches nothing")
+    func unknownFile() {
+        let timeline = Self.timeline()
+        #expect(timeline.entry(inFile: "nowhere.mp3", at: 0) == nil)
+    }
+}

@@ -54,8 +54,18 @@ public struct SMILTimeline: Sendable {
     public let entries: [SMILEntry]
     /// Fragment id to entry index, for seeking from a tapped word.
     private let indexByFragment: [String: Int]
-    /// Contiguous index range of the entries belonging to each audio file.
-    private let fileRanges: [String: Range<Int>]
+    /// Contiguous runs of entries belonging to each audio file, in the order
+    /// they occur in the book — usually one run, occasionally more when a file
+    /// (a shared intro or outro clip) is referenced from more than one place in
+    /// the spine, with some other file's entries in between.
+    ///
+    /// Never merged into a single spanning range: a widened range for two
+    /// far-apart runs of the same file would include whatever other files'
+    /// entries fall between them, and since clip times restart near zero per
+    /// file, a binary search over that span could return a different file's
+    /// entry entirely for a `time` that happens to fall inside both — silently
+    /// mis-highlighting or mis-seeking while the correct audio keeps playing.
+    private let fileRanges: [String: [Range<Int>]]
     /// The same, per text document — which is what a reader calls a chapter.
     private let documentRanges: [String: Range<Int>]
 
@@ -73,19 +83,16 @@ public struct SMILTimeline: Sendable {
         }
         indexByFragment = index
 
-        var ranges: [String: Range<Int>] = [:]
+        var ranges: [String: [Range<Int>]] = [:]
         var start = 0
         while start < entries.count {
             let href = entries[start].audioHref
             var end = start + 1
             while end < entries.count, entries[end].audioHref == href { end += 1 }
-            // A file may legitimately appear in more than one run; widen rather
-            // than overwrite so the whole span stays searchable.
-            if let existing = ranges[href] {
-                ranges[href] = min(existing.lowerBound, start) ..< max(existing.upperBound, end)
-            } else {
-                ranges[href] = start ..< end
-            }
+            // A file may legitimately appear in more than one run. Recorded as
+            // a separate range each time rather than widened into one — see
+            // the property's doc comment for why widening is the bug.
+            ranges[href, default: []].append(start ..< end)
             start = end
         }
         fileRanges = ranges
@@ -177,30 +184,34 @@ public struct SMILTimeline: Sendable {
     /// because clip times restart at zero in each track, so a book-time search
     /// would match the wrong sentence entirely.
     public func entry(inFile audioHref: String, at time: TimeInterval) -> SMILEntry? {
-        // Entries for a file are contiguous and ordered, so bound the search to
-        // that slice and then binary search it.
-        guard let range = fileRanges[audioHref] else { return nil }
-        var low = range.lowerBound
-        var high = range.upperBound - 1
-        var result: SMILEntry?
-        while low <= high {
-            let mid = (low + high) / 2
-            let entry = entries[mid]
-            if time < entry.start {
-                high = mid - 1
-            } else if time >= entry.end {
-                low = mid + 1
-            } else {
-                result = entry
-                break
+        // Entries within one run are contiguous and ordered, so each run is
+        // bound and binary searched on its own — never across a gap that might
+        // hold another file's entries. See `fileRanges`.
+        guard let runs = fileRanges[audioHref], !runs.isEmpty else { return nil }
+        for range in runs {
+            var low = range.lowerBound
+            var high = range.upperBound - 1
+            while low <= high {
+                let mid = (low + high) / 2
+                let entry = entries[mid]
+                if time < entry.start {
+                    high = mid - 1
+                } else if time >= entry.end {
+                    low = mid + 1
+                } else {
+                    return entry
+                }
             }
         }
         // A time past the last clip belongs to the final entry rather than
-        // nothing: clips are gapless, so this only happens at the very end.
-        if result == nil, time >= entries[range.upperBound - 1].end {
-            result = entries[range.upperBound - 1]
+        // nothing: clips are gapless within a file, so this only happens at the
+        // very end — of the file's last run, in the rare case it has more than
+        // one.
+        let lastRun = runs[runs.count - 1]
+        if time >= entries[lastRun.upperBound - 1].end {
+            return entries[lastRun.upperBound - 1]
         }
-        return result
+        return nil
     }
 
     /// The entry that follows `entry` in reading order, if any.
