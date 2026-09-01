@@ -75,7 +75,7 @@ public struct ControlsSettingsView: View {
             }
             .listRowBackground(Palette.surface)
 
-            Section("Skip amount") {
+            Section {
                 ValueStepper(
                     "Forward", value: $settings.commandMap.skipForwardInterval,
                     in: 5 ... 120, step: 5, format: { "\(Int($0))s" },
@@ -84,6 +84,12 @@ public struct ControlsSettingsView: View {
                     "Back", value: $settings.commandMap.skipBackwardInterval,
                     in: 5 ... 120, step: 5, format: { "\(Int($0))s" },
                 )
+            } header: {
+                Text("Skip amount")
+            } footer: {
+                // One setting, three places: this is also what the jump buttons
+                // beside the chapter name on the reading page move by.
+                Text("Used by the skip buttons wherever narration is playing — the player, the Lock Screen, CarPlay — and by the jump buttons next to the chapter name on the reading page.")
             }
             .listRowBackground(Palette.surface)
 

@@ -1,4 +1,5 @@
 import IssaCore
+import IssaPlayback
 import IssaRender
 import IssaUI
 import SwiftUI
@@ -59,6 +60,7 @@ public struct ReaderView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(PlaybackSettings.self) private var settings
     @Environment(AppModel.self) private var app
+    @Environment(NowPlayingController.self) private var nowPlaying
     #if os(macOS)
     @Environment(\.controlActiveState) private var controlActiveState
     private var isActiveScene: Bool { controlActiveState == .key }
@@ -660,6 +662,21 @@ public struct ReaderView: View {
                     .foregroundStyle(model.style.theme.text.opacity(0.55))
                 }
                 .buttonStyle(.plain)
+                if model.hasNarration {
+                    // Same seconds, same buttons as the full player and the mini
+                    // bar — the setting in Controls & remapping governs all three,
+                    // so a reader who tunes it once gets the same jump everywhere.
+                    narrationSkipButton(
+                        seconds: settings.commandMap.skipBackwardInterval,
+                        symbol: "gobackward", action: .skipBackward,
+                        label: "Skip back",
+                    )
+                    narrationSkipButton(
+                        seconds: settings.commandMap.skipForwardInterval,
+                        symbol: "goforward", action: .skipForward,
+                        label: "Skip forward",
+                    )
+                }
                 Spacer()
                 // Inside the chrome, not beside it: hiding everything should
                 // hide everything. It used to stay behind on the grounds that
@@ -678,6 +695,32 @@ public struct ReaderView: View {
         }
         .padding(.horizontal, model.style.pageMargin)
         .frame(height: ReaderChrome.barHeight)
+    }
+
+    /// A jump button beside the chapter indicator, sized for the footer rather
+    /// than the full player's transport.
+    ///
+    /// The interval is drawn inside it for the same reason the player draws its
+    /// own: answering "how far does this jump" without a trip to Settings.
+    private func narrationSkipButton(
+        seconds: TimeInterval, symbol: String, action: PlaybackAction, label: String,
+    ) -> some View {
+        Button {
+            Task {
+                await model.readalong?.perform(action, using: settings.commandMap)
+                nowPlaying.publish()
+            }
+        } label: {
+            ZStack {
+                Image(systemName: symbol).font(.system(size: 17))
+                Text("\(Int(seconds))")
+                    .font(Typography.sans(8, weight: .semibold))
+                    .offset(y: 1)
+            }
+            .foregroundStyle(model.style.theme.textTertiary)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(label) \(Int(seconds)) seconds")
     }
 }
 
