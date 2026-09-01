@@ -23,6 +23,34 @@ struct PlaybackProgressTests {
                          totalDuration: book, chapterSpan: span)
     }
 
+    // MARK: - The scope itself
+
+    /// The chapter is the default, and it is `allCases.first` so the picker
+    /// lists it first. Both are asserted because the default is not written to
+    /// preferences until someone moves the picker — nothing on disk records it,
+    /// so this is the only place it is stated.
+    @Test("the chapter leads, because it is what a progress bar defaults to")
+    func chapterIsFirst() {
+        #expect(ProgressScope.allCases.first == .chapter)
+        #expect(ProgressScope.allCases.count == 2)
+    }
+
+    /// "This chapter" read as a description of the bar rather than a choice of
+    /// scope, sitting next to "Whole book" which plainly is one.
+    @Test("both scopes are named as choices, not as descriptions")
+    func titles() {
+        #expect(ProgressScope.chapter.title == "Current chapter")
+        #expect(ProgressScope.book.title == "Whole book")
+    }
+
+    /// The raw values are what sits in preferences, so renaming a case must not
+    /// quietly reset everyone who chose the other one.
+    @Test("the stored spellings do not move")
+    func rawValues() {
+        #expect(ProgressScope.chapter.rawValue == "chapter")
+        #expect(ProgressScope.book.rawValue == "book")
+    }
+
     // MARK: - Whole book, which must not change
 
     @Test("the whole book is the bar it has always been")

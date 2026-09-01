@@ -93,6 +93,12 @@ public struct PlayerView: View {
             .padding(.horizontal, Metrics.spacing8)
         }
         .padding(Metrics.spacing24)
+        // Filled, then painted. A self-sizing stack takes only its intrinsic
+        // height, so inside a sheet it sat centred and `Palette.paper` covered
+        // just that band — leaving the sheet's own grey backdrop showing above
+        // and below it. The Playing tab looked right only because it added
+        // these two lines itself at the call site.
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Palette.paper)
     }
 

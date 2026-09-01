@@ -130,7 +130,7 @@ struct TypefaceTests {
         style.typeface = .publisher
         style.publisherFamily = nil
         #expect(style.resolvedFamily == nil)
-        // Newsreader is registered by the app, so this is the bundled face and
+        // The app's default face is registered, so this is the bundled face and
         // not the system's.
         #expect(style.bodyFont().familyName != nil)
     }

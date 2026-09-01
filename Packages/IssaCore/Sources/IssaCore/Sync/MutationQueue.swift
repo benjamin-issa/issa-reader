@@ -187,6 +187,14 @@ public struct MutationDrain: Sendable {
                 sent += 1
             } catch StorytellerError.positionConflict {
                 // The server has something newer. Ours is obsolete, not failed.
+                //
+                // Logged, because this and the non-retryable branch below are
+                // the only two places a write is thrown away, and they were the
+                // only two that said nothing — so a server that refused every
+                // position looked exactly like a client that never sent one.
+                IssaLog.info("mutation superseded by server", [
+                    "kind": String(describing: item.kind), "book": item.bookUUID,
+                ])
                 try? await queue.remove(item.id)
             } catch StorytellerError.notAuthenticated {
                 // Not this item's problem — the whole session is bad, and every
@@ -203,6 +211,14 @@ public struct MutationDrain: Sendable {
                 // retry — the book was deleted server-side, or a permission was
                 // revoked for it. Genuinely per-item, unlike the auth case
                 // above, so the rest of the queue still deserves its turn.
+                //
+                // A discarded write is worth a line even when discarding is
+                // correct: this is where a rejected locator shape would go, and
+                // without it the position simply stops moving for no stated
+                // reason.
+                IssaLog.failure("sync mutation discarded", error, [
+                    "kind": String(describing: item.kind), "book": item.bookUUID,
+                ])
                 try? await queue.remove(item.id)
             } catch {
                 IssaLog.failure("sync mutation", error, ["kind": String(describing: item.kind)])

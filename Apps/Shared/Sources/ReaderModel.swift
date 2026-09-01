@@ -41,6 +41,10 @@ public final class ReaderModel {
     /// rather than being freshly — and wrongly — labelled at the moment it runs.
     private var positionOrigin: PositionOrigin = .chosen
 
+    /// One-shot: the next fragment change is a seek landing, not narration
+    /// drifting, so it must not relabel the destination the reader chose.
+    private var steeredToFragment = false
+
     /// The narrated sentence the server said we were on.
     ///
     /// `loadChapter(_:restoring:)` uses the locator to work out a character
@@ -258,7 +262,24 @@ public final class ReaderModel {
 
             // Resume where the server says we were, before the first render, so
             // the reader never flashes page one and then jumps.
-            let stored = try? await ProgressService(client: session.client).current(for: book.uuid)
+            //
+            // With a local fallback, because `try?` swallows a dropped
+            // connection as readily as a real absence, and the consequence was
+            // silently landing at the front of the book — over the reader's
+            // real position, which the very next page turn then saved. The app
+            // already holds this book's last locator in memory and on disk;
+            // needing the network to find your own place is not a contract
+            // worth keeping.
+            let stored: StoredPosition?
+            do {
+                stored = try await ProgressService(client: session.client).current(for: book.uuid)
+            } catch {
+                stored = book.position
+                IssaLog.failure("stored position fetch", error, [
+                    "book": book.title,
+                    "fallback": book.position == nil ? "none" : "local",
+                ])
+            }
             restoredSentenceID = stored?.locator.sentenceID
             let resumed = stored.flatMap { position in
                 package.spine.firstIndex { position.locator.matchesHref($0.href) }
@@ -384,20 +405,39 @@ public final class ReaderModel {
         coordinator.onFragmentChange = { [weak self] fragment in
             guard let self else { return }
             activeFragmentID = fragment
+            // Keep the narrated sentence on screen. If it is already visible,
+            // do not fight the reader by turning the page underneath them.
+            var moved = false
+            if style.followNarration, let layout,
+               let page = layout.page(containingFragment: fragment),
+               page.index != pageIndex {
+                pageIndex = page.index
+                moved = true
+            }
             // Narration arriving somewhere is not the reader choosing to be
             // there, so a write derived from it may not overwrite a good
             // position with a wildly different one.
-            positionOrigin = .derived
+            //
+            // But only when it actually arrived somewhere. This used to be
+            // unconditional, so a sentence boundary that merely repainted the
+            // highlight — the common case, and every case with "follow
+            // narration" off — relabelled the reader's *own* page `.derived`.
+            // The debounced save then wrote their page turn under a
+            // classification the guard is entitled to refuse.
+            if steeredToFragment {
+                // The change a seek produces is the seek arriving, not
+                // narration wandering: `seek(toFragment:)` calls `onSeek` and
+                // then `play(from:)`, which lands here in the same turn. Left
+                // to itself that relabelled a deliberate jump `.derived`, and
+                // a jump backwards past the tolerance was then refused —
+                // exactly the case `PositionGuard` promises to allow.
+                steeredToFragment = false
+            } else if moved {
+                positionOrigin = .derived
+            }
             // Listening moves the position as surely as turning pages does;
             // without this an hour of narration is lost on every other device.
             scheduleSave()
-            guard style.followNarration else { return }
-            // Keep the narrated sentence on screen. If it is already visible,
-            // do not fight the reader by turning the page underneath them.
-            if let layout, let page = layout.page(containingFragment: fragment),
-               page.index != pageIndex {
-                pageIndex = page.index
-            }
         }
         coordinator.onChapterChange = { [weak self] href in
             guard let self else { return }
@@ -410,7 +450,11 @@ public final class ReaderModel {
                 await self?.followNarration(toDocument: href, fragment: fragment)
             }
         }
-        coordinator.onSeek = { [weak self] in self?.positionOrigin = .chosen }
+        coordinator.onSeek = { [weak self] in
+            guard let self else { return }
+            positionOrigin = .chosen
+            steeredToFragment = true
+        }
         readalong = coordinator
         onNarrationReady?(coordinator)
     }
@@ -575,6 +619,11 @@ public final class ReaderModel {
             )
         }
         await loadChapter(index, restoring: anchor)
+        // A chapter the voice crossed into, not one the reader picked. The
+        // fragment change that precedes this cannot classify it — the sentence
+        // belongs to the *next* document, so it never resolves in the layout
+        // still on screen and the move looked like nobody's.
+        positionOrigin = .derived
         IssaLog.info("narration crossed chapter", [
             "book": book.title, "to": String(index),
             "fragment": fragment ?? "none", "page": String(pageIndex),
@@ -598,6 +647,13 @@ public final class ReaderModel {
               page.index != pageIndex
         else { return }
         pageIndex = page.index
+        // Catching up with the voice is the textbook derived move, and it was
+        // being written under whatever label the reader's last deliberate one
+        // left behind — with the guard disarmed. It also has to be saved: an
+        // hour of playing while the reader was elsewhere in the app moved the
+        // position and told no one.
+        positionOrigin = .derived
+        scheduleSave()
         IssaLog.info("returned to narration", [
             "book": book.title, "chapter": String(chapterIndex),
             "page": String(pageIndex), "fragment": entry.fragmentID,
@@ -1165,7 +1221,12 @@ public final class ReaderModel {
     }
 
     public func saveProgress() async {
-        guard let package, let layout, let page = currentPage else {
+        // `spine.indices` alongside the rest, like every other reader of this
+        // pair: `chapterIndex` and `package` are set independently, and a bare
+        // subscript here is the one place that would trap rather than log.
+        guard let package, let layout, let page = currentPage,
+              package.spine.indices.contains(chapterIndex)
+        else {
             IssaLog.info("position not saved", ["book": book.title, "reason": "noPage"])
             return
         }

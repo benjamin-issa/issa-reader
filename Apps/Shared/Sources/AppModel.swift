@@ -192,13 +192,19 @@ public final class AppModel {
         // opening the app on a train should see their shelf, not a spinner that
         // resolves to an error.
         store = try? LibraryStore(serverKey: url.absoluteString)
+        // The queue belongs with the store, not with the credential. It used to
+        // sit inside the `hasCredential` branch below, which meant a first-time
+        // sign-in — where `connect` runs *before* the device flow hands over a
+        // token — spent its whole session with `mutations` nil, and `enqueue`
+        // silently dropped every position, status and rating write. It looked
+        // fine, because the in-memory book still moved; only the server knew.
+        ensureMutationQueue()
         // Only for someone who is actually signed in. Showing the cached shelf
         // on the strength of the database alone meant signing out left the
         // entire library readable: the token went, the rows did not, and the
         // next launch walked straight past the sign-in screen into the grid.
         let hasCredential = await session.hasStoredCredential
         if let store, hasCredential {
-            mutations = try? MutationQueue(store: store)
             if let cached = try? await store.allBooks(), !cached.isEmpty {
                 books = cached
                 phase = .ready
@@ -281,6 +287,11 @@ public final class AppModel {
         try? await store?.clearAccountData()
         store = nil
         mutations = nil
+        // The high-water marks go too. They are keyed by book uuid, and the
+        // same server hands the same uuids to a different account — so without
+        // this, account A's finished book refuses every derived write account B
+        // makes against it.
+        positionGuards = [:]
         books = []
         downloadedUUIDs = []
         statuses = []
@@ -312,7 +323,24 @@ public final class AppModel {
         phase = .chooseServer
     }
 
+    /// Opens the durable write queue, if it is not open already.
+    ///
+    /// Idempotent, and called from both `connect` and `enterLibrary` on purpose:
+    /// `connect` runs before a first sign-in has a token, and `adopt` is the
+    /// only other way into a signed-in library. Between them they are every
+    /// route, and a route that arrives without a queue loses writes in silence.
+    private func ensureMutationQueue() {
+        guard mutations == nil, let store else { return }
+        mutations = try? MutationQueue(store: store)
+        if mutations == nil {
+            IssaLog.warning("mutation queue unavailable", ["server": serverAddress])
+        }
+    }
+
     private func enterLibrary() async {
+        // Belt and braces: whichever way we got here, writes must be durable
+        // before the library — and therefore the reader — is reachable.
+        ensureMutationQueue()
         phase = .ready
         await refreshLibrary()
     }
@@ -397,8 +425,41 @@ public final class AppModel {
         _ kind: MutationQueue.Kind, bookUUID: String, payload: some Encodable,
         supersedes ordering: Double? = nil,
     ) async {
-        guard let mutations, let data = try? JSONEncoder().encode(payload) else { return }
-        try? await mutations.enqueue(kind, bookUUID: bookUUID, payload: data, supersedes: ordering)
+        // Both halves logged. A write that vanishes here leaves no other trace:
+        // the in-memory book has already moved, `pendingWrites` stays at zero,
+        // and the next refresh re-persists the position the server never took —
+        // so nothing downstream can ever notice. That is how a whole build
+        // shipped with no queue at all.
+        guard let mutations else {
+            IssaLog.warning("write dropped: no queue", [
+                "book": bookUUID, "kind": String(describing: kind),
+            ])
+            return
+        }
+        guard let data = try? JSONEncoder().encode(payload) else {
+            IssaLog.warning("write dropped: not encodable", [
+                "book": bookUUID, "kind": String(describing: kind),
+            ])
+            return
+        }
+        do {
+            let recorded = try await mutations.enqueue(
+                kind, bookUUID: bookUUID, payload: data, supersedes: ordering)
+            if !recorded {
+                // Not a loss — a newer write for this book is already queued and
+                // is the only remaining copy of where the reader is. Rare enough
+                // (it takes a clock going backwards) to be worth a line when it
+                // does happen.
+                IssaLog.info("write superseded by a queued newer one", [
+                    "book": bookUUID, "kind": String(describing: kind),
+                ])
+            }
+        } catch {
+            IssaLog.failure("write dropped: queue refused it", error, [
+                "book": bookUUID, "kind": String(describing: kind),
+            ])
+            return
+        }
         pendingWrites = (try? await mutations.count) ?? 0
         await drainPendingWrites()
     }
@@ -694,6 +755,21 @@ public final class AppModel {
     public func readerDidClose(_ model: ReaderModel) {
         guard readers[model.book.uuid] === model, narratingBookUUID != model.book.uuid else { return }
         readers.removeValue(forKey: model.book.uuid)
+    }
+
+    /// Writes out every open book's position, then sends whatever is queued.
+    ///
+    /// For suspension. `ReaderView` flushes on `onDisappear`, but the reader is
+    /// a full-screen cover and being backgrounded does not dismiss it — so the
+    /// last two seconds of the debounce, and any queued write that had not yet
+    /// reached the network, simply waited for a relaunch that might be days
+    /// away. The caller is responsible for holding the app awake long enough;
+    /// see the scene-phase handler.
+    public func flushOpenReaders() async {
+        for model in readers.values {
+            await model.saveProgress()
+        }
+        await drainPendingWrites()
     }
 
     /// Releases every open reader and stops whichever is narrating. Every open
@@ -1078,10 +1154,6 @@ public final class AppModel {
         _ = session
     }
 
-    /// Re-reads one book after something changed it server-side.
-    ///
-    /// Writing a reading position moves the status on the server, so after a
-    /// reading session the local copy is stale in a way the user can see.
     /// Records a position the app has just written, without asking the server.
     ///
     /// The Continue card, the library row and the book screen all read
@@ -1094,9 +1166,19 @@ public final class AppModel {
     /// server can legitimately still be a session behind, and the card would
     /// visibly walk backwards. The app wrote this locator; it does not need to
     /// be told what it is.
-    public func recordPosition(_ locator: ReadiumLocator, timestamp: Double, for bookUUID: String) {
+    ///
+    /// Persisted as well as held, which it was not. The `book` row's `progress`
+    /// and `positionTimestamp` used to wait for the next `replaceCatalogue`, so
+    /// a chapter read offline and then killed came back at the old percentage —
+    /// and worse, `refreshLibrary` fetches from the server *before* draining the
+    /// queue, so the stale row won the merge. With the timestamp on disk,
+    /// `reconciled(with:)` defends it.
+    public func recordPosition(
+        _ locator: ReadiumLocator, timestamp: Double, for bookUUID: String,
+    ) async {
         guard let index = books.firstIndex(where: { $0.uuid == bookUUID }) else { return }
         books[index].adopt(position: locator, timestamp: timestamp)
+        try? await store?.upsert(books[index])
     }
 
     /// One high-water mark per book, for the life of the session.
@@ -1156,10 +1238,14 @@ public final class AppModel {
             payload: MutationDrain.PositionPayload(locator: locator, timestamp: timestamp),
             supersedes: timestamp,
         )
-        recordPosition(locator, timestamp: timestamp, for: bookUUID)
+        await recordPosition(locator, timestamp: timestamp, for: bookUUID)
         return true
     }
 
+    /// Re-reads one book after something changed it server-side.
+    ///
+    /// Writing a reading position moves the status on the server, so after a
+    /// reading session the local copy is stale in a way the user can see.
     public func refresh(book: Book) async {
         guard let session,
               let index = books.firstIndex(where: { $0.uuid == book.uuid }),

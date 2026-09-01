@@ -27,8 +27,24 @@ struct BookTypographyView: View {
     @State private var loaded = false
 
     var body: some View {
-        NavigationStack {
+        @Bindable var settings = settings
+
+        return NavigationStack {
             List {
+                // Bound to the global value, not to this sheet's `style`.
+                // `ReaderStyleOverride` carries typeface, size, spacing and
+                // justification and nothing else, so a theme written through
+                // `style` would be dropped on the floor by `difference(to:)` —
+                // it would appear to work and then not persist.
+                Section {
+                    ThemePicker(selection: $settings.readerStyle.theme)
+                } header: {
+                    Text("Page colour")
+                } footer: {
+                    Text("Applies to every book, unlike the settings below.")
+                }
+                .listRowBackground(Palette.surface)
+
                 Section {
                     TypographyControls(
                         style: $style,

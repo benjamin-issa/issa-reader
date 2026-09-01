@@ -39,6 +39,7 @@ public final class PlaybackSettings {
     private static let bookStylesKey = "issa.bookStyles"
     private static let rateKey = "issa.playbackRate"
     private static let progressScopeKey = "issa.progressScope"
+    private static let faceMigrationKey = "issa.migratedDefaultFaceToLiterata"
 
     private let defaults: UserDefaults
 
@@ -51,8 +52,38 @@ public final class PlaybackSettings {
             [String: ReaderStyleOverride].self, from: store, key: Self.bookStylesKey) ?? [:]
         let storedRate = store.double(forKey: Self.rateKey)
         playbackRate = storedRate > 0 ? storedRate : 1.0
+        // No migration needed, and this is the part to get right: a stored
+        // property assigned in `init` does not fire its `didSet`, so the key is
+        // absent from defaults until someone actually moves the picker. Moving
+        // the fallback therefore moves everyone who never chose, and leaves
+        // alone everyone who did.
         progressScope = store.string(forKey: Self.progressScopeKey)
-            .flatMap(ProgressScope.init(rawValue:)) ?? .book
+            .flatMap(ProgressScope.init(rawValue:)) ?? .chapter
+        moveOffTheOldDefaultFace()
+    }
+
+    /// Moves anyone still on the previous default reading face onto the new one,
+    /// once.
+    ///
+    /// Changing `ReaderStyle.defaultFamily` alone would have reached nobody who
+    /// already had settings: the whole style is persisted as one blob the first
+    /// time any reading preference changes, so an existing reader has the old
+    /// face written down whether they chose it or not. The flag makes this a
+    /// move and not a policy — pick Newsreader afterwards and it stays picked.
+    ///
+    /// Assignments in `init` do not fire `didSet`, so both blobs are written
+    /// back by hand here.
+    private func moveOffTheOldDefaultFace() {
+        guard !defaults.bool(forKey: Self.faceMigrationKey) else { return }
+        defaults.set(true, forKey: Self.faceMigrationKey)
+
+        let movedStyle = readerStyle.replacingLegacyDefaultFace()
+        let movedBooks = bookStyles.mapValues { $0.replacingLegacyDefaultFace() }
+        guard movedStyle != readerStyle || movedBooks != bookStyles else { return }
+        readerStyle = movedStyle
+        bookStyles = movedBooks
+        persist(readerStyle, as: Self.readerStyleKey)
+        persist(bookStyles, as: Self.bookStylesKey)
     }
 
     /// The style to set this book in: the global settings, with the book's own

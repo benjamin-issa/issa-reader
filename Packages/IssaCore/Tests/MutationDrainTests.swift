@@ -135,4 +135,25 @@ struct MutationDrainTests {
         #expect(try await queue.count == 2, "a retryable failure must not discard anything")
         #expect(StatusQueueProtocol.requestsMade == 1)
     }
+
+    /// 409 means the server already holds something newer, so ours is obsolete
+    /// rather than failed and dropping it is right. Asserted because it is one
+    /// of only two branches that throw a write away, and both used to do it in
+    /// complete silence — a server refusing every position looked exactly like
+    /// a client that never sent one, with nothing in the log either way.
+    @Test("a superseded write is dropped, and the rest of the queue still goes")
+    func supersededWriteIsDroppedWithoutBlocking() async throws {
+        let (drain, queue, directory) = try await makeDrain()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        try await queue.enqueue(.status, bookUUID: "stale", payload: Data(#"{"status":"reading"}"#.utf8))
+        try await queue.enqueue(.status, bookUUID: "fresh", payload: Data(#"{"status":"reading"}"#.utf8))
+
+        StatusQueueProtocol.prime([409, 200])
+        let sent = await drain.drain()
+
+        #expect(sent == 1, "the 409 is not a send")
+        #expect(try await queue.count == 0, "an obsolete write must not be kept forever")
+        #expect(StatusQueueProtocol.requestsMade == 2, "409 must not stop the drain")
+    }
 }

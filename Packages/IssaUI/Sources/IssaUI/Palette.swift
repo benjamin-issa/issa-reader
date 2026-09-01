@@ -102,6 +102,18 @@ public enum ReaderTheme: String, CaseIterable, Sendable, Codable {
     public var selection: Color { accent.opacity(0.28) }
 
     public var isDark: Bool { self == .night || self == .slate }
+
+    /// The name to put under the swatch. Written out rather than derived from
+    /// `rawValue`, so the label is a translatable string and not an
+    /// implementation detail of the case name.
+    public var title: String {
+        switch self {
+        case .paper: "Paper"
+        case .sepia: "Sepia"
+        case .night: "Night"
+        case .slate: "Slate"
+        }
+    }
 }
 
 public extension Color {

@@ -208,6 +208,11 @@ public struct ReaderView: View {
                 coordinator: model.readalong, chapterTitle: model.chapterTitle,
             )
                 .presentationDetents([.large])
+                // The sheet's own backdrop, which is what shows behind the
+                // corner radius and under the home indicator. Without it the
+                // content can be right to the edge and the frame around it is
+                // still system grey against warm paper.
+                .presentationBackground(Palette.paper)
         }
         .sheet(isPresented: $showsSearch) {
             NavigationStack {

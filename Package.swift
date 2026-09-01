@@ -60,7 +60,10 @@ let package = Package(
         ),
         .testTarget(
             name: "IssaRenderTests",
-            dependencies: ["IssaRender", "IssaEPUB"],
+            // IssaUI for the bundled-face catalogue: the faces it advertises
+            // and the trait resolution IssaRender does have to agree, and that
+            // agreement is only testable where both are in scope.
+            dependencies: ["IssaRender", "IssaEPUB", "IssaUI"],
             path: "Packages/IssaRender/Tests",
             resources: [.copy("Fixtures")],
         ),

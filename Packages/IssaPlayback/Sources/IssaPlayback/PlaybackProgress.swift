@@ -2,17 +2,21 @@ import Foundation
 
 /// How much of a book a progress bar stands for.
 ///
-/// The whole book is the honest default, but for a five-hour audiobook it makes
-/// a chapter a sliver you cannot aim at, and "3:49:09 remaining" answers a
-/// question nobody asked while listening to chapter seventeen.
+/// The chapter, by default. The whole book sounds like the honest answer, but
+/// for a five-hour audiobook it makes a chapter a sliver you cannot aim at, and
+/// "3:49:09 remaining" answers a question nobody asked while listening to
+/// chapter seventeen. `.chapter` is first here so the picker lists the default
+/// first.
 public enum ProgressScope: String, Codable, Sendable, CaseIterable, Hashable {
-    case book
     case chapter
+    case book
 
     public var title: String {
         switch self {
         case .book: "Whole book"
-        case .chapter: "This chapter"
+        // "This chapter" read as a description of the bar rather than a choice
+        // of scope, next to "Whole book" which plainly is one.
+        case .chapter: "Current chapter"
         }
     }
 }

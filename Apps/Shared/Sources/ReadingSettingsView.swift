@@ -16,13 +16,12 @@ public struct ReadingSettingsView: View {
         @Bindable var settings = settings
 
         List {
-            Section("Page theme") {
-                Picker("Theme", selection: $settings.readerStyle.theme) {
-                    ForEach(ReaderTheme.allCases, id: \.self) { theme in
-                        Text(theme.rawValue.capitalized).tag(theme)
-                    }
-                }
-                .pickerStyle(.segmented)
+            Section {
+                ThemePicker(selection: $settings.readerStyle.theme)
+            } header: {
+                Text("Page colour")
+            } footer: {
+                Text("The same control is in the reader under Aa. Page colour is one setting for every book, not a per-book choice like the type.")
             }
             .listRowBackground(Palette.surface)
 
@@ -63,6 +62,13 @@ public struct ReadingSettingsView: View {
                 Text("Read-along")
             } footer: {
                 Text("“Follow narration” keeps the spoken sentence on screen. Turning pages mid-sentence flips as soon as the text runs off, rather than waiting for the sentence to finish. Double-tapping a sentence starts the narration there.")
+            }
+            .listRowBackground(Palette.surface)
+
+            Section {
+                NavigationLink { FontLicencesView() } label: {
+                    Label("Fonts & licences", systemImage: "textformat.alt")
+                }
             }
             .listRowBackground(Palette.surface)
         }

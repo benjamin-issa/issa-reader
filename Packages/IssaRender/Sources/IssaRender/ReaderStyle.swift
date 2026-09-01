@@ -89,7 +89,12 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
     public var publisherFamily: String?
 
     /// The face the app sets a page in when nothing else is chosen.
-    public static let defaultFamily = "Newsreader"
+    public static let defaultFamily = "Literata"
+
+    /// The face this used to be, kept so the one-time move off it can recognise
+    /// its own work. Still bundled, still offered, and still the app's own UI
+    /// serif — this is only about what a *book* is set in by default.
+    public static let legacyDefaultFamily = "Newsreader"
 
     public var fontSize: CGFloat
     public var lineSpacing: LineSpacing
@@ -292,5 +297,34 @@ extension PlatformFont {
         let descriptor = fontDescriptor.withSymbolicTraits(.bold)
         return NSFont(descriptor: descriptor, size: pointSize) ?? self
         #endif
+    }
+}
+
+public extension ReaderStyle {
+    /// Moves a style still sitting on the old default face onto the new one.
+    ///
+    /// `readerStyle` is persisted as one blob whenever *any* reading setting
+    /// changes, so nearly every existing reader has `bundled:Newsreader` stored
+    /// whether they ever chose it or not, and simply changing `defaultFamily`
+    /// would have reached none of them. Run once, behind a flag.
+    ///
+    /// The cost, accepted deliberately: someone who really did pick Newsreader
+    /// is moved too, because nothing recorded the difference between a choice
+    /// and a default. They can pick it back, and it is still in the list.
+    func replacingLegacyDefaultFace() -> ReaderStyle {
+        guard typeface == .bundled(Self.legacyDefaultFamily) else { return self }
+        var moved = self
+        moved.typeface = .bundled(Self.defaultFamily)
+        return moved
+    }
+}
+
+public extension ReaderStyleOverride {
+    /// The same move, for a book that took the old default as its own.
+    func replacingLegacyDefaultFace() -> ReaderStyleOverride {
+        guard typeface == .bundled(ReaderStyle.legacyDefaultFamily) else { return self }
+        var moved = self
+        moved.typeface = .bundled(ReaderStyle.defaultFamily)
+        return moved
     }
 }

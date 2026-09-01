@@ -9,15 +9,26 @@ import SwiftUI
 /// the design's "one sentence at a time, or audio-only". Nothing here is
 /// scrollable or focusable while narration runs; the remote drives playback,
 /// not reading position.
+/// Resolved through `AppModel`, exactly as `ReaderScreen` does on the other
+/// platforms. Building a bare `ReaderModel` here left `enqueuePosition` nil, so
+/// tvOS wrote positions straight to the network — outside the offline queue,
+/// and outside `PositionGuard`, which is stated to be the one gate every writer
+/// passes through. A dropped connection lost the position with nothing queued
+/// to retry, and narration could overwrite a good reading place unchecked.
 struct TVReadalongView: View {
-    @State private var model: ReaderModel
+    @Environment(AppModel.self) private var app
+    let book: Book
+    let session: Session
+
+    var body: some View {
+        TVReadalongContent(model: app.reader(for: book, session: session), book: book)
+    }
+}
+
+private struct TVReadalongContent: View {
+    let model: ReaderModel
     @Environment(PlaybackSettings.self) private var settings
     let book: Book
-
-    init(book: Book, session: Session) {
-        self.book = book
-        _model = State(initialValue: ReaderModel(book: book, session: session))
-    }
 
     var body: some View {
         ZStack {

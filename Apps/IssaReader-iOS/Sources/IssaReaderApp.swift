@@ -2,6 +2,7 @@ import CoreSpotlight
 import IssaCore
 import IssaUI
 import SwiftUI
+import UIKit
 
 @main
 @MainActor
@@ -89,9 +90,19 @@ struct LibraryTabs: View {
     @Environment(AppModel.self) private var app
     @Environment(\.scenePhase) private var scenePhase
     @State private var libraryPath = NavigationPath()
-    @State private var selectedTab = Tab.library
+    @State private var selectedTab = Destination.library
+    @State private var showsPlayer = false
 
-    enum Tab: Hashable { case library, playing, settings }
+    /// Two, not three. There used to be a Playing tab, and the mini player was
+    /// removed while it was showing so the same transport was not on screen
+    /// twice — but `.tabViewBottomAccessory` is what shapes the bar, so an
+    /// accessory that came and went with the selected tab made the tab bar
+    /// resize on every switch. Apple's answer to the duplication is not a
+    /// conditional accessory; it is not having a full-player tab. The mini bar
+    /// expands into a sheet, as it does in Music.
+    // Named `Destination` rather than `Tab`, which is now SwiftUI's own
+    // type in this scope.
+    enum Destination: Hashable { case library, settings }
 
     private func openPendingBook() {
         guard let pending = app.consumePendingBook() else { return }
@@ -103,29 +114,26 @@ struct LibraryTabs: View {
         libraryPath.append(pending.book)
     }
 
+    /// The modern `Tab` builder rather than `.tabItem` + `.tag`: the legacy
+    /// pair goes through `UITabBarItem` compatibility instead of `UITab`, and
+    /// this bar's metrics are the whole point of the change.
     private var tabs: some View {
         TabView(selection: $selectedTab) {
-            NavigationStack(path: $libraryPath) {
-                LibraryView()
-                    .navigationTitle("Library")
-                    .navigationDestination(for: Book.self) { book in
-                        BookDetailView(book: book)
-                    }
+            Tab("Library", systemImage: "books.vertical", value: Destination.library) {
+                NavigationStack(path: $libraryPath) {
+                    LibraryView()
+                        .navigationTitle("Library")
+                        .navigationDestination(for: Book.self) { book in
+                            BookDetailView(book: book)
+                        }
+                }
             }
-            .tabItem { Label("Library", systemImage: "books.vertical") }
-            .tag(Tab.library)
 
-            NavigationStack {
-                NowPlayingTab().navigationTitle("Playing")
+            Tab("Settings", systemImage: "gearshape", value: Destination.settings) {
+                NavigationStack {
+                    SettingsView().navigationTitle("Settings")
+                }
             }
-            .tabItem { Label("Playing", systemImage: "play.circle") }
-            .tag(Tab.playing)
-
-            NavigationStack {
-                SettingsView().navigationTitle("Settings")
-            }
-            .tabItem { Label("Settings", systemImage: "gearshape") }
-            .tag(Tab.settings)
         }
     }
 
@@ -146,10 +154,13 @@ struct LibraryTabs: View {
     /// changes and the 26.1 path never churns view identity; only the fallback
     /// can, and losing the library's scroll position when playback starts is
     /// still better than a bar that is always there and always empty.
-    /// Not on the Playing tab, where the full player is already on screen and
-    /// the bar repeats it in miniature immediately below.
+    ///
+    /// Gated on playback and on nothing else. It briefly also excluded the
+    /// Playing tab, which made the accessory — and therefore the bar's whole
+    /// shape — a function of the selection, so the tab bar resized on every
+    /// switch and the 26.0 branch churned the `TabView`'s identity with it.
     private var showsMiniPlayer: Bool {
-        app.playback != nil && selectedTab != .playing
+        app.playback != nil
     }
 
     @ViewBuilder
@@ -163,12 +174,40 @@ struct LibraryTabs: View {
         }
     }
 
+    /// Saves the open book and sends the backlog while being suspended.
+    ///
+    /// Inside a background task, because the point is the network call: without
+    /// one the system suspends the process the moment the frame is committed
+    /// and the POST never leaves. The expiration handler must end the
+    /// assertion, or iOS kills the app for holding it too long.
+    private func flushOnSuspend() {
+        var identifier = UIBackgroundTaskIdentifier.invalid
+        identifier = UIApplication.shared.beginBackgroundTask(withName: "issa.flushPosition") {
+            UIApplication.shared.endBackgroundTask(identifier)
+            identifier = .invalid
+        }
+        guard identifier != .invalid else { return }
+        Task {
+            await app.flushOpenReaders()
+            UIApplication.shared.endBackgroundTask(identifier)
+            identifier = .invalid
+        }
+    }
+
     private var miniPlayer: some View {
-        MiniPlayer { selectedTab = .playing }
+        MiniPlayer { showsPlayer = true }
     }
 
     var body: some View {
         shell
+        // Presented from the shell rather than from the accessory: the mini bar
+        // is unmounted the moment playback stops, and a sheet owned by it would
+        // be torn down mid-gesture.
+        .sheet(isPresented: $showsPlayer) { NowPlayingSheet() }
+        .onChange(of: app.playback == nil) { _, stopped in
+            // Nothing to expand into once the book has stopped.
+            if stopped { showsPlayer = false }
+        }
         // A link can arrive before the library has loaded, so this waits for
         // the book to exist rather than dropping the request on the floor.
         .onChange(of: app.pendingBook) { openPendingBook() }
@@ -180,6 +219,10 @@ struct LibraryTabs: View {
         // An intent runs outside the scene and cannot navigate, so it leaves
         // the book in an inbox for the scene to collect when it appears.
         .onChange(of: scenePhase) { _, phase in
+            if phase == .background {
+                flushOnSuspend()
+                return
+            }
             guard phase == .active else { return }
             // A download can finish while the app is in the background, and the
             // finish hook only fires in-process.

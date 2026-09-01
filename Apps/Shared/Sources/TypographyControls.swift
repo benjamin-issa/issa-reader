@@ -22,19 +22,52 @@ struct TypographyControls: View {
     var onImport: (() -> Void)?
 
     var body: some View {
+        // Grouped, because "which face is easiest for me to read" and "which
+        // face do I like" are different questions, and the accessibility ones
+        // are worth finding without reading the whole list.
         Picker("Typeface", selection: typefaceSelection) {
-            if publisherFamily != nil {
-                Text("Publisher's font").tag(ReaderStyle.Typeface.publisher)
+            Section {
+                if publisherFamily != nil {
+                    Text("Publisher's font").tag(ReaderStyle.Typeface.publisher)
+                }
+                ForEach(IssaFonts.readingFaces, id: \.family) { face in
+                    Text(face.title).tag(ReaderStyle.Typeface.bundled(face.family))
+                }
+            } header: {
+                Text("Reading")
             }
-            Text("Newsreader").tag(ReaderStyle.Typeface.bundled("Newsreader"))
-            Text("Public Sans").tag(ReaderStyle.Typeface.bundled("Public Sans"))
-            ForEach(customFamilies, id: \.self) { family in
-                Text(family).tag(ReaderStyle.Typeface.custom(family))
+
+            Section {
+                ForEach(IssaFonts.accessibilityFaces, id: \.family) { face in
+                    Text(face.title).tag(ReaderStyle.Typeface.bundled(face.family))
+                }
+            } header: {
+                Text("Accessibility")
+            }
+
+            if !customFamilies.isEmpty {
+                Section {
+                    ForEach(customFamilies, id: \.self) { family in
+                        Text(family).tag(ReaderStyle.Typeface.custom(family))
+                    }
+                } header: {
+                    Text("Your fonts")
+                }
             }
         }
 
         if let publisherNote, publisherFamily == nil {
             Text(publisherNote)
+                .font(Typography.caption)
+                .foregroundStyle(Palette.inkTertiary)
+        }
+
+        // Said rather than left to be discovered mid-chapter. Lexend ships no
+        // italic at any weight, and `withItalicTrait` will not fake one.
+        if case let .bundled(family) = style.typeface,
+           let face = IssaFonts.allFaces.first(where: { $0.family == family }),
+           !face.hasItalic {
+            Text("\(face.title) has no italic, so emphasis is set upright.")
                 .font(Typography.caption)
                 .foregroundStyle(Palette.inkTertiary)
         }

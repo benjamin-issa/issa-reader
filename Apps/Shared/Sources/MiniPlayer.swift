@@ -8,7 +8,7 @@ import SwiftUI
 /// Without it, starting a book and navigating away leaves audio coming out of
 /// the phone with nothing on screen to stop it — the listener's only recourse
 /// being the lock screen. It sits above the tab bar, shows real progress, and
-/// opens the Playing tab.
+/// expands into the full player.
 ///
 /// Driven by `PlaybackDriving` rather than by the audiobook coordinator, so it
 /// covers narration too. It did not before, which meant a read-along left
@@ -19,8 +19,9 @@ public struct MiniPlayer: View {
     @Environment(NowPlayingController.self) private var nowPlaying
     @Environment(PlaybackSettings.self) private var settings
 
-    /// Shows the full player. A tab rather than a sheet, so there is one
-    /// expanded player in the app and not two that can disagree.
+    /// Shows the full player, as a sheet. It used to switch to a Playing tab,
+    /// which forced this bar to be hidden while that tab was showing — and an
+    /// accessory that comes and goes with the selection resizes the tab bar.
     private let onExpand: () -> Void
 
     public init(onExpand: @escaping () -> Void = {}) {
@@ -90,10 +91,11 @@ public struct MiniPlayer: View {
             .padding(.horizontal, Metrics.spacing12)
             .padding(.vertical, Metrics.spacing8)
         }
-        // Palette.surface, not .regularMaterial: system grey sat against warm
-        // paper and was the only surface in the app not made from the palette.
-        .background(Palette.surface)
-        .overlay(alignment: .top) { Palette.border.frame(height: 0.5) }
+        // No fill and no hairline. Those were written when this sat in a
+        // `safeAreaInset` and had to draw its own edge; inside the tab bar's
+        // accessory slot it is already in a glass capsule, and painting an
+        // opaque surface plus a border inside that is what made the bar read as
+        // heavier and taller than the one Apple draws.
         .contentShape(Rectangle())
         .onTapGesture(perform: onExpand)
         .accessibilityElement(children: .contain)
