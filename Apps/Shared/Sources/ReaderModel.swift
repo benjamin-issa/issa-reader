@@ -1002,11 +1002,30 @@ public final class ReaderModel {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             : chapterTitle
 
+        // `highlightRects(on:)` later rebuilds this highlight's rectangle from
+        // (charOffset, excerpt.length) — so charOffset has to name the
+        // excerpt's own first character. A selection that began at a paragraph
+        // break or with leading whitespace trims to a shorter excerpt without
+        // this adjustment, and the rebuilt range — same start, shorter length —
+        // always begins right and clips its own tail by exactly how much was
+        // trimmed off the front. Replacing "\n" with " " above never changes
+        // character count, so trimming's boundary is the same whichever side of
+        // that replace it is measured on.
+        let storedRange: NSRange
+        if range.length > 0 {
+            let raw = text.substring(with: range)
+            let leadingTrimmed = raw.prefix(while: \.isWhitespace).utf16.count
+            storedRange = NSRange(
+                location: range.location + leadingTrimmed, length: (excerpt as NSString).length)
+        } else {
+            storedRange = range
+        }
+
         let annotation = Annotation(
             bookUUID: book.uuid,
             kind: kind,
             tint: tint,
-            locator: locator(forRange: range),
+            locator: locator(forRange: storedRange),
             excerpt: excerpt,
             chapterTitle: chapterTitle,
         )

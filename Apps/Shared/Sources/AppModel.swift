@@ -749,7 +749,16 @@ public final class AppModel {
     public func startListening(
         to book: Book, nowPlaying: NowPlayingController, settings: PlaybackSettings,
     ) async {
-        guard let session, let url = Self.normalizeServerURL(serverAddress) else { return }
+        // This guard used to return with `listeningError` untouched — so a
+        // failure here read as whatever the *previous* attempt happened to
+        // leave behind, nil included. CarPlay's `onPlay` reports this value
+        // back verbatim as its success signal, so a stale nil made this
+        // attempt's early return look identical to nothing having gone wrong:
+        // the row pushed straight to Now Playing with no audio behind it.
+        guard let session, let url = Self.normalizeServerURL(serverAddress) else {
+            listeningError = "Not signed in yet."
+            return
+        }
         // One player at a time. Each coordinator owns its own AVQueuePlayer, so
         // starting an audiobook over running narration is two voices at once —
         // and whichever attached to Now Playing second silently released the

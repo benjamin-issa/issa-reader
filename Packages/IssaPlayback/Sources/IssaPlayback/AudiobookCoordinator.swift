@@ -151,6 +151,11 @@ public final class AudiobookCoordinator {
         steeredAt = true
         if player.currentTime > 3 {
             await player.seek(to: 0)
+            // Every other seek path — `seek(toBookTime:)`, `load(track:startAt:)`
+            // — updates `bookTime` itself; this was the one that didn't; a skip
+            // fired right after restarting a chapter computed its target from
+            // wherever playback had been a moment ago, not from the restart.
+            bookTime = manifest.startTime(ofTrackAt: trackIndex)
         } else {
             await play(chapter: max(trackIndex - 1, 0))
         }

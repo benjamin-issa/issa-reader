@@ -117,4 +117,61 @@ struct BookClockTests {
         await subject.seek(toBookTime: 10_000_000)
         #expect(subject.progress <= 1)
     }
+
+    /// `previousChapter()`'s restart-the-current-track branch used to seek the
+    /// player directly, without the `bookTime` update every other seek path —
+    /// `seek(toBookTime:)`, `load(track:startAt:)` — performs. A skip fired
+    /// right after a restart computed its target from wherever playback had
+    /// been a moment before, not from the restart, overshooting by however far
+    /// into the track the listener had gotten.
+    @Test("restarting the current chapter keeps the book clock in step")
+    func restartingCurrentChapterUpdatesBookTime() async {
+        let subject = coordinator(manifest(trackCount: 3, each: 1_000))
+        await subject.seek(toBookTime: 1_010) // 10s into track 1
+        #expect(subject.trackIndex == 1)
+
+        // Disconnected deliberately. `AudiobookCoordinator` wires the player's
+        // own periodic time observer to keep `bookTime` current during real
+        // playback — and against a real (if unplayable) `AVPlayer`, that
+        // observer can fire essentially synchronously with a seek, which
+        // quietly repaired this exact bug by accident inside this test harness
+        // and would have made the mutation below pass either way. On a device
+        // the observer fires on a 0.2-1.0s cadence, so a skip tapped right
+        // after "previous chapter" is not guaranteed to race behind it — the
+        // whole reason the fix sets `bookTime` itself rather than trusting that
+        // race. Disconnecting it here is what makes this test about
+        // `previousChapter()`'s own code, not about incidental test-harness
+        // timing.
+        subject.player.onTimeUpdate = nil
+
+        // Simulate real playback progress past the 3s threshold that decides
+        // "restart this track" versus "go back a track".
+        await subject.player.seek(to: 10)
+        #expect(subject.player.currentTime > 3)
+
+        await subject.previousChapter()
+        #expect(subject.trackIndex == 1, "a restart stays on the same track")
+        #expect(subject.bookTime == 1_000, "bookTime must reflect the restart, not the old position")
+
+        // The regression, made concrete: a skip fired immediately after must be
+        // measured from the true, just-restarted position.
+        await subject.skip(by: 30)
+        #expect(abs(subject.bookTime - 1_030) < 0.001,
+                "skip after a restart landed at \(subject.bookTime), not 1030")
+    }
+
+    /// The other branch, unchanged: three or fewer seconds in moves back a
+    /// whole track, and `load(track:startAt:)` already keeps `bookTime` correct
+    /// there — this just confirms the boundary between the two branches.
+    @Test("previous chapter near the start of a track moves back a track instead")
+    func previousChapterNearStartMovesBackATrack() async {
+        let subject = coordinator(manifest(trackCount: 3, each: 1_000))
+        await subject.seek(toBookTime: 1_002) // 2s into track 1
+        await subject.player.seek(to: 2)
+        #expect(subject.player.currentTime <= 3)
+
+        await subject.previousChapter()
+        #expect(subject.trackIndex == 0)
+        #expect(subject.bookTime == 0)
+    }
 }
