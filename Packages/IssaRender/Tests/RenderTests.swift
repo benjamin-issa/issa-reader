@@ -295,4 +295,73 @@ struct PageBoundaryTests {
         }
         #expect(layout.pages.last?.contentBottom == .infinity)
     }
+
+    /// A paragraph too long to fit the remaining room on a page used to move
+    /// in its entirety to the next one — pagination refused to split a
+    /// fragment (a whole paragraph) across a boundary, only a line. For a
+    /// paragraph long enough that even a fresh page could not hold it, that
+    /// left no boundary anywhere that worked: whichever page it started on,
+    /// its tail ran past the page's own height, and the fixed-size canvas
+    /// clipped whatever didn't fit — silently. This is the fixture that
+    /// forces it: one paragraph with no internal breaks, long enough to run
+    /// several times the height of the page.
+    static func oneGiantParagraphLayout(pageHeight: CGFloat = 400) throws -> ChapterLayout {
+        let sentence = "The lamplighter went from post to post along the empty street. "
+        let xhtml = "<html><body><p>" + String(repeating: sentence, count: 40) + "</p></body></html>"
+        let result = try HTMLContentParser(style: ReaderStyle())
+            .parse(xhtml: Data(xhtml.utf8), baseHref: "c.xhtml")
+        let layout = ChapterLayout(text: result.text, fragmentRanges: result.fragmentRanges)
+        layout.layout(pageSize: CGSize(width: 320, height: pageHeight))
+        return layout
+    }
+
+    @Test("no page's content runs past the height it was given")
+    func noPageOverflowsItsHeight() throws {
+        let layout = try Self.oneGiantParagraphLayout()
+        #expect(layout.pages.count > 3, "the fixture should span several pages")
+        for page in layout.pages where page.contentBottom.isFinite {
+            let used = page.contentBottom - page.yOffset
+            #expect(used <= 400 + 0.5,
+                    "page \(page.index) holds \(used)pt of content in a 400pt page — its tail would be clipped")
+        }
+    }
+
+    @Test("no page wastes more than about a line's worth of room")
+    func noPageWastesALotOfSpace() throws {
+        let layout = try Self.oneGiantParagraphLayout()
+        for page in layout.pages where page.contentBottom.isFinite {
+            let used = page.contentBottom - page.yOffset
+            let wasted = 400 - used
+            #expect(wasted < 60,
+                    "page \(page.index) leaves \(wasted)pt unused out of 400 — a whole paragraph moved that should have had its lines split")
+        }
+    }
+
+    /// The strongest check: every character of the chapter is painted on
+    /// exactly one page. `pagesTile()` above proves this for `characterRange`,
+    /// which `computePages` assigns; this proves it independently for
+    /// `paintedCharacterRange`, which `draw` and `spokenText` actually use —
+    /// the two disagreeing is exactly the class of bug this suite exists for.
+    @Test("the painted ranges of every page reconstruct the whole chapter, with no gap and no overlap")
+    func paintedRangesTileTheChapter() throws {
+        let layout = try Self.oneGiantParagraphLayout()
+        var expected = 0
+        for page in layout.pages {
+            let painted = layout.paintedCharacterRange(for: page)
+            guard painted.length > 0 else { continue }
+            #expect(painted.location == expected,
+                    "page \(page.index) painted range starts at \(painted.location), expected \(expected)")
+            expected = NSMaxRange(painted)
+        }
+        #expect(expected == layout.attributedText.length)
+    }
+
+    @Test("a real long chapter also never wastes more than about a line of room")
+    func realChapterNoWaste() throws {
+        let layout = try Self.longChapterLayout()
+        for page in layout.pages where page.contentBottom.isFinite {
+            let wasted = 480 - (page.contentBottom - page.yOffset)
+            #expect(wasted < 60, "page \(page.index) wastes \(wasted)pt")
+        }
+    }
 }

@@ -76,22 +76,39 @@ public final class ChapterLayout {
     private func computePages(pageHeight: CGFloat) -> [RenderedPage] {
         struct Boundary { let top: CGFloat; let startOffset: Int }
         var boundaries: [Boundary] = [Boundary(top: 0, startOffset: 0)]
-        var lastSeenEnd = 0
 
         layoutManager.enumerateTextLayoutFragments(
             from: contentStorage.documentRange.location,
             options: [.ensuresLayout, .ensuresExtraLineFragment],
         ) { fragment in
-            let frame = fragment.layoutFragmentFrame
-            // A fragment that would cross the page boundary starts the next page
-            // instead of being split, so no line is ever cut in half. The
-            // `minY > top` guard keeps a fragment taller than a whole page — a
-            // full-height plate — on the page it starts, rather than looping.
-            if frame.maxY > (boundaries.last?.top ?? 0) + pageHeight,
-               frame.minY > (boundaries.last?.top ?? 0) {
-                boundaries.append(Boundary(top: frame.minY, startOffset: lastSeenEnd))
+            let fragmentTop = fragment.layoutFragmentFrame.minY
+            let fragmentOffset = self.offset(of: fragment.rangeInElement.location)
+
+            // Per line, not per fragment. A fragment is a whole paragraph, and
+            // pushing an entire long paragraph to the next page rather than
+            // splitting its lines wasted up to a full page of blank space below
+            // a short one — worse, a paragraph taller than one page could never
+            // fit on any single page at all and had its tail silently clipped
+            // by the fixed-size canvas, since nothing ever gave it a second
+            // page to continue onto.
+            //
+            // A LINE that would cross the boundary starts the next page instead
+            // of being split, so no line is ever cut in half — the same
+            // guarantee the old fragment-level check made, just at the
+            // granularity that actually matches what a reader sees. The
+            // `lineTop > top` guard is the same anti-loop protection as before,
+            // now sized to "a line taller than a page" rather than "a paragraph
+            // taller than a page" — a full-height plate still trips it, since an
+            // image rides in its own line fragment.
+            for line in fragment.textLineFragments {
+                let lineTop = fragmentTop + line.typographicBounds.minY
+                let lineBottom = fragmentTop + line.typographicBounds.maxY
+                if lineBottom > (boundaries.last?.top ?? 0) + pageHeight,
+                   lineTop > (boundaries.last?.top ?? 0) {
+                    let lineStart = fragmentOffset + line.characterRange.location
+                    boundaries.append(Boundary(top: lineTop, startOffset: lineStart))
+                }
             }
-            lastSeenEnd = self.offset(of: fragment.rangeInElement.endLocation)
             return true
         }
 
@@ -142,7 +159,19 @@ public final class ChapterLayout {
     /// Page coordinates, so the caller does not have to know about the scroll
     /// offset pagination is built on.
     public func characterIndex(at point: CGPoint, on page: RenderedPage) -> Int? {
-        let inDocument = CGPoint(x: point.x, y: point.y + page.yOffset)
+        // Bounded to this page's own content, never the next one's. The canvas
+        // clips drawing at `page.contentBottom` — nothing below it is ever
+        // shown for this page — but this lookup used to convert straight to
+        // absolute document coordinates with no such limit, so a point whose
+        // local y fell in that clipped, undrawn margin could still resolve to
+        // a fragment that is genuinely the *next* page's, in the continuous
+        // layout underneath. A whole-paragraph page boundary usually left
+        // enough of that margin to make the point moot; once a page could end
+        // mid-paragraph, with its content running almost to `pageHeight`, a
+        // tap near the bottom edge reached it far more easily.
+        let upperBound = page.contentBottom.isFinite ? page.contentBottom - 1 : CGFloat.greatestFiniteMagnitude
+        let inDocument = CGPoint(
+            x: point.x, y: min(max(point.y + page.yOffset, page.yOffset), upperBound))
         guard let fragment = layoutManager.textLayoutFragment(for: inDocument) else { return nil }
         let frame = fragment.layoutFragmentFrame
         let inFragment = CGPoint(x: inDocument.x - frame.minX, y: inDocument.y - frame.minY)
@@ -193,7 +222,23 @@ public final class ChapterLayout {
         at point: CGPoint, on page: RenderedPage,
         matching isUsable: (String) -> Bool = { _ in true },
     ) -> String? {
-        guard let index = characterIndex(at: point, on: page) else { return nil }
+        guard let rawIndex = characterIndex(at: point, on: page) else { return nil }
+        // Clamped into this page's own character range. A tap right at a page's
+        // last line can compute an "end of line" index equal to the very first
+        // character of the *next* fragment — genuinely ambiguous, since that
+        // number is simultaneously "one past this page's last character" and
+        // "the first of the next page's". Left unclamped, that ambiguity always
+        // resolved in the next page's favour, because the enclosing search
+        // matches a range's start inclusively. Symmetric at the top for the
+        // same reason a tap at a page's very first pixel deserves.
+        let index: Int
+        if page.characterRange.length > 0 {
+            index = min(
+                max(rawIndex, page.characterRange.location),
+                NSMaxRange(page.characterRange) - 1)
+        } else {
+            index = rawIndex
+        }
         let enclosing = fragmentRanges
             .filter { isUsable($0.key) && NSLocationInRange(index, $0.value) }
             // Length first, then the id, because `Dictionary.filter` has no
@@ -352,10 +397,32 @@ public final class ChapterLayout {
             options: [.ensuresLayout],
         ) { fragment in
             let frame = fragment.layoutFragmentFrame
-            if frame.minY < page.yOffset - 0.5 { return true }
+            // Overlap, not "starts here": a fragment can now straddle a page
+            // boundary, so a fragment that began on the previous page may still
+            // have lines painted on this one.
+            if frame.maxY <= page.yOffset - 0.5 { return true }
             if frame.minY >= page.contentBottom { return false }
-            lower = min(lower, self.offset(of: fragment.rangeInElement.location))
-            upper = max(upper, self.offset(of: fragment.rangeInElement.endLocation))
+
+            let fragmentOffset = self.offset(of: fragment.rangeInElement.location)
+            for line in fragment.textLineFragments {
+                let lineTop = frame.minY + line.typographicBounds.minY
+                let lineBottom = frame.minY + line.typographicBounds.maxY
+                // Only the lines this page actually draws — a straddling
+                // fragment's other lines belong to its neighbour, and counting
+                // them here is what let a page's spoken text quietly repeat or
+                // skip a sentence at the seam.
+                //
+                // No epsilon here, deliberately, unlike the coarse fragment
+                // pre-filter above. `computePages` sets a new page's `yOffset`
+                // to the exact `lineTop` of the line that starts it, and lines
+                // within one paragraph sit flush with no gap between them — so
+                // the preceding line's `lineBottom` and this line's `lineTop`
+                // are the same value. A 0.5pt tolerance here included that
+                // preceding line on both pages at once.
+                guard lineBottom > page.yOffset, lineTop < page.contentBottom else { continue }
+                lower = min(lower, fragmentOffset + line.characterRange.location)
+                upper = max(upper, fragmentOffset + NSMaxRange(line.characterRange))
+            }
             return true
         }
         guard lower != Int.max else { return NSRange(location: page.characterRange.location, length: 0) }
@@ -401,16 +468,38 @@ public final class ChapterLayout {
     public func draw(page: RenderedPage, in context: CGContext) {
         context.saveGState()
         context.translateBy(x: 0, y: -page.yOffset)
+        // Crops out whatever belongs to the neighbouring page. A fragment
+        // (paragraph) that straddles the boundary is now visited on both pages
+        // it touches — see `computePages` — and is drawn whole each time; the
+        // clip is what leaves only this page's own lines visible, without
+        // positioning each line by hand. `NSTextLayoutFragment.draw` already
+        // places every line at its correct offset within the fragment; cropping
+        // costs nothing extra and cannot desynchronise from that positioning
+        // the way manually re-deriving each line's draw origin could.
+        if page.contentBottom.isFinite {
+            // In document coordinates, like `frame.origin` below — `fragment.draw`
+            // is never handed a page-relative point, only its raw absolute
+            // frame, and relies entirely on the translate above to land it on
+            // screen. A page-relative clip (`y: 0 ..< height`) was therefore
+            // being applied `page.yOffset` points above every visible page,
+            // clipping every page down to nothing.
+            context.clip(to: CGRect(
+                x: -100_000, y: page.yOffset, width: 200_000, height: page.contentBottom - page.yOffset))
+        }
         layoutManager.enumerateTextLayoutFragments(
             from: contentStorage.documentRange.location,
             options: [.ensuresLayout],
         ) { fragment in
             let frame = fragment.layoutFragmentFrame
-            // Membership is decided by where a fragment STARTS, against the
-            // boundaries pagination chose — not by whether it happens to overlap
-            // the page rectangle. Bounding by the rectangle draws the next
-            // page's opening line and clips it mid-glyph.
-            if frame.minY < page.yOffset - 0.5 { return true }
+            // Overlap, not "starts here" — see `paintedCharacterRange(for:)`.
+            // Bounding by "starts here" alone would skip a fragment's tail lines
+            // entirely on the page they actually belong to, once a fragment can
+            // straddle a boundary; bounding only by the page rectangle (rather
+            // than by fragment start at all) draws the next page's opening
+            // fragment early and relies purely on the clip to hide it, which is
+            // correct but would visit — and lay out — far more fragments than
+            // necessary on every page.
+            if frame.maxY <= page.yOffset - 0.5 { return true }
             if frame.minY >= page.contentBottom { return false }
             fragment.draw(at: frame.origin, in: context)
             return true

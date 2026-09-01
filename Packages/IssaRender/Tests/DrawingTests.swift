@@ -159,3 +159,96 @@ struct ImageRenderingTests {
         #expect(result.text.string.contains("After."))
     }
 }
+
+
+/// The clip that keeps a straddling paragraph's lines on the right page.
+///
+/// `computePages` can now split a paragraph mid-line, so a page's last
+/// fragment may continue onto the next page too — `draw(page:)` used to
+/// select fragments by whether they *start* on this page, then draw each one
+/// whole. Once a fragment can straddle the boundary, drawing it whole draws
+/// lines that belong to the *next* page as well: visible past the bottom edge
+/// of a fixed-size, clipped canvas, and then drawn *again* when that next
+/// page's own turn comes. A pagination-only test cannot see this — it never
+/// rasterises — which is exactly why `PageBoundaryTests`' pixel-blind checks
+/// passed even with the clip removed.
+@MainActor
+struct StraddlingParagraphDrawTests {
+    static let pageHeight: CGFloat = 400
+    static let pageWidth = 320
+
+    /// Rasterises a page at its own true size, rather than the fixed 340×560
+    /// `inkCoverage` uses elsewhere — the straddling case only shows up when
+    /// the bitmap matches the page the fixture was actually paginated at.
+    static func render(_ layout: ChapterLayout, page: RenderedPage) -> [UInt8] {
+        let width = pageWidth
+        let height = Int(pageHeight)
+        var pixels = [UInt8](repeating: 255, count: width * height * 4)
+        let space = CGColorSpaceCreateDeviceRGB()
+        guard let context = CGContext(
+            data: &pixels, width: width, height: height,
+            bitsPerComponent: 8, bytesPerRow: width * 4, space: space,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue,
+        ) else { return pixels }
+        context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        context.translateBy(x: 0, y: CGFloat(height))
+        context.scaleBy(x: 1, y: -1)
+        layout.draw(page: page, in: context)
+        return pixels
+    }
+
+    /// Whether row `y` (top-down, matching TextKit's own coordinate sense) has
+    /// any non-background pixel.
+    static func rowHasInk(_ pixels: [UInt8], y: Int) -> Bool {
+        let rowStart = y * pageWidth * 4
+        for x in stride(from: rowStart, to: rowStart + pageWidth * 4, by: 4) where pixels[x] < 200 {
+            return true
+        }
+        return false
+    }
+
+    @Test("nothing is drawn below where a page's own content actually ends")
+    func nothingDrawnPastContentBottom() throws {
+        let layout = try PageBoundaryTests.oneGiantParagraphLayout(pageHeight: Self.pageHeight)
+        // A page in the middle of the giant paragraph: its predecessor and its
+        // successor both belong to the very same fragment, so this is squarely
+        // the straddling case, not an edge page that might legitimately be
+        // fully used or fully empty. Deliberately not page 0: its `yOffset` is
+        // 0, which made a clip anchored at local `y: 0` instead of `y:
+        // page.yOffset` look correct by coincidence — that bug shipped a
+        // reader a blank page on anything but a chapter's opening page, and
+        // this suite still passed, because every assertion below only ever
+        // checked for the ABSENCE of ink. A page with no ink anywhere trivially
+        // has none below content-bottom either.
+        let page = try #require(layout.pages.dropFirst().dropLast().first)
+        let localContentBottom = Int((page.contentBottom - page.yOffset).rounded(.up))
+        #expect(localContentBottom < Int(Self.pageHeight), "the fixture should leave a real margin to check")
+
+        let pixels = Self.render(layout, page: page)
+        #expect((0 ..< localContentBottom).contains { Self.rowHasInk(pixels, y: $0) },
+                "no row above content-bottom \(localContentBottom) has any ink — the page drew nothing at all")
+        for y in localContentBottom ..< Int(Self.pageHeight) {
+            #expect(!Self.rowHasInk(pixels, y: y),
+                    "row \(y) has ink below content-bottom \(localContentBottom) — the next page's lines leaked through")
+        }
+    }
+
+    @Test("consecutive pages of a straddling paragraph do not repeat the same line")
+    func consecutivePagesDoNotRepeatALine() throws {
+        let layout = try PageBoundaryTests.oneGiantParagraphLayout(pageHeight: Self.pageHeight)
+        let page = try #require(layout.pages.dropFirst().dropLast().first)
+        let pageIndex: Int = page.index
+        #expect(layout.pages.indices.contains(pageIndex + 1), "the fixture should have a following page")
+
+        // The first row of the next page, translated into this page's own
+        // coordinate space, is this page's own content-bottom — if that same
+        // row shows ink here, this page drew a line the next page will draw
+        // too.
+        let seam = Int((page.contentBottom - page.yOffset).rounded())
+        guard seam < Int(Self.pageHeight) else { return }
+        let pixels = Self.render(layout, page: page)
+        #expect(!Self.rowHasInk(pixels, y: seam),
+                "page \(pageIndex) painted its own seam row, which the next page will paint too")
+    }
+}
