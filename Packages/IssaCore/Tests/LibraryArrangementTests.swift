@@ -113,7 +113,7 @@ struct LibraryArrangementTests {
         let json = #"{"sort":"chronological","ascending":true,"shelf":"reading","tags":["Fiction"]}"#
         let restored = try JSONDecoder().decode(LibraryArrangement.self, from: Data(json.utf8))
 
-        #expect(restored.sort == .recent)      // fell back
+        #expect(restored.sort == .added)       // fell back
         #expect(restored.shelf == .reading)    // survived
         #expect(restored.tags == ["Fiction"])  // survived
         #expect(restored.ascending == true)    // survived
@@ -136,6 +136,64 @@ struct LibraryArrangementTests {
         #expect(restored.shelf == .finished)
         #expect(restored.sort == LibraryArrangement().sort)
         #expect(restored.tags.isEmpty)
+    }
+
+    /// The default was "Recently read" for every build before the Reading
+    /// tab existed, so a stored `.recent` is almost always the old default
+    /// rather than a choice. It is flipped once; after that the reader's
+    /// word stands.
+    @Test("a stored recently-read sort becomes recently-added, once")
+    func recentIsMigratedOnce() throws {
+        let name = "test.\(UUID().uuidString)"
+        let suite = try #require(UserDefaults(suiteName: name))
+        defer { suite.removePersistentDomain(forName: name) }
+        LibraryArrangement(sort: .recent, shelf: .reading, tags: ["Fantasy"]).store(in: suite)
+
+        let migrated = LibraryArrangement.restored(from: suite)
+        #expect(migrated.sort == .added)
+        #expect(migrated.shelf == .reading)     // only the sort moved
+        #expect(migrated.tags == ["Fantasy"])
+
+        // Now a deliberate choice, made after the migration ran.
+        LibraryArrangement(sort: .recent).store(in: suite)
+        #expect(LibraryArrangement.restored(from: suite).sort == .recent)
+    }
+
+    /// A fresh install has no blob to migrate, and must not migrate the first
+    /// blob it ever stores either.
+    @Test("a choice made on a fresh install is not mistaken for the old default")
+    func freshInstallKeepsALaterChoice() throws {
+        let name = "test.\(UUID().uuidString)"
+        let suite = try #require(UserDefaults(suiteName: name))
+        defer { suite.removePersistentDomain(forName: name) }
+
+        #expect(LibraryArrangement.restored(from: suite).sort == .added)
+        LibraryArrangement(sort: .recent).store(in: suite)
+        #expect(LibraryArrangement.restored(from: suite).sort == .recent)
+    }
+
+    @Test("a sort other than recently-read is left alone by the migration")
+    func migrationLeavesOtherSortsAlone() throws {
+        let name = "test.\(UUID().uuidString)"
+        let suite = try #require(UserDefaults(suiteName: name))
+        defer { suite.removePersistentDomain(forName: name) }
+        LibraryArrangement(sort: .title).store(in: suite)
+        #expect(LibraryArrangement.restored(from: suite).sort == .title)
+    }
+
+    /// Now the default, so it gets the rule the other sentinel sorts have:
+    /// books the server never dated stay at the end whichever way it runs.
+    @Test("recently added keeps undated books at the end, reversed or not")
+    func addedSortKeepsUndatedLast() {
+        let books = [
+            book("Undated"),
+            book("Old", createdAt: "2024-01-01T00:00:00.000Z"),
+            book("New", createdAt: "2025-01-01T00:00:00.000Z"),
+        ]
+        #expect(LibraryArrangement(sort: .added).apply(to: books).map(\.title)
+            == ["New", "Old", "Undated"])
+        #expect(LibraryArrangement(sort: .added, ascending: true).apply(to: books).map(\.title)
+            == ["Old", "New", "Undated"])
     }
 
     @Test("what a reader chose survives a round trip through defaults")

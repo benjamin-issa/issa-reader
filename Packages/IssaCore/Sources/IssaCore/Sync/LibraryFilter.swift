@@ -60,8 +60,11 @@ public struct LibraryArrangement: Codable, Hashable, Sendable {
     /// Tag names to require. Empty means no tag filter at all.
     public var tags: Set<String>
 
+    /// `.added` rather than `.recent`: resuming a book left this screen for
+    /// the Reading tab, and a browse surface ordered by what you last
+    /// resumed was ordered by nothing a browser cares about.
     public init(
-        sort: Sort = .recent, ascending: Bool = false,
+        sort: Sort = .added, ascending: Bool = false,
         shelf: Shelf = .all, tags: Set<String> = [],
     ) {
         self.sort = sort
@@ -116,9 +119,23 @@ public extension LibraryArrangement {
     /// Reading it here rather than in the app model keeps the key and the shape
     /// in one place — the two have to agree, and they drift when they are apart.
     static func restored(from defaults: UserDefaults = .standard) -> LibraryArrangement {
+        // The default used to be "Recently read", and every reader who never
+        // opened the sort menu has that stored. Flip it to the new default
+        // once; a reader who picks "Recently read" after this keeps it. A
+        // reader who chose it *before* this build loses it this one time —
+        // a stored `.recent` cannot say whether it was chosen or inherited.
+        // The flag is set on every path, including a fresh install with no
+        // blob yet, so a later deliberate choice is never mistaken for the
+        // inherited one.
+        let migrate = !defaults.bool(forKey: sortMigrationKey)
+        defer { defaults.set(true, forKey: sortMigrationKey) }
         guard let data = defaults.data(forKey: storageKey),
-              let value = try? JSONDecoder().decode(LibraryArrangement.self, from: data)
+              var value = try? JSONDecoder().decode(LibraryArrangement.self, from: data)
         else { return LibraryArrangement() }
+        if migrate, value.sort == .recent {
+            value.sort = LibraryArrangement().sort
+            value.store(in: defaults)
+        }
         return value
     }
 
@@ -128,6 +145,7 @@ public extension LibraryArrangement {
     }
 
     static var storageKey: String { "issa.library.arrangement" }
+    static var sortMigrationKey: String { "issa.library.arrangement.sortMigrated" }
 
     /// Applies the arrangement. `isDownloaded` is injected because whether a
     /// book is on disk is the app's business, not the model's.
@@ -209,8 +227,17 @@ public extension LibraryArrangement {
                 return l.localizedCaseInsensitiveCompare(r) == .orderedAscending
             }
         case .added:
-            ordered = books.sorted {
-                ($0.createdAt?.value ?? .distantPast) > ($1.createdAt?.value ?? .distantPast)
+            // Books the server never dated go last either way, the rule
+            // `.recent` and `.narrator` follow: this is the default sort now,
+            // and the blanket reversal below would have put every undated
+            // book ahead of the newest arrival.
+            return books.sorted { left, right in
+                switch (left.createdAt?.value, right.createdAt?.value) {
+                case let (l?, r?): ascending ? l < r : l > r
+                case (nil, _?): false
+                case (_?, nil): true
+                case (nil, nil): false
+                }
             }
         case .progress:
             ordered = books.sorted { ($0.progress ?? 0) > ($1.progress ?? 0) }
