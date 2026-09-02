@@ -798,28 +798,7 @@ public struct BookDetailView: View {
     }
 
     private func rail(_ title: String, books: [Book]) -> some View {
-        VStack(alignment: .leading, spacing: Metrics.spacing8) {
-            Text(title).overlineStyle()
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(alignment: .top, spacing: Metrics.spacing12) {
-                    ForEach(books) { sibling in
-                        NavigationLink {
-                            BookDetailView(book: sibling)
-                        } label: {
-                            VStack(alignment: .leading, spacing: Metrics.spacing4) {
-                                CoverImage(book: sibling, session: app.session).frame(width: 84)
-                                Text(sibling.title)
-                                    .font(Typography.caption)
-                                    .foregroundStyle(Palette.ink)
-                                    .lineLimit(2)
-                                    .frame(width: 84, alignment: .leading)
-                            }
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
-        }
+        BookRail(title: title, books: books)
     }
 
     /// Whether a server-supplied URL is safe to hand to a `Link`.

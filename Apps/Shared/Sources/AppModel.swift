@@ -61,8 +61,12 @@ public final class AppModel {
     /// Shelf and tag counts for the library header. Rebuilt when the catalogue
     /// or the downloaded set changes, never in a view body.
     public private(set) var facets: LibraryFacets = .empty
-    /// The book the Continue card offers, if any.
-    public private(set) var continueBook: Book?
+    /// The Browse screen's rails. Rebuilt with the facets: a series, a tag
+    /// or an arrival date cannot change with a page turn.
+    public private(set) var rails: LibraryRails = .empty
+    /// The Reading tab. Rebuilt whenever a position moves, because the
+    /// Continue book and the order beneath it are what a position moves.
+    public private(set) var readingHome: ReadingHome = .empty
 
     private let keychain: any TokenPersisting
     /// The on-device catalogue. Present as soon as a server is chosen, so the
@@ -552,15 +556,52 @@ public final class AppModel {
     /// Recomputes everything derived from the catalogue.
     func rebuildDerived() {
         facets = LibraryFacets(books: books, downloadedUUIDs: downloadedUUIDs)
+        rails = LibraryRails(books: books)
         rebuildAfterPositionChange()
     }
 
-    /// The part of the above a position can move: the Continue card, and the
-    /// arrangement when it sorts by recency or progress. The facets — shelves,
-    /// tags, what is downloaded — cannot change with a page turn.
+    /// The part of the above a position can move: the Continue card, the
+    /// Reading tab's order, and the arrangement when it sorts by recency or
+    /// progress. The facets and the rails — shelves, tags, series, what is
+    /// downloaded — cannot change with a page turn, and this path runs on
+    /// every debounced save while narrating.
     private func rebuildAfterPositionChange() {
-        continueBook = LibraryDerivation(books: books).continueReading.first
+        readingHome = ReadingHome(books: books, rails: rails)
         rebuildArranged()
+    }
+
+    /// Whether the Library shows its browse rails or the flat, sortable grid.
+    ///
+    /// On the model rather than in the view, because the Reading tab's "See
+    /// all" and every rail's "See all" have to set it and the Library has to
+    /// notice. Deliberately not a field of `LibraryArrangement`: a mode flip
+    /// must not persist and re-sort the grid.
+    public enum LibraryMode: String, Sendable { case browse, all }
+
+    public var libraryMode: LibraryMode = AppModel.restoredLibraryMode() {
+        didSet { UserDefaults.standard.set(libraryMode.rawValue, forKey: AppModel.libraryModeKey) }
+    }
+
+    private static let libraryModeKey = "issa.library.mode"
+
+    private static func restoredLibraryMode() -> LibraryMode {
+        UserDefaults.standard.string(forKey: libraryModeKey).flatMap(LibraryMode.init) ?? .browse
+    }
+
+    /// Opens the flat grid on one shelf — what every "See all" does.
+    ///
+    /// One assignment to `arrangement`, so its observer stores and re-sorts
+    /// once rather than once per field. Fields not named keep their values,
+    /// except the tags: a shelf asked for by name is that shelf, not that
+    /// shelf narrowed by whatever tags were last picked.
+    public func showAllBooks(
+        shelf: LibraryArrangement.Shelf, tags: Set<String> = [], sort: LibraryArrangement.Sort? = nil,
+    ) {
+        arrangement = LibraryArrangement(
+            sort: sort ?? arrangement.sort, ascending: sort == nil ? arrangement.ascending : false,
+            shelf: shelf, tags: tags,
+        )
+        libraryMode = .all
     }
 
     private func rebuildArranged() {

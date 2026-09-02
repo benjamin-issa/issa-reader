@@ -69,31 +69,32 @@ struct RootView: View {
     }
 }
 
-/// Library, Playing and Settings.
+/// Library, Reading and Settings.
 ///
-/// There was once a Listening tab over the same catalogue minus the text-only
-/// books, which testers read as two libraries rather than one filtered view.
-/// Its job is a shelf chip now. The Playing tab is a different thing: not
-/// another way to browse, but the one place the expanded player lives, which
-/// the mini bar opens into.
+/// Two homes with two jobs: the Library is for looking around, the Reading tab
+/// is for getting back to your book. There was once a Listening tab over the
+/// same catalogue minus the text-only books, which testers read as two
+/// libraries rather than one filtered view; its job is a shelf chip now.
 /// (`ListeningView` stays — the macOS sidebar and tvOS still use it.)
 struct LibraryTabs: View {
     @Environment(AppModel.self) private var app
     @Environment(\.scenePhase) private var scenePhase
     @State private var libraryPath = NavigationPath()
+    @State private var readingPath = NavigationPath()
     @State private var selectedTab = Destination.library
     @State private var showsPlayer = false
 
-    /// Two, not three. There used to be a Playing tab, and the mini player was
-    /// removed while it was showing so the same transport was not on screen
-    /// twice — but `.tabViewBottomAccessory` is what shapes the bar, so an
-    /// accessory that came and went with the selected tab made the tab bar
-    /// resize on every switch. Apple's answer to the duplication is not a
-    /// conditional accessory; it is not having a full-player tab. The mini bar
-    /// expands into a sheet, as it does in Music.
+    /// No Playing tab. There used to be one, and the mini player was removed
+    /// while it was showing so the same transport was not on screen twice —
+    /// but `.tabViewBottomAccessory` is what shapes the bar, so an accessory
+    /// that came and went with the selected tab made the tab bar resize on
+    /// every switch. Apple's answer to the duplication is not a conditional
+    /// accessory; it is not having a full-player tab. The mini bar expands
+    /// into a sheet, as it does in Music. The objection was to a tab that
+    /// shaped the accessory, not to a third tab: Reading shapes nothing.
     // Named `Destination` rather than `Tab`, which is now SwiftUI's own
     // type in this scope.
-    enum Destination: Hashable { case library, settings }
+    enum Destination: Hashable { case library, reading, settings }
 
     private func openPendingBook() {
         // Don't tear down the stack when the reader for this very book is already
@@ -121,12 +122,31 @@ struct LibraryTabs: View {
         // below while the one-shot reader request was spent behind it — and
         // the reader's own cover cannot present while it is showing.
         showsPlayer = false
-        selectedTab = .library
-        libraryPath = NavigationPath()
+        // Presented on whichever book stack is showing. The Reading tab's own
+        // Continue card takes this route, and a Continue that flipped the app
+        // to the Library tab would be answering a question nobody asked; a
+        // widget or Handoff arriving while Settings is up lands on Library, as
+        // does a cold launch, which runs this with Library selected.
+        if selectedTab == .settings { selectedTab = .library }
         // Pushed either way, so Back from the reader lands on the book and then
-        // the library. `consumePendingBook` has already recorded whether the
-        // book's own screen should go straight through to the reader.
-        libraryPath.append(pending.book)
+        // the tab it came from. `consumePendingBook` has already recorded
+        // whether the book's own screen should go straight through to the
+        // reader.
+        switch selectedTab {
+        case .reading:
+            readingPath = NavigationPath()
+            readingPath.append(pending.book)
+        case .library, .settings:
+            libraryPath = NavigationPath()
+            libraryPath.append(pending.book)
+        }
+    }
+
+    /// What the Reading tab does when it points at the Library: the flat grid
+    /// on a shelf, or, with no shelf, just the tab.
+    private func showLibrary(_ shelf: LibraryArrangement.Shelf?) {
+        if let shelf { app.showAllBooks(shelf: shelf) }
+        selectedTab = .library
     }
 
     /// The modern `Tab` builder rather than `.tabItem` + `.tag`: the legacy
@@ -138,6 +158,16 @@ struct LibraryTabs: View {
                 NavigationStack(path: $libraryPath) {
                     LibraryView()
                         .navigationTitle("Library")
+                        .navigationDestination(for: Book.self) { book in
+                            BookDetailView(book: book)
+                        }
+                }
+            }
+
+            Tab("Reading", systemImage: "bookmark", value: Destination.reading) {
+                NavigationStack(path: $readingPath) {
+                    ReadingView(showLibrary: showLibrary)
+                        .navigationTitle("Reading")
                         .navigationDestination(for: Book.self) { book in
                             BookDetailView(book: book)
                         }

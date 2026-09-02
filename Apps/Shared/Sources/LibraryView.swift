@@ -2,7 +2,10 @@ import IssaCore
 import IssaUI
 import SwiftUI
 
-/// The library grid, with the "Continue" card the design leads with.
+/// The library grid.
+///
+/// The Continue card used to lead here; it lives on the Reading tab now — one
+/// home per job — and `ContinueCardLink` below is what that tab draws.
 public struct LibraryView: View {
     @Environment(AppModel.self) private var app
     @State private var search = ""
@@ -14,13 +17,6 @@ public struct LibraryView: View {
     private var scrollContent: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: Metrics.spacing32, pinnedViews: []) {
-                if search.isEmpty, let current = app.continueBook {
-                    // Wrapped the same way BookGridItem is. The card was styled
-                    // from the design canvas and never given an affordance, so
-                    // the app's most prominent control did nothing at all.
-                    ContinueCardLink(book: current, session: app.session)
-                }
-
                 if books.isEmpty, search.isEmpty, app.arrangement.isFiltering {
                     // A shelf is one tap away now rather than three levels into
                     // a menu, so readers land here far more often than they did.
@@ -247,7 +243,7 @@ public struct ProgressBar: View {
     }
 }
 
-/// The design's lead card: the book you were last in, one tap from its page.
+/// The Reading tab's lead card: the book you were last in, one tap from its page.
 ///
 /// Two targets, not one. The card body resumes reading the way the widget and
 /// Handoff already do — `requestBook(.read)` leaves the book in the pending
