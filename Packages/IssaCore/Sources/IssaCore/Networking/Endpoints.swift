@@ -7,23 +7,14 @@ import Foundation
 public enum Endpoint {
     // Auth
     public static let token = "/api/v2/token"
-    public static let tokenApp = "/api/v2/token/app"
     public static let validate = "/api/v2/validate"
     public static let deviceStart = "/api/v2/device/start"
     public static let deviceToken = "/api/v2/device/token"
-    public static func deviceStatus(_ deviceCode: String) -> String {
-        "/api/v2/device/status/\(deviceCode)"
-    }
-
-    public static func deviceQR(_ deviceCode: String) -> String {
-        "/api/v2/device/qr/\(deviceCode)"
-    }
 
     // Identity
     /// Revokes the session token server-side.
     public static let logout = "/api/v2/logout"
     public static let user = "/api/v2/user"
-    public static let userSettings = "/api/v2/user/settings"
     public static let userRatings = "/api/v2/user/ratings"
 
     // Catalogue
@@ -59,7 +50,6 @@ public enum Endpoint {
     public enum V3 {
         public static let serverPublic = "/api/v2/server/public"
         public static let homeSections = "/api/v2/home/sections"
-        public static let homeStats = "/api/v2/home/stats"
         public static let shelves = "/api/v2/shelves"
         public static let sidebar = "/api/v2/sidebar"
         public static let libraryFacets = "/api/v2/library/facets"

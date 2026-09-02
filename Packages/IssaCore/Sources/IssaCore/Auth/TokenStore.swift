@@ -56,22 +56,3 @@ public protocol TokenPersisting: Sendable {
     func delete(account: String)
 }
 
-/// Non-persistent store, for tests and for a "don't remember me" sign-in.
-public final class EphemeralTokenStorage: TokenPersisting, @unchecked Sendable {
-    private let lock = NSLock()
-    private var storage: [String: String] = [:]
-
-    public init() {}
-
-    public func read(account: String) -> String? {
-        lock.withLock { storage[account] }
-    }
-
-    public func write(_ token: String, account: String) {
-        lock.withLock { storage[account] = token }
-    }
-
-    public func delete(account: String) {
-        _ = lock.withLock { storage.removeValue(forKey: account) }
-    }
-}

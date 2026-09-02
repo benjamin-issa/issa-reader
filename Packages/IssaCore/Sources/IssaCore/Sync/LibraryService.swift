@@ -109,12 +109,6 @@ public struct LibraryDerivation: Sendable {
             .sorted { ($0.position?.timestamp ?? 0) > ($1.position?.timestamp ?? 0) }
     }
 
-    public var recentlyAdded: [Book] {
-        books.sorted {
-            ($0.createdAt?.value ?? .distantPast) > ($1.createdAt?.value ?? .distantPast)
-        }
-    }
-
     public var readalongs: [Book] {
         books.filter(\.hasReadalong)
     }
@@ -163,14 +157,6 @@ public struct LibraryDerivation: Sendable {
         return pairs.sorted { left, right in
             left.count == right.count ? left.name < right.name : left.count > right.count
         }
-    }
-
-    public var formatCounts: [BookFormat: Int] {
-        var counts: [BookFormat: Int] = [:]
-        for book in books {
-            for format in book.availableFormats { counts[format, default: 0] += 1 }
-        }
-        return counts
     }
 
     /// Case- and diacritic-insensitive match across title, authors and narrators.

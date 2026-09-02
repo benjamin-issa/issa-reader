@@ -120,7 +120,7 @@ public struct CarPlayCatalogue: Sendable {
     /// Driving glanceability: author plus time remaining.
     func subtitle(for book: Book) -> String {
         var parts = [book.byline]
-        if let duration = book.audiobook?.duration ?? book.readaloud?.duration, duration > 0 {
+        if let duration = book.narrationDuration, duration > 0 {
             let remaining = duration * (1 - min(max(book.progress ?? 0, 0), 1))
             parts.append(Self.durationText(remaining) + " left")
         }
@@ -128,10 +128,6 @@ public struct CarPlayCatalogue: Sendable {
     }
 
     public static func durationText(_ seconds: Double) -> String {
-        guard seconds.isFinite, seconds > 0 else { return "0m" }
-        let total = Int(seconds.rounded())
-        let hours = total / 3600
-        let minutes = (total % 3600) / 60
-        return hours > 0 ? "\(hours)h \(minutes)m" : "\(minutes)m"
+        DurationText.text(seconds)
     }
 }

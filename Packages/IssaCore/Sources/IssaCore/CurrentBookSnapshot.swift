@@ -74,22 +74,15 @@ public struct CurrentBookSnapshot: Codable, Sendable, Hashable {
     }
 
     /// "2h 18m left", or nil when there is less than a minute of it — below
-    /// which `durationText` floors to "0m".
+    /// which `DurationText` floors to "0m".
     public var remainingText: String? {
         guard let remaining, remaining.isFinite, remaining >= 60 else { return nil }
-        return Self.durationText(remaining) + " left"
+        return DurationText.text(remaining) + " left"
     }
 
     public var subtitle: String {
         let parts = [remainingText, displayChapter].compactMap { $0 }
         return parts.isEmpty ? author : parts.joined(separator: " · ")
-    }
-
-    static func durationText(_ seconds: TimeInterval) -> String {
-        let total = Int(seconds.rounded())
-        let hours = total / 3600
-        let minutes = (total % 3600) / 60
-        return hours > 0 ? "\(hours)h \(minutes)m" : "\(minutes)m"
     }
 
     // Spelled out because the decoder below names them.

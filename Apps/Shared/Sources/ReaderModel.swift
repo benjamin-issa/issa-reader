@@ -1504,8 +1504,7 @@ public final class ReaderModel {
     /// The publisher decides whether anything moved enough to be worth the
     /// widget's reload budget; this just hands it the current state.
     private func publishSnapshot(progress: Double) {
-        let remaining = (book.readaloud?.duration ?? book.audiobook?.duration)
-            .map { $0 * (1 - progress) }
+        let remaining = book.narrationDuration.map { $0 * (1 - progress) }
         // One publisher for the whole app: the cover latch, the ownership rule
         // and the reload all live there, because two surfaces writing one file
         // is what made the widget flip between books.

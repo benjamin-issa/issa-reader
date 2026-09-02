@@ -42,16 +42,6 @@ public actor APIClient {
     }
 
     @discardableResult
-    public func postForm(_ path: String, fields: [String: String]) async throws -> Data {
-        var req = request(path, method: "POST")
-        var components = URLComponents()
-        components.queryItems = fields.map { URLQueryItem(name: $0.key, value: $0.value) }
-        req.httpBody = components.percentEncodedQuery?.data(using: .utf8)
-        req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        return try await send(req).0
-    }
-
-    @discardableResult
     public func put<Body: Encodable & Sendable>(_ path: String, body: Body) async throws -> Data {
         var req = request(path, method: "PUT")
         req.httpBody = try JSONEncoder().encode(body)

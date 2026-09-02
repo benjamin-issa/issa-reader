@@ -37,7 +37,7 @@ struct BundledFaceTests {
     @Test("every face carries a real bold", arguments: IssaFonts.allFaces)
     func hasBold(_ face: BundledFace) throws {
         try CustomFonts.testRegistryLock.withLock {
-            let regular = try #require(PlatformFont(name: face.family, size: 18))
+            let regular = try #require(PlatformFont.upright(family: face.family, size: 18))
             let bold = regular.withBoldTrait()
             #expect(bold.fontName != regular.fontName,
                     "\(face.family) has no bold member — \(bold.fontName) is the upright")
@@ -47,7 +47,7 @@ struct BundledFaceTests {
     @Test("every face that claims an italic has one", arguments: IssaFonts.allFaces)
     func hasItalic(_ face: BundledFace) throws {
         try CustomFonts.testRegistryLock.withLock {
-            let regular = try #require(PlatformFont(name: face.family, size: 18))
+            let regular = try #require(PlatformFont.upright(family: face.family, size: 18))
             let italic = regular.withItalicTrait()
             if face.hasItalic {
                 #expect(italic.fontName != regular.fontName,
@@ -71,7 +71,7 @@ struct BundledFaceTests {
           arguments: IssaFonts.allFaces.filter(\.hasItalic))
     func boldKeepsItalic(_ face: BundledFace) throws {
         try CustomFonts.testRegistryLock.withLock {
-            let regular = try #require(PlatformFont(name: face.family, size: 18))
+            let regular = try #require(PlatformFont.upright(family: face.family, size: 18))
             let boldItalic = regular.withItalicTrait().withBoldTrait()
             #if canImport(UIKit)
             #expect(boldItalic.fontDescriptor.symbolicTraits.contains(.traitItalic),

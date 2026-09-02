@@ -462,6 +462,47 @@ struct ReadalongCoordinatorTests {
         #expect(subject.bookProgress > 0, "a paused scrub must still reach the scrubber")
     }
 
+    /// `onSeek` used to fire before the move, so every early return behind
+    /// it — an unknown fragment, the end of the book — told the reader of a
+    /// choice that never happened, and its one-shot latch then laundered the
+    /// next genuine drift into a chosen position.
+    @Test("a seek is announced after it moved, and not at all when it did not")
+    func seekAnnouncedAfterMoving() async throws {
+        let (subject, timeline, directory) = try Self.make()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let order = OrderLog()
+        subject.onFragmentChange = { _ in order.append("fragment") }
+        subject.onSeek = { order.append("seek") }
+
+        await subject.seek(toFragment: "no-such-fragment")
+        #expect(order.events.isEmpty, "nothing moved, so nothing is announced")
+
+        await subject.seek(toBookProgress: 0.5)
+        // The player's clock can report the landing a second time; what
+        // matters is that the announcement comes after the landing.
+        #expect(order.events.first == "fragment", "the landing first")
+        #expect(order.events.last == "seek", "then the announcement")
+        #expect(order.events.filter { $0 == "seek" }.count == 1)
+
+        // `play(from:)` names no place, so no seek is announced.
+        order.reset()
+        let first = try #require(timeline.entries.first)
+        await subject.play(from: first)
+        #expect(order.events.contains("fragment"))
+        #expect(!order.events.contains("seek"))
+    }
+
+    /// A scrub to the far end of the bar lands exactly on `totalDuration`,
+    /// which the strictly-greater search had no entry for: the scrub was a
+    /// silent no-op, announced as a seek.
+    @Test("a scrub to the very end lands on the last sentence")
+    func scrubToEndLandsOnLastEntry() async throws {
+        let (subject, timeline, directory) = try Self.make()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        await subject.seek(toBookProgress: 1)
+        #expect(subject.activeEntry?.fragmentID == timeline.entries.last?.fragmentID)
+    }
+
     @Test("a scrub while playing keeps playing")
     func playingSeekKeepsPlaying() async throws {
         let (subject, timeline, directory) = try Self.make()
@@ -491,4 +532,13 @@ struct ReadalongCoordinatorTests {
         await subject.perform(.play, using: map)
         #expect(subject.player.isPlaying, "play is not a toggle")
     }
+}
+
+
+/// Records callback order for the coordinator tests.
+@MainActor
+private final class OrderLog {
+    private(set) var events: [String] = []
+    func append(_ event: String) { events.append(event) }
+    func reset() { events.removeAll() }
 }

@@ -38,8 +38,7 @@ public struct PlayerView: View {
         PlaybackProgress(
             scope: settings.progressScope,
             bookProgress: coordinator?.bookProgress ?? book.progress ?? 0,
-            totalDuration: coordinator?.totalDuration
-                ?? book.readaloud?.duration ?? book.audiobook?.duration ?? 0,
+            totalDuration: coordinator?.totalDuration ?? book.narrationDuration ?? 0,
             chapterSpan: coordinator?.chapterSpan,
         )
     }

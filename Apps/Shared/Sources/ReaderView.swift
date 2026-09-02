@@ -731,14 +731,14 @@ public struct ReaderView: View {
                 ProgressView(value: Double(received), total: Double(total))
                     .tint(model.style.theme.accent)
                     .frame(maxWidth: 280)
-                Text("\(Self.sizeText(received)) of \(Self.sizeText(total))")
+                Text("\(ByteCountText.text(received)) of \(ByteCountText.text(total))")
                     .font(Typography.caption.monospacedDigit())
                     .foregroundStyle(model.style.theme.textTertiary)
             } else {
                 // No Content-Length: an indeterminate bar is honest, where a
                 // bar pinned at zero looks exactly like a stall.
                 ProgressView().frame(maxWidth: 280)
-                Text(received > 0 ? Self.sizeText(received) : "Starting…")
+                Text(received > 0 ? ByteCountText.text(received) : "Starting…")
                     .font(Typography.caption.monospacedDigit())
                     .foregroundStyle(model.style.theme.textTertiary)
             }
@@ -748,10 +748,6 @@ public struct ReaderView: View {
                 .foregroundStyle(model.style.theme.textSecondary)
         }
         .padding(Metrics.spacing32)
-    }
-
-    static func sizeText(_ bytes: Int64) -> String {
-        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
     }
 
     /// Tap coordinates arrive in the padded frame's space; the layout speaks

@@ -403,3 +403,16 @@ public struct ReadaloudFormat: Codable, Hashable, Sendable {
     /// non-empty timeline.
     public var isAligned: Bool { status == "ALIGNED" }
 }
+
+public extension Book {
+    /// How long the book's narration runs, in seconds, where it has any.
+    ///
+    /// The read-along's length first, then the audiobook's: the read-along is
+    /// what the reader hears in the app, and the detail badge leads with it
+    /// too. Five sites used to spell this chain out inline, two of them the
+    /// other way round, so the library sort, the widget and CarPlay could
+    /// disagree about the length of one book.
+    var narrationDuration: Double? {
+        readaloud?.duration ?? audiobook?.duration
+    }
+}

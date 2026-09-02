@@ -2,6 +2,8 @@ import CoreGraphics
 import Foundation
 import Testing
 
+import IssaUI
+
 @testable import IssaRender
 
 /// Per-book typography, stored as a departure from the reading settings.
@@ -125,14 +127,22 @@ struct TypefaceTests {
     }
 
     @Test("a book with no usable face still sets its text in something deliberate")
-    func fallsBackToTheAppFace() {
-        var style = ReaderStyle()
-        style.typeface = .publisher
-        style.publisherFamily = nil
-        #expect(style.resolvedFamily == nil)
-        // The app's default face is registered, so this is the bundled face and
-        // not the system's. `familyName` is never nil, so comparing it to nil
-        // asserted nothing at all.
-        #expect(style.bodyFont().familyName == ReaderStyle.defaultFamily)
+    func fallsBackToTheAppFace() throws {
+        // Registered here rather than relied on: the face was only on hand
+        // when another suite happened to have registered it first, which is
+        // why the old assertion could pass on nothing. Under the registry
+        // lock like every other test that resolves a face by name — CoreText
+        // resolves a family nondeterministically while another thread is at it.
+        try CustomFonts.testRegistryLock.withLock {
+            IssaFonts.register()
+            var style = ReaderStyle()
+            style.typeface = .publisher
+            style.publisherFamily = nil
+            #expect(style.resolvedFamily == nil)
+            // The app's default face is registered, so this is the bundled
+            // face and not the system's. `familyName` is never nil, so
+            // comparing it to nil asserted nothing at all.
+            #expect(style.bodyFont().familyName == ReaderStyle.defaultFamily)
+        }
     }
 }

@@ -62,12 +62,16 @@ xcodegen generate
 
 cd Tools/docker
 npm install
+npx playwright install chromium
+docker compose up -d
 PUBLIC_HOST=$(ipconfig getifaddr en0) node setup.mjs
 ```
 
-`setup.mjs` brings up Storyteller `web-v2.14.21` and Keycloak, creates an admin
-account, wires Keycloak in as an OIDC provider with group-derived permissions,
-and smoke-tests the endpoints the client depends on. It is idempotent.
+`docker compose up` brings up Storyteller `web-v2.14.21` and Keycloak;
+`setup.mjs` waits for both, creates an admin account, wires Keycloak in as an
+OIDC provider with group-derived permissions, and smoke-tests the endpoints the
+client depends on. It is idempotent, and drives Storyteller's first-run screen
+through Playwright's Chromium, hence the install step.
 
 Everything must agree on **one host**. Auth.js sets the PKCE `state` cookie on
 the origin that begins the OIDC redirect and reads it back on the callback, so

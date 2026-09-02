@@ -134,11 +134,11 @@ public struct BookPrimaryAction: Equatable, Sendable {
         switch kind {
         case let .download(bytes):
             guard let bytes, !compact else { return "Download" }
-            return "Download · \(Self.sizeText(bytes))"
+            return "Download · \(ByteCountText.text(Int64(bytes)))"
         case .waiting:
             return "Waiting…"
         case let .downloading(fraction, written, isDeterminate):
-            if !isDeterminate { return compact ? "Downloading" : "Downloading · \(Self.sizeText(Int(written)))" }
+            if !isDeterminate { return compact ? "Downloading" : "Downloading · \(ByteCountText.text(written))" }
             return "\(Int(fraction * 100))%"
         case let .pausedDownload(fraction):
             // Never "Resume": that is already the reading action in this very
@@ -192,9 +192,6 @@ public struct BookPrimaryAction: Equatable, Sendable {
         return "\(title()). \(detail)"
     }
 
-    static func sizeText(_ bytes: Int) -> String {
-        ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
-    }
 }
 
 /// What an edition row says about itself, now that it carries no buttons.
@@ -207,7 +204,7 @@ public enum DownloadStatusText {
         case let .downloading(fraction, written, total):
             return total > 0
                 ? "\(Int(fraction * 100))%"
-                : BookPrimaryAction.sizeText(Int(written))
+                : ByteCountText.text(written)
         case let .paused(fraction): return "Paused · \(Int(fraction * 100))%"
         case .failed: return "Failed"
         case .finished: return "Downloaded"

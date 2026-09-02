@@ -1,4 +1,5 @@
 import CoreGraphics
+import CoreText
 import Foundation
 import IssaUI
 
@@ -261,7 +262,7 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
         // falling straight through to the system face changes the look of the
         // page for a setting the reader did not touch.
         for name in [resolvedFamily, Self.defaultFamily].compactMap({ $0 }) {
-            guard let face = PlatformFont(name: name, size: size) else { continue }
+            guard let face = PlatformFont.upright(family: name, size: size) else { continue }
             return italic ? face.withItalicTrait() : face
         }
         let system = PlatformFont.systemFont(ofSize: size, weight: weight)
@@ -269,10 +270,33 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
     }
 
     public var textColor: PlatformColor { PlatformColor(theme.text) }
-    public var backgroundColor: PlatformColor { PlatformColor(theme.background) }
 }
 
 extension PlatformFont {
+    /// The upright, regular member of a family, or nil when the family is
+    /// not registered.
+    ///
+    /// Not `init(name:)`. That takes a PostScript name, and handed a family
+    /// name it falls back to *some* member — under concurrent lookups it
+    /// handed back Literata-Italic for "Literata" about one time in five, so
+    /// a page could be set entirely in italic and the italic trait then had
+    /// nothing to add. And not `NSFontManager`, which is a main-thread object
+    /// and deadlocked CoreText when the parser asked from two threads.
+    /// CoreText descriptor matching is thread-safe and names the member by
+    /// its PostScript name, which `init(name:)` resolves unambiguously.
+    static func upright(family: String, size: CGFloat) -> PlatformFont? {
+        let attributes: [CFString: Any] = [
+            kCTFontFamilyNameAttribute: family,
+            kCTFontTraitsAttribute: [kCTFontSymbolicTrait: 0] as CFDictionary,
+        ]
+        let wanted = CTFontDescriptorCreateWithAttributes(attributes as CFDictionary)
+        let mandatory: Set<CFString> = [kCTFontFamilyNameAttribute, kCTFontTraitsAttribute]
+        guard let matched = CTFontDescriptorCreateMatchingFontDescriptor(wanted, mandatory as CFSet),
+              let name = CTFontDescriptorCopyAttribute(matched, kCTFontNameAttribute) as? String
+        else { return nil }
+        return PlatformFont(name: name, size: size)
+    }
+
     /// Adds an italic trait where the face has one, otherwise returns self.
     /// Never synthesises an oblique — a faked italic in a serif reading face
     /// looks visibly wrong.

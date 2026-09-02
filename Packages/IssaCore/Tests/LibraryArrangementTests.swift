@@ -140,7 +140,11 @@ struct LibraryArrangementTests {
 
     @Test("what a reader chose survives a round trip through defaults")
     func roundTripsThroughDefaults() throws {
-        let suite = try #require(UserDefaults(suiteName: "test.\(UUID().uuidString)"))
+        let name = "test.\(UUID().uuidString)"
+        let suite = try #require(UserDefaults(suiteName: name))
+        // A named suite is a plist in ~/Library/Preferences, and every run
+        // left one behind — over a hundred of them before this line.
+        defer { suite.removePersistentDomain(forName: name) }
         let arrangement = LibraryArrangement(
             sort: .narrator, ascending: true, shelf: .withNarration, tags: ["Fantasy"])
 

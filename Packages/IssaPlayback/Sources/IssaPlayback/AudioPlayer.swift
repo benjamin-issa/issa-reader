@@ -64,10 +64,6 @@ public final class AudioPlayer {
         rateObservers[ObjectIdentifier(owner)] = observer
     }
 
-    public func removeRateObserver(for owner: AnyObject) {
-        rateObservers[ObjectIdentifier(owner)] = nil
-    }
-
     /// Drops every observer, for a coordinator being torn down.
     public func removeRateObservers() {
         rateObservers.removeAll()

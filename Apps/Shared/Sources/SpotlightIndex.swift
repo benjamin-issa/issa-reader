@@ -46,7 +46,7 @@ enum SpotlightIndex {
             // Series and tags make a book findable by what it is as well as
             // what it is called.
             attributes.keywords = book.tags.map(\.name) + book.series.map(\.name)
-            if let duration = book.audiobook?.duration ?? book.readaloud?.duration {
+            if let duration = book.narrationDuration {
                 attributes.duration = NSNumber(value: duration)
             }
             attributes.contentURL = CurrentBookSnapshotStore.deepLink(bookID: book.uuid)

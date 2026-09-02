@@ -477,7 +477,7 @@ public struct BookDetailView: View {
 
     private func badge(_ title: String, duration: Double? = nil, pages: Int? = nil) -> some View {
         var text = title
-        if let duration { text += " · " + Self.durationText(duration) }
+        if let duration { text += " · " + DurationText.text(duration) }
         if let pages { text += " · \(pages) pages" }
         return Text(text)
             .font(Typography.caption)
@@ -559,14 +559,14 @@ public struct BookDetailView: View {
             }
             if let audiobook = book.audiobook {
                 editionRow(Self.editionName(.audiobook), format: .audiobook,
-                           detail: Self.durationText(audiobook.duration ?? 0),
+                           detail: DurationText.text(audiobook.duration ?? 0),
                            size: audiobook.fileSize, missing: audiobook.missing == true)
             }
             if let readaloud = book.readaloud {
                 editionRow(
                     Self.editionName(.readaloud), format: .readaloud,
                     detail: readaloud.isAligned
-                        ? Self.durationText(readaloud.duration ?? 0)
+                        ? DurationText.text(readaloud.duration ?? 0)
                         : (readaloud.status ?? "processing").capitalized,
                     size: readaloud.fileSize, missing: readaloud.missing == true,
                 )
@@ -601,7 +601,7 @@ public struct BookDetailView: View {
             } else {
                 Text(detail).font(Typography.caption).foregroundStyle(Palette.inkSecondary)
                 if let size {
-                    Text(Self.sizeText(size)).font(Typography.caption).foregroundStyle(Palette.inkQuaternary)
+                    Text(ByteCountText.text(Int64(size))).font(Typography.caption).foregroundStyle(Palette.inkQuaternary)
                 }
                 // State, not a control. The 17pt glyph that used to sit here
                 // was the only way to fetch a book and had a tap target under
@@ -838,16 +838,6 @@ public struct BookDetailView: View {
         position == position.rounded() ? "Book \(Int(position))" : "Book \(position)"
     }
 
-    static func durationText(_ seconds: Double) -> String {
-        let total = Int(seconds.rounded())
-        let hours = total / 3600
-        let minutes = (total % 3600) / 60
-        return hours > 0 ? "\(hours)h \(minutes)m" : "\(minutes)m"
-    }
-
-    static func sizeText(_ bytes: Int) -> String {
-        ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
-    }
 }
 
 /// Wraps its children onto as many lines as needed. Used for tag chips, where

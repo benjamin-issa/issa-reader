@@ -238,7 +238,7 @@ public extension LibraryArrangement {
     }
 
     static func duration(of book: Book) -> Double {
-        book.readaloud?.duration ?? book.audiobook?.duration ?? 0
+        book.narrationDuration ?? 0
     }
 
     /// Sorting titles the way a shelf does: leading articles ignored, so

@@ -94,7 +94,10 @@ if [ "$DESTINATION" = upload ] && [ "$ARCHIVE_ONLY" = 0 ]; then
             echo "       list → +) — no endpoint can do it. See docs/RELEASE.md." >&2
             exit 1
         fi
-        if python3 scripts/asc-api.py builds --platform "$asc" | grep -qx "$BUILD"; then
+        # Captured first: a command in an `if` condition is exempt from
+        # `set -e`, so a failing query read as "the number is free".
+        EXISTING=$(python3 scripts/asc-api.py builds --platform "$asc")
+        if grep -qx "$BUILD" <<<"$EXISTING"; then
             echo "error: $asc already has build $BUILD. Pick another with --build." >&2
             exit 1
         fi

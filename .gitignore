@@ -24,4 +24,3 @@ Tools/docker/node_modules/
 # macOS
 .DS_Store
 .playwright-mcp/
-Tools/docker/package-lock.json

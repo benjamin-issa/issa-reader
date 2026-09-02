@@ -52,7 +52,7 @@ public struct DownloadsView: View {
     private var storageSection: some View {
         Section {
             VStack(alignment: .leading, spacing: Metrics.spacing12) {
-                Text(Self.sizeText(totalBytes))
+                Text(ByteCountText.text(totalBytes))
                     .font(Typography.title)
                     .foregroundStyle(Palette.ink)
                     .contentTransition(.numericText())
@@ -74,7 +74,7 @@ public struct DownloadsView: View {
                                 .font(Typography.caption)
                                 .foregroundStyle(Palette.inkSecondary)
                             Spacer()
-                            Text(Self.sizeText(segment.bytes))
+                            Text(ByteCountText.text(segment.bytes))
                                 .font(Typography.caption)
                                 .foregroundStyle(Palette.inkTertiary)
                                 .monospacedDigit()
@@ -86,7 +86,7 @@ public struct DownloadsView: View {
             .padding(.vertical, Metrics.spacing8)
         } footer: {
             Text(freeBytes > 0
-                ? "\(Self.sizeText(freeBytes)) free on this device. Downloaded books open with no network at all."
+                ? "\(ByteCountText.text(freeBytes)) free on this device. Downloaded books open with no network at all."
                 : "Downloaded books open with no network at all.")
         }
         .listRowBackground(Palette.surface)
@@ -113,7 +113,7 @@ public struct DownloadsView: View {
         }
         .frame(height: 10)
         .accessibilityElement()
-        .accessibilityLabel("Storage used: \(Self.sizeText(totalBytes))")
+        .accessibilityLabel("Storage used: \(ByteCountText.text(totalBytes))")
     }
 
     private var transfersSection: some View {
@@ -208,7 +208,7 @@ public struct DownloadsView: View {
                             Text(entry.book.title)
                                 .font(Typography.callout)
                                 .foregroundStyle(Palette.ink)
-                            Text("\(entry.format.rawValue.capitalized) · \(Self.sizeText(entry.bytes))")
+                            Text("\(entry.format.rawValue.capitalized) · \(ByteCountText.text(entry.bytes))")
                                 .font(Typography.caption)
                                 .foregroundStyle(Palette.inkTertiary)
                         }
@@ -278,8 +278,8 @@ public struct DownloadsView: View {
         case .queued:
             return "\(format) · Waiting"
         case let .downloading(fraction, written, total):
-            guard total > 0 else { return "\(format) · \(sizeText(written))" }
-            return "\(format) · \(sizeText(written)) of \(sizeText(total)) · \(Int(fraction * 100))%"
+            guard total > 0 else { return "\(format) · \(ByteCountText.text(written))" }
+            return "\(format) · \(ByteCountText.text(written)) of \(ByteCountText.text(total)) · \(Int(fraction * 100))%"
         case let .paused(fraction):
             return "\(format) · Paused at \(Int(fraction * 100))%"
         case .finished:
@@ -301,20 +301,4 @@ public struct DownloadsView: View {
         return total
     }
 
-    static func sizeText(_ bytes: Int64) -> String {
-        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
-    }
-}
-
-/// Small shim so the downloads screen does not need to import the playback
-/// package purely to clean up extracted audio.
-enum AudioExtractionCleanup {
-    static func removeAudio(for bookID: String) {
-        // Must match AudioExtraction.defaultDirectory: Application Support, not
-        // Caches. Pointing at the old path silently freed nothing.
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        try? FileManager.default.removeItem(
-            at: support.appending(path: "Audio/\(bookID)", directoryHint: .isDirectory),
-        )
-    }
 }

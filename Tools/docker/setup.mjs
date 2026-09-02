@@ -53,7 +53,7 @@ async function waitForHealthy(name, url, predicate, tries = 60) {
     } catch { /* not up yet */ }
     await new Promise((r) => setTimeout(r, 2000))
   }
-  throw new Error(`${name} did not become ready at ${url}`)
+  throw new Error(`${name} did not become ready at ${url} — is the stack up? (docker compose up -d)`)
 }
 
 async function isInitialised() {

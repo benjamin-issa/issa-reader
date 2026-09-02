@@ -58,11 +58,6 @@ public enum DeviceGrantError: String, Sendable {
     case invalidRequest = "invalid_request"
     case invalidGrant = "invalid_grant"
     case serverError = "server_error"
-
-    /// Whether polling should continue.
-    public var isTransient: Bool {
-        self == .authorizationPending || self == .slowDown
-    }
 }
 
 public enum DeviceGrantOutcome: Sendable, Equatable {

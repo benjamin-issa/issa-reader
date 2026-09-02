@@ -576,7 +576,7 @@ public final class AppModel {
     public func removeDownload(_ book: Book, format: BookContentService.Format) {
         guard let session else { return }
         BookContentService(client: session.client).removeDownload(book, format: format)
-        if format == .readaloud { AudioExtractionCleanup.removeAudio(for: book.uuid) }
+        if format == .readaloud { AudioExtraction.removeExtractedAudio(for: book.uuid) }
         downloads?.clear(.init(bookUUID: book.uuid, format: format))
         refreshDownloadedSet()
     }

@@ -48,7 +48,6 @@ public extension View {
 
 /// Spacing and radius scale, matching the canvas's rhythm.
 public enum Metrics {
-    public static let spacing2: CGFloat = 2
     public static let spacing4: CGFloat = 4
     public static let spacing8: CGFloat = 8
     public static let spacing12: CGFloat = 12
@@ -59,7 +58,6 @@ public enum Metrics {
     public static let radiusSmall: CGFloat = 6
     public static let radiusMedium: CGFloat = 11
     public static let radiusLarge: CGFloat = 14
-    public static let radiusPill: CGFloat = 46
 
     /// Portrait ebook covers; the canvas draws them at a 2:3 ratio.
     public static let coverAspect: CGFloat = 2.0 / 3.0
