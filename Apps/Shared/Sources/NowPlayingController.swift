@@ -126,11 +126,14 @@ public final class NowPlayingController {
             fade: { [weak coordinator] level in coordinator?.player.volume = level },
         )
         sleepTimer = timer
-        // "End of chapter" is driven by the narration crossing a boundary, not
-        // by a clock, so it has to be told.
-        // "End of chapter" is only meaningful where chapters are observable.
-        // A readaloud knows when narration crosses a boundary; an audiobook
-        // knows when a track ends.
+        // "End of chapter" is driven by the audio running off the end of one,
+        // not by a clock, so the timer has to be told — and only of that. A
+        // readaloud knows when narration crosses a boundary; an audiobook
+        // knows when a track ends. Both coordinators keep that signal apart
+        // from the one every chapter change fires, because a chapter the
+        // listener picked, or a scrub across a boundary, is not a chapter
+        // ending: hung off the general signal, the timer stopped the book
+        // the moment a chapter was chosen from the list.
         if let readalong = coordinator as? ReadalongCoordinator {
             readalong.onChapterChangeObserved = { [weak timer, weak self] in
                 timer?.chapterDidEnd()
@@ -141,10 +144,8 @@ public final class NowPlayingController {
                 self?.publish()
             }
         } else if let audiobook = coordinator as? AudiobookCoordinator {
-            audiobook.onChapterChange = { [weak timer, weak self] _ in
-                timer?.chapterDidEnd()
-                self?.publish()
-            }
+            audiobook.onChapterChangeObserved = { [weak timer] in timer?.chapterDidEnd() }
+            audiobook.onChapterChange = { [weak self] _ in self?.publish() }
         }
         // Publish the moment anything changes, rather than waiting up to five
         // seconds for the poll — a lock screen that lags a play tap looks broken.
@@ -220,10 +221,6 @@ public final class NowPlayingController {
         )
     }
 
-    /// Fetches the square audiobook cover for the Lock Screen.
-    ///
-    /// Storyteller keeps two covers; the square one is the right shape for a
-    /// Now Playing tile, where the portrait ebook cover would be letterboxed.
     /// Wraps a cover for the Now Playing centre.
     ///
     /// Nonisolated deliberately: MediaPlayer invokes this request handler on its
@@ -235,6 +232,10 @@ public final class NowPlayingController {
         MPMediaItemArtwork(boundsSize: size) { _ in image }
     }
 
+    /// Fetches the square audiobook cover for the Lock Screen.
+    ///
+    /// Storyteller keeps two covers; the square one is the right shape for a
+    /// Now Playing tile, where the portrait ebook cover would be letterboxed.
     private func loadArtwork(for book: Book) {
         guard let session else { return }
         artworkGeneration += 1

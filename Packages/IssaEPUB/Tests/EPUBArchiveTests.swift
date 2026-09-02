@@ -318,3 +318,127 @@ struct PercentEncodedHrefTests {
         #expect(package.spineWeights.allSatisfy { $0 > 0 })
     }
 }
+
+/// `EPUBArchive.init(data:)` is public and takes any `Data` — including a
+/// slice, whose indices do not start at zero. The word helpers were rebased on
+/// `startIndex`; the two `subdata(in:)` calls were not, so a slice read the
+/// wrong bytes for every entry name and payload.
+@Suite("Archives opened from a Data slice")
+struct SlicedArchiveTests {
+    @Test("a slice with a non-zero startIndex reads exactly like the whole")
+    func sliceReadsLikeWhole() throws {
+        let whole = ZIPBytes.archive([
+            .init(name: "mimetype", payload: Data("application/epub+zip".utf8)),
+            .init(name: "OEBPS/ch1.xhtml", payload: Data("<html><body>one</body></html>".utf8)),
+        ])
+        let padded = Data([0xDE, 0xAD, 0xBE, 0xEF]) + whole
+        let slice = padded[4...]
+        #expect(slice.startIndex == 4)
+
+        let archive = try EPUBArchive(data: slice)
+        #expect(archive.contains("OEBPS/ch1.xhtml"))
+        #expect(String(decoding: try archive.read("mimetype"), as: UTF8.self) == "application/epub+zip")
+        let fromWhole = try EPUBArchive(data: whole).read("OEBPS/ch1.xhtml")
+        #expect(try archive.read("OEBPS/ch1.xhtml") == fromWhole)
+    }
+}
+
+/// A Zip64 extra field shorter than the values it claims. The reads were
+/// bounded by the file, not by the field, so the parser carried on into the
+/// next central-directory record and adopted its bytes as this entry's offset.
+@Suite("Short zip64 extra fields")
+struct TruncatedZip64ExtraTests {
+    /// The same shape as `zip64ExtraArchive`, but the 0x0001 field declares
+    /// only `declared` bytes of payload while the archive keeps eight.
+    private static func archive(declaredFieldSize declared: UInt16) -> Data {
+        var out = Data()
+        let name = Data("a".utf8)
+        out.append(contentsOf: [0x50, 0x4B, 0x01, 0x02])
+        out.append(ZIPBytes.le16(45))
+        out.append(ZIPBytes.le16(45))
+        out.append(ZIPBytes.le16(0))
+        out.append(ZIPBytes.le16(0))
+        out.append(ZIPBytes.le16(0))
+        out.append(ZIPBytes.le16(0))
+        out.append(ZIPBytes.le32(0))
+        out.append(ZIPBytes.le32(4))
+        out.append(ZIPBytes.le32(4))
+        out.append(ZIPBytes.le16(UInt16(name.count)))
+        out.append(ZIPBytes.le16(12)) // extra length as stored
+        out.append(ZIPBytes.le16(0))
+        out.append(ZIPBytes.le16(0))
+        out.append(ZIPBytes.le16(0))
+        out.append(ZIPBytes.le32(0))
+        out.append(ZIPBytes.le32(0xFFFF_FFFF)) // local offset, saturated
+        out.append(name)
+        out.append(ZIPBytes.le16(0x0001))
+        out.append(ZIPBytes.le16(declared))
+        out.append(ZIPBytes.le64(0)) // the bytes that would be read past the field
+
+        let directorySize = UInt32(out.count)
+        out.append(contentsOf: [0x50, 0x4B, 0x05, 0x06])
+        out.append(ZIPBytes.le16(0))
+        out.append(ZIPBytes.le16(0))
+        out.append(ZIPBytes.le16(1))
+        out.append(ZIPBytes.le16(1))
+        out.append(ZIPBytes.le32(directorySize))
+        out.append(ZIPBytes.le32(0))
+        out.append(ZIPBytes.le16(0))
+        return out
+    }
+
+    @Test("a field too short for the value it must hold is a thrown error")
+    func shortFieldThrows() {
+        #expect(throws: EPUBError.self) { try EPUBArchive(data: Self.archive(declaredFieldSize: 4)) }
+    }
+
+    @Test("a field of the right size still reads")
+    func fullFieldReads() throws {
+        let archive = try EPUBArchive(data: Self.archive(declaredFieldSize: 8))
+        #expect(archive.contains("a"))
+    }
+}
+
+/// An EPUB 3 navigation document that is present but unparseable must not
+/// cost the book its table of contents when a good NCX sits beside it.
+@Suite("Navigation fallback")
+struct NavigationFallbackTests {
+    @Test("a broken nav document falls back to the NCX")
+    func brokenNavFallsBackToNCX() throws {
+        let container = """
+        <?xml version="1.0"?>
+        <container version="1.0"><rootfiles>
+        <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+        </rootfiles></container>
+        """
+        let opf = """
+        <?xml version="1.0"?>
+        <package version="3.0">
+        <metadata><title>Fallback</title></metadata>
+        <manifest>
+        <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+        <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+        <item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/>
+        </manifest>
+        <spine toc="ncx"><itemref idref="c1"/></spine>
+        </package>
+        """
+        let ncx = """
+        <?xml version="1.0"?>
+        <ncx version="2005-1"><navMap>
+        <navPoint id="n1"><navLabel><text>Down the Rabbit-Hole</text></navLabel><content src="c1.xhtml"/></navPoint>
+        </navMap></ncx>
+        """
+        let archive = try EPUBArchive(data: ZIPBytes.archive([
+            .init(name: "mimetype", payload: Data("application/epub+zip".utf8)),
+            .init(name: "META-INF/container.xml", payload: Data(container.utf8)),
+            .init(name: "OEBPS/content.opf", payload: Data(opf.utf8)),
+            .init(name: "OEBPS/nav.xhtml", payload: Data("<html><body><nav epub:type=\"toc\"><ol><li>".utf8)),
+            .init(name: "OEBPS/toc.ncx", payload: Data(ncx.utf8)),
+            .init(name: "OEBPS/c1.xhtml", payload: Data("<html><body><p>Prose.</p></body></html>".utf8)),
+        ]))
+        let package = try EPUBPackage.open(archive: archive)
+        #expect(package.navigation.map(\.title) == ["Down the Rabbit-Hole"])
+        #expect(package.navigation.first?.href == "OEBPS/c1.xhtml")
+    }
+}

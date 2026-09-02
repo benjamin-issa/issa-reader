@@ -224,3 +224,18 @@ struct RepeatedAudioFileTests {
         #expect(timeline.entry(inFile: "nowhere.mp3", at: 0) == nil)
     }
 }
+
+/// A scrub to the far end of the bar lands exactly on `totalDuration`. The
+/// strictly-greater search had no entry for it, so the scrub did nothing.
+@Suite("The end of the book")
+struct TimelineEndTests {
+    @Test("exactly the total duration is the last sentence, not nowhere")
+    func endIsLastEntry() throws {
+        let timeline = SMILParser.timeline(for: try SMILTimelineTests.package())
+        let last = try #require(timeline.entries.last)
+        #expect(timeline.entry(atBookTime: timeline.totalDuration)?.fragmentID == last.fragmentID)
+        #expect(timeline.entry(atBookTime: timeline.totalDuration + 5)?.fragmentID == last.fragmentID)
+        // Inside the last entry is unchanged.
+        #expect(timeline.entry(atBookTime: last.cumulativeEnd - last.duration / 2)?.fragmentID == last.fragmentID)
+    }
+}

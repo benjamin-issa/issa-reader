@@ -240,8 +240,6 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
         return T(rawValue: raw)
     }
 
-    /// Body font, falling back to the system serif when the bundled family is
-    /// unavailable so early builds and previews still render.
     /// The face this book is actually set in, once the choice is resolved.
     ///
     /// `nil` for `.publisher` until the book has been opened and its own font
@@ -253,6 +251,9 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
         }
     }
 
+    /// Body font: the chosen face, then the app's own, then the system serif,
+    /// so early builds and previews still render. `weight` is honoured only
+    /// by the system fallback; a named face is used as it comes.
     public func bodyFont(weight: PlatformFont.Weight = .regular, italic: Bool = false, scale: CGFloat = 1) -> PlatformFont {
         let size = fontSize * scale
         // The chosen face, then the app's own, then the system's. A book that

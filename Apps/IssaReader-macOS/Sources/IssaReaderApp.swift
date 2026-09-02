@@ -107,11 +107,16 @@ struct IssaCommands: Commands {
         }
 
         CommandMenu("Playback") {
+            // No key equivalent. This carried a bare Space, and AppKit matches
+            // menu key equivalents before a key reaches the first responder —
+            // so with a book loaded, every space typed into Find or the
+            // server field toggled playback instead. The reader page handles
+            // Space itself while it has the keyboard, which is the right
+            // scope for it.
             Button(nowPlaying.coordinator?.player.isPlaying == true ? "Pause" : "Play") {
                 nowPlaying.coordinator?.player.togglePlayPause()
                 nowPlaying.publish()
             }
-            .keyboardShortcut(.space, modifiers: [])
             .disabled(nowPlaying.coordinator == nil)
 
             Button("Skip Forward") {

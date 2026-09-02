@@ -131,7 +131,8 @@ struct TypefaceTests {
         style.publisherFamily = nil
         #expect(style.resolvedFamily == nil)
         // The app's default face is registered, so this is the bundled face and
-        // not the system's.
-        #expect(style.bodyFont().familyName != nil)
+        // not the system's. `familyName` is never nil, so comparing it to nil
+        // asserted nothing at all.
+        #expect(style.bodyFont().familyName == ReaderStyle.defaultFamily)
     }
 }

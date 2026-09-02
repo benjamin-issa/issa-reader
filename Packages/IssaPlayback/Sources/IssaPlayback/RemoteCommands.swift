@@ -176,9 +176,14 @@ public final class RemoteCommandCenter {
         center.changePlaybackRateCommand.supportedPlaybackRates =
             [0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0].map { NSNumber(value: $0) }
         center.changePlaybackRateCommand.isEnabled = true
+        // Hopped, never assumed: MediaPlayer delivers these on its own queue
+        // — the artwork request handler in `NowPlayingController` documents
+        // the same framework doing exactly that — and `assumeIsolated` off the
+        // main thread is a trap, not a hop.
         center.changePlaybackRateCommand.addTarget { [weak self] event in
             guard let event = event as? MPChangePlaybackRateCommandEvent else { return .commandFailed }
-            MainActor.assumeIsolated { self?.onRateChange?(event.playbackRate) }
+            let rate = event.playbackRate
+            Task { @MainActor in self?.onRateChange?(rate) }
             return .success
         }
         // Recorded so tearDown can remove it. These two were added directly and
@@ -191,7 +196,8 @@ public final class RemoteCommandCenter {
         center.changePlaybackPositionCommand.isEnabled = true
         center.changePlaybackPositionCommand.addTarget { [weak self] event in
             guard let event = event as? MPChangePlaybackPositionCommandEvent else { return .commandFailed }
-            MainActor.assumeIsolated { self?.onSeek?(event.positionTime) }
+            let position = event.positionTime
+            Task { @MainActor in self?.onSeek?(position) }
             return .success
         }
         handlers.append(center.changePlaybackPositionCommand)
@@ -205,10 +211,10 @@ public final class RemoteCommandCenter {
         onAction?(action)
     }
 
-    private func register(_ command: MPRemoteCommand, handler: @escaping () -> Void) {
+    private func register(_ command: MPRemoteCommand, handler: @escaping @MainActor @Sendable () -> Void) {
         command.isEnabled = true
         command.addTarget { _ in
-            MainActor.assumeIsolated { handler() }
+            Task { @MainActor in handler() }
             return .success
         }
         handlers.append(command)

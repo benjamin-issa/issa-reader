@@ -216,11 +216,17 @@ public extension EPUBPackage {
         manifest: [String: ManifestItem], rootDirectory: String,
     ) throws -> [NavPoint] {
         // EPUB 3 navigation document first, NCX as the fallback for older books.
+        //
+        // The fallback has to cover a navigation document that is *there but
+        // broken* as well as one that is absent: a throw here used to abort
+        // the whole function, and the caller's `try?` then showed no contents
+        // at all with a perfectly good NCX unread in the manifest.
         if let nav = manifest.values.first(where: { $0.properties.contains("nav") }) {
-            let document = try EPUBXML.parse(archive.read(nav.href))
-            for navElement in document.descendants("nav") {
-                guard navElement["type"] == "toc" || navElement["epub:type"] == "toc" else { continue }
-                return flatten(list: navElement.descendants("ol").first, base: nav.href, depth: 0)
+            if let document = try? EPUBXML.parse(archive.read(nav.href)) {
+                for navElement in document.descendants("nav") {
+                    guard navElement["type"] == "toc" || navElement["epub:type"] == "toc" else { continue }
+                    return flatten(list: navElement.descendants("ol").first, base: nav.href, depth: 0)
+                }
             }
         }
         if let ncx = manifest.values.first(where: { $0.mediaType == "application/x-dtbncx+xml" }) {

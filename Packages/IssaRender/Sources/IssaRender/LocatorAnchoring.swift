@@ -53,10 +53,25 @@ public enum LocatorAnchoring {
         }
 
         // 4. Progression. Always available, never precise.
-        if let progression = locator.locations?.progression {
-            return min(max(Int(Double(length) * progression), 0), length - 1)
+        if let offset = offset(forProgression: locator.locations?.progression, length: length) {
+            return offset
         }
         return nil
+    }
+
+    /// The character a progression names in text of `length`, or nil when the
+    /// progression cannot name one.
+    ///
+    /// The value comes straight off the server, decoded as whatever `Double`
+    /// the JSON held, and the arithmetic used to convert it to `Int` *before*
+    /// clamping: `Int(.nan)`, `Int(.infinity)` and `Int(1e300 * length)` all
+    /// trap, uncatchably, on every open of that book until the position is
+    /// overwritten from another device. Clamped first, and refused when there
+    /// is nothing finite to clamp.
+    static func offset(forProgression progression: Double?, length: Int) -> Int? {
+        guard let progression, progression.isFinite, length > 0 else { return nil }
+        let clamped = min(max(progression, 0), 1)
+        return min(Int(Double(length) * clamped), length - 1)
     }
 
     /// Finds the remembered text again, preferring the occurrence nearest to
@@ -71,7 +86,7 @@ public enum LocatorAnchoring {
         else { return nil }
 
         let haystack = text as NSString
-        let expected = locator.locations?.progression.map { Int(Double(haystack.length) * $0) }
+        let expected = offset(forProgression: locator.locations?.progression, length: haystack.length)
 
         var best: Int?
         var searchFrom = 0

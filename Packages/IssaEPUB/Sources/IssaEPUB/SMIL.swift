@@ -139,6 +139,12 @@ public struct SMILTimeline: Sendable {
 
     public func index(atBookTime time: TimeInterval) -> Int? {
         guard !entries.isEmpty else { return nil }
+        // The end of the book is the last sentence, not nowhere: a scrub to
+        // the far end of the bar lands exactly on `totalDuration`, which the
+        // strictly-greater search below has no entry for, and the scrub was
+        // silently a no-op. The audiobook manifest makes the same exception
+        // for its last track.
+        if time >= entries[entries.count - 1].cumulativeEnd { return entries.count - 1 }
         // Strictly-greater search: a time exactly on a boundary belongs to the
         // entry that starts there, not the one that ends there.
         var low = 0

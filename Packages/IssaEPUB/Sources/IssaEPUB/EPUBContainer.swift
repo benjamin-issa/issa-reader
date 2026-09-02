@@ -89,7 +89,10 @@ public struct EPUBArchive: Sendable {
         }
         let end = start + entry.compressedSize
 
-        let payload = data.subdata(in: start ..< end)
+        // Rebased on `startIndex` like `u16`/`u32`/`u64`: `subdata(in:)` takes
+        // absolute indices, and `init(data:)` is public, so a caller handing
+        // over a slice read the wrong bytes — or past the end.
+        let payload = data.subdata(in: data.startIndex + start ..< data.startIndex + end)
         switch entry.compressionMethod {
         case 0:
             return payload
@@ -157,7 +160,10 @@ public struct EPUBArchive: Sendable {
             guard nameStart + nameLength <= data.count else {
                 throw EPUBError.malformedArchive("truncated entry name")
             }
-            let name = String(decoding: data.subdata(in: nameStart ..< nameStart + nameLength), as: UTF8.self)
+            let name = String(
+                decoding: data.subdata(in: data.startIndex + nameStart ..< data.startIndex + nameStart + nameLength),
+                as: UTF8.self,
+            )
 
             if compressed == 0xFFFF_FFFF || uncompressed == 0xFFFF_FFFF || localOffset == 0xFFFF_FFFF {
                 let extraStart = nameStart + nameLength
@@ -184,24 +190,29 @@ public struct EPUBArchive: Sendable {
         uncompressed: inout Int, compressed: inout Int, localOffset: inout Int,
     ) throws {
         var cursor = start
-        let end = start + length
-        while cursor + 4 <= end, cursor + 4 <= data.count {
+        // Bounded by the extra field's own declared end as well as the file:
+        // bounding by the file alone let a 0x0001 field shorter than the
+        // values it claims read on into the next central-directory record and
+        // adopt its bytes as an entry's size or offset.
+        let end = min(start + length, data.count)
+        while cursor + 4 <= end {
             let headerID = data.u16(cursor)
             let size = Int(data.u16(cursor + 2))
             var field = cursor + 4
             if headerID == 0x0001 {
+                let fieldEnd = min(field + size, end)
                 // `Int(exactly:)`, matching the zip64 EOCD fields: a trapping
                 // conversion of these attacker-supplied values is an
                 // uncatchable crash rather than a thrown error.
                 func read64(at offset: Int) throws -> Int {
-                    guard let value = Int(exactly: data.u64(offset)) else {
+                    guard offset + 8 <= fieldEnd, let value = Int(exactly: data.u64(offset)) else {
                         throw EPUBError.malformedArchive("zip64 extra field out of range")
                     }
                     return value
                 }
-                if uncompressed == 0xFFFF_FFFF, field + 8 <= data.count { uncompressed = try read64(at: field); field += 8 }
-                if compressed == 0xFFFF_FFFF, field + 8 <= data.count { compressed = try read64(at: field); field += 8 }
-                if localOffset == 0xFFFF_FFFF, field + 8 <= data.count { localOffset = try read64(at: field) }
+                if uncompressed == 0xFFFF_FFFF { uncompressed = try read64(at: field); field += 8 }
+                if compressed == 0xFFFF_FFFF { compressed = try read64(at: field); field += 8 }
+                if localOffset == 0xFFFF_FFFF { localOffset = try read64(at: field) }
                 return
             }
             cursor += 4 + size

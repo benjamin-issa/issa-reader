@@ -28,6 +28,15 @@ public final class AudiobookCoordinator {
 
     /// Called when the playing chapter changes, for Now Playing and the UI.
     public var onChapterChange: ((Int) -> Void)?
+    /// Called only when a chapter *ended* — the audio ran off the end of one
+    /// track into the next. Not for a chapter the listener picked, nor a
+    /// scrub that crossed a boundary.
+    ///
+    /// The sleep timer's "end of chapter" hangs off this and nothing else.
+    /// It used to hang off `onChapterChange`, which every track load fires,
+    /// so picking a chapter from the list stopped the book and disarmed the
+    /// timer. The read-along coordinator draws the same line.
+    public var onChapterChangeObserved: (() -> Void)?
 
     private let source: Source
     /// Increments per load so a superseded one cannot write back.
@@ -224,18 +233,23 @@ public final class AudiobookCoordinator {
             player.pause()
             return
         }
-        await load(track: trackIndex + 1, startAt: 0)
-        // Only if the boundary left it playing. `load` fires `onChapterChange`,
-        // which is where an "end of chapter" sleep timer pauses — and an
-        // unconditional play() here undid that pause in the same turn, after
-        // the timer had already reset itself, so the rest of the book played
-        // on into the night.
+        guard await load(track: trackIndex + 1, startAt: 0) else { return }
+        // The one place a chapter genuinely ends, so the one place the sleep
+        // timer is told.
+        onChapterChangeObserved?()
+        // Only if the boundary left it playing. An "end of chapter" sleep
+        // timer pauses in the call above, and an unconditional play() here
+        // undid that pause in the same turn, after the timer had already
+        // reset itself, so the rest of the book played on into the night.
         guard player.isPlaying else { return }
         player.play()
     }
 
-    private func load(track index: Int, startAt offset: TimeInterval) async {
-        guard tracks.indices.contains(index) else { return }
+    /// - Returns: whether this load still owned the state when it finished;
+    ///   false when a newer one overtook it.
+    @discardableResult
+    private func load(track index: Int, startAt offset: TimeInterval) async -> Bool {
+        guard tracks.indices.contains(index) else { return false }
         // One load at a time. Two interleaved loads left `trackIndex` and
         // `bookTime` set by whichever coroutine resumed last while the audio
         // came from whichever insert won, which is the one way the book clock
@@ -257,8 +271,9 @@ public final class AudiobookCoordinator {
             await player.load(url: url, href: track.href, startAt: offset)
         }
         // A newer load started while this one was awaiting; it owns the state.
-        guard loadGeneration == generation else { return }
+        guard loadGeneration == generation else { return false }
         bookTime = manifest.startTime(ofTrackAt: index) + offset
         onChapterChange?(index)
+        return true
     }
 }

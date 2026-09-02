@@ -320,3 +320,37 @@ struct TapZoneTests {
         #expect(Zone.of(x: 10, pageWidth: 0, margin: 0) == .middle)
     }
 }
+
+/// `progression` is decoded verbatim from the server, and the conversion to a
+/// character index used to trap on anything non-finite or huge — on every
+/// open of that book, with nothing the reader could do about it.
+@Suite("A hostile progression")
+struct HostileProgressionTests {
+    @Test("non-finite and out-of-range values resolve or fall through, never trap",
+          arguments: [Double.nan, .infinity, -.infinity, 1e300, -1, 2, 0.5])
+    func neverTraps(progression: Double) {
+        let text = String(repeating: "abcdefghij", count: 10)
+        let locator = ReadiumLocator(
+            href: "ch01.xhtml", type: "application/xhtml+xml",
+            title: nil,
+            locations: .init(progression: progression),
+            text: .init(before: nil, highlight: "abcdefghijabcdefghij"),
+        )
+        let offset = LocatorAnchoring.characterOffset(for: locator, in: text, fragmentRanges: [:])
+        if let offset {
+            #expect(offset >= 0 && offset < 100)
+        } else {
+            #expect(!progression.isFinite, "a finite progression always names some character")
+        }
+    }
+
+    @Test("the offset a progression names is clamped into the text")
+    func clamps() {
+        #expect(LocatorAnchoring.offset(forProgression: 2, length: 10) == 9)
+        #expect(LocatorAnchoring.offset(forProgression: -1, length: 10) == 0)
+        #expect(LocatorAnchoring.offset(forProgression: 0.5, length: 10) == 5)
+        #expect(LocatorAnchoring.offset(forProgression: .nan, length: 10) == nil)
+        #expect(LocatorAnchoring.offset(forProgression: 0.5, length: 0) == nil)
+        #expect(LocatorAnchoring.offset(forProgression: nil, length: 10) == nil)
+    }
+}
