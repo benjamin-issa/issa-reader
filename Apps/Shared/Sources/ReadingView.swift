@@ -75,7 +75,7 @@ public struct ReadingView: View {
     }
 
     private func resumeLabel(for book: Book) -> String {
-        guard let progress = book.progress else { return "Resume \(book.title)" }
+        guard let progress = book.progress, progress > 0 else { return "Resume \(book.title)" }
         return "Resume \(book.title), \(ReadingProgress.percent(progress))% complete"
     }
 }
@@ -94,12 +94,14 @@ struct ResumeRow: View {
                     .font(Typography.bookTitle)
                     .foregroundStyle(Palette.ink)
                     .lineLimit(1)
-                if let progress = book.progress {
+                // Only once there is something to show: a bar at nothing and
+                // a "0%" beside it say "not started" louder than a blank does.
+                if let progress = book.progress, progress > 0 {
                     ProgressBar(value: progress).frame(maxWidth: 150)
                 }
             }
             Spacer(minLength: 0)
-            if let progress = book.progress {
+            if let progress = book.progress, progress > 0 {
                 Text(ReadingProgress.percentText(progress))
                     .font(Typography.caption.monospacedDigit())
                     .foregroundStyle(Palette.inkTertiary)

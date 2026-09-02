@@ -162,6 +162,7 @@ struct LibraryTabs: View {
                             BookDetailView(book: book)
                         }
                 }
+                .background(AccessoryBandReservation(height: reservedBand))
             }
 
             Tab("Reading", systemImage: "bookmark", value: Destination.reading) {
@@ -172,12 +173,14 @@ struct LibraryTabs: View {
                             BookDetailView(book: book)
                         }
                 }
+                .background(AccessoryBandReservation(height: reservedBand))
             }
 
             Tab("Settings", systemImage: "gearshape", value: Destination.settings) {
                 NavigationStack {
                     SettingsView().navigationTitle("Settings")
                 }
+                .background(AccessoryBandReservation(height: reservedBand))
             }
         }
     }
@@ -206,6 +209,29 @@ struct LibraryTabs: View {
     /// switch and the 26.0 branch churned the `TabView`'s identity with it.
     private var showsMiniPlayer: Bool {
         app.playback != nil
+    }
+
+    /// The height the accessory adds to the content's bottom safe area on an
+    /// iPhone: 139pt with the mini player up against 83pt without, measured
+    /// on the iPhone 17 Pro simulator, and the same at the largest
+    /// accessibility text size — the bar does not scale with type.
+    ///
+    /// Reserved while nothing plays, so that starting a book does not shove
+    /// every scroll view's bottom edge up by a bar's height and stopping one
+    /// does not drop it back. The accessory itself stays gated: the slot
+    /// cannot be kept without its glass capsule, so the space is held from the
+    /// content's side instead, and the padding here and the accessory below
+    /// both follow `playback` in the same update. The idle band is empty
+    /// paper, which is the design's chosen trade.
+    ///
+    /// Phones only. iPad puts its tab bar at the top and floats the accessory
+    /// elsewhere, and no iPad simulator was to hand to measure it; there the
+    /// content keeps moving with the bar, as it always has.
+    private static let accessoryBand: CGFloat = 56
+
+    private var reservedBand: CGFloat {
+        guard UIDevice.current.userInterfaceIdiom == .phone, !showsMiniPlayer else { return 0 }
+        return Self.accessoryBand
     }
 
     @ViewBuilder
@@ -276,6 +302,69 @@ struct LibraryTabs: View {
             AppIntentInbox.shared.bookID = nil
             // "Continue reading" means exactly that.
             app.requestBook(id, .read)
+        }
+    }
+}
+
+/// Holds the mini player's band open in UIKit's safe area.
+///
+/// SwiftUI's `safeAreaPadding` and `safeAreaInset` on the tab's content draw
+/// their band and change nothing: the tab's whole hierarchy is hosted by one
+/// UIKit controller (`TabHostingController`, a child of the tab bar
+/// controller — there is no `UINavigationController` under a `NavigationStack`
+/// on iOS 26), and its scroll views take their insets from UIKit's safe area,
+/// which is also where the accessory subtracts its own height. So the
+/// reservation goes in the same place — `additionalSafeAreaInsets` on that
+/// hosting controller, which every screen in the stack inherits, including a
+/// detail screen reached from a rail rather than the path. Sits in each stack's
+/// root as a background: a zero-size child controller that sets the inset on
+/// its parent, and clears it when the band closes because the accessory has
+/// opened.
+///
+/// The change is animated to the accessory's own duration, so the band handing
+/// over to the bar reads as one movement rather than a drop and a rise.
+private struct AccessoryBandReservation: UIViewControllerRepresentable {
+    let height: CGFloat
+
+    func makeUIViewController(context: Context) -> Controller { Controller() }
+
+    func updateUIViewController(_ controller: Controller, context: Context) {
+        controller.height = height
+        controller.apply(animated: true)
+    }
+
+    final class Controller: UIViewController {
+        var height: CGFloat = 0
+        private var applied: CGFloat?
+
+        override func viewDidLoad() {
+            super.viewDidLoad()
+            view.isUserInteractionEnabled = false
+            view.backgroundColor = .clear
+        }
+
+        override func didMove(toParent parent: UIViewController?) {
+            super.didMove(toParent: parent)
+            apply(animated: false)
+        }
+
+        override func viewWillAppear(_ animated: Bool) {
+            super.viewWillAppear(animated)
+            apply(animated: false)
+        }
+
+        func apply(animated: Bool) {
+            guard let host = parent, applied != height else { return }
+            applied = height
+            let change = { host.additionalSafeAreaInsets.bottom = self.height }
+            if animated, let container = host.view {
+                UIView.animate(withDuration: 0.35, delay: 0, options: [.curveEaseInOut]) {
+                    change()
+                    container.layoutIfNeeded()
+                }
+            } else {
+                change()
+            }
         }
     }
 }
