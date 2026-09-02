@@ -354,53 +354,26 @@ public struct BookDetailView: View {
     /// "Rate" chip (item 06) that marks it as an input. A set rating fills in
     /// tangerine, a colour the muted average text never uses, so the reader's
     /// own stars and the community number never read as the same thing.
+    ///
+    /// Five 44pt star targets are 236pt on their own, which is the whole text
+    /// column beside the cover on a phone, so a single row squeezed the "Rate"
+    /// chip to nothing: an empty capsule the height of four wrapped lines. The
+    /// row is tried first and the chip drops above the stars when it does not
+    /// fit; the stars never shrink, and the chip never wraps.
     private var ratingControl: some View {
         let mine = app.ratings[book.uuid]
-        return HStack(spacing: Metrics.spacing8) {
-            if mine == nil {
-                // Not a control of its own — the stars are — just the cue that
-                // makes the outline stars read as "tap to rate" rather than an
-                // average already earned. Hidden from VoiceOver, which reads the
-                // star buttons and the row's own hint instead.
-                Text("Rate")
-                    .font(Typography.caption.weight(.semibold))
-                    .foregroundStyle(Palette.inkTertiary)
-                    .padding(.horizontal, Metrics.spacing8)
-                    .padding(.vertical, 3)
-                    .overlay(Capsule().strokeBorder(Palette.borderStrong, lineWidth: 1))
-                    .accessibilityHidden(true)
+        return ViewThatFits(in: .horizontal) {
+            HStack(spacing: Metrics.spacing8) {
+                rateCue(mine)
+                stars(mine)
+                average(mine)
             }
-            HStack(spacing: Metrics.spacing4) {
-                ForEach(1 ... 5, id: \.self) { star in
-                    Button {
-                        Task { await app.setRating(mine == Double(star) ? nil : Double(star), for: book) }
-                    } label: {
-                        Image(systemName: Double(star) <= (mine ?? 0) ? "star.fill" : "star")
-                            .font(.system(size: 14))
-                            .foregroundStyle(mine == nil ? Palette.inkQuaternary : Palette.tangerine)
-                    }
-                    .buttonStyle(.plain)
-                    // A 14pt glyph is a ~15pt target; grow each to the 44pt
-                    // floor the rest of this build's controls meet, so a tap
-                    // does not land on the neighbouring star.
-                    .frame(minWidth: 44, minHeight: 44)
-                    .contentShape(Rectangle())
-                    .accessibilityLabel("Rate \(star) star\(star == 1 ? "" : "s")")
-                    // The fill and the tangerine never reach the accessibility
-                    // tree, so VoiceOver read five identical buttons whether or
-                    // not the book was rated. The current score carries the trait,
-                    // and its hint says what a second tap does — silently deleting
-                    // the rating is not discoverable any other way.
-                    .accessibilityAddTraits(mine == Double(star) ? .isSelected : [])
-                    .accessibilityHint(mine == Double(star) ? "Removes your rating." : "")
+            VStack(alignment: .leading, spacing: Metrics.spacing4) {
+                HStack(spacing: Metrics.spacing8) {
+                    rateCue(mine)
+                    average(mine)
                 }
-            }
-            if let serverAverage = book.rating, mine == nil {
-                // The community's number, muted and named, so it never reads as
-                // the reader's own tangerine stars.
-                Text(String(format: "%.1f average", serverAverage))
-                    .font(Typography.caption)
-                    .foregroundStyle(Palette.inkTertiary)
+                stars(mine)
             }
         }
         // The score goes in the container LABEL, not its value/hint: a
@@ -413,6 +386,64 @@ public struct BookDetailView: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel(mine.map { "Your rating, \(Int($0)) star\($0 == 1 ? "" : "s")" }
             ?? "Your rating, not rated. Rate this book from one to five stars.")
+    }
+
+    /// Not a control of its own — the stars are — just the cue that makes the
+    /// outline stars read as "tap to rate" rather than an average already
+    /// earned. Hidden from VoiceOver, which reads the star buttons and the
+    /// row's own hint instead.
+    @ViewBuilder
+    private func rateCue(_ mine: Double?) -> some View {
+        if mine == nil {
+            Text("Rate")
+                .font(Typography.caption.weight(.semibold))
+                .foregroundStyle(Palette.inkTertiary)
+                .padding(.horizontal, Metrics.spacing8)
+                .padding(.vertical, 3)
+                .overlay(Capsule().strokeBorder(Palette.borderStrong, lineWidth: 1))
+                .fixedSize()
+                .accessibilityHidden(true)
+        }
+    }
+
+    /// The community's number, muted and named, so it never reads as the
+    /// reader's own tangerine stars.
+    @ViewBuilder
+    private func average(_ mine: Double?) -> some View {
+        if let serverAverage = book.rating, mine == nil {
+            Text(String(format: "%.1f average", serverAverage))
+                .font(Typography.caption)
+                .foregroundStyle(Palette.inkTertiary)
+                .fixedSize()
+        }
+    }
+
+    private func stars(_ mine: Double?) -> some View {
+        HStack(spacing: Metrics.spacing4) {
+            ForEach(1 ... 5, id: \.self) { star in
+                Button {
+                    Task { await app.setRating(mine == Double(star) ? nil : Double(star), for: book) }
+                } label: {
+                    Image(systemName: Double(star) <= (mine ?? 0) ? "star.fill" : "star")
+                        .font(.system(size: 14))
+                        .foregroundStyle(mine == nil ? Palette.inkQuaternary : Palette.tangerine)
+                }
+                .buttonStyle(.plain)
+                // A 14pt glyph is a ~15pt target; grow each to the 44pt
+                // floor the rest of this build's controls meet, so a tap
+                // does not land on the neighbouring star.
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
+                .accessibilityLabel("Rate \(star) star\(star == 1 ? "" : "s")")
+                // The fill and the tangerine never reach the accessibility
+                // tree, so VoiceOver read five identical buttons whether or
+                // not the book was rated. The current score carries the trait,
+                // and its hint says what a second tap does — silently deleting
+                // the rating is not discoverable any other way.
+                .accessibilityAddTraits(mine == Double(star) ? .isSelected : [])
+                .accessibilityHint(mine == Double(star) ? "Removes your rating." : "")
+            }
+        }
     }
 
     /// The shelf this book sits on, changeable in place.
