@@ -48,7 +48,8 @@ Apps/
   Shared              views and app model used by more than one platform
 Tools/
   docker    local Storyteller + Keycloak stack and its provisioning scripts
-  scripts   fixture generation
+  scripts   fixture generation, and the app-icon generators (see Tools/design/app-icon/ICON.md)
+  design    the app icon's SVG masters and spec
 ```
 
 The Xcode project is generated: edit `project.yml`, then `xcodegen generate`.

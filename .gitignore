@@ -24,3 +24,6 @@ Tools/docker/node_modules/
 # macOS
 .DS_Store
 .playwright-mcp/
+
+# Python bytecode from the icon generators
+__pycache__/
