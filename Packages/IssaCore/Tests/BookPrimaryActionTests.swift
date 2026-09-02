@@ -16,6 +16,7 @@ struct BookPrimaryActionTests {
         ebookMissing: Bool? = nil,
         hasEbook: Bool = true,
         audiobookOnly: Bool = false,
+        alignedReadaloud: Bool = false,
     ) -> Book {
         var json: [String: Any] = [
             "uuid": "u", "title": "A Book",
@@ -29,6 +30,13 @@ struct BookPrimaryActionTests {
             if let ebookSize { ebook["fileSize"] = ebookSize }
             if let ebookMissing { ebook["missing"] = ebookMissing }
             json["ebook"] = ebook
+        }
+        // An aligned read-along edition the server can serve. `preferredReadingFormat`
+        // prefers this over a plain ebook, so the reading action targets `.readaloud`.
+        if alignedReadaloud {
+            json["readaloud"] = [
+                "uuid": "r", "filepath": "r.epub", "status": "ALIGNED", "identifiers": [],
+            ]
         }
         if let progress {
             json["position"] = [
@@ -174,6 +182,98 @@ struct BookPrimaryActionTests {
             .title(compact: true) == "Resume")
         #expect(try #require(action(book(), state: .paused(fractionCompleted: 0.6)))
             .title(compact: true) == "Paused")
+    }
+}
+
+/// The always-lead-with-Read control (Option A).
+///
+/// `reading` never wears a download's state: the primary control is a promise
+/// to read, and the file is fetched inside the reader on open. These pin the
+/// invariant that a book you do not yet have still says Read/Resume — a
+/// regression here reintroduces the "Download · NNN MB" gate the change removed.
+@Suite("The book screen's reading control")
+struct BookReadingActionTests {
+    private func book(
+        progress: Double? = nil,
+        ebookMissing: Bool? = nil,
+        hasEbook: Bool = true,
+        audiobookOnly: Bool = false,
+        alignedReadaloud: Bool = false,
+    ) -> Book {
+        var json: [String: Any] = [
+            "uuid": "u", "title": "A Book",
+            "authors": [], "narrators": [], "creators": [], "series": [],
+            "collections": [], "identifiers": [], "tags": [],
+        ]
+        if audiobookOnly {
+            json["audiobook"] = ["uuid": "a", "filepath": "a.m4b", "identifiers": []]
+        } else if hasEbook {
+            var ebook: [String: Any] = ["uuid": "e", "identifiers": []]
+            if let ebookMissing { ebook["missing"] = ebookMissing }
+            json["ebook"] = ebook
+        }
+        if alignedReadaloud {
+            json["readaloud"] = [
+                "uuid": "r", "filepath": "r.epub", "status": "ALIGNED", "identifiers": [],
+            ]
+        }
+        if let progress {
+            json["position"] = [
+                "locator": ["href": "a", "type": "t", "locations": ["totalProgression": progress]],
+                "timestamp": 0,
+            ]
+        }
+        let data = try! JSONSerialization.data(withJSONObject: json)
+        return try! JSONDecoder().decode(Book.self, from: data)
+    }
+
+    // MARK: - The gate is unchanged
+
+    @Test("a book with nothing readable still gets no reading control")
+    func audiobookOnlyGetsNoControl() {
+        #expect(BookPrimaryAction.reading(book: book(audiobookOnly: true)) == nil)
+    }
+
+    @Test("a book whose only edition the server has lost gets no reading control")
+    func missingEbookGetsNoControl() {
+        #expect(BookPrimaryAction.reading(book: book(ebookMissing: true)) == nil)
+    }
+
+    // MARK: - Always Read, never Download
+
+    @Test("a book that is not on the device still leads with Read, not a download")
+    func notDownloadedStillReads() throws {
+        let subject = try #require(BookPrimaryAction.reading(book: book()))
+        #expect(subject.title() == "Read")
+        #expect(subject.intent == .openReader)
+    }
+
+    @Test("a book with a saved position resumes, on or off the device")
+    func withProgressResumes() throws {
+        let subject = try #require(BookPrimaryAction.reading(book: book(progress: 0.42)))
+        #expect(subject.title() == "Resume · 42%")
+        #expect(subject.intent == .openReader)
+    }
+
+    @Test("a barely-started book drops the percentage, like resolve does")
+    func barelyStartedDropsThePercentage() throws {
+        let subject = try #require(BookPrimaryAction.reading(book: book(progress: 0.004)))
+        #expect(subject.title() == "Resume")
+    }
+
+    // MARK: - Which edition Read opens
+
+    @Test("an aligned book reads the read-along edition, so the screen can say narration is included")
+    func alignedBookTargetsReadaloud() throws {
+        let subject = try #require(BookPrimaryAction.reading(book: book(alignedReadaloud: true)))
+        #expect(subject.format == .readaloud)
+        #expect(subject.intent == .openReader)
+    }
+
+    @Test("a plain text book reads the ebook edition")
+    func plainBookTargetsEbook() throws {
+        let subject = try #require(BookPrimaryAction.reading(book: book()))
+        #expect(subject.format == .ebook)
     }
 }
 

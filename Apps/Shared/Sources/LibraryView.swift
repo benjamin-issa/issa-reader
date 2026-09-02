@@ -247,14 +247,22 @@ public struct ProgressBar: View {
     }
 }
 
-/// The design's lead card: current book, chapter, time left.
-/// Makes the Continue card open its book.
+/// The design's lead card: the book you were last in, one tap from its page.
 ///
-/// Mirrors `BookGridItem` rather than inventing a second pattern: a pushed
-/// screen on iOS and tvOS, a window on the Mac. A value-based NavigationLink
-/// would have been shorter but only iOS registers a Book destination, so it
-/// would silently do nothing on the other two platforms.
+/// Two targets, not one. The card body resumes reading the way the widget and
+/// Handoff already do — `requestBook(.read)` leaves the book in the pending
+/// inbox and `LibraryTabs.openPendingBook` presents the reader at the saved
+/// position — while a trailing chevron still routes to the detail screen the
+/// whole card used to open. Splitting them is the point of the change: the
+/// app's most prominent control now opens a book to read rather than describing
+/// one. VoiceOver reads the two as separate elements.
+///
+/// The Mac keeps opening its own Reader window, which is already resume-first,
+/// and its grid has no detail route to add a chevron for; the signed-out
+/// placeholder stays inert. tvOS renders `TVLibraryView`, whose poster Continue
+/// already pushes straight into the reader, so this card is an iOS concern.
 struct ContinueCardLink: View {
+    @Environment(AppModel.self) private var app
     let book: Book
     let session: Session?
     #if os(macOS)
@@ -271,12 +279,11 @@ struct ContinueCardLink: View {
             }
             .buttonStyle(.plain)
             #else
-            NavigationLink {
-                BookDetailView(book: book)
-            } label: {
-                ContinueCard(book: book, session: session)
+            ContinueCard(book: book, session: session) {
+                // The same resume path a widget tap takes; the reader fetches
+                // on open when the file is absent (item 02).
+                app.requestBook(book.uuid, .read)
             }
-            .buttonStyle(.plain)
             #endif
         } else {
             ContinueCard(book: book, session: session)
@@ -284,11 +291,43 @@ struct ContinueCardLink: View {
     }
 }
 
+/// The lead card. Interactive when handed a `resume` action: the body resumes
+/// reading and a trailing chevron opens the book's detail screen — two tap
+/// targets VoiceOver announces separately. Without one it is a plain visual, so
+/// the Mac and signed-out paths can wrap it in their own control.
 public struct ContinueCard: View {
     let book: Book
     let session: Session?
+    let resume: (() -> Void)?
+
+    public init(book: Book, session: Session?, resume: (() -> Void)? = nil) {
+        self.book = book
+        self.session = session
+        self.resume = resume
+    }
 
     public var body: some View {
+        if let resume {
+            HStack(spacing: 0) {
+                Button(action: resume) { content }
+                    .buttonStyle(.plain)
+                    // The action, not the contents: read as one flat string,
+                    // "Continue / Title / 45% complete" said nothing about what
+                    // a tap does. The chevron gets its own label so the two
+                    // targets never blur into a single announcement.
+                    .accessibilityLabel("Resume \(book.title)")
+                    .accessibilityHint("Opens the reader where you left off")
+                detailsLink
+            }
+            .cardChrome()
+        } else {
+            content.cardChrome()
+        }
+    }
+
+    /// Cover, title, byline and progress — the card's visible matter, with a
+    /// trailing spacer so the text stays left whether or not a chevron follows.
+    private var content: some View {
         HStack(alignment: .top, spacing: Metrics.spacing16) {
             CoverImage(book: book, session: session)
                 .frame(width: 92)
@@ -311,11 +350,38 @@ public struct ContinueCard: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(Metrics.spacing16)
-        .background(Palette.surface, in: RoundedRectangle(cornerRadius: Metrics.radiusLarge))
-        .overlay(
-            RoundedRectangle(cornerRadius: Metrics.radiusLarge)
-                .strokeBorder(Palette.border, lineWidth: 1),
-        )
+        // So the gap between the text and the chevron still resumes reading.
+        .contentShape(Rectangle())
+    }
+
+    /// The detail route the whole card used to be. A full-height 44pt column so
+    /// it is its own target beside the resume body, never a sliver of it.
+    private var detailsLink: some View {
+        NavigationLink {
+            BookDetailView(book: book)
+        } label: {
+            Image(systemName: "chevron.right")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(Palette.inkTertiary)
+                .frame(width: 44)
+                .frame(maxHeight: .infinity)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Details for \(book.title)")
+        .accessibilityHint("Opens the book's detail page")
+    }
+}
+
+private extension View {
+    /// The surface, inset and border every Continue card wears, kept in one
+    /// place so the interactive and plain layouts cannot drift apart.
+    func cardChrome() -> some View {
+        padding(Metrics.spacing16)
+            .background(Palette.surface, in: RoundedRectangle(cornerRadius: Metrics.radiusLarge))
+            .overlay(
+                RoundedRectangle(cornerRadius: Metrics.radiusLarge)
+                    .strokeBorder(Palette.border, lineWidth: 1),
+            )
     }
 }

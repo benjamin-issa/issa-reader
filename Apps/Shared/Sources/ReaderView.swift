@@ -57,10 +57,17 @@ public struct ReaderView: View {
     /// Whether a finger is currently down, so `selecting` can be cleared at the
     /// start of a touch rather than the end of one.
     @State private var touching = false
+    #if os(iOS)
+    // First-run gesture guide. Persisted so it never returns once dismissed,
+    // and split in two so the narrated tip can still appear the first time a
+    // narrated book opens even when the zone guide was already seen on a plain
+    // one.
+    @AppStorage("issa.hasSeenReaderCoach") private var hasSeenReaderCoach = false
+    @AppStorage("issa.hasSeenNarrationTip") private var hasSeenNarrationTip = false
+    #endif
     @Environment(\.dismiss) private var dismiss
     @Environment(PlaybackSettings.self) private var settings
     @Environment(AppModel.self) private var app
-    @Environment(NowPlayingController.self) private var nowPlaying
     #if os(macOS)
     @Environment(\.controlActiveState) private var controlActiveState
     private var isActiveScene: Bool { controlActiveState == .key }
@@ -275,6 +282,9 @@ public struct ReaderView: View {
         // Drawn over the page rather than above it, so showing it cannot
         // change the page's size.
         .overlay(alignment: .top) { topBar }
+        // The first-run gesture guide sits above even the chrome and swallows
+        // the tap that dismisses it, so the page below does not also turn.
+        .overlay { coachOverlay }
         #endif
         #endif
     }
@@ -349,6 +359,30 @@ public struct ReaderView: View {
         // like anywhere else rather than hitting a control that is not there.
         .allowsHitTesting(model.chromeVisible)
         .animation(.easeInOut(duration: 0.2), value: model.chromeVisible)
+    }
+
+    /// The first-run gesture guide, shown once the page is actually readable —
+    /// naming tap zones over a spinner would point at nothing — and only while a
+    /// "seen" flag is still unset. Empty the rest of the time, so the overlay it
+    /// lives in is inert.
+    @ViewBuilder
+    private var coachOverlay: some View {
+        let showsZones = !hasSeenReaderCoach
+        let showsTip = model.hasNarration && !hasSeenNarrationTip
+        if model.phase == .ready, showsZones || showsTip {
+            ReaderCoachOverlay(
+                theme: model.style.theme,
+                showsZones: showsZones,
+                showsNarrationTip: showsTip,
+            ) {
+                // Mark seen only what was actually shown, so a plain book's
+                // first open does not silently spend the narrated tip a reader
+                // has yet to meet.
+                if showsZones { hasSeenReaderCoach = true }
+                if showsTip { hasSeenNarrationTip = true }
+            }
+            .transition(.opacity)
+        }
     }
     #endif
 
@@ -677,6 +711,13 @@ public struct ReaderView: View {
         HStack(spacing: Metrics.spacing12) {
             if model.chromeVisible {
                 if model.hasNarration {
+                    // The strip's one audio control, and it toggles narration in
+                    // place. Skip ±N and the scrubber moved into the full player,
+                    // so the two adjacent controls that used to mean different
+                    // things — toggle here, open-the-player next to it — are no
+                    // longer side by side. The player, where skip now lives
+                    // (still driven by the shared commandMap interval), is a
+                    // swipe up on the strip instead, so it costs no visible slot.
                     Button {
                         Task { await model.togglePlayback() }
                     } label: {
@@ -685,14 +726,10 @@ public struct ReaderView: View {
                             .foregroundStyle(model.style.theme.accent)
                     }
                     .buttonStyle(.plain)
-                    Button {
-                        showsPlayer = true
-                    } label: {
-                        Image(systemName: "waveform")
-                            .font(.system(size: 17))
-                            .foregroundStyle(model.style.theme.textTertiary)
-                    }
-                    .buttonStyle(.plain)
+                    .accessibilityLabel(model.isPlaying ? "Pause narration" : "Play narration")
+                    // VoiceOver has no swipe-up, so it reaches the player through
+                    // a named action rather than the strip gesture below.
+                    .accessibilityAction(named: "Open player") { showsPlayer = true }
                 }
                 Button {
                     showsContents = true
@@ -707,21 +744,6 @@ public struct ReaderView: View {
                     .foregroundStyle(model.style.theme.text.opacity(0.55))
                 }
                 .buttonStyle(.plain)
-                if model.hasNarration {
-                    // Same seconds, same buttons as the full player and the mini
-                    // bar — the setting in Controls & remapping governs all three,
-                    // so a reader who tunes it once gets the same jump everywhere.
-                    narrationSkipButton(
-                        seconds: settings.commandMap.skipBackwardInterval,
-                        symbol: "gobackward", action: .skipBackward,
-                        label: "Skip back",
-                    )
-                    narrationSkipButton(
-                        seconds: settings.commandMap.skipForwardInterval,
-                        symbol: "goforward", action: .skipForward,
-                        label: "Skip forward",
-                    )
-                }
                 Spacer()
                 // Inside the chrome, not beside it: hiding everything should
                 // hide everything. It used to stay behind on the grounds that
@@ -740,38 +762,24 @@ public struct ReaderView: View {
         }
         .padding(.horizontal, model.style.pageMargin)
         .frame(height: ReaderChrome.barHeight)
-    }
-
-    /// A jump button beside the chapter indicator, sized for the footer rather
-    /// than the full player's transport.
-    ///
-    /// The interval is drawn inside it for the same reason the player draws its
-    /// own: answering "how far does this jump" without a trip to Settings.
-    private func narrationSkipButton(
-        seconds: TimeInterval, symbol: String, action: PlaybackAction, label: String,
-    ) -> some View {
-        Button {
-            Task {
-                await model.readalong?.perform(action, using: settings.commandMap)
-                nowPlaying.publish()
-            }
-        } label: {
-            ZStack {
-                Image(systemName: symbol).font(.system(size: 17))
-                Text("\(Int(seconds))")
-                    // Pinned, not scaled: the numeral is part of the glyph it
-                    // sits inside, and `Font.custom(_:size:)` follows Dynamic
-                    // Type while `Font.system(size:)` does not — at
-                    // accessibility sizes the digits outgrew the arrow and
-                    // spilled past the footer's fixed bar height. VoiceOver
-                    // still gets the interval from the accessibility label.
-                    .font(.custom(Typography.sansFamily, fixedSize: 8).weight(.semibold))
-                    .offset(y: 1)
-            }
-            .foregroundStyle(model.style.theme.textTertiary)
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("\(label) \(Int(seconds)) seconds")
+        // Swipe up on the strip to open the full player, where skip ±N and the
+        // scrubber now live — the same expand gesture the mini-player uses. The
+        // minimum distance keeps it clear of the buttons' taps, and it does
+        // nothing on a book with no narration to play. VoiceOver, which has no
+        // swipe, reaches the player through the play button's named action.
+        //
+        // iOS only: this footer is the phone/iPad reader's. tvOS reads through
+        // TVReadalongView and drives focus, not drag, and `DragGesture` is not
+        // available there at all.
+        #if os(iOS)
+        .gesture(
+            DragGesture(minimumDistance: 24)
+                .onEnded { value in
+                    guard model.hasNarration, value.translation.height < -24 else { return }
+                    showsPlayer = true
+                },
+        )
+        #endif
     }
 }
 

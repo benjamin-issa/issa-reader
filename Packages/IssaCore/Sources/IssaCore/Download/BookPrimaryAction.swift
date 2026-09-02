@@ -53,6 +53,32 @@ public struct BookPrimaryAction: Equatable, Sendable {
             kind: kind(book: book, format: format, state: state, isDownloaded: isDownloaded))
     }
 
+    /// The reading control, which always leads with **Read** (Option A).
+    ///
+    /// `resolve` above is the download-state machine — it wears "Downloading
+    /// 64%", "Paused", "Retry" and the rest, and still drives the Save-for-
+    /// offline affordance in Manage downloads. This one is deliberately blind
+    /// to all of it: the primary control is a promise to *read*, not a download
+    /// button, and opening the reader fetches the file on demand (`ReaderScreen`
+    /// shows real bytes + Cancel) when it is absent. So a book that is not yet
+    /// on disk still says "Read" — one tap to the page — rather than "Download ·
+    /// NNN MB" as the only way in, and a transfer already in flight never
+    /// hijacks the verb.
+    ///
+    /// Nil on the same gate as `resolve`: no readable edition, no control. The
+    /// `format` it carries is the edition Read will open, so a caller can tell
+    /// whether Read gives synced narration (`.readaloud`) or plain text.
+    public static func reading(book: Book) -> BookPrimaryAction? {
+        guard let format = BookContentService.preferredReadingFormat(for: book) else { return nil }
+        let kind: Kind
+        if let progress = book.progress, progress > 0 {
+            kind = .resume(progress: progress)
+        } else {
+            kind = .read
+        }
+        return BookPrimaryAction(format: format, kind: kind)
+    }
+
     /// Order matters here more than anything else in this type.
     private static func kind(
         book: Book,

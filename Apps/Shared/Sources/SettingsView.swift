@@ -36,20 +36,6 @@ public struct SettingsView: View {
                     Text("Library")
                 }
                 .listRowBackground(Palette.surface)
-
-                // Surfacing this makes it obvious which server generation is in
-                // play, and why some rails are computed locally.
-                Section {
-                    capabilityRow("Home sections", session.capabilities.homeSections)
-                    capabilityRow("Shelves", session.capabilities.shelves)
-                    capabilityRow("Library facets", session.capabilities.libraryFacets)
-                    capabilityRow("Server discovery", session.capabilities.serverDiscovery)
-                } header: {
-                    Text("Server capabilities")
-                } footer: {
-                    Text("Features your server does not provide are computed on this device instead.")
-                }
-                .listRowBackground(Palette.surface)
             }
 
             Section {
@@ -77,10 +63,21 @@ public struct SettingsView: View {
             }
             .listRowBackground(Palette.surface)
 
-            Section("Diagnostics") {
-                NavigationLink { DiagnosticsView() } label: {
-                    Label("Export logs", systemImage: "doc.text.magnifyingglass")
+            // Server internals and log export serve self-hosters and support,
+            // not the general reader, so they collapse one tap down rather than
+            // competing with Account / Library / Playback for attention.
+            Section {
+                // tvOS has no `DisclosureGroup`; it shows the same rows under a
+                // plain "Advanced" heading (still one section down, off the main
+                // path), while iOS and the Mac collapse them.
+                #if os(tvOS)
+                Text("Advanced").overlineStyle()
+                advancedContent
+                #else
+                DisclosureGroup("Advanced") {
+                    advancedContent
                 }
+                #endif
             }
             .listRowBackground(Palette.surface)
 
@@ -97,6 +94,28 @@ public struct SettingsView: View {
                 }
                 Button("Cancel", role: .cancel) {}
             }
+        }
+    }
+
+    /// The rows behind "Advanced": server capabilities (for self-hosters) and
+    /// log export (for support). Factored out so iOS/macOS can put them in a
+    /// `DisclosureGroup` and tvOS can list them inline.
+    @ViewBuilder private var advancedContent: some View {
+        if let session = app.session, case .signedIn = session.state {
+            // Surfacing this makes it obvious which server generation is in
+            // play, and why some rails are computed locally.
+            Text("Server capabilities")
+                .overlineStyle()
+            capabilityRow("Home sections", session.capabilities.homeSections)
+            capabilityRow("Shelves", session.capabilities.shelves)
+            capabilityRow("Library facets", session.capabilities.libraryFacets)
+            capabilityRow("Server discovery", session.capabilities.serverDiscovery)
+            Text("Features your server does not provide are computed on this device instead.")
+                .font(Typography.footnote)
+                .foregroundStyle(Palette.inkTertiary)
+        }
+        NavigationLink { DiagnosticsView() } label: {
+            Label("Export logs", systemImage: "doc.text.magnifyingglass")
         }
     }
 

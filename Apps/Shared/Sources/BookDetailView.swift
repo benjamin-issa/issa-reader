@@ -26,6 +26,10 @@ public struct BookDetailView: View {
     #if os(iOS)
     @State private var showsReader = false
     #endif
+    /// Whether the expanded player is up, opened by tapping "Now playing" once
+    /// this book's audio is already running (item 08). Reuses `NowPlayingSheet`,
+    /// the same full player the mini-bar expands into.
+    @State private var showsPlayer = false
     /// The book as it was when this screen opened. Identity only — everything
     /// drawn comes from `book` below.
     private let initialBook: Book
@@ -63,8 +67,11 @@ public struct BookDetailView: View {
                         #endif
                 }
                 if !book.tags.isEmpty { tags }
-                editions
                 facts
+                // Editions are a fetch-a-file detail, not a reading choice, so
+                // they sit one disclosure down (item 03) rather than competing
+                // with Read and Listen above the fold.
+                manageDownloads
                 externalRatings
                 relatedRails
             }
@@ -88,6 +95,14 @@ public struct BookDetailView: View {
             }
         }
         #endif
+        // The full player, reached by tapping "Now playing" while this book's
+        // audio runs (item 08). Reuses `NowPlayingSheet` — the mini-bar's own
+        // expansion — so there is one full player, not a second one here.
+        .sheet(isPresented: $showsPlayer) { NowPlayingSheet() }
+        // Nothing to expand into once playback has stopped.
+        .onChange(of: app.playback == nil) { _, stopped in
+            if stopped { showsPlayer = false }
+        }
         .onChange(of: app.downloadedUUIDs, initial: true) { refreshDownloaded() }
         // `downloadedUUIDs` is keyed by book with the format discarded, so a
         // second edition arriving or leaving while the first is still on disk
@@ -151,10 +166,18 @@ public struct BookDetailView: View {
                 primaryControl
                 listenButton
             }
-            // The reason a download failed existed only in an accessibility
-            // label; a sighted reader saw a button that did nothing twice.
-            if let detail = primaryAction?.detail {
-                Text(detail).font(Typography.caption).foregroundStyle(Palette.alert)
+            // On an aligned book Read opens the read-along edition, so the
+            // reader gets synced narration without choosing a separate file
+            // (item 03). Said here so "Read" never has to be guessed at — the
+            // note only appears when the primary edition actually carries audio.
+            if primaryAction?.format == .readaloud {
+                Label {
+                    Text("Narration included — tap any line to hear it")
+                } icon: {
+                    Image(systemName: "waveform")
+                }
+                .font(Typography.caption)
+                .foregroundStyle(Palette.inkSecondary)
             }
             // A failed Listen tap used to be completely silent. The outcome
             // is rendered from this screen's own copy, not `app.listeningError`
@@ -166,17 +189,14 @@ public struct BookDetailView: View {
         }
     }
 
-    /// The one control whose label follows the download state.
+    /// The primary control: always Read / Resume (item 02, Option A).
+    ///
+    /// It no longer follows the download state — a book that is not on disk
+    /// still leads with Read, and the file is fetched inside the reader on open
+    /// (`ReaderScreen`'s own `downloadingView`, real bytes + Cancel). Explicit
+    /// prefetching lives in Manage downloads below.
     private var primaryAction: BookPrimaryAction? {
-        BookPrimaryAction.resolve(
-            book: book,
-            state: app.downloads.flatMap { $0.state(for: .init(bookUUID: book.uuid, format: preferredFormat ?? .ebook)) },
-            isDownloaded: preferredFormat.map { downloaded.contains($0) } ?? false,
-        )
-    }
-
-    private var preferredFormat: BookContentService.Format? {
-        BookContentService.preferredReadingFormat(for: book)
+        BookPrimaryAction.reading(book: book)
     }
 
     /// Which editions are on disk.
@@ -205,51 +225,36 @@ public struct BookDetailView: View {
 
     @ViewBuilder
     private var primaryControl: some View {
+        // Always opens the reader now (item 02): the control's only intent is
+        // `.openReader`, and the reader downloads on open when the file is
+        // absent. There is no download branch here any more — Manage downloads
+        // owns explicit fetching.
         if let action = primaryAction, let session = app.session {
-            switch action.intent {
-            case .openReader:
-                #if os(iOS)
-                // Presented, not pushed. Inside the tab's NavigationStack the
-                // reader inherits the tab bar and its accessory slot, whose
-                // glass capsule draws over the page's own footer — and the
-                // navigation stack's edge-swipe pops the book shut mid-page.
-                // Outside it, the page owns the whole screen.
-                Button {
-                    showsReader = true
-                } label: {
-                    PrimaryCapsule(action: action)
-                }
-                .buttonStyle(.plain)
-                #else
-                NavigationLink {
-                    ReaderScreen(book: book, session: session)
-                } label: {
-                    PrimaryCapsule(action: action)
-                }
-                .buttonStyle(.plain)
-                #endif
-            case .startDownload, .pauseDownload, .resumeDownload:
-                Button {
-                    perform(action)
-                } label: {
-                    PrimaryCapsule(action: action)
-                }
-                .buttonStyle(.plain)
+            #if os(iOS)
+            // Presented, not pushed. Inside the tab's NavigationStack the
+            // reader inherits the tab bar and its accessory slot, whose
+            // glass capsule draws over the page's own footer — and the
+            // navigation stack's edge-swipe pops the book shut mid-page.
+            // Outside it, the page owns the whole screen.
+            Button {
+                showsReader = true
+            } label: {
+                PrimaryCapsule(action: action)
             }
+            .buttonStyle(.plain)
+            #else
+            NavigationLink {
+                ReaderScreen(book: book, session: session)
+            } label: {
+                PrimaryCapsule(action: action)
+            }
+            .buttonStyle(.plain)
+            #endif
         }
     }
 
-    private func perform(_ action: BookPrimaryAction) {
-        let job = DownloadManager.Job(bookUUID: book.uuid, format: action.format)
-        switch action.intent {
-        case .openReader: break
-        case .startDownload: Task { await app.download(book, format: action.format) }
-        case .pauseDownload: app.downloads?.pause(job)
-        case .resumeDownload: Task { await app.resumeDownload(job) }
-        }
-    }
-
-    /// Plays the audiobook without opening the reader.
+    /// Plays the audiobook without opening the reader — or, once it is playing,
+    /// opens the player (item 08).
     ///
     /// Offered for readaloud books too: wanting to hear a book while driving or
     /// walking is not the same as wanting the text on screen, and it is the
@@ -260,19 +265,33 @@ public struct BookDetailView: View {
         // but the gate only ever looked at `audiobook`, so a readaloud-only
         // book got no Listen button at all.
         if book.servableFormats.contains(.audiobook) || book.servableFormats.contains(.readaloud) {
+            // Whichever kind is playing. Reading it off the audiobook alone
+            // offered "Listen" for a book already narrating in the reader.
+            let isPlaying = app.playbackBook?.uuid == book.uuid
             Button {
-                Task {
-                    await app.startListening(to: book, nowPlaying: nowPlaying, settings: settings)
-                    listenError = app.listeningError
+                if isPlaying {
+                    // Already this book's audio — expand the player rather than
+                    // calling `startListening` again, which is at best a silent
+                    // resume and, when it is the reader's narration that is
+                    // running, a swap to the audiobook that cuts the current
+                    // audio. This just surfaces what is already playing.
+                    showsPlayer = true
+                } else {
+                    Task {
+                        await app.startListening(to: book, nowPlaying: nowPlaying, settings: settings)
+                        listenError = app.listeningError
+                    }
                 }
             } label: {
                 HStack(spacing: 6) {
-                    Image(systemName: "headphones").font(.system(size: 14, weight: .semibold))
-                    // Whichever kind is playing. Reading it off the audiobook
-                    // alone offered "Listen" for a book already narrating in
-                    // the reader — and tapping it would have swapped one for
-                    // the other rather than doing nothing.
-                    Text(app.playbackBook?.uuid == book.uuid ? "Playing" : "Listen")
+                    Image(systemName: isPlaying ? "waveform" : "headphones")
+                        .font(.system(size: 14, weight: .semibold))
+                    // "Now playing ▸" reads as a route into the player, not a
+                    // status the reader cannot act on.
+                    Text(isPlaying ? "Now playing" : "Listen")
+                    if isPlaying {
+                        Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold))
+                    }
                 }
                 .font(Typography.headline)
                 .padding(.horizontal, Metrics.spacing16)
@@ -282,6 +301,9 @@ public struct BookDetailView: View {
                 .foregroundStyle(Palette.ink)
             }
             .buttonStyle(.plain)
+            // The label alone reads "Now playing"; the action is to open the
+            // player, so say so.
+            .accessibilityLabel(isPlaying ? "Now playing. Open the player" : "Listen")
         }
     }
 
@@ -323,28 +345,51 @@ public struct BookDetailView: View {
 
     /// This user's own rating, tappable. Tapping the current score clears it,
     /// which is the only way to un-rate something without a separate control.
+    ///
+    /// Unrated, the row wore only five outline stars beside a muted average —
+    /// indistinguishable from a static score readout — so it gets a faint
+    /// "Rate" chip (item 06) that marks it as an input. A set rating fills in
+    /// tangerine, a colour the muted average text never uses, so the reader's
+    /// own stars and the community number never read as the same thing.
     private var ratingControl: some View {
         let mine = app.ratings[book.uuid]
-        return HStack(spacing: Metrics.spacing4) {
-            ForEach(1 ... 5, id: \.self) { star in
-                Button {
-                    Task { await app.setRating(mine == Double(star) ? nil : Double(star), for: book) }
-                } label: {
-                    Image(systemName: Double(star) <= (mine ?? 0) ? "star.fill" : "star")
-                        .font(.system(size: 14))
-                        .foregroundStyle(mine == nil ? Palette.inkQuaternary : Palette.tangerine)
+        return HStack(spacing: Metrics.spacing8) {
+            if mine == nil {
+                // Not a control of its own — the stars are — just the cue that
+                // makes the outline stars read as "tap to rate" rather than an
+                // average already earned. Hidden from VoiceOver, which reads the
+                // star buttons and the row's own hint instead.
+                Text("Rate")
+                    .font(Typography.caption.weight(.semibold))
+                    .foregroundStyle(Palette.inkTertiary)
+                    .padding(.horizontal, Metrics.spacing8)
+                    .padding(.vertical, 3)
+                    .overlay(Capsule().strokeBorder(Palette.borderStrong, lineWidth: 1))
+                    .accessibilityHidden(true)
+            }
+            HStack(spacing: Metrics.spacing4) {
+                ForEach(1 ... 5, id: \.self) { star in
+                    Button {
+                        Task { await app.setRating(mine == Double(star) ? nil : Double(star), for: book) }
+                    } label: {
+                        Image(systemName: Double(star) <= (mine ?? 0) ? "star.fill" : "star")
+                            .font(.system(size: 14))
+                            .foregroundStyle(mine == nil ? Palette.inkQuaternary : Palette.tangerine)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Rate \(star) star\(star == 1 ? "" : "s")")
+                    // The fill and the tangerine never reach the accessibility
+                    // tree, so VoiceOver read five identical buttons whether or
+                    // not the book was rated. The current score carries the trait,
+                    // and its hint says what a second tap does — silently deleting
+                    // the rating is not discoverable any other way.
+                    .accessibilityAddTraits(mine == Double(star) ? .isSelected : [])
+                    .accessibilityHint(mine == Double(star) ? "Removes your rating." : "")
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Rate \(star) star\(star == 1 ? "" : "s")")
-                // The fill and the tangerine never reach the accessibility
-                // tree, so VoiceOver read five identical buttons whether or
-                // not the book was rated. The current score carries the trait,
-                // and its hint says what a second tap does — silently deleting
-                // the rating is not discoverable any other way.
-                .accessibilityAddTraits(mine == Double(star) ? .isSelected : [])
-                .accessibilityHint(mine == Double(star) ? "Removes your rating." : "")
             }
             if let serverAverage = book.rating, mine == nil {
+                // The community's number, muted and named, so it never reads as
+                // the reader's own tangerine stars.
                 Text(String(format: "%.1f average", serverAverage))
                     .font(Typography.caption)
                     .foregroundStyle(Palette.inkTertiary)
@@ -353,9 +398,12 @@ public struct BookDetailView: View {
         // Announced on entering the row, so the score is discoverable without
         // swiping across every star hunting for the selected one.
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Rating")
+        .accessibilityLabel("Your rating")
         .accessibilityValue(
             mine.map { "\(Int($0)) star\($0 == 1 ? "" : "s")" } ?? "Not rated")
+        // Names the action when nothing is set — otherwise "Not rated" alone
+        // reads as a fact, not an invitation to tap.
+        .accessibilityHint(mine == nil ? "Rate this book from one to five stars." : "")
     }
 
     /// The shelf this book sits on, changeable in place.
@@ -388,6 +436,10 @@ public struct BookDetailView: View {
             .foregroundStyle(Palette.inkSecondary)
         }
         .disabled(app.statuses.isEmpty)
+        // The pill's own text is a bare shelf name; VoiceOver needs the verb.
+        // The current shelf is the value, so it is not repeated in the label.
+        .accessibilityLabel(book.status == nil ? "Set reading status" : "Change reading status")
+        .accessibilityValue(book.status?.name ?? "None")
     }
 
     static func symbol(for status: String?) -> String {
@@ -404,7 +456,8 @@ public struct BookDetailView: View {
     private var formatBadges: some View {
         let formats = book.servableFormats
         if formats.contains(.readaloud) {
-            badge("Readaloud", duration: book.readaloud?.duration)
+            // "Read-along", never the server's "Readaloud" (item 03).
+            badge("Read-along", duration: book.readaloud?.duration)
         } else if formats.contains(.audiobook) {
             badge("Audiobook", duration: book.audiobook?.duration)
         }
@@ -443,39 +496,83 @@ public struct BookDetailView: View {
         }
     }
 
-    /// Storyteller keeps up to three editions of a book; showing which exist
-    /// answers "can I listen to this" without opening it.
-    private var editions: some View {
+    /// Editions and their download state, one disclosure down (items 02 & 03).
+    ///
+    /// Under Option A a book downloads when you open it, so this is no longer a
+    /// prerequisite to reading — it is where you *keep* an edition for offline
+    /// use, and where the per-edition ⋯ menu (save, pause, resume, remove)
+    /// lives. Collapsed by default so raw edition rows never compete with Read
+    /// and Listen above the fold.
+    private var manageDownloads: some View {
+        // tvOS has no `DisclosureGroup` and no route to this screen anyway, so
+        // it shows the same content expanded under a plain heading; iOS and the
+        // Mac collapse it so raw edition rows never compete above the fold.
+        #if os(tvOS)
         VStack(alignment: .leading, spacing: Metrics.spacing8) {
-            Text("Editions").overlineStyle()
-            VStack(spacing: 1) {
-                if book.availableFormats.isEmpty {
-                    // Was a header over a blank rounded rectangle.
-                    editionNote("This book has no editions on the server yet.")
-                } else if book.servableFormats.isEmpty {
-                    editionNote("Every edition is missing on the server.")
-                }
-                if let ebook = book.ebook {
-                    editionRow("Ebook", format: .ebook,
-                               detail: ebook.isEpub2 == true ? "EPUB 2" : "EPUB 3",
-                               size: ebook.fileSize, missing: ebook.missing == true)
-                }
-                if let audiobook = book.audiobook {
-                    editionRow("Audiobook", format: .audiobook,
-                               detail: Self.durationText(audiobook.duration ?? 0),
-                               size: audiobook.fileSize, missing: audiobook.missing == true)
-                }
-                if let readaloud = book.readaloud {
-                    editionRow(
-                        "Readaloud", format: .readaloud,
-                        detail: readaloud.isAligned
-                            ? Self.durationText(readaloud.duration ?? 0)
-                            : (readaloud.status ?? "processing").capitalized,
-                        size: readaloud.fileSize, missing: readaloud.missing == true,
-                    )
-                }
+            Text("Manage downloads").overlineStyle()
+            manageDownloadsContent
+        }
+        #else
+        DisclosureGroup {
+            manageDownloadsContent
+                .padding(.top, Metrics.spacing8)
+        } label: {
+            Text("Manage downloads").overlineStyle()
+        }
+        .tint(Palette.inkSecondary)
+        #endif
+    }
+
+    private var manageDownloadsContent: some View {
+        VStack(alignment: .leading, spacing: Metrics.spacing8) {
+            Text("Books download automatically when you open them. Save an edition here to keep it for offline reading.")
+                .font(Typography.footnote)
+                .foregroundStyle(Palette.inkTertiary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            editionsCard
+        }
+    }
+
+    /// The edition rows. Storyteller keeps up to three editions of a book;
+    /// showing which exist answers "can I listen to this" without opening it.
+    private var editionsCard: some View {
+        VStack(spacing: 1) {
+            if book.availableFormats.isEmpty {
+                // Was a header over a blank rounded rectangle.
+                editionNote("This book has no editions on the server yet.")
+            } else if book.servableFormats.isEmpty {
+                editionNote("Every edition is missing on the server.")
             }
-            .background(Palette.surface, in: RoundedRectangle(cornerRadius: Metrics.radiusMedium))
+            if let ebook = book.ebook {
+                editionRow(Self.editionName(.ebook), format: .ebook,
+                           detail: ebook.isEpub2 == true ? "EPUB 2" : "EPUB 3",
+                           size: ebook.fileSize, missing: ebook.missing == true)
+            }
+            if let audiobook = book.audiobook {
+                editionRow(Self.editionName(.audiobook), format: .audiobook,
+                           detail: Self.durationText(audiobook.duration ?? 0),
+                           size: audiobook.fileSize, missing: audiobook.missing == true)
+            }
+            if let readaloud = book.readaloud {
+                editionRow(
+                    Self.editionName(.readaloud), format: .readaloud,
+                    detail: readaloud.isAligned
+                        ? Self.durationText(readaloud.duration ?? 0)
+                        : (readaloud.status ?? "processing").capitalized,
+                    size: readaloud.fileSize, missing: readaloud.missing == true,
+                )
+            }
+        }
+        .background(Palette.surface, in: RoundedRectangle(cornerRadius: Metrics.radiusMedium))
+    }
+
+    /// The reader-facing name for an edition. "Read-along", never the server's
+    /// "Readaloud" (item 03); the other two already read plainly.
+    static func editionName(_ format: BookContentService.Format) -> String {
+        switch format {
+        case .ebook: "Ebook"
+        case .audiobook: "Audiobook"
+        case .readaloud: "Read-along"
         }
     }
 
@@ -541,7 +638,10 @@ public struct BookDetailView: View {
                     Task { await app.resumeDownload(job) }
                 }
             } else if !onDisk {
-                Button("Download", systemImage: "arrow.down.circle") {
+                // "Save for offline", not "Download": under Option A opening the
+                // book already fetches it, so this button is specifically about
+                // keeping the edition on the device (item 02).
+                Button("Save for offline", systemImage: "arrow.down.circle") {
                     Task { await app.download(book, format: format) }
                 }
             }
@@ -569,7 +669,7 @@ public struct BookDetailView: View {
                 .frame(width: 44, height: 44)
                 .contentShape(Rectangle())
         }
-        .accessibilityLabel("\(format.rawValue.capitalized) options")
+        .accessibilityLabel("\(Self.editionName(format)) options")
         #endif
     }
 

@@ -123,11 +123,25 @@ struct LibraryHeader: View {
         if isSearching {
             return "\(displayedCount) result\(displayedCount == 1 ? "" : "s")"
         }
+        // A tag filter narrows the grid below the selected shelf's own number,
+        // and the plain "3 books" sitting under a chip reading "All books 6"
+        // reads as a contradiction — the chips count the whole library, this
+        // counts what's on screen. When tags are in force, count against that
+        // shelf's total ("3 of 6") so the line and the highlighted chip
+        // describe the same set out loud. Without tags the shelf filter and the
+        // chip share a predicate, so the plain count cannot disagree with it.
+        if !app.arrangement.tags.isEmpty {
+            let shelfTotal = app.facets.count(app.arrangement.shelf)
+            return "\(displayedCount) of \(shelfTotal) book\(shelfTotal == 1 ? "" : "s")"
+        }
         return "\(displayedCount) book\(displayedCount == 1 ? "" : "s")"
     }
 
-    /// Labelled, never a bare glyph: the whole complaint was that the current
-    /// sort could not be read without opening something.
+    /// A control, not a caption: a bordered, tinted capsule with a sort glyph,
+    /// the current sort's name and a disclosure chevron, so it reads as
+    /// something you press rather than a note about how the grid is ordered.
+    /// The current sort is still legible without opening anything, which was the
+    /// original point of labelling it.
     #if !os(tvOS)
     private var sortMenu: some View {
         @Bindable var app = app
@@ -140,17 +154,26 @@ struct LibraryHeader: View {
             Toggle("Reverse order", isOn: $app.arrangement.ascending)
         } label: {
             HStack(spacing: Metrics.spacing4) {
+                Image(systemName: "arrow.up.arrow.down")
+                    .font(.system(size: 11, weight: .semibold))
                 Text(app.arrangement.sort.title)
-                Image(systemName: "chevron.up.chevron.down").font(.system(size: 10, weight: .semibold))
+                    .font(Typography.subhead.weight(.semibold))
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .bold))
             }
-            .font(Typography.caption)
             .foregroundStyle(Palette.tangerinePressed)
-            .padding(.horizontal, Metrics.spacing8)
-            .padding(.vertical, Metrics.spacing4)
+            .padding(.horizontal, Metrics.spacing12)
+            .padding(.vertical, Metrics.spacing8)
             .background(Palette.surfaceRaised, in: Capsule())
+            .overlay(Capsule().strokeBorder(Palette.borderStrong, lineWidth: 1))
             .fixedSize()
+            // The capsule sits shy of the 44pt floor, so the tap area is grown
+            // to meet it without inflating the visible pill.
+            .frame(minHeight: 44)
+            .contentShape(Capsule())
         }
         .accessibilityLabel("Sort by \(app.arrangement.sort.title)")
+        .accessibilityHint("Changes how your library is ordered")
     }
     #endif
 }
