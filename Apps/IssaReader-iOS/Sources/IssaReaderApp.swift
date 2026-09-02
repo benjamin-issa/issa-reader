@@ -96,13 +96,6 @@ struct LibraryTabs: View {
     enum Destination: Hashable { case library, settings }
 
     private func openPendingBook() {
-        guard let pending = app.consumePendingBook() else { return }
-        // The expanded player is a sheet now, not a tab, so switching tabs no
-        // longer moves it out of the way. Left up, it sat over the navigation
-        // below while the one-shot reader request was spent behind it — and
-        // the reader's own cover cannot present while it is showing.
-        showsPlayer = false
-        selectedTab = .library
         // Don't tear down the stack when the reader for this very book is already
         // on screen. `navigationDestination` keys on the whole Book value, and a
         // book being read has a moving `position`, so a reset-then-append pushed
@@ -111,7 +104,24 @@ struct LibraryTabs: View {
         // widget or Handoff deep link to the book you are reading would do. When
         // the reader is closed (or showing a different book) we still reset, so a
         // deep link opens or reopens it and Back lands on the library.
-        if app.visibleReaderUUID == pending.book.uuid { return }
+        //
+        // Decided before the request is consumed, and the request dropped
+        // rather than consumed: consuming arms the one-shot reader request,
+        // and one armed for a book already on screen re-presented the reader
+        // the next time that book's screen appeared. The reader reports itself
+        // visible from the moment its cover is up, so a second link arriving
+        // while the book is still opening is caught here too.
+        if let pending = app.pendingBook, app.visibleReaderUUID == pending.uuid {
+            app.discardPendingBook()
+            return
+        }
+        guard let pending = app.consumePendingBook() else { return }
+        // The expanded player is a sheet now, not a tab, so switching tabs no
+        // longer moves it out of the way. Left up, it sat over the navigation
+        // below while the one-shot reader request was spent behind it — and
+        // the reader's own cover cannot present while it is showing.
+        showsPlayer = false
+        selectedTab = .library
         libraryPath = NavigationPath()
         // Pushed either way, so Back from the reader lands on the book and then
         // the library. `consumePendingBook` has already recorded whether the

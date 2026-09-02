@@ -74,7 +74,13 @@ struct ReaderCoachOverlay: View {
                 zoneGuide
             }
             if showsNarrationTip {
-                tip(icon: "hand.tap", text: "Double-tap a line to hear it.")
+                VStack(spacing: Metrics.spacing12) {
+                    tip(icon: "hand.tap", text: "Double-tap a line to hear it.")
+                    // The strip's own buttons need no explaining; the route to
+                    // the full player — the scrubber, the rate, the sleep
+                    // timer — does, since one of the two ways there is a swipe.
+                    tip(icon: "waveform", text: "Tap the waveform, or swipe up, for the player.")
+                }
             }
             Text("Tap anywhere to begin")
                 .font(Typography.footnote)
@@ -143,7 +149,10 @@ struct ReaderCoachOverlay: View {
             )
         }
         if showsNarrationTip {
-            parts.append("This book is narrated. Double-tap a line to hear it read aloud.")
+            parts.append(
+                "This book is narrated. Double-tap a line to hear it read aloud. "
+                    + "The play button's Open player action shows the full player.",
+            )
         }
         return parts.joined(separator: " ")
     }

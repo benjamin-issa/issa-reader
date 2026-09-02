@@ -358,6 +358,29 @@ public final class ChapterLayout {
         }
     }
 
+    /// The first fragment that *begins* on a page — the one a saved position
+    /// may anchor on.
+    ///
+    /// Not the one covering the page's first character. Pages break per line,
+    /// so that fragment usually began on the page before, and a position
+    /// anchored on it came back to that page's start; the close then saved the
+    /// page it had landed on, and every open walked the reader back one more
+    /// page. `nil` when no fragment starts here — one sentence spanning the
+    /// whole page — and the position rests on its offset and quote instead.
+    public func firstFragment(beginningOn page: RenderedPage) -> String? {
+        let range = page.characterRange
+        guard range.length > 0, NSMaxRange(range) <= attributedText.length else { return nil }
+        var found: String?
+        attributedText.enumerateAttribute(.issaFragmentID, in: range) { value, _, stop in
+            guard let id = value as? String,
+                  let whole = fragmentRanges[id], whole.location >= range.location
+            else { return }
+            found = id
+            stop.pointee = true
+        }
+        return found
+    }
+
     /// The page holding a character index, for restoring a saved position.
     public func page(containingOffset offset: Int) -> RenderedPage? {
         pages.first { NSLocationInRange(offset, $0.characterRange) } ?? pages.last

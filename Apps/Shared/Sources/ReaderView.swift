@@ -10,13 +10,24 @@ import UIKit
 /// Opens a book, resolving its model at the moment the screen is really shown.
 ///
 /// `ReaderView` takes its model rather than making one, and asking `AppModel`
-/// for it has a side effect: it lets go of whatever book was open before, and
-/// silences it. A `NavigationLink`'s destination closure can be evaluated
-/// before the link is ever followed, so handing `ReaderView` a model from the
-/// call site would let merely glancing at one book's detail screen stop another
-/// one playing. Resolving inside `body` happens only when the screen renders.
+/// for it has a side effect: a book opened for the first time is registered
+/// with the app, which is what keeps its narration alive after the screen
+/// closes. A `NavigationLink`'s destination closure can be evaluated before
+/// the link is ever followed, so handing `ReaderView` a model from the call
+/// site would register books nobody opened.
+///
+/// Resolved in `onAppear`, not in `body`. `AppModel.readers` is observed by the
+/// mini bar, the player sheet and both `onChange(of: app.playback == nil)`
+/// handlers, so registering the model from inside a body wrote an observed
+/// property in the middle of the update that was reading it — and an eviction
+/// (`readerDidClose`) then invalidated this very view, whose body promptly
+/// resolved a replacement model behind the closing screen. Held in `@State`
+/// once resolved, so nothing the app does to `readers` afterwards can make
+/// this screen build a second one.
 public struct ReaderScreen: View {
     @Environment(AppModel.self) private var app
+    @Environment(PlaybackSettings.self) private var settings
+    @State private var model: ReaderModel?
     private let book: Book
     private let session: Session
 
@@ -26,7 +37,17 @@ public struct ReaderScreen: View {
     }
 
     public var body: some View {
-        ReaderView(model: app.reader(for: book, session: session))
+        ZStack {
+            // The page's own ground for the one update before the model lands,
+            // so a cover that is sliding up is never briefly the wrong colour.
+            settings.readerStyle.theme.background.ignoresSafeArea()
+            if let model {
+                ReaderView(model: model)
+            }
+        }
+        .onAppear {
+            if model == nil { model = app.reader(for: book, session: session) }
+        }
     }
 }
 
@@ -68,6 +89,9 @@ public struct ReaderView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(PlaybackSettings.self) private var settings
     @Environment(AppModel.self) private var app
+    // The skip buttons move the audio from the strip, so the lock screen has
+    // to be told where it landed.
+    @Environment(NowPlayingController.self) private var nowPlaying
     #if os(macOS)
     @Environment(\.controlActiveState) private var controlActiveState
     private var isActiveScene: Bool { controlActiveState == .key }
@@ -194,18 +218,31 @@ public struct ReaderView: View {
         // Dismisses the home indicator with the rest of it.
         .persistentSystemOverlays(model.chromeVisible ? .automatic : .hidden)
         #endif
+        // Visibility is the whole screen's, not `pageContent`'s: that view
+        // exists only in the `.ready` branch, so the app learned which book
+        // was on screen only once the chapter had laid out — and a deep link
+        // to the very book still opening reset the navigation stack under
+        // the cover, tearing it down and opening the book again. The book id
+        // is captured by value inside `onVisibilityChanged`, so this does not
+        // retain the model.
+        .onAppear { model.setReaderVisible(true) }
         .onDisappear {
+            model.setReaderVisible(false)
             Task { await model.saveProgress() }
             // Released only if nothing is playing it, so a book that is merely
             // read does not pin its chapter layout for the rest of the session.
             //
-            // Attached to the whole screen, not to `pageContent`: that view
-            // exists only in the `.ready` branch of the phase switch, so its
-            // own onDisappear also fired when a chapter failed to load
-            // mid-session — evicting the live model while the reader was still
-            // on screen, and letting `ReaderScreen.body` resolve a hollow
-            // replacement behind it that took over narration bookkeeping.
-            app.readerDidClose(model)
+            // Attached to the whole screen, not to `pageContent`, for the same
+            // reason as above: its own onDisappear also fired when a chapter
+            // failed to load mid-session, evicting the live model while the
+            // reader was still on screen.
+            //
+            // And deferred a turn. Evicting flips `app.playback`, which the
+            // mini bar, the player sheet and two `onChange` handlers observe —
+            // written synchronously from here, that landed inside the very
+            // update that was dismissing this screen (or tearing the scene
+            // down on quit), an update SwiftUI then had to run again.
+            Task { @MainActor in app.readerDidClose(model) }
         }
         #if os(iOS) || os(macOS)
         // Handoff: the same book, at the same place, on the Mac or the iPad.
@@ -531,11 +568,7 @@ public struct ReaderView: View {
             // settings screen is otherwise writing to a value nothing reads.
             // The narration rate is seeded earlier, with `downloadHost`.
             applyStyle()
-            // The book id is captured by value. Reaching through `model` inside
-            // a closure the model itself stores would retain it for the life of
-            // the process, pinning the chapter layout, the decoded plates and
-            // the readalong coordinator with it.
-            model.setReaderVisible(true)
+            // Visibility is reported by the screen-level onAppear, not here.
             // `enqueuePosition` and the annotation hooks are installed by
             // `AppModel.reader(for:session:)` and stay installed. They used to
             // be set here and broken again in `onDisappear`, which left
@@ -583,16 +616,11 @@ public struct ReaderView: View {
         // would throw away this book's own settings the moment the reader
         // changed a default, mid-page.
         .onChange(of: settings.readerStyle) { _, _ in applyStyle() }
-        .onDisappear {
-            // Not a teardown any more. The model belongs to the app, and its
-            // closures stay wired, so narration keeps playing and keeps writing
-            // its position while the reader browses the library. All that
-            // changes here is the clock: the fine-grained tick is only worth
-            // running while there is a page to move — letting go of the model
-            // itself happens in the screen-level onDisappear, because this view
-            // also disappears whenever the phase merely leaves `.ready`.
-            model.setReaderVisible(false)
-        }
+        // No onDisappear. The model belongs to the app and its closures stay
+        // wired, so narration keeps playing and keeps writing its position
+        // while the reader browses the library; visibility and release are the
+        // screen-level hooks' business, because this view also disappears
+        // whenever the phase merely leaves `.ready`.
     }
 
     /// What to do with the selected text. Copy first, because that is what a
@@ -712,13 +740,10 @@ public struct ReaderView: View {
         HStack(spacing: Metrics.spacing12) {
             if model.chromeVisible {
                 if model.hasNarration {
-                    // The strip's one audio control, and it toggles narration in
-                    // place. Skip ±N and the scrubber moved into the full player,
-                    // so the two adjacent controls that used to mean different
-                    // things — toggle here, open-the-player next to it — are no
-                    // longer side by side. The player, where skip now lives
-                    // (still driven by the shared commandMap interval), is a
-                    // swipe up on the strip instead, so it costs no visible slot.
+                    // Toggles narration in place. Build 15 thinned this strip
+                    // to the one button and moved skip ±N and the waveform into
+                    // the full player behind a swipe — and the phone lost every
+                    // visible way to move through the audio. Back as they were.
                     Button {
                         Task { await model.togglePlayback() }
                     } label: {
@@ -729,27 +754,20 @@ public struct ReaderView: View {
                     .buttonStyle(.plain)
                     .accessibilityLabel(model.isPlaying ? "Pause narration" : "Play narration")
                     // VoiceOver has no swipe-up, so it reaches the player through
-                    // a named action rather than the strip gesture below.
+                    // a named action as well as the waveform button.
                     .accessibilityAction(named: "Open player") { showsPlayer = true }
-                }
-                #if os(macOS)
-                // The Mac has no swipe-up gesture, so the thinned footer would
-                // otherwise leave a sighted reader no route to the full player —
-                // and the sleep timer and the seek scrubber live only there. A
-                // small waveform button keeps that route on the Mac while the
-                // phone reaches it by swiping the strip.
-                if model.hasNarration {
+                    // The full player: the scrubber, the rate and the sleep
+                    // timer live only there.
                     Button {
                         showsPlayer = true
                     } label: {
                         Image(systemName: "waveform")
-                            .font(.system(size: 15))
-                            .foregroundStyle(model.style.theme.text.opacity(0.55))
+                            .font(.system(size: 17))
+                            .foregroundStyle(model.style.theme.textTertiary)
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Open player")
                 }
-                #endif
                 Button {
                     showsContents = true
                 } label: {
@@ -763,6 +781,26 @@ public struct ReaderView: View {
                     .foregroundStyle(model.style.theme.text.opacity(0.55))
                 }
                 .buttonStyle(.plain)
+                if model.hasNarration {
+                    // Same seconds, same buttons as the full player and the mini
+                    // bar — the setting in Controls & remapping governs all three,
+                    // so a reader who tunes it once gets the same jump everywhere.
+                    // These are also the only way to move the page *with* the
+                    // audio: "follow narration" turns a page back to the spoken
+                    // sentence, so a page turned by hand is turned back a few
+                    // seconds later, and a listener who wants to go forward has
+                    // to take the audio with them.
+                    narrationSkipButton(
+                        seconds: settings.commandMap.skipBackwardInterval,
+                        symbol: "gobackward", action: .skipBackward,
+                        label: "Skip back",
+                    )
+                    narrationSkipButton(
+                        seconds: settings.commandMap.skipForwardInterval,
+                        symbol: "goforward", action: .skipForward,
+                        label: "Skip forward",
+                    )
+                }
                 Spacer()
                 // Inside the chrome, not beside it: hiding everything should
                 // hide everything. It used to stay behind on the grounds that
@@ -781,16 +819,19 @@ public struct ReaderView: View {
         }
         .padding(.horizontal, model.style.pageMargin)
         .frame(height: ReaderChrome.barHeight)
-        // Swipe up on the strip to open the full player, where skip ±N and the
-        // scrubber now live — the same expand gesture the mini-player uses. The
-        // minimum distance keeps it clear of the buttons' taps, and it does
-        // nothing on a book with no narration to play. VoiceOver, which has no
-        // swipe, reaches the player through the play button's named action.
+        // Swipe up on the strip to open the full player, as well as tapping the
+        // waveform. The whole bar is the target: without a content shape an
+        // HStack is hittable only where its glyphs are, which made the swipe
+        // land perhaps one time in five. The minimum distance keeps it clear
+        // of the buttons' taps, and it does nothing on a book with no
+        // narration to play. (The mini bar expands on a tap, not a drag —
+        // this is the reader's own gesture, not a shared one.)
         //
         // iOS only: this footer is the phone/iPad reader's. tvOS reads through
         // TVReadalongView and drives focus, not drag, and `DragGesture` is not
         // available there at all.
         #if os(iOS)
+        .contentShape(Rectangle())
         .gesture(
             DragGesture(minimumDistance: 24)
                 .onEnded { value in
@@ -799,6 +840,27 @@ public struct ReaderView: View {
                 },
         )
         #endif
+    }
+
+    private func narrationSkipButton(
+        seconds: TimeInterval, symbol: String, action: PlaybackAction, label: String,
+    ) -> some View {
+        Button {
+            Task {
+                await model.readalong?.perform(action, using: settings.commandMap)
+                nowPlaying.publish()
+            }
+        } label: {
+            ZStack {
+                Image(systemName: symbol).font(.system(size: 17))
+                Text("\(Int(seconds))")
+                    .font(Typography.sans(8, weight: .semibold))
+                    .offset(y: 1)
+            }
+            .foregroundStyle(model.style.theme.textTertiary)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(label) \(Int(seconds)) seconds")
     }
 }
 

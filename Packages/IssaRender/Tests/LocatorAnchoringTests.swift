@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import IssaCore
 import IssaEPUB
@@ -26,6 +27,85 @@ struct LocatorAnchoringTests {
             for: locator, in: text, fragmentRanges: ["ch1-s3": NSRange(location: 13, length: 20)],
         )
         #expect(offset == 13)
+    }
+
+    /// Page breaks fall mid-sentence far more often than not, so a position
+    /// saved at the top of a page names a sentence that began on the page
+    /// before. Returning that sentence's start put the reader there, the close
+    /// then saved *that* page, and the position walked back one page per open.
+    @Test("An offset inside the fragment refines it to the exact place")
+    func offsetInsideFragmentRefines() {
+        let ranges = ["ch1-s2": NSRange(location: 13, length: 60)]
+        let inside = ReadiumLocator(
+            href: "ch01.xhtml", type: "application/xhtml+xml",
+            locations: .init(fragments: ["ch1-s2"], progression: 0.2, charOffset: 40),
+        )
+        #expect(LocatorAnchoring.characterOffset(for: inside, in: text, fragmentRanges: ranges) == 40)
+
+        // An offset outside the sentence is from another rendering of the
+        // text; the sentence keeps its authority.
+        let stale = ReadiumLocator(
+            href: "ch01.xhtml", type: "application/xhtml+xml",
+            locations: .init(fragments: ["ch1-s2"], progression: 0.2, charOffset: 200),
+        )
+        #expect(LocatorAnchoring.characterOffset(for: stale, in: text, fragmentRanges: ranges) == 13)
+    }
+
+    /// The same drift from the writing side: the fragment a page anchors on
+    /// must begin on that page. The one covering its first character usually
+    /// does not, and restoring to it lands on the page before.
+    @Test("A saved page anchors on a fragment that begins on it")
+    @MainActor
+    func savedPageAnchorsOnItsOwnFragment() throws {
+        // One long paragraph of numbered sentences, laid out narrow enough
+        // that every page break falls inside a sentence.
+        let style = ReaderStyle()
+        let attributed = NSMutableAttributedString()
+        var ranges: [String: NSRange] = [:]
+        for index in 0..<40 {
+            let start = attributed.length
+            attributed.append(NSAttributedString(
+                string: "Sentence number \(index) rambles on for long enough to wrap onto another line. ",
+                attributes: [.font: style.bodyFont(), .issaFragmentID: "s\(index)"],
+            ))
+            ranges["s\(index)"] = NSRange(location: start, length: attributed.length - start)
+        }
+        let layout = ChapterLayout(text: attributed, fragmentRanges: ranges)
+        layout.layout(pageSize: CGSize(width: 200, height: 120))
+        try #require(layout.pages.count > 2)
+
+        for page in layout.pages.dropFirst() where page.characterRange.length > 0 {
+            let start = page.characterRange.location
+            let covering = attributed.attribute(.issaFragmentID, at: start, effectiveRange: nil) as? String
+            let anchor = layout.firstFragment(beginningOn: page)
+            if let anchor {
+                let range = try #require(ranges[anchor])
+                #expect(range.location >= start, "\(anchor) began before page \(page.index)")
+                #expect(NSLocationInRange(range.location, page.characterRange))
+                // What a restore does with it: back to this page, never the one before.
+                let locator = ReadiumLocator(
+                    href: "ch.xhtml", type: "application/xhtml+xml",
+                    locations: .init(fragments: [anchor], charOffset: start),
+                )
+                let offset = try #require(LocatorAnchoring.characterOffset(
+                    for: locator, in: attributed.string, fragmentRanges: ranges))
+                #expect(layout.page(containingOffset: offset)?.index == page.index)
+            }
+            // The covering fragment is the trap: whenever it began earlier it
+            // must not have been chosen.
+            if let covering, let range = ranges[covering], range.location < start {
+                #expect(anchor != covering)
+            }
+        }
+        // The fixture actually exercises the straddling case.
+        let straddles = layout.pages.dropFirst().contains { page in
+            guard page.characterRange.length > 0,
+                  let id = attributed.attribute(
+                    .issaFragmentID, at: page.characterRange.location, effectiveRange: nil) as? String,
+                  let range = ranges[id] else { return false }
+            return range.location < page.characterRange.location
+        }
+        #expect(straddles, "no page break fell inside a sentence; the fixture proves nothing")
     }
 
     /// A locator written before the reader changed font size still has to land

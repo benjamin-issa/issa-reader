@@ -95,8 +95,13 @@ public final class DownloadManager: NSObject {
     public var onFinished: ((Job) -> Void)?
 
     private static let wifiOnlyKey = "issa.downloads.wifiOnly"
-    private let baseURL: URL
-    private let tokens: any TokenProviding
+    private var baseURL: URL
+    private var tokens: any TokenProviding
+    private let identifier: String
+    /// How many times the session has been rebuilt after the daemon
+    /// invalidated it unasked. Once: a repeat means the identifier is being
+    /// fought over, and rebuilding again would only feed the fight.
+    private var rebuilds = 0
     /// Nonisolated so the delegate can resolve a destination on its own queue:
     /// the temporary file is deleted the instant the callback returns, so the
     /// move cannot wait for a hop to the main actor.
@@ -138,16 +143,35 @@ public final class DownloadManager: NSObject {
     ) {
         self.baseURL = baseURL
         self.tokens = tokens
+        self.identifier = identifier
         self.destinationFor = destinationFor
         super.init()
 
         wifiOnly = UserDefaults.standard.bool(forKey: Self.wifiOnlyKey)
+        session = makeSession()
+    }
 
+    private func makeSession() -> URLSession {
         let configuration = URLSessionConfiguration.background(withIdentifier: identifier)
         // A book is worth finishing even if the reader locks the phone.
         configuration.sessionSendsLaunchEvents = true
         configuration.isDiscretionary = false
-        session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
+        return URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
+    }
+
+    /// Points a live manager at a different server or credential.
+    ///
+    /// One background session per process, kept for the whole process. The
+    /// daemon keys the session on its identifier, so invalidating one instance
+    /// while another is built on the same identifier — which reconnecting did:
+    /// the sign-in form's `connect` right after the launch's — invalidated the
+    /// new one as well, and its first `downloadTask(with:)` raised
+    /// `NSGenericException` and took the app down. Reconnecting now keeps the
+    /// session and changes only what it is for. Requests read these at the
+    /// moment they are built, so a transfer already in flight is unaffected.
+    public func reconfigure(baseURL: URL, tokens: any TokenProviding) {
+        self.baseURL = baseURL
+        self.tokens = tokens
     }
 
     public func state(for job: Job) -> State? { states[job] }
@@ -158,6 +182,10 @@ public final class DownloadManager: NSObject {
     /// `states[job]` alone does not distinguish "the task was never created"
     /// from "it was, and is running unobserved".
     func hasTask(for job: Job) -> Bool { tasks[job] != nil }
+
+    /// The request a live task was built with. Internal, for the test that
+    /// reconfigures a manager and needs to see which server it now asks.
+    func request(for job: Job) -> URLRequest? { tasks[job]?.originalRequest }
 
     /// Everything not yet finished, for the Downloads screen.
     public var pending: [(job: Job, state: State)] {
@@ -197,6 +225,14 @@ public final class DownloadManager: NSObject {
         // Honour it here, before a task is created and resumed for a transfer
         // the caller already asked to stop.
         if cancelledBeforeStart.remove(job) != nil { return }
+
+        // The session may have gone while the token was fetched — a sign-out,
+        // or the daemon. Creating a task on an invalid session is not an
+        // error but an `NSGenericException`, which no Swift code can catch.
+        guard !isShutDown else {
+            states[job] = .failed("Downloads are stopped. Tap to try again.")
+            return
+        }
 
         // Resuming from a partial transfer beats starting a 79 MB file again.
         let task = if let data = resumeData.removeValue(forKey: job) {
@@ -272,9 +308,54 @@ public final class DownloadManager: NSObject {
     /// downloads mid-flight. Nothing invalidated the old session, and the
     /// URLSession/delegate pair retains itself, so old managers leaked and went
     /// on mutating state nothing was reading.
+    ///
+    /// Cancels what is in flight rather than letting it finish: the callers
+    /// are sign-out, where a transfer belongs to the account that just left,
+    /// and a session kept alive by a transfer would still be attached to the
+    /// identifier when the next sign-in builds a fresh one on it.
     public func shutDown() async {
         shutDownFlag.withLock { $0 = true }
-        session.finishTasksAndInvalidate()
+        session.invalidateAndCancel()
+    }
+
+    /// Stops everything in flight and forgets it, keeping the session.
+    ///
+    /// Sign-out's teardown: the transfers belong to the account that just left,
+    /// so they are cancelled and their rows cleared. What it deliberately does
+    /// not do is invalidate the session — the daemon owns the identifier for
+    /// the whole process, and a session invalidated here made the *next*
+    /// sign-in's session invalid from birth, whose first `downloadTask(with:)`
+    /// raised an uncatchable `NSGenericException`. The manager is kept and
+    /// pointed at the new account by `reconfigure`.
+    public func stop() {
+        for task in tasks.values { task.cancel() }
+        tasks = [:]
+        resumeData = [:]
+        pausing = []
+        cancelledBeforeStart = []
+        states = [:]
+    }
+
+    /// The daemon invalidated the session unasked.
+    ///
+    /// Everything it was carrying died with it. Rebuilt once, so the next tap
+    /// on a row works; a second invalidation means the identifier is being
+    /// contested and this manager stays down rather than joining in.
+    private func sessionDidBecomeInvalid(_ error: (any Error)?) {
+        for job in tasks.keys {
+            states[job] = .failed("The download was interrupted. Tap to try again.")
+        }
+        tasks = [:]
+        guard rebuilds == 0 else {
+            IssaLog.warning("download session invalidated again; staying down",
+                            ["error": error.map { String(describing: $0) } ?? "none"])
+            return
+        }
+        rebuilds += 1
+        IssaLog.warning("download session invalidated; rebuilt",
+                        ["error": error.map { String(describing: $0) } ?? "none"])
+        session = makeSession()
+        shutDownFlag.withLock { $0 = false }
     }
 
     /// Reattaches to whatever the system carried on with while the app was away.
@@ -310,6 +391,19 @@ public final class DownloadManager: NSObject {
 }
 
 extension DownloadManager: URLSessionDownloadDelegate {
+    public nonisolated func urlSession(_ session: URLSession, didBecomeInvalidWithError error: (any Error)?) {
+        // Flagged first, on this queue: from here on no task may be created on
+        // the session, whoever invalidated it. `shutDown` set the flag
+        // already; an invalidation it did not ask for is handled on the actor.
+        let deliberate = shutDownFlag.withLock { flag -> Bool in
+            let was = flag
+            flag = true
+            return was
+        }
+        guard !deliberate else { return }
+        Task { @MainActor [weak self] in self?.sessionDidBecomeInvalid(error) }
+    }
+
     public nonisolated func urlSession(
         _ session: URLSession, downloadTask: URLSessionDownloadTask,
         didWriteData bytesWritten: Int64, totalBytesWritten: Int64,

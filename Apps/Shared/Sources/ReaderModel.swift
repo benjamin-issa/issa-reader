@@ -562,6 +562,10 @@ public final class ReaderModel {
             steeredToFragment = true
         }
         readalong = coordinator
+        // The screen reports visibility as it appears, which is before the
+        // book has opened and this coordinator exists; the clock it asked for
+        // is applied now that there is a player to run it on.
+        coordinator.player.setHighFrequencyUpdates(isReaderVisible)
         onNarrationReady?(coordinator)
     }
 
@@ -871,8 +875,12 @@ public final class ReaderModel {
     /// `AppModel.reader(for:session:)` alongside the other hooks.
     public var onVisibilityChanged: ((Bool) -> Void)?
 
+    /// Whether the reader screen is on screen, as last reported.
+    private var isReaderVisible = false
+
     /// The fine-grained clock is only worth running while the page is visible.
     public func setReaderVisible(_ visible: Bool) {
+        isReaderVisible = visible
         readalong?.player.setHighFrequencyUpdates(visible)
         onVisibilityChanged?(visible)
     }
@@ -1414,21 +1422,14 @@ public final class ReaderModel {
         }
         let href = package.spine[chapterIndex].href
 
-        // Anchor on the first narrated fragment on this page when there is one:
-        // it survives a font or margin change, which a page number does not.
-        //
-        // Clamped: `.ensuresExtraLineFragment` can append a synthetic
-        // zero-length trailing page whose `characterRange.location` equals the
-        // chapter's length, and `attribute(at:)` requires a valid index —
-        // passing the length itself is out of bounds and crashes. Every other
-        // reader of this offset (`locator(forRange:)`, `firstNarratedFragment`)
-        // already clamps; this was the one that didn't.
-        let textLength = (layout.attributedText.string as NSString).length
-        let fragment = textLength > 0
-            ? layout.attributedText.attribute(
-                .issaFragmentID, at: min(page.characterRange.location, textLength - 1),
-                effectiveRange: nil) as? String
-            : nil
+        // Anchor on the first fragment that begins on this page when there is
+        // one: it survives a font or margin change, which a page number does
+        // not. Beginning on it, not merely covering its first character — the
+        // fragment across the page break began on the page before, and a
+        // position anchored there came back a page early on every open.
+        // Bounds-checked inside: `.ensuresExtraLineFragment` can append a
+        // synthetic zero-length trailing page at the chapter's length.
+        let fragment = layout.firstFragment(beginningOn: page)
 
         let chapterProgress = layout.progression(of: page)
         let overall = package.bookProgress(spineIndex: chapterIndex, within: chapterProgress)

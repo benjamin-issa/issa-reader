@@ -15,13 +15,27 @@ import SwiftUI
 /// and outside `PositionGuard`, which is stated to be the one gate every writer
 /// passes through. A dropped connection lost the position with nothing queued
 /// to retry, and narration could overwrite a good reading place unchecked.
+///
+/// And resolved in `onAppear`, not `body`, for the reason `ReaderScreen`
+/// gives: registering the model writes `AppModel.readers`, which the player
+/// surfaces observe, and a body must not write what other bodies read.
 struct TVReadalongView: View {
     @Environment(AppModel.self) private var app
+    @Environment(PlaybackSettings.self) private var settings
+    @State private var model: ReaderModel?
     let book: Book
     let session: Session
 
     var body: some View {
-        TVReadalongContent(model: app.reader(for: book, session: session), book: book)
+        ZStack {
+            settings.readerStyle.theme.background.ignoresSafeArea()
+            if let model {
+                TVReadalongContent(model: model, book: book)
+            }
+        }
+        .onAppear {
+            if model == nil { model = app.reader(for: book, session: session) }
+        }
     }
 }
 
@@ -88,8 +102,11 @@ private struct TVReadalongContent: View {
             // Released only if nothing is playing it, exactly as `ReaderView`
             // does on the other platforms — without this every book browsed on
             // the TV pinned its chapter layout and decoded plates for the rest
-            // of the session.
-            app.readerDidClose(model)
+            // of the session. Deferred a turn for the reason `ReaderView`
+            // gives: evicting flips observed playback state, and doing so
+            // inside the update that is removing this screen is an update
+            // SwiftUI has to run again.
+            Task { @MainActor in app.readerDidClose(model) }
         }
         .onPlayPauseCommand { Task { await model.togglePlayback() } }
         .onChange(of: settings.readerStyle) { _, style in model.style = style }

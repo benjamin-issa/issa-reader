@@ -26,7 +26,18 @@ public enum LocatorAnchoring {
 
         // 1. The narrated sentence id. Exact, and stable across renderings,
         //    because it comes from the markup rather than from the layout.
+        //
+        //    Refined by the recorded offset when that falls inside the
+        //    sentence. Page breaks land mid-sentence far more often than not,
+        //    so a position saved at the top of a page names a sentence that
+        //    began on the page before; returning the sentence's start sent the
+        //    reader back a page on every open. An offset outside the sentence
+        //    is from a different rendering of the text and is not trusted.
         if let fragment = locator.sentenceID, let range = fragmentRanges[fragment] {
+            if let offset = locator.locations?.charOffset,
+               offset > range.location, offset < NSMaxRange(range), offset < length {
+                return offset
+            }
             return range.location
         }
 

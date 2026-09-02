@@ -264,6 +264,84 @@ struct CancelBeforeStartTests {
                 "start resuming after the cancel must not resurrect the job")
     }
 
+    /// A session invalidated during the same window is worse than a cancel:
+    /// `downloadTask(with:)` on an invalid session does not fail, it raises an
+    /// `NSGenericException`, and nothing in Swift can catch that. Sign-out
+    /// lands in this window whenever a download is starting, and a reconnect
+    /// used to as well.
+    @Test("a shutdown that lands before the task exists fails the job instead of raising")
+    func shutDownDuringTokenFetchDoesNotCreateATask() async {
+        let tokens = GatedTokens()
+        let manager = DownloadManager(
+            baseURL: URL(string: "http://example.test")!,
+            tokens: tokens,
+            identifier: "test.\(UUID().uuidString)",
+            destinationFor: { _ in URL(fileURLWithPath: "/dev/null") },
+        )
+        let job = DownloadManager.Job(bookUUID: "b", format: .ebook)
+
+        let starting = Task { await manager.start(job) }
+        await tokens.waitUntilEntered()
+        await manager.shutDown()
+        await tokens.release()
+        await starting.value
+
+        #expect(!manager.hasTask(for: job), "no task may be created on an invalidated session")
+        #expect(manager.state(for: job)?.isFailure == true,
+                "the row must say why, not sit at queued forever")
+    }
+
+    /// Reconnecting re-points the one manager rather than replacing it, so the
+    /// server and credential a request is built with are the new ones.
+    @Test("reconfiguring a manager keeps it usable")
+    func reconfigureKeepsTheManager() async {
+        let manager = DownloadManager(
+            baseURL: URL(string: "http://old.test")!,
+            tokens: StubTokens(),
+            identifier: "test.\(UUID().uuidString)",
+            destinationFor: { _ in URL(fileURLWithPath: "/dev/null") },
+        )
+        manager.reconfigure(baseURL: URL(string: "http://new.test")!, tokens: StubTokens())
+        let job = DownloadManager.Job(bookUUID: "b", format: .ebook)
+        await manager.start(job)
+        #expect(manager.state(for: job) == .queued)
+        #expect(manager.request(for: job)?.url?.host() == "new.test")
+        await manager.shutDown()
+    }
+
+    /// Sign-out then sign-in, in one process.
+    ///
+    /// The account's transfers must go, but the session must not: the daemon
+    /// keys a background session on its identifier for the whole process, and
+    /// invalidating one here made the next one invalid from birth — its first
+    /// `downloadTask(with:)` raised an `NSGenericException` no Swift code can
+    /// catch, which is what took Build 16 down on launch.
+    @Test("stopping for a sign-out leaves the manager able to download again")
+    func stopThenReconfigureStillDownloads() async {
+        let manager = DownloadManager(
+            baseURL: URL(string: "http://first.test")!,
+            tokens: StubTokens(),
+            identifier: "test.\(UUID().uuidString)",
+            destinationFor: { _ in URL(fileURLWithPath: "/dev/null") },
+        )
+        let job = DownloadManager.Job(bookUUID: "b", format: .ebook)
+        await manager.start(job)
+        #expect(manager.hasTask(for: job))
+
+        // Sign out: the transfer and its row go.
+        manager.stop()
+        #expect(!manager.hasTask(for: job))
+        #expect(manager.state(for: job) == nil)
+        #expect(manager.pending.isEmpty)
+
+        // Sign in as someone else: same manager, same session, new server.
+        manager.reconfigure(baseURL: URL(string: "http://second.test")!, tokens: StubTokens())
+        await manager.start(job)
+        #expect(manager.state(for: job) == .queued)
+        #expect(manager.request(for: job)?.url?.host() == "second.test")
+        await manager.shutDown()
+    }
+
     /// The ordinary case, unchanged: a cancel with a real task in flight still
     /// goes through the task's own `cancel()`.
     @Test("a cancel after the task exists still cancels it directly")

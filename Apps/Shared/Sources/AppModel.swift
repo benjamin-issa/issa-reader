@@ -230,15 +230,21 @@ public final class AppModel {
         // to a daemon that may need waking — both used to run ahead of the few
         // milliseconds of SQLite that could have shown the library immediately.
         //
-        // The previous manager goes first. Sign-out tears it down, but not
-        // every route here is a sign-out — an expired token's "Sign in again"
-        // and a corrected address both reconnect with the old manager alive,
-        // and two background sessions on one identifier make the daemon kill
-        // one owner's transfers (see `DownloadManager.shutDown`).
-        await downloads?.shutDown()
-        downloads = DownloadManager(baseURL: url, tokens: session.tokenProvider) { job in
-            BookContentService.defaultDirectory()
-                .appending(path: "\(job.bookUUID)-\(job.format.rawValue).epub")
+        // The manager already alive is kept and re-pointed. Not every route
+        // here follows a sign-out — the sign-in form's connect follows the
+        // launch's, and an expired token's "Sign in again" and a corrected
+        // address both arrive with the old manager alive — and a background
+        // session is owned by its identifier for the whole process: tearing
+        // one down while building the next on the same identifier left the
+        // new one invalid too, and its first download raised and crashed
+        // (see `DownloadManager.reconfigure`).
+        if let downloads {
+            downloads.reconfigure(baseURL: url, tokens: session.tokenProvider)
+        } else {
+            downloads = DownloadManager(baseURL: url, tokens: session.tokenProvider) { job in
+                BookContentService.defaultDirectory()
+                    .appending(path: "\(job.bookUUID)-\(job.format.rawValue).epub")
+            }
         }
         // Declared on DownloadManager and never assigned until now, which is
         // why a finished download did not refresh anything that reads the disk.
@@ -324,10 +330,12 @@ public final class AppModel {
         ratings = [:]
         loadError = nil
 
-        // The download session outlived sign-out, so the next connect stacked
-        // a second one on the same identifier.
-        await downloads?.shutDown()
-        downloads = nil
+        // The account's transfers go with it. The manager itself stays: its
+        // background session owns its identifier for the life of the process,
+        // and tearing it down here made the session the next sign-in built
+        // invalid from birth — its first task raised an uncatchable
+        // `NSGenericException`. `connect` points this one at the new account.
+        downloads?.stop()
         session = nil
         CoverCache.shared.clear()
         // The widget keeps showing the last book on a signed-out device unless
@@ -604,6 +612,16 @@ public final class AppModel {
         return (book, destination)
     }
 
+    /// Drops a pending request without acting on it.
+    ///
+    /// For a link to the book whose reader is already on screen: there is
+    /// nothing to open, and `consumePendingBook` would arm the one-shot reader
+    /// request on the way past, so the next visit to that book's screen —
+    /// Back out of the reader and in again — reopened the reader unasked.
+    public func discardPendingBook() {
+        pendingBook = nil
+    }
+
     /// Whether this book's screen should open the reader as it appears.
     ///
     /// One-shot: a later visit to the same book, arrived at by tapping through
@@ -682,8 +700,16 @@ public final class AppModel {
     /// if it still holds it, so an appear-before-disappear crossover during a
     /// book-to-book switch cannot leave the slot pointing at the book that left.
     public func setReaderVisible(_ uuid: String, _ visible: Bool) {
-        if visible { visibleReaderUUID = uuid }
-        else if visibleReaderUUID == uuid { visibleReaderUUID = nil }
+        if visible {
+            visibleReaderUUID = uuid
+            // The screen is back; the model no longer leaves with narration.
+            // Done here rather than in `reader(for:)`, which is asked for the
+            // model as the screen appears and must have no side effects on
+            // observed state — see `ReaderScreen`.
+            closedWhileNarrating.remove(uuid)
+        } else if visibleReaderUUID == uuid {
+            visibleReaderUUID = nil
+        }
     }
 
     /// Which open book, if any, owns the active narration and Now Playing.
@@ -762,11 +788,7 @@ public final class AppModel {
     /// them and left `saveProgress` writing straight to the network with no
     /// queue and no guard.
     public func reader(for book: Book, session: Session) -> ReaderModel {
-        if let existing = readers[book.uuid] {
-            // The screen is back; the model no longer leaves with narration.
-            closedWhileNarrating.remove(book.uuid)
-            return existing
-        }
+        if let existing = readers[book.uuid] { return existing }
 
         let model = ReaderModel(book: book, session: session)
         model.downloadHost = self
