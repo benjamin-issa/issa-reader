@@ -192,12 +192,14 @@ struct MacRootView: View {
     /// The sidebar's entries. Shelves come from the same definition the phone
     /// filters by, so the two never drift apart.
     enum Destination: Hashable {
+        case reading
         case shelf(LibraryArrangement.Shelf)
         case listening
         case downloads
 
         var title: String {
             switch self {
+            case .reading: "Reading"
             case let .shelf(shelf): shelf.title
             case .listening: "Listening"
             case .downloads: "Downloads"
@@ -206,6 +208,9 @@ struct MacRootView: View {
 
         var symbol: String {
             switch self {
+            // Not `bookmark` or `book`: those are the To read and Reading
+            // shelves' glyphs two rows down.
+            case .reading: "text.book.closed"
             case .shelf(.all): "books.vertical"
             case .shelf(.reading): "book"
             case .shelf(.toRead): "bookmark"
@@ -274,6 +279,13 @@ struct MacRootView: View {
     private var readyBody: some View {
         NavigationSplitView {
             List(selection: $selection) {
+                // The phone's Reading tab: where you are, above where you
+                // might look. Its "See all" sets a shelf, and the shelf
+                // observer below moves the sidebar there.
+                Section {
+                    Label(Destination.reading.title, systemImage: Destination.reading.symbol)
+                        .tag(Destination.reading)
+                }
                 Section("Library") {
                     ForEach(LibraryArrangement.Shelf.allCases) { shelf in
                         let destination = Destination.shelf(shelf)
@@ -292,6 +304,8 @@ struct MacRootView: View {
         } detail: {
             Group {
                 switch selection ?? .shelf(.all) {
+                case .reading:
+                    ReadingView { shelf in selection = .shelf(shelf ?? .all) }
                 case .shelf: LibraryView()
                 case .listening: ListeningView()
                 case .downloads: DownloadsView()
