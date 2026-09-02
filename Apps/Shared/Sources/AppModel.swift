@@ -798,7 +798,7 @@ public final class AppModel {
         let bookUUID = book.uuid
         model.enqueuePosition = { [weak self] locator, timestamp, origin in
             await self?.writePosition(
-                locator, timestamp: timestamp, for: bookUUID, origin: origin)
+                locator, timestamp: timestamp, for: bookUUID, origin: origin) ?? false
         }
         model.onSaveAnnotation = { [weak self] in self?.save($0) }
         model.onDeleteAnnotation = { [weak self] in self?.delete($0) }
@@ -1340,8 +1340,20 @@ public final class AppModel {
         for bookUUID: String,
         origin: PositionOrigin,
     ) async -> Bool {
+        // No queue means no account: the flush a closing reader sends after a
+        // sign-out lands here, and there is nothing to take it.
+        guard mutations != nil else {
+            IssaLog.warning("write dropped: no queue", ["book": bookUUID, "kind": "position"])
+            return false
+        }
+        let book = books.first { $0.uuid == bookUUID }
+        // With the narration length, where there is one: the guard's absolute
+        // bound — five minutes — only exists for long audiobooks, and without
+        // the duration it was never applied, leaving a forty-hour book two
+        // hours of undetected slack.
+        let duration = book.map(LibraryArrangement.duration(of:)).flatMap { $0 > 0 ? $0 : nil }
         var state = positionGuards[bookUUID]
-            ?? PositionGuard(highWater: books.first { $0.uuid == bookUUID }?.progress ?? 0)
+            ?? PositionGuard(highWater: book?.progress ?? 0, duration: duration)
         let decision = state.decide(locator.locations?.totalProgression, origin: origin)
         positionGuards[bookUUID] = state
 

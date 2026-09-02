@@ -136,6 +136,11 @@ final class AppServices {
             let entries = CarPlayChapters.entries(for: package)
             guard entries.indices.contains(index) else { return }
             await reader.go(toChapter: entries[index].spineIndex, fragment: entries[index].fragment)
+            // The car asked to *play* the chapter. Turning the page alone left
+            // the voice in the old chapter, and the jump was then saved as the
+            // listener's chosen place — pinning the synced position there
+            // while every write the narration made was refused as a step back.
+            await reader.playFirstSentenceOnPage()
         }
 
         bridge.cover = { [app] bookUUID in

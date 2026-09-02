@@ -63,19 +63,25 @@ public actor MutationQueue {
         _ kind: Kind, bookUUID: String, payload: Data, supersedes ordering: Double? = nil,
     ) throws -> Bool {
         try dbQueue.write { db in
-            if let ordering,
-               let existing = try Row.fetchOne(
-                   db,
-                   sql: "SELECT ordering FROM mutation WHERE bookUUID = ? AND kind = ?",
-                   arguments: [bookUUID, kind.rawValue],
-               ),
-               let held = existing["ordering"] as Double?,
-               ordering < held {
+            let existing = try Row.fetchOne(
+                db,
+                sql: "SELECT ordering, attempts, createdAt FROM mutation WHERE bookUUID = ? AND kind = ?",
+                arguments: [bookUUID, kind.rawValue],
+            )
+            if let ordering, let held = existing?["ordering"] as Double?, ordering < held {
                 // The queued write is newer than this one. Keeping it is the
                 // whole point: it may be the only remaining copy of where the
                 // reader actually is.
                 return false
             }
+            // The replacement inherits the failures and the age of what it
+            // replaces. With a fresh count and a fresh timestamp on every
+            // collapse, a position the server kept refusing was re-queued
+            // every page turn as a brand-new item: it could never reach the
+            // abandon limit, and it sat at the back of the drain order while
+            // everything behind it waited on it forever.
+            let attempts = existing?["attempts"] as Int? ?? 0
+            let createdAt = existing?["createdAt"] as Double? ?? Date().timeIntervalSince1970
             try db.execute(
                 sql: "DELETE FROM mutation WHERE bookUUID = ? AND kind = ?",
                 arguments: [bookUUID, kind.rawValue],
@@ -83,11 +89,9 @@ public actor MutationQueue {
             try db.execute(
                 sql: """
                     INSERT INTO mutation (bookUUID, kind, payload, createdAt, attempts, ordering)
-                    VALUES (?, ?, ?, ?, 0, ?)
+                    VALUES (?, ?, ?, ?, ?, ?)
                     """,
-                arguments: [
-                    bookUUID, kind.rawValue, payload, Date().timeIntervalSince1970, ordering,
-                ],
+                arguments: [bookUUID, kind.rawValue, payload, createdAt, attempts, ordering],
             )
             return true
         }

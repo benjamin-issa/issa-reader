@@ -35,6 +35,11 @@ public final class ReadalongCoordinator {
     /// pressing play asks for audio, it does not name a place, and when the app
     /// has to work out where that is the guess must not be allowed to overwrite
     /// a known-good position.
+    ///
+    /// Fired *after* the move, and only when something moved. Announcing the
+    /// seek first meant every early return behind it — the end of the book, a
+    /// missing audio file, a skip with no anchor yet — left the reader told of
+    /// a choice that never happened.
     public var onSeek: (() -> Void)?
 
     public let player: AudioPlayer
@@ -99,9 +104,20 @@ public final class ReadalongCoordinator {
     // MARK: - Seeking
 
     /// Starts (or continues) playback at a specific narrated fragment.
-    public func play(from entry: SMILEntry) async {
-        guard await move(to: entry) else { return }
+    ///
+    /// - Returns: whether it moved there. False when the entry's audio file is
+    ///   missing, in which case nothing plays either.
+    @discardableResult
+    public func play(from entry: SMILEntry) async -> Bool {
+        guard await move(to: entry) else { return false }
         player.play()
+        return true
+    }
+
+    /// `play(from:)` for a place the listener named: the seek is announced once
+    /// the move has happened, and not at all if it did not.
+    private func jump(to entry: SMILEntry) async {
+        if await play(from: entry) { onSeek?() }
     }
 
     /// Moves the playhead and the highlight without touching whether audio is
@@ -133,8 +149,7 @@ public final class ReadalongCoordinator {
 
     public func seek(toFragment fragmentID: String) async {
         guard let entry = timeline.entry(forFragment: fragmentID) else { return }
-        onSeek?()
-        await play(from: entry)
+        await jump(to: entry)
     }
 
     /// Seeks by fraction of the whole book, for a scrubber.
@@ -166,13 +181,12 @@ public final class ReadalongCoordinator {
     }
 
     public func seek(toBookProgress progress: Double) async {
-        onSeek?()
         let time = timeline.totalDuration * min(max(progress, 0), 1)
         guard let entry = timeline.entry(atBookTime: time) else { return }
         // A seek is not a play button: it lands paused when paused, playing
         // when playing, exactly as the audiobook implementation of this same
         // protocol method always has.
-        await move(to: entry)
+        if await move(to: entry) { onSeek?() }
     }
 
     // MARK: - Actions
@@ -182,13 +196,7 @@ public final class ReadalongCoordinator {
     /// so a remapping applies everywhere at once.
     public func perform(_ action: PlaybackAction, using map: CommandMap) async {
         // Navigation names a place; playing, speed and the sleep timer do not.
-        switch action {
-        case .skipForward, .skipBackward, .nextSentence, .previousSentence,
-             .nextParagraph, .previousParagraph, .nextChapter, .previousChapter:
-            onSeek?()
-        default:
-            break
-        }
+        // Each navigation route announces its own seek, after it has moved.
         switch action {
         case .playPause:
             player.togglePlayPause()
@@ -197,9 +205,9 @@ public final class ReadalongCoordinator {
         case .skipBackward:
             await skipBook(by: -map.skipBackwardInterval)
         case .nextSentence:
-            if let entry = activeEntry, let next = timeline.entry(after: entry) { await play(from: next) }
+            if let entry = activeEntry, let next = timeline.entry(after: entry) { await jump(to: next) }
         case .previousSentence:
-            if let entry = activeEntry, let previous = timeline.entry(before: entry) { await play(from: previous) }
+            if let entry = activeEntry, let previous = timeline.entry(before: entry) { await jump(to: previous) }
         case .nextParagraph:
             await moveParagraph(forward: true)
         case .previousParagraph:
@@ -235,7 +243,7 @@ public final class ReadalongCoordinator {
             guard let next = forward ? timeline.entry(after: entry) : timeline.entry(before: entry) else { break }
             entry = next
         }
-        await play(from: entry)
+        await jump(to: entry)
     }
 
     private func moveChapter(forward: Bool) async {
@@ -248,7 +256,7 @@ public final class ReadalongCoordinator {
         guard documents.indices.contains(target),
               let entry = timeline.firstEntry(inDocument: documents[target])
         else { return }
-        await play(from: entry)
+        await jump(to: entry)
     }
 }
 

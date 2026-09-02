@@ -41,10 +41,6 @@ public final class ReaderModel {
     /// rather than being freshly — and wrongly — labelled at the moment it runs.
     private var positionOrigin: PositionOrigin = .chosen
 
-    /// One-shot: the next fragment change is a seek landing, not narration
-    /// drifting, so it must not relabel the destination the reader chose.
-    private var steeredToFragment = false
-
     /// The narrated sentence the server said we were on.
     ///
     /// `loadChapter(_:restoring:)` uses the locator to work out a character
@@ -117,7 +113,9 @@ public final class ReaderModel {
     /// the screen showing it has gone.
     public var onNarrationReady: ((ReadalongCoordinator) -> Void)?
 
-    public var enqueuePosition: ((ReadiumLocator, Double, PositionOrigin) async -> Void)?
+    /// Returns whether the write was accepted: the app's guard may refuse a
+    /// derived one, and a refused position must not reach the widget either.
+    public var enqueuePosition: ((ReadiumLocator, Double, PositionOrigin) async -> Bool)?
     /// When the oldest unwritten change happened, for the debounce ceiling.
     private var firstUnsavedChangeAt: Date?
 
@@ -294,6 +292,14 @@ public final class ReaderModel {
                     "fallback": book.position == nil ? "none" : "local",
                 ])
             }
+            // The catch above is deliberately broad, and a cancelled fetch
+            // throws `URLError.cancelled`, which the `CancellationError` catch
+            // below would not match anyway. Checked explicitly, here and
+            // before narration: a layout pass that replaced this task while
+            // the fetch was in flight otherwise saw the open run to the end —
+            // a second package, a second layout, a second coordinator with its
+            // own player — while the replacement did it all again.
+            try Task.checkCancellation()
             restoredSentenceID = stored?.locator.sentenceID
             var resumed = stored.flatMap { position in
                 package.spine.firstIndex { position.locator.matchesHref($0.href) }
@@ -374,6 +380,7 @@ public final class ReaderModel {
                 phase = .failed("This book's file doesn't contain any readable chapters.")
                 return
             }
+            try Task.checkCancellation()
             await prepareNarration(package: package)
             phase = .ready
             // Spelled out rather than inline: enough of these and the type
@@ -530,15 +537,14 @@ public final class ReaderModel {
             // narration" off — relabelled the reader's *own* page `.derived`.
             // The debounced save then wrote their page turn under a
             // classification the guard is entitled to refuse.
-            if steeredToFragment {
-                // The change a seek produces is the seek arriving, not
-                // narration wandering: `seek(toFragment:)` calls `onSeek` and
-                // then `play(from:)`, which lands here in the same turn. Left
-                // to itself that relabelled a deliberate jump `.derived`, and
-                // a jump backwards past the tolerance was then refused —
-                // exactly the case `PositionGuard` promises to allow.
-                steeredToFragment = false
-            } else if moved {
+            //
+            // A seek lands here too, and is then relabelled by `onSeek`, which
+            // the coordinator fires *after* the move it announces. The save is
+            // debounced and reads the label when it runs, so the later word
+            // wins. There used to be a one-shot latch armed by `onSeek` and
+            // consumed here; a seek that moved nothing left it armed, and it
+            // then laundered the next genuine drift into a chosen position.
+            if moved {
                 positionOrigin = .derived
             }
             // Listening moves the position as surely as turning pages does;
@@ -557,9 +563,7 @@ public final class ReaderModel {
             }
         }
         coordinator.onSeek = { [weak self] in
-            guard let self else { return }
-            positionOrigin = .chosen
-            steeredToFragment = true
+            self?.positionOrigin = .chosen
         }
         readalong = coordinator
         // The screen reports visibility as it appears, which is before the
@@ -753,7 +757,7 @@ public final class ReaderModel {
                 locations: .init(fragments: [$0]),
             )
         }
-        await loadChapter(index, restoring: anchor)
+        guard await loadChapter(index, restoring: anchor) else { return }
         // A chapter the voice crossed into, not one the reader picked. The
         // fragment change that precedes this cannot classify it — the sentence
         // belongs to the *next* document, so it never resolves in the layout
@@ -924,8 +928,7 @@ public final class ReaderModel {
         guard package != nil else { return }
         let fragment = firstFragmentOnCurrentPage()
         let anchor = currentPage?.characterRange.location ?? 0
-        await loadChapter(chapterIndex)
-        guard let layout else { return }
+        guard await loadChapter(chapterIndex), let layout else { return }
         if let fragment, let page = layout.page(containingFragment: fragment) {
             pageIndex = page.index
         } else {
@@ -990,9 +993,13 @@ public final class ReaderModel {
 
     // MARK: - Navigation
 
+    // Every deliberate move labels the position only once it has happened.
+    // Labelling first and then returning early left the model saying "chosen"
+    // about a place the reader never went, and the next unrelated save — the
+    // flush on closing the screen, a narration tick — carried that label.
     public func nextPage() async {
-        positionOrigin = .chosen
         guard let layout else { return }
+        positionOrigin = .chosen
         if pageIndex + 1 < layout.pages.count {
             pageIndex += 1
         } else if let package, chapterIndex + 1 < package.spine.count {
@@ -1002,8 +1009,8 @@ public final class ReaderModel {
     }
 
     public func previousPage() async {
-        positionOrigin = .chosen
         guard layout != nil else { return }
+        positionOrigin = .chosen
         if pageIndex > 0 {
             pageIndex -= 1
         } else if chapterIndex > 0 {
@@ -1047,8 +1054,12 @@ public final class ReaderModel {
     }
 
     public func go(toChapter index: Int, fragment: String? = nil) async {
+        // On failure `layout` still holds the previous chapter, and every
+        // offset below would resolve against it — and then be saved as the
+        // reader's own choice, which is the one write the guard may not
+        // refuse. Same for the other two jumps below.
+        guard await loadChapter(index) else { return }
         positionOrigin = .chosen
-        await loadChapter(index)
         // Books that pack many chapters into one spine file need the fragment to
         // land anywhere useful; without it every entry opens page one.
         if let fragment, let layout, let page = layout.page(containingFragment: fragment) {
@@ -1142,9 +1153,9 @@ public final class ReaderModel {
     /// Jumps to a hit and leaves the matched text selected, so the reader can
     /// see what was found without hunting for it.
     public func go(to hit: SearchHit, matching query: String) async {
+        guard await loadChapter(hit.chapterIndex),
+              let layout, let page = layout.page(containingOffset: hit.charOffset) else { return }
         positionOrigin = .chosen
-        await loadChapter(hit.chapterIndex)
-        guard let layout, let page = layout.page(containingOffset: hit.charOffset) else { return }
         pageIndex = page.index
         selection = NSRange(location: hit.charOffset, length: (query as NSString).length)
         selectionChapter = chapterIndex
@@ -1278,15 +1289,15 @@ public final class ReaderModel {
 
     /// Opens the page an annotation is on.
     public func go(to annotation: Annotation) async {
-        positionOrigin = .chosen
         guard let package else { return }
         if let index = package.spine.firstIndex(where: { annotation.locator.matchesHref($0.href) }),
            index != chapterIndex {
-            await loadChapter(index, restoring: annotation.locator)
+            guard await loadChapter(index, restoring: annotation.locator) else { return }
         } else if let layout, let offset = annotation.locator.locations?.charOffset,
                   let page = layout.page(containingOffset: offset) {
             pageIndex = page.index
         }
+        positionOrigin = .chosen
         scheduleSave()
     }
 
@@ -1453,20 +1464,25 @@ public final class ReaderModel {
         // Recorded locally first: a chapter read with no signal must not be
         // lost, and the drain collapses a run of page turns to one write.
         let timestamp = ProgressService.now()
+        let accepted: Bool
         if let enqueuePosition {
-            await enqueuePosition(locator, timestamp, positionOrigin)
+            accepted = await enqueuePosition(locator, timestamp, positionOrigin)
         } else {
-            _ = try? await ProgressService(client: session.client)
-                .save(locator, for: book.uuid, timestamp: timestamp)
+            accepted = (try? await ProgressService(client: session.client)
+                .save(locator, for: book.uuid, timestamp: timestamp)) != nil
         }
-        publishSnapshot(progress: overall)
+        // Only a position that was actually taken reaches the widget. A
+        // refused one — or one with no account left to take it, which is what
+        // the flush on closing the screen finds after a sign-out — used to be
+        // published regardless, so the Home Screen showed a place the book
+        // was never at, or the book of an account that had left.
+        if accepted { publishSnapshot(progress: overall) }
     }
 
     /// Publishes the small record the widget reads.
     ///
-    /// Written only when progress meaningfully moves, not on every tick: the
-    /// widget's own reload budget is the scarce resource, and a snapshot the
-    /// widget never reads costs a disk write for nothing.
+    /// The publisher decides whether anything moved enough to be worth the
+    /// widget's reload budget; this just hands it the current state.
     private func publishSnapshot(progress: Double) {
         let remaining = (book.readaloud?.duration ?? book.audiobook?.duration)
             .map { $0 * (1 - progress) }
