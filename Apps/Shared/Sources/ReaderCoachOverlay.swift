@@ -1,14 +1,52 @@
 import IssaUI
 import SwiftUI
 
-#if os(iOS)
+#if !os(tvOS)
+/// The words for the pointing device in the reader's hand.
+///
+/// The guide is copy *about gestures*, so it is the one screen where "tap" on a
+/// Mac would be wrong in every line. Everything else about the guide — its
+/// layout, its theming, its dismissal — is identical on both platforms, so only
+/// the verbs fork. tvOS has neither gesture and no guide at all.
+private enum CoachCopy {
+    #if os(macOS)
+    static let zoneHeadline = "Click the page to turn it"
+    static let selectTip = "Click and hold to select text."
+    static let readAloudTip = "Double-click a line to hear it."
+    // No swipe on the Mac: ⌥⌘P and the waveform are the two routes there.
+    static let playerTip = "Click the waveform, or press ⌥⌘P, for the player."
+    static let dismiss = "Click anywhere to begin"
+    static let spokenZones =
+        "Reading gestures. Click the left edge to turn back, the middle to "
+        + "show or hide the controls, the right edge to turn forward. "
+        + "Click and hold to select text."
+    static let spokenNarration =
+        "This book is narrated. Double-click a line to hear it read aloud. "
+        + "The play button's Open player action shows the full player."
+    #else
+    static let zoneHeadline = "Tap the page to turn it"
+    static let selectTip = "Press and hold to select text."
+    static let readAloudTip = "Double-tap a line to hear it."
+    static let playerTip = "Tap the waveform, or swipe up, for the player."
+    static let dismiss = "Tap anywhere to begin"
+    static let spokenZones =
+        "Reading gestures. Tap the left edge to turn back, the middle to "
+        + "show or hide the controls, the right edge to turn forward. "
+        + "Press and hold to select text."
+    static let spokenNarration =
+        "This book is narrated. Double-tap a line to hear it read aloud. "
+        + "The play button's Open player action shows the full player."
+    #endif
+}
+
 /// A one-time guide, drawn over the page the first time the reader opens.
 ///
 /// It names the three tap zones — the left edge turns back, the middle shows
 /// and hides the controls, the right edge turns forward — and the press-and-hold
 /// that selects text, none of which a bare page announces. On a narrated book it
 /// adds the single line the double-tap gesture needs: that tapping a line twice
-/// reads it aloud.
+/// reads it aloud. On the Mac the same gestures are clicks, and `CoachCopy` says
+/// so — the layer itself is the same layer.
 ///
 /// Coloured from the reader's *theme*, not the system palette, for the same
 /// reason the rest of the reader is: someone reading Paper in Dark Mode has
@@ -50,7 +88,11 @@ struct ReaderCoachOverlay: View {
         .accessibilityElement(children: .combine)
         .accessibilityLabel(spokenSummary)
         .accessibilityAddTraits(.isButton)
+        #if os(macOS)
+        .accessibilityHint("Press to dismiss")
+        #else
         .accessibilityHint("Double tap to dismiss")
+        #endif
         // Modal, so VoiceOver keeps focus on the coach and does not reach the
         // page, bars and controls the scrim covers — which it otherwise could
         // still activate, and activating them never dismisses the coach, so it
@@ -75,14 +117,15 @@ struct ReaderCoachOverlay: View {
             }
             if showsNarrationTip {
                 VStack(spacing: Metrics.spacing12) {
-                    tip(icon: "hand.tap", text: "Double-tap a line to hear it.")
+                    tip(icon: "hand.tap", text: CoachCopy.readAloudTip)
                     // The strip's own buttons need no explaining; the route to
                     // the full player — the scrubber, the rate, the sleep
-                    // timer — does, since one of the two ways there is a swipe.
-                    tip(icon: "waveform", text: "Tap the waveform, or swipe up, for the player.")
+                    // timer — does, since on the phone one of the two ways there
+                    // is a swipe and on the Mac one of them is a shortcut.
+                    tip(icon: "waveform", text: CoachCopy.playerTip)
                 }
             }
-            Text("Tap anywhere to begin")
+            Text(CoachCopy.dismiss)
                 .font(Typography.footnote)
                 .foregroundStyle(theme.textTertiary)
         }
@@ -90,7 +133,7 @@ struct ReaderCoachOverlay: View {
 
     private var zoneGuide: some View {
         VStack(spacing: Metrics.spacing24) {
-            Text("Tap the page to turn it")
+            Text(CoachCopy.zoneHeadline)
                 .font(Typography.headline)
                 .foregroundStyle(theme.text)
 
@@ -100,7 +143,7 @@ struct ReaderCoachOverlay: View {
                 zone(icon: "chevron.right", title: "Forward", subtitle: "Right edge")
             }
 
-            tip(icon: "hand.point.up.left", text: "Press and hold to select text.")
+            tip(icon: "hand.point.up.left", text: CoachCopy.selectTip)
         }
     }
 
@@ -141,19 +184,8 @@ struct ReaderCoachOverlay: View {
     /// as a single dismissible element rather than picking through the cards.
     private var spokenSummary: String {
         var parts: [String] = []
-        if showsZones {
-            parts.append(
-                "Reading gestures. Tap the left edge to turn back, the middle to "
-                    + "show or hide the controls, the right edge to turn forward. "
-                    + "Press and hold to select text.",
-            )
-        }
-        if showsNarrationTip {
-            parts.append(
-                "This book is narrated. Double-tap a line to hear it read aloud. "
-                    + "The play button's Open player action shows the full player.",
-            )
-        }
+        if showsZones { parts.append(CoachCopy.spokenZones) }
+        if showsNarrationTip { parts.append(CoachCopy.spokenNarration) }
         return parts.joined(separator: " ")
     }
 }

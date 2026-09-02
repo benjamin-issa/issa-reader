@@ -8,5 +8,14 @@
   <true/>
   <key>com.apple.security.files.user-selected.read-write</key>
   <true/>
+  <!-- Where the reading preferences live, shared with the iOS app's group so
+       one App ID carries one group across every platform. Without it a
+       sandboxed Mac build writes them somewhere that is not its container;
+       `PlaybackSettings` checks for the container and falls back rather than
+       trusting the suite, but the entitlement is what makes the check pass. -->
+  <key>com.apple.security.application-groups</key>
+  <array>
+    <string>group.com.benjaminissa.issareader</string>
+  </array>
 </dict>
 </plist>

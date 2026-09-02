@@ -26,7 +26,7 @@ and highlight-sync latency.
 | Playback | Variable rate with pitch correction, chapter and sentence navigation, Now Playing on the lock screen |
 | Controls | Every external control remappable per surface — phone, CarPlay, headphones — including a car's steering-wheel buttons |
 | Apple TV | Device-code sign-in, poster-shelf library, one-sentence-at-a-time readalong |
-| Mac | Sidebar library, each book in its own window |
+| Mac | Sidebar library, each book in its own window, menu-bar transport, `issareader://` links and Handoff |
 | Widget | Current book, chapter and progress from a shared App Group snapshot |
 
 `docs/VERIFICATION.md` records exactly what has been run, and what has not.
@@ -77,9 +77,14 @@ parsed" — and the LAN address is the only one a phone or Apple TV can reach.
 Then run any scheme from Xcode, or:
 
 ```bash
-swift test                                    # 67 tests, no server needed
+swift test                                    # no server needed
 node Tools/docker/verify-device-flow.mjs      # full sign-in round trip
+scripts/release.sh --archive-only             # archive all three apps
 ```
+
+`docs/RELEASE.md` covers shipping to TestFlight: one command for iOS, tvOS and
+macOS, where the credentials live, why each platform signs differently, and the
+two steps that exist only as a checkbox in App Store Connect.
 
 ## Notes on the server
 

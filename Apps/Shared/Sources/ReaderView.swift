@@ -78,11 +78,15 @@ public struct ReaderView: View {
     /// Whether a finger is currently down, so `selecting` can be cleared at the
     /// start of a touch rather than the end of one.
     @State private var touching = false
-    #if os(iOS)
+    #if !os(tvOS)
     // First-run gesture guide. Persisted so it never returns once dismissed,
     // and split in two so the narrated tip can still appear the first time a
     // narrated book opens even when the zone guide was already seen on a plain
     // one.
+    //
+    // Not iOS-only: the Mac reader has every gesture the guide explains — the
+    // three click zones, double-click to read aloud, click and hold to select —
+    // and used to be told about none of them.
     @AppStorage("issa.hasSeenReaderCoach") private var hasSeenReaderCoach = false
     @AppStorage("issa.hasSeenNarrationTip") private var hasSeenNarrationTip = false
     #endif
@@ -95,6 +99,15 @@ public struct ReaderView: View {
     #if os(macOS)
     @Environment(\.controlActiveState) private var controlActiveState
     private var isActiveScene: Bool { controlActiveState == .key }
+    /// Whether the page holds the keyboard, which is what the bare arrow keys
+    /// below depend on. Tracked rather than left to SwiftUI because a sheet
+    /// takes the keyboard and does not hand it back: after closing the player —
+    /// now one ⌥⌘P away — the arrows did nothing at all until the page was
+    /// clicked, and nothing on screen said why.
+    @FocusState private var pageHasKeyboardFocus: Bool
+    private var anySheetShowing: Bool {
+        showsPlayer || showsContents || showsSearch || showsAnnotations || showsTypography
+    }
     #endif
 
     /// Takes the model rather than making one.
@@ -315,6 +328,9 @@ public struct ReaderView: View {
         #if os(macOS)
         // The Mac keeps a real toolbar: its window chrome never moved the page.
         .toolbar { ToolbarItemGroup(placement: .primaryAction) { readerActions } }
+        // The guide goes over the toolbar as well as the page, and swallows the
+        // click that dismisses it so the page below does not also turn.
+        .overlay { coachOverlay }
         #else
         // Drawn over the page rather than above it, so showing it cannot
         // change the page's size.
@@ -398,6 +414,9 @@ public struct ReaderView: View {
         .animation(.easeInOut(duration: 0.2), value: model.chromeVisible)
     }
 
+    #endif
+
+    #if !os(tvOS)
     /// The first-run gesture guide, shown once the page is actually readable —
     /// naming tap zones over a spinner would point at nothing — and only while a
     /// "seen" flag is still unset. Empty the rest of the time, so the overlay it
@@ -555,6 +574,13 @@ public struct ReaderView: View {
         // Bare arrow keys turn pages, which is what a Mac reader tries first.
         // The menu shortcuts are ⌘-arrow so the two do not collide.
         .focusable()
+        .focused($pageHasKeyboardFocus)
+        // Asynchronous on purpose: a `@FocusState` write from `onAppear` lands
+        // inside the transaction that is presenting the page.
+        .task { pageHasKeyboardFocus = true }
+        .onChange(of: anySheetShowing) { _, showing in
+            if !showing { pageHasKeyboardFocus = true }
+        }
         .onKeyPress(.rightArrow) { Task { await model.nextPage() }; return .handled }
         .onKeyPress(.leftArrow) { Task { await model.previousPage() }; return .handled }
         .onKeyPress(.space) {
@@ -610,6 +636,14 @@ public struct ReaderView: View {
         .onReceive(NotificationCenter.default.publisher(for: ReaderCommand.previousPage.notification)) { _ in
             guard isActiveScene else { return }
             Task { await model.previousPage() }
+        }
+        // The phone reaches the full player by swiping the footer strip up.
+        // There is no swipe on the Mac and a click-drag over the strip's own
+        // buttons would be a poor substitute, so the menu is the Mac's route —
+        // and the only one that names a keyboard shortcut.
+        .onReceive(NotificationCenter.default.publisher(for: ReaderCommand.player.notification)) { _ in
+            guard isActiveScene, model.hasNarration else { return }
+            showsPlayer = true
         }
         #endif
         // A re-resolve, not an assignment: `model.style = settings.readerStyle`

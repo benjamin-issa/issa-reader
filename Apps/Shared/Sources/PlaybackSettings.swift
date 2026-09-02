@@ -43,8 +43,31 @@ public final class PlaybackSettings {
 
     private let defaults: UserDefaults
 
+    /// The named defaults, or nil where an App Group suite is not actually
+    /// available to this process.
+    ///
+    /// The iOS app, its widget and the Mac's Release build carry the App Group
+    /// entitlement. tvOS has no entitlements file at all, and the Mac's Debug
+    /// build deliberately omits the group — that entitlement needs a
+    /// provisioning profile, and a macOS development profile needs a registered
+    /// Mac. `UserDefaults(suiteName:)` hands back an object regardless — it does
+    /// not fail, and it does not warn — so a reading preference could be written
+    /// somewhere that is not the container and need not survive the app. Asking
+    /// for the container is the only honest test, and `.standard` is a perfectly
+    /// good home for preferences nothing else has to read.
+    ///
+    /// Scoped to `group.` names so a plain suite passed in by a caller is still
+    /// taken at face value.
+    private static func defaults(named name: String) -> UserDefaults? {
+        if name.hasPrefix("group."),
+           FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: name) == nil {
+            return nil
+        }
+        return UserDefaults(suiteName: name)
+    }
+
     public init(suiteName: String? = CurrentBookSnapshotStore.appGroup) {
-        let store = suiteName.flatMap { UserDefaults(suiteName: $0) } ?? .standard
+        let store = suiteName.flatMap { Self.defaults(named: $0) } ?? .standard
         defaults = store
         commandMap = Self.load(CommandMap.self, from: store, key: Self.commandMapKey) ?? CommandMap()
         readerStyle = Self.load(ReaderStyle.self, from: store, key: Self.readerStyleKey) ?? ReaderStyle()

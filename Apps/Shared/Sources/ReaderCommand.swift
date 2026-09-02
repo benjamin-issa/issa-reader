@@ -13,6 +13,10 @@ enum ReaderCommand: String, Sendable {
     case bookmark
     case nextPage
     case previousPage
+    /// The full player — the scrubber, the rate and the sleep timer. The phone
+    /// swipes up on the footer strip to reach it; the Mac has no swipe, so the
+    /// menu is its route.
+    case player
 
     var notification: Notification.Name { Notification.Name("issa.reader.\(rawValue)") }
 

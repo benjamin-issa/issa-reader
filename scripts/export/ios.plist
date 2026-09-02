@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>method</key>
+  <string>app-store-connect</string>
+  <!-- `release.sh` rewrites this to `export` for a local dry run. -->
+  <key>destination</key>
+  <string>upload</string>
+  <!-- iOS is the one target automatic signing handles: the team has registered
+       iOS devices, so the archive can mint the Development profile it insists
+       on looking for before it reaches the distribution one. -->
+  <key>signingStyle</key>
+  <string>automatic</string>
+  <!-- False on purpose. A build number is spent permanently on a successful
+       upload; letting Xcode renumber turns a duplicate into a silent surprise
+       instead of ENTITY_ERROR.ATTRIBUTE.INVALID.DUPLICATE. -->
+  <key>manageAppVersionAndBuildNumber</key>
+  <false/>
+  <!-- The OU of the signing certificate, not the CN suffix (<certificate CN suffix>). -->
+  <key>teamID</key>
+  <string>D8455BV6NN</string>
+</dict>
+</plist>

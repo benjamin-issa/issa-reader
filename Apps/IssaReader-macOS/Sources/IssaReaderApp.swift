@@ -127,6 +127,13 @@ struct IssaCommands: Commands {
             .disabled(nowPlaying.coordinator == nil)
 
             Divider()
+            // The reader's waveform button is the only other way there, and it
+            // is 17 points wide. The phone swipes the footer up; the Mac has no
+            // swipe, so this is the shortcut that closes the gap.
+            Button("Show Player") { ReaderCommand.player.post() }
+                .keyboardShortcut("p", modifiers: [.command, .option])
+
+            Divider()
             Button("Faster") {
                 settings.playbackRate = min(settings.playbackRate + 0.25, 5)
                 nowPlaying.coordinator?.player.rate = Float(settings.playbackRate)
@@ -174,6 +181,7 @@ struct ReaderWindow: View {
 /// A real Mac layout: source list on the left, content on the right.
 struct MacRootView: View {
     @Environment(AppModel.self) private var app
+    @Environment(\.openWindow) private var openWindow
     @State private var selection: Destination? = .shelf(.all)
 
     /// The sidebar's entries. Shelves come from the same definition the phone
@@ -220,6 +228,42 @@ struct MacRootView: View {
         // goes stale on every install eventually. Without this the Mac kept
         // rendering the cached shelf while every write quietly queued forever.
         .task { await app.watchForExpiry() }
+        // The Mac declared the `issareader` scheme in its Info.plist and then
+        // handled nothing: a widget, Spotlight or Handoff link brought the app
+        // to the front and did nothing else. `AppModel.open` is shared and
+        // already parses `issareader://book/{uuid}`.
+        .onOpenURL { app.open($0) }
+        // The other half of the Handoff the reader has always advertised. The
+        // reader's `.userActivity` runs on macOS too, but nothing here ever
+        // listened, so continuing a book from the phone landed on the shelf.
+        .onContinueUserActivity(BookActivity.type) { activity in
+            guard let id = activity.userInfo?[BookActivity.bookIDKey] as? String else { return }
+            app.requestBook(id, .read)
+        }
+        // Both, because a link can arrive before the library can answer it:
+        // `consumePendingBook` returns nil until the book is in `books`, so the
+        // request has to be retried when the shelf lands. Equal values do not
+        // re-fire, and consuming clears the request, so this settles.
+        .onChange(of: app.pendingBook) { openPendingBook() }
+        .onChange(of: app.books) { openPendingBook() }
+    }
+
+    /// Opens whatever a link, a Handoff or a Spotlight hit asked for.
+    ///
+    /// Always the reader window, for either destination. On the Mac a book *is*
+    /// a window — the library grid opens one directly — and `BookDetailView` is
+    /// not reachable from the grid at all, so sending `.details` anywhere else
+    /// would point at a screen with no route to it.
+    private func openPendingBook() {
+        guard let pending = app.consumePendingBook() else { return }
+        // `consumePendingBook` arms the one-shot reader request for `.read`, and
+        // on the Mac nothing ever spends it — the screen that does is `#if
+        // os(iOS)`. Left armed it is a flag set for the life of the process;
+        // this is the same leak that reopened the iPhone's reader unasked.
+        _ = app.consumeReaderRequest(for: pending.book)
+        // Keyed by the book's uuid, so a second link to a book already open
+        // brings its window forward rather than opening a duplicate.
+        openWindow(id: "Reader", value: pending.book.uuid)
     }
 
     private var readyBody: some View {

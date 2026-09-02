@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>method</key>
+  <string>app-store-connect</string>
+  <key>destination</key>
+  <string>upload</string>
+  <!-- Manual, against a profile created through the App Store Connect API:
+       automatic signing tries to mint a Development profile first, which
+       enumerates device UDIDs, and this team has no tvOS devices registered. -->
+  <key>signingStyle</key>
+  <string>manual</string>
+  <key>provisioningProfiles</key>
+  <dict>
+    <key>com.benjaminissa.issareader</key>
+    <string>tvOS Store Provisioning Profile: com.benjaminissa.issareader</string>
+  </dict>
+  <key>manageAppVersionAndBuildNumber</key>
+  <false/>
+  <key>teamID</key>
+  <string>D8455BV6NN</string>
+</dict>
+</plist>

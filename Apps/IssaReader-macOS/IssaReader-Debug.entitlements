@@ -2,14 +2,23 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <!-- Debug builds sign ad-hoc, and an ad-hoc signature gives the bundle a hash
-       identifier rather than its real one. The sandbox then cannot create a
-       container and the app traps on launch with "Unable to get bundle
-       identifier for container id". The sandbox is therefore off for local
-       Debug runs and on for Release, which is what ships. -->
+  <!-- The sandbox is on here too, so the configuration that ships is the one
+       that gets run. It could not be while Debug signed ad-hoc: an ad-hoc
+       signature gives the bundle a hash identifier rather than its real one,
+       the sandbox cannot create a container from that, and the app trapped at
+       launch with "Unable to get bundle identifier for container id". Debug now
+       signs with the Apple Development certificate, which needs no
+       provisioning profile as long as nothing here asks for one. -->
+  <key>com.apple.security.app-sandbox</key>
+  <true/>
   <key>com.apple.security.network.client</key>
   <true/>
   <key>com.apple.security.files.user-selected.read-write</key>
   <true/>
+  <!-- Deliberately no App Group. That entitlement *does* need a profile, and a
+       macOS development profile needs a registered Mac. `PlaybackSettings`
+       falls back to standard defaults when the group container is missing, so
+       a Debug run keeps its reading preferences; only sharing them with a
+       future Mac widget would need the entitlement. Release has it. -->
 </dict>
 </plist>

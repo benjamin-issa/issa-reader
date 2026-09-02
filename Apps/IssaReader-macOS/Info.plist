@@ -33,6 +33,8 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.books</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
 	<key>NSAppTransportSecurity</key>
@@ -42,5 +44,9 @@
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Issa Reader connects to your Storyteller server on your local network.</string>
+	<key>NSUserActivityTypes</key>
+	<array>
+		<string>com.benjaminissa.issareader.reading</string>
+	</array>
 </dict>
 </plist>
