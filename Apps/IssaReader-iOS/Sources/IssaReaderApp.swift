@@ -81,7 +81,9 @@ struct LibraryTabs: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var libraryPath = NavigationPath()
     @State private var readingPath = NavigationPath()
-    @State private var selectedTab = Destination.library
+    /// Opens on Reading: the tab is where you left off, and a launch is
+    /// almost always to carry on. Library stays first in the bar.
+    @State private var selectedTab = Destination.reading
     @State private var showsPlayer = false
 
     /// No Playing tab. There used to be one, and the mini player was removed
@@ -125,8 +127,8 @@ struct LibraryTabs: View {
         // Presented on whichever book stack is showing. The Reading tab's own
         // Continue card takes this route, and a Continue that flipped the app
         // to the Library tab would be answering a question nobody asked; a
-        // widget or Handoff arriving while Settings is up lands on Library, as
-        // does a cold launch, which runs this with Library selected.
+        // widget or Handoff arriving while Settings is up lands on Library; a
+        // cold launch runs this with Reading selected, so it lands there.
         if selectedTab == .settings { selectedTab = .library }
         // Pushed either way, so Back from the reader lands on the book and then
         // the tab it came from. `consumePendingBook` has already recorded
