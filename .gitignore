@@ -17,6 +17,8 @@ Package.resolved.bak
 # Local test stack state
 Tools/docker/data/
 Tools/docker/.env
+# The App Review server's sign-in, which must never enter history
+Tools/deploy/review-server/credentials.local.md
 Tools/docker/node_modules/
 
 # macOS
