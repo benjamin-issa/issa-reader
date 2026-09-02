@@ -36,8 +36,17 @@ struct LibraryHeader: View {
             #if os(iOS)
             LibrarySearchField(text: $search)
             shelfChips
-            #endif
+            // A count and a sort describe a grid. Browse has rails, and
+            // search results are already the answer to a question — but the
+            // number of them is worth a line. Mode and search are the
+            // reader's doing, never something that loads, so the height
+            // changing here cannot inflate the refresh control.
+            if app.libraryMode == .all || isSearching {
+                countAndSort
+            }
+            #else
             countAndSort
+            #endif
         }
         .padding(.horizontal, Metrics.spacing16)
         .padding(.top, Metrics.spacing8)
@@ -48,16 +57,22 @@ struct LibraryHeader: View {
     // MARK: - Chips
 
     #if os(iOS)
+    /// Browse first, then the shelves. Browse is the rails; a shelf is the
+    /// flat grid cut that way, so tapping one leaves Browse. The tags a reader
+    /// picked travel with them from shelf to shelf, as they always have.
     private var shelfChips: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: Metrics.spacing8) {
+                ShelfChip(title: "Browse", count: nil, isSelected: app.libraryMode == .browse) {
+                    app.libraryMode = .browse
+                }
                 ForEach(LibraryArrangement.Shelf.allCases) { shelf in
                     ShelfChip(
                         title: shelf.title,
                         count: app.facets.count(shelf),
-                        isSelected: app.arrangement.shelf == shelf,
+                        isSelected: app.libraryMode == .all && app.arrangement.shelf == shelf,
                     ) {
-                        app.arrangement.shelf = shelf
+                        app.showAllBooks(shelf: shelf, tags: app.arrangement.tags)
                     }
                 }
                 tagsChip
@@ -81,11 +96,11 @@ struct LibraryHeader: View {
             }
             ForEach(app.facets.tagCounts.prefix(12), id: \.name) { tag in
                 Button {
-                    if app.arrangement.tags.contains(tag.name) {
-                        app.arrangement.tags.remove(tag.name)
-                    } else {
-                        app.arrangement.tags.insert(tag.name)
-                    }
+                    // A tag is a cut through the grid, so picking one opens
+                    // the grid — Browse has its own tag rails.
+                    var tags = app.arrangement.tags
+                    if tags.contains(tag.name) { tags.remove(tag.name) } else { tags.insert(tag.name) }
+                    app.showAllBooks(shelf: app.arrangement.shelf, tags: tags)
                 } label: {
                     Label(
                         "\(tag.name) (\(tag.count))",
@@ -224,7 +239,8 @@ struct LibrarySearchField: View {
 
 struct ShelfChip: View {
     let title: String
-    let count: Int
+    /// Nil for a chip that is not a shelf — Browse counts nothing.
+    let count: Int?
     let isSelected: Bool
     let action: () -> Void
 
@@ -233,7 +249,7 @@ struct ShelfChip: View {
             ChipLabel(title: title, count: count, isSelected: isSelected, showsChevron: false)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("\(title), \(count) book\(count == 1 ? "" : "s")")
+        .accessibilityLabel(count.map { "\(title), \($0) book\($0 == 1 ? "" : "s")" } ?? title)
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
     }
 }

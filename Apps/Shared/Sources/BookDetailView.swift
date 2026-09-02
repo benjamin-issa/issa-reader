@@ -687,7 +687,19 @@ public struct BookDetailView: View {
             Text("Details").overlineStyle()
             VStack(spacing: 1) {
                 if let series = book.series.first {
-                    factRow("Series", series.position.map { "\(series.name) · \(Self.positionText($0))" } ?? series.name)
+                    let text = series.position.map { "\(series.name) · \(Self.positionText($0))" } ?? series.name
+                    if app.rails.series.contains(where: { $0.name == series.name }) {
+                        // A series with more than one book has a screen; a
+                        // book alone in its series has nowhere to go.
+                        NavigationLink {
+                            SeriesView(name: series.name)
+                        } label: {
+                            factRow("Series", text, showsLink: true)
+                        }
+                        .buttonStyle(.plain)
+                    } else {
+                        factRow("Series", text)
+                    }
                 }
                 if let published = book.publicationDate?.value {
                     factRow("Published", published.formatted(.dateTime.year()))
@@ -780,7 +792,8 @@ public struct BookDetailView: View {
         let derivation = app.derivation
         return VStack(alignment: .leading, spacing: Metrics.spacing24) {
             if let series = book.series.first,
-               let siblings = derivation.bySeries[series.name]?.filter({ $0.uuid != book.uuid }),
+               let siblings = app.rails.series.first(where: { $0.name == series.name })?
+                   .books.filter({ $0.uuid != book.uuid }),
                !siblings.isEmpty {
                 rail("The \(series.name)", books: siblings)
             }

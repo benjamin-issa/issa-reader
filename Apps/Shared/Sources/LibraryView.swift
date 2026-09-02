@@ -17,20 +17,36 @@ public struct LibraryView: View {
     private var scrollContent: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: Metrics.spacing32, pinnedViews: []) {
-                if books.isEmpty, search.isEmpty, app.arrangement.isFiltering {
-                    // A shelf is one tap away now rather than three levels into
-                    // a menu, so readers land here far more often than they did.
-                    EmptyShelfView(shelf: app.arrangement.shelf.title) {
-                        app.arrangement.shelf = .all
-                        app.arrangement.tags = []
-                    }
+                #if os(iOS)
+                if app.libraryMode == .browse, search.isEmpty {
+                    // Search results are an answer, and they are shown
+                    // whichever mode is on; only an idle Browse gets rails.
+                    BrowseView()
                 } else {
-                    BookGrid(books: books, session: app.session)
+                    shelf
                 }
+                #else
+                // The Mac's shelves are its sidebar, which Browse would fight.
+                shelf
+                #endif
             }
             .padding(Metrics.spacing16)
         }
         .refreshable { await app.refreshLibrary() }
+    }
+
+    /// The flat grid, or what an empty shelf says.
+    @ViewBuilder
+    private var shelf: some View {
+        if books.isEmpty, search.isEmpty, app.arrangement.isFiltering {
+            // A shelf is one tap away now rather than three levels into
+            // a menu, so readers land here far more often than they did.
+            EmptyShelfView(shelf: app.arrangement.shelf.title) {
+                app.showAllBooks(shelf: .all)
+            }
+        } else {
+            BookGrid(books: books, session: app.session)
+        }
     }
 
     /// Search results are already the answer to a question; re-sorting them by
@@ -98,15 +114,21 @@ public struct BookGrid: View {
     /// Off where every book already has audio, so the mark says nothing.
     let showsFormatMark: Bool
 
+    /// A line under the title in place of the byline — a series screen says
+    /// "Book 2" where the author's name would say nothing new.
+    let caption: ((Book) -> String?)?
+
     public init(
         books: [Book], session: Session?,
         shape: LibraryService.CoverShape = .portrait,
         showsFormatMark: Bool = true,
+        caption: ((Book) -> String?)? = nil,
     ) {
         self.books = books
         self.session = session
         self.shape = shape
         self.showsFormatMark = showsFormatMark
+        self.caption = caption
     }
 
     private let columns = [GridItem(.adaptive(minimum: 108, maximum: 160), spacing: Metrics.spacing16)]
@@ -116,7 +138,7 @@ public struct BookGrid: View {
             ForEach(books) { book in
                 BookGridItem(
                     book: book, session: session, shape: shape,
-                    showsFormatMark: showsFormatMark)
+                    showsFormatMark: showsFormatMark, caption: caption?(book))
                     // Rows size to their tallest cell and centre vertically —
                     // LazyVGrid's alignment is horizontal only — so a title
                     // wrapping to two lines pushed its neighbours down.
@@ -133,29 +155,13 @@ struct BookGridItem: View {
     let session: Session?
     var shape: LibraryService.CoverShape = .portrait
     var showsFormatMark = true
-    #if os(macOS)
-    @Environment(\.openWindow) private var openWindow
-    #endif
+    var caption: String?
 
     var body: some View {
-        if let session {
-            #if os(macOS)
-            Button {
-                openWindow(id: "Reader", value: book.uuid)
-            } label: {
-                BookCell(book: book, session: session, shape: shape, showsFormatMark: showsFormatMark)
-            }
-            .buttonStyle(.plain)
-            #else
-            NavigationLink {
-                BookDetailView(book: book)
-            } label: {
-                BookCell(book: book, session: session, shape: shape, showsFormatMark: showsFormatMark)
-            }
-            .buttonStyle(.plain)
-            #endif
-        } else {
-            BookCell(book: book, session: session, shape: shape, showsFormatMark: showsFormatMark)
+        BookLink(book: book, session: session) {
+            BookCell(
+                book: book, session: session, shape: shape,
+                showsFormatMark: showsFormatMark, caption: caption)
         }
     }
 }
@@ -167,6 +173,8 @@ public struct BookCell: View {
     /// Off on a screen made entirely of audiobooks, where marking every cover
     /// marks nothing.
     var showsFormatMark = true
+    /// Shown instead of the byline when given.
+    var caption: String?
 
     public var body: some View {
         VStack(alignment: .leading, spacing: Metrics.spacing8) {
@@ -193,7 +201,7 @@ public struct BookCell: View {
                 .foregroundStyle(Palette.ink)
                 .lineLimit(2, reservesSpace: true)
                 .fixedSize(horizontal: false, vertical: true)
-            Text(book.byline)
+            Text(caption ?? book.byline)
                 .font(Typography.caption)
                 .foregroundStyle(Palette.inkTertiary)
                 .lineLimit(1)
