@@ -123,6 +123,24 @@ struct CarPlayCatalogueTests {
         #expect(entries.first?.isDownloaded == true)
     }
 
+    /// The bug this pins: the shelf used `.continueReading`, which drops any
+    /// book without progress — so an audiobook downloaded for the drive and
+    /// never yet opened was answered with "No downloads on this phone".
+    @Test("a download never opened still shows on the Downloaded shelf")
+    func downloadedShelfIncludesUnstartedBooks() {
+        let catalogue = CarPlayCatalogue(
+            books: [
+                book("FreshDownload"),
+                book("HalfDone", progress: 0.5, positionTimestamp: 10),
+                book("Streamed", progress: 0.5, positionTimestamp: 20),
+            ],
+            downloadedUUIDs: ["FreshDownload", "HalfDone"],
+        )
+        let titles = catalogue.entries(for: .downloaded, limit: Self.plenty).map(\.title)
+        // In progress first, most recent on top; unstarted downloads follow.
+        #expect(titles == ["HalfDone", "FreshDownload"])
+    }
+
     @Test("a download does not jump the queue on the other shelves")
     func downloadsDoNotReorderRecent() {
         // A driver looking for the book they were in the middle of should find

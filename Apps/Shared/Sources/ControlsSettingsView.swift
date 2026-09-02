@@ -30,6 +30,13 @@ public struct ControlsSettingsView: View {
     /// bindings either. They used to be offered here anyway, so rebinding one
     /// silently did nothing — a setting that cannot be wrong because it is
     /// never consulted. See `PlaybackControl` for what a real "hold" would need.
+    ///
+    /// Headphones list only the wheel for the same reason: a headphone's single
+    /// press arrives as `togglePlayPauseCommand`, which is play/pause by the
+    /// system's contract and never consults a binding — only the double- and
+    /// triple-press, which land on the track commands, reach this surface. The
+    /// wheel rows are resolved against it whenever a headphone-class device is
+    /// the audio route; see `RemoteCommandCenter.surface(for:active:headphonesRouted:)`.
     private var controls: [PlaybackControl] {
         switch surface {
         case .phone:
@@ -37,7 +44,7 @@ public struct ControlsSettingsView: View {
         case .carPlay:
             [.tapForward, .tapBackward, .wheelNext, .wheelPrevious]
         case .headphones:
-            [.tapForward, .wheelNext, .wheelPrevious]
+            [.wheelNext, .wheelPrevious]
         }
     }
 
@@ -58,7 +65,7 @@ public struct ControlsSettingsView: View {
             Section {
                 ForEach(controls, id: \.self) { control in
                     Picker(control.title, selection: binding(for: control)) {
-                        ForEach(PlaybackAction.allCases, id: \.self) { Text($0.title).tag($0) }
+                        ForEach(actions(for: control), id: \.self) { Text($0.title).tag($0) }
                     }
                 }
             } header: {
@@ -106,6 +113,17 @@ public struct ControlsSettingsView: View {
 
     private var wheelIsBound: Bool {
         settings.commandMap.usesTrackCommands(on: surface)
+    }
+
+    /// What the picker offers: the assignable actions, plus whatever this
+    /// control is already bound to. The addition matters for a reader carrying
+    /// a binding no longer on offer — `.sleepTimer` was pickable back when
+    /// nothing performed it — whose row would otherwise draw with no selection.
+    private func actions(for control: PlaybackControl) -> [PlaybackAction] {
+        let current = settings.commandMap.action(for: control, on: surface)
+        var options = PlaybackAction.assignable
+        if !options.contains(current) { options.append(current) }
+        return options
     }
 
     private func binding(for control: PlaybackControl) -> Binding<PlaybackAction> {

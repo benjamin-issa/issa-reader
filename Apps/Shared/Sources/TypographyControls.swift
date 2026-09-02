@@ -103,13 +103,17 @@ struct TypographyControls: View {
 
     /// Keeps a selection that is no longer offered from clearing the picker.
     ///
-    /// A book set in the publisher's face, reopened on a book that has none,
-    /// would otherwise show an empty picker and lose the setting on the next
-    /// touch.
+    /// A book set in the publisher's face, reopened on a book that has none —
+    /// or set in an imported face whose file is no longer registered — would
+    /// otherwise show an empty picker and lose the setting on the next touch.
     private var typefaceSelection: Binding<ReaderStyle.Typeface> {
         Binding(
             get: {
                 if case .publisher = style.typeface, publisherFamily == nil {
+                    return .bundled(ReaderStyle.defaultFamily)
+                }
+                if case let .custom(family) = style.typeface,
+                   !customFamilies.contains(family) {
                     return .bundled(ReaderStyle.defaultFamily)
                 }
                 return style.typeface
@@ -142,11 +146,43 @@ enum FontImport {
         guard let directory = CustomFonts.importedDirectory else { return nil }
         let scoped = picked.startAccessingSecurityScopedResource()
         defer { if scoped { picked.stopAccessingSecurityScopedResource() } }
-        let destination = directory.appendingPathComponent(picked.lastPathComponent)
-        if !FileManager.default.fileExists(atPath: destination.path) {
+        let destination = destinationFor(picked, in: directory)
+        let existedBefore = FileManager.default.fileExists(atPath: destination.path)
+        if !existedBefore {
             guard (try? FileManager.default.copyItem(at: picked, to: destination)) != nil
             else { return nil }
         }
-        return CustomFonts.register(destination)
+        guard let family = CustomFonts.register(destination, imported: true) else {
+            // A file CoreText rejects must not stay behind: `registerAll`
+            // would retry it — and fail again — at every launch. Only the copy
+            // this import just made is removed; a file that was already there
+            // belongs to an earlier import.
+            if !existedBefore { try? FileManager.default.removeItem(at: destination) }
+            return nil
+        }
+        return family
+    }
+
+    /// Where the picked file should land, without trusting its name.
+    ///
+    /// Keying purely on the filename silently swapped fonts: a second,
+    /// different file that happened to be called `Inter-Regular.ttf` was never
+    /// copied, and the reader was switched to the face already on disk under
+    /// that name. Identical bytes reuse the existing copy — re-importing the
+    /// same font stays idempotent — and different bytes get a numbered name of
+    /// their own.
+    private static func destinationFor(_ picked: URL, in directory: URL) -> URL {
+        let manager = FileManager.default
+        let base = picked.deletingPathExtension().lastPathComponent
+        let ext = picked.pathExtension
+        var candidate = directory.appendingPathComponent(picked.lastPathComponent)
+        var counter = 2
+        while manager.fileExists(atPath: candidate.path),
+              !manager.contentsEqual(atPath: picked.path, andPath: candidate.path) {
+            let name = ext.isEmpty ? "\(base)-\(counter)" : "\(base)-\(counter).\(ext)"
+            candidate = directory.appendingPathComponent(name)
+            counter += 1
+        }
+        return candidate
     }
 }

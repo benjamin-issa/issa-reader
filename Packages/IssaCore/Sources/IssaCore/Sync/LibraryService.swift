@@ -130,9 +130,14 @@ public struct LibraryDerivation: Sendable {
         Dictionary(grouping: books.flatMap { book in book.series.map { ($0.name, book) } },
                    by: \.0)
             .mapValues { pairs in
-                pairs.map(\.1).sorted { lhs, rhs in
-                    let l = lhs.series.first?.position ?? .greatestFiniteMagnitude
-                    let r = rhs.series.first?.position ?? .greatestFiniteMagnitude
+                // The ordinal must come from the series being grouped, not
+                // `series.first`: a book in two series has two positions, and
+                // ordering one series by the other's numbers shuffles it.
+                // Every pair in a group shares its name, so read it once.
+                let name = pairs[0].0
+                return pairs.map(\.1).sorted { lhs, rhs in
+                    let l = lhs.series.first { $0.name == name }?.position ?? .greatestFiniteMagnitude
+                    let r = rhs.series.first { $0.name == name }?.position ?? .greatestFiniteMagnitude
                     return l < r
                 }
             }

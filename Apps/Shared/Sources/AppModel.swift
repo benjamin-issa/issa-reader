@@ -178,7 +178,14 @@ public final class AppModel {
         // a URL from `serverAddress`, and re-deriving from a bare hostname
         // undoes the probe above and lands back on the wrong port. Storing the
         // absolute URL means every later call is taken at its word.
-        let resolved = url.absoluteString
+        //
+        // The one exception is a bare host that only answered over cleartext
+        // HTTP after HTTPS failed: persisting `http://…` there would pin the
+        // downgrade forever. `addressToStore` keeps the typed text in that one
+        // case — where re-deriving lands on the same URL anyway — so the next
+        // launch tries HTTPS first, and logs the fallback rather than baking
+        // it in silently.
+        let resolved = ServerAddress.addressToStore(for: address, connectedTo: url)
         UserDefaults.standard.set(resolved, forKey: Self.lastServerKey)
         // Also in memory. Only UserDefaults was written, so `serverAddress`
         // stayed empty for the whole first launch — which silently broke
@@ -192,6 +199,13 @@ public final class AppModel {
         // opening the app on a train should see their shelf, not a spinner that
         // resolves to an error.
         store = try? LibraryStore(serverKey: url.absoluteString)
+        // The store was just reassigned, and the queue wraps the store's
+        // database file — captured at construction, never re-read. Keeping the
+        // old queue across a reconnect meant a corrected address wrote every
+        // position into the previous server's file while the catalogue lived
+        // in the new one — and rows left behind there could later drain into
+        // the wrong account. Rebuilding over the same file is cheap.
+        mutations = nil
         // The queue belongs with the store, not with the credential. It used to
         // sit inside the `hasCredential` branch below, which meant a first-time
         // sign-in — where `connect` runs *before* the device flow hands over a
@@ -215,6 +229,13 @@ public final class AppModel {
         // URLSession is an XPC handshake and `reattach()` is a second round trip
         // to a daemon that may need waking — both used to run ahead of the few
         // milliseconds of SQLite that could have shown the library immediately.
+        //
+        // The previous manager goes first. Sign-out tears it down, but not
+        // every route here is a sign-out — an expired token's "Sign in again"
+        // and a corrected address both reconnect with the old manager alive,
+        // and two background sessions on one identifier make the daemon kill
+        // one owner's transfers (see `DownloadManager.shutDown`).
+        await downloads?.shutDown()
         downloads = DownloadManager(baseURL: url, tokens: session.tokenProvider) { job in
             BookContentService.defaultDirectory()
                 .appending(path: "\(job.bookUUID)-\(job.format.rawValue).epub")
@@ -240,7 +261,12 @@ public final class AppModel {
             loadError = reason
             if phase != .ready { phase = .chooseServer }
         case .signedOut, .signingIn, .expired:
-            if phase != .ready { phase = .chooseServer }
+            // With the cached shelf already up, restore() just rejected the
+            // stored token — a revoked device grant, most often. Staying
+            // `.ready` presented a signed-in library over a dead session:
+            // every request 401'd silently and nothing offered a way back in.
+            // `.expired` keeps the server and makes signing in again one tap.
+            phase = phase == .ready ? .expired : .chooseServer
         }
     }
 
@@ -312,6 +338,10 @@ public final class AppModel {
         // Reloads the CurrentBook timeline itself; the accessory families
         // share it, so a second reloadAllTimelines here was redundant.
         CurrentBookPublisher.shared.clear()
+        // And the device-wide Spotlight index, which otherwise keeps this
+        // account's titles, bylines and blurbs answering Home Screen searches
+        // for up to 30 days after sign-out.
+        await SpotlightIndex.clear()
 
         if !keepDownloads {
             let manager = FileManager.default
@@ -652,6 +682,17 @@ public final class AppModel {
     /// screen.
     private var narratingBookUUID: String?
 
+    /// Books whose reader screen closed while they were still narrating.
+    ///
+    /// `readerDidClose` must keep such a model — audio outliving its screen is
+    /// the point — but that refusal used to be final: once another book took
+    /// over narration nothing revisited the eviction, so the model, its
+    /// chapter layout, decoded plates and player were pinned for the life of
+    /// the process, and `flushOpenReaders` kept re-stamping their stale
+    /// positions. Remembered here so each model is let go the moment its
+    /// narration actually ends.
+    private var closedWhileNarrating: Set<String> = []
+
     /// The model backing whichever book is currently narrating, if any.
     ///
     /// Not `private`: CarPlay's chapter list (`AppServices.connectCarPlay`)
@@ -709,7 +750,11 @@ public final class AppModel {
     /// them and left `saveProgress` writing straight to the network with no
     /// queue and no guard.
     public func reader(for book: Book, session: Session) -> ReaderModel {
-        if let existing = readers[book.uuid] { return existing }
+        if let existing = readers[book.uuid] {
+            // The screen is back; the model no longer leaves with narration.
+            closedWhileNarrating.remove(book.uuid)
+            return existing
+        }
 
         let model = ReaderModel(book: book, session: session)
         model.downloadHost = self
@@ -748,12 +793,17 @@ public final class AppModel {
     /// the one narrating.
     ///
     /// A book that is merely read should not pin its chapter layout for the
-    /// rest of the session; one that is still being listened to must. Identity
-    /// is checked because the Mac can have several reader windows open: closing
-    /// one must not evict a model a still-open window is using, and must not
-    /// evict a later model already created for the same book uuid.
+    /// rest of the session; one that is still being listened to must — but only
+    /// until that narration ends, which `releaseIfScreenClosed` picks up.
+    /// Identity is checked because the Mac can have several reader windows
+    /// open: closing one must not evict a model a still-open window is using,
+    /// and must not evict a later model already created for the same book uuid.
     public func readerDidClose(_ model: ReaderModel) {
-        guard readers[model.book.uuid] === model, narratingBookUUID != model.book.uuid else { return }
+        guard readers[model.book.uuid] === model else { return }
+        if narratingBookUUID == model.book.uuid {
+            closedWhileNarrating.insert(model.book.uuid)
+            return
+        }
         readers.removeValue(forKey: model.book.uuid)
     }
 
@@ -776,6 +826,9 @@ public final class AppModel {
     /// book belongs to the account being left, unlike the per-window release
     /// above, which only ever concerns the one book that closed.
     private func releaseAllReaders() {
+        // Dropped before narration stops: sign-out must not schedule one last
+        // position save for the account being left.
+        closedWhileNarrating.removeAll()
         stopNarration()
         readers.removeAll()
     }
@@ -786,6 +839,17 @@ public final class AppModel {
         narratingBookUUID = nil
         readers[uuid]?.readalong?.player.pause()
         nowPlayingController?.attach(coordinator: nil, book: nil)
+        releaseIfScreenClosed(uuid)
+    }
+
+    /// Lets go of a model whose screen already closed, now that the narration
+    /// it was kept alive for has ended.
+    private func releaseIfScreenClosed(_ uuid: String) {
+        guard closedWhileNarrating.remove(uuid) != nil,
+              let model = readers.removeValue(forKey: uuid) else { return }
+        // Its screen flushed when it closed, but narration has moved the book
+        // since; one last save so the tail of the debounce does not go with it.
+        Task { await model.saveProgress() }
     }
 
     /// Called when one open book's narration actually begins.
@@ -806,6 +870,7 @@ public final class AppModel {
         // the plain audiobook path.
         if let previous = narratingBookUUID, previous != bookUUID {
             readers[previous]?.readalong?.player.pause()
+            releaseIfScreenClosed(previous)
         }
         if listening != nil { stopListening(nowPlaying: nil) }
         narratingBookUUID = bookUUID
@@ -820,11 +885,30 @@ public final class AppModel {
         )
     }
 
+    /// Re-entrancy guard for `startListening`, which suspends at the manifest
+    /// fetch and again at `start(atProgress:)` while the Listen button has no
+    /// in-flight state of its own. A double tap — or a tap racing CarPlay's
+    /// `onPlay` — used to run the whole method twice: two coordinators, two
+    /// audible AVQueuePlayers, and the fifteen-second position writer bound to
+    /// whichever coordinator was about to be discarded.
+    private var isStartingListening = false
+
     /// Starts a plain audiobook: fetch the manifest, resume where the server
     /// says we were, and hand it to the Now Playing centre.
     public func startListening(
         to book: Book, nowPlaying: NowPlayingController, settings: PlaybackSettings,
     ) async {
+        // A concurrent duplicate is dropped, not queued: the first call is
+        // already starting this same playback. `listeningError` is nil while
+        // it is in flight, so CarPlay's success signal stays honest.
+        guard !isStartingListening else { return }
+        isStartingListening = true
+        defer { isStartingListening = false }
+        // Clear last time's error at the top of every genuine attempt, so no
+        // later `return` — the resume fast-path below included — can leave a
+        // stale message that CarPlay's `onPlay` would read back as this
+        // attempt's outcome. Each attempt now speaks only for itself.
+        listeningError = nil
         // This guard used to return with `listeningError` untouched — so a
         // failure here read as whatever the *previous* attempt happened to
         // leave behind, nil included. CarPlay's `onPlay` reports this value
@@ -864,11 +948,20 @@ public final class AppModel {
                 listeningError = "This audiobook has no playable tracks on the server."
                 return
             }
-            // Play the downloaded file when there is one; otherwise stream, with
-            // the token travelling as a cookie because AVFoundation makes its
-            // own requests and never sees our headers.
+            // Play the downloaded file when it can stand in for the manifest;
+            // otherwise stream, with the token travelling as a cookie because
+            // AVFoundation makes its own requests and never sees our headers.
+            //
+            // "Stand in" means the manifest has exactly one playable track:
+            // the download is the whole book as a single file, while the
+            // coordinator drives playback track by track against the manifest.
+            // Handing it one file for a 17-track book applied every per-track
+            // offset to that same file — a resume at 50% seeked minutes in
+            // instead of hours, and then persisted the double-counted clock.
             let content = BookContentService(client: session.client)
-            let source: AudiobookCoordinator.Source = content.isDownloaded(book, format: .audiobook)
+            let playableAsOneFile = manifest.playableTracks.count == 1
+                && content.isDownloaded(book, format: .audiobook)
+            let source: AudiobookCoordinator.Source = playableAsOneFile
                 ? .local(content.localURL(for: book, format: .audiobook))
                 : .streaming(
                     base: service.trackBase(for: book.uuid),

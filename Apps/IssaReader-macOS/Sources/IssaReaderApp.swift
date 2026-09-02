@@ -39,7 +39,11 @@ struct IssaReaderMacApp: App {
         // A book opens in its own window, which is what a Mac reader should do:
         // several books can be open at once, each with its own size, position
         // and full-screen state, and closing one does not disturb the library.
-        WindowGroup("Reader", for: String.self) { $bookID in
+        // `id:`, not a title: `openWindow(id: "Reader", value:)` resolves by
+        // scene identifier, and the title-taking initialiser leaves the group
+        // unidentified — so every route into a book matched nothing and no
+        // reader window ever opened.
+        WindowGroup(id: "Reader", for: String.self) { $bookID in
             ReaderWindow(bookID: bookID)
                 .environment(app)
                 .environment(settings)
@@ -202,44 +206,63 @@ struct MacRootView: View {
     }
 
     var body: some View {
-        switch app.phase {
-        case .launching:
-            Palette.paper.ignoresSafeArea().task { await app.restoreIfPossible() }
-        case .chooseServer, .signingIn, .expired:
-            SignInView().task { await app.restoreIfPossible() }
-        case .ready:
-            NavigationSplitView {
-                List(selection: $selection) {
-                    Section("Library") {
-                        ForEach(LibraryArrangement.Shelf.allCases) { shelf in
-                            let destination = Destination.shelf(shelf)
-                            Label(destination.title, systemImage: destination.symbol)
-                                .tag(destination)
-                        }
-                    }
-                    Section {
-                        Label(Destination.listening.title, systemImage: Destination.listening.symbol)
-                            .tag(Destination.listening)
-                        Label(Destination.downloads.title, systemImage: Destination.downloads.symbol)
-                            .tag(Destination.downloads)
+        Group {
+            switch app.phase {
+            case .launching:
+                Palette.paper.ignoresSafeArea().task { await app.restoreIfPossible() }
+            case .chooseServer, .signingIn, .expired:
+                SignInView().task { await app.restoreIfPossible() }
+            case .ready:
+                readyBody
+            }
+        }
+        // Nothing else moves `phase` to `.expired`, and the device-grant token
+        // goes stale on every install eventually. Without this the Mac kept
+        // rendering the cached shelf while every write quietly queued forever.
+        .task { await app.watchForExpiry() }
+    }
+
+    private var readyBody: some View {
+        NavigationSplitView {
+            List(selection: $selection) {
+                Section("Library") {
+                    ForEach(LibraryArrangement.Shelf.allCases) { shelf in
+                        let destination = Destination.shelf(shelf)
+                        Label(destination.title, systemImage: destination.symbol)
+                            .tag(destination)
                     }
                 }
-                .navigationSplitViewColumnWidth(min: 200, ideal: 220)
-            } detail: {
-                Group {
-                    switch selection ?? .shelf(.all) {
-                    case .shelf: LibraryView()
-                    case .listening: ListeningView()
-                    case .downloads: DownloadsView()
-                    }
+                Section {
+                    Label(Destination.listening.title, systemImage: Destination.listening.symbol)
+                        .tag(Destination.listening)
+                    Label(Destination.downloads.title, systemImage: Destination.downloads.symbol)
+                        .tag(Destination.downloads)
                 }
-                .navigationTitle((selection ?? .shelf(.all)).title)
             }
-            // Picking a sidebar shelf sets the same arrangement the phone
-            // uses, rather than a second, parallel idea of what a shelf is.
-            .onChange(of: selection) { _, new in
-                if case let .shelf(shelf) = new { app.arrangement.shelf = shelf }
+            .navigationSplitViewColumnWidth(min: 200, ideal: 220)
+        } detail: {
+            Group {
+                switch selection ?? .shelf(.all) {
+                case .shelf: LibraryView()
+                case .listening: ListeningView()
+                case .downloads: DownloadsView()
+                }
             }
+            .navigationTitle((selection ?? .shelf(.all)).title)
+        }
+        // Picking a sidebar shelf sets the same arrangement the phone
+        // uses, rather than a second, parallel idea of what a shelf is.
+        .onChange(of: selection) { _, new in
+            if case let .shelf(shelf) = new { app.arrangement.shelf = shelf }
+        }
+        // And the other direction: the arrangement is restored from
+        // UserDefaults while `selection` starts at `.shelf(.all)` every
+        // launch, so without `initial: true` the sidebar highlighted — and the
+        // title claimed — "All books" over a grid filtered to the saved shelf.
+        // Equal values do not re-fire `.onChange`, so the two writers settle
+        // rather than loop.
+        .onChange(of: app.arrangement.shelf, initial: true) { _, shelf in
+            selection = .shelf(shelf)
         }
     }
 }

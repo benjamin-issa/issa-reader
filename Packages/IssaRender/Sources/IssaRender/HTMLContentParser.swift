@@ -148,9 +148,13 @@ public struct HTMLContentParser {
 
         if node.name.lowercased() == "script" { complexity.hasScripting = true }
 
-        // Text content of this element, before descending.
+        // Text content of this element, before descending. `child`, not
+        // `context`: a <pre>'s own preformatted flag was set on `child` just
+        // above, and reading the incoming context collapsed the very text the
+        // element exists to preserve — nested <pre><code> worked while a bare
+        // <pre> (Gutenberg's poetry markup) lost every line break.
         if !node.text.isEmpty {
-            let string = context.isPreformatted ? node.text : Self.collapseWhitespace(node.text)
+            let string = child.isPreformatted ? node.text : Self.collapseWhitespace(node.text)
             if !string.isEmpty {
                 output.append(NSAttributedString(string: string, attributes: attributes(for: child)))
             }
@@ -160,7 +164,7 @@ public struct HTMLContentParser {
             render(node: sub, into: output, ranges: &ranges, complexity: &complexity, context: &child)
             // Text following a child element belongs to this element.
             if !sub.tail.isEmpty {
-                let tail = context.isPreformatted ? sub.tail : Self.collapseWhitespace(sub.tail)
+                let tail = child.isPreformatted ? sub.tail : Self.collapseWhitespace(sub.tail)
                 if !tail.isEmpty {
                     output.append(NSAttributedString(string: tail, attributes: attributes(for: child)))
                 }

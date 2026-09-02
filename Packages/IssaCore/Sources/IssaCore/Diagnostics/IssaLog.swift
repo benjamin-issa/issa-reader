@@ -174,6 +174,17 @@ public extension IssaLog {
                 with: "Bearer «redacted»",
                 options: .regularExpression,
             )
+            // Credentials typed into the address itself: `https://user:pw@host`.
+            // The server address is logged everywhere a request can fail, and
+            // it also rides inside `URLError` descriptions, so no call-site
+            // rule could catch it. The whole userinfo goes — a username is a
+            // credential too — and the host stays, or the log cannot be
+            // matched against anything.
+            result = result.replacingOccurrences(
+                of: "://[^/@\\s]+@",
+                with: "://«redacted»@",
+                options: .regularExpression,
+            )
             // `key=value` and `"key": "value"` for anything named as a secret.
             for key in secretKeys {
                 result = result.replacingOccurrences(

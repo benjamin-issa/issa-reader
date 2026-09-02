@@ -222,8 +222,20 @@ public struct MutationDrain: Sendable {
                 try? await queue.remove(item.id)
             } catch {
                 IssaLog.failure("sync mutation", error, ["kind": String(describing: item.kind)])
-                // Anything else is worth another go later, up to a limit.
-                _ = try? await queue.recordFailure(item.id)
+                // Anything else is worth another go later — but only a failure
+                // that could implicate the write itself counts toward giving
+                // up on it. Every offline drain used to count, and eight of
+                // them — well under a minute of reading without signal, since
+                // each debounced save triggers one — quietly deleted the head
+                // of the queue.
+                if countsTowardAbandonment(error),
+                   (try? await queue.recordFailure(item.id)) == true {
+                    // The third and last place a write is thrown away, and
+                    // until this line the only one that said nothing.
+                    IssaLog.failure("sync mutation abandoned", error, [
+                        "kind": String(describing: item.kind), "book": item.bookUUID,
+                    ])
+                }
                 // Stop on the first genuine failure: the connection is probably
                 // gone, and hammering the rest achieves nothing.
                 break
@@ -250,6 +262,31 @@ public struct MutationDrain: Sendable {
             } else {
                 try await client.delete(Endpoint.rating(item.bookUUID))
             }
+        }
+    }
+
+    /// Whether a failed attempt is evidence against the queued write itself.
+    ///
+    /// Abandonment exists for poisoned items: writes that will never send and,
+    /// because the drain stops at its first failure, block every write behind
+    /// them. A transport failure is not that — the request never reached the
+    /// server, and a queue that outlives an offline weekend is the whole point
+    /// of a durable one. A 429 is the server explicitly asking to be tried
+    /// later; obeying must not cost the write. A 5xx *does* count — a
+    /// judgement call: the server received exactly this payload and choked,
+    /// and a payload that reliably breaks a route would otherwise sit at the
+    /// head of the queue forever, while a server that is merely down mostly
+    /// presents as transport failures — even behind a proxy's 502s, nothing is
+    /// lost unless eight separate drains all land inside the same outage.
+    /// Anything unrecognised (a payload that no longer decodes, say) fails
+    /// identically every time, which is what poison means.
+    private func countsTowardAbandonment(_ error: any Error) -> Bool {
+        guard let storyteller = error as? StorytellerError else { return true }
+        switch storyteller {
+        case .transport, .server(status: 429, message: _):
+            return false
+        default:
+            return true
         }
     }
 }

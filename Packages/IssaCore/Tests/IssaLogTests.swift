@@ -59,6 +59,34 @@ struct IssaLogTests {
         #expect(!line.contains("UBHO1MuQZWx81snQ"))
     }
 
+    /// A reverse proxy with basic auth means the password is *in* the server
+    /// address, and the address is logged everywhere a request can fail.
+    @Test("credentials typed into the server address are not recorded")
+    func redactsURLCredentials() {
+        let line = entry("library refresh failed",
+                         ["server": "https://ben:hunter2@books.example.com"]).line
+        #expect(!line.contains("hunter2"))
+        #expect(!line.contains("ben:"))
+        #expect(line.contains("books.example.com"), "the host is what makes the report legible")
+    }
+
+    /// The same URL rides inside `URLError` descriptions, which no call-site
+    /// rule could catch — the scrub has to work on prose.
+    @Test("credentials in a URL inside an error description are not recorded")
+    func redactsURLCredentialsInProse() {
+        let line = entry("Error Domain=NSURLErrorDomain Code=-1004 "
+            + "NSErrorFailingURLKey=https://ben:hunter2@books.example.com/api/v2/books").line
+        #expect(!line.contains("hunter2"))
+        #expect(line.contains("books.example.com/api/v2/books"))
+    }
+
+    /// A plain URL must survive the userinfo rule untouched.
+    @Test("an address without credentials is kept whole")
+    func keepsPlainURLs() {
+        let line = entry("connected", ["server": "https://books.example.com/api"]).line
+        #expect(line.contains("https://books.example.com/api"))
+    }
+
     /// The other half of the bargain. A log that redacts the server address and
     /// the book title is safe and useless.
     @Test("what makes a report legible is kept")
@@ -104,6 +132,24 @@ struct IssaLogTests {
         store.append(entry("earlier", ago: 3600))
         let lines = store.entries(since: Date() - IssaLog.window).map(\.message)
         #expect(lines == ["earlier", "later"])
+    }
+
+    /// The file used to be written with `.iso8601`, which drops fractional
+    /// seconds — so two entries milliseconds apart came back simultaneous,
+    /// and could come back reordered, in the report that exists to say which
+    /// happened first.
+    @Test("entries milliseconds apart keep their order through the file")
+    func keepsMillisecondOrder() {
+        let store = temporaryStore()
+        defer { store.clear() }
+        let base = Date() - 60
+        store.append(IssaLog.entry(.info, "position moved", [:], at: base))
+        store.append(IssaLog.entry(.error, "sync mutation failed", [:], at: base + 0.004))
+        let entries = store.entries(since: Date() - IssaLog.window)
+        #expect(entries.map(\.message) == ["position moved", "sync mutation failed"])
+        // Not merely ordered: the times themselves must survive distinct, or
+        // the sort above is deciding by luck.
+        #expect(entries.count == 2 && entries[0].time < entries[1].time)
     }
 
     /// The log survives a relaunch — the whole reason it is a file and not

@@ -144,7 +144,14 @@ public final class AudiobookCoordinator {
     /// Restarting the current chapter when a few seconds in is what every audio
     /// player does, and what a listener who taps "previous" by reflex means.
     public func nextChapter() async {
-        await play(chapter: min(trackIndex + 1, tracks.count - 1))
+        // Refuse at the end rather than clamp. `min` on the last track resolved
+        // to the *current* track, restarting it at zero — and because
+        // `play(chapter:)` marks the move as steered, the position writer sent
+        // that backwards jump to the server as `.chosen`, the one origin
+        // PositionGuard never refuses. The read-along's `moveChapter` already
+        // refuses at the boundary; this is the same contract.
+        guard tracks.indices.contains(trackIndex + 1) else { return }
+        await play(chapter: trackIndex + 1)
     }
 
     public func previousChapter() async {
@@ -198,6 +205,13 @@ public final class AudiobookCoordinator {
             player.rate = min(player.rate + 0.25, 5.0)
         case .speedDown:
             player.rate = max(player.rate - 0.25, 0.5)
+        // Discrete on purpose, never a toggle: the system sends these when it
+        // has already decided which one it means, and its idea of the state —
+        // the published rate — can lag `isPlaying` through a stall.
+        case .play:
+            player.play()
+        case .pause:
+            player.pause()
         case .sleepTimer, .none:
             break
         }
@@ -211,6 +225,12 @@ public final class AudiobookCoordinator {
             return
         }
         await load(track: trackIndex + 1, startAt: 0)
+        // Only if the boundary left it playing. `load` fires `onChapterChange`,
+        // which is where an "end of chapter" sleep timer pauses — and an
+        // unconditional play() here undid that pause in the same turn, after
+        // the timer had already reset itself, so the rest of the book played
+        // on into the night.
+        guard player.isPlaying else { return }
         player.play()
     }
 

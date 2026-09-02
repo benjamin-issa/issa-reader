@@ -126,7 +126,7 @@ public enum EPUBFontResolver {
         var selector = ""
         var depth = 0
         var body = ""
-        for character in css {
+        for character in stripComments(css) {
             if character == "{" {
                 depth += 1
                 if depth == 1 { body = ""; continue }
@@ -139,9 +139,38 @@ public enum EPUBFontResolver {
                     continue
                 }
             }
+            // A `;` at the top level ends a braceless at-rule — `@charset`,
+            // `@import`, `@namespace`. Without this reset their text glues
+            // itself onto the next rule's selector, and `matches` (an exact
+            // equality test, deliberately) then rejects that rule outright.
+            if depth == 0, character == ";" {
+                selector = ""
+                continue
+            }
             if depth == 0 { selector.append(character) } else { body.append(character) }
         }
         return blocks
+    }
+
+    /// Removes `/* ... */` comments, which CSS permits anywhere. Left in, a
+    /// comment ahead of a rule becomes part of its selector, and a comment
+    /// inside a block corrupts the declaration it interrupts — either way a
+    /// perfectly ordinary stylesheet loses its `@font-face` or `body` rule.
+    static func stripComments(_ css: String) -> String {
+        var result = ""
+        result.reserveCapacity(css.count)
+        var rest = Substring(css)
+        while let open = rest.range(of: "/*") {
+            result += rest[..<open.lowerBound]
+            guard let close = rest.range(of: "*/", range: open.upperBound ..< rest.endIndex) else {
+                // An unterminated comment swallows the rest of the sheet,
+                // matching how a browser tokenises it.
+                return result
+            }
+            rest = rest[close.upperBound...]
+        }
+        result += rest
+        return result
     }
 
     /// Whether a selector list targets `name` plainly — `body`, or `html, body`.

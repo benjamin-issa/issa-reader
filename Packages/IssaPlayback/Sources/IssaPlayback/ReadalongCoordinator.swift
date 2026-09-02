@@ -100,16 +100,35 @@ public final class ReadalongCoordinator {
 
     /// Starts (or continues) playback at a specific narrated fragment.
     public func play(from entry: SMILEntry) async {
+        guard await move(to: entry) else { return }
+        player.play()
+    }
+
+    /// Moves the playhead and the highlight without touching whether audio is
+    /// playing. False when the entry's audio file is missing and nothing moved.
+    ///
+    /// Split out of `play(from:)` because `seek(toBookProgress:)` is a protocol
+    /// requirement with a neutral contract — the audiobook implementation moves
+    /// the playhead and nothing else — and routing a Lock Screen scrub through
+    /// `play(from:)` made a paused book start reading itself aloud in a quiet
+    /// room, from the scrubber, the skip buttons and the macOS key commands
+    /// alike.
+    @discardableResult
+    private func move(to entry: SMILEntry) async -> Bool {
         if player.currentAudioHref != entry.audioHref {
-            guard let url = audioFiles[entry.audioHref] else { return }
+            guard let url = audioFiles[entry.audioHref] else { return false }
             await player.load(url: url, href: entry.audioHref, startAt: entry.start)
         } else {
             await player.seek(to: entry.start)
         }
         activeFragmentID = entry.fragmentID
         activeEntry = entry
+        // Set here rather than left to the time observer: a paused player's
+        // clock does not tick, so without this a paused scrub never reached
+        // the scrubber or the Lock Screen.
+        bookProgress = timeline.progression(atBookTime: entry.cumulativeEnd - entry.duration)
         onFragmentChange?(entry.fragmentID)
-        player.play()
+        return true
     }
 
     public func seek(toFragment fragmentID: String) async {
@@ -130,7 +149,18 @@ public final class ReadalongCoordinator {
     public func skipBook(by delta: TimeInterval) async {
         let total = totalDuration
         guard total > 0 else { return }
-        let current = bookProgress * total
+        // Refuse rather than guess when narration has never played: the
+        // coordinator is built eagerly on open and the reader footer draws the
+        // skip buttons regardless, so with no anchor a skip resolved to
+        // sentence one of the whole book — a third of a novel away from the
+        // reader. The same contract as the audiobook's skip from a broken
+        // clock.
+        guard let entry = activeEntry else { return }
+        // Anchored to the active entry and the player's own clock, not to
+        // `bookProgress`: that field is written only by the periodic observer,
+        // so in the first moments after `play(from:)` it still reads 0.
+        let within = min(max(0, player.currentTime - entry.start), entry.duration)
+        let current = entry.cumulativeEnd - entry.duration + within
         guard current.isFinite else { return }
         await seek(toBookProgress: max(0, min(current + delta, total)) / total)
     }
@@ -139,7 +169,10 @@ public final class ReadalongCoordinator {
         onSeek?()
         let time = timeline.totalDuration * min(max(progress, 0), 1)
         guard let entry = timeline.entry(atBookTime: time) else { return }
-        await play(from: entry)
+        // A seek is not a play button: it lands paused when paused, playing
+        // when playing, exactly as the audiobook implementation of this same
+        // protocol method always has.
+        await move(to: entry)
     }
 
     // MARK: - Actions
@@ -179,6 +212,13 @@ public final class ReadalongCoordinator {
             player.rate = min(player.rate + 0.25, 5.0)
         case .speedDown:
             player.rate = max(player.rate - 0.25, 0.5)
+        // Discrete on purpose, never a toggle: the system sends these when it
+        // has already decided which one it means, and its idea of the state —
+        // the published rate — can lag `isPlaying` through a stall.
+        case .play:
+            player.play()
+        case .pause:
+            player.pause()
         case .sleepTimer, .none:
             break
         }

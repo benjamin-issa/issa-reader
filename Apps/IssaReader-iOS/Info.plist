@@ -40,6 +40,13 @@
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Issa Reader connects to your Storyteller server on your local network.</string>
+	<!-- Must match BookActivity.type: the system refuses to advertise or
+	     continue a custom activity the app has not declared, so without this
+	     Handoff was silently dead in both directions. -->
+	<key>NSUserActivityTypes</key>
+	<array>
+		<string>com.benjaminissa.issareader.reading</string>
+	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

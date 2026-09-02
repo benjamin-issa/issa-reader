@@ -182,14 +182,26 @@ public extension LibraryArrangement {
         switch sort {
         case .recent:
             // Books never opened have no position and belong at the end
-            // whichever way the sort runs, not interleaved with recent reads.
-            ordered = books.sorted { left, right in
-                let l = left.position?.timestamp ?? -.greatestFiniteMagnitude
-                let r = right.position?.timestamp ?? -.greatestFiniteMagnitude
-                return l > r
+            // whichever way the sort runs, not interleaved with recent reads —
+            // so the direction lives in the comparator, where it flips only
+            // the timestamps. The blanket reversal below would flip the
+            // never-opened block to the top of the shelf.
+            return books.sorted { left, right in
+                switch (left.position?.timestamp, right.position?.timestamp) {
+                case let (l?, r?): ascending ? l < r : l > r
+                case (nil, _?): false
+                case (_?, nil): true
+                case (nil, nil): false
+                }
             }
         case .title:
-            ordered = books.sorted { Self.sortKey($0.title) < Self.sortKey($1.title) }
+            // The same locale-aware comparison `.author` uses: `String.<` is
+            // a code-unit comparison, which files every accented initial
+            // after Z — Émile ended up behind Zorro.
+            ordered = books.sorted {
+                Self.sortKey($0.title)
+                    .localizedCaseInsensitiveCompare(Self.sortKey($1.title)) == .orderedAscending
+            }
         case .author:
             ordered = books.sorted {
                 let l = $0.authors.first?.fileAs ?? $0.byline
@@ -206,12 +218,16 @@ public extension LibraryArrangement {
             ordered = books.sorted { Self.duration(of: $0) > Self.duration(of: $1) }
         case .narrator:
             // Books with no narrator sort last either way, the same rule
-            // `.recent` uses for books never opened.
-            ordered = books.sorted {
+            // `.recent` uses for books never opened — and, like `.recent`,
+            // the direction lives in the comparator so the reversal below
+            // cannot move that bucket to the front.
+            return books.sorted {
                 let l = $0.narrators.first.map { $0.fileAs ?? $0.name }
                 let r = $1.narrators.first.map { $0.fileAs ?? $0.name }
                 switch (l, r) {
-                case let (l?, r?): return l.localizedCaseInsensitiveCompare(r) == .orderedAscending
+                case let (l?, r?):
+                    return l.localizedCaseInsensitiveCompare(r)
+                        == (ascending ? .orderedDescending : .orderedAscending)
                 case (nil, _?): return false
                 case (_?, nil): return true
                 case (nil, nil): return false

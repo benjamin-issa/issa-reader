@@ -25,7 +25,11 @@ public final class AudioPlayer {
     public var rate: Float = 1.0 {
         didSet {
             player.rate = isPlaying ? rate : 0
-            notifyRateObservers(rate)
+            // The effective rate, not the requested one. Observers treat a
+            // non-zero rate as "playing" — the widget publishes `isPlaying`
+            // from exactly this number — so choosing 1.5× on a paused book
+            // must not announce that it started.
+            notifyRateObservers(isPlaying ? rate : 0)
         }
     }
 
@@ -100,18 +104,29 @@ public final class AudioPlayer {
         observers.tearDown(player: player)
     }
 
-    /// Prepares the session for spoken audio.
+    /// Prepares the session for spoken audio — without taking the audio route.
     ///
     /// `.playback` keeps sound going when the ring switch is silent and when the
     /// screen locks, which is the whole point of an audiobook app; `.spokenAudio`
     /// tells the system this is speech, so it ducks and resumes the way podcasts
-    /// do rather than behaving like music. Without an active session, playback
-    /// is silent on a device even though the player reports it is running.
+    /// do rather than behaving like music. Declaring the category is free, but
+    /// `setActive(true)` is what silences whatever else is audible — and this
+    /// runs from `init`, which fires when a book is merely *opened*: a
+    /// read-along builds its coordinator eagerly, so activating here stopped
+    /// the reader's music the moment they tapped an aligned book. Activation
+    /// waits for `play()`, the first moment the app intends to make sound.
     static func configureAudioSession() {
         #if os(iOS) || os(tvOS)
         let session = AVAudioSession.sharedInstance()
         try? session.setCategory(.playback, mode: .spokenAudio, options: [])
-        try? session.setActive(true)
+        #endif
+    }
+
+    /// Takes the audio route. Without an active session, playback is silent on
+    /// a device even though the player reports it is running.
+    static func activateAudioSession() {
+        #if os(iOS) || os(tvOS)
+        try? AVAudioSession.sharedInstance().setActive(true)
         #endif
     }
 
@@ -242,10 +257,24 @@ public final class AudioPlayer {
         // duration reports exactly that.
         let loaded = (try? await asset.load(.duration).seconds) ?? 0
         duration = loaded.isFinite ? loaded : 0
-        if offset > 0 { await seek(to: offset) }
+        if offset > 0 {
+            await seek(to: offset)
+        } else if isPlaying {
+            // Replacing the queue item drops AVPlayer's rate to 0, and the
+            // seek above is the only path in this method that restores it. An
+            // offset of exactly 0 — a scrub back to the start of the book —
+            // skipped it, leaving the audio silent while `isPlaying` stayed
+            // true, so the transport drew a pause glyph over a stopped player.
+            player.rate = rate
+        }
     }
 
     public func play() {
+        // Activated here, not in `init`: a non-mixable session interrupts
+        // whatever else is playing the moment it goes active, which is right
+        // when the listener asks for narration and wrong when they only
+        // opened the book.
+        Self.activateAudioSession()
         isPlaying = true
         player.rate = rate
         // The rate hook fires only from `rate`'s didSet, and this does not touch

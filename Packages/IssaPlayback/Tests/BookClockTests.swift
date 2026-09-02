@@ -174,4 +174,100 @@ struct BookClockTests {
         #expect(subject.trackIndex == 0)
         #expect(subject.bookTime == 0)
     }
+
+    /// `min(trackIndex + 1, tracks.count - 1)` on the final track resolved to
+    /// the *current* track: a restart at zero, marked as steered — which the
+    /// position writer then sent to the server as `.chosen`, the one origin
+    /// PositionGuard never refuses.
+    @Test("next chapter on the last track refuses rather than restarting it")
+    func nextChapterOnLastTrackDoesNothing() async {
+        let subject = coordinator(manifest(trackCount: 3, each: 1_000))
+        await subject.seek(toBookTime: 2_500) // 500s into the final track
+        #expect(subject.trackIndex == 2)
+        _ = subject.consumeSteering()
+
+        await subject.nextChapter()
+
+        #expect(subject.trackIndex == 2)
+        #expect(abs(subject.bookTime - 2_500) < 1, "must not restart the track at zero")
+        #expect(subject.consumeSteering() == false,
+                "a refused move must not be written back as a chosen position")
+    }
+
+    /// `advance()` runs `play()` after `load()` — and `load()` is what fires
+    /// `onChapterChange`, which is where an "end of chapter" sleep timer
+    /// pauses. The unconditional play() undid that pause in the same turn,
+    /// after the timer had already reset itself, so the rest of the book
+    /// played on into the night.
+    @Test("the end-of-chapter pause survives the automatic advance")
+    func endOfChapterPauseSurvivesAdvance() async {
+        let subject = coordinator(manifest(trackCount: 3, each: 1_000))
+        await subject.seek(toBookTime: 999)
+        subject.player.play()
+        // The Now Playing wiring, in miniature: the timer's expiry pauses from
+        // inside the chapter-change callback, mid-`advance()`.
+        var boundaryCrossed = false
+        subject.onChapterChange = { [weak subject] _ in
+            subject?.player.pause()
+            boundaryCrossed = true
+        }
+
+        subject.player.onFinishedFile?()
+        // `onFinishedFile` hops through a Task; from the callback to the end
+        // of `advance()` there is no further suspension, so once the boundary
+        // has been observed the coordinator's decision is already made.
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while !boundaryCrossed, ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+
+        #expect(boundaryCrossed, "the next track never loaded")
+        #expect(subject.trackIndex == 1)
+        #expect(subject.player.isPlaying == false,
+                "advance() must not undo the pause the boundary just asked for")
+    }
+
+    @Test("the discrete play and pause commands hold their meaning when repeated")
+    func discretePlayPause() async {
+        let subject = coordinator(manifest())
+        let map = CommandMap()
+
+        await subject.perform(.play, using: map)
+        #expect(subject.player.isPlaying)
+        // A stalled book draws ▶ (the published rate is 0) while `isPlaying`
+        // is true; the tap that arrives is `.play` and must not flip to pause.
+        await subject.perform(.play, using: map)
+        #expect(subject.player.isPlaying, "play is not a toggle")
+
+        await subject.perform(.pause, using: map)
+        #expect(subject.player.isPlaying == false)
+        await subject.perform(.pause, using: map)
+        #expect(subject.player.isPlaying == false, "pause is not a toggle")
+    }
+}
+
+/// What the rate observers are told, which is what the widget and the lock
+/// screen believe.
+@MainActor
+struct RateObserverTests {
+    @Test("changing speed while paused does not announce playback")
+    func pausedRateChangeReportsZero() {
+        let subject = AudioPlayer()
+        var reported: [Float] = []
+        let owner = NSObject()
+        subject.setRateObserver(for: owner) { reported.append($0) }
+
+        // Paused: picking 1.5× from the menu must not tell anyone the book
+        // started. AppModel publishes the widget's `isPlaying` from exactly
+        // this number, and a paused book never republishes to correct it.
+        subject.rate = 1.5
+        #expect(reported == [0], "the effective rate of a paused player is zero")
+
+        subject.play()
+        #expect(reported.last == 1.5)
+        subject.rate = 2.0
+        #expect(reported.last == 2.0)
+        subject.pause()
+        #expect(reported.last == 0)
+    }
 }

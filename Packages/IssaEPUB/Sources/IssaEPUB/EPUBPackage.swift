@@ -94,10 +94,12 @@ public extension EPUBPackage {
         let containerData = try archive.read("META-INF/container.xml")
         let container = try EPUBXML.parse(containerData)
         guard let rootfile = container.descendants("rootfile").first,
-              let opfPath = rootfile["full-path"]
+              let rawOPFPath = rootfile["full-path"]
         else {
             throw EPUBError.malformedPackage("container.xml has no rootfile")
         }
+        // A URI, like every href — see `resolve` for why it is decoded.
+        let opfPath = rawOPFPath.removingPercentEncoding ?? rawOPFPath
 
         let rootDirectory = (opfPath as NSString).deletingLastPathComponent
         let opf = try EPUBXML.parse(archive.read(opfPath))
@@ -130,11 +132,21 @@ public extension EPUBPackage {
     }
 
     /// Resolves an href that appears inside `base` to an archive path.
+    ///
+    /// Hrefs are URIs, so a space in a filename arrives as `%20` and an
+    /// accented letter as UTF-8 escapes — Calibre and Sigil encode them as a
+    /// matter of course — while the ZIP entry name holds the raw characters.
+    /// Decoding happens here, the funnel every href passes through, so
+    /// `Chapter%201.xhtml` finds the entry `Chapter 1.xhtml`. Only the path is
+    /// decoded, after the fragment is stripped; a sloppy unencoded href with a
+    /// bare `%` fails to decode and is kept verbatim, which is what its
+    /// producer meant by it.
     static func resolve(_ href: String, relativeTo base: String) -> String {
         let target = href.split(separator: "#", maxSplits: 1).first.map(String.init) ?? href
-        if target.hasPrefix("/") { return EPUBArchive.normalize(target) }
+        let decoded = target.removingPercentEncoding ?? target
+        if decoded.hasPrefix("/") { return EPUBArchive.normalize(decoded) }
         let directory = (base as NSString).deletingLastPathComponent
-        let joined = directory.isEmpty ? target : directory + "/" + target
+        let joined = directory.isEmpty ? decoded : directory + "/" + decoded
         return EPUBArchive.normalize(joined)
     }
 
@@ -168,7 +180,9 @@ public extension EPUBPackage {
         guard let manifestNode = opf.descendants("manifest").first else { return [:] }
         var items: [String: ManifestItem] = [:]
         for item in manifestNode.children("item") {
-            guard let id = item["id"], let href = item["href"] else { continue }
+            guard let id = item["id"], let rawHref = item["href"] else { continue }
+            // A URI, like every href — see `resolve` for why it is decoded.
+            let href = rawHref.removingPercentEncoding ?? rawHref
             let resolved = rootDirectory.isEmpty
                 ? EPUBArchive.normalize(href)
                 : EPUBArchive.normalize(rootDirectory + "/" + href)

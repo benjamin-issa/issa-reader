@@ -22,8 +22,9 @@ struct BookTypographyView: View {
     @State private var style = ReaderStyle()
     @State private var customFamilies: [String] = []
     @State private var importing = false
-    /// Set once the sheet has loaded, so the first assignment to `style` does
-    /// not look like an edit and write an override for every book opened.
+    /// Set once the sheet has seeded `style`, so nothing that fires before the
+    /// load can be mistaken for an edit. The seed itself is told apart in
+    /// `onChange` instead — see there for why this flag cannot catch it.
     @State private var loaded = false
 
     var body: some View {
@@ -89,6 +90,16 @@ struct BookTypographyView: View {
         }
         .onChange(of: style) { _, edited in
             guard loaded else { return }
+            // `loaded` cannot tell the seed from an edit: `.task` assigns
+            // `style` and the flag in one main-actor block, and SwiftUI
+            // delivers that first change afterwards, when the flag already
+            // reads true. What does mark the seed is that writing it back
+            // would change nothing — it *is* the stored style — so any value
+            // that still matches is skipped. Without this, merely opening the
+            // sheet re-derived the override, and once the global settings had
+            // caught up with a book's own choice, `difference(to:)` came back
+            // empty and deleted that choice outright.
+            guard edited != settings.style(for: book.uuid) else { return }
             settings.setOverride(settings.readerStyle.difference(to: edited), for: book.uuid)
             onChange()
         }

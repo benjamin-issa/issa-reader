@@ -2,6 +2,12 @@ import IssaUI
 import Testing
 @testable import IssaRender
 
+#if canImport(UIKit)
+import UIKit
+#elseif canImport(AppKit)
+import AppKit
+#endif
+
 /// Every advertised face must actually be there, under the name we advertise.
 ///
 /// `BundledFace.family` is the name CoreText reads out of the file, and it is
@@ -47,6 +53,26 @@ struct BundledFaceTests {
             // says so rather than leaving it to be found mid-chapter.
             #expect(italic.fontName == regular.fontName)
         }
+    }
+
+    /// Bold layered on italic must keep the italic. AppKit's
+    /// `withSymbolicTraits(_:)` *replaces* the descriptor's traits, so a bare
+    /// `.bold` there stripped the italic — `<strong><em>` text rendered bold
+    /// upright on the Mac and bold italic everywhere else. The order matters:
+    /// `bodyFont(italic:)` italicises first and the parser bolds second, so
+    /// this walks the same path a nested emphasis does.
+    @Test("bold layered on an italic face keeps the italic",
+          arguments: IssaFonts.allFaces.filter(\.hasItalic))
+    func boldKeepsItalic(_ face: BundledFace) throws {
+        let regular = try #require(PlatformFont(name: face.family, size: 18))
+        let boldItalic = regular.withItalicTrait().withBoldTrait()
+        #if canImport(UIKit)
+        #expect(boldItalic.fontDescriptor.symbolicTraits.contains(.traitItalic),
+                "\(face.family): applying bold stripped the italic — resolved \(boldItalic.fontName)")
+        #else
+        #expect(boldItalic.fontDescriptor.symbolicTraits.contains(.italic),
+                "\(face.family): applying bold stripped the italic — resolved \(boldItalic.fontName)")
+        #endif
     }
 
     @Test("the default face is one of the faces actually shipped")

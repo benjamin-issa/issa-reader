@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import os
 
 /// How much room is left, asked the way each platform allows.
 ///
@@ -112,7 +113,12 @@ public final class DownloadManager: NSObject {
     private var pausing: Set<Job> = []
     /// Set when the session has been torn down, so late delegate callbacks from
     /// a superseded session cannot write state the app is no longer showing.
-    private var isShutDown = false
+    ///
+    /// Lock-backed rather than actor state because `didFinishDownloadingTo`
+    /// must consult it synchronously on the session's own queue, before a file
+    /// move that cannot wait for a hop to the main actor.
+    private nonisolated let shutDownFlag = OSAllocatedUnfairLock(initialState: false)
+    private nonisolated var isShutDown: Bool { shutDownFlag.withLock { $0 } }
     /// A job cancelled while `start(_:)` was still awaiting a token, before its
     /// task existed to be cancelled.
     ///
@@ -237,8 +243,14 @@ public final class DownloadManager: NSObject {
     }
 
     public func cancel(_ job: Job) {
-        pausing.insert(job)
         if let task = tasks[job] {
+            // Marked only when a live task exists to produce the cancellation
+            // callback that consumes the marker. Inserting unconditionally
+            // left a permanent marker behind the X on a failed row, which made
+            // the *next* download of the same job swallow a system-initiated
+            // cancellation as though it were a pause — freezing the row at
+            // "downloading" with no task ever coming to finish it.
+            pausing.insert(job)
             task.cancel()
             tasks[job] = nil
         } else {
@@ -261,7 +273,7 @@ public final class DownloadManager: NSObject {
     /// URLSession/delegate pair retains itself, so old managers leaked and went
     /// on mutating state nothing was reading.
     public func shutDown() async {
-        isShutDown = true
+        shutDownFlag.withLock { $0 = true }
         session.finishTasksAndInvalidate()
     }
 
@@ -324,6 +336,12 @@ extension DownloadManager: URLSessionDownloadDelegate {
     ) {
         guard let description = downloadTask.taskDescription,
               let job = Self.decode(description) else { return }
+
+        // Checked here, synchronously, not only in the main-actor hop below:
+        // "sign out and delete downloads" removes the Books folder right after
+        // shutDown() returns, and a transfer that outlived it would otherwise
+        // re-create the folder and move the signed-out account's book into it.
+        guard !isShutDown else { return }
 
         // The temporary file is deleted the moment this returns, so it has to be
         // moved here and now, synchronously, before hopping to the actor.

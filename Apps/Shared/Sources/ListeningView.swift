@@ -8,9 +8,21 @@ public struct ListeningView: View {
 
     public init() {}
 
-    private var readalongs: [Book] { app.derivation.readalongs }
+    // Both sections read from `servableFormats`, not bare row presence:
+    // Storyteller creates an audiobook or readaloud row as soon as work on one
+    // is requested, so `audiobook != nil` listed books with nothing behind
+    // them — and a readaloud the server has lost stayed under "Read along".
+    // Book.swift states the rule this tab was breaking: for anything
+    // user-facing prefer `servableFormats`.
+    private var readalongs: [Book] {
+        app.books.filter { $0.servableFormats.contains(.readaloud) }
+    }
+
     private var audiobooks: [Book] {
-        app.books.filter { $0.audiobook != nil && !$0.hasReadalong }
+        app.books.filter {
+            let formats = $0.servableFormats
+            return formats.contains(.audiobook) && !formats.contains(.readaloud)
+        }
     }
 
     public var body: some View {

@@ -2,6 +2,15 @@ import AppIntents
 import Foundation
 import IssaCore
 
+// iOS only, though this file compiles into all three app targets. On macOS the
+// sandbox has no App Group entitlement, so `CurrentBookSnapshotStore.read()`
+// is always nil and the intent told a mid-book reader "You haven't started a
+// book yet"; tvOS is the same, and neither platform's scene consumes
+// `AppIntentInbox` anyway. Advertising a shortcut that can never succeed is
+// worse than not having one, so the whole feature is compiled out until those
+// platforms can honour it.
+#if os(iOS)
+
 /// "Hey Siri, continue my book."
 ///
 /// One intent, doing the thing a listener actually asks for. Resuming needs no
@@ -61,3 +70,5 @@ struct IssaShortcuts: AppShortcutsProvider {
         )
     }
 }
+
+#endif

@@ -95,8 +95,14 @@ public struct CarPlayCatalogue: Sendable {
             // floating downloads to the top of them: a driver looking for the
             // book they were in the middle of should find it where they left
             // it. This shelf is the offline answer instead.
-            LibraryDerivation(books: playable.filter { downloadedUUIDs.contains($0.uuid) })
-                .continueReading
+            //
+            // Every download, not `.continueReading`: that filter drops any
+            // book without progress, and a book downloaded for the drive and
+            // never yet opened is precisely what this shelf exists to offer.
+            // In-progress books come first, most recently positioned on top;
+            // unstarted downloads follow in the library's own order.
+            playable.filter { downloadedUUIDs.contains($0.uuid) }
+                .sorted { ($0.position?.timestamp ?? 0) > ($1.position?.timestamp ?? 0) }
         }
         return selected.prefix(limit).map(entry)
     }

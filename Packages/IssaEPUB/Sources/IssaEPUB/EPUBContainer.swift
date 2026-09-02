@@ -74,14 +74,20 @@ public struct EPUBArchive: Sendable {
     private func extract(_ entry: Entry) throws -> Data {
         // The local header's name and extra-field lengths can differ from the
         // central directory's, so the payload offset must be read from it.
+        //
+        // Bounds are checked subtraction-side throughout: the offset and size
+        // come out of the file, and adding 30 to an attacker-chosen value near
+        // `Int.max` is an overflow trap, not a thrown error.
         let base = entry.localHeaderOffset
-        guard base + 30 <= data.count else { throw EPUBError.malformedArchive("truncated local header") }
+        guard base >= 0, base <= data.count - 30 else { throw EPUBError.malformedArchive("truncated local header") }
         guard data.u32(base) == 0x0403_4B50 else { throw EPUBError.malformedArchive("bad local signature") }
         let nameLength = Int(data.u16(base + 26))
         let extraLength = Int(data.u16(base + 28))
         let start = base + 30 + nameLength + extraLength
+        guard entry.compressedSize >= 0, entry.compressedSize <= data.count - start else {
+            throw EPUBError.malformedArchive("truncated entry \(entry.path)")
+        }
         let end = start + entry.compressedSize
-        guard end <= data.count else { throw EPUBError.malformedArchive("truncated entry \(entry.path)") }
 
         let payload = data.subdata(in: start ..< end)
         switch entry.compressionMethod {
@@ -107,12 +113,28 @@ public struct EPUBArchive: Sendable {
             guard let locator = findZip64Locator(data, before: eocd) else {
                 throw EPUBError.malformedArchive("zip64 locator missing")
             }
-            let zip64 = Int(data.u64(locator + 8))
-            guard zip64 + 56 <= data.count, data.u32(zip64) == 0x0605_4B50 else {
+            // `Int(exactly:)`, never `Int(_:)`: these eight-byte fields come
+            // straight out of the file, and the trapping initialiser turns a
+            // malformed archive into an uncatchable crash instead of a thrown
+            // error. The record guard subtracts rather than adds for the same
+            // reason — `zip64 + 56` overflows on a value near `Int.max`.
+            guard let zip64 = Int(exactly: data.u64(locator + 8)),
+                  zip64 <= data.count - 56, data.u32(zip64) == 0x0605_4B50,
+                  let zip64Count = Int(exactly: data.u64(zip64 + 32)),
+                  let zip64Offset = Int(exactly: data.u64(zip64 + 48))
+            else {
                 throw EPUBError.malformedArchive("bad zip64 record")
             }
-            count = Int(data.u64(zip64 + 32))
-            offset = Int(data.u64(zip64 + 48))
+            count = zip64Count
+            offset = zip64Offset
+        }
+
+        // Each central-directory entry takes at least 46 bytes, so a count or
+        // offset the file cannot possibly hold is malformed, not merely large —
+        // and bounding them here keeps `reserveCapacity` and the cursor
+        // arithmetic below out of reach of a hostile zip64 record.
+        guard offset >= 0, offset <= data.count, count >= 0, count <= data.count / 46 else {
+            throw EPUBError.malformedArchive("central directory out of bounds")
         }
 
         var result: [String: Entry] = [:]
@@ -139,7 +161,7 @@ public struct EPUBArchive: Sendable {
 
             if compressed == 0xFFFF_FFFF || uncompressed == 0xFFFF_FFFF || localOffset == 0xFFFF_FFFF {
                 let extraStart = nameStart + nameLength
-                readZip64Extra(
+                try readZip64Extra(
                     data, at: extraStart, length: extraLength,
                     uncompressed: &uncompressed, compressed: &compressed, localOffset: &localOffset,
                 )
@@ -160,7 +182,7 @@ public struct EPUBArchive: Sendable {
     private static func readZip64Extra(
         _ data: Data, at start: Int, length: Int,
         uncompressed: inout Int, compressed: inout Int, localOffset: inout Int,
-    ) {
+    ) throws {
         var cursor = start
         let end = start + length
         while cursor + 4 <= end, cursor + 4 <= data.count {
@@ -168,9 +190,18 @@ public struct EPUBArchive: Sendable {
             let size = Int(data.u16(cursor + 2))
             var field = cursor + 4
             if headerID == 0x0001 {
-                if uncompressed == 0xFFFF_FFFF, field + 8 <= data.count { uncompressed = Int(data.u64(field)); field += 8 }
-                if compressed == 0xFFFF_FFFF, field + 8 <= data.count { compressed = Int(data.u64(field)); field += 8 }
-                if localOffset == 0xFFFF_FFFF, field + 8 <= data.count { localOffset = Int(data.u64(field)) }
+                // `Int(exactly:)`, matching the zip64 EOCD fields: a trapping
+                // conversion of these attacker-supplied values is an
+                // uncatchable crash rather than a thrown error.
+                func read64(at offset: Int) throws -> Int {
+                    guard let value = Int(exactly: data.u64(offset)) else {
+                        throw EPUBError.malformedArchive("zip64 extra field out of range")
+                    }
+                    return value
+                }
+                if uncompressed == 0xFFFF_FFFF, field + 8 <= data.count { uncompressed = try read64(at: field); field += 8 }
+                if compressed == 0xFFFF_FFFF, field + 8 <= data.count { compressed = try read64(at: field); field += 8 }
+                if localOffset == 0xFFFF_FFFF, field + 8 <= data.count { localOffset = try read64(at: field) }
                 return
             }
             cursor += 4 + size

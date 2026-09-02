@@ -29,8 +29,10 @@ struct CurrentBookWidget: Widget {
                 .containerBackground(Palette.surface, for: .widget)
                 // Tapping the widget opens the book it is showing, not the
                 // library — the widget exists because that is the book you are
-                // in.
-                .widgetURL(CurrentBookSnapshotStore.deepLink(bookID: entry.snapshot.bookID))
+                // in. When there is no book, a nil URL just opens the app:
+                // a link to a book that does not exist silently did nothing.
+                .widgetURL(entry.isEmpty
+                    ? nil : CurrentBookSnapshotStore.deepLink(bookID: entry.snapshot.bookID))
         }
         .configurationDisplayName("Currently Reading")
         .description("The book you're in, and how far through you are.")
@@ -45,9 +47,15 @@ struct CurrentBookEntry: TimelineEntry {
     let date: Date
     let snapshot: CurrentBookSnapshot
     let cover: Data?
+    /// No book in progress: a fresh install, or after a sign-out. The views
+    /// draw an empty state instead of reading `snapshot`.
+    var isEmpty = false
 }
 
 struct CurrentBookProvider: TimelineProvider {
+    /// The gallery sample. Only ever shown where `isPreview` is true — on the
+    /// Home Screen this fictional book would masquerade as the user's real
+    /// reading state, complete with a deep link to a book that does not exist.
     func placeholder(in context: Context) -> CurrentBookEntry {
         CurrentBookEntry(
             date: .now,
@@ -56,6 +64,16 @@ struct CurrentBookProvider: TimelineProvider {
                 chapter: "Part 3 · The Tides", progress: 0.42, remaining: 8_280,
             ),
             cover: nil,
+        )
+    }
+
+    /// What an installed widget shows when no snapshot exists on disk.
+    private func emptyEntry() -> CurrentBookEntry {
+        CurrentBookEntry(
+            date: .now,
+            snapshot: CurrentBookSnapshot(bookID: "", title: "", author: "", progress: 0),
+            cover: nil,
+            isEmpty: true,
         )
     }
 
@@ -74,7 +92,11 @@ struct CurrentBookProvider: TimelineProvider {
     }
 
     func getSnapshot(in context: Context, completion: @escaping (CurrentBookEntry) -> Void) {
-        completion(currentEntry(fallback: placeholder(in: context)))
+        // The sample book only where this is genuinely a preview — the widget
+        // gallery. A transient snapshot for an installed widget gets the same
+        // honest empty state the timeline does.
+        let fallback = context.isPreview ? placeholder(in: context) : emptyEntry()
+        completion(currentEntry(fallback: fallback))
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<CurrentBookEntry>) -> Void) {
@@ -82,7 +104,11 @@ struct CurrentBookProvider: TimelineProvider {
         // when an audio session exempts them from the daily budget, so a
         // ticking progress bar cannot come from reloads. Anything that must
         // move second by second uses a self-updating timer view instead.
-        let entry = currentEntry(fallback: placeholder(in: context))
+        //
+        // The empty entry, never the placeholder: an installed widget with no
+        // snapshot — a fresh install, a sign-out — showed the fictional sample
+        // book as if it were the user's current one, refreshed forever.
+        let entry = currentEntry(fallback: emptyEntry())
         completion(Timeline(entries: [entry], policy: .after(.now.addingTimeInterval(15 * 60))))
     }
 }
@@ -92,6 +118,47 @@ struct CurrentBookView: View {
     let entry: CurrentBookEntry
 
     var body: some View {
+        if entry.isEmpty {
+            empty
+        } else {
+            filled
+        }
+    }
+
+    /// What an installed widget says when there is no book in progress —
+    /// which is the normal state on a fresh install and after a sign-out,
+    /// not an error worth dressing up.
+    @ViewBuilder
+    private var empty: some View {
+        switch family {
+        case .accessoryInline:
+            Text("No book in progress")
+        case .accessoryCircular:
+            ZStack {
+                AccessoryWidgetBackground()
+                Image(systemName: "book.closed")
+            }
+        case .accessoryRectangular:
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Nothing in progress").font(.headline).lineLimit(1)
+                Text("Open a book to see it here").font(.caption).lineLimit(2)
+            }
+        default:
+            VStack(spacing: Metrics.spacing8) {
+                Image(systemName: "book.closed")
+                    .font(.system(size: 26))
+                    .foregroundStyle(Palette.inkSecondary)
+                Text("Nothing in progress")
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.inkSecondary)
+                    .multilineTextAlignment(.center)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    @ViewBuilder
+    private var filled: some View {
         switch family {
         case .accessoryInline:
             // One line, no room for anything but the fact.

@@ -158,4 +158,47 @@ struct LibraryArrangementTests {
         let sorted = LibraryArrangement(sort: .narrator).apply(to: books)
         #expect(sorted.map(\.title) == ["Alpha", "Zeta", "No narrator"])
     }
+
+    /// The trap this pins: reversing the whole array also reversed the
+    /// never-opened block `.recent` pins to the end, so flipping "Reverse
+    /// order" buried the book actually being read under every book never
+    /// opened.
+    @Test("reversed recently-read still keeps unread books at the end")
+    func recentSortReversed() {
+        let books = [
+            book("Never opened"),
+            book("Read yesterday", progress: 0.4, positionTimestamp: 1_000),
+            book("Read today", progress: 0.2, positionTimestamp: 2_000),
+        ]
+        let sorted = LibraryArrangement(sort: .recent, ascending: true).apply(to: books)
+        #expect(sorted.map(\.title) == ["Read yesterday", "Read today", "Never opened"])
+    }
+
+    @Test("reversed narrator order still keeps unnarrated books at the end")
+    func narratorSortReversed() {
+        let books = [
+            book("No narrator"),
+            book("Zeta", narrator: "Zeta"),
+            book("Alpha", narrator: "Alpha"),
+        ]
+        let sorted = LibraryArrangement(sort: .narrator, ascending: true).apply(to: books)
+        #expect(sorted.map(\.title) == ["Zeta", "Alpha", "No narrator"])
+    }
+
+    /// A sort with no sentinel bucket must still actually reverse.
+    @Test("reverse order reverses a title sort end to end")
+    func titleSortReversed() {
+        let books = [book("The Time Machine"), book("Alice"), book("A Study in Scarlet")]
+        let sorted = LibraryArrangement(sort: .title, ascending: true).apply(to: books)
+        #expect(sorted.map(\.title) == ["The Time Machine", "A Study in Scarlet", "Alice"])
+    }
+
+    /// `String.<` compares code units, which files every accented initial
+    /// after Z; a shelf files É under E.
+    @Test("an accented title files under its letter, not after Z")
+    func accentedTitleSort() {
+        let books = [book("Zorro"), book("Émile"), book("Alice")]
+        let sorted = LibraryArrangement(sort: .title).apply(to: books)
+        #expect(sorted.map(\.title) == ["Alice", "Émile", "Zorro"])
+    }
 }

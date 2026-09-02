@@ -16,6 +16,13 @@ public struct BookDetailView: View {
     /// Which editions are on disk, recomputed on appear and whenever a download
     /// finishes or is deleted anywhere in the app.
     @State private var downloaded: Set<BookContentService.Format> = []
+    /// What this screen's own Listen tap reported, if anything.
+    ///
+    /// `app.listeningError` is one app-wide string, cleared only inside the
+    /// *next* attempt — rendered directly, book A's failure showed under book
+    /// B's perfectly working Listen button. Copied here when the attempt this
+    /// screen started returns, it can only describe this book.
+    @State private var listenError: String?
     #if os(iOS)
     @State private var showsReader = false
     #endif
@@ -82,6 +89,16 @@ public struct BookDetailView: View {
         }
         #endif
         .onChange(of: app.downloadedUUIDs, initial: true) { refreshDownloaded() }
+        // `downloadedUUIDs` is keyed by book with the format discarded, so a
+        // second edition arriving or leaving while the first is still on disk
+        // produces an equal set and the line above stays silent. The
+        // per-edition download states do move — a finish writes `.finished`,
+        // a removal clears the job — so they are watched as well.
+        .onChange(of: editionDownloadStates) { refreshDownloaded() }
+        // And re-read on the way back from another screen: removing an edition
+        // that was fetched in an earlier session from the downloads list moves
+        // neither observed value, because its job has no state to clear.
+        .onAppear { refreshDownloaded() }
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
@@ -139,9 +156,11 @@ public struct BookDetailView: View {
             if let detail = primaryAction?.detail {
                 Text(detail).font(Typography.caption).foregroundStyle(Palette.alert)
             }
-            // Set in AppModel and, until now, rendered by nothing at all — so a
-            // Listen tap that failed was completely silent.
-            if let error = app.listeningError {
+            // A failed Listen tap used to be completely silent. The outcome
+            // is rendered from this screen's own copy, not `app.listeningError`
+            // itself, which is app-wide and would resurface one book's failure
+            // under every other book's button.
+            if let error = listenError {
                 Text(error).font(Typography.caption).foregroundStyle(Palette.alert)
             }
         }
@@ -172,6 +191,16 @@ public struct BookDetailView: View {
         downloaded = Set(BookContentService.Format.allCases.filter {
             content.isDownloaded(book, format: $0)
         })
+    }
+
+    /// The download states for this book's editions, one slot per format.
+    ///
+    /// Observed because `app.downloadedUUIDs` cannot carry a second edition of
+    /// the same book — see the `onChange` in `body`.
+    private var editionDownloadStates: [DownloadManager.State?] {
+        BookContentService.Format.allCases.map {
+            app.downloads?.state(for: .init(bookUUID: book.uuid, format: $0))
+        }
     }
 
     @ViewBuilder
@@ -234,6 +263,7 @@ public struct BookDetailView: View {
             Button {
                 Task {
                     await app.startListening(to: book, nowPlaying: nowPlaying, settings: settings)
+                    listenError = app.listeningError
                 }
             } label: {
                 HStack(spacing: 6) {
@@ -306,6 +336,13 @@ public struct BookDetailView: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Rate \(star) star\(star == 1 ? "" : "s")")
+                // The fill and the tangerine never reach the accessibility
+                // tree, so VoiceOver read five identical buttons whether or
+                // not the book was rated. The current score carries the trait,
+                // and its hint says what a second tap does — silently deleting
+                // the rating is not discoverable any other way.
+                .accessibilityAddTraits(mine == Double(star) ? .isSelected : [])
+                .accessibilityHint(mine == Double(star) ? "Removes your rating." : "")
             }
             if let serverAverage = book.rating, mine == nil {
                 Text(String(format: "%.1f average", serverAverage))
@@ -313,6 +350,12 @@ public struct BookDetailView: View {
                     .foregroundStyle(Palette.inkTertiary)
             }
         }
+        // Announced on entering the row, so the score is discoverable without
+        // swiping across every star hunting for the selected one.
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Rating")
+        .accessibilityValue(
+            mine.map { "\(Int($0)) star\($0 == 1 ? "" : "s")" } ?? "Not rated")
     }
 
     /// The shelf this book sits on, changeable in place.
@@ -510,6 +553,11 @@ public struct BookDetailView: View {
             if onDisk {
                 Button("Remove download", systemImage: "trash", role: .destructive) {
                     app.removeDownload(book, format: format)
+                    // The model refreshes a set keyed by book UUID, which does
+                    // not change while the other edition is still on disk — so
+                    // re-read locally rather than waiting on an observer that
+                    // cannot fire.
+                    refreshDownloaded()
                 }
             }
         } label: {
@@ -541,10 +589,10 @@ public struct BookDetailView: View {
                 }
                 if let alignedWith = book.alignedWith { factRow("Aligned with", alignedWith) }
                 ForEach(namedIdentifiers) { identifier in
-                    if let url = identifier.url {
+                    if let url = identifier.url, Self.isWebLink(url) {
                         // The server configures the URL template per identifier
                         // type, so a link only appears where it actually leads
-                        // somewhere.
+                        // somewhere — and only somewhere on the web.
                         Link(destination: url) {
                             factRow(identifier.label, identifier.value ?? "", showsLink: true)
                         }
@@ -588,7 +636,8 @@ public struct BookDetailView: View {
                             Capsule().fill((Color(hex: rating.sourceColor) ?? Palette.moss).opacity(0.12)),
                         )
 
-                        if let source = rating.sourceUrl, let url = URL(string: source) {
+                        if let source = rating.sourceUrl, let url = URL(string: source),
+                           Self.isWebLink(url) {
                             Link(destination: url) { chip }.buttonStyle(.plain)
                         } else {
                             chip
@@ -662,6 +711,18 @@ public struct BookDetailView: View {
                 }
             }
         }
+    }
+
+    /// Whether a server-supplied URL is safe to hand to a `Link`.
+    ///
+    /// The same rule `HTMLText.href` applies to scraped descriptions:
+    /// identifiers and external ratings are metadata the server controls, and
+    /// `URL(string:)` happily builds `javascript:`, `sms:` or `shortcuts:`
+    /// URLs — a tapped `Link` hands those straight to whatever app claims the
+    /// scheme. Web links only.
+    static func isWebLink(_ url: URL) -> Bool {
+        let scheme = url.scheme?.lowercased()
+        return scheme == "http" || scheme == "https"
     }
 
     static func positionText(_ position: Double) -> String {

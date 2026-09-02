@@ -61,4 +61,36 @@ public enum ServerAddress {
             .compactMap { $0 }
             .filter { seen.insert($0).inserted }
     }
+
+    /// Whether settling on `url` means speaking cleartext for an address that
+    /// never asked for it: no scheme was typed, HTTPS was the first candidate,
+    /// and plain HTTP is what answered.
+    ///
+    /// An explicit `http://` is not a downgrade — someone who typed one has
+    /// said what they meant, and a LAN install depends on being believed.
+    public static func isCleartextFallback(_ url: URL, forTyped input: String) -> Bool {
+        guard !input.contains("://") else { return false }
+        return url.scheme?.lowercased() == "http"
+    }
+
+    /// The address to remember once `url` has answered for `input`.
+    ///
+    /// Normally the resolved URL, so every later call is taken at its word.
+    /// For a bare address that fell back to plain HTTP it is what was typed
+    /// instead: persisting the `http://` URL would make the downgrade
+    /// permanent — every later connect would honour the stored scheme and
+    /// never try HTTPS again — while the typed text probes HTTPS first on the
+    /// next connect. Keeping raw text is safe precisely here, because for a
+    /// bare host `normalize(typed)` *is* the fallback URL, so nothing
+    /// downstream re-derives a different one. The downgrade is logged, so an
+    /// unencrypted connection at least shows up in a diagnostics export.
+    public static func addressToStore(for input: String, connectedTo url: URL) -> String {
+        let typed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard isCleartextFallback(url, forTyped: typed) else { return url.absoluteString }
+        IssaLog.warning(
+            "connected over cleartext HTTP after HTTPS failed",
+            ["server": url.absoluteString],
+        )
+        return typed
+    }
 }

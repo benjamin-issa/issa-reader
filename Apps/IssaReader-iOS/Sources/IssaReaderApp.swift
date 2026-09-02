@@ -23,18 +23,9 @@ struct IssaReaderApp: App {
                 // run by now, but a scene that somehow arrives first must not
                 // find an unstarted app.
                 .task { AppServices.shared.start() }
-                // CarPlay's list is built from whatever the bridge holds, and
-                // the car can connect before the phone app has ever loaded a
-                // library — so it is refreshed whenever the library changes
-                // rather than only at connect.
-                .onChange(of: services.app.books) { _, books in
-                    CarPlayBridge.shared.update(
-                        books: books, downloaded: services.app.downloadedUUIDs)
-                }
-                .onChange(of: services.app.downloadedUUIDs) { _, downloaded in
-                    CarPlayBridge.shared.update(
-                        books: services.app.books, downloaded: downloaded)
-                }
+                // CarPlay's list is kept fresh by `AppServices`, not here: a
+                // car-only launch never evaluates this body, so an `.onChange`
+                // in it left the shelves empty for the whole drive.
                 .tint(Palette.tangerine)
                 .onOpenURL { services.app.open($0) }
                 // A Spotlight result carries the book's uuid as its identifier,
@@ -106,6 +97,11 @@ struct LibraryTabs: View {
 
     private func openPendingBook() {
         guard let pending = app.consumePendingBook() else { return }
+        // The expanded player is a sheet now, not a tab, so switching tabs no
+        // longer moves it out of the way. Left up, it sat over the navigation
+        // below while the one-shot reader request was spent behind it — and
+        // the reader's own cover cannot present while it is showing.
+        showsPlayer = false
         selectedTab = .library
         libraryPath = NavigationPath()
         // Pushed either way, so Back from the reader lands on the book and then

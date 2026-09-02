@@ -18,6 +18,13 @@ public enum PlaybackAction: String, Codable, Sendable, CaseIterable, Hashable {
     case speedUp
     case speedDown
     case sleepTimer
+    /// The system's discrete play and pause, as the Lock Screen, CarPlay and a
+    /// paired watch send them. Not offered as bindings — `.playPause` already
+    /// covers what a button should do — but they exist so `playCommand` can
+    /// mean "make sure audio is running" rather than "flip whatever the flag
+    /// says"; see `RemoteCommandCenter.activate()`.
+    case play
+    case pause
     case none
 
     public var title: String {
@@ -34,8 +41,22 @@ public enum PlaybackAction: String, Codable, Sendable, CaseIterable, Hashable {
         case .speedUp: "Speed up"
         case .speedDown: "Slow down"
         case .sleepTimer: "Sleep timer"
+        case .play: "Play"
+        case .pause: "Pause"
         case .none: "Nothing"
         }
+    }
+
+    /// The actions the Controls screen offers for binding.
+    ///
+    /// Not `allCases`. `.play` and `.pause` exist for the system's discrete
+    /// commands, and a button already has `.playPause`; `.sleepTimer` has no
+    /// handler in either coordinator, so offering it made a binding that read
+    /// back correctly and did nothing at all — a setting that cannot be wrong
+    /// because it is never consulted. A stored map carrying one of these still
+    /// decodes and still shows in the picker; it just cannot be chosen anew.
+    public static var assignable: [PlaybackAction] {
+        allCases.filter { $0 != .play && $0 != .pause && $0 != .sleepTimer }
     }
 
     /// Whether this action moves the listener a whole chapter.

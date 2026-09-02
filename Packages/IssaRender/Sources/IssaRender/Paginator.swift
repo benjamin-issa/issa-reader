@@ -145,8 +145,12 @@ public final class ChapterLayout {
         var rects: [CGRect] = []
         layoutManager.enumerateTextSegments(in: textRange, type: .highlight, options: []) { _, frame, _, _ in
             let translated = frame.offsetBy(dx: 0, dy: -page.yOffset)
-            // Segments from other pages are simply out of frame.
-            if translated.maxY > -1, translated.minY < page.height + 1 {
+            // Segments from other pages are simply out of frame. Bounded by
+            // `contentBottom`, not `height`: the page's drawn content stops at
+            // the last whole line, and a fragment continuing onto the next page
+            // would otherwise paint a bar in the blank band below it — the same
+            // migration `draw` and `paintedCharacterRange` already made.
+            if translated.maxY > -1, frame.minY < page.contentBottom {
                 rects.append(translated)
             }
             return true
@@ -281,7 +285,8 @@ public final class ChapterLayout {
         var rects: [CGRect] = []
         layoutManager.enumerateTextSegments(in: textRange, type: .selection, options: []) { _, frame, _, _ in
             let translated = frame.offsetBy(dx: 0, dy: -page.yOffset)
-            if translated.maxY > -1, translated.minY < page.height + 1 {
+            // `contentBottom`, not `height` — see `highlightRects(forFragment:on:)`.
+            if translated.maxY > -1, frame.minY < page.contentBottom {
                 rects.append(translated)
             }
             return true

@@ -14,7 +14,13 @@ private actor StubTokenProvider: TokenProviding {
 /// Hands out one status code per request, in the order given, then 200 for
 /// anything beyond that — so a test states exactly what the server does to
 /// each successive item without needing to know which item is sent first.
+/// Priming `offline` in place of a status serves a transport-level failure —
+/// nothing listening at all — instead of an HTTP response.
 private final class StatusQueueProtocol: URLProtocol {
+    /// Primed in place of an HTTP status to fail the request the way a dead
+    /// network does, before any response exists.
+    static let offline = -1
+
     private static let lock = NSLock()
     nonisolated(unsafe) private static var queue: [Int] = []
     nonisolated(unsafe) private static var requestCount = 0
@@ -37,6 +43,10 @@ private final class StatusQueueProtocol: URLProtocol {
         let status = Self.lock.withLock { () -> Int in
             Self.requestCount += 1
             return Self.queue.isEmpty ? 200 : Self.queue.removeFirst()
+        }
+        guard status != Self.offline else {
+            client?.urlProtocol(self, didFailWithError: URLError(.notConnectedToInternet))
+            return
         }
         let response = HTTPURLResponse(
             url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: nil)!
@@ -155,5 +165,63 @@ struct MutationDrainTests {
         #expect(sent == 1, "the 409 is not a send")
         #expect(try await queue.count == 0, "an obsolete write must not be kept forever")
         #expect(StatusQueueProtocol.requestsMade == 2, "409 must not stop the drain")
+    }
+
+    /// The data-loss regression. `recordFailure` abandons — deletes — a write
+    /// at 8 attempts, and every offline drain used to count as one; since each
+    /// debounced save triggers a drain, a reader who kept reading through a
+    /// tunnel burned the limit in well under a minute, and the queue whose
+    /// entire purpose is surviving offline deleted their write in silence. A
+    /// request that never reached the server says nothing about the item, so
+    /// it must not count — no matter how many times it happens.
+    @Test("offline drains never count toward abandoning a write")
+    func offlineDrainsNeverAbandon() async throws {
+        let (drain, queue, directory) = try await makeDrain()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        try await queue.enqueue(.status, bookUUID: "kept", payload: Data(#"{"status":"reading"}"#.utf8))
+
+        // Comfortably past the abandon limit of 8.
+        for _ in 1 ... 12 {
+            StatusQueueProtocol.prime([StatusQueueProtocol.offline])
+            let sent = await drain.drain()
+            #expect(sent == 0)
+        }
+
+        let pending = try await queue.pending()
+        #expect(pending.count == 1, "an unreachable server must never cost a queued write")
+        #expect(pending.first?.attempts == 0,
+                "a transport failure is no evidence against the item, so it must not even count")
+    }
+
+    /// The complement: abandonment still exists for writes the server itself
+    /// chokes on — a repeated 5xx counts, see `countsTowardAbandonment` for
+    /// the judgement — and throwing one away now leaves a line in the log.
+    @Test("a write the server keeps choking on is abandoned at the limit, and logged")
+    func poisonedWriteIsAbandonedAndLogged() async throws {
+        let (drain, queue, directory) = try await makeDrain()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        // Unique, so the log assertion below cannot match a line left over
+        // from an earlier run: the log store is real and keeps six hours.
+        let book = "poisoned-\(UUID().uuidString)"
+        try await queue.enqueue(.status, bookUUID: book, payload: Data(#"{"status":"reading"}"#.utf8))
+
+        // Eight separate drains, exactly as real ones arrive — each gets one
+        // 500 and stops.
+        for attempt in 1 ... 8 {
+            StatusQueueProtocol.prime([500])
+            _ = await drain.drain()
+            if attempt < 8 {
+                #expect(try await queue.count == 1,
+                        "attempt \(attempt) is short of the limit and must not abandon yet")
+            }
+        }
+
+        #expect(try await queue.count == 0, "the eighth refusal must abandon the write")
+        let logged = IssaLog.export().split(separator: "\n").contains {
+            $0.contains("sync mutation abandoned") && $0.contains(book)
+        }
+        #expect(logged, "a write thrown away by the abandon limit must say so in the log")
     }
 }

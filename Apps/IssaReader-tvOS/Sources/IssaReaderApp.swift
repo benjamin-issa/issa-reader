@@ -35,17 +35,23 @@ struct TVRootView: View {
     @Environment(AppModel.self) private var app
 
     var body: some View {
-        switch app.phase {
-        case .launching:
-            Palette.paper.ignoresSafeArea().task { await app.restoreIfPossible() }
-        case .chooseServer, .signingIn, .expired:
-            TVSignInView().task { await app.restoreIfPossible() }
-        case .ready:
-            TabView {
-                NavigationStack { TVLibraryView() }.tabItem { Text("Library") }
-                NavigationStack { ListeningView() }.tabItem { Text("Listening") }
+        Group {
+            switch app.phase {
+            case .launching:
+                Palette.paper.ignoresSafeArea().task { await app.restoreIfPossible() }
+            case .chooseServer, .signingIn, .expired:
+                TVSignInView().task { await app.restoreIfPossible() }
+            case .ready:
+                TabView {
+                    NavigationStack { TVLibraryView() }.tabItem { Text("Library") }
+                    NavigationStack { ListeningView() }.tabItem { Text("Listening") }
+                }
             }
         }
+        // Nothing else moves `phase` to `.expired`, and the device-grant token
+        // goes stale on every install eventually. Without this the TV kept
+        // rendering the cached shelf with no way to reach the sign-in code.
+        .task { await app.watchForExpiry() }
     }
 }
 

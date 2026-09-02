@@ -294,7 +294,13 @@ extension PlatformFont {
         ) else { return self }
         return UIFont(descriptor: descriptor, size: pointSize)
         #elseif canImport(AppKit)
-        let descriptor = fontDescriptor.withSymbolicTraits(.bold)
+        // Union, not a bare `.bold`: AppKit's `withSymbolicTraits(_:)` REPLACES
+        // the descriptor's traits, so passing the trait alone strips italic
+        // from an already-italic face — `<strong><em>` rendered bold upright on
+        // the Mac while the identical book was bold italic on iOS.
+        let descriptor = fontDescriptor.withSymbolicTraits(
+            fontDescriptor.symbolicTraits.union(.bold),
+        )
         return NSFont(descriptor: descriptor, size: pointSize) ?? self
         #endif
     }

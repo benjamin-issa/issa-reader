@@ -30,17 +30,30 @@ public enum CustomFonts {
     private static let lock = NSLock()
     /// File URL → the family name it registered under.
     nonisolated(unsafe) private static var registered: [URL: String] = [:]
+    /// The subset of `registered` the reader imported themselves.
+    ///
+    /// `registered` also carries faces extracted from books, and those must
+    /// not reach the picker: a book's face lives under `Fonts/<book-uuid>/`,
+    /// which the launch-time `registerAll` never descends into, so choosing
+    /// one persisted a family name that resolved to nothing on the next
+    /// launch — every book silently set in the fallback face.
+    nonisolated(unsafe) private static var importedURLs: Set<URL> = []
 
     /// Registers a font file and returns the family name to ask for.
     ///
     /// Idempotent per URL. Returns `nil` for a format CoreText cannot read, or
     /// a file it rejects — callers fall back to the chosen face rather than
-    /// rendering nothing.
+    /// rendering nothing. Pass `imported: true` only for a face the reader
+    /// imported into the fonts directory root: those are what `families()`
+    /// offers, because they are the only ones registered again at launch.
     @discardableResult
-    public static func register(_ url: URL) -> String? {
+    public static func register(_ url: URL, imported: Bool = false) -> String? {
         lock.lock()
         defer { lock.unlock() }
-        if let known = registered[url] { return known }
+        if let known = registered[url] {
+            if imported { importedURLs.insert(url) }
+            return known
+        }
         guard isReadable(url) else { return nil }
 
         var error: Unmanaged<CFError>?
@@ -51,6 +64,7 @@ public enum CustomFonts {
         }
         guard let family = familyName(in: url) else { return nil }
         registered[url] = family
+        if imported { importedURLs.insert(url) }
         return family
     }
 
@@ -67,10 +81,14 @@ public enum CustomFonts {
     }
 
     /// Every imported face currently registered, for the picker to list.
+    ///
+    /// Imported only — never a face extracted from a book. Those were listed
+    /// here once, under "Your fonts", and picking one made a promise the next
+    /// launch could not keep.
     public static func families() -> [String] {
         lock.lock()
         defer { lock.unlock() }
-        return Set(registered.values).sorted()
+        return Set(importedURLs.compactMap { registered[$0] }).sorted()
     }
 
     /// Registers everything in the app's own font directory.
@@ -82,7 +100,10 @@ public enum CustomFonts {
     public static func registerAll(in directory: URL) -> [String] {
         guard let files = try? FileManager.default.contentsOfDirectory(
             at: directory, includingPropertiesForKeys: nil) else { return [] }
-        return files.compactMap { register($0) }
+        // Everything at this directory's root was put there by
+        // `FontImport.adopt`, so it counts as imported and belongs in the
+        // picker.
+        return files.compactMap { register($0, imported: true) }
     }
 
     /// Where imported and extracted faces live.

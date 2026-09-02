@@ -120,6 +120,37 @@ struct EPUBFontResolverTests {
         #expect(faces.first?.path == "OEBPS/fonts/B.otf")
     }
 
+    /// The exact shape mainstream tools emit: an `@charset`, comments between
+    /// rules, then the faces and the body rule. Each of those used to glue
+    /// itself onto the following selector, and the exact-equality `matches`
+    /// then dropped the rule — silently costing the book its body face.
+    @Test("comments and at-rules do not cost the rules that follow them")
+    func survivesCommentsAndAtRules() {
+        let css = """
+        @charset "utf-8";
+        /* Stylesheet generated for this edition. */
+        @font-face { font-family: "Minion Pro"; src: url(fonts/MinionPro.otf); }
+        @font-face { font-family: "Display"; src: url(fonts/Display.otf); }
+        /* Running text */
+        body { font-family: "Minion Pro", serif; }
+        """
+        let faces = EPUBFontResolver.fontFaces(in: css, relativeTo: "OEBPS/s.css")
+        #expect(faces.map(\.family) == ["Minion Pro", "Display"])
+        #expect(EPUBFontResolver.bodyFontFamilies(in: css) == ["Minion Pro", "serif"])
+    }
+
+    @Test("a comment inside a block does not corrupt its declarations")
+    func stripsCommentsInsideBlocks() {
+        let css = "body { /* running text */ font-family: /* the face */ \"Text\"; }"
+        #expect(EPUBFontResolver.bodyFontFamilies(in: css) == ["Text"])
+    }
+
+    @Test("an unterminated comment swallows the rest, the way a browser reads it")
+    func unterminatedCommentSwallowsTheRest() {
+        let css = "body { font-family: A; } /* trailing body { font-family: B; }"
+        #expect(EPUBFontResolver.bodyFontFamilies(in: css) == ["A"])
+    }
+
     /// A stylesheet that fails to parse must not take the book down with it.
     @Test("malformed CSS yields no face rather than throwing")
     func survivesMalformedCSS() {

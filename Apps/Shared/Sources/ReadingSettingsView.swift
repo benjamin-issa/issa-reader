@@ -13,9 +13,24 @@ public struct ReadingSettingsView: View {
     public init() {}
 
     public var body: some View {
+        #if os(macOS)
+        // MacSettingsView places this screen straight into its TabView — no
+        // navigation container anywhere above — so the "Fonts & licences"
+        // link at the bottom drew as a row and did nothing when clicked,
+        // leaving the licence screens unreachable on the one platform's only
+        // route to them. The stack is brought along here rather than added
+        // there because iOS pushes this same screen inside the Settings tab's
+        // own stack, where a second stack must not nest.
+        NavigationStack { content }
+        #else
+        content
+        #endif
+    }
+
+    private var content: some View {
         @Bindable var settings = settings
 
-        List {
+        return List {
             Section {
                 ThemePicker(selection: $settings.readerStyle.theme)
             } header: {

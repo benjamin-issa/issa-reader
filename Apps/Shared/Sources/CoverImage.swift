@@ -14,17 +14,59 @@ import SwiftUI
 public final class CoverCache {
     public static let shared = CoverCache()
 
+    /// Decoded bitmaps for instant reuse — bounded, in LRU order.
+    ///
+    /// Each entry is a fully materialised bitmap, roughly 1 MB at the 600px
+    /// default, and the cache — not the view — owns it, so an unbounded
+    /// dictionary pinned every cover a long scroll ever decoded. NSCache
+    /// cannot hold a SwiftUI `Image` without boxing it in a class, so the
+    /// bound and the eviction order are kept by hand.
     private var memory: [String: Image] = [:]
+    /// `memory`'s keys, least recently used first.
+    private var recency: [String] = []
+    /// A few screenfuls of grid plus the player — roughly 80 MB of decoded
+    /// covers at worst, well clear of an older phone's jetsam limit.
+    private let memoryCap = 80
     private var inFlight: [String: Task<Image?, Never>] = [:]
     private let diskDirectory: URL
+    private let memoryPressure: DispatchSourceMemoryPressure
 
     private init() {
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
         diskDirectory = caches.appending(path: "Covers", directoryHint: .isDirectory)
         try? FileManager.default.createDirectory(at: diskDirectory, withIntermediateDirectories: true)
+
+        // Under memory pressure the decoded bitmaps go first: the JPEGs stay
+        // on disk, so covers come back for the cost of a decode, not a fetch.
+        memoryPressure = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .main)
+        memoryPressure.setEventHandler { [weak self] in
+            // Synchronous rather than a Task: the handler already runs on the
+            // main queue, and a release scheduled for later is a release the
+            // jetsam may not wait for.
+            MainActor.assumeIsolated { self?.releaseDecodedCovers() }
+        }
+        memoryPressure.activate()
     }
 
-    public func cached(_ uuid: String) -> Image? { memory[uuid] }
+    /// Drops the decoded bitmaps but leaves the disk files.
+    private func releaseDecodedCovers() {
+        memory.removeAll()
+        recency.removeAll()
+    }
+
+    private func markUsed(_ key: String) {
+        if let index = recency.firstIndex(of: key) { recency.remove(at: index) }
+        recency.append(key)
+    }
+
+    private func store(_ image: Image, at key: String) {
+        memory[key] = image
+        markUsed(key)
+        while memory.count > memoryCap, let oldest = recency.first {
+            recency.removeFirst()
+            memory[oldest] = nil
+        }
+    }
 
     /// Copies a book's cover into the App Group so the widget can draw it.
     ///
@@ -80,6 +122,7 @@ public final class CoverCache {
     /// Drops everything, for sign-out.
     public func clear() {
         memory.removeAll()
+        recency.removeAll()
         try? FileManager.default.removeItem(at: diskDirectory)
         try? FileManager.default.createDirectory(at: diskDirectory, withIntermediateDirectories: true)
     }
@@ -89,8 +132,17 @@ public final class CoverCache {
         shape: LibraryService.CoverShape = .portrait,
         maxPixel: CGFloat = 600,
     ) async -> Image? {
-        let key = shape == .square ? book.uuid + "-square" : book.uuid
-        if let hit = memory[key] { return hit }
+        // The key carries updatedAt as well as the uuid. The network request
+        // below is versioned precisely so a replaced cover is re-fetched — but
+        // the disk file (and this session's memory entry) shadow that request,
+        // so an unversioned key meant a cover, once cached, was never asked
+        // for again for the life of the install.
+        let version = book.updatedAt.map { String(Int($0.value.timeIntervalSince1970 * 1000)) } ?? "0"
+        let key = "\(book.uuid)-v\(version)" + (shape == .square ? "-square" : "")
+        if let hit = memory[key] {
+            markUsed(key)
+            return hit
+        }
         if let existing = inFlight[key] { return await existing.value }
 
         let task = Task<Image?, Never> { [diskDirectory] in
@@ -125,7 +177,7 @@ public final class CoverCache {
         inFlight[key] = task
         let result = await task.value
         inFlight[key] = nil
-        if let result { memory[key] = result }
+        if let result { store(result, at: key) }
         return result
     }
 
@@ -193,7 +245,13 @@ public struct CoverImage: View {
         )
         .task(id: book.uuid) {
             guard let session else { return }
-            image = await CoverCache.shared.image(for: book, session: session, shape: shape)
+            let fetched = await CoverCache.shared.image(for: book, session: session, shape: shape)
+            // The cache's await cannot be cancelled mid-flight, so a load
+            // superseded by a book change resumes here after the current
+            // book's cover has already landed — a reused view (the mini
+            // player, the continue card) would then show the previous book's
+            // art beside this book's title.
+            if !Task.isCancelled { image = fetched }
         }
     }
 

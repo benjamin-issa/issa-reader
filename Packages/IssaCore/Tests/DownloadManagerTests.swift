@@ -96,10 +96,61 @@ struct DownloadInterruptionTests {
     func shutDownSilencesIt() async {
         let subject = manager()
         let job = DownloadManager.Job(bookUUID: "b", format: .ebook)
+        // A real claim first, so there is a state for a late callback to
+        // corrupt — asserting on a job that was never started passed even
+        // with `shutDown()` deleted outright.
+        await subject.start(job)
+        #expect(subject.state(for: job) == .queued)
+
         await subject.shutDown()
-        // A superseded manager must not publish anything: two managers sharing
-        // a background identifier is what cancelled transfers in the first place.
-        #expect(subject.state(for: job) == nil)
+
+        // Late delegate callbacks from the superseded session — progress, a
+        // finished file, the daemon reporting the transfer it killed. None
+        // may be published: two managers sharing a background identifier is
+        // what cancelled transfers in the first place.
+        let task = URLSession.shared.downloadTask(with: URL(string: "http://example.test/file")!)
+        task.taskDescription = DownloadManager.encode(job)
+        subject.urlSession(
+            URLSession.shared, downloadTask: task,
+            didWriteData: 512, totalBytesWritten: 512, totalBytesExpectedToWrite: 1_024)
+        subject.urlSession(
+            URLSession.shared, downloadTask: task,
+            didFinishDownloadingTo: FileManager.default.temporaryDirectory.appending(path: UUID().uuidString))
+        subject.urlSession(
+            URLSession.shared, task: task,
+            didCompleteWithError: NSError(domain: NSURLErrorDomain, code: NSURLErrorNetworkConnectionLost))
+        // The delegate writes state through hops to the main actor; let any
+        // enqueued hop land before asserting that none of them wrote.
+        for _ in 0 ..< 5 { await Task.yield() }
+        #expect(subject.state(for: job) == .queued,
+                "a shut-down manager must not overwrite state with late callbacks")
+    }
+
+    /// The X on a failed row calls `cancel(_:)` with no live task — and no
+    /// task means no delegate callback will ever come to consume whatever
+    /// marker `cancel` leaves behind. A stale pause marker made the *next*
+    /// download of the same job swallow a system-initiated cancellation as a
+    /// pause, freezing the row at "downloading" with every control dead.
+    @Test("cancelling a dead job does not eat the next download's interruption")
+    func cancelOfDeadJobLeavesNoPauseMarker() async {
+        let subject = manager()
+        let job = DownloadManager.Job(bookUUID: "b", format: .ebook)
+
+        // Dismiss a job with no live task, then download the same book again.
+        subject.cancel(job)
+        await subject.start(job)
+        #expect(subject.hasTask(for: job))
+
+        // The daemon reclaims the transfer: a cancellation nobody asked for.
+        let task = URLSession.shared.downloadTask(with: URL(string: "http://example.test/file")!)
+        task.taskDescription = DownloadManager.encode(job)
+        subject.urlSession(
+            URLSession.shared, task: task,
+            didCompleteWithError: NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled))
+        for _ in 0 ..< 5 { await Task.yield() }
+
+        #expect(subject.state(for: job)?.isFailure == true,
+                "an unrequested cancellation must surface as a failure, not vanish into a stale pause marker")
     }
 }
 

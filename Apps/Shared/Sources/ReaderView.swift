@@ -141,6 +141,11 @@ public struct ReaderView: View {
                 // renders once the book is already open, so the reader always
                 // fell back to the old blocking foreground download.
                 model.downloadHost = app
+                // The rate for the same reason: open() fixes it into the
+                // read-along coordinator, and by the time pageContent's
+                // onAppear could run the coordinator is already built — every
+                // fresh open narrated at 1× whatever rate the reader saved.
+                model.preferredRate = settings.playbackRate
                 switch model.phase {
                 case .loading, .downloading:
                     // Re-entering while downloading is safe and necessary: the
@@ -182,7 +187,19 @@ public struct ReaderView: View {
         // Dismisses the home indicator with the rest of it.
         .persistentSystemOverlays(model.chromeVisible ? .automatic : .hidden)
         #endif
-        .onDisappear { Task { await model.saveProgress() } }
+        .onDisappear {
+            Task { await model.saveProgress() }
+            // Released only if nothing is playing it, so a book that is merely
+            // read does not pin its chapter layout for the rest of the session.
+            //
+            // Attached to the whole screen, not to `pageContent`: that view
+            // exists only in the `.ready` branch of the phase switch, so its
+            // own onDisappear also fired when a chapter failed to load
+            // mid-session — evicting the live model while the reader was still
+            // on screen, and letting `ReaderScreen.body` resolve a hollow
+            // replacement behind it that took over narration bookkeeping.
+            app.readerDidClose(model)
+        }
         #if os(iOS) || os(macOS)
         // Handoff: the same book, at the same place, on the Mac or the iPad.
         .userActivity(BookActivity.type) { activity in
@@ -217,7 +234,16 @@ public struct ReaderView: View {
         .sheet(isPresented: $showsSearch) {
             NavigationStack {
                 BookSearchView(model: model) { hit in
-                    Task { await model.go(to: hit, matching: hit.excerpt) }
+                    // The matched text itself, not the whole excerpt:
+                    // `go(to:matching:)` sizes the selection on what it is
+                    // handed, and the ±100-character context snippet left a
+                    // sentence and a half selected — or, near a chapter's
+                    // end, a range past the text that drew nothing at all.
+                    Task {
+                        await model.go(
+                            to: hit, matching: String(hit.excerpt[hit.excerptMatchRange]),
+                        )
+                    }
                 }
             }
         }
@@ -228,6 +254,19 @@ public struct ReaderView: View {
                 }
             }
             .presentationDetents([.medium, .large])
+        }
+        // At body level like every other reader sheet, not inside pageContent:
+        // that view exists only at `.ready`, while the "Aa" button lives in
+        // the always-present chrome — tapped during a download, the flag was
+        // set with no sheet modifier in the hierarchy, so nothing happened
+        // until the book opened and the sheet then popped up unbidden.
+        .sheet(isPresented: $showsTypography) {
+            BookTypographyView(
+                book: model.book,
+                publisherFamily: model.style.publisherFamily,
+                publisherNote: model.publisherFontDescription,
+                onChange: applyStyle,
+            )
         }
         #if os(macOS)
         // The Mac keeps a real toolbar: its window chrome never moved the page.
@@ -427,9 +466,19 @@ public struct ReaderView: View {
 
             footer
         }
-        // A tap outside the menu dismisses the selection, the way every text
-        // selection anywhere else does.
-        .onChange(of: model.pageIndex) { model.clearSelection() }
+        // Turning the page dismisses a selection left behind on the old one,
+        // the way scrolling dismisses a selection anywhere else. But only one
+        // left behind: `go(to:)` sets the page and the found text's selection
+        // in the same main-actor block, and SwiftUI delivers this change after
+        // both — clearing unconditionally wiped the highlight the jump exists
+        // to leave. A selection with glyphs on the page just arrived at is the
+        // one the reader came to see.
+        .onChange(of: model.pageIndex) {
+            guard let selection = model.selection else { return }
+            if let page = model.currentPage,
+               NSIntersectionRange(selection, page.characterRange).length > 0 { return }
+            model.clearSelection()
+        }
         #if os(macOS)
         // Bare arrow keys turn pages, which is what a Mac reader tries first.
         // The menu shortcuts are ⌘-arrow so the two do not collide.
@@ -445,8 +494,8 @@ public struct ReaderView: View {
         .onAppear {
             // Seed from the shared preferences, then follow them: the Reading
             // settings screen is otherwise writing to a value nothing reads.
+            // The narration rate is seeded earlier, with `downloadHost`.
             applyStyle()
-            model.preferredRate = settings.playbackRate
             // The book id is captured by value. Reaching through `model` inside
             // a closure the model itself stores would retain it for the life of
             // the process, pinning the chapter layout, the decoded plates and
@@ -499,24 +548,15 @@ public struct ReaderView: View {
         // would throw away this book's own settings the moment the reader
         // changed a default, mid-page.
         .onChange(of: settings.readerStyle) { _, _ in applyStyle() }
-        .sheet(isPresented: $showsTypography) {
-            BookTypographyView(
-                book: model.book,
-                publisherFamily: model.style.publisherFamily,
-                publisherNote: model.publisherFontDescription,
-                onChange: applyStyle,
-            )
-        }
         .onDisappear {
             // Not a teardown any more. The model belongs to the app, and its
             // closures stay wired, so narration keeps playing and keeps writing
             // its position while the reader browses the library. All that
             // changes here is the clock: the fine-grained tick is only worth
-            // running while there is a page to move.
+            // running while there is a page to move — letting go of the model
+            // itself happens in the screen-level onDisappear, because this view
+            // also disappears whenever the phase merely leaves `.ready`.
             model.setReaderVisible(false)
-            // Released only if nothing is playing it, so a book that is merely
-            // read does not pin its chapter layout for the rest of the session.
-            app.readerDidClose(model)
         }
     }
 
@@ -719,7 +759,13 @@ public struct ReaderView: View {
             ZStack {
                 Image(systemName: symbol).font(.system(size: 17))
                 Text("\(Int(seconds))")
-                    .font(Typography.sans(8, weight: .semibold))
+                    // Pinned, not scaled: the numeral is part of the glyph it
+                    // sits inside, and `Font.custom(_:size:)` follows Dynamic
+                    // Type while `Font.system(size:)` does not — at
+                    // accessibility sizes the digits outgrew the arrow and
+                    // spilled past the footer's fixed bar height. VoiceOver
+                    // still gets the interval from the accessibility label.
+                    .font(.custom(Typography.sansFamily, fixedSize: 8).weight(.semibold))
                     .offset(y: 1)
             }
             .foregroundStyle(model.style.theme.textTertiary)

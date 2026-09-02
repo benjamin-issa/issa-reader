@@ -99,3 +99,35 @@ struct LibraryFacetsTests {
         }
     }
 }
+
+/// The sub-series rail on the book screen promises reading order, which has
+/// to mean order within *that* series.
+@Suite("Series in reading order")
+struct SeriesDerivationTests {
+    /// Built by decoding, like every other test fixture: the model has no
+    /// public initialiser.
+    private func book(_ title: String, series: [(name: String, position: Double)]) -> Book {
+        let json: [String: Any] = [
+            "uuid": title, "title": title,
+            "authors": [], "narrators": [], "creators": [],
+            "collections": [], "identifiers": [], "tags": [],
+            "series": series.map { ["uuid": $0.name, "name": $0.name, "position": $0.position] },
+        ]
+        let data = try! JSONSerialization.data(withJSONObject: json)
+        return try! JSONDecoder().decode(Book.self, from: data)
+    }
+
+    /// The bug this pins: the comparator read `series.first?.position`, so a
+    /// book in two series was ordered inside every group by whichever series
+    /// happened to be listed first on it.
+    @Test("a book in two series is ordered by its place in the one being shown")
+    func multiSeriesBookUsesTheRightOrdinal() {
+        let x = book("X", series: [(name: "Discworld", position: 5), (name: "Death", position: 1)])
+        let y = book("Y", series: [(name: "Death", position: 2)])
+        let z = book("Z", series: [(name: "Discworld", position: 2)])
+        let derivation = LibraryDerivation(books: [y, x, z])
+
+        #expect(derivation.bySeries["Death"]?.map(\.title) == ["X", "Y"])
+        #expect(derivation.bySeries["Discworld"]?.map(\.title) == ["Z", "X"])
+    }
+}

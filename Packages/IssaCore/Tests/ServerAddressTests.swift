@@ -73,4 +73,44 @@ struct ServerAddressTests {
     func emptyIsEmpty() {
         #expect(ServerAddress.candidates(for: "  ").isEmpty)
     }
+
+    // MARK: - What to remember
+
+    /// The three sides of the cleartext bargain. A bare host that answered
+    /// over HTTPS remembers the resolved URL; one that fell back to plain
+    /// HTTP remembers what was typed, so the next connect tries HTTPS again
+    /// rather than making the downgrade permanent; an explicit `http://` is
+    /// honoured untouched, because a LAN install depends on it.
+    @Test("a bare host that answered over HTTPS remembers the resolved URL")
+    func httpsAnswerIsStoredResolved() throws {
+        let https = try #require(URL(string: "https://books.example.com"))
+        #expect(!ServerAddress.isCleartextFallback(https, forTyped: "books.example.com"))
+        #expect(ServerAddress.addressToStore(for: "books.example.com", connectedTo: https)
+            == "https://books.example.com")
+    }
+
+    @Test("a cleartext fallback remembers what was typed, so HTTPS is retried")
+    func cleartextFallbackKeepsTypedText() throws {
+        let http = try #require(URL(string: "http://library.example.com:8001"))
+        #expect(ServerAddress.isCleartextFallback(http, forTyped: "library.example.com"))
+        #expect(ServerAddress.addressToStore(for: " library.example.com ", connectedTo: http)
+            == "library.example.com")
+        // What is stored must re-derive the very URL that just answered, or
+        // keeping raw text would break the session that stored it…
+        #expect(ServerAddress.normalize("library.example.com")?.absoluteString
+            == "http://library.example.com:8001")
+        // …and the next connect from it must still lead with HTTPS.
+        #expect(ServerAddress.candidates(for: "library.example.com").first?.scheme == "https")
+        // The downgrade may only ever happen visibly: recording the address
+        // is also what writes the warning a diagnostics export shows.
+        #expect(IssaLog.export().contains("cleartext HTTP"))
+    }
+
+    @Test("an explicit http:// is not treated as a downgrade")
+    func explicitHTTPIsNotADowngrade() throws {
+        let url = try #require(URL(string: "http://192.168.68.125:8001"))
+        #expect(!ServerAddress.isCleartextFallback(url, forTyped: "http://192.168.68.125:8001"))
+        #expect(ServerAddress.addressToStore(for: "http://192.168.68.125:8001", connectedTo: url)
+            == "http://192.168.68.125:8001")
+    }
 }

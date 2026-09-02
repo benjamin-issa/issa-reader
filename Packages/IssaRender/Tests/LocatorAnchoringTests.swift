@@ -144,6 +144,21 @@ struct ChapterLabellingTests {
         #expect(hit.excerpt[hit.excerptMatchRange] == "Chapter Two")
     }
 
+    /// The reader jumps to a hit by selecting `excerpt[excerptMatchRange]`:
+    /// the selection starts at `charOffset` and is sized on the text it is
+    /// handed, so that text must be the match alone — handing over the whole
+    /// excerpt once selected a sentence and a half of context.
+    @Test("the matched text sizes a selection covering exactly the match")
+    func matchedTextSizesSelection() {
+        let hits = BookSearch.hits(
+            for: "chapter two", in: text, chapterIndex: 0, chapterTitle: "Book")
+        let hit = try! #require(hits.first)
+        let matched = String(hit.excerpt[hit.excerptMatchRange]) as NSString
+        let selected = (text as NSString).substring(
+            with: NSRange(location: hit.charOffset, length: matched.length))
+        #expect(selected == "Chapter Two")
+    }
+
     /// A runaway match count on a common word would build a list nobody can use
     /// and hold the whole chapter in memory twice over.
     @Test("matches are capped per chapter")

@@ -341,7 +341,13 @@ struct BookRow: Codable, FetchableRecord, PersistableRecord {
 extension Book {
     /// Removes rows the server no longer lists.
     static func deletedRowsCleanup(_ db: Database, keeping uuids: [String]) throws {
-        guard !uuids.isEmpty else { return }
+        // An empty list is not "nothing to do" — it means the server lists
+        // nothing, so everything held here is stale. Returning early kept
+        // every deleted book on the shelf, and in search, forever.
+        guard !uuids.isEmpty else {
+            try db.execute(sql: "DELETE FROM book")
+            return
+        }
         try db.execute(
             sql: "DELETE FROM book WHERE uuid NOT IN (\(uuids.map { _ in "?" }.joined(separator: ",")))",
             arguments: StatementArguments(uuids),

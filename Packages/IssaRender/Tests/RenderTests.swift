@@ -65,6 +65,26 @@ struct HTMLContentParserTests {
         #expect(result.text.string.contains("one two three"))
     }
 
+    /// Publishers put verse and code directly in `<pre>` — Gutenberg marks up
+    /// poetry this way. The collapse guard used to read the *incoming*
+    /// context rather than the element's own, so a bare `<pre>`'s text lost
+    /// every line break while the nested `<pre><code>` form kept them.
+    @Test("a bare <pre> keeps its line breaks and indentation")
+    func preservesPreformattedText() throws {
+        let html = Data(
+            "<html xmlns=\"http://www.w3.org/1999/xhtml\"><body><pre>line one\n  line two\nline three</pre></body></html>".utf8)
+        let result = try HTMLContentParser(style: ReaderStyle()).parse(xhtml: html, baseHref: "c.xhtml")
+        #expect(result.text.string.contains("line one\n  line two\nline three"))
+    }
+
+    @Test("text following an inline element inside <pre> stays preformatted")
+    func preservesPreformattedTails() throws {
+        let html = Data(
+            "<html xmlns=\"http://www.w3.org/1999/xhtml\"><body><pre>one <i>two</i>\n  three</pre></body></html>".utf8)
+        let result = try HTMLContentParser(style: ReaderStyle()).parse(xhtml: html, baseHref: "c.xhtml")
+        #expect(result.text.string.contains("two\n  three"))
+    }
+
     @Test("flags structure the native renderer cannot represent")
     func flagsComplexity() throws {
         let plain = Data("<html xmlns=\"http://www.w3.org/1999/xhtml\"><body><p>Just prose.</p></body></html>".utf8)
@@ -362,6 +382,53 @@ struct PageBoundaryTests {
         for page in layout.pages where page.contentBottom.isFinite {
             let wasted = 480 - (page.contentBottom - page.yOffset)
             #expect(wasted < 60, "page \(page.index) wastes \(wasted)pt")
+        }
+    }
+
+    /// Sentence spans across several pages, so some span inevitably straddles
+    /// a page boundary — the shape a read-along chapter always has.
+    static func spannedParagraphLayout() throws -> ChapterLayout {
+        let sentence = "The lamplighter went from post to post along the empty street. "
+        var body = "<p>"
+        for index in 0 ..< 80 { body += "<span id=\"s\(index)\">\(sentence)</span>" }
+        body += "</p>"
+        let result = try HTMLContentParser(style: ReaderStyle())
+            .parse(xhtml: Data(("<html><body>" + body + "</body></html>").utf8), baseHref: "c.xhtml")
+        let layout = ChapterLayout(text: result.text, fragmentRanges: result.fragmentRanges)
+        layout.layout(pageSize: CGSize(width: 320, height: 400))
+        return layout
+    }
+
+    /// `highlightRects` and `rects(forRange:)` were the last two callers still
+    /// bounding by `page.height` after pages started ending mid-paragraph: a
+    /// narrated sentence continuing onto the next page painted a bar in the
+    /// blank band below this page's last line — a tinted stripe under no text,
+    /// held for as long as the sentence was spoken.
+    @Test("highlight rects stop at the page's drawn content, not its height")
+    func highlightRectsRespectContentBottom() throws {
+        let layout = try Self.spannedParagraphLayout()
+        #expect(layout.pages.count > 3, "the fixture should span several pages")
+
+        // The fixture must actually exercise the seam: at least one span has
+        // characters on two pages.
+        let straddlers = layout.fragmentRanges.filter { _, range in
+            layout.pages.filter { NSIntersectionRange(range, $0.characterRange).length > 0 }.count > 1
+        }
+        #expect(!straddlers.isEmpty, "no span straddles a page boundary")
+
+        for page in layout.pages {
+            let localBottom = page.contentBottom.isFinite
+                ? page.contentBottom - page.yOffset : CGFloat.greatestFiniteMagnitude
+            for (id, range) in layout.fragmentRanges {
+                for rect in layout.highlightRects(forFragment: id, on: page) {
+                    #expect(rect.minY < localBottom,
+                            "page \(page.index): \(id) highlights at \(rect.minY), below the content bottom \(localBottom)")
+                }
+                for rect in layout.rects(forRange: range, on: page) {
+                    #expect(rect.minY < localBottom,
+                            "page \(page.index): \(id) selection reaches \(rect.minY), below the content bottom \(localBottom)")
+                }
+            }
         }
     }
 }

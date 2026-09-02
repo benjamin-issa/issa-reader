@@ -216,7 +216,17 @@ public struct PlayerView: View {
 
     /// The timer belongs to the Now Playing controller, not this sheet — it has
     /// to keep running after the sheet is dismissed, which is the entire point.
-    private var sleepTimer: SleepTimer? { nowPlaying.sleepTimer }
+    ///
+    /// And only when this sheet's book is the one Now Playing is driving. The
+    /// controller builds its timer in `attach`, capturing *that* coordinator:
+    /// before narration has started there is no timer at all, and while a
+    /// different book holds Now Playing the timer on offer here would pause
+    /// the other book while this one kept narrating. Nil in both cases, which
+    /// also disables the control below.
+    private var sleepTimer: SleepTimer? {
+        guard nowPlaying.coordinator === coordinator else { return nil }
+        return nowPlaying.sleepTimer
+    }
 
     private var sleepTimerControl: some View {
         Menu {
@@ -237,11 +247,15 @@ public struct PlayerView: View {
             }
             .foregroundStyle(sleepTimer?.mode == SleepTimer.Mode.off ? Palette.inkTertiary : Palette.tangerine)
         }
-        .disabled(coordinator == nil)
+        // On the timer, not the coordinator: an enabled moon over a nil timer
+        // was a menu whose every choice silently did nothing.
+        .disabled(sleepTimer == nil)
     }
 
     static func rateText(_ rate: Double) -> String {
-        rate == rate.rounded() ? "\(Int(rate))×" : String(format: "%.2g×", rate)
+        // %g, not %.2g: two *significant* digits printed 1.25 as "1.2" and
+        // 1.75 as "1.8" — a menu offering speeds the player never plays.
+        rate == rate.rounded() ? "\(Int(rate))×" : String(format: "%g×", rate)
     }
 
     static func timeText(_ seconds: TimeInterval) -> String {

@@ -33,6 +33,9 @@ public final class NowPlayingController {
     private let remote = RemoteCommandCenter()
     private var settings: PlaybackSettings?
     private var refreshTask: Task<Void, Never>?
+    /// Stamps each artwork fetch so one that outlives its book cannot land —
+    /// the same guard `CurrentBookPublisher.fetchCover` keeps for the widget.
+    private var artworkGeneration = 0
 
     public init() {}
 
@@ -106,6 +109,9 @@ public final class NowPlayingController {
         currentChapterTitle = chapterTitle
         refreshTask?.cancel()
         artwork = nil
+        // Detaching must also invalidate any fetch still in flight, or its
+        // completion would repopulate `artwork` for a book no longer playing.
+        artworkGeneration += 1
 
         guard let coordinator, let book else {
             sleepTimer = nil
@@ -231,13 +237,19 @@ public final class NowPlayingController {
 
     private func loadArtwork(for book: Book) {
         guard let session else { return }
+        artworkGeneration += 1
+        let generation = artworkGeneration
         Task { [weak self] in
             guard let data = try? await LibraryService(client: session.client)
                 .coverData(for: book.uuid, shape: .square, pixelWidth: 600),
                 let image = PlatformImage(data: data) else { return }
             let size = image.size
-            self?.artwork = Self.artwork(from: image, size: size)
-            self?.publish()
+            // A slow fetch for a previous book must not overwrite the current
+            // one — the lock screen and CarPlay would show this book's title
+            // over that book's jacket until the next attach.
+            guard let self, self.artworkGeneration == generation else { return }
+            self.artwork = Self.artwork(from: image, size: size)
+            self.publish()
         }
     }
 }

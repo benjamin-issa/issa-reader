@@ -72,6 +72,24 @@ struct LibraryStoreTests {
         #expect(try await store.allBooks().count == 2)
     }
 
+    /// An empty catalogue is still the truth — every book was deleted
+    /// server-side, or this account lost access to all of them. Guarding on
+    /// the empty list used to keep the whole stale library on the shelf, and
+    /// in search, until sign-out.
+    @Test("a refetch that returns nothing empties the shelf")
+    func removesEverythingWhenServerListsNothing() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try LibraryStore(serverKey: "http://example.test", directory: directory)
+
+        try await store.replaceCatalogue(try sampleBooks())
+        try await store.replaceCatalogue([])
+        #expect(try await store.isEmpty)
+        // The FTS index must empty with the table, or search resurrects
+        // books the shelf no longer shows.
+        #expect(try await store.search("alice").isEmpty)
+    }
+
     @Test("full-text search finds by title and by author")
     func searches() async throws {
         let directory = temporaryDirectory()
@@ -262,7 +280,10 @@ struct StoreFilenameTests {
         #expect(a == b)
         // Swift's String.hashValue is seeded per process, so this must not be
         // derived from it — a fresh launch would look for a different file.
-        #expect(a == "8a2b3d81a6a1c0f5" || a.count == 16)
+        // Pinned to the value SHA-256 actually gives this key (verify with
+        // `printf 'http://storyteller.home.arpa:8001' | shasum -a 256 | cut -c1-16`);
+        // any per-process derivation cannot reproduce it across launches.
+        #expect(a == "960d97ea20ca5a43")
     }
 
     @Test("different servers map to different files")

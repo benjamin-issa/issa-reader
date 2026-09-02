@@ -27,6 +27,7 @@ struct TVReadalongView: View {
 
 private struct TVReadalongContent: View {
     let model: ReaderModel
+    @Environment(AppModel.self) private var app
     @Environment(PlaybackSettings.self) private var settings
     let book: Book
 
@@ -66,12 +67,30 @@ private struct TVReadalongContent: View {
         }
         .task {
             model.style = settings.readerStyle
-            // Layout still needs a page size to resolve fragment ranges, even
-            // though pages are never shown here.
-            await model.open(pageSize: CGSize(width: 1400, height: 900))
-            if model.hasNarration { await model.startNarration() }
+            // Only a model that is not already open. The model is cached in
+            // `AppModel.readers`, and `open()` rebuilds the narration
+            // coordinator from scratch — so re-entering a playing book built a
+            // second AVQueuePlayer while Now Playing still held, and still
+            // played, the first. `.loading`/`.downloading` re-enter safely
+            // (the transfer belongs to the background session), and `.failed`
+            // retries, which is the only way back in with no retry button here.
+            if case .ready = model.phase {} else {
+                // Layout still needs a page size to resolve fragment ranges,
+                // even though pages are never shown here.
+                await model.open(pageSize: CGSize(width: 1400, height: 900))
+            }
+            // Not while it is already playing: `startNarration()` would seek
+            // the running coordinator back to the reader position mid-sentence.
+            if model.hasNarration, !model.isPlaying { await model.startNarration() }
         }
-        .onDisappear { Task { await model.saveProgress() } }
+        .onDisappear {
+            Task { await model.saveProgress() }
+            // Released only if nothing is playing it, exactly as `ReaderView`
+            // does on the other platforms — without this every book browsed on
+            // the TV pinned its chapter layout and decoded plates for the rest
+            // of the session.
+            app.readerDidClose(model)
+        }
         .onPlayPauseCommand { Task { await model.togglePlayback() } }
         .onChange(of: settings.readerStyle) { _, style in model.style = style }
     }

@@ -36,15 +36,28 @@ final class LogStore: @unchecked Sendable {
     private static let filenameStamp = Date.ISO8601FormatStyle()
         .year().month().day().dateSeparator(.dash)
 
+    // Not `.iso8601`: that strategy silently drops fractional seconds, and a
+    // page turn logs several entries in a few milliseconds — rounding them to
+    // the same whole second is exactly what makes a report unable to say
+    // which happened first. `Entry.stamp` keeps the milliseconds.
     private let encoder: JSONEncoder = {
         let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
+        encoder.dateEncodingStrategy = .custom { date, encoder in
+            var container = encoder.singleValueContainer()
+            try container.encode(date.formatted(IssaLog.Entry.stamp))
+        }
         return encoder
     }()
 
     private let decoder: JSONDecoder = {
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+        // The fractional form first; files written before it existed carry
+        // whole seconds, and a format change must not cost their lines.
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let string = try decoder.singleValueContainer().decode(String.self)
+            if let date = try? Date(string, strategy: IssaLog.Entry.stamp) { return date }
+            return try Date(string, strategy: .iso8601)
+        }
         return decoder
     }()
 

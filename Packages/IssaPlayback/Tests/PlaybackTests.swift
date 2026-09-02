@@ -85,6 +85,21 @@ struct CommandMapTests {
         #expect(map.action(for: .tapForward, on: .phone) == .playPause)
     }
 
+    @Test("the Controls picker offers only actions something actually performs")
+    func assignableActions() {
+        // `.sleepTimer` was bindable while neither coordinator performed it: a
+        // dead steering-wheel button, configured in good faith.
+        #expect(!PlaybackAction.assignable.contains(.sleepTimer))
+        // The discrete pair exists for the system's own play/pause commands; a
+        // button already has the toggle.
+        #expect(!PlaybackAction.assignable.contains(.play))
+        #expect(!PlaybackAction.assignable.contains(.pause))
+        // Unbinding must stay possible, and the everyday actions must remain.
+        #expect(PlaybackAction.assignable.contains(.none))
+        #expect(PlaybackAction.assignable.contains(.playPause))
+        #expect(PlaybackAction.assignable.contains(.nextChapter))
+    }
+
     @Test("survives a round trip through Codable, so settings persist")
     func codable() throws {
         var map = CommandMap()
@@ -353,5 +368,127 @@ struct RemoteCommandRegistrationTests {
 
         #expect(Self.center.skipBackwardCommand.preferredIntervals == [10])
         #expect(Self.center.skipForwardCommand.preferredIntervals == [45])
+    }
+}
+
+/// Where a control's binding is looked up — what made the Headphones tab real.
+///
+/// Nothing ever *assigns* `.headphones`: the CarPlay bridge only ever hands
+/// over `.carPlay` and `.phone`, so before this every binding stored under the
+/// headphones surface was silently discarded. The surface is inferred per
+/// control from the audio route instead, and only for the wheel, because the
+/// wheel — `nextTrack`/`previousTrack` — is where AirPods' double- and
+/// triple-press arrive.
+@MainActor
+struct SurfaceResolutionTests {
+    @Test("the wheel belongs to headphones while a headphone-class device is routed")
+    func wheelFollowsHeadphones() {
+        #expect(RemoteCommandCenter.surface(
+            for: .wheelNext, active: .phone, headphonesRouted: true) == .headphones)
+        #expect(RemoteCommandCenter.surface(
+            for: .wheelPrevious, active: .phone, headphonesRouted: true) == .headphones)
+        // Unrouted, the wheel is the phone's — a Bluetooth head unit's buttons.
+        #expect(RemoteCommandCenter.surface(
+            for: .wheelNext, active: .phone, headphonesRouted: false) == .phone)
+    }
+
+    @Test("the tap controls stay with the phone: skip commands only ever come from a screen")
+    func tapsStayOnThePhone() {
+        #expect(RemoteCommandCenter.surface(
+            for: .tapForward, active: .phone, headphonesRouted: true) == .phone)
+        #expect(RemoteCommandCenter.surface(
+            for: .tapBackward, active: .phone, headphonesRouted: true) == .phone)
+    }
+
+    @Test("the car wins outright: CarPlay declares itself, the route does not decide")
+    func carPlayWins() {
+        for control in PlaybackControl.allCases {
+            #expect(RemoteCommandCenter.surface(
+                for: control, active: .carPlay, headphonesRouted: true) == .carPlay)
+        }
+    }
+}
+
+/// The read-along coordinator's seeking contract.
+@MainActor
+struct ReadalongCoordinatorTests {
+    /// The fixture book with its narration genuinely extracted, so
+    /// `play(from:)` has real files to load.
+    static func make() throws -> (ReadalongCoordinator, SMILTimeline, URL) {
+        let (timeline, package) = try ReadalongLookupTests.timeline()
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appending(path: "issa-readalong-coordinator-\(UUID().uuidString)")
+        let files = try AudioExtraction.extractAudio(
+            from: package, timeline: timeline, bookID: "coordinator-test", into: directory,
+        )
+        return (ReadalongCoordinator(timeline: timeline, audioFiles: files), timeline, directory)
+    }
+
+    /// The coordinator is built eagerly on open and the reader footer draws
+    /// the skip buttons regardless, so before narration has played a skip had
+    /// no anchor — `bookProgress` still read 0 — and resolved to sentence one
+    /// of the whole book, a shelf of chapters away from the reader.
+    @Test("a skip before narration has ever played refuses rather than jumping to sentence one")
+    func skipBeforeNarrationDoesNothing() async throws {
+        let (subject, _, directory) = try Self.make()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        await subject.skipBook(by: -15)
+        await subject.skipBook(by: 30)
+
+        #expect(subject.activeEntry == nil, "no anchor: the skip must refuse, not resolve")
+        #expect(subject.player.currentAudioHref == nil, "nothing should have been loaded")
+        #expect(subject.player.isPlaying == false)
+    }
+
+    /// `seek(toBookProgress:)` is a protocol requirement with a neutral
+    /// contract — the audiobook implementation moves the playhead and nothing
+    /// else — but the read-along one funnelled into `play(from:)`, so dragging
+    /// the Lock Screen scrubber on a paused book started it reading aloud.
+    @Test("a scrub while paused moves the playhead without starting playback")
+    func pausedSeekStaysPaused() async throws {
+        let (subject, timeline, directory) = try Self.make()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let first = try #require(timeline.entries.first)
+        await subject.play(from: first)
+        #expect(subject.player.isPlaying)
+        subject.player.pause()
+
+        await subject.seek(toBookProgress: 0.9)
+
+        #expect(subject.player.isPlaying == false, "a seek is not a play button")
+        let landed = try #require(subject.activeEntry)
+        #expect(landed.fragmentID != first.fragmentID, "the playhead must still have moved")
+        #expect(subject.bookProgress > 0, "a paused scrub must still reach the scrubber")
+    }
+
+    @Test("a scrub while playing keeps playing")
+    func playingSeekKeepsPlaying() async throws {
+        let (subject, timeline, directory) = try Self.make()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let first = try #require(timeline.entries.first)
+        await subject.play(from: first)
+
+        await subject.seek(toBookProgress: 0.5)
+        #expect(subject.player.isPlaying)
+    }
+
+    @Test("the discrete play and pause commands hold their meaning when repeated")
+    func discretePlayPause() async throws {
+        let (subject, timeline, directory) = try Self.make()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let first = try #require(timeline.entries.first)
+        await subject.play(from: first)
+        let map = CommandMap()
+
+        await subject.perform(.pause, using: map)
+        #expect(subject.player.isPlaying == false)
+        await subject.perform(.pause, using: map)
+        #expect(subject.player.isPlaying == false, "pause is not a toggle")
+
+        await subject.perform(.play, using: map)
+        #expect(subject.player.isPlaying)
+        await subject.perform(.play, using: map)
+        #expect(subject.player.isPlaying, "play is not a toggle")
     }
 }

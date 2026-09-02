@@ -270,9 +270,23 @@ public final class ReaderModel {
             // already holds this book's last locator in memory and on disk;
             // needing the network to find your own place is not a contract
             // worth keeping.
+            //
+            // Reconciled by timestamp even when the fetch succeeds, the same
+            // way `Book.reconciled(with:)` merges a catalogue refetch: a newer
+            // position can still be sitting undrained in the mutation queue —
+            // a chapter read offline, force-quit before the queue ran — and
+            // the server's answer then predates the one held locally. Adopting
+            // the server's copy verbatim landed the reader back there, and the
+            // first page turn saved that older place over the real one.
             let stored: StoredPosition?
             do {
-                stored = try await ProgressService(client: session.client).current(for: book.uuid)
+                let server = try await ProgressService(client: session.client).current(for: book.uuid)
+                if let mine = book.position,
+                   server.map({ mine.timestamp > $0.timestamp }) ?? true {
+                    stored = mine
+                } else {
+                    stored = server
+                }
             } catch {
                 stored = book.position
                 IssaLog.failure("stored position fetch", error, [
@@ -281,23 +295,65 @@ public final class ReaderModel {
                 ])
             }
             restoredSentenceID = stored?.locator.sentenceID
-            let resumed = stored.flatMap { position in
+            var resumed = stored.flatMap { position in
                 package.spine.firstIndex { position.locator.matchesHref($0.href) }
             }
-            if stored != nil, resumed == nil {
-                // The reader is about to land at the front of the book, and the
-                // first page turn will save that over their real position.
-                IssaLog.warning("stored position matched no chapter", [
-                    "book": book.title,
-                    "href": stored?.locator.href ?? "none",
-                    "spineItems": String(package.spine.count),
-                ])
+            // The anchor the chapter load restores from. Usually the stored
+            // locator itself; replaced when that locator names no chapter.
+            var restoring = stored?.locator
+            if let position = stored, resumed == nil {
+                // An href no spine entry can match — an audiobook position,
+                // whose href is an audio track's path, or a chapter file a
+                // revision renamed. The whole-book progression still says
+                // where the reader was, so land there: falling back to the
+                // front of the book put the first page turn's save over their
+                // real position.
+                if let progress = position.locator.totalProgression, progress.isFinite,
+                   let landing = Self.spinePosition(atTotalProgression: progress, in: package) {
+                    resumed = landing.index
+                    // A synthetic anchor rather than the stored locator: its
+                    // `progression` is within the original resource — for an
+                    // audiobook, the track — not within this chapter, and
+                    // `LocatorAnchoring` would otherwise anchor on it.
+                    restoring = ReadiumLocator(
+                        href: package.spine[landing.index].href,
+                        type: "application/xhtml+xml",
+                        locations: .init(progression: landing.within),
+                    )
+                    IssaLog.info("stored position resolved by progression", [
+                        "book": book.title,
+                        "href": position.locator.href,
+                        "progress": String(format: "%.4f", progress),
+                        "chapter": String(landing.index),
+                    ])
+                } else {
+                    // Nothing left to resolve from: the reader is about to
+                    // land at the front of the book, and the first page turn
+                    // will save that over their real position.
+                    IssaLog.warning("stored position matched no chapter", [
+                        "book": book.title,
+                        "href": position.locator.href,
+                        "spineItems": String(package.spine.count),
+                    ])
+                }
             }
             chapterIndex = resumed ?? Self.firstReadableChapter(in: package, style: style)
 
             // A chapter that failed to parse already set `.failed`; overwriting
             // it with `.ready` showed a blank page and no explanation at all.
-            guard await loadChapter(chapterIndex, restoring: stored?.locator) else { return }
+            guard await loadChapter(chapterIndex, restoring: restoring) else {
+                // The other way out of `loadChapter` is its bounds guard — an
+                // empty spine, every itemref naming a missing manifest id —
+                // which sets nothing, and used to leave the reader on the
+                // opening spinner forever with not a line in the log.
+                if case .failed = phase { return }
+                IssaLog.warning("book has no loadable chapter", [
+                    "book": book.title, "chapter": String(chapterIndex),
+                    "spineItems": String(package.spine.count),
+                ])
+                phase = .failed("This book's file doesn't contain any readable chapters.")
+                return
+            }
             await prepareNarration(package: package)
             phase = .ready
             // Spelled out rather than inline: enough of these and the type
@@ -372,6 +428,36 @@ public final class ReaderModel {
             }
         }
         return 0
+    }
+
+    /// The spine location a whole-book progression names — the inverse of
+    /// `EPUBPackage.bookProgress(spineIndex:within:)`, sharing its weighting
+    /// and its equal-count fallback so the two round-trip.
+    static func spinePosition(
+        atTotalProgression progression: Double, in package: EPUBPackage,
+    ) -> (index: Int, within: Double)? {
+        guard !package.spine.isEmpty else { return nil }
+        let clamped = min(max(progression, 0), 1)
+        let weights = package.spineWeights
+        let total = weights.reduce(0, +)
+        guard total > 0 else {
+            // No sizes available: count items equally, as `bookProgress` does.
+            let scaled = clamped * Double(package.spine.count)
+            let index = min(Int(scaled), package.spine.count - 1)
+            return (index, min(max(scaled - Double(index), 0), 1))
+        }
+        let target = clamped * total
+        var before = 0.0
+        for (index, weight) in weights.enumerated() {
+            if weight > 0, target < before + weight {
+                return (index, (target - before) / weight)
+            }
+            before += weight
+        }
+        // A progression of exactly 1 walks past every item; the last one with
+        // any size is the end of the book.
+        let last = weights.lastIndex { $0 > 0 } ?? package.spine.count - 1
+        return (last, 1)
     }
 
     /// Extracts the embedded narration and hooks the audio clock to the page.
@@ -536,6 +622,25 @@ public final class ReaderModel {
     /// a book out.
     static let narrationProximityLimit = 0.10
 
+    /// Where a narration entry sits, in the same byte-weighted spine
+    /// coordinates as `bookProgress`, so the proximity check compares like
+    /// with like. Audio time within the entry's own document stands in for
+    /// text position within it — approximate, but well inside a threshold of
+    /// a tenth of the book.
+    private static func spineProgress(
+        of entry: SMILEntry, in package: EPUBPackage, timeline: SMILTimeline,
+    ) -> Double? {
+        guard let index = package.spine.firstIndex(where: { $0.href == entry.textHref })
+        else { return nil }
+        var within = 0.0
+        if let span = timeline.span(ofDocument: entry.textHref),
+           let time = timeline.bookTime(forFragment: entry.fragmentID),
+           span.duration > 0 {
+            within = min(max((time - span.start) / span.duration, 0), 1)
+        }
+        return package.bookProgress(spineIndex: index, within: within)
+    }
+
     /// Where narration should begin for a reader who is here.
     ///
     /// Every rung is anchored to the chapter the reader is in, and the last one
@@ -570,7 +675,7 @@ public final class ReaderModel {
     }
 
     public func startNarration() async {
-        guard let readalong, let timeline else { return }
+        guard let readalong, let timeline, let package else { return }
         guard let (entry, via) = narrationStart() else {
             IssaLog.warning("narration has nowhere to start", [
                 "book": book.title, "chapter": String(chapterIndex),
@@ -581,7 +686,13 @@ public final class ReaderModel {
         // The proximity check, which is the actual fix. Refusing is right:
         // the alternative on the way in was a position, which plays, and which
         // is written to the server within two seconds.
-        let at = timeline.bookTime(forFragment: entry.fragmentID).map(timeline.progression(atBookTime:))
+        //
+        // Measured in the same coordinates as `bookProgress` — byte-weighted
+        // spine progress — not as a fraction of narrated audio time. On a
+        // partly aligned book the two denominators disagree by exactly the
+        // unaligned part, so a candidate on the reader's own page measured as
+        // most of a book away and the play button was permanently dead.
+        let at = Self.spineProgress(of: entry, in: package, timeline: timeline)
         let distance = at.map { abs($0 - bookProgress) }
         if let distance, distance > Self.narrationProximityLimit {
             IssaLog.warning("narration would start too far away", [
@@ -950,9 +1061,19 @@ public final class ReaderModel {
         searchTask = Task { [weak self] in
             for (index, item) in package.spine.enumerated() {
                 if Task.isCancelled { break }
+                // Parsed with the images loaded, though search has no use for
+                // the pictures: each plate contributes characters — the object
+                // replacement character and its line break — to the rendered
+                // text, and a parse without them computes offsets that drift
+                // ahead of the laid-out chapter's, far enough on an
+                // illustrated book to land `go(to:)` on the wrong page.
+                // Decoded per chapter and released with it, as `loadChapter`
+                // does.
+                let images = ChapterImageSource(archive: package.archive)
                 guard let data = try? package.archive.read(item.href),
-                      let parsed = try? HTMLContentParser(style: style)
-                          .parse(xhtml: data, baseHref: item.href)
+                      let parsed = try? HTMLContentParser(
+                          style: style, loadImage: { images.image(for: $0) },
+                      ).parse(xhtml: data, baseHref: item.href)
                 else { continue }
 
                 let hits = BookSearch.hits(
@@ -970,7 +1091,11 @@ public final class ReaderModel {
                 // with hundreds of spine items.
                 await Task.yield()
             }
-            self?.isSearching = false
+            // Only when this task is still the live one: a superseded search
+            // resumes from that yield already cancelled, and the flag by then
+            // belongs to the search that replaced it — clearing it here hid
+            // the spinner and showed "No matches." for a search still running.
+            if !Task.isCancelled { self?.isSearching = false }
         }
     }
 
@@ -1146,13 +1271,19 @@ public final class ReaderModel {
     /// reading position so the two restore through the same code.
     private func locator(forRange range: NSRange) -> ReadiumLocator {
         let href = package?.spine[chapterIndex].href ?? ""
-        let total = max((layout?.attributedText.string as NSString?)?.length ?? 1, 1)
+        let length = (layout?.attributedText.string as NSString?)?.length ?? 0
+        let total = max(length, 1)
         let chapterProgress = Double(range.location) / Double(total)
         let overall = (package?.spine.count ?? 0) > 0
             ? (Double(chapterIndex) + chapterProgress) / Double(package?.spine.count ?? 1)
             : chapterProgress
-        let fragment = layout?.attributedText
-            .attribute(.issaFragmentID, at: min(range.location, total - 1), effectiveRange: nil) as? String
+        // Guarded on the length, not merely clamped: a bookmark is legal on a
+        // page with no text at all, and `attribute(at:)` raises on any index
+        // into an empty string — clamping to `total - 1` still passed it 0.
+        let fragment = length > 0
+            ? layout?.attributedText
+                .attribute(.issaFragmentID, at: min(range.location, length - 1), effectiveRange: nil) as? String
+            : nil
         return ReadiumLocator(
             href: href,
             type: "application/xhtml+xml",

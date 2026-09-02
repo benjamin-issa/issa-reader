@@ -2,6 +2,7 @@ import CoreSpotlight
 import IssaCore
 import IssaPlayback
 import IssaUI
+import Observation
 import UIKit
 
 /// The app's long-lived objects, and the one place it is started from.
@@ -67,6 +68,12 @@ final class AppServices {
     private func connectCarPlay() {
         let bridge = CarPlayBridge.shared
         bridge.update(books: app.books, downloaded: app.downloadedUUIDs)
+        // That first update ran before the async restore has produced any
+        // books. The later ones cannot live in a view's `.onChange`: when the
+        // car is what launched the app there is no window scene, no `RootView`
+        // body ever evaluates, and the shelves would stay on their empty state
+        // for the whole drive — the exact lifecycle this file exists for.
+        observeLibraryForCarPlay()
 
         bridge.onPlay = { [app, settings, nowPlaying] bookID in
             guard let book = app.books.first(where: { $0.uuid == bookID }) else {
@@ -137,6 +144,25 @@ final class AppServices {
             // Screen tile.
             return try? await LibraryService(client: session.client)
                 .coverData(for: bookUUID, shape: .square, pixelWidth: 240)
+        }
+    }
+
+    /// Mirrors the library into the CarPlay bridge for as long as the process
+    /// lives, re-arming itself after each change the way `withObservationTracking`
+    /// requires. Observation rather than a SwiftUI `.onChange` because the
+    /// bridge must hear about the restore finishing even when no view exists.
+    private func observeLibraryForCarPlay() {
+        withObservationTracking {
+            _ = app.books
+            _ = app.downloadedUUIDs
+        } onChange: {
+            // `onChange` fires on willSet and off the main actor; the hop is
+            // also what defers the read until the new values have landed.
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                CarPlayBridge.shared.update(books: app.books, downloaded: app.downloadedUUIDs)
+                observeLibraryForCarPlay()
+            }
         }
     }
 }
