@@ -55,6 +55,11 @@ struct CustomFontsTests {
 
     @Test("an imported face registers and is listed")
     func importedFaceIsListed() throws {
+        // Held across the whole test — acquired first so its release defer runs
+        // last, after the unregister below — so no other suite resolves a
+        // bundled family while this test has a duplicate copy registered.
+        CustomFonts.testRegistryLock.lock()
+        defer { CustomFonts.testRegistryLock.unlock() }
         let directory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         defer { unregisterFonts(under: directory) }
@@ -66,6 +71,11 @@ struct CustomFontsTests {
 
     @Test("a book-embedded face registers but is never listed")
     func embeddedFaceIsNotListed() throws {
+        // Held across the whole test — acquired first so its release defer runs
+        // last, after the unregister below — so no other suite resolves a
+        // bundled family while this test has a duplicate copy registered.
+        CustomFonts.testRegistryLock.lock()
+        defer { CustomFonts.testRegistryLock.unlock() }
         let directory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         defer { unregisterFonts(under: directory) }
@@ -82,6 +92,11 @@ struct CustomFontsTests {
 
     @Test("registerAll lists what it finds, and re-registration keeps it listed")
     func registerAllListsRootFiles() throws {
+        // Held across the whole test — acquired first so its release defer runs
+        // last, after the unregister below — so no other suite resolves a
+        // bundled family while this test has a duplicate copy registered.
+        CustomFonts.testRegistryLock.lock()
+        defer { CustomFonts.testRegistryLock.unlock() }
         let directory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         defer { unregisterFonts(under: directory) }
@@ -107,6 +122,11 @@ struct CustomFontsTests {
 
     @Test("a plain registration is upgraded when the same URL is imported")
     func importUpgradesExistingRegistration() throws {
+        // Held across the whole test — acquired first so its release defer runs
+        // last, after the unregister below — so no other suite resolves a
+        // bundled family while this test has a duplicate copy registered.
+        CustomFonts.testRegistryLock.lock()
+        defer { CustomFonts.testRegistryLock.unlock() }
         let directory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         defer { unregisterFonts(under: directory) }
@@ -120,6 +140,11 @@ struct CustomFontsTests {
 
     @Test("a file CoreText cannot read is refused, imported or not")
     func unreadableFilesAreRefused() throws {
+        // Held across the whole test — acquired first so its release defer runs
+        // last, after the unregister below — so no other suite resolves a
+        // bundled family while this test has a duplicate copy registered.
+        CustomFonts.testRegistryLock.lock()
+        defer { CustomFonts.testRegistryLock.unlock() }
         let directory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         // The right extension with junk behind it, and a format CoreText

@@ -598,10 +598,8 @@ public final class AppModel {
         guard let pendingBook else { return nil }
         guard let book = books.first(where: { $0.uuid == pendingBook.uuid }) else { return nil }
         self.pendingBook = nil
-        let readable = book.servableFormats.contains(.ebook)
-            || book.servableFormats.contains(.readaloud)
         let destination: PendingBook.Destination =
-            pendingBook.destination == .read && readable ? .read : .details
+            pendingBook.destination == .read && book.isReadable ? .read : .details
         if destination == .read { readerRequest = book.uuid }
         return (book, destination)
     }
@@ -673,6 +671,20 @@ public final class AppModel {
     /// model until its own window closes; only which one is narrating is
     /// exclusive, tracked separately below.
     private var readers: [String: ReaderModel] = [:]
+
+    /// The book whose reader is on screen right now, or nil. Set as the reader
+    /// view appears and cleared as it goes away, so a deep link that arrives for
+    /// the book already being read can avoid resetting the navigation stack out
+    /// from under the open reader.
+    public private(set) var visibleReaderUUID: String?
+
+    /// An appearing reader claims the slot; a disappearing one releases it only
+    /// if it still holds it, so an appear-before-disappear crossover during a
+    /// book-to-book switch cannot leave the slot pointing at the book that left.
+    public func setReaderVisible(_ uuid: String, _ visible: Bool) {
+        if visible { visibleReaderUUID = uuid }
+        else if visibleReaderUUID == uuid { visibleReaderUUID = nil }
+    }
 
     /// Which open book, if any, owns the active narration and Now Playing.
     ///
@@ -768,6 +780,9 @@ public final class AppModel {
         }
         model.onSaveAnnotation = { [weak self] in self?.save($0) }
         model.onDeleteAnnotation = { [weak self] in self?.delete($0) }
+        model.onVisibilityChanged = { [weak self] visible in
+            self?.setReaderVisible(bookUUID, visible)
+        }
         // Every route into playback — the reader's own button, a tapped
         // sentence, the player sheet, a remote command — ends at the player's
         // rate, so watching that is what catches all of them. A callback on the
@@ -948,6 +963,12 @@ public final class AppModel {
                 listeningError = "This audiobook has no playable tracks on the server."
                 return
             }
+            // The `stopNarration()` at the top ran before this network round
+            // trip; a read-along the reader tapped *during* the fetch would
+            // otherwise still be playing when the audiobook starts, two voices
+            // at once. Stop again now that the suspension is over, just before
+            // this coordinator takes over Now Playing.
+            stopNarration()
             // Play the downloaded file when it can stand in for the manifest;
             // otherwise stream, with the token travelling as a cookie because
             // AVFoundation makes its own requests and never sees our headers.

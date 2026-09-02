@@ -92,7 +92,12 @@ public final class CoverCache {
         // 600px through the same directory, so sharing a key let whichever
         // landed first serve the other — an upscaled 320px cover in the library
         // grid for the life of the cache.
-        let name = "\(book.uuid)-widget-\(shape == .square ? "square" : "portrait").jpg"
+        // Versioned like `image(for:)`'s key (and for the same reason): an
+        // unversioned filename let a cached file shadow the versioned request
+        // below, so a replaced cover never reached the widget. `updatedAt` in
+        // the name means a new cover lands under a new file.
+        let version = book.updatedAt.map { String(Int($0.value.timeIntervalSince1970 * 1000)) } ?? "0"
+        let name = "\(book.uuid)-widget-v\(version)-\(shape == .square ? "square" : "portrait").jpg"
         let fileURL = diskDirectory.appending(path: name)
         if let cached = await Task.detached(priority: .utility, operation: {
             try? Data(contentsOf: fileURL)
@@ -110,7 +115,7 @@ public final class CoverCache {
                 version: book.updatedAt?.value)
             else { continue }
             let url = diskDirectory.appending(
-                path: "\(book.uuid)-widget-\(candidate == .square ? "square" : "portrait").jpg")
+                path: "\(book.uuid)-widget-v\(version)-\(candidate == .square ? "square" : "portrait").jpg")
             await Task.detached(priority: .utility) {
                 try? data.write(to: url, options: .atomic)
             }.value

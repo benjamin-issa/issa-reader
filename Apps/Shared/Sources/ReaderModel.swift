@@ -341,7 +341,27 @@ public final class ReaderModel {
 
             // A chapter that failed to parse already set `.failed`; overwriting
             // it with `.ready` showed a blank page and no explanation at all.
-            guard await loadChapter(chapterIndex, restoring: restoring) else {
+            var loaded = await loadChapter(chapterIndex, restoring: restoring)
+
+            // A resolved landing chapter can still be unreadable — a resume by
+            // progression names the byte-weighted spine item without checking
+            // its ZIP entry is intact. If that one chapter is corrupt, opening
+            // the book at the front still beats refusing to open it at all, so
+            // retry once from `firstReadableChapter` (which `try?`-skips
+            // throwing items) rather than drop the reader into `.failed`.
+            if !loaded, resumed != nil {
+                let fallback = Self.firstReadableChapter(in: package, style: style)
+                if fallback != chapterIndex {
+                    IssaLog.warning("resume landing chapter unreadable, opening at start", [
+                        "book": book.title, "landing": String(chapterIndex),
+                    ])
+                    chapterIndex = fallback
+                    restoring = nil
+                    loaded = await loadChapter(chapterIndex, restoring: restoring)
+                }
+            }
+
+            guard loaded else {
                 // The other way out of `loadChapter` is its bounds guard — an
                 // empty spine, every itemref naming a missing manifest id —
                 // which sets nothing, and used to leave the reader on the
@@ -846,9 +866,15 @@ public final class ReaderModel {
         }
     }
 
+    /// Notified as the reader view appears (true) and goes away (false), so the
+    /// app can tell which book is on screen. Installed by
+    /// `AppModel.reader(for:session:)` alongside the other hooks.
+    public var onVisibilityChanged: ((Bool) -> Void)?
+
     /// The fine-grained clock is only worth running while the page is visible.
     public func setReaderVisible(_ visible: Bool) {
         readalong?.player.setHighFrequencyUpdates(visible)
+        onVisibilityChanged?(visible)
     }
 
     public func resize(to size: CGSize) async {
@@ -1113,6 +1139,7 @@ public final class ReaderModel {
         guard let layout, let page = layout.page(containingOffset: hit.charOffset) else { return }
         pageIndex = page.index
         selection = NSRange(location: hit.charOffset, length: (query as NSString).length)
+        selectionChapter = chapterIndex
         scheduleSave()
     }
 
@@ -1120,6 +1147,12 @@ public final class ReaderModel {
 
     /// The characters the reader has selected on this page, if any.
     public private(set) var selection: NSRange?
+    /// The chapter the current selection was made in. A selection's offsets are
+    /// rebased per chapter, so after a chapter jump the same integers address
+    /// unrelated text — this lets the view drop a selection it has navigated
+    /// away from instead of drawing a highlight (or, worse, saving a bookmark)
+    /// over whatever now sits at those offsets in the new chapter.
+    private var selectionChapter: Int?
     /// Annotations for this book, drawn under the text and listed on demand.
     public private(set) var annotations: [Annotation] = []
     private var selectionAnchor: Int?
@@ -1143,6 +1176,7 @@ public final class ReaderModel {
         let range = layout.sentenceRange(at: index) ?? layout.wordRange(at: index)
         selectionAnchor = index
         selection = range
+        selectionChapter = chapterIndex
     }
 
     public func extendSelection(to point: CGPoint) {
@@ -1160,6 +1194,23 @@ public final class ReaderModel {
     public func clearSelection() {
         selection = nil
         selectionAnchor = nil
+        selectionChapter = nil
+    }
+
+    /// Drops a selection the reader has navigated away from.
+    ///
+    /// A selection is kept only while it is still on the visible page of the
+    /// chapter it was made in. A same-offset range in a different chapter can
+    /// intersect the current page purely by coincidence, so the page-range test
+    /// alone would keep a stale highlight after a chapter jump — the chapter
+    /// check is what stops a bookmark landing on text the reader never touched.
+    /// A search jump re-stamps `selectionChapter`, so its landing highlight,
+    /// the one the jump exists to leave, survives.
+    public func clearSelectionIfStale() {
+        guard let selection else { return }
+        if selectionChapter == chapterIndex, let page = currentPage,
+           NSIntersectionRange(selection, page.characterRange).length > 0 { return }
+        clearSelection()
     }
 
     /// Turns the current selection into a highlight, or drops a bookmark at the

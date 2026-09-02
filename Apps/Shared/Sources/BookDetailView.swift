@@ -168,9 +168,12 @@ public struct BookDetailView: View {
             }
             // On an aligned book Read opens the read-along edition, so the
             // reader gets synced narration without choosing a separate file
-            // (item 03). Said here so "Read" never has to be guessed at — the
-            // note only appears when the primary edition actually carries audio.
-            if primaryAction?.format == .readaloud {
+            // (item 03). Said here so "Read" never has to be guessed at — but
+            // only when the read-along is actually ALIGNED: the server hands
+            // back a `.readaloud` primary the moment alignment is *requested*,
+            // and promising "tap any line to hear it" on a still-processing book
+            // is a lie the reader discovers by tapping.
+            if primaryAction?.format == .readaloud, book.readaloud?.isAligned == true {
                 Label {
                     Text("Narration included — tap any line to hear it")
                 } icon: {
@@ -377,6 +380,11 @@ public struct BookDetailView: View {
                             .foregroundStyle(mine == nil ? Palette.inkQuaternary : Palette.tangerine)
                     }
                     .buttonStyle(.plain)
+                    // A 14pt glyph is a ~15pt target; grow each to the 44pt
+                    // floor the rest of this build's controls meet, so a tap
+                    // does not land on the neighbouring star.
+                    .frame(minWidth: 44, minHeight: 44)
+                    .contentShape(Rectangle())
                     .accessibilityLabel("Rate \(star) star\(star == 1 ? "" : "s")")
                     // The fill and the tangerine never reach the accessibility
                     // tree, so VoiceOver read five identical buttons whether or
@@ -395,15 +403,16 @@ public struct BookDetailView: View {
                     .foregroundStyle(Palette.inkTertiary)
             }
         }
-        // Announced on entering the row, so the score is discoverable without
-        // swiping across every star hunting for the selected one.
+        // The score goes in the container LABEL, not its value/hint: a
+        // `.contain` element is a container VoiceOver steps into rather than a
+        // focusable leaf, so a value or hint set on it is never spoken — only
+        // the label is, as focus enters the row. Folding the state into the
+        // label makes "Your rating, 3 stars" (or "not rated, rate from one to
+        // five stars") audible on entry, while the individual star buttons stay
+        // separately focusable so the rating can still be changed.
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Your rating")
-        .accessibilityValue(
-            mine.map { "\(Int($0)) star\($0 == 1 ? "" : "s")" } ?? "Not rated")
-        // Names the action when nothing is set — otherwise "Not rated" alone
-        // reads as a fact, not an invitation to tap.
-        .accessibilityHint(mine == nil ? "Rate this book from one to five stars." : "")
+        .accessibilityLabel(mine.map { "Your rating, \(Int($0)) star\($0 == 1 ? "" : "s")" }
+            ?? "Your rating, not rated. Rate this book from one to five stars.")
     }
 
     /// The shelf this book sits on, changeable in place.

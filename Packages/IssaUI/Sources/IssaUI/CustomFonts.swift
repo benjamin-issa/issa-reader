@@ -28,6 +28,15 @@ public enum CustomFonts {
     }
 
     private static let lock = NSLock()
+
+    /// Serialises CoreText registration across test suites. Registration is
+    /// process-global, and several suites in one test process touch the shared
+    /// registry — one suite registering a bundled family from a temporary copy
+    /// while another resolves that same family flips which member CoreText hands
+    /// back for the bare family name. Suites that register or resolve fonts run
+    /// their bodies inside this lock so they never overlap. Not used by the app.
+    package static let testRegistryLock = NSLock()
+
     /// File URL → the family name it registered under.
     nonisolated(unsafe) private static var registered: [URL: String] = [:]
     /// The subset of `registered` the reader imported themselves.

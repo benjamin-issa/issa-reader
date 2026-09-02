@@ -51,6 +51,11 @@ struct ReaderCoachOverlay: View {
         .accessibilityLabel(spokenSummary)
         .accessibilityAddTraits(.isButton)
         .accessibilityHint("Double tap to dismiss")
+        // Modal, so VoiceOver keeps focus on the coach and does not reach the
+        // page, bars and controls the scrim covers — which it otherwise could
+        // still activate, and activating them never dismisses the coach, so it
+        // would re-present on the next open.
+        .accessibilityAddTraits(.isModal)
         // The tap gesture is for sighted readers; VoiceOver needs the dismissal
         // as an explicit action, since a combined element does not adopt it.
         .accessibilityAction { onDismiss() }

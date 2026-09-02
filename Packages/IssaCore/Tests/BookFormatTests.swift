@@ -58,6 +58,18 @@ struct BookFormatTests {
         #expect(BookContentService.preferredReadingFormat(for: subject) == nil)
     }
 
+    /// `isReadable` gates whether a "resume reading" request opens the reader or
+    /// the detail screen, and the Continue card's VoiceOver hint. It must agree
+    /// with "has an ebook or a readaloud that is actually servable".
+    @Test("only a book with text is readable")
+    func isReadableTracksServableText() {
+        #expect(!book(audiobook: (filepath: "a.m4b", missing: nil)).isReadable)
+        #expect(book(ebook: (missing: nil, ())).isReadable)
+        #expect(book(readaloud: (filepath: "r.epub", aligned: false, missing: nil)).isReadable)
+        #expect(!book(ebook: (missing: true, ()),
+                      audiobook: (filepath: "a.m4b", missing: nil)).isReadable)
+    }
+
     /// The 404 bug: `missing` was never consulted, so the download started and
     /// the server answered 404 halfway through.
     @Test("an ebook the server has lost is not offered")

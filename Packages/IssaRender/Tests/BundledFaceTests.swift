@@ -24,9 +24,11 @@ struct BundledFaceTests {
     @Test("every advertised face resolves under the name it is advertised by",
           arguments: IssaFonts.allFaces)
     func resolves(_ face: BundledFace) throws {
-        let font = try #require(PlatformFont(name: face.family, size: 18),
-                                "nothing registered under the family \"\(face.family)\"")
-        #expect(font.familyName == face.family)
+        try CustomFonts.testRegistryLock.withLock {
+            let font = try #require(PlatformFont(name: face.family, size: 18),
+                                    "nothing registered under the family \"\(face.family)\"")
+            #expect(font.familyName == face.family)
+        }
     }
 
     /// Not merely "a bold descriptor came back". CoreText hands back the
@@ -34,24 +36,28 @@ struct BundledFaceTests {
     /// would render `<strong>` as body text with nothing to show for it.
     @Test("every face carries a real bold", arguments: IssaFonts.allFaces)
     func hasBold(_ face: BundledFace) throws {
-        let regular = try #require(PlatformFont(name: face.family, size: 18))
-        let bold = regular.withBoldTrait()
-        #expect(bold.fontName != regular.fontName,
-                "\(face.family) has no bold member — \(bold.fontName) is the upright")
+        try CustomFonts.testRegistryLock.withLock {
+            let regular = try #require(PlatformFont(name: face.family, size: 18))
+            let bold = regular.withBoldTrait()
+            #expect(bold.fontName != regular.fontName,
+                    "\(face.family) has no bold member — \(bold.fontName) is the upright")
+        }
     }
 
     @Test("every face that claims an italic has one", arguments: IssaFonts.allFaces)
     func hasItalic(_ face: BundledFace) throws {
-        let regular = try #require(PlatformFont(name: face.family, size: 18))
-        let italic = regular.withItalicTrait()
-        if face.hasItalic {
-            #expect(italic.fontName != regular.fontName,
-                    "\(face.family) claims an italic but resolves to \(italic.fontName)")
-        } else {
-            // Lexend ships none at any weight, and `withItalicTrait` will not
-            // fake one. The upright face is the honest answer, and the picker
-            // says so rather than leaving it to be found mid-chapter.
-            #expect(italic.fontName == regular.fontName)
+        try CustomFonts.testRegistryLock.withLock {
+            let regular = try #require(PlatformFont(name: face.family, size: 18))
+            let italic = regular.withItalicTrait()
+            if face.hasItalic {
+                #expect(italic.fontName != regular.fontName,
+                        "\(face.family) claims an italic but resolves to \(italic.fontName)")
+            } else {
+                // Lexend ships none at any weight, and `withItalicTrait` will not
+                // fake one. The upright face is the honest answer, and the picker
+                // says so rather than leaving it to be found mid-chapter.
+                #expect(italic.fontName == regular.fontName)
+            }
         }
     }
 
@@ -64,15 +70,17 @@ struct BundledFaceTests {
     @Test("bold layered on an italic face keeps the italic",
           arguments: IssaFonts.allFaces.filter(\.hasItalic))
     func boldKeepsItalic(_ face: BundledFace) throws {
-        let regular = try #require(PlatformFont(name: face.family, size: 18))
-        let boldItalic = regular.withItalicTrait().withBoldTrait()
-        #if canImport(UIKit)
-        #expect(boldItalic.fontDescriptor.symbolicTraits.contains(.traitItalic),
-                "\(face.family): applying bold stripped the italic — resolved \(boldItalic.fontName)")
-        #else
-        #expect(boldItalic.fontDescriptor.symbolicTraits.contains(.italic),
-                "\(face.family): applying bold stripped the italic — resolved \(boldItalic.fontName)")
-        #endif
+        try CustomFonts.testRegistryLock.withLock {
+            let regular = try #require(PlatformFont(name: face.family, size: 18))
+            let boldItalic = regular.withItalicTrait().withBoldTrait()
+            #if canImport(UIKit)
+            #expect(boldItalic.fontDescriptor.symbolicTraits.contains(.traitItalic),
+                    "\(face.family): applying bold stripped the italic — resolved \(boldItalic.fontName)")
+            #else
+            #expect(boldItalic.fontDescriptor.symbolicTraits.contains(.italic),
+                    "\(face.family): applying bold stripped the italic — resolved \(boldItalic.fontName)")
+            #endif
+        }
     }
 
     @Test("the default face is one of the faces actually shipped")

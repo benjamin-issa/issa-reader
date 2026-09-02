@@ -507,12 +507,13 @@ public struct ReaderView: View {
         // both — clearing unconditionally wiped the highlight the jump exists
         // to leave. A selection with glyphs on the page just arrived at is the
         // one the reader came to see.
-        .onChange(of: model.pageIndex) {
-            guard let selection = model.selection else { return }
-            if let page = model.currentPage,
-               NSIntersectionRange(selection, page.characterRange).length > 0 { return }
-            model.clearSelection()
-        }
+        .onChange(of: model.pageIndex) { model.clearSelectionIfStale() }
+        // Also on chapter change: a jump that lands on the same page index (both
+        // page 0, say) never fires the pageIndex handler, so a stale selection
+        // from the old chapter would otherwise survive at coincidentally
+        // matching offsets. `clearSelectionIfStale` keeps a search landing,
+        // which re-stamps its selection's chapter.
+        .onChange(of: model.chapterIndex) { model.clearSelectionIfStale() }
         #if os(macOS)
         // Bare arrow keys turn pages, which is what a Mac reader tries first.
         // The menu shortcuts are ⌘-arrow so the two do not collide.
@@ -731,6 +732,24 @@ public struct ReaderView: View {
                     // a named action rather than the strip gesture below.
                     .accessibilityAction(named: "Open player") { showsPlayer = true }
                 }
+                #if os(macOS)
+                // The Mac has no swipe-up gesture, so the thinned footer would
+                // otherwise leave a sighted reader no route to the full player —
+                // and the sleep timer and the seek scrubber live only there. A
+                // small waveform button keeps that route on the Mac while the
+                // phone reaches it by swiping the strip.
+                if model.hasNarration {
+                    Button {
+                        showsPlayer = true
+                    } label: {
+                        Image(systemName: "waveform")
+                            .font(.system(size: 15))
+                            .foregroundStyle(model.style.theme.text.opacity(0.55))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Open player")
+                }
+                #endif
                 Button {
                     showsContents = true
                 } label: {

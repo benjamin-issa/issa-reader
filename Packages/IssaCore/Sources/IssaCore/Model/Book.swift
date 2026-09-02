@@ -114,6 +114,13 @@ public extension Book {
         return formats
     }
 
+    /// Whether opening this book leads to the reader at all. An audiobook-only
+    /// book has no on-screen text, so a "resume reading" request for it lands on
+    /// the detail screen instead — callers use this to keep that promise honest.
+    var isReadable: Bool {
+        servableFormats.contains(.ebook) || servableFormats.contains(.readaloud)
+    }
+
     /// Book-level completion, 0...1, from the stored Readium locator.
     var progress: Double? { position?.locator.totalProgression }
 

@@ -103,6 +103,15 @@ struct LibraryTabs: View {
         // the reader's own cover cannot present while it is showing.
         showsPlayer = false
         selectedTab = .library
+        // Don't tear down the stack when the reader for this very book is already
+        // on screen. `navigationDestination` keys on the whole Book value, and a
+        // book being read has a moving `position`, so a reset-then-append pushed
+        // a *different* value, rebuilt BookDetailView, and dismissed its open
+        // fullScreenCover reader mid-session — exactly what a "Currently reading"
+        // widget or Handoff deep link to the book you are reading would do. When
+        // the reader is closed (or showing a different book) we still reset, so a
+        // deep link opens or reopens it and Back lands on the library.
+        if app.visibleReaderUUID == pending.book.uuid { return }
         libraryPath = NavigationPath()
         // Pushed either way, so Back from the reader lands on the book and then
         // the library. `consumePendingBook` has already recorded whether the

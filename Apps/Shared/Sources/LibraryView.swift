@@ -316,7 +316,11 @@ public struct ContinueCard: View {
                     // a tap does. The chevron gets its own label so the two
                     // targets never blur into a single announcement.
                     .accessibilityLabel("Resume \(book.title)")
-                    .accessibilityHint("Opens the reader where you left off")
+                    // Honest about where the tap lands: an audiobook-only book
+                    // has no reader to resume, so the request opens its screen.
+                    .accessibilityHint(book.isReadable
+                        ? "Opens the reader where you left off"
+                        : "Opens the book")
                 detailsLink
             }
             .cardChrome()
