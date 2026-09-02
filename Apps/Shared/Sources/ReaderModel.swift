@@ -381,7 +381,7 @@ public final class ReaderModel {
                 return
             }
             try Task.checkCancellation()
-            await prepareNarration(package: package)
+            try await prepareNarration(package: package)
             phase = .ready
             // Spelled out rather than inline: enough of these and the type
             // checker gives up on the literal.
@@ -492,16 +492,25 @@ public final class ReaderModel {
     /// Only runs when the timeline is non-empty, so a book the server reports as
     /// ALIGNED but which carries no overlays simply reads as a plain ebook
     /// rather than showing a player that can never play anything.
-    private func prepareNarration(package: EPUBPackage) async {
+    private func prepareNarration(package: EPUBPackage) async throws {
         guard let timeline, !timeline.isEmpty else {
             IssaLog.info("narration unavailable", [
                 "book": book.title, "reason": "emptyTimeline",
             ])
             return
         }
-        guard let files = try? AudioExtraction.extractAudio(
-            from: package, timeline: timeline, bookID: book.uuid,
-        ), !files.isEmpty else {
+        // Off the main actor: this inflates every audio track in the book and
+        // writes it to disk, which for a long readaloud is hundreds of
+        // megabytes through the deflater — and it ran on the main actor, so
+        // the whole app froze for the duration on every open. Checked for
+        // cancellation on the way back, since a layout pass may have replaced
+        // this open while the extraction ran.
+        let bookID = book.uuid
+        let files = await Task.detached(priority: .userInitiated) {
+            try? AudioExtraction.extractAudio(from: package, timeline: timeline, bookID: bookID)
+        }.value
+        try Task.checkCancellation()
+        guard let files, !files.isEmpty else {
             // A book whose play button never appears, with no reason given, is
             // indistinguishable from one that was never aligned.
             IssaLog.warning("narration unavailable", [
@@ -1419,6 +1428,17 @@ public final class ReaderModel {
             self?.firstUnsavedChangeAt = nil
             await self?.saveProgress()
         }
+    }
+
+    /// Drops a save that has not run yet.
+    ///
+    /// Sign-out calls it: the screen holds this model beyond the account, and
+    /// a debounced write two seconds out otherwise fired for an account that
+    /// had already left.
+    public func cancelPendingSave() {
+        saveTask?.cancel()
+        saveTask = nil
+        firstUnsavedChangeAt = nil
     }
 
     public func saveProgress() async {

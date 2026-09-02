@@ -18,10 +18,12 @@ struct IssaWidgetBundle: WidgetBundle {
 /// Reads a small snapshot the app writes to the shared App Group container.
 ///
 /// The widget never opens the library database: extensions are held to roughly
-/// 30 MB, and a snapshot read is bounded work. Progress that advances during
-/// playback is rendered with a self-updating `ProgressView(timerInterval:)`
-/// rather than by reloading the timeline, because WidgetKit enforces a minimum
-/// spacing of about five minutes between reloads even while audio is playing.
+/// 30 MB, and a snapshot read is bounded work. The timeline is one static
+/// entry, refreshed a quarter of an hour later; between refreshes the app asks
+/// for a reload only when the snapshot has meaningfully moved, because
+/// WidgetKit budgets reloads in tens per day and enforces a floor of about five
+/// minutes between them even while audio is playing. Progress does not tick on
+/// its own — there is no self-updating timer view here.
 struct CurrentBookWidget: Widget {
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: CurrentBookSnapshotStore.widgetKind, provider: CurrentBookProvider()) { entry in
@@ -100,10 +102,10 @@ struct CurrentBookProvider: TimelineProvider {
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<CurrentBookEntry>) -> Void) {
-        // WidgetKit enforces roughly a five-minute floor between reloads even
-        // when an audio session exempts them from the daily budget, so a
-        // ticking progress bar cannot come from reloads. Anything that must
-        // move second by second uses a self-updating timer view instead.
+        // One entry, a quarter of an hour apart. WidgetKit enforces roughly a
+        // five-minute floor between reloads even when an audio session exempts
+        // them from the daily budget, so a ticking progress bar cannot come
+        // from reloads, and the app only asks for one when the snapshot moved.
         //
         // The empty entry, never the placeholder: an installed widget with no
         // snapshot — a fresh install, a sign-out — showed the fictional sample

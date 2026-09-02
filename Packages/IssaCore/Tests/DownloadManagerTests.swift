@@ -151,6 +151,81 @@ struct DownloadInterruptionTests {
 
         #expect(subject.state(for: job)?.isFailure == true,
                 "an unrequested cancellation must surface as a failure, not vanish into a stale pause marker")
+        await subject.shutDown()
+    }
+
+    /// Sign-out calls `stop()`, not `shutDown()`, and then deletes the Books
+    /// folder. The callbacks the cancel provokes arrive afterwards: a transfer
+    /// that finished as the cancel landed used to re-create the folder and
+    /// move the signed-out account's book back into it, and the cancellation
+    /// itself wrote a `.failed` row into the state `stop()` had just emptied.
+    @Test("a stopped manager ignores the callbacks its own cancel provokes")
+    func stopSilencesLateCallbacks() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "issa-stop-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let books = root.appending(path: "Books", directoryHint: .isDirectory)
+        let subject = DownloadManager(
+            baseURL: URL(string: "http://example.test")!,
+            tokens: StubTokens(),
+            identifier: "test.\(UUID().uuidString)",
+            destinationFor: { job in books.appending(path: "\(job.bookUUID).epub") },
+        )
+        let job = DownloadManager.Job(bookUUID: "b", format: .ebook)
+        await subject.start(job)
+        #expect(subject.hasTask(for: job))
+
+        subject.stop()
+        #expect(subject.state(for: job) == nil)
+
+        // A file that landed just as the cancel did, then the cancellation.
+        let source = root.appending(path: "arrived.tmp")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data("book".utf8).write(to: source)
+        let task = URLSession.shared.downloadTask(with: URL(string: "http://example.test/file")!)
+        task.taskDescription = DownloadManager.encode(job)
+        subject.urlSession(
+            URLSession.shared, downloadTask: task,
+            didWriteData: 512, totalBytesWritten: 512, totalBytesExpectedToWrite: 1_024)
+        subject.urlSession(URLSession.shared, downloadTask: task, didFinishDownloadingTo: source)
+        subject.urlSession(
+            URLSession.shared, task: task,
+            didCompleteWithError: NSError(
+                domain: NSURLErrorDomain, code: NSURLErrorCancelled,
+                userInfo: [NSURLSessionDownloadTaskResumeData: Data("resume".utf8)]))
+        for _ in 0 ..< 5 { await Task.yield() }
+
+        #expect(!FileManager.default.fileExists(atPath: books.path),
+                "the deleted Books folder must not come back for the account that left")
+        #expect(subject.state(for: job) == nil, "no phantom Retry row for the next account")
+        #expect(subject.pending.isEmpty)
+
+        // The same job downloaded again by the next account is a new transfer,
+        // whose callbacks count — and the old transfer's, arriving late, still
+        // do not: the two are told apart by the stamp, not by the job.
+        await subject.start(job)
+        #expect(subject.state(for: job) == .queued)
+        subject.urlSession(
+            URLSession.shared, task: task,
+            didCompleteWithError: NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled))
+        let fresh = URLSession.shared.downloadTask(with: URL(string: "http://example.test/file")!)
+        fresh.taskDescription = DownloadManager.encode(job, generation: 1)
+        subject.urlSession(
+            URLSession.shared, downloadTask: fresh,
+            didWriteData: 512, totalBytesWritten: 512, totalBytesExpectedToWrite: 1_024)
+        for _ in 0 ..< 5 { await Task.yield() }
+        #expect(subject.state(for: job)?.isActive == true)
+        await subject.shutDown()
+    }
+
+    @Test("a stamped task description still decodes to its job")
+    func stampedDescriptionsDecode() {
+        let job = DownloadManager.Job(bookUUID: "b", format: .readaloud)
+        let stamped = DownloadManager.encode(job, generation: 7)
+        #expect(DownloadManager.decode(stamped) == job)
+        #expect(DownloadManager.decodeStamped(stamped)?.generation == 7)
+        #expect(DownloadManager.decodeStamped(DownloadManager.encode(job))?.generation == 0)
+        #expect(DownloadManager.decode("b|readaloud|x") == nil)
     }
 }
 
@@ -262,6 +337,7 @@ struct CancelBeforeStartTests {
                 "the task must never be created for a job already cancelled")
         #expect(manager.state(for: job) == nil,
                 "start resuming after the cancel must not resurrect the job")
+        await manager.shutDown()
     }
 
     /// A session invalidated during the same window is worse than a cancel:
@@ -362,6 +438,7 @@ struct CancelBeforeStartTests {
         manager.cancel(job)
         #expect(!manager.hasTask(for: job))
         #expect(manager.state(for: job) == nil)
+        await manager.shutDown()
     }
 
     /// A cancel with no `start` ever having been called must not leave a
@@ -381,5 +458,6 @@ struct CancelBeforeStartTests {
         manager.cancel(job)
         await manager.start(job)
         #expect(manager.hasTask(for: job), "a later, real start must not be swallowed by a stale cancel marker")
+        await manager.shutDown()
     }
 }

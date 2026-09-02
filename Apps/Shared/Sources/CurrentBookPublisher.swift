@@ -27,6 +27,11 @@ final class CurrentBookPublisher {
     }
 
     private var owner: Owner?
+    /// Set by `clear()` and lifted by `resume()`. Between a sign-out and the
+    /// next session nothing may write: the closing reader's flush and its
+    /// debounced save both outlive the account, and used to put its book back
+    /// on the Home Screen — deep link and all — after the snapshot was cleared.
+    private var suspended = false
     /// When the owner last said it was playing. Ownership lapses rather than
     /// latching: a stream that stalls stops publishing entirely — the player
     /// leaves `.playing` with no callback — and without a lapse the reader
@@ -37,6 +42,8 @@ final class CurrentBookPublisher {
 
     /// How long a silent owner keeps its claim.
     private static let ownershipLapse: TimeInterval = 90
+    /// The smallest move in whole-book progress worth a snapshot write.
+    private static let progressWorthWriting = 0.002
 
     private init() {}
 
@@ -61,19 +68,32 @@ final class CurrentBookPublisher {
         isPlaying: Bool,
         as candidate: Owner,
     ) {
-        guard progress.isFinite, mayPublish(candidate) else { return }
+        guard !suspended, progress.isFinite, mayPublish(candidate) else { return }
         owner = candidate
         playingSince = isPlaying ? .now : nil
 
         let existing = CurrentBookSnapshotStore.read()
         // What is on disk right now, which may be the previous book's.
         let coverMatches = existing?.coverBookID == book.uuid
+        let usableChapter = Self.usableChapter(chapter, title: book.title)
+
+        // Written, and the widget reloaded, only when something it draws has
+        // moved. Every caller publishes on its own clock — the reader on each
+        // debounced save, two seconds apart while narrating; the listening
+        // loop every fifteen seconds — and each publish used to be a read, a
+        // rewrite and a reload request against a per-widget daily budget
+        // counted in tens. A fifth of a percent is under a page of a novel.
+        if let existing, existing.bookID == book.uuid, existing.chapter == usableChapter,
+           existing.isPlaying == isPlaying, coverMatches,
+           abs(existing.progress - progress) < Self.progressWorthWriting {
+            return
+        }
 
         CurrentBookSnapshotStore.write(CurrentBookSnapshot(
             bookID: book.uuid,
             title: book.title,
             author: book.byline,
-            chapter: Self.usableChapter(chapter, title: book.title),
+            chapter: usableChapter,
             progress: progress,
             remaining: remaining.flatMap { $0.isFinite ? $0 : nil },
             isPlaying: isPlaying,
@@ -138,8 +158,15 @@ final class CurrentBookPublisher {
         owner = nil
         playingSince = nil
         coverGeneration += 1
+        suspended = true
         CurrentBookSnapshotStore.clear()
         reload()
+    }
+
+    /// Lifts the suspension `clear()` imposed. Called when a session exists
+    /// again, which is the earliest anything has a book to publish.
+    func resume() {
+        suspended = false
     }
 
     private func reload() {

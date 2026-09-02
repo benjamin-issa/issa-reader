@@ -124,6 +124,34 @@ public final class DownloadManager: NSObject {
     /// move that cannot wait for a hop to the main actor.
     private nonisolated let shutDownFlag = OSAllocatedUnfairLock(initialState: false)
     private nonisolated var isShutDown: Bool { shutDownFlag.withLock { $0 } }
+    /// Which `stop()` a task belongs after. Stamped into every task's
+    /// description; a callback whose stamp is older than the current value is
+    /// from a transfer sign-out cancelled, and is ignored.
+    ///
+    /// Lock-backed for the same reason as `shutDownFlag`, and separate from it
+    /// because `stop()` keeps the session. Sign-out deletes the Books folder
+    /// right after `stop()` returns, and a transfer that finished as the
+    /// cancel landed used to re-create it and move the signed-out account's
+    /// book back in: the finished-file callback moves the file *before* it
+    /// hops to the actor, and the only synchronous guard it had was the
+    /// shut-down flag, which nothing in the app ever raised. The same late
+    /// callbacks wrote `.failed` rows and resume data into the state `stop()`
+    /// had just emptied, so the next account saw Retry rows for books it
+    /// never asked for.
+    ///
+    /// A generation rather than a set of discarded jobs: the next account may
+    /// start the very same job before the old transfer's cancellation has
+    /// reported back, and a per-job marker cannot tell the two apart.
+    private nonisolated let generation = OSAllocatedUnfairLock(initialState: 0)
+
+    /// The job a callback is for, or nil when the transfer was discarded.
+    private nonisolated func liveJob(in task: URLSessionTask) -> Job? {
+        guard let description = task.taskDescription,
+              let (job, stamped) = Self.decodeStamped(description),
+              stamped == generation.withLock({ $0 })
+        else { return nil }
+        return job
+    }
     /// A job cancelled while `start(_:)` was still awaiting a token, before its
     /// task existed to be cancelled.
     ///
@@ -240,7 +268,7 @@ public final class DownloadManager: NSObject {
         } else {
             session.downloadTask(with: request)
         }
-        task.taskDescription = Self.encode(job)
+        task.taskDescription = Self.encode(job, generation: generation.withLock { $0 })
         tasks[job] = task
         task.resume()
     }
@@ -328,6 +356,10 @@ public final class DownloadManager: NSObject {
     /// raised an uncatchable `NSGenericException`. The manager is kept and
     /// pointed at the new account by `reconfigure`.
     public func stop() {
+        // Advanced before the cancel, on the lock the delegate reads, so the
+        // callbacks the cancel provokes find themselves stale however soon
+        // they come.
+        generation.withLock { $0 += 1 }
         for task in tasks.values { task.cancel() }
         tasks = [:]
         resumeData = [:]
@@ -361,8 +393,12 @@ public final class DownloadManager: NSObject {
     /// Reattaches to whatever the system carried on with while the app was away.
     public func reattach() async {
         let running = await session.tasks.2
+        let current = generation.withLock { $0 }
         for task in running {
             guard let description = task.taskDescription, let job = Self.decode(description) else { continue }
+            // Re-stamped: the stamp it carries is from the process that started
+            // it, and means nothing to this one.
+            task.taskDescription = Self.encode(job, generation: current)
             tasks[job] = task
             states[job] = .downloading(fractionCompleted: task.progress.fractionCompleted,
                                        bytesWritten: task.countOfBytesReceived,
@@ -378,15 +414,31 @@ public final class DownloadManager: NSObject {
         return available > bytes + 200_000_000
     }
 
-    nonisolated static func encode(_ job: Job) -> String { "\(job.bookUUID)|\(job.format.rawValue)" }
+    /// The task description, with the `stop()` generation it was started in.
+    /// A description with no stamp reads as generation zero, which is where
+    /// every process starts.
+    nonisolated static func encode(_ job: Job, generation: Int = 0) -> String {
+        let base = "\(job.bookUUID)|\(job.format.rawValue)"
+        return generation == 0 ? base : base + "|\(generation)"
+    }
 
     /// Nonisolated because the URLSession delegate callbacks arrive on the
     /// session's own queue and need to identify the job before hopping.
     nonisolated static func decode(_ description: String) -> Job? {
+        decodeStamped(description)?.job
+    }
+
+    nonisolated static func decodeStamped(_ description: String) -> (job: Job, generation: Int)? {
         let parts = description.split(separator: "|")
-        guard parts.count == 2, let format = BookContentService.Format(rawValue: String(parts[1]))
+        guard (2 ... 3).contains(parts.count),
+              let format = BookContentService.Format(rawValue: String(parts[1]))
         else { return nil }
-        return Job(bookUUID: String(parts[0]), format: format)
+        var generation = 0
+        if parts.count == 3 {
+            guard let stamped = Int(parts[2]) else { return nil }
+            generation = stamped
+        }
+        return (Job(bookUUID: String(parts[0]), format: format), generation)
     }
 }
 
@@ -409,8 +461,7 @@ extension DownloadManager: URLSessionDownloadDelegate {
         didWriteData bytesWritten: Int64, totalBytesWritten: Int64,
         totalBytesExpectedToWrite: Int64,
     ) {
-        guard let description = downloadTask.taskDescription,
-              let job = Self.decode(description) else { return }
+        guard let job = liveJob(in: downloadTask) else { return }
         let fraction = totalBytesExpectedToWrite > 0
             ? Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)
             : 0
@@ -428,14 +479,11 @@ extension DownloadManager: URLSessionDownloadDelegate {
         _ session: URLSession, downloadTask: URLSessionDownloadTask,
         didFinishDownloadingTo location: URL,
     ) {
-        guard let description = downloadTask.taskDescription,
-              let job = Self.decode(description) else { return }
-
         // Checked here, synchronously, not only in the main-actor hop below:
         // "sign out and delete downloads" removes the Books folder right after
-        // shutDown() returns, and a transfer that outlived it would otherwise
+        // stop() returns, and a transfer that outlived it would otherwise
         // re-create the folder and move the signed-out account's book into it.
-        guard !isShutDown else { return }
+        guard let job = liveJob(in: downloadTask), !isShutDown else { return }
 
         // The temporary file is deleted the moment this returns, so it has to be
         // moved here and now, synchronously, before hopping to the actor.
@@ -474,8 +522,7 @@ extension DownloadManager: URLSessionDownloadDelegate {
     public nonisolated func urlSession(
         _ session: URLSession, task: URLSessionTask, didCompleteWithError error: (any Error)?,
     ) {
-        guard let error, let description = task.taskDescription,
-              let job = Self.decode(description) else { return }
+        guard let error, let job = liveJob(in: task) else { return }
         let resume = (error as NSError).userInfo[NSURLSessionDownloadTaskResumeData] as? Data
         let message = Self.readableReason(for: error)
         let cancelled = (error as NSError).code == NSURLErrorCancelled
@@ -483,16 +530,21 @@ extension DownloadManager: URLSessionDownloadDelegate {
         Task { @MainActor [weak self] in
             guard let self, !self.isShutDown else { return }
             self.tasks[job] = nil
-            if let resume { self.resumeData[job] = resume }
             if cancelled {
                 // Only a cancellation we asked for is not a failure. Anything
                 // else — the system reclaiming the transfer, a second session
                 // taking the identifier — has to be reported, or the row sits
                 // at "downloading" forever and every control on it is dead.
+                //
+                // Nothing is kept for our own cancellations: `pause` takes its
+                // resume data from the cancel's own callback, and `cancel`
+                // had just cleared it — this used to put it straight back.
                 if self.pausing.remove(job) != nil { return }
+                if let resume { self.resumeData[job] = resume }
                 self.states[job] = .failed("The download was interrupted. Tap to try again.")
                 return
             }
+            if let resume { self.resumeData[job] = resume }
             self.states[job] = .failed(message)
         }
     }

@@ -55,12 +55,19 @@ public struct LibraryService: Sendable {
     /// makes a library scroll badly. `version` is the book's `updatedAt` in
     /// epoch milliseconds — supplying it makes the response immutably
     /// cacheable, and changes the URL when a cover is replaced.
+    ///
+    /// - Parameter fallback: whether a missing portrait cover may be answered
+    ///   with the square one. The default suits a shelf, where any art beats a
+    ///   letter tile; a caller that needs to know which shape it was given —
+    ///   the widget frames the two differently — turns it off and asks for the
+    ///   other shape itself.
     public func coverData(
         for uuid: String,
         shape: CoverShape = .portrait,
         pixelWidth: Int? = nil,
         pixelHeight: Int? = nil,
         version: Date? = nil,
+        fallback: Bool = true,
     ) async throws -> Data {
         var query: [URLQueryItem] = []
         if shape == .square { query.append(URLQueryItem(name: "audio", value: "")) }
@@ -72,7 +79,7 @@ public struct LibraryService: Sendable {
 
         do {
             return try await client.getData(Endpoint.cover(uuid), query: query)
-        } catch StorytellerError.notFound where shape == .portrait {
+        } catch StorytellerError.notFound where shape == .portrait && fallback {
             // An audiobook-only book has no text cover. Falling back is the
             // difference between artwork and a letter tile forever.
             return try await coverData(

@@ -68,22 +68,17 @@ public final class CoverCache {
         }
     }
 
-    /// Copies a book's cover into the App Group so the widget can draw it.
+    /// The cover the widget should draw, and which shape it turned out to be.
     ///
     /// The widget cannot reach the app's Caches directory, and a cover fetched
     /// inside the extension would spend its 30 MB budget on a network decode.
-    /// So the app fetches it; the publisher decides where it goes.
-    /// Fetches the bytes without deciding what to do with them.
-    ///
-    /// Returning the data rather than writing it lets the caller record which
-    /// shape actually landed — a square request 404s for a book with no
-    /// audiobook edition, and the widget needs to know which aspect it got.
-    /// The cover the widget should draw, and which shape it turned out to be.
-    ///
-    /// Returns the shape as well as the bytes because the caller cannot infer
-    /// it: `LibraryService.coverData` has its own fallback from portrait to
-    /// square, so asking for one can quietly return the other — and the widget
-    /// crops by a third if it frames square art at the portrait aspect.
+    /// So the app fetches it and returns the bytes rather than writing them,
+    /// so the publisher decides where they go and can record which shape
+    /// actually landed — a square request 404s for a book with no audiobook
+    /// edition, and the widget crops by a third if it frames square art at the
+    /// portrait aspect. The service's own portrait-to-square fallback is
+    /// turned off for the same reason: it answered a portrait request with
+    /// square bytes, which were then labelled portrait and cached as such.
     public func widgetCover(
         for book: Book, session: Session,
         preferring shape: LibraryService.CoverShape,
@@ -112,7 +107,7 @@ public final class CoverCache {
         for candidate in [shape, shape == .square ? .portrait : .square] {
             guard let data = try? await service.coverData(
                 for: book.uuid, shape: candidate, pixelWidth: 320,
-                version: book.updatedAt?.value)
+                version: book.updatedAt?.value, fallback: false)
             else { continue }
             let url = diskDirectory.appending(
                 path: "\(book.uuid)-widget-v\(version)-\(candidate == .square ? "square" : "portrait").jpg")

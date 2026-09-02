@@ -22,6 +22,15 @@ import GRDB
 public actor LibraryStore {
     let dbQueue: DatabaseQueue
     public let url: URL
+    /// Whose annotations this store is currently reading and writing.
+    ///
+    /// The file is per server, and a server serves more than one reader: on a
+    /// shared device a second account used to be handed the first one's
+    /// highlights and quoted excerpts, because `clearAccountData` keeps the
+    /// annotations (rightly — they exist nowhere else) and nothing scoped
+    /// them. Nil until the app says who is signed in; rows written before
+    /// then carry no account and are adopted by the next one named.
+    private var account: String?
 
     /// Opens, or creates, the store for one server.
     ///
@@ -181,6 +190,17 @@ public actor LibraryStore {
             try db.alter(table: "mutation") { t in
                 t.add(column: "ordering", .double)
             }
+        }
+
+        // Annotations belong to the reader who made them, not to the server
+        // they were made against. Nullable: every row already here was made
+        // before accounts were recorded, and `setAccount` claims them for the
+        // first account that signs in after the upgrade.
+        migrator.registerMigration("v5-annotation-account") { db in
+            try db.alter(table: "annotation") { t in
+                t.add(column: "account", .text)
+            }
+            try db.create(index: "annotation_on_account", on: "annotation", columns: ["account"])
         }
 
         return migrator
@@ -358,14 +378,37 @@ extension Book {
 // MARK: - Annotations
 
 public extension LibraryStore {
+    /// Names the signed-in account, and claims for it every annotation made
+    /// before accounts were recorded.
+    ///
+    /// The claim is deliberate: those rows are the device's own highlights
+    /// from before the upgrade, and the first reader to sign in afterwards is
+    /// who made them. Leaving them unowned would show them to everyone, which
+    /// is the leak this closes.
+    func setAccount(_ id: String) throws {
+        account = id
+        try dbQueue.write { db in
+            try db.execute(
+                sql: "UPDATE annotation SET account = ? WHERE account IS NULL", arguments: [id])
+        }
+    }
+
+    /// The clause that scopes a query to the current account. With none named
+    /// yet — an offline launch before any sign-in was recorded — only rows
+    /// that predate accounts qualify, which is everything the device had.
+    private var accountClause: (sql: String, arguments: StatementArguments) {
+        if let account { return ("account = ?", [account]) }
+        return ("account IS NULL", [])
+    }
+
     /// Inserts or replaces one annotation.
     func save(_ annotation: Annotation) throws {
         let json = try JSONEncoder().encode(annotation)
         try dbQueue.write { db in
             try db.execute(
                 sql: """
-                INSERT INTO annotation (id, bookUUID, kind, createdAt, progression, excerpt, json)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO annotation (id, bookUUID, kind, createdAt, progression, excerpt, json, account)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     kind = excluded.kind, progression = excluded.progression,
                     excerpt = excluded.excerpt, json = excluded.json
@@ -375,29 +418,33 @@ public extension LibraryStore {
                     annotation.createdAt.timeIntervalSince1970,
                     annotation.locator.locations?.totalProgression
                         ?? annotation.locator.locations?.progression,
-                    annotation.excerpt, json,
+                    annotation.excerpt, json, account,
                 ],
             )
         }
     }
 
     func annotations(for bookUUID: String) throws -> [Annotation] {
+        let scope = accountClause
         let rows: [Data] = try dbQueue.read { db in
             try Data.fetchAll(
-                db, sql: "SELECT json FROM annotation WHERE bookUUID = ? ORDER BY progression",
-                arguments: [bookUUID],
+                db,
+                sql: "SELECT json FROM annotation WHERE bookUUID = ? AND \(scope.sql) ORDER BY progression",
+                arguments: [bookUUID] + scope.arguments,
             )
         }
         let decoder = JSONDecoder()
         return rows.compactMap { try? decoder.decode(Annotation.self, from: $0) }
     }
 
-    /// Every annotation in the library, newest first, for a single list.
+    /// Every annotation this account has made, newest first, for a single list.
     func allAnnotations(limit: Int = 500) throws -> [Annotation] {
+        let scope = accountClause
         let rows: [Data] = try dbQueue.read { db in
             try Data.fetchAll(
-                db, sql: "SELECT json FROM annotation ORDER BY createdAt DESC LIMIT ?",
-                arguments: [limit],
+                db,
+                sql: "SELECT json FROM annotation WHERE \(scope.sql) ORDER BY createdAt DESC LIMIT ?",
+                arguments: scope.arguments + [limit],
             )
         }
         let decoder = JSONDecoder()
@@ -410,10 +457,17 @@ public extension LibraryStore {
         }
     }
 
-    /// Removes every annotation for a book, for when it is deleted server-side.
+    /// Removes every annotation this account made on a book, for when the
+    /// book is deleted server-side. Scoped: a book gone from one account's
+    /// library may only be hidden from it, and another reader's marks on it
+    /// are not this account's to delete.
     func deleteAnnotations(forBook bookUUID: String) throws {
+        let scope = accountClause
         _ = try dbQueue.write { db in
-            try db.execute(sql: "DELETE FROM annotation WHERE bookUUID = ?", arguments: [bookUUID])
+            try db.execute(
+                sql: "DELETE FROM annotation WHERE bookUUID = ? AND \(scope.sql)",
+                arguments: [bookUUID] + scope.arguments,
+            )
         }
     }
 }

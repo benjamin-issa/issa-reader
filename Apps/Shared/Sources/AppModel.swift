@@ -30,7 +30,12 @@ public final class AppModel {
     public var phase: Phase = .launching
     public var serverAddress: String = ""
     public var session: Session?
-    public var books: [Book] = [] { didSet { rebuildDerived() } }
+    /// Rebuilt explicitly by whatever changes the catalogue, not from a
+    /// `didSet`: a position write mutates one element, and the observer
+    /// re-faceted and re-sorted the whole library on every debounced save —
+    /// every two seconds while narrating. `recordPosition` recomputes only
+    /// what a position can move.
+    public var books: [Book] = []
     /// Books with at least one file on disk, from a single directory read.
     ///
     /// The download shelf and its count both need this for the whole library,
@@ -199,6 +204,13 @@ public final class AppModel {
         // opening the app on a train should see their shelf, not a spinner that
         // resolves to an error.
         store = try? LibraryStore(serverKey: url.absoluteString)
+        // Whose annotations to show, before the identity call answers — which
+        // offline it never does. Cached per server by `enterLibrary`.
+        if let account = UserDefaults.standard.string(forKey: Self.accountKey(for: url)) {
+            try? await store?.setAccount(account)
+        }
+        // A session again means the widget may be written again.
+        CurrentBookPublisher.shared.resume()
         // The store was just reassigned, and the queue wraps the store's
         // database file — captured at construction, never re-read. Keeping the
         // old queue across a reconnect meant a corrected address wrote every
@@ -221,6 +233,7 @@ public final class AppModel {
         if let store, hasCredential {
             if let cached = try? await store.allBooks(), !cached.isEmpty {
                 books = cached
+                rebuildDerived()
                 phase = .ready
             }
         }
@@ -325,6 +338,7 @@ public final class AppModel {
         // makes against it.
         positionGuards = [:]
         books = []
+        rebuildDerived()
         downloadedUUIDs = []
         statuses = []
         ratings = [:]
@@ -379,8 +393,21 @@ public final class AppModel {
         // Belt and braces: whichever way we got here, writes must be durable
         // before the library — and therefore the reader — is reachable.
         ensureMutationQueue()
+        // Annotations are kept per account. The store is per server, and a
+        // second reader signing into the same server on a shared device used
+        // to be shown the first one's highlights and quoted excerpts.
+        if let session, case let .signedIn(user) = session.state {
+            try? await store?.setAccount(user.id)
+            UserDefaults.standard.set(user.id, forKey: Self.accountKey(for: session.serverURL))
+        }
         phase = .ready
         await refreshLibrary()
+    }
+
+    /// Where the last signed-in account for a server is remembered, so an
+    /// offline launch still knows whose annotations to show.
+    private static func accountKey(for url: URL) -> String {
+        "issa.account.\(url.absoluteString)"
     }
 
     /// Watches for the token going stale while the app is in use.
@@ -426,6 +453,7 @@ public final class AppModel {
             let known = Dictionary(books.map { ($0.uuid, $0) }, uniquingKeysWith: { first, _ in first })
             let merged = fetched.map { known[$0.uuid]?.reconciled(with: $0) ?? $0 }
             books = merged
+            rebuildDerived()
             statuses = fetchedStatuses
             ratings = fetchedRatings
             loadError = nil
@@ -443,6 +471,7 @@ public final class AppModel {
             // A failed refresh is not an empty library when something is cached.
             if books.isEmpty, let cached = try? await store?.allBooks(), !cached.isEmpty {
                 books = cached
+                rebuildDerived()
             }
             loadError = books.isEmpty ? Self.message(for: error) : nil
         }
@@ -523,6 +552,13 @@ public final class AppModel {
     /// Recomputes everything derived from the catalogue.
     func rebuildDerived() {
         facets = LibraryFacets(books: books, downloadedUUIDs: downloadedUUIDs)
+        rebuildAfterPositionChange()
+    }
+
+    /// The part of the above a position can move: the Continue card, and the
+    /// arrangement when it sorts by recency or progress. The facets — shelves,
+    /// tags, what is downloaded — cannot change with a page turn.
+    private func rebuildAfterPositionChange() {
         continueBook = LibraryDerivation(books: books).continueReading.first
         rebuildArranged()
     }
@@ -867,6 +903,10 @@ public final class AppModel {
         // position save for the account being left.
         closedWhileNarrating.removeAll()
         stopNarration()
+        // Nor run one already scheduled. The screen holds the model beyond
+        // this, so a debounced save two seconds out still fired — with no
+        // queue to take it, and until recently straight into the widget.
+        for model in readers.values { model.cancelPendingSave() }
         readers.removeAll()
     }
 
@@ -1183,6 +1223,8 @@ public final class AppModel {
             throw StorytellerError.transport(loadError ?? "Couldn't start the download.")
         }
 
+        // The last real byte counts seen, for a pause to keep showing.
+        var lastReported: (written: Int64, total: Int64) = (0, 0)
         while !Task.isCancelled {
             switch downloads.state(for: job) {
             case .finished:
@@ -1190,15 +1232,25 @@ public final class AppModel {
             case let .failed(reason):
                 throw StorytellerError.transport(reason)
             case let .downloading(_, written, total):
+                lastReported = (written, total)
                 onProgress(written, total)
-            case let .paused(fraction):
+            case .paused:
                 // Not a failure. Pausing from the Downloads screen used to
                 // throw here, and the reader's .failed phase was a dead end —
                 // resuming completed the file but never revived the screen.
-                // Keep waiting; resuming picks straight back up.
-                onProgress(Int64(fraction * 100), 100)
-            case .queued, .none:
+                // Keep waiting; resuming picks straight back up. Reported in
+                // the bytes the callback is defined in: a percentage pushed
+                // through it rendered as "44 bytes of 100 bytes".
+                onProgress(lastReported.written, lastReported.total)
+            case .queued:
                 break
+            case .none:
+                // `start` claims the job before its first await, so once
+                // `download` has returned true there is only one way to no
+                // state at all: the reader's Cancel, which clears it. This used
+                // to wait on it forever, four times a second, and a Try Again
+                // then ran a second open alongside the first.
+                throw StorytellerError.transport("Download cancelled.")
             }
             try? await Task.sleep(for: .milliseconds(250))
         }
@@ -1274,6 +1326,7 @@ public final class AppModel {
     public func setStatus(_ status: Status, for book: Book) async {
         guard let session, let index = books.firstIndex(where: { $0.uuid == book.uuid }) else { return }
         books[index].status = status
+        rebuildDerived()
         try? await store?.upsert(books[index])
         // Queued, not sent directly: a shelf change made offline must survive,
         // and rolling it back under the reader's finger was the old behaviour.
@@ -1314,6 +1367,7 @@ public final class AppModel {
     ) async {
         guard let index = books.firstIndex(where: { $0.uuid == bookUUID }) else { return }
         books[index].adopt(position: locator, timestamp: timestamp)
+        rebuildAfterPositionChange()
         try? await store?.upsert(books[index])
     }
 
@@ -1400,5 +1454,6 @@ public final class AppModel {
               let fresh = try? await LibraryService(client: session.client).book(book.uuid)
         else { return }
         books[index] = books[index].reconciled(with: fresh)
+        rebuildDerived()
     }
 }

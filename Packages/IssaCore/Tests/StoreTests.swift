@@ -328,4 +328,41 @@ struct SignOutCleanupTests {
         #expect(try await store.isEmpty)
         #expect(try await store.annotations(for: books[0].uuid).count == 1)
     }
+
+    /// The store is per server and the server serves more than one reader:
+    /// a second account on a shared device was handed the first one's
+    /// highlights and quoted excerpts.
+    @Test("a second account on the same server sees none of the first one's marks")
+    func annotationsArePerAccount() async throws {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appending(path: "issa-accounts-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try LibraryStore(serverKey: "http://example.test", directory: directory)
+        func mark(_ excerpt: String) -> Annotation {
+            Annotation(
+                bookUUID: "shared-book", kind: .highlight,
+                locator: ReadiumLocator(
+                    href: "chapter1.xhtml", type: "application/xhtml+xml",
+                    locations: .init(progression: 0.1, totalProgression: 0.1, charOffset: 10)),
+                excerpt: excerpt)
+        }
+
+        // Made before the upgrade that records accounts.
+        try await store.save(mark("legacy"))
+
+        try await store.setAccount("alice")
+        try await store.save(mark("alice's"))
+        try await store.clearAccountData()
+
+        try await store.setAccount("bob")
+        try await store.save(mark("bob's"))
+        #expect(try await store.annotations(for: "shared-book").map(\.excerpt) == ["bob's"])
+        #expect(try await store.allAnnotations().map(\.excerpt) == ["bob's"])
+        try await store.deleteAnnotations(forBook: "shared-book")
+
+        // The first account to sign in after the upgrade owns the legacy
+        // rows, and nothing another account did since touched hers.
+        try await store.setAccount("alice")
+        #expect(Set(try await store.allAnnotations().map(\.excerpt)) == ["legacy", "alice's"])
+    }
 }
