@@ -58,7 +58,17 @@ was diffed against a browser render of these SVGs (mean difference under
 | spine | x=90, y 67.3–134, stroke 3 | between the pages |
 | arc radius | 38 | headphone band radius, centre (90, 54) |
 | band width | 8 | headphone stroke weight, round caps |
-| ear cups | 14×22, r6 | at x=46 and x=120, y=52 |
+| ear cups | 20×28, r8 | at x=42 and x=118, y=50 — enlarged 2026-09 so the terminals stay legible at notification size |
+| vertical shift | `translate(0 11)` | optical centring, applied to the art group and never to the background |
+
+The shift is deliberate: the mark's weight is all in the book, and the airy arc
+above it made a geometrically centred mark read as sitting high in the squircle.
+Do not "recentre" it to the mathematical middle.
+
+The 2026-09 handoff's own `icon-dark.svg` put the left ear cup outside the
+`translate(0 11)` group and the right one inside, so its dark PNG ships with the
+cups 11 units apart vertically. The masters here apply the shift to the whole
+art group in all three variants, which is what the table above specifies.
 
 ## Colours per variant
 

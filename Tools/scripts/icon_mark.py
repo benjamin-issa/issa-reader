@@ -46,11 +46,20 @@ _RIGHT = [((142, 70), (126.1, 61), (107.9, 61), (92, 70)),
           ((92, 134), (107.9, 125), (126.1, 125), (142, 134))]
 
 # Spine: a 3-unit stroke at x=90 from y=67.3 to 134. Band: a semicircle of
-# radius 38 about (90,54), stroke 8, round caps. Cups: 14×22, corner 6.
+# radius 38 about (90,54), stroke 8, round caps. Cups: 20×28, corner 8 —
+# enlarged in the 2026-09 revision so the terminals stay legible at
+# notification size.
 SPINE = (88.5, 67.3, 91.5, 134)
 BAND_CENTRE, BAND_R, BAND_W = (90, 54), 38, 8
-CUPS = [(46, 52, 60, 74), (120, 52, 134, 74)]
-CUP_R = 6
+CUPS = [(42, 50, 62, 78), (118, 50, 138, 78)]
+CUP_R = 8
+
+# Optical centring, the SVG masters' `translate(0 11)`. Everything except the
+# background moves down 11 units: the mark's weight is all in the book, and the
+# airy arc above it made a geometrically centred mark read as sitting high in
+# the squircle. Applied to the art, never to the background, which fills the
+# whole tile.
+ART_SHIFT_Y = 11
 
 
 def _cubic(p0, p1, p2, p3, steps=64):
@@ -109,7 +118,7 @@ def render(w, h, colours, parts=("bg", "book", "headphones"), unit=None, origin=
            else Image.new("RGBA", (w * ss, h * ss), (0, 0, 0, 0)))
     d = ImageDraw.Draw(img)
     u = unit * ss
-    def at(x, y): return (ox * ss + x * u, oy * ss + y * u)
+    def at(x, y): return (ox * ss + x * u, oy * ss + (y + ART_SHIFT_Y) * u)
     if "book" in parts:
         draw_book(d, at, colours)
     if "headphones" in parts:
