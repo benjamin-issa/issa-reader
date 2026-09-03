@@ -13,6 +13,8 @@ enum ReaderCommand: String, Sendable {
     case bookmark
     case nextPage
     case previousPage
+    /// Type size, face and theme for this book.
+    case typography
     /// The full player — the scrubber, the rate and the sleep timer. The phone
     /// swipes up on the footer strip to reach it; the Mac has no swipe, so the
     /// menu is its route.

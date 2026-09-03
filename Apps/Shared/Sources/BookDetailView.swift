@@ -30,6 +30,9 @@ public struct BookDetailView: View {
     /// this book's audio is already running (item 08). Reuses `NowPlayingSheet`,
     /// the same full player the mini-bar expands into.
     @State private var showsPlayer = false
+    #if os(macOS)
+    @Environment(\.openWindow) private var openWindow
+    #endif
     /// The book as it was when this screen opened. Identity only — everything
     /// drawn comes from `book` below.
     private let initialBook: Book
@@ -44,8 +47,21 @@ public struct BookDetailView: View {
         app.books.first { $0.uuid == initialBook.uuid } ?? initialBook
     }
 
-    public init(book: Book) {
+    /// How much width this screen has to work with.
+    ///
+    /// `.full` is the phone's screen and the tvOS layout. `.inspector` is the
+    /// Mac's third column, where a 130pt cover beside a text column leaves
+    /// neither enough room, so the hero stacks instead.
+    public enum Layout: Sendable {
+        case full
+        case inspector
+    }
+
+    private let layout: Layout
+
+    public init(book: Book, layout: Layout = .full) {
         initialBook = book
+        self.layout = layout
     }
 
     public var body: some View {
@@ -112,7 +128,10 @@ public struct BookDetailView: View {
         // The full player, reached by tapping "Now playing" while this book's
         // audio runs (item 08). Reuses `NowPlayingSheet` — the mini-bar's own
         // expansion — so there is one full player, not a second one here.
+        // The Mac's player is a window, opened by `presentPlayer` below.
+        #if !os(macOS)
         .sheet(isPresented: $showsPlayer) { NowPlayingSheet() }
+        #endif
         // Nothing to expand into once playback has stopped.
         .onChange(of: app.playback == nil) { _, stopped in
             if stopped { showsPlayer = false }
@@ -133,12 +152,32 @@ public struct BookDetailView: View {
         #endif
     }
 
+    @ViewBuilder
     private var hero: some View {
+        if layout == .inspector {
+            VStack(alignment: .leading, spacing: Metrics.spacing16) {
+                CoverImage(book: book, session: app.session)
+                    .frame(maxWidth: 200)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                heroText
+            }
+        } else {
+            wideHero
+        }
+    }
+
+    private var wideHero: some View {
         HStack(alignment: .top, spacing: Metrics.spacing16) {
             CoverImage(book: book, session: app.session)
                 .frame(width: 130)
 
-            VStack(alignment: .leading, spacing: Metrics.spacing8) {
+            heroText
+            Spacer(minLength: 0)
+        }
+    }
+
+    private var heroText: some View {
+        VStack(alignment: .leading, spacing: Metrics.spacing8) {
                 Text(book.title)
                     .font(Typography.title)
                     .foregroundStyle(Palette.ink)
@@ -162,8 +201,6 @@ public struct BookDetailView: View {
                         .font(Typography.caption)
                         .foregroundStyle(Palette.inkTertiary)
                 }
-            }
-            Spacer(minLength: 0)
         }
     }
 
@@ -239,6 +276,15 @@ public struct BookDetailView: View {
         }
     }
 
+    /// Shows the full player: a window on the Mac, a sheet everywhere else.
+    private func presentPlayer() {
+        #if os(macOS)
+        openWindow(id: "NowPlaying")
+        #else
+        showsPlayer = true
+        #endif
+    }
+
     @ViewBuilder
     private var primaryControl: some View {
         // Always opens the reader now (item 02): the control's only intent is
@@ -254,6 +300,17 @@ public struct BookDetailView: View {
             // Outside it, the page owns the whole screen.
             Button {
                 showsReader = true
+            } label: {
+                PrimaryCapsule(action: action)
+            }
+            .buttonStyle(.plain)
+            #elseif os(macOS)
+            // Into the book's own window, which is how every other route into
+            // a book on this Mac works. Pushed inline, this screen would put a
+            // reader inside the inspector column — 320pt wide, beside the grid
+            // it was opened from.
+            Button {
+                openWindow(id: "Reader", value: book.uuid)
             } label: {
                 PrimaryCapsule(action: action)
             }
@@ -291,11 +348,14 @@ public struct BookDetailView: View {
                     // resume and, when it is the reader's narration that is
                     // running, a swap to the audiobook that cuts the current
                     // audio. This just surfaces what is already playing.
-                    showsPlayer = true
+                    presentPlayer()
                 } else {
                     Task {
                         await app.startListening(to: book, nowPlaying: nowPlaying, settings: settings)
                         listenError = app.listeningError
+                        // Starting playback from a screen with no transport of
+                        // its own should show the transport.
+                        if listenError == nil { presentPlayer() }
                     }
                 }
             } label: {

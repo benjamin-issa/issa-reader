@@ -98,6 +98,9 @@ public struct ReaderView: View {
     @Environment(NowPlayingController.self) private var nowPlaying
     #if os(macOS)
     @Environment(\.controlActiveState) private var controlActiveState
+    /// The Now Playing panel is a window on the Mac, so the reader opens it
+    /// rather than presenting a sheet of its own.
+    @Environment(\.openWindow) private var openWindow
     private var isActiveScene: Bool { controlActiveState == .key }
     /// Whether the page holds the keyboard, which is what the bare arrow keys
     /// below depend on. Tracked rather than left to SwiftUI because a sheet
@@ -276,6 +279,9 @@ public struct ReaderView: View {
             }
             .presentationDetents([.medium, .large])
         }
+        // Not on the Mac, where the player is a window several open books can
+        // share rather than a sheet owned by whichever one summoned it.
+        #if !os(macOS)
         .sheet(isPresented: $showsPlayer) {
             PlayerView(
                 book: model.book, session: model.readerSession,
@@ -288,6 +294,7 @@ public struct ReaderView: View {
                 // still system grey against warm paper.
                 .presentationBackground(Palette.paper)
         }
+        #endif
         .sheet(isPresented: $showsSearch) {
             NavigationStack {
                 BookSearchView(model: model) { hit in
@@ -327,7 +334,12 @@ public struct ReaderView: View {
         }
         #if os(macOS)
         // The Mac keeps a real toolbar: its window chrome never moved the page.
-        .toolbar { ToolbarItemGroup(placement: .primaryAction) { readerActions } }
+        .toolbar { ToolbarItemGroup(placement: .primaryAction) { macToolbar } }
+        // The reader's colours are the book's theme, not the system's, and the
+        // toolbar sits against the page. Without this a Night book gets a light
+        // toolbar with dark glyphs floating above a dark page.
+        .toolbarBackground(model.style.theme.background, for: .windowToolbar)
+        .toolbarColorScheme(model.style.theme.isDark ? .dark : .light, for: .windowToolbar)
         // The guide goes over the toolbar as well as the page, and swallows the
         // click that dismisses it so the page below does not also turn.
         .overlay { coachOverlay }
@@ -351,6 +363,72 @@ public struct ReaderView: View {
         var resolved = settings.style(for: model.book.uuid)
         resolved.publisherFamily = model.style.publisherFamily
         model.style = resolved
+    }
+
+    #if os(macOS)
+    /// Every reading action the menu bar posts, as a window toolbar.
+    ///
+    /// The same set, in the same order the Read menu lists them, so the toolbar
+    /// and the menu are two views of one thing rather than two inventories.
+    /// Each button calls `perform`, which is what the menu's notification also
+    /// reaches.
+    @ViewBuilder
+    private var macToolbar: some View {
+        Button { perform(.contents) } label: { Image(systemName: "list.bullet") }
+            .help("Table of Contents (⇧⌘T)")
+            .accessibilityLabel("Table of contents")
+
+        Button { perform(.find) } label: { Image(systemName: "magnifyingglass") }
+            .help("Find in Book (⌘F)")
+            .accessibilityLabel("Find in book")
+
+        Button { perform(.marks) } label: { Image(systemName: "bookmark.square") }
+            .help("Marks (⇧⌘B)")
+            .accessibilityLabel("Bookmarks and highlights")
+
+        Button { perform(.bookmark) } label: {
+            Image(systemName: model.isPageBookmarked ? "bookmark.fill" : "bookmark")
+        }
+        .help("Add Bookmark (⌘D)")
+        .accessibilityLabel(model.isPageBookmarked ? "Remove bookmark" : "Bookmark this page")
+
+        Button { perform(.typography) } label: { Image(systemName: "textformat.size") }
+            .help("Text Options (⌥⌘T)")
+            .accessibilityLabel("Text options for this book")
+
+        if model.hasNarration {
+            Button { perform(.player) } label: { Image(systemName: "waveform") }
+                .help("Show Player (⌥⌘P)")
+                .accessibilityLabel("Open player")
+        }
+    }
+
+    /// What each reading command does, in one place.
+    private func perform(_ command: ReaderCommand) {
+        switch command {
+        case .find: showsSearch = true
+        case .contents: showsContents = true
+        case .marks: showsAnnotations = true
+        case .bookmark: model.toggleBookmark()
+        case .typography: showsTypography = true
+        case .nextPage: Task { await model.nextPage() }
+        case .previousPage: Task { await model.previousPage() }
+        // Its own window on the Mac, which several open books can share, rather
+        // than a sheet belonging to whichever one happened to summon it.
+        case .player:
+            guard model.hasNarration else { return }
+            openWindow(id: "NowPlaying")
+        }
+    }
+    #endif
+
+    /// Opens the full player: a window on the Mac, a sheet everywhere else.
+    private func openPlayer() {
+        #if os(macOS)
+        openWindow(id: "NowPlaying")
+        #else
+        showsPlayer = true
+        #endif
     }
 
     /// Bookmark, and the rest behind an ellipsis.
@@ -612,38 +690,32 @@ public struct ReaderView: View {
         .task { model.loadAnnotations(await app.annotations(for: model.book.uuid)) }
         #if os(macOS)
         // Menu commands arrive as notifications; only the frontmost reader
-        // window is active, so only it responds.
+        // window is active, so only it responds. Each one routes through
+        // `perform`, which is also what the window toolbar calls — one mapping
+        // from command to behaviour rather than two that drift.
         .onReceive(NotificationCenter.default.publisher(for: ReaderCommand.find.notification)) { _ in
-            guard isActiveScene else { return }
-            showsSearch = true
+            if isActiveScene { perform(.find) }
         }
         .onReceive(NotificationCenter.default.publisher(for: ReaderCommand.contents.notification)) { _ in
-            guard isActiveScene else { return }
-            showsContents = true
+            if isActiveScene { perform(.contents) }
         }
         .onReceive(NotificationCenter.default.publisher(for: ReaderCommand.marks.notification)) { _ in
-            guard isActiveScene else { return }
-            showsAnnotations = true
+            if isActiveScene { perform(.marks) }
         }
         .onReceive(NotificationCenter.default.publisher(for: ReaderCommand.bookmark.notification)) { _ in
-            guard isActiveScene else { return }
-            model.toggleBookmark()
+            if isActiveScene { perform(.bookmark) }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: ReaderCommand.typography.notification)) { _ in
+            if isActiveScene { perform(.typography) }
         }
         .onReceive(NotificationCenter.default.publisher(for: ReaderCommand.nextPage.notification)) { _ in
-            guard isActiveScene else { return }
-            Task { await model.nextPage() }
+            if isActiveScene { perform(.nextPage) }
         }
         .onReceive(NotificationCenter.default.publisher(for: ReaderCommand.previousPage.notification)) { _ in
-            guard isActiveScene else { return }
-            Task { await model.previousPage() }
+            if isActiveScene { perform(.previousPage) }
         }
-        // The phone reaches the full player by swiping the footer strip up.
-        // There is no swipe on the Mac and a click-drag over the strip's own
-        // buttons would be a poor substitute, so the menu is the Mac's route —
-        // and the only one that names a keyboard shortcut.
         .onReceive(NotificationCenter.default.publisher(for: ReaderCommand.player.notification)) { _ in
-            guard isActiveScene, model.hasNarration else { return }
-            showsPlayer = true
+            if isActiveScene { perform(.player) }
         }
         #endif
         // A re-resolve, not an assignment: `model.style = settings.readerStyle`
@@ -785,9 +857,14 @@ public struct ReaderView: View {
                     .accessibilityLabel(model.isPlaying ? "Pause narration" : "Play narration")
                     // VoiceOver has no swipe-up, so it reaches the player through
                     // a named action as well as the waveform button.
-                    .accessibilityAction(named: "Open player") { showsPlayer = true }
+                    .accessibilityAction(named: "Open player") { openPlayer() }
                     // The full player: the scrubber, the rate and the sleep
                     // timer live only there.
+                    //
+                    // Not on the Mac, where the toolbar above already carries
+                    // it and the footer is meant to stay calm — three targets,
+                    // not six.
+                    #if !os(macOS)
                     Button {
                         showsPlayer = true
                     } label: {
@@ -797,6 +874,7 @@ public struct ReaderView: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Open player")
+                    #endif
                 }
                 Button {
                     showsContents = true
@@ -811,6 +889,10 @@ public struct ReaderView: View {
                     .foregroundStyle(model.style.theme.text.opacity(0.55))
                 }
                 .buttonStyle(.plain)
+                // Not on the Mac: the Playback menu carries skip with its own
+                // shortcuts, and the panel draws the same two buttons. This is
+                // one copy fewer, not a second source of the interval.
+                #if !os(macOS)
                 if model.hasNarration {
                     // Same seconds, same buttons as the full player and the mini
                     // bar — the setting in Controls & remapping governs all three,
@@ -831,6 +913,7 @@ public struct ReaderView: View {
                         label: "Skip forward",
                     )
                 }
+                #endif
                 Spacer()
                 // Inside the chrome, not beside it: hiding everything should
                 // hide everything. It used to stay behind on the grounds that

@@ -101,6 +101,18 @@ public struct SettingsView: View {
     /// log export (for support). Factored out so iOS/macOS can put them in a
     /// `DisclosureGroup` and tvOS can list them inline.
     @ViewBuilder private var advancedContent: some View {
+        AdvancedSettingsRows()
+    }
+}
+
+/// What "Advanced" holds, wherever it is shown.
+///
+/// Its own view so the Mac's Advanced tab and the phone's disclosure render the
+/// same rows rather than two lists that drift.
+struct AdvancedSettingsRows: View {
+    @Environment(AppModel.self) private var app
+
+    var body: some View {
         if let session = app.session, case .signedIn = session.state {
             // Surfacing this makes it obvious which server generation is in
             // play, and why some rails are computed locally.

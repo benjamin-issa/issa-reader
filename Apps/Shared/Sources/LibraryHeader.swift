@@ -83,7 +83,9 @@ struct LibraryHeader: View {
         // which is why the outer padding is removed here and added back inside.
         .padding(.horizontal, -Metrics.screenMargin)
     }
+    #endif
 
+    #if os(iOS) || os(macOS)
     /// Tags overflow into a menu: a library's tag list runs long, and a chip
     /// each would push every shelf off the row.
     private var tagsChip: some View {
@@ -128,6 +130,12 @@ struct LibraryHeader: View {
                 .font(Typography.caption.monospacedDigit())
                 .foregroundStyle(Palette.inkTertiary)
             Spacer()
+            // The Mac has no chip row, and a tag rail's "See all" narrows the
+            // grid by a tag. Without this the reader would be left looking at
+            // "3 of 300 books" with nothing on screen able to undo it.
+            #if os(macOS)
+            tagsChip
+            #endif
             #if !os(tvOS)
             sortMenu
             #endif
@@ -237,6 +245,9 @@ struct LibrarySearchField: View {
     }
 }
 
+#endif
+
+#if os(iOS)
 struct ShelfChip: View {
     let title: String
     /// Nil for a chip that is not a shelf — Browse counts nothing.
@@ -254,7 +265,10 @@ struct ShelfChip: View {
     }
 }
 
+#endif
+
 /// The capsule both a chip and the tags menu wear, so they cannot drift.
+/// Shared with the Mac, whose only chip is the tags menu.
 struct ChipLabel: View {
     let title: String
     let count: Int?
@@ -287,7 +301,6 @@ struct ChipLabel: View {
         .contentShape(Capsule())
     }
 }
-#endif
 
 /// What a shelf with nothing on it says.
 ///

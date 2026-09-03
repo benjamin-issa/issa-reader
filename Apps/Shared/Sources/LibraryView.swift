@@ -25,8 +25,18 @@ public struct LibraryView: View {
                 } else {
                     shelf
                 }
+                #elseif os(macOS)
+                // Rails only on All books. The sidebar is the Mac's shelf
+                // control, so picking a shelf there means "show me that cut of
+                // the library", which is the grid. Rails are what the wide
+                // window is for when no cut has been asked for.
+                if app.libraryMode == .browse, search.isEmpty, app.arrangement.shelf == .all {
+                    BrowseView()
+                } else {
+                    shelf
+                }
                 #else
-                // The Mac's shelves are its sidebar, which Browse would fight.
+                // tvOS renders TVLibraryView; this only has to compile.
                 shelf
                 #endif
             }
@@ -48,6 +58,24 @@ public struct LibraryView: View {
             BookGrid(books: books, session: app.session)
         }
     }
+
+    #if os(macOS)
+    /// The toolbar switch.
+    ///
+    /// Reads as "All Books" whenever rails are not what is on screen, so the
+    /// segment never claims Browse over a grid. Setting `.all` writes the mode
+    /// and nothing else — the grid keeps the sort and tags it already had,
+    /// which is what "with all its controls intact" has to mean.
+    private var modeBinding: Binding<AppModel.LibraryMode> {
+        Binding(
+            get: {
+                guard app.arrangement.shelf == .all, search.isEmpty else { return .all }
+                return app.libraryMode
+            },
+            set: { app.libraryMode = $0 },
+        )
+    }
+    #endif
 
     /// Search results are already the answer to a question; re-sorting them by
     /// title would bury the best match. Arrangement applies to the shelf only.
@@ -74,6 +102,22 @@ public struct LibraryView: View {
         // The Mac keeps its toolbar search — the sidebar is already its shelf
         // control — and tvOS renders TVLibraryView, so this only has to compile.
         .searchable(text: $search, prompt: "Search your library")
+        #endif
+        #if os(macOS)
+        // Browse or the sortable grid, in the window's own toolbar. Disabled
+        // where rails would be a lie: on a named shelf, and while a search is
+        // showing results.
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                Picker("Library view", selection: modeBinding) {
+                    Text("Browse").tag(AppModel.LibraryMode.browse)
+                    Text("All Books").tag(AppModel.LibraryMode.all)
+                }
+                .pickerStyle(.segmented)
+                .disabled(app.arrangement.shelf != .all || !search.isEmpty)
+                .accessibilityLabel("Library view")
+            }
+        }
         #endif
         // Full-text, from the local index: the server's book endpoint takes no
         // query parameters at all, so search has to happen here either way.
@@ -186,6 +230,9 @@ public struct BookCell: View {
     var showsFormatMark = true
     /// Shown instead of the byline when given.
     var caption: String?
+    #if os(macOS)
+    @Environment(MacBookSelection.self) private var selection: MacBookSelection?
+    #endif
 
     public var body: some View {
         VStack(alignment: .leading, spacing: Metrics.spacing8) {
@@ -200,6 +247,17 @@ public struct BookCell: View {
                     .overlay(alignment: .topTrailing) {
                         if showsFormatMark { formatMark }
                     }
+                    // The Mac's selection ring: a click selects into the
+                    // inspector rather than opening a window, so the cover has
+                    // to say which book the column is describing.
+                    #if os(macOS)
+                    .overlay {
+                        if selection?.bookID == book.uuid {
+                            RoundedRectangle(cornerRadius: Metrics.radiusSmall)
+                                .strokeBorder(Palette.tangerine, lineWidth: 3)
+                        }
+                    }
+                    #endif
                 if let progress = book.progress, progress > 0 {
                     ProgressBar(value: progress)
                         .padding(Metrics.spacing4)
@@ -217,6 +275,10 @@ public struct BookCell: View {
                 .foregroundStyle(Palette.inkTertiary)
                 .lineLimit(1)
         }
+        // The ring is a colour; the trait is what VoiceOver has.
+        #if os(macOS)
+        .accessibilityAddTraits(selection?.bookID == book.uuid ? .isSelected : [])
+        #endif
     }
 
     /// Whether a book can be listened to, in one glyph.

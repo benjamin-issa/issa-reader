@@ -57,6 +57,29 @@ struct IssaReaderMacApp: App {
         }
         .defaultSize(width: 760, height: 900)
 
+        // Now Playing, as a panel that floats over the reading windows.
+        //
+        // A window rather than a sheet: playback belongs to the app, not to one
+        // book's window, and a reader with three books open should not have to
+        // remember which of them the player came out of. `.restorationBehavior`
+        // is off so a relaunch does not restore an empty one.
+        UtilityWindow("Now Playing", id: "NowPlaying") {
+            NowPlayingPanel()
+                .environment(app)
+                .environment(settings)
+                .environment(nowPlaying)
+                .task {
+                    nowPlaying.configure(settings: settings)
+                    app.nowPlayingController = nowPlaying
+                }
+                .tint(Palette.tangerine)
+                .frame(width: 320, height: 560)
+        }
+        .defaultSize(width: 320, height: 560)
+        .windowResizability(.contentSize)
+        .defaultPosition(.topTrailing)
+        .restorationBehavior(.disabled)
+
         // ⌘, — the one place a Mac user looks for preferences.
         Settings {
             MacSettingsView()
@@ -79,6 +102,7 @@ struct IssaCommands: Commands {
     let app: AppModel
     let settings: PlaybackSettings
     let nowPlaying: NowPlayingController
+    @Environment(\.openWindow) private var openWindow
 
     var body: some Commands {
         // Nothing here creates documents, so an enabled New menu would be a lie.
@@ -99,6 +123,10 @@ struct IssaCommands: Commands {
             Divider()
             Button("Add Bookmark") { ReaderCommand.bookmark.post() }
                 .keyboardShortcut("d", modifiers: .command)
+            Button("Text Options…") { ReaderCommand.typography.post() }
+                // Not ⌘T, which is the system's Fonts panel, and not ⇧⌘T,
+                // which is Contents two items up.
+                .keyboardShortcut("t", modifiers: [.command, .option])
             Divider()
             Button("Next Page") { ReaderCommand.nextPage.post() }
                 .keyboardShortcut(.rightArrow, modifiers: .command)
@@ -132,10 +160,11 @@ struct IssaCommands: Commands {
             .disabled(nowPlaying.coordinator == nil)
 
             Divider()
-            // The reader's waveform button is the only other way there, and it
-            // is 17 points wide. The phone swipes the footer up; the Mac has no
-            // swipe, so this is the shortcut that closes the gap.
-            Button("Show Player") { ReaderCommand.player.post() }
+            // Opens the window directly. Posted as a notification this reached
+            // only an active reader scene, so with the library window frontmost
+            // — which is where a reader would most want it — the menu item did
+            // nothing at all.
+            Button("Show Player") { openWindow(id: "NowPlaying") }
                 .keyboardShortcut("p", modifiers: [.command, .option])
 
             Divider()
@@ -188,6 +217,9 @@ struct MacRootView: View {
     @Environment(AppModel.self) private var app
     @Environment(\.openWindow) private var openWindow
     @State private var selection: Destination? = .shelf(.all)
+    /// Which book the inspector is showing. A cover's click writes it; the
+    /// shared cells read it to mark themselves selected.
+    @State private var inspected = MacBookSelection()
 
     /// The sidebar's entries. Shelves come from the same definition the phone
     /// filters by, so the two never drift apart.
@@ -260,12 +292,19 @@ struct MacRootView: View {
 
     /// Opens whatever a link, a Handoff or a Spotlight hit asked for.
     ///
-    /// Always the reader window, for either destination. On the Mac a book *is*
-    /// a window — the library grid opens one directly — and `BookDetailView` is
-    /// not reachable from the grid at all, so sending `.details` anywhere else
-    /// would point at a screen with no route to it.
+    /// `.read` opens the book's window, because on the Mac a book *is* a
+    /// window. `.details` selects it into the inspector, which is the screen
+    /// that answer always meant and that the Mac has only just gained.
     private func openPendingBook() {
         guard let pending = app.consumePendingBook() else { return }
+        // A link that asked for the book's page rather than its text now has
+        // somewhere to land. Before the inspector existed this fell through to
+        // the reader, which is why the comment below used to say every route
+        // ends in a window.
+        if pending.destination == .details {
+            inspected.bookID = pending.book.uuid
+            return
+        }
         // `consumePendingBook` arms the one-shot reader request for `.read`, and
         // on the Mac nothing ever spends it — the screen that does is `#if
         // os(iOS)`. Left armed it is a flag set for the life of the process;
@@ -276,15 +315,33 @@ struct MacRootView: View {
         openWindow(id: "Reader", value: pending.book.uuid)
     }
 
+    /// Whether the inspector column is open, which is the same question as
+    /// whether a book is selected — closing it clears the selection so the grid
+    /// goes back to full width and no cover is left ringed.
+    private var showsInspector: Binding<Bool> {
+        Binding(
+            get: { inspected.bookID != nil },
+            set: { if !$0 { inspected.bookID = nil } },
+        )
+    }
+
     private var readyBody: some View {
         NavigationSplitView {
+            // Three named zones: where you are, what you own, and the two
+            // machinery screens. The rows and their bindings are unchanged —
+            // only the grouping is new, so a shelf still sets the arrangement
+            // and nothing gained a second idea of what a shelf is.
             List(selection: $selection) {
                 // The phone's Reading tab: where you are, above where you
                 // might look. Its "See all" sets a shelf, and the shelf
                 // observer below moves the sidebar there.
-                Section {
+                Section("Reading") {
                     Label(Destination.reading.title, systemImage: Destination.reading.symbol)
                         .tag(Destination.reading)
+                        // "Reading" is also a shelf one zone down, and the
+                        // heading above says it too. VoiceOver would read the
+                        // word three times without this.
+                        .accessibilityLabel("Continue reading")
                 }
                 Section("Library") {
                     ForEach(LibraryArrangement.Shelf.allCases) { shelf in
@@ -293,25 +350,55 @@ struct MacRootView: View {
                             .tag(destination)
                     }
                 }
-                Section {
+                Section("Audio & storage") {
                     Label(Destination.listening.title, systemImage: Destination.listening.symbol)
                         .tag(Destination.listening)
                     Label(Destination.downloads.title, systemImage: Destination.downloads.symbol)
                         .tag(Destination.downloads)
                 }
             }
+            .listStyle(.sidebar)
+            .scrollContentBackground(.hidden)
+            .background(Palette.paper)
             .navigationSplitViewColumnWidth(min: 200, ideal: 220)
         } detail: {
-            Group {
-                switch selection ?? .shelf(.all) {
-                case .reading:
-                    ReadingView { shelf in selection = .shelf(shelf ?? .all) }
-                case .shelf: LibraryView()
-                case .listening: ListeningView()
-                case .downloads: DownloadsView()
+            // A stack, because the Browse rails and the book detail both push a
+            // series screen. Without one those were links to nowhere — which
+            // did not show before, because the Mac never rendered the rails and
+            // could not reach the detail at all.
+            NavigationStack {
+                Group {
+                    switch selection ?? .shelf(.all) {
+                    case .reading:
+                        ReadingView { shelf in selection = .shelf(shelf ?? .all) }
+                    case .shelf: LibraryView()
+                    case .listening: ListeningView()
+                    case .downloads: DownloadsView()
+                    }
                 }
+                .navigationTitle((selection ?? .shelf(.all)).title)
             }
-            .navigationTitle((selection ?? .shelf(.all)).title)
+            // A fresh stack per sidebar row, so a series pushed under Library
+            // does not survive a switch to Downloads. These links are closures,
+            // not a path, so nothing else can pop them.
+            .id(selection)
+        }
+        // The third column. Applied to the split view rather than inside the
+        // detail's stack, so it is a real trailing column that collapses and
+        // gives the grid its full width back.
+        .inspector(isPresented: showsInspector) {
+            MacBookInspector(bookID: inspected.bookID)
+                .inspectorColumnWidth(min: 280, ideal: 320, max: 440)
+        }
+        .environment(inspected)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Toggle(isOn: showsInspector) {
+                    Label("Book Info", systemImage: "sidebar.trailing")
+                }
+                .disabled(inspected.bookID == nil)
+                .help("Show or hide the selected book's details")
+            }
         }
         // Picking a sidebar shelf sets the same arrangement the phone
         // uses, rather than a second, parallel idea of what a shelf is.

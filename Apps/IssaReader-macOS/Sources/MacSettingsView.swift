@@ -18,6 +18,8 @@ struct MacSettingsView: View {
                 .tabItem { Label("Downloads", systemImage: "arrow.down.circle") }
             AccountSettingsView()
                 .tabItem { Label("Account", systemImage: "person.crop.circle") }
+            AdvancedSettingsView()
+                .tabItem { Label("Advanced", systemImage: "wrench.and.screwdriver") }
         }
         .background(Palette.paper)
     }
@@ -55,6 +57,26 @@ struct AccountSettingsView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Downloaded books stay on this Mac unless you remove them.")
+        }
+    }
+}
+
+/// Server internals and log export.
+///
+/// A tab rather than the everyday four, because these serve self-hosting and
+/// support rather than reading. Nothing is removed — the same rows the phone
+/// keeps under its Advanced disclosure, from the same view.
+struct AdvancedSettingsView: View {
+    var body: some View {
+        // Its own stack: "Export logs" pushes, and a Settings tab has no
+        // navigation container of its own.
+        NavigationStack {
+            List {
+                AdvancedSettingsRows()
+                    .listRowBackground(Palette.surface)
+            }
+            .scrollContentBackground(.hidden)
+            .background(Palette.paper)
         }
     }
 }

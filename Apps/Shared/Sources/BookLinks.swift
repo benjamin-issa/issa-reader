@@ -2,27 +2,55 @@ import IssaCore
 import IssaUI
 import SwiftUI
 
+#if os(macOS)
+/// Which book the Mac's inspector is showing.
+///
+/// An observable in the environment rather than state threaded through every
+/// caller: the cells that draw covers are shared with two other platforms, and
+/// they should not have to know the Mac has an inspector beyond asking whether
+/// one is present.
+@MainActor
+@Observable
+public final class MacBookSelection {
+    public var bookID: String?
+    public init() {}
+}
+
+#endif
+
 /// Routes a book the way each platform expects: a pushed detail screen on
-/// iOS and tvOS, a Reader window on the Mac — the two branches `BookGridItem`
-/// has always had, with the label left to the caller so a rail cover, a grid
-/// cell and a row can share them. Signed out, the label is inert.
+/// iOS and tvOS, and on the Mac a click that selects it into the inspector
+/// with a double-click that opens the reader — the label left to the caller so
+/// a rail cover, a grid cell and a row can share them. Signed out, the label is
+/// inert.
 struct BookLink<Label: View>: View {
     let book: Book
     let session: Session?
     @ViewBuilder let label: () -> Label
     #if os(macOS)
     @Environment(\.openWindow) private var openWindow
+    @Environment(MacBookSelection.self) private var selection: MacBookSelection?
     #endif
 
     var body: some View {
         if session != nil {
             #if os(macOS)
             Button {
-                openWindow(id: "Reader", value: book.uuid)
+                // Selecting, where there is an inspector to select into.
+                // Without one — a window that has none — a click still opens
+                // the book, which is what the Mac did before the inspector
+                // existed.
+                if let selection { selection.bookID = book.uuid } else { openReader() }
             } label: {
                 label()
             }
             .buttonStyle(.plain)
+            // Double-click still opens the book, because that is what a Mac
+            // user expects of a cover and what this app taught them.
+            // Simultaneous, so the single click is not held back waiting to see
+            // whether a second one arrives.
+            .simultaneousGesture(TapGesture(count: 2).onEnded { openReader() })
+            .accessibilityAction(named: "Open in reader") { openReader() }
             #else
             NavigationLink {
                 BookDetailView(book: book)
@@ -35,6 +63,14 @@ struct BookLink<Label: View>: View {
             label()
         }
     }
+
+    #if os(macOS)
+    private func openReader() {
+        // Keyed by uuid, so a second route to a book already open brings its
+        // window forward rather than opening a duplicate.
+        openWindow(id: "Reader", value: book.uuid)
+    }
+    #endif
 }
 
 /// Resumes a book where it was left: the pending-book inbox on iOS, which
