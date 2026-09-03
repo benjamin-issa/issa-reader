@@ -102,7 +102,6 @@ struct IssaCommands: Commands {
     let app: AppModel
     let settings: PlaybackSettings
     let nowPlaying: NowPlayingController
-    @Environment(\.openWindow) private var openWindow
 
     var body: some Commands {
         // Nothing here creates documents, so an enabled New menu would be a lie.
@@ -160,11 +159,14 @@ struct IssaCommands: Commands {
             .disabled(nowPlaying.coordinator == nil)
 
             Divider()
-            // Opens the window directly. Posted as a notification this reached
-            // only an active reader scene, so with the library window frontmost
-            // — which is where a reader would most want it — the menu item did
-            // nothing at all.
-            Button("Show Player") { openWindow(id: "NowPlaying") }
+            // Posted, not opened here: `openWindow` reads from the environment,
+            // and a `Commands` body has none — the action resolves to a no-op
+            // and the menu item silently does nothing. The library window and
+            // every reader window listen for this and open the panel, which is
+            // also what makes it work with no reader open at all. It used to
+            // reach only an active reader scene, so with the library frontmost
+            // — where a reader would most want it — this did nothing.
+            Button("Show Player") { ReaderCommand.player.post() }
                 .keyboardShortcut("p", modifiers: [.command, .option])
 
             Divider()
@@ -265,6 +267,12 @@ struct MacRootView: View {
             case .ready:
                 readyBody
             }
+        }
+        // Show Player, from anywhere. A reader window answers this too when it
+        // is the active scene; both call the same window id, and opening a
+        // window that is already open just brings it forward.
+        .onReceive(NotificationCenter.default.publisher(for: ReaderCommand.player.notification)) { _ in
+            openWindow(id: "NowPlaying")
         }
         // Nothing else moves `phase` to `.expired`, and the device-grant token
         // goes stale on every install eventually. Without this the Mac kept

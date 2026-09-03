@@ -109,6 +109,9 @@ struct ResumeLink<Label: View>: View {
 /// Library's Browse screen and the Reading tab's queue, so they cannot drift.
 struct BookRail: View {
     @Environment(AppModel.self) private var app
+    #if os(macOS)
+    @Environment(MacBookSelection.self) private var selection: MacBookSelection?
+    #endif
     let title: String
     let books: [Book]
     var coverWidth: CGFloat = 84
@@ -135,7 +138,20 @@ struct BookRail: View {
                     ForEach(books) { book in
                         BookLink(book: book, session: app.session) {
                             VStack(alignment: .leading, spacing: Metrics.spacing4) {
-                                CoverImage(book: book, session: app.session).frame(width: coverWidth)
+                                CoverImage(book: book, session: app.session)
+                                    .frame(width: coverWidth)
+                                    // The same ring the grid draws. A rail
+                                    // cover opens the inspector too, and
+                                    // without it the reader loses track of
+                                    // which cover the column is describing.
+                                    #if os(macOS)
+                                    .overlay {
+                                        if selection?.bookID == book.uuid {
+                                            RoundedRectangle(cornerRadius: Metrics.radiusSmall)
+                                                .strokeBorder(Palette.tangerine, lineWidth: 3)
+                                        }
+                                    }
+                                    #endif
                                 Text(book.title)
                                     .font(Typography.caption)
                                     .foregroundStyle(Palette.ink)
