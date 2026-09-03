@@ -830,6 +830,34 @@ public final class ReaderModel {
         )
     }
 
+    /// One sentence of the read-along window: its text and whether it is the one
+    /// being spoken.
+    public struct NarratedLine: Identifiable, Equatable, Sendable {
+        public let id: String
+        public let text: String
+        public let isCurrent: Bool
+    }
+
+    /// Several sentences either side of the spoken one, in reading order.
+    ///
+    /// What `narrationContext()` gives is three lines, which is all a phone has
+    /// room for. A television has a whole column, and three sentences floating
+    /// in it reads as a teleprompter rather than as a book.
+    ///
+    /// Lines with no text on the current page are dropped rather than rendered
+    /// blank: a fragment can belong to a document the layout has not painted,
+    /// and a gap in the column would read as a pause the narrator did not take.
+    public func narrationWindow(before: Int = 3, after: Int = 3) -> [NarratedLine] {
+        guard let timeline, let entry = readalong?.activeEntry,
+              let window = timeline.window(around: entry, before: before, after: after)
+        else { return [] }
+        return window.entries.enumerated().compactMap { offset, item in
+            guard let text = text(forFragment: item.fragmentID), !text.isEmpty else { return nil }
+            return NarratedLine(
+                id: item.fragmentID, text: text, isCurrent: offset == window.currentIndex)
+        }
+    }
+
     /// The first narrated fragment at or after the top of the current page.
     ///
     /// `continuingPastPage: false` is the page-scoped question;`true` carries on

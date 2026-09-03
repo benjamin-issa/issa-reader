@@ -213,13 +213,79 @@ struct BookGridItem: View {
     var caption: String?
 
     var body: some View {
+        #if os(tvOS)
+        TVPosterItem(
+            book: book, session: session, shape: shape,
+            showsFormatMark: showsFormatMark, caption: caption)
+        #else
         BookLink(book: book, session: session) {
             BookCell(
                 book: book, session: session, shape: shape,
                 showsFormatMark: showsFormatMark, caption: caption)
         }
+        #endif
     }
 }
+
+#if os(tvOS)
+/// A poster on a television: the cover lifts on focus, the words sit still
+/// beneath it.
+///
+/// The words are deliberately *outside* the focusable button, which is the fix
+/// for two faults at once. tvOS's focus treatment clips a button's label to the
+/// label's own bounds, so a title inside it loses its leading characters as the
+/// card grows — "he Hero of Ages". And the hand-rolled `scaleEffect` that used
+/// to sit on top of that reserved no layout space, so the grown cell was clipped
+/// a second time by the enclosing scroll view. The platform's own card lift does
+/// the job and reserves the room for it.
+///
+/// The fixed width is the other half. A single-line `Text` lays out at its full
+/// ideal width when nothing bounds it — and a horizontal `ScrollView` proposes
+/// exactly that — so "This Is How You Lose the Time War" ran far past its cover
+/// and dragged the poster out of registration with its neighbours. Bounding the
+/// whole cell means the title can never be wider than the artwork above it.
+struct TVPosterItem: View {
+    let book: Book
+    let session: Session?
+    var shape: LibraryService.CoverShape = .portrait
+    var showsFormatMark = true
+    var caption: String?
+
+    @FocusState private var focused: Bool
+
+    /// Matches `BookGrid`'s adaptive minimum, so a rail and the grid below it
+    /// draw the same poster.
+    static let coverWidth: CGFloat = 300
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Metrics.spacing12) {
+            if session != nil {
+                NavigationLink(value: book) {
+                    cell.coverBlock
+                }
+                // The platform's poster treatment: lift, specular sheen, and
+                // layout space reserved for both.
+                .buttonStyle(.card)
+                .focused($focused)
+            } else {
+                cell.coverBlock
+            }
+            cell.captionBlock
+                // Dimmed until focused, which is how a ten-foot shelf says
+                // which poster the remote is on without shouting.
+                .opacity(focused ? 1 : 0.7)
+                .animation(.easeOut(duration: 0.15), value: focused)
+        }
+        .frame(width: Self.coverWidth, alignment: .leading)
+    }
+
+    private var cell: BookCell {
+        BookCell(
+            book: book, session: session, shape: shape,
+            showsFormatMark: showsFormatMark, caption: caption)
+    }
+}
+#endif
 
 public struct BookCell: View {
     let book: Book
@@ -236,6 +302,24 @@ public struct BookCell: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: Metrics.spacing8) {
+            coverBlock
+            captionBlock
+        }
+        // The ring is a colour; the trait is what VoiceOver has.
+        #if os(macOS)
+        .accessibilityAddTraits(selection?.bookID == book.uuid ? .isSelected : [])
+        #endif
+    }
+
+    /// The artwork and everything drawn on it.
+    ///
+    /// Separated from the words beneath so tvOS can put this — and only this —
+    /// inside the focusable button. tvOS's focus treatment clips a button's
+    /// label to its own bounds and lifts it with a transform that reserves no
+    /// layout space, so a title inside the button loses its first characters as
+    /// the card grows. See `TVPosterItem`.
+    @ViewBuilder
+    var coverBlock: some View {
             ZStack(alignment: .bottomLeading) {
                 CoverImage(
                     book: book, session: session,
@@ -263,6 +347,10 @@ public struct BookCell: View {
                         .padding(Metrics.spacing4)
                 }
             }
+    }
+
+    @ViewBuilder
+    var captionBlock: some View {
             // Two lines' worth of room whether the title needs it or not, so a
             // one-line title does not pull its byline up above the neighbours'.
             Text(book.title)
@@ -270,15 +358,17 @@ public struct BookCell: View {
                 .foregroundStyle(Palette.ink)
                 .lineLimit(2, reservesSpace: true)
                 .fixedSize(horizontal: false, vertical: true)
-            Text(caption ?? book.byline)
+            // Truncating, explicitly. A single-line `Text` lays out at its
+            // full ideal width when the proposal is unbounded — which is
+            // exactly what a horizontal `ScrollView` proposes — so without a
+            // width to work against, a long byline runs past its cover instead
+            // of ending in an ellipsis. The width itself comes from the caller;
+            // see `TVPosterItem`.
+            Text(self.caption ?? book.byline)
                 .font(Typography.caption)
                 .foregroundStyle(Palette.inkTertiary)
                 .lineLimit(1)
-        }
-        // The ring is a colour; the trait is what VoiceOver has.
-        #if os(macOS)
-        .accessibilityAddTraits(selection?.bookID == book.uuid ? .isSelected : [])
-        #endif
+                .truncationMode(.tail)
     }
 
     /// Whether a book can be listened to, in one glyph.

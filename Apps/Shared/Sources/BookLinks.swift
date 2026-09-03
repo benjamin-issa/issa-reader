@@ -51,6 +51,15 @@ struct BookLink<Label: View>: View {
             // whether a second one arrives.
             .simultaneousGesture(TapGesture(count: 2).onEnded { openReader() })
             .accessibilityAction(named: "Open in reader") { openReader() }
+            #elseif os(tvOS)
+            // Value-based, so the television declares once — in `TVRootView` —
+            // that a book opens the read-along screen. Pushing a destination
+            // inline here would mean the shared code naming a view that only
+            // the tvOS target has.
+            NavigationLink(value: book) {
+                label()
+            }
+            .buttonStyle(.plain)
             #else
             NavigationLink {
                 BookDetailView(book: book)
@@ -114,7 +123,13 @@ struct BookRail: View {
     #endif
     let title: String
     let books: [Book]
+    /// An 84-point cover is a postage stamp across a room. `Metrics.scale` is 2
+    /// on tvOS, and this number never went through it.
+    #if os(tvOS)
+    var coverWidth: CGFloat = 220
+    #else
     var coverWidth: CGFloat = 84
+    #endif
     var seeAll: (() -> Void)?
 
     var body: some View {

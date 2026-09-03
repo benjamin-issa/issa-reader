@@ -165,6 +165,10 @@ public extension IssaLog {
             "authorization", "token", "access_token", "accesstoken",
             "refresh_token", "refreshtoken", "device_code", "devicecode",
             "user_code", "usercode", "password", "secret", "client_secret",
+            // A username is a credential too, and the password form's wire field
+            // is literally `usernameOrEmail`, so a future call site that logged
+            // the form body would be scrubbed on both halves rather than one.
+            "username", "usernameoremail", "username_or_email",
         ]
 
         public static func scrub(_ text: String) -> String {

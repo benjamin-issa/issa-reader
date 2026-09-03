@@ -239,3 +239,76 @@ struct TimelineEndTests {
         #expect(timeline.entry(atBookTime: last.cumulativeEnd - last.duration / 2)?.fragmentID == last.fragmentID)
     }
 }
+
+/// The window the ten-foot read-along screen shows around the spoken sentence.
+@Suite("A window of sentences around the one being read")
+struct SMILTimelineWindowTests {
+    private func timeline() throws -> SMILTimeline {
+        SMILParser.timeline(for: try SMILTimelineTests.package())
+    }
+
+    @Test("the window is centred on the entry, in reading order")
+    func centredOnTheEntry() throws {
+        let timeline = try timeline()
+        // The middle of whatever the fixture holds, so the assertion is about
+        // the window and not about how many sentences somebody put in an EPUB.
+        let index = timeline.entries.count / 2
+        let middle = timeline.entries[index]
+        let window = try #require(timeline.window(around: middle, before: 2, after: 2))
+
+        #expect(window.currentIndex == 2)
+        #expect(window.entries[window.currentIndex].fragmentID == middle.fragmentID)
+        // The neighbours are the ones the linked-list walk would have found.
+        #expect(window.entries[1].fragmentID == timeline.entry(before: middle)?.fragmentID)
+        if window.entries.count > 3 {
+            #expect(window.entries[3].fragmentID == timeline.entry(after: middle)?.fragmentID)
+        }
+        // Never more than asked for, and never past the ends of the book.
+        #expect(window.entries.count <= 5)
+        #expect(window.entries.count == min(timeline.entries.count, index + 3) - max(0, index - 2))
+    }
+
+    /// Clamped rather than padded: a short window at the start of a book is
+    /// honest, and blank lines in the column would read as pauses.
+    @Test("the start of the book yields a short window, not blanks")
+    func clampsAtTheStart() throws {
+        let timeline = try timeline()
+        let first = try #require(timeline.entries.first)
+        let window = try #require(timeline.window(around: first, before: 3, after: 3))
+
+        #expect(window.currentIndex == 0)
+        #expect(window.entries.count == min(4, timeline.entries.count))
+        #expect(window.entries[0].fragmentID == first.fragmentID)
+    }
+
+    @Test("the end of the book clamps too")
+    func clampsAtTheEnd() throws {
+        let timeline = try timeline()
+        let last = try #require(timeline.entries.last)
+        let window = try #require(timeline.window(around: last, before: 3, after: 3))
+
+        let expected = min(4, timeline.entries.count)
+        #expect(window.entries.count == expected)
+        #expect(window.currentIndex == expected - 1)
+        #expect(window.entries[window.currentIndex].fragmentID == last.fragmentID)
+    }
+
+    @Test("a radius of nothing is just the entry")
+    func zeroRadius() throws {
+        let timeline = try timeline()
+        let entry = timeline.entries[timeline.entries.count / 2]
+        let window = try #require(timeline.window(around: entry, before: 0, after: 0))
+
+        #expect(window.entries.count == 1)
+        #expect(window.currentIndex == 0)
+    }
+
+    @Test("a fragment this timeline has never heard of has no window")
+    func unknownFragment() throws {
+        let timeline = try timeline()
+        let stranger = SMILEntry(
+            fragmentID: "not-in-this-book", textHref: "x.xhtml", audioHref: "x.mp4",
+            start: 0, end: 1, cumulativeEnd: 1)
+        #expect(timeline.window(around: stranger, before: 1, after: 1) == nil)
+    }
+}

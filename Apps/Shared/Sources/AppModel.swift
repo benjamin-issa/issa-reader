@@ -30,6 +30,15 @@ public final class AppModel {
     public var phase: Phase = .launching
     public var serverAddress: String = ""
     public var session: Session?
+    /// Whether this server has a username-and-password route, established
+    /// before any sign-in has happened.
+    ///
+    /// Deliberately not on `ServerCapabilities`: that is probed *after* the
+    /// identity call, with a bearer token, and cached on the session. This one
+    /// has to be answered with no credential at all, while the reader is still
+    /// standing in front of the sign-in screen, so it lives with the address.
+    public private(set) var passwordLogin: PasswordLoginSupport = .unknown
+    public private(set) var isProbingPasswordLogin = false
     /// Rebuilt explicitly by whatever changes the catalogue, not from a
     /// `didSet`: a position write mutates one element, and the observer
     /// re-faceted and re-sorted the whole library on every debounced save —
@@ -172,6 +181,8 @@ public final class AppModel {
         guard !isConnecting else { return }
         isConnecting = true
         defer { isConnecting = false }
+        // A new address is a new question.
+        passwordLogin = .unknown
 
         let candidates = Self.candidateServerURLs(for: address)
         guard !candidates.isEmpty else {
@@ -291,6 +302,24 @@ public final class AppModel {
             // `.expired` keeps the server and makes signing in again one tap.
             phase = phase == .ready ? .expired : .chooseServer
         }
+    }
+
+    /// Asks the server whether it accepts a username and password, so the
+    /// chooser can offer that route only where it exists.
+    ///
+    /// Not called from `connect`: a returning reader whose token is in the
+    /// keychain never sees the chooser, and should not pay for a request they
+    /// will not use. The chooser's `.task` is what starts it.
+    public func probePasswordLogin() async {
+        guard passwordLogin == .unknown, !isProbingPasswordLogin else { return }
+        guard let url = session?.serverURL ?? Self.normalizeServerURL(serverAddress) else { return }
+        isProbingPasswordLogin = true
+        defer { isProbingPasswordLogin = false }
+        passwordLogin = await PasswordSignIn(
+            transport: HTTPPasswordGrantTransport(baseURL: url)).support()
+        IssaLog.info(
+            "password login probe",
+            ["server": url.absoluteString, "support": String(describing: passwordLogin)])
     }
 
     public func adopt(token: String) async {

@@ -231,6 +231,24 @@ public struct SMILTimeline: Sendable {
         return entries[index - 1]
     }
 
+    /// The run of entries around `entry`, and where in that run it sits.
+    ///
+    /// A window rather than repeated `entry(before:)` calls: the ten-foot
+    /// read-along screen shows several sentences either side of the spoken one,
+    /// and walking the linked list N times to build a list the timeline can
+    /// slice directly is work for nothing. Clamped at both ends, so the window
+    /// is short at the start and end of a book rather than padded with blanks.
+    ///
+    /// Returns `nil` only when the fragment is not in this timeline at all.
+    public func window(
+        around entry: SMILEntry, before: Int, after: Int
+    ) -> (entries: [SMILEntry], currentIndex: Int)? {
+        guard let index = indexByFragment[entry.fragmentID] else { return nil }
+        let lower = max(0, index - max(before, 0))
+        let upper = min(entries.count - 1, index + max(after, 0))
+        return (Array(entries[lower ... upper]), index - lower)
+    }
+
     /// First entry of each text document, for chapter navigation.
     public func firstEntry(inDocument href: String) -> SMILEntry? {
         entries.first { $0.textHref == href }

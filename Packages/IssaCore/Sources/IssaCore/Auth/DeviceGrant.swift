@@ -51,17 +51,10 @@ public struct DeviceAuthorization: Codable, Hashable, Sendable {
 }
 
 /// Successful `POST /api/v2/device/token` response.
-public struct DeviceToken: Codable, Hashable, Sendable {
-    public let accessToken: String
-    public let tokenType: String?
-
-    private enum CodingKeys: String, CodingKey {
-        case accessToken = "access_token"
-        case tokenType = "token_type"
-    }
-    // `expires_in` is deliberately not decoded: this server computes it as
-    // `epochMillis * 1000`, which is neither a duration nor a timestamp.
-}
+///
+/// The same shape `POST /api/v2/token` returns, so both grants decode one type;
+/// see `AccessTokenResponse` for why `expires_in` is not among its fields.
+public typealias DeviceToken = AccessTokenResponse
 
 /// The error codes `POST /api/v2/device/token` returns.
 public enum DeviceGrantError: String, Sendable {

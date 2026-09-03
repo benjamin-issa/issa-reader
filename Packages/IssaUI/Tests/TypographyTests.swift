@@ -47,6 +47,7 @@ struct TypographyTests {
         #expect(Metrics.spacing4 == 4)
         #expect(Metrics.spacing16 == 16)
         #expect(Metrics.spacing32 == 32)
+        #expect(Metrics.spacing48 == 48)
         #expect(Metrics.radiusLarge == 14)
         #expect(Metrics.screenMargin == 16)
         #expect(Metrics.overlineTracking == 1.6)

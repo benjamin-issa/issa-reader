@@ -1,4 +1,7 @@
 import Foundation
+// `URL.isWebLink` lives in IssaCore, beside the layer that receives untrusted
+// server URLs in the first place.
+import IssaCore
 import SwiftUI
 
 /// Renders the small fragments of HTML a book's metadata carries.

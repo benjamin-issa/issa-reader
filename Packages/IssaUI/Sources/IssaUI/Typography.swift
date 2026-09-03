@@ -104,6 +104,9 @@ public enum Metrics {
     public static let spacing16: CGFloat = 16 * scale
     public static let spacing24: CGFloat = 24 * scale
     public static let spacing32: CGFloat = 32 * scale
+    /// The gap between whole sections. Only a ten-foot layout has ever needed
+    /// one this large, but it scales like the rest so the phone can use it too.
+    public static let spacing48: CGFloat = 48 * scale
 
     /// Corners grow less than the boxes they round, or a card on a television
     /// turns into a lozenge.
