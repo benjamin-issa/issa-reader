@@ -65,7 +65,11 @@ public struct LibraryView: View {
                 search: $search, displayedCount: books.count, isSearching: !search.isEmpty)
             scrollContent
         }
-        .background(Palette.paper)
+        // Under the safe area, which the Reading tab and Settings already do by
+        // painting a scroll view. Here the paper was on a stack laid out inside
+        // it, so the strip behind the tab bar's glass accessory was the host's
+        // own white — the one place in the app where that showed.
+        .background(Palette.paper.ignoresSafeArea())
         #if !os(iOS)
         // The Mac keeps its toolbar search — the sidebar is already its shelf
         // control — and tvOS renders TVLibraryView, so this only has to compile.

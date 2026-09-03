@@ -231,6 +231,10 @@ struct LibraryTabs: View {
     /// content keeps moving with the bar, as it always has.
     private static let accessoryBand: CGFloat = 56
 
+    /// The scheme the app is actually drawing in, read outside the accessory
+    /// so it can be handed back to the content inside it.
+    @Environment(\.colorScheme) private var colorScheme
+
     private var reservedBand: CGFloat {
         guard UIDevice.current.userInterfaceIdiom == .phone, !showsMiniPlayer else { return 0 }
         return Self.accessoryBand
@@ -269,6 +273,15 @@ struct LibraryTabs: View {
 
     private var miniPlayer: some View {
         MiniPlayer { showsPlayer = true }
+            // The palette's colours are trait-adaptive, and inside the tab
+            // bar's glass accessory they were resolving against a dark trait
+            // while the capsule itself rendered light — so on the Library tab
+            // the title came out cream on near-white and all but vanished,
+            // while the chapter line under it, a mid-grey either way, stayed
+            // legible. Pinning the scheme to the one the rest of the app is
+            // drawing in makes the bar read correctly whatever the container
+            // decides about its own material.
+            .environment(\.colorScheme, colorScheme)
     }
 
     var body: some View {

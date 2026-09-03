@@ -56,6 +56,15 @@ public struct BookDetailView: View {
                 // 130pt cover, where its labels broke mid-word.
                 VStack(alignment: .leading, spacing: Metrics.spacing16) {
                     hero
+                    // Full width, like the action row and for the same reason.
+                    // Five stars grown to the 44pt tap floor are a rigid 236pt,
+                    // and the column beside a 130pt cover on a 402pt phone is
+                    // 224pt — so the hero could not fit, the scroll view
+                    // centred content 28pt wider than the screen, and every
+                    // margin on the screen collapsed from 16pt to 2pt. It fit
+                    // on a 440pt phone, which is why this only showed up on the
+                    // smaller one.
+                    ratingControl
                     actionRow
                 }
                 if let description = book.description, !description.isEmpty {
@@ -75,7 +84,12 @@ public struct BookDetailView: View {
                 externalRatings
                 relatedRails
             }
-            .padding(Metrics.spacing16)
+            .padding(Metrics.screenMargin)
+            // The scroll view centres content that overflows its cross axis,
+            // which turns one over-wide subview into wrong margins for the
+            // whole screen. Pinning the width to the container makes that
+            // failure visible as clipping inside one row instead.
+            .containerRelativeFrame(.horizontal)
         }
         .background(Palette.paper)
         .navigationTitle(book.title)
@@ -136,7 +150,6 @@ public struct BookDetailView: View {
                         .font(Typography.footnote)
                         .foregroundStyle(Palette.inkTertiary)
                 }
-                ratingControl
                 // Wrapping, not a fixed row: "Readaloud · 5h 4m" beside a
                 // status pill overflows a phone column and breaks mid-word.
                 FlowRow(spacing: Metrics.spacing8) {
