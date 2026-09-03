@@ -24,7 +24,15 @@ public struct BookContentService: Sendable {
     }()
 
     private static func prepare(_ directory: URL) {
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        } catch {
+            // Not silent. A `try?` here is how an Apple TV spent every session
+            // unable to save a single book while the app said nothing: the
+            // failure only surfaced at the end of a download, dressed as a
+            // network error.
+            IssaLog.failure("prepare download directory", error, ["path": directory.path])
+        }
         excludeFromBackup(directory)
     }
 
@@ -42,15 +50,13 @@ public struct BookContentService: Sendable {
 
     /// Where downloaded books live.
     ///
-    /// Application Support, not Caches: iOS purges Caches under storage
-    /// pressure, and a reader who downloaded a book for a flight would find it
-    /// gone at exactly the moment there is no network to fetch it again. Marked
-    /// as excluded from backup all the same — these are re-downloadable, and a
+    /// Under `StorageRoot` — Application Support on the phone and the Mac,
+    /// Caches on the Apple TV, for the reasons written there. Marked as
+    /// excluded from backup either way: these are re-downloadable, and a
     /// library of readaloud editions would otherwise bloat every iCloud backup
     /// by gigabytes.
     public static func defaultDirectory() -> URL {
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return support.appending(path: "Books", directoryHint: .isDirectory)
+        StorageRoot.directory("Books")
     }
 
     static func excludeFromBackup(_ url: URL) {
@@ -64,11 +70,28 @@ public struct BookContentService: Sendable {
     ///
     /// Early builds wrote here; without this, an existing install silently loses
     /// every download it already had.
+    ///
+    /// Never on tvOS, where Caches *is* the storage root: source and
+    /// destination would be the same folder, every file would be skipped as
+    /// already present, and the `removeItem` at the end would then delete the
+    /// whole library on every launch. The equality guard below says the same
+    /// thing without naming a platform; the compile-time return is there so
+    /// the intent is impossible to miss.
     public static func migrateFromCachesIfNeeded() {
+        #if os(tvOS)
+        return
+        #else
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appending(path: "Books", directoryHint: .isDirectory)
+        migrate(from: caches, to: defaultDirectory())
+        #endif
+    }
+
+    /// The move itself, separated so it can be tested with two real directories
+    /// — including the case where they are the same one.
+    static func migrate(from caches: URL, to destination: URL) {
         guard FileManager.default.fileExists(atPath: caches.path) else { return }
-        let destination = defaultDirectory()
+        guard caches.standardizedFileURL != destination.standardizedFileURL else { return }
         try? FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
         for file in (try? FileManager.default.contentsOfDirectory(at: caches, includingPropertiesForKeys: nil)) ?? [] {
             let target = destination.appending(path: file.lastPathComponent)

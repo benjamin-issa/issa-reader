@@ -370,10 +370,10 @@ public final class AppModel {
         await SpotlightIndex.clear()
 
         if !keepDownloads {
-            let manager = FileManager.default
-            let support = manager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            // Through StorageRoot, or "delete my downloads" would look at
+            // Application Support on an Apple TV and delete nothing.
             for folder in ["Books", "Audio"] {
-                try? manager.removeItem(at: support.appending(path: folder, directoryHint: .isDirectory))
+                try? FileManager.default.removeItem(at: StorageRoot.directory(folder))
             }
         }
         phase = .chooseServer
@@ -1261,7 +1261,7 @@ public final class AppModel {
         // is what left the reader stuck on "Downloading…" forever, with the
         // real reason sitting unseen in `loadError`.
         guard await download(book, format: format) else {
-            throw StorytellerError.transport(loadError ?? "Couldn't start the download.")
+            throw StorytellerError.download(loadError ?? "Couldn't start the download.")
         }
 
         // The last real byte counts seen, for a pause to keep showing.
@@ -1271,7 +1271,7 @@ public final class AppModel {
             case .finished:
                 return destination
             case let .failed(reason):
-                throw StorytellerError.transport(reason)
+                throw StorytellerError.download(reason)
             case let .downloading(_, written, total):
                 lastReported = (written, total)
                 onProgress(written, total)
@@ -1291,7 +1291,7 @@ public final class AppModel {
                 // state at all: the reader's Cancel, which clears it. This used
                 // to wait on it forever, four times a second, and a Try Again
                 // then ran a second open alongside the first.
-                throw StorytellerError.transport("Download cancelled.")
+                throw StorytellerError.download("Download cancelled.")
             }
             try? await Task.sleep(for: .milliseconds(250))
         }

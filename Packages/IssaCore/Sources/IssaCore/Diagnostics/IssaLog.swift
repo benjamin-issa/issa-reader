@@ -61,6 +61,7 @@ public enum IssaLog {
                 fields["status"] = String(status)
                 if let message { fields["serverMessage"] = message }
             case let .transport(detail): fields["transport"] = detail
+            case let .download(detail): fields["download"] = detail
             case let .decoding(detail): fields["decoding"] = detail
             default: break
             }

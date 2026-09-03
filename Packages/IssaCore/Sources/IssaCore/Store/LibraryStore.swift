@@ -48,9 +48,11 @@ public actor LibraryStore {
         try Self.migrator.migrate(dbQueue)
     }
 
+    /// Under `StorageRoot`. This one failing is why an Apple TV could not keep
+    /// a catalogue or queue a single position write: the store was nil and
+    /// every mutation was dropped on the floor.
     public static func defaultDirectory() -> URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appending(path: "Store", directoryHint: .isDirectory)
+        StorageRoot.directory("Store")
     }
 
     /// A server URL is not a filename; hash it rather than trying to sanitise.

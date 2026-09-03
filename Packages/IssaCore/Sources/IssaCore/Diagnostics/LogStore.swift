@@ -63,21 +63,20 @@ final class LogStore: @unchecked Sendable {
 
     // MARK: - Location
 
-    /// `Application Support/Logs`, created on first use.
+    /// `Logs` under `StorageRoot`, created on first use.
     ///
-    /// Not `Caches`: iOS empties that under storage pressure, and "the device
-    /// was low on space" is a thing a report needs to still be able to say.
+    /// Not `Caches` on the phone: iOS empties that under storage pressure, and
+    /// "the device was low on space" is a thing a report needs to still be able
+    /// to say. On tvOS the root is Caches, so a purge costs the log — the
+    /// platform's price, and better than the alternative, which is what the TV
+    /// had until now: no log file at all.
     var directory: URL? {
         if let root {
             try? FileManager.default.createDirectory(
                 at: root, withIntermediateDirectories: true)
             return root
         }
-        guard let support = try? FileManager.default.url(
-            for: .applicationSupportDirectory, in: .userDomainMask,
-            appropriateFor: nil, create: true,
-        ) else { return nil }
-        let logs = support.appendingPathComponent("Logs", isDirectory: true)
+        let logs = StorageRoot.directory("Logs")
         if !FileManager.default.fileExists(atPath: logs.path) {
             try? FileManager.default.createDirectory(
                 at: logs, withIntermediateDirectories: true)

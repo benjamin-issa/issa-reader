@@ -243,8 +243,7 @@ public struct DownloadsView: View {
         entries = found.sorted { $0.bytes > $1.bytes }
 
         let books = service.cacheSize()
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let audio = Self.directorySize(support.appending(path: "Audio", directoryHint: .isDirectory))
+        let audio = Self.directorySize(StorageRoot.directory("Audio"))
         // Must match CoverCache.diskDirectory: Caches, not Application
         // Support. Sizing a Covers folder nothing ever creates reported the
         // cover cache as zero and dropped its band from the legend.
@@ -262,7 +261,7 @@ public struct DownloadsView: View {
             Segment(label: "Covers", bytes: covers, color: Palette.inkQuaternary),
         ].filter { $0.bytes > 0 }
 
-        freeBytes = DiskSpace.available(at: support) ?? 0
+        freeBytes = DiskSpace.available(at: StorageRoot.url) ?? 0
     }
 
     private func remove(_ entry: Entry) {

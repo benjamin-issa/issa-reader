@@ -12,8 +12,9 @@ struct IssaReaderTVApp: App {
         // Package-bundled fonts are not registered automatically the way an
         // app's UIAppFonts entry would be, so this must run before first render.
         IssaFonts.register()
-        // Early builds put downloads in Caches, which iOS purges.
-        BookContentService.migrateFromCachesIfNeeded()
+        // No Caches migration here: on tvOS Caches *is* where downloads live,
+        // so there is nothing to move and everything to lose. The function
+        // guards itself too; this is the second lock on the same door.
     }
 
     var body: some Scene {

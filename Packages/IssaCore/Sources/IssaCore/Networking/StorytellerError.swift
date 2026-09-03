@@ -12,6 +12,15 @@ public enum StorytellerError: Error, Sendable, Equatable {
     case positionConflict
     case server(status: Int, message: String?)
     case transport(String)
+    /// A download that did not finish, carrying the reason the download
+    /// manager gave — a filesystem refusal, a bad status, an interrupted
+    /// transfer, no room on the device.
+    ///
+    /// Its own case because these were being thrown as `.transport`, which
+    /// appends "Check that you're on the same network as your server" to
+    /// everything. An Apple TV that could not create its downloads folder was
+    /// therefore told, at length, to check its Wi-Fi.
+    case download(String)
     case decoding(String)
 
     public var isRetryable: Bool {
@@ -40,6 +49,8 @@ extension StorytellerError: LocalizedError {
         // that never finished got reported as a network outage.
         case let .transport(reason):
             reason.isEmpty ? "Couldn't reach your server." : reason
+        case let .download(reason):
+            reason.isEmpty ? "The download didn't finish." : reason
         case .decoding: "The server sent something this app didn't understand."
         }
     }
@@ -52,6 +63,9 @@ extension StorytellerError: LocalizedError {
         case .positionConflict: "Open the book to pick up from the newer position."
         case .server: "It may be restarting. Try again shortly."
         case .transport: "Check that you're on the same network as your server."
+        // No hint. The reasons here are already sentences, and none of them is
+        // a network outage.
+        case .download: nil
         case .decoding: "This can happen if the server is a newer version than the app expects."
         }
     }

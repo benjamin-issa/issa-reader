@@ -10,7 +10,7 @@ import os
 /// there is.
 public enum DiskSpace {
     public static func available(
-        at url: URL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0],
+        at url: URL = StorageRoot.url,
     ) -> Int64? {
         #if os(tvOS)
         guard let values = try? url.resourceValues(forKeys: [.volumeAvailableCapacityKey]),

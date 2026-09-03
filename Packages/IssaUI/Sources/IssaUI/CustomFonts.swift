@@ -1,5 +1,6 @@
 import CoreText
 import Foundation
+import IssaCore
 
 #if canImport(UIKit)
 import UIKit
@@ -117,15 +118,11 @@ public enum CustomFonts {
 
     /// Where imported and extracted faces live.
     ///
-    /// `Application Support`, excluded from backup — the file came from
+    /// Under `StorageRoot`, excluded from backup — the file came from
     /// somewhere else and can come from there again, and a book's embedded
     /// font is already inside the book.
     public static func directory(named name: String) -> URL? {
-        guard let support = try? FileManager.default.url(
-            for: .applicationSupportDirectory, in: .userDomainMask,
-            appropriateFor: nil, create: true,
-        ) else { return nil }
-        var url = support.appendingPathComponent(name, isDirectory: true)
+        var url = StorageRoot.directory(name)
         if !FileManager.default.fileExists(atPath: url.path) {
             try? FileManager.default.createDirectory(
                 at: url, withIntermediateDirectories: true)

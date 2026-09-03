@@ -1,4 +1,5 @@
 import Foundation
+import IssaCore
 import IssaEPUB
 
 /// Extracts a readaloud EPUB's embedded audio to disk.
@@ -41,12 +42,9 @@ public enum AudioExtraction {
         return result
     }
 
-    /// Application Support rather than Caches, for the same reason the books
-    /// are: narration extracted for offline listening must survive the system
-    /// reclaiming space.
+    /// Beside the books, under `StorageRoot`, for the same reason they are.
     public static func defaultDirectory(for bookID: String) -> URL {
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return support.appending(path: "Audio/\(bookID)", directoryHint: .isDirectory)
+        StorageRoot.directory("Audio/\(bookID)")
     }
 
     public static func removeExtractedAudio(for bookID: String) {
