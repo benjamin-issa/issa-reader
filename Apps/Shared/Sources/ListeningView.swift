@@ -35,7 +35,13 @@ public struct ListeningView: View {
                     section("Audiobooks", books: audiobooks)
                 }
             }
-            .padding(Metrics.spacing16)
+            // The television's own overscan-safe gutter, matching the shelf
+            // next door; everywhere else the screen margin.
+            #if os(tvOS)
+            .padding(60)
+            #else
+            .padding(Metrics.screenMargin)
+            #endif
         }
         .background(Palette.paper)
         .overlay {
@@ -45,7 +51,7 @@ public struct ListeningView: View {
                 // warm paper is the whole first impression.
                 VStack(spacing: Metrics.spacing12) {
                     Image(systemName: "headphones")
-                        .font(.system(size: 44))
+                        .font(.system(size: Metrics.scale * 44))
                         .foregroundStyle(Palette.inkQuaternary)
                     Text("Nothing to listen to yet")
                         .font(Typography.title)

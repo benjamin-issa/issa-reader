@@ -141,7 +141,8 @@ struct TVSignInView: View {
 struct TVLibraryView: View {
     @Environment(AppModel.self) private var app
 
-    private let columns = [GridItem(.adaptive(minimum: 220, maximum: 260), spacing: 48)]
+    // Matches the grid the Listening tab draws, so the two shelves agree.
+    private let columns = [GridItem(.adaptive(minimum: 300, maximum: 340), spacing: 48)]
 
     var body: some View {
         ScrollView {
@@ -192,7 +193,7 @@ struct TVBookCell: View {
         } label: {
             VStack(alignment: .leading, spacing: Metrics.spacing12) {
                 CoverImage(book: book, session: session)
-                    .frame(width: 220)
+                    .frame(width: 300)
                 Text(book.title)
                     .font(Typography.subhead)
                     .lineLimit(1)

@@ -131,7 +131,14 @@ public struct BookGrid: View {
         self.caption = caption
     }
 
+    // A cover sized for a hand is a postage stamp across a room, so the
+    // television asks for roughly three times the width. Spacing follows the
+    // scaled metric on its own.
+    #if os(tvOS)
+    private let columns = [GridItem(.adaptive(minimum: 300, maximum: 340), spacing: Metrics.spacing16)]
+    #else
     private let columns = [GridItem(.adaptive(minimum: 108, maximum: 160), spacing: Metrics.spacing16)]
+    #endif
 
     public var body: some View {
         LazyVGrid(columns: columns, alignment: .leading, spacing: Metrics.spacing24) {
@@ -222,7 +229,7 @@ public struct BookCell: View {
         let formats = book.servableFormats
         if formats.contains(.readaloud) || formats.contains(.audiobook) {
             Image(systemName: formats.contains(.readaloud) ? "waveform" : "headphones")
-                .font(.system(size: 10, weight: .semibold))
+                .font(.system(size: FormatMarkSize.glyph, weight: .semibold))
                 .foregroundStyle(Palette.ink)
                 .padding(4)
                 // Its own ground, because a cover is arbitrary artwork and a
@@ -234,10 +241,27 @@ public struct BookCell: View {
     }
 }
 
+/// The corner glyph on a cover, which is the one mark small enough that the
+/// television needs it stated rather than scaled with the type.
+enum FormatMarkSize {
+    #if os(tvOS)
+    static let glyph: CGFloat = 20
+    #else
+    static let glyph: CGFloat = 10
+    #endif
+}
+
 public struct ProgressBar: View {
     let value: Double
 
     public init(value: Double) { self.value = value }
+
+    /// A three-point bar is a hairline on a television.
+    #if os(tvOS)
+    private static let thickness: CGFloat = 6
+    #else
+    private static let thickness: CGFloat = 3
+    #endif
 
     public var body: some View {
         GeometryReader { geo in
@@ -247,7 +271,7 @@ public struct ProgressBar: View {
                     .frame(width: max(2, geo.size.width * min(max(value, 0), 1)))
             }
         }
-        .frame(height: 3)
+        .frame(height: Self.thickness)
     }
 }
 
