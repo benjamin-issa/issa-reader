@@ -85,6 +85,13 @@ struct SeriesRail: View {
                 // The rotated back cover pokes above the tile's frame.
                 .padding(.top, Metrics.spacing4)
             }
+            // Edge to edge, with the margin put back as a content inset. Inside
+            // the screen's padding the rail was clipped 16pt short of the
+            // glass, so a shelf that continues off-screen looked like one that
+            // had been cut off. The filter chips already do this.
+            .scrollClipDisabled()
+            .padding(.horizontal, -Metrics.screenMargin)
+            .contentMargins(.horizontal, Metrics.screenMargin, for: .scrollContent)
         }
     }
 }

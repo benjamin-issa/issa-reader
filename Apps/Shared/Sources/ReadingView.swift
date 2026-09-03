@@ -38,7 +38,7 @@ public struct ReadingView: View {
                     }
                 }
             }
-            .padding(Metrics.spacing16)
+            .padding(Metrics.screenMargin)
         }
         .background(Palette.paper)
         .refreshable { await app.refreshLibrary() }

@@ -48,7 +48,7 @@ struct LibraryHeader: View {
             countAndSort
             #endif
         }
-        .padding(.horizontal, Metrics.spacing16)
+        .padding(.horizontal, Metrics.screenMargin)
         .padding(.top, Metrics.spacing8)
         .padding(.bottom, Metrics.spacing12)
         .background(Palette.paper)
@@ -77,11 +77,11 @@ struct LibraryHeader: View {
                 }
                 tagsChip
             }
-            .padding(.horizontal, Metrics.spacing16)
+            .padding(.horizontal, Metrics.screenMargin)
         }
         // The row is padded internally so chips can scroll to the screen edge,
         // which is why the outer padding is removed here and added back inside.
-        .padding(.horizontal, -Metrics.spacing16)
+        .padding(.horizontal, -Metrics.screenMargin)
     }
 
     /// Tags overflow into a menu: a library's tag list runs long, and a chip

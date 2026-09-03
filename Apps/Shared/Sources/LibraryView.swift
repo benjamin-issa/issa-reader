@@ -30,7 +30,7 @@ public struct LibraryView: View {
                 shelf
                 #endif
             }
-            .padding(Metrics.spacing16)
+            .padding(Metrics.screenMargin)
         }
         .refreshable { await app.refreshLibrary() }
     }
