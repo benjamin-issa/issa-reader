@@ -47,12 +47,15 @@ public struct SettingsView: View {
                 }
                 NavigationLink { ControlsSettingsView() } label: {
                     Label("Controls & remapping", systemImage: "slider.horizontal.3")
+                        .labelStyle(.gapped)
                 }
                 NavigationLink { ReadingSettingsView() } label: {
                     Label("Reading & highlights", systemImage: "textformat")
+                        .labelStyle(.gapped)
                 }
                 NavigationLink { DownloadsView() } label: {
                     Label("Downloads & storage", systemImage: "arrow.down.circle")
+                        .labelStyle(.gapped)
                 }
             } header: {
                 Text("Playback & reading")
@@ -128,6 +131,7 @@ struct AdvancedSettingsRows: View {
         }
         NavigationLink { DiagnosticsView() } label: {
             Label("Export logs", systemImage: "doc.text.magnifyingglass")
+                        .labelStyle(.gapped)
         }
     }
 

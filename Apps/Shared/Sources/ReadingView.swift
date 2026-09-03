@@ -88,7 +88,7 @@ struct ResumeRow: View {
     var body: some View {
         HStack(spacing: Metrics.spacing12) {
             CoverImage(book: book, session: session)
-                .frame(width: 38)
+                .frame(width: Metrics.scaled(38))
             VStack(alignment: .leading, spacing: Metrics.spacing8) {
                 Text(book.title)
                     .font(Typography.bookTitle)
@@ -97,7 +97,7 @@ struct ResumeRow: View {
                 // Only once there is something to show: a bar at nothing and
                 // a "0%" beside it say "not started" louder than a blank does.
                 if let progress = book.progress, progress > 0 {
-                    ProgressBar(value: progress).frame(maxWidth: 150)
+                    ProgressBar(value: progress).frame(maxWidth: Metrics.scaled(150))
                 }
             }
             Spacer(minLength: 0)

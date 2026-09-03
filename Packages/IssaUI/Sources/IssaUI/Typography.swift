@@ -115,6 +115,14 @@ public enum Metrics {
     public static let radiusMedium: CGFloat = 11 * radiusScale
     public static let radiusLarge: CGFloat = 14 * radiusScale
 
+    /// A one-off layout number, put through the same scale as everything else.
+    ///
+    /// For the sizes that are genuinely particular to one view — a small cover
+    /// beside a row of text, the width of a progress bar — and so have no
+    /// business being a named token. Writing them bare is how a television ends
+    /// up with a 38-point cover and a 150-point bar in a 1920-point window.
+    public static func scaled(_ points: CGFloat) -> CGFloat { (points * scale).rounded() }
+
     /// The overline's letter-spacing, which has to open up with its type.
     public static let overlineTracking: CGFloat = 1.6 * scale
 
@@ -122,8 +130,40 @@ public enum Metrics {
     ///
     /// One token rather than the same literal retyped on every screen, which is
     /// how the header, the grid and the navigation title drifted apart.
+    ///
+    /// Not `16 * scale` on a television. A TV crops the edges of its own
+    /// picture, so the gutter is an overscan allowance rather than a
+    /// typographic one, and Apple's own shelves sit further in than doubling a
+    /// phone's margin would put them.
+    #if os(tvOS)
+    public static let screenMargin: CGFloat = 60
+    #else
     public static let screenMargin: CGFloat = 16 * scale
+    #endif
 
     /// Portrait ebook covers; the canvas draws them at a 2:3 ratio.
     public static let coverAspect: CGFloat = 2.0 / 3.0
+}
+
+/// A `Label` whose icon and title keep a deliberate gap.
+///
+/// The platform's own spacing is derived from the system font, and this app
+/// draws in Public Sans — which on a television collapsed the gap to nothing,
+/// so a settings row read as "AaReading & highlights". Stated here rather than
+/// per call site, because every row that has an icon has the same problem.
+public struct GappedLabelStyle: LabelStyle {
+    private let spacing: CGFloat
+
+    public init(spacing: CGFloat = Metrics.spacing12) { self.spacing = spacing }
+
+    public func makeBody(configuration: Configuration) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: spacing) {
+            configuration.icon
+            configuration.title
+        }
+    }
+}
+
+public extension LabelStyle where Self == GappedLabelStyle {
+    static var gapped: GappedLabelStyle { GappedLabelStyle() }
 }

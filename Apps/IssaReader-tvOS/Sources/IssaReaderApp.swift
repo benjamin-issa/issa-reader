@@ -265,9 +265,8 @@ struct TVLibraryView: View {
         .accessibilityIdentifier("screen.tvLibrary")
     }
 
-    /// The overscan-safe gutter. A television crops the edges of its own
-    /// picture, so this is wider than any margin a phone would use.
-    private static let margin: CGFloat = 60
+    /// The overscan-safe gutter, which `Metrics` now owns for every screen.
+    private static let margin: CGFloat = Metrics.screenMargin
 
     private func section(_ title: String, @ViewBuilder content: () -> some View) -> some View {
         VStack(alignment: .leading, spacing: Metrics.spacing16) {

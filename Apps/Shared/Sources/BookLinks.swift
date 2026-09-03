@@ -97,6 +97,16 @@ struct ResumeLink<Label: View>: View {
 
     var body: some View {
         if session != nil {
+            #if os(tvOS)
+            // A push, not a resume request. `requestBook` sets a pending book
+            // that the iOS root view consumes to drive its navigation path;
+            // nothing on the television reads it, so pressing this did
+            // precisely nothing. The shelf's route is the one that works here.
+            NavigationLink(value: book) {
+                label()
+            }
+            .buttonStyle(.plain)
+            #else
             Button {
                 #if os(macOS)
                 openWindow(id: "Reader", value: book.uuid)
@@ -107,6 +117,7 @@ struct ResumeLink<Label: View>: View {
                 label()
             }
             .buttonStyle(.plain)
+            #endif
         } else {
             label()
         }

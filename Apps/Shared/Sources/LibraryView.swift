@@ -462,6 +462,15 @@ struct ContinueCardLink: View {
                 ContinueCard(book: book, session: session)
             }
             .buttonStyle(.plain)
+            #elseif os(tvOS)
+            // See `ResumeLink`: the television has no consumer for a pending
+            // book, so the card has to push like everything else does here. It
+            // stays one target rather than two — a Siri Remote has no way to
+            // aim at a chevron beside the thing it is already on.
+            NavigationLink(value: book) {
+                ContinueCard(book: book, session: session)
+            }
+            .buttonStyle(.plain)
             #else
             ContinueCard(book: book, session: session) {
                 // The same resume path a widget tap takes; the reader fetches
@@ -518,7 +527,7 @@ public struct ContinueCard: View {
     private var content: some View {
         HStack(alignment: .top, spacing: Metrics.spacing16) {
             CoverImage(book: book, session: session)
-                .frame(width: 92)
+                .frame(width: Metrics.scaled(92))
 
             VStack(alignment: .leading, spacing: Metrics.spacing8) {
                 Text("Continue").overlineStyle(Palette.tangerine)
@@ -530,7 +539,7 @@ public struct ContinueCard: View {
                     .font(Typography.footnote)
                     .foregroundStyle(Palette.inkTertiary)
                 if let progress = book.progress {
-                    ProgressBar(value: progress).frame(maxWidth: 220)
+                    ProgressBar(value: progress).frame(maxWidth: Metrics.scaled(220))
                     Text("\(ReadingProgress.percent(progress))% complete")
                         .font(Typography.caption)
                         .foregroundStyle(Palette.inkSecondary)
@@ -549,9 +558,9 @@ public struct ContinueCard: View {
             BookDetailView(book: book)
         } label: {
             Image(systemName: "chevron.right")
-                .font(.system(size: 15, weight: .semibold))
+                .font(.system(size: Metrics.scaled(15), weight: .semibold))
                 .foregroundStyle(Palette.inkTertiary)
-                .frame(width: 44)
+                .frame(width: Metrics.scaled(44))
                 .frame(maxHeight: .infinity)
                 .contentShape(Rectangle())
         }

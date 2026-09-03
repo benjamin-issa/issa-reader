@@ -36,12 +36,11 @@ private struct TVReadalongContent: View {
     let model: ReaderModel
     @Environment(AppModel.self) private var app
     @Environment(PlaybackSettings.self) private var settings
-    @Environment(\.dismiss) private var dismiss
     let book: Book
     let session: Session
 
     /// The overscan-safe gutter, matching the shelf.
-    private static let margin: CGFloat = 60
+    private static let margin: CGFloat = Metrics.screenMargin
 
     var body: some View {
         ZStack {
@@ -84,13 +83,11 @@ private struct TVReadalongContent: View {
             Task { @MainActor in app.readerDidClose(model) }
         }
         .onPlayPauseCommand { Task { await model.togglePlayback() } }
-        // Menu already pops the stack; this is here so the position is written
-        // before it does, rather than relying on `onDisappear` winning a race
-        // with the view being torn down.
-        .onExitCommand {
-            Task { await model.saveProgress() }
-            dismiss()
-        }
+        // No `.onExitCommand` here, deliberately. Adding one and calling
+        // `dismiss()` from it made a single Menu press pop twice — out of the
+        // book and then out of the app to the tvOS home screen. The stack
+        // already pops on Menu, and `onDisappear` above already writes the
+        // position; the modifier had nothing to add and something to break.
         .onChange(of: settings.readerStyle) { _, style in model.style = style }
     }
 
@@ -113,8 +110,10 @@ private struct TVReadalongContent: View {
                         .foregroundStyle(Palette.inkSecondary)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
                 }
-                transport
-                menuHint
+                VStack(spacing: Metrics.spacing12) {
+                    transport
+                    menuHint
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         }
@@ -170,8 +169,26 @@ private struct TVReadalongContent: View {
 
     /// Several sentences either side of the spoken one, which stays put while
     /// the rest roll past it.
+    @ViewBuilder
     private var sentences: some View {
         let lines = model.narrationWindow(before: 3, after: 3)
+        if lines.isEmpty {
+            // Extracting the audio and finding the first fragment takes a
+            // moment on a cold open, and an empty column reads as a broken
+            // screen rather than as a pause.
+            VStack(spacing: Metrics.spacing16) {
+                ProgressView()
+                Text(model.isPlaying ? "Finding your place…" : "Press play to start reading along.")
+                    .font(Typography.sans(28))
+                    .foregroundStyle(Palette.inkSecondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        } else {
+            window(lines)
+        }
+    }
+
+    private func window(_ lines: [ReaderModel.NarratedLine]) -> some View {
         let currentIndex = lines.firstIndex(where: \.isCurrent) ?? 0
         return VStack(alignment: .leading, spacing: Metrics.spacing24) {
             ForEach(Array(lines.enumerated()), id: \.element.id) { offset, line in
@@ -231,6 +248,13 @@ private struct TVReadalongContent: View {
         .frame(maxWidth: .infinity, alignment: .center)
     }
 
+    /// Explicit colours and an explicit ground.
+    ///
+    /// The app sets `.tint(Palette.tangerine)`, and a default tvOS button fills
+    /// itself with the tint — so a tangerine glyph on a tangerine capsule is an
+    /// orange blob with nothing legible on it. `TVSignInView` learned this the
+    /// same way. `.plain` keeps the system's focus lift, which is wanted here:
+    /// a glyph in a capsule has no text to clip.
     private func transportButton(
         _ symbol: String, label: String, action: @escaping () async -> Void
     ) -> some View {
@@ -239,8 +263,14 @@ private struct TVReadalongContent: View {
         } label: {
             Image(systemName: symbol)
                 .font(.system(size: 34, weight: .semibold))
-                .frame(width: 76, height: 60)
+                .foregroundStyle(model.style.theme.text)
+                .frame(width: 84, height: 66)
+                .background(
+                    model.style.theme.text.opacity(0.10),
+                    in: Capsule(style: .continuous),
+                )
         }
+        .buttonStyle(.plain)
         .accessibilityLabel(label)
     }
 

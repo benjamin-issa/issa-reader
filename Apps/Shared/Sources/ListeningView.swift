@@ -35,13 +35,9 @@ public struct ListeningView: View {
                     section("Audiobooks", books: audiobooks)
                 }
             }
-            // The television's own overscan-safe gutter, matching the shelf
-            // next door; everywhere else the screen margin.
-            #if os(tvOS)
-            .padding(60)
-            #else
+            // `screenMargin` is itself the television's overscan allowance
+            // now, so the fence that used to be here has nothing left to say.
             .padding(Metrics.screenMargin)
-            #endif
         }
         .background(Palette.paper)
         .overlay {
