@@ -172,10 +172,7 @@ public enum HTMLText {
         // The value is markup too: `?a=1&amp;b=2` must not navigate to a
         // parameter literally named "amp;b".
         let decoded = decodeEntities(value).trimmingCharacters(in: .whitespaces)
-        guard let url = URL(string: decoded),
-              let scheme = url.scheme?.lowercased(),
-              scheme == "http" || scheme == "https"
-        else { return nil }
+        guard let url = URL(string: decoded), url.isWebLink else { return nil }
         return url
     }
 

@@ -88,7 +88,10 @@ struct TVSignInView: View {
                 } onCancel: {
                     self.flow = nil
                 }
-                .frame(maxWidth: 900)
+                // Wide enough for the two-column approval layout, and centred:
+                // capped at 900 it sat against the left edge of a 1920-wide
+                // screen with the whole right half empty.
+                .frame(maxWidth: 1600)
             } else {
                 // Ten-foot type: everything here is roughly double what the
                 // phone uses, because the viewer is across a room.

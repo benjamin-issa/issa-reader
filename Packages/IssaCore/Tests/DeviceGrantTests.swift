@@ -137,24 +137,34 @@ struct DeviceGrantTests {
     }
 }
 
-/// The QR is a convenience, and must not become the fastest way to steal a
-/// session. `verification_uri_complete` carries the device code, which is the
-/// polling secret; a QR is readable across a room.
-@Suite("What the sign-in QR may carry")
+/// What the QR and the link carry, and the trade-off that was accepted to put
+/// it there. See `DeviceAuthorization.approvalPayload` for the reasoning.
+@Suite("What the sign-in QR carries")
 struct DeviceCodeQRPayloadTests {
-    @Test("the complete URI carries the polling secret, which is why it is not the payload")
-    func completeURICarriesTheSecret() throws {
-        let json = Data(#"""
+    private func authorization(complete: String?) throws -> DeviceAuthorization {
+        let completeField = complete.map { ",\n \"verification_uri_complete\":\"\($0)\"" } ?? ""
+        let json = Data("""
         {"device_code":"SECRET-abc","user_code":"WXYZ-1234",
          "verification_uri":"https://library.example/link",
-         "verification_uri_complete":"https://library.example/link?code=SECRET-abc",
-         "expires_in":900,"interval":5}
-        """#.utf8)
-        let auth = try JSONDecoder().decode(DeviceAuthorization.self, from: json)
+         "expires_in":900,"interval":5\(completeField)}
+        """.utf8)
+        return try JSONDecoder().decode(DeviceAuthorization.self, from: json)
+    }
 
-        // The premise: the complete URI really does embed the secret …
-        #expect(auth.verificationURIComplete?.contains(auth.deviceCode) == true)
-        // … and the plain one, which is what the view encodes, does not.
-        #expect(!auth.verificationURI.contains(auth.deviceCode))
+    @Test("the payload is the pre-identified URL, secret and all")
+    func payloadIsTheCompleteURI() throws {
+        let auth = try authorization(complete: "https://library.example/link?code=SECRET-abc")
+        #expect(auth.approvalPayload == auth.verificationURIComplete)
+        // Stated rather than implied: this is the exposure that was accepted,
+        // so a future change that reverts it fails here and has to say why.
+        #expect(auth.approvalPayload.contains(auth.deviceCode))
+        #expect(auth.approvalURL?.scheme == "https")
+    }
+
+    @Test("a server without a complete URI falls back to the address people type")
+    func payloadFallsBack() throws {
+        let auth = try authorization(complete: nil)
+        #expect(auth.approvalPayload == auth.verificationURI)
+        #expect(!auth.approvalPayload.contains(auth.deviceCode))
     }
 }

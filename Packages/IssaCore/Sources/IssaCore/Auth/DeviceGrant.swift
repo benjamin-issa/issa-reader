@@ -21,6 +21,24 @@ public struct DeviceAuthorization: Codable, Hashable, Sendable {
     /// Server-rendered SVG QR pointing at `verificationURIComplete`.
     public let qrSVGURL: String?
 
+    /// What the tappable link and the QR carry: the pre-identified URL when the
+    /// server offers one, the plain address otherwise.
+    ///
+    /// Decision, 2026-09: use the complete URL everywhere, the QR on a
+    /// television included. It embeds `device_code`, the polling secret, so
+    /// someone who photographs the screen can race this app to redeem the
+    /// approval. That is accepted knowingly. The window is at most `expiresIn`
+    /// seconds and the code now rotates when it lapses; the approver still has
+    /// to be signed in to the server; and the thing readers actually gave up on
+    /// was scanning a code that then asked them to type eight more characters.
+    ///
+    /// The plain `verificationURI` is still what the screen prints, because
+    /// that is the address a person can type.
+    public var approvalPayload: String { verificationURIComplete ?? verificationURI }
+
+    /// The same, as a URL, for opening or encoding.
+    public var approvalURL: URL? { URL(string: approvalPayload) }
+
     private enum CodingKeys: String, CodingKey {
         case deviceCode = "device_code"
         case userCode = "user_code"
@@ -65,6 +83,9 @@ public enum DeviceGrantOutcome: Sendable, Equatable {
     case denied
     case expired
     case failed(String)
+    /// The caller walked away — the sign-in screen closed, or a fresh code
+    /// replaced this one.
+    case cancelled
 }
 
 /// One poll's result, as reported by the transport.
@@ -114,6 +135,10 @@ public struct DeviceGrantFlow: Sendable {
         while waited < deadline {
             await transport.wait(seconds: interval)
             waited += interval
+            // The wait swallows cancellation, so without this the loop stops
+            // waiting and then polls a server it has been told to leave alone,
+            // as fast as it can, until the deadline.
+            if Task.isCancelled { return .cancelled }
 
             switch await transport.poll(deviceCode: authorization.deviceCode) {
             case let .token(token):

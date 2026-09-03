@@ -741,7 +741,7 @@ public struct BookDetailView: View {
                 }
                 if let alignedWith = book.alignedWith { factRow("Aligned with", alignedWith) }
                 ForEach(namedIdentifiers) { identifier in
-                    if let url = identifier.url, Self.isWebLink(url) {
+                    if let url = identifier.url, url.isWebLink {
                         // The server configures the URL template per identifier
                         // type, so a link only appears where it actually leads
                         // somewhere — and only somewhere on the web.
@@ -789,7 +789,7 @@ public struct BookDetailView: View {
                         )
 
                         if let source = rating.sourceUrl, let url = URL(string: source),
-                           Self.isWebLink(url) {
+                           url.isWebLink {
                             Link(destination: url) { chip }.buttonStyle(.plain)
                         } else {
                             chip
@@ -843,18 +843,6 @@ public struct BookDetailView: View {
 
     private func rail(_ title: String, books: [Book]) -> some View {
         BookRail(title: title, books: books)
-    }
-
-    /// Whether a server-supplied URL is safe to hand to a `Link`.
-    ///
-    /// The same rule `HTMLText.href` applies to scraped descriptions:
-    /// identifiers and external ratings are metadata the server controls, and
-    /// `URL(string:)` happily builds `javascript:`, `sms:` or `shortcuts:`
-    /// URLs — a tapped `Link` hands those straight to whatever app claims the
-    /// scheme. Web links only.
-    static func isWebLink(_ url: URL) -> Bool {
-        let scheme = url.scheme?.lowercased()
-        return scheme == "http" || scheme == "https"
     }
 
     static func positionText(_ position: Double) -> String {
