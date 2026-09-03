@@ -184,9 +184,13 @@ struct TVSignInView: View {
                         .font(Typography.sans(28))
                         .foregroundStyle(Palette.inkSecondary)
                         .frame(maxWidth: 1100, alignment: .leading)
-                    // See SignInView: `storyteller.home.arpa` is RFC 8375's
-                    // home-network domain, correct and entirely opaque.
-                    TextField("https://yourlibrary.com", text: $address)
+                    // See SignInView, for the domain and for why the example
+                    // is a coloured `prompt:` rather than a title string.
+                    TextField(
+                        "",
+                        text: $address,
+                        prompt: Text("https://yourlibrary.com").foregroundStyle(Palette.inkTertiary),
+                    )
                         .font(Typography.sans(30))
                         .frame(maxWidth: 900)
                     Button {

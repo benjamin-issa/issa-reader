@@ -196,6 +196,9 @@ struct PasswordSignInView: View {
                 .foregroundStyle(Palette.inkSecondary)
         }
         .padding(Metrics.spacing12)
+        // The same width as the fields below it. Without this the card sizes to
+        // its text and sits visibly narrower than everything it is warning about.
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(Palette.surface, in: RoundedRectangle(cornerRadius: Metrics.radiusMedium))
     }
 

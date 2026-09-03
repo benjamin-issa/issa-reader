@@ -140,6 +140,11 @@ public final class BrowserSignInModel {
         /// The window closed; collecting an approval that may already exist.
         case finishing
         case granted(String)
+        /// The window closed and no approval arrived. Its own case, not a
+        /// return to `.starting`: `.starting` renders as "Contacting your
+        /// server…", so folding the two left the screen spinning forever on a
+        /// sign-in the reader had already walked away from.
+        case dismissed
         case failed(String)
     }
 
@@ -195,7 +200,7 @@ public final class BrowserSignInModel {
         case .expired: stage = .failed("The sign-in request expired. Try again.")
         // Not a failure. The reader closed the window, so the chooser is what
         // they want next, not an error about a thing they chose to do.
-        case .dismissed: stage = .starting
+        case .dismissed: stage = .dismissed
         case let .failed(reason): stage = .failed(reason)
         }
     }
@@ -236,6 +241,10 @@ struct BrowserSignInView: View {
             case .granted:
                 row(Image(systemName: "checkmark.circle.fill").foregroundStyle(Palette.tangerine),
                     "Signed in.")
+            case .dismissed:
+                // On screen for an instant before `onChange` hands back to the
+                // chooser, but it must not be a spinner.
+                row(EmptyView(), "Taking you back…")
             case let .failed(reason):
                 Text(reason)
                     .font(Typography.body)
@@ -253,6 +262,7 @@ struct BrowserSignInView: View {
         .onAppear { model.begin() }
         .onChange(of: model.stage) { _, stage in
             if case let .granted(token) = stage { onGranted(token) }
+            if case .dismissed = stage { onCancel() }
         }
         .onDisappear { model.cancel() }
     }

@@ -289,7 +289,16 @@ public struct SignInView: View {
                 // Was `storyteller.home.arpa` — RFC 8375's home-network domain,
                 // correct and completely opaque to anyone who has not read the
                 // RFC. A placeholder's job is to show the shape of the answer.
-                TextField("https://yourlibrary.com", text: $address)
+                //
+                // As a `prompt:` with its own colour, not a title string: an
+                // address-shaped placeholder gets drawn in link blue, which
+                // reads as text somebody already typed rather than as an
+                // example of what to type.
+                TextField(
+                    "",
+                    text: $address,
+                    prompt: Text("https://yourlibrary.com").foregroundStyle(Palette.inkTertiary),
+                )
                     // Explicit, the way LibrarySearchField is: a field that
                     // sets no colour takes the system label, which is white in
                     // Dark Mode.
