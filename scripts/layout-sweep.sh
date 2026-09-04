@@ -93,7 +93,12 @@ trap cleanup EXIT INT TERM
 command -v xcodegen >/dev/null || { echo "xcodegen not found" >&2; exit 1; }
 xcodegen generate >/dev/null
 
-rm -rf "$WORK"; mkdir -p "$WORK" "$OUT"
+# $OUT too, not just $WORK. collect-sweep-shots copies by name and never
+# deletes, so an --all run followed by a quick one left five stale device
+# folders in place and make-contact-sheet.py sheeted them beside the three
+# fresh ones — a regression that only shows at 402pt presented as fixed, with
+# nothing marking the panels as coming from different code.
+rm -rf "$WORK" "$OUT"; mkdir -p "$WORK" "$OUT"
 
 echo "▸ building once for all destinations"
 # Signed, deliberately: CODE_SIGNING_ALLOWED=NO breaks the simulator keychain
@@ -161,9 +166,17 @@ for row in "${SELECTED[@]}"; do
   # Extract before deleting the device, and before reacting to the status: a
   # failing sweep is exactly when the screenshots are wanted.
   rm -rf "$WORK/$slug-attachments"
-  xcrun xcresulttool export attachments \
-      --path "$RESULT" --output-path "$WORK/$slug-attachments" >/dev/null 2>&1 || true
-  python3 Tools/scripts/collect-sweep-shots.py "$WORK/$slug-attachments" "$OUT/$slug" || true
+  if ! xcrun xcresulttool export attachments \
+      --path "$RESULT" --output-path "$WORK/$slug-attachments" >/dev/null 2>&1; then
+    echo "error: could not export attachments for $slug" >&2
+    FAILED=1
+    RESULTS+=("$slug: attachment export failed")
+  elif ! python3 Tools/scripts/collect-sweep-shots.py \
+      "$WORK/$slug-attachments" "$OUT/$slug"; then
+    echo "error: could not collect screenshots for $slug" >&2
+    FAILED=1
+    RESULTS+=("$slug: screenshot collection failed")
+  fi
 
   # A scheme whose Test action omits the UI-test target builds fine, runs
   # nothing, and exits 0. That would be the worst outcome this whole exercise
@@ -186,11 +199,18 @@ for row in "${SELECTED[@]}"; do
   rm -rf "$RESULT"
 done
 
-python3 Tools/scripts/make-contact-sheet.py "$OUT" || true
+# Not `|| true`. Without Pillow the import raises, every device still reported
+# "ok", and the script named a sheets directory it had never written — while
+# the sheets are documented as the only coverage for inner-padding drift.
+if ! python3 Tools/scripts/make-contact-sheet.py "$OUT"; then
+  echo "error: contact sheets were not written" >&2
+  FAILED=1
+  RESULTS+=("contact sheets: FAILED")
+fi
 
 echo
 echo "── sweep ──"
-for line in "${RESULTS[@]}"; do echo "  $line"; done
+for line in ${RESULTS[@]+"${RESULTS[@]}"}; do echo "  $line"; done
 echo "  screenshots: $OUT"
 echo "  contact sheets: $OUT/_sheets"
 exit "$FAILED"
