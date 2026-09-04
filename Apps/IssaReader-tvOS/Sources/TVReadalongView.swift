@@ -154,7 +154,7 @@ private struct TVReadalongContent: View {
     private var progressLine: String {
         var parts = ["\(ReadingProgress.percent(progress))%"]
         if let coordinator = model.readalong, coordinator.totalDuration > 0 {
-            let remaining = coordinator.totalDuration * (1 - min(max(coordinator.bookProgress, 0), 1))
+            let remaining = coordinator.totalDuration * (1 - (coordinator.bookProgress.asProgression ?? 0))
             parts.append("\(Self.durationText(remaining)) left")
         }
         return parts.joined(separator: " · ")

@@ -95,6 +95,16 @@ public struct EPUBArchive: Sendable {
         let payload = data.subdata(in: data.startIndex + start ..< data.startIndex + end)
         switch entry.compressionMethod {
         case 0:
+            // A stored entry is its own uncompressed size by definition. The
+            // declared value went unchecked, so a central directory could claim
+            // 0xFFFFFFFE for a ten-byte member and `size(of:)` reported it —
+            // and that feeds `spineWeights`, the denominator of every progress
+            // figure, so one such entry made every real chapter's share round
+            // to zero and pinned the book at 0% throughout.
+            guard entry.uncompressedSize == payload.count else {
+                throw EPUBError.malformedArchive(
+                    "stored entry declares \(entry.uncompressedSize) bytes but holds \(payload.count)")
+            }
             return payload
         case 8:
             return try Inflate.raw(payload, expectedSize: entry.uncompressedSize)
@@ -182,7 +192,20 @@ public struct EPUBArchive: Sendable {
                 )
             }
 
-            result[normalize(name)] = Entry(
+            // First record wins, not the last.
+            //
+            // `normalize` resolves `.` and `..` and strips a leading slash, so
+            // `META-INF/container.xml`, `./META-INF/container.xml` and
+            // `x/../META-INF/container.xml` are one key — and plain assignment
+            // let the *last* central-directory record replace every earlier
+            // one. `unzip`, epubcheck and any server-side scanner take the
+            // first, so an archive whose first container.xml is benign and
+            // whose trailing duplicate points at a different OPF looked clean
+            // to every one of them and loaded the second here. The same trick
+            // shadowed any spine document or encryption.xml.
+            let key = normalize(name)
+            if result[key] != nil { continue }
+            result[key] = Entry(
                 path: name,
                 compressionMethod: method,
                 compressedSize: compressed,

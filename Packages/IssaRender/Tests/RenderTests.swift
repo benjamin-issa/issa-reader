@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import IssaEPUB
 import Testing
@@ -491,5 +492,101 @@ struct NamedEntityTests {
     @Test("the five XML predefined entities are left to the parser")
     func predefinedStillWork() throws {
         #expect(try parse("a &amp; b &lt; c") == "a & b < c")
+    }
+}
+
+/// A blank image of an exact pixel size, for testing how plates are scaled.
+///
+/// Built rather than read from a fixture: the sizes that matter here are the
+/// awkward ones — a 3000px-tall frontispiece — and shipping such a file to
+/// assert arithmetic about it would be worse than making one.
+extension PlatformImage {
+    static func solid(width: Int, height: Int) -> PlatformImage {
+        let space = CGColorSpaceCreateDeviceRGB()
+        let context = CGContext(
+            data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+            space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        context.setFillColor(CGColor(red: 0.5, green: 0.5, blue: 0.5, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        let cgImage = context.makeImage()!
+        let size = CGSize(width: width, height: height)
+        #if canImport(AppKit)
+        return PlatformImage(cgImage: cgImage, size: size)
+        #else
+        return PlatformImage(cgImage: cgImage)
+        #endif
+    }
+}
+
+@Suite("A plate taller than the page is scaled to fit it", .serialized)
+struct TallImageTests {
+    /// A full-page frontispiece: 800×3000, the shape Gutenberg and
+    /// comics-style EPUBs ship.
+    private func parse(page: CGSize) throws -> NSAttributedString {
+        let plate = PlatformImage.solid(width: 800, height: 3000)
+        let xhtml = Data("""
+            <html xmlns="http://www.w3.org/1999/xhtml"><body>
+            <p><img src="plate.jpg" alt="A plate"/></p></body></html>
+            """.utf8)
+        return try HTMLContentParser(
+            style: ReaderStyle(),
+            maxImageWidth: page.width,
+            maxImageHeight: page.height,
+            loadImage: { _ in plate },
+        ).parse(xhtml: xhtml, baseHref: "c.xhtml").text
+    }
+
+    private func attachmentSize(in text: NSAttributedString) -> CGSize? {
+        var found: CGSize?
+        text.enumerateAttribute(.attachment, in: NSRange(location: 0, length: text.length)) {
+            value, _, _ in
+            if let attachment = value as? ImageAttachment { found = attachment.displaySize }
+        }
+        return found
+    }
+
+    /// Scaled to the column only, an 800×3000 plate became 320×1200 on a
+    /// ~600pt page: `computePages` gave it a page whose content extent was
+    /// twice the canvas, `draw` clipped, and the lower half was painted outside
+    /// the page and unreachable — the turn skipped straight past it.
+    @Test("it fits the page, not merely the column")
+    func fitsThePage() throws {
+        let page = CGSize(width: 320, height: 600)
+        let size = try #require(attachmentSize(in: try parse(page: page)))
+        #expect(size.height <= page.height + 0.5, "the whole plate has to be on one page")
+        #expect(size.width <= page.width + 0.5)
+        #expect(abs(size.width / size.height - 800.0 / 3000.0) < 0.001, "aspect preserved")
+    }
+
+    /// The width bound still governs when it is the tighter of the two.
+    @Test("a wide short image is still bounded by the column")
+    func wideImageStillBoundedByWidth() throws {
+        let wide = PlatformImage.solid(width: 2000, height: 100)
+        let xhtml = Data("""
+            <html xmlns="http://www.w3.org/1999/xhtml"><body>
+            <p><img src="w.jpg"/></p></body></html>
+            """.utf8)
+        let text = try HTMLContentParser(
+            style: ReaderStyle(), maxImageWidth: 320, maxImageHeight: 600,
+            loadImage: { _ in wide },
+        ).parse(xhtml: xhtml, baseHref: "c.xhtml").text
+        let size = try #require(attachmentSize(in: text))
+        #expect(abs(size.width - 320) < 0.5)
+    }
+
+    /// Never up: an upscaled decoration looks worse than a small one.
+    @Test("a small decoration is left alone")
+    func smallImageUnscaled() throws {
+        let small = PlatformImage.solid(width: 60, height: 60)
+        let xhtml = Data("""
+            <html xmlns="http://www.w3.org/1999/xhtml"><body>
+            <p><img src="s.jpg"/></p></body></html>
+            """.utf8)
+        let text = try HTMLContentParser(
+            style: ReaderStyle(), maxImageWidth: 320, maxImageHeight: 600,
+            loadImage: { _ in small },
+        ).parse(xhtml: xhtml, baseHref: "c.xhtml").text
+        let size = try #require(attachmentSize(in: text))
+        #expect(size == CGSize(width: 60, height: 60))
     }
 }

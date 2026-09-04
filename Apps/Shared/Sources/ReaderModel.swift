@@ -477,7 +477,7 @@ public final class ReaderModel {
         atTotalProgression progression: Double, in package: EPUBPackage,
     ) -> (index: Int, within: Double)? {
         guard !package.spine.isEmpty else { return nil }
-        let clamped = min(max(progression, 0), 1)
+        let clamped = (progression.asProgression ?? 0)
         let weights = package.spineWeights
         let total = weights.reduce(0, +)
         guard total > 0 else {
@@ -696,7 +696,7 @@ public final class ReaderModel {
         if let span = timeline.span(ofDocumentContaining: entry),
            let time = timeline.bookTime(forFragment: entry.fragmentID),
            span.duration > 0 {
-            within = min(max((time - span.start) / span.duration, 0), 1)
+            within = (((time - span.start) / span.duration).asProgression ?? 0)
         }
         return package.bookProgress(spineIndex: index, within: within)
     }
@@ -1042,6 +1042,7 @@ public final class ReaderModel {
             let parsed = try HTMLContentParser(
                 style: style,
                 maxImageWidth: max(pageSize.width, 1),
+                maxImageHeight: max(pageSize.height, 1),
                 loadImage: { images.image(for: $0) },
             ).parse(xhtml: data, baseHref: item.href)
             let layout = ChapterLayout(text: parsed.text, fragmentRanges: parsed.fragmentRanges)

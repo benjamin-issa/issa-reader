@@ -31,6 +31,7 @@ public struct HTMLContentParser {
     private let style: ReaderStyle
     private let loadImage: ((String) -> PlatformImage?)?
     private let maxImageWidth: CGFloat
+    private let maxImageHeight: CGFloat
 
     /// - Parameters:
     ///   - loadImage: given an archive path, the decoded artwork. Supplying it is
@@ -39,13 +40,22 @@ public struct HTMLContentParser {
     ///     Results are expected to be cached by the caller — a chapter asks once
     ///     per plate.
     ///   - maxImageWidth: the column width images are scaled to fit.
+    ///   - maxImageHeight: the page height images are scaled to fit. Without
+    ///     it a tall plate was scaled to the column and left taller than the
+    ///     page: `computePages` gives that oversized line a page of its own
+    ///     whose content extent exceeds the canvas, `draw` clips to the canvas,
+    ///     and the rest of the picture is painted outside it — unreachable on
+    ///     every page, with the page turn skipping straight past. A full-page
+    ///     cover or map showed only its top.
     public init(
         style: ReaderStyle,
         maxImageWidth: CGFloat = 320,
+        maxImageHeight: CGFloat = .greatestFiniteMagnitude,
         loadImage: ((String) -> PlatformImage?)? = nil,
     ) {
         self.style = style
         self.maxImageWidth = maxImageWidth
+        self.maxImageHeight = maxImageHeight
         self.loadImage = loadImage
     }
 
@@ -218,9 +228,11 @@ public struct HTMLContentParser {
         let pixelSize = image.size
         guard pixelSize.width > 0, pixelSize.height > 0 else { return }
 
-        // Scale to the column, never up: an upscaled 60px decoration looks worse
-        // than a small one.
-        let scale = min(1, maxImageWidth / pixelSize.width)
+        // Both bounds, never up: an upscaled 60px decoration looks worse than a
+        // small one, and a plate taller than the page cannot be paged through.
+        let scale = min(
+            1,
+            min(maxImageWidth / pixelSize.width, maxImageHeight / pixelSize.height))
         let displaySize = CGSize(width: pixelSize.width * scale, height: pixelSize.height * scale)
 
         let attachment = ImageAttachment(displaySize: displaySize, image: image)

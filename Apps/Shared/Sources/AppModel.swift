@@ -1309,7 +1309,7 @@ public final class AppModel {
             type: track?.type ?? "audio/mpeg",
             title: track.map { coordinator.manifest.title(of: $0, at: index) },
             locations: .init(
-                progression: min(max(within, 0), 1),
+                progression: (within.asProgression ?? 0),
                 totalProgression: coordinator.bookProgress,
             ),
         )

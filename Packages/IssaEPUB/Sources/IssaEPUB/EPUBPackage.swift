@@ -227,6 +227,17 @@ public extension EPUBPackage {
         }
     }
 
+    /// Whether this `<nav>` is the table of contents.
+    ///
+    /// `epub:type` holds a space-separated token list, so `"toc bodymatter"` is
+    /// a table of contents and an equality test says it is not.
+    private static func isTableOfContents(_ node: EPUBXMLNode) -> Bool {
+        let declared = [node["type"], node["epub:type"]].compactMap { $0 }
+        return declared.contains { value in
+            value.split(whereSeparator: \.isWhitespace).contains("toc")
+        }
+    }
+
     private static func parseNavigation(
         opf: EPUBXMLNode, archive: EPUBArchive,
         manifest: [String: ManifestItem], rootDirectory: String,
@@ -240,8 +251,24 @@ public extension EPUBPackage {
         if let nav = manifest.values.first(where: { $0.properties.contains("nav") }) {
             if let document = try? EPUBXML.parse(archive.read(nav.href)) {
                 for navElement in document.descendants("nav") {
-                    guard navElement["type"] == "toc" || navElement["epub:type"] == "toc" else { continue }
-                    return flatten(list: navElement.descendants("ol").first, base: nav.href, depth: 0)
+                    // `epub:type` is a space-separated token list per spec, so
+                    // exact equality skipped `epub:type="toc bodymatter"`
+                    // entirely and such a book showed no contents at all.
+                    guard Self.isTableOfContents(navElement) else { continue }
+                    // `<ul>` as well as `<ol>`: several conversion tools emit
+                    // it, invalidly but commonly.
+                    let list = navElement.descendants("ol").first
+                        ?? navElement.descendants("ul").first
+                    let points = flatten(list: list, base: nav.href, depth: 0)
+                    // Only return when there is something to return. An empty
+                    // result used to short-circuit the NCX below, so a nav
+                    // document that *parsed* but yielded nothing — a `<ul>`, or
+                    // list items carrying headings with no anchor — left the
+                    // reader with no table of contents while a perfectly good
+                    // toc.ncx sat unread in the manifest. The comment above
+                    // promised this fallback covered "there but broken"; it
+                    // only covered "throws".
+                    if !points.isEmpty { return points }
                 }
             }
         }

@@ -3,8 +3,8 @@ import Foundation
 public extension Double {
     /// This value as a progression through a book: finite, and between 0 and 1.
     ///
-    /// `min(max(x, 0), 1)` does not do this, and was written inline at twenty
-    /// production sites — fourteen of them with no finiteness check in front.
+    /// `min(max(x, 0), 1)` does not do this, and was written inline across the
+    /// tree — most of those without a finiteness check in front.
     /// Swift's `max(_:_:)` is `y >= x ? y : x`, and every comparison against
     /// NaN is false, so `max(.nan, 0)` returns **NaN** and the clamp passes it
     /// straight through. (Argument order decides it: `max(0, .nan)` returns 0.
@@ -15,6 +15,12 @@ public extension Double {
     /// comment explaining why; this is that reasoning made reusable, so the
     /// next site cannot get it wrong by writing the operands the other way
     /// round.
+    ///
+    /// Every site that clamps a *progression* now uses this. A handful of
+    /// `min(max(…))` calls remain deliberately and are not this: a stepper
+    /// bounded by its own range, a y-coordinate held inside a page, a buffer
+    /// capacity held under a ceiling. Those are not 0...1 and NaN is not
+    /// reachable at them.
     ///
     /// - Returns: the clamped value, or `nil` when there is no honest answer.
     ///   `nil` rather than 0: a NaN is not "the start of the book", and

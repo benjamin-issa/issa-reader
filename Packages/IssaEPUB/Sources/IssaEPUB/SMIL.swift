@@ -1,4 +1,5 @@
 import Foundation
+import IssaCore
 
 /// Parses SMIL clock values.
 ///
@@ -278,7 +279,10 @@ public struct SMILTimeline: Sendable {
     /// Fraction of the book narrated, 0...1.
     public func progression(atBookTime time: TimeInterval) -> Double {
         guard totalDuration > 0 else { return 0 }
-        return min(max(time / totalDuration, 0), 1)
+        // The last inline clamp in this package. `min(max(x, 0), 1)` does not
+        // filter NaN — Swift's max returns the other operand against it — and a
+        // zero progression is a claim about where the reader is.
+        return (time / totalDuration).asProgression ?? 0
     }
 
     /// The entries belonging to one text document, in reading order.

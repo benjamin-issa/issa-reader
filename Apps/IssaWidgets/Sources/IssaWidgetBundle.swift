@@ -337,7 +337,7 @@ struct ProgressRingWidget: View {
             Circle().inset(by: 2).stroke(Palette.border, lineWidth: 4)
             Circle()
                 .inset(by: 2)
-                .trim(from: 0, to: min(max(value, 0), 1))
+                .trim(from: 0, to: (value.asProgression ?? 0))
                 .stroke(Palette.tangerine, style: .init(lineWidth: 4, lineCap: .round))
                 .rotationEffect(.degrees(-90))
             // Rounded, matching the reader's own readout. Truncating showed
@@ -363,7 +363,7 @@ struct ProgressBarWidget: View {
             ZStack(alignment: .leading) {
                 Capsule().fill(Palette.border)
                 Capsule().fill(Palette.tangerine)
-                    .frame(width: max(2, geo.size.width * min(max(value, 0), 1)))
+                    .frame(width: max(2, geo.size.width * (value.asProgression ?? 0)))
             }
         }
         .frame(height: 4)
