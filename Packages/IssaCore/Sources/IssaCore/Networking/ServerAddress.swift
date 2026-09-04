@@ -33,6 +33,18 @@ public enum ServerAddress {
         components.path = path
         components.query = nil
         components.fragment = nil
+        // Userinfo goes the same way as the query and the fragment, and for a
+        // sharper reason. A reader behind HTTP basic auth types
+        // `https://ben:hunter2@library.home.arpa`, and the whole string used to
+        // survive into three places that store or show it in the clear: the
+        // `issa.lastServer` preference, which is in the backed-up preferences
+        // plist; the keychain *account* attribute, which is unencrypted
+        // metadata rather than protected item data; and the Settings screen,
+        // rendered verbatim over the reader's shoulder. `IssaLog.Redaction`
+        // has a dedicated rule for this exact shape, so the log — the one sink
+        // nobody reads — was the only one protected.
+        components.user = nil
+        components.password = nil
         return components.url
     }
 

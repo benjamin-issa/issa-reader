@@ -179,23 +179,52 @@ final class LogStore: @unchecked Sendable {
     }
 
     /// The export, as a file with a name worth receiving in a message.
+    ///
+    /// Written into a directory of its own with a random name, and protected.
+    /// It used to land on a date-stamped path directly in `tmp` — guessable,
+    /// with no `completeFileProtection` so it was readable on a booted-but-
+    /// locked device, and never deleted. `DiagnosticsView` materialises it from
+    /// `.task`, so merely opening that screen wrote six hours of hostnames and
+    /// book titles to disk whether or not the reader shared anything, including
+    /// straight after they tapped "Clear log". `discardExports()` removes them.
     func exportFile(since date: Date) -> URL? {
         let stamp = Date().formatted(Self.filenameStamp)
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("IssaReader-\(stamp).log")
+        let directory = Self.exportDirectory
+        try? FileManager.default.createDirectory(
+            at: directory, withIntermediateDirectories: true)
+        let url = directory
+            .appendingPathComponent("IssaReader-\(stamp)-\(UUID().uuidString.prefix(8)).log")
         let header = """
         Issa Reader diagnostics
         Written \(Date().formatted(IssaLog.Entry.stamp))
         Covering the last six hours.
 
         """
+        // Previous exports go first: one file per visit to the screen would
+        // otherwise accumulate for the life of the install.
+        discardExports()
+        try? FileManager.default.createDirectory(
+            at: directory, withIntermediateDirectories: true)
         guard let data = (header + text(since: date) + "\n").data(using: .utf8),
-              (try? data.write(to: url, options: .atomic)) != nil
+              (try? data.write(to: url, options: [.atomic, .completeFileProtection])) != nil
         else { return nil }
         return url
     }
 
+    /// Where exports live, and the fact that they are ours to delete.
+    static var exportDirectory: URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent("issa-log-exports", isDirectory: true)
+    }
+
+    /// Removes every export written so far.
+    func discardExports() {
+        try? FileManager.default.removeItem(at: Self.exportDirectory)
+    }
+
     func clear() {
+        // Exports too. "Clear log" that leaves a full copy of the log in tmp
+        // is not what the button says it is.
+        discardExports()
         io.lock()
         defer { io.unlock() }
         lock.lock()

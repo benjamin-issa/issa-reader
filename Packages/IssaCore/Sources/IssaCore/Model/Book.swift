@@ -301,7 +301,7 @@ public struct ExternalData: Codable, Hashable, Sendable, Identifiable {
     public var normalized: Double? {
         let low = sourceRatingMin ?? 0
         guard let high = sourceRatingMax, high > low else { return nil }
-        return min(max((rating - low) / (high - low), 0), 1)
+        return ((rating - low) / (high - low)).asProgression ?? 0
     }
 
     /// "4.3 of 5" — stated in the source's own terms rather than converted,

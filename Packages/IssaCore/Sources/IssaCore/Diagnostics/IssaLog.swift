@@ -112,6 +112,8 @@ public enum IssaLog {
     public static func count() -> Int { store.count(since: Date() - window) }
 
     public static func clear() { store.clear() }
+    /// Removes any diagnostics file written for sharing.
+    public static func discardExports() { store.discardExports() }
 
     /// Where the log is, so the diagnostics screen can say so.
     public static var directory: URL? { store.directory }

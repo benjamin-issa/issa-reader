@@ -1,4 +1,5 @@
 import Foundation
+import IssaCore
 
 /// An opened EPUB: its package document, spine, manifest and navigation.
 public struct EPUBPackage: Sendable {
@@ -60,7 +61,12 @@ public struct EPUBPackage: Sendable {
             return (Double(spineIndex) + within) / Double(spine.count)
         }
         let before = weights.prefix(spineIndex).reduce(0, +)
-        return min(max((before + weights[spineIndex] * min(max(within, 0), 1)) / total, 0), 1)
+        // `asProgression`, not `min(max(…))`: Swift's max returns the other
+        // operand against NaN, so the inline clamp passed one straight through
+        // and `ReaderModel.spinePosition` then fed `Int(scaled)` a NaN, which
+        // traps.
+        let place = within.asProgression ?? 0
+        return ((before + weights[spineIndex] * place) / total).asProgression ?? 0
     }
 
     public struct NavPoint: Sendable, Hashable {

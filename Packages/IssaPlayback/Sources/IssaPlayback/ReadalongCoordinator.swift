@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import IssaCore
 import IssaEPUB
 import Observation
 
@@ -181,7 +182,13 @@ public final class ReadalongCoordinator {
     }
 
     public func seek(toBookProgress progress: Double) async {
-        let time = timeline.totalDuration * min(max(progress, 0), 1)
+        // A non-finite progress is not a place in the book. Refusing it is
+        // the point: the inline clamp let NaN through, `totalDuration * NaN`
+        // is NaN, and the seek that followed set `steeredAt`, so the position
+        // writer persisted the result as a listener-*chosen* position — the one
+        // origin PositionGuard may not refuse.
+        guard let place = progress.asProgression else { return }
+        let time = timeline.totalDuration * place
         guard let entry = timeline.entry(atBookTime: time) else { return }
         // A seek is not a play button: it lands paused when paused, playing
         // when playing, exactly as the audiobook implementation of this same

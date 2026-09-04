@@ -347,8 +347,14 @@ struct SignOutCleanupTests {
                 excerpt: excerpt)
         }
 
-        // Made before the upgrade that records accounts.
-        try await store.save(mark("legacy"))
+        // Written while the store had no account named. This used to be
+        // spelled the same way as "made before the upgrade that records
+        // accounts" — both NULL — and `setAccount` claimed both for whoever
+        // signed in next. On a shared device that handed one reader's
+        // highlights to another, by a one-way UPDATE, in the one datum that
+        // exists nowhere else. Genuinely pre-upgrade rows are marked by the
+        // v6 migration instead, so only they are ever adopted.
+        try await store.save(mark("unowned"))
 
         try await store.setAccount("alice")
         try await store.save(mark("alice's"))
@@ -360,9 +366,33 @@ struct SignOutCleanupTests {
         #expect(try await store.allAnnotations().map(\.excerpt) == ["bob's"])
         try await store.deleteAnnotations(forBook: "shared-book")
 
-        // The first account to sign in after the upgrade owns the legacy
-        // rows, and nothing another account did since touched hers.
+        // Alice keeps her own, and nothing another account did since touched
+        // them.
         try await store.setAccount("alice")
-        #expect(Set(try await store.allAnnotations().map(\.excerpt)) == ["legacy", "alice's"])
+        #expect(Set(try await store.allAnnotations().map(\.excerpt)) == ["alice's"])
+    }
+
+    /// The leak, stated as a rule.
+    @Test("a mark made while nobody was signed in is not handed to the next account")
+    func unownedMarksAreNotAdopted() async throws {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appending(path: "issa-unowned-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try LibraryStore(serverKey: "http://shared.test", directory: directory)
+
+        func mark(_ excerpt: String) -> Annotation {
+            Annotation(
+                bookUUID: "shared-book", kind: .highlight,
+                locator: ReadiumLocator(
+                    href: "chapter1.xhtml", type: "application/xhtml+xml",
+                    locations: .init(progression: 0.1, totalProgression: 0.1, charOffset: 10)),
+                excerpt: excerpt)
+        }
+
+        try await store.save(mark("made with nobody named"))
+        try await store.setAccount("bob")
+        #expect(
+            try await store.allAnnotations().isEmpty,
+            "bob did not make it, so bob must not inherit it")
     }
 }

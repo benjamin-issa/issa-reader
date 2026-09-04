@@ -205,6 +205,25 @@ public actor LibraryStore {
             try db.create(index: "annotation_on_account", on: "annotation", columns: ["account"])
         }
 
+        // Marks the rows that predate accounts, so "made before accounts
+        // existed" stops being spelled the same way as "made while no account
+        // was known".
+        //
+        // `setAccount` claimed every NULL row for the first reader to sign in
+        // afterwards, which is right for the upgrade and wrong for everything
+        // since: an annotation written when the store had no account — a launch
+        // that reached the cached shelf without a successful `enterLibrary`, so
+        // no `issa.account.<server>` key was ever stored — was also NULL, and
+        // was handed to whoever signed in next. On a shared device that is one
+        // reader's highlights and quoted excerpts transferring to another, by a
+        // one-way UPDATE with no undo, in the one datum the class doc says
+        // "exists nowhere else".
+        migrator.registerMigration("v6-annotation-preaccount") { db in
+            try db.execute(
+                sql: "UPDATE annotation SET account = ? WHERE account IS NULL",
+                arguments: [Self.preAccountOwner])
+        }
+
         return migrator
     }
 
@@ -380,18 +399,28 @@ extension Book {
 // MARK: - Annotations
 
 public extension LibraryStore {
-    /// Names the signed-in account, and claims for it every annotation made
-    /// before accounts were recorded.
+    /// The owner of rows made before this database recorded accounts at all.
     ///
-    /// The claim is deliberate: those rows are the device's own highlights
-    /// from before the upgrade, and the first reader to sign in afterwards is
-    /// who made them. Leaving them unowned would show them to everyone, which
-    /// is the leak this closes.
+    /// A sentinel rather than NULL, because NULL has to keep meaning something
+    /// else: an annotation written while no account was known. Claiming those
+    /// for the next reader is the leak, not the fix.
+    static var preAccountOwner: String { "__pre-account__" }
+
+    /// Names the signed-in account, and claims for it the annotations made
+    /// before accounts were recorded at all.
+    ///
+    /// That claim is deliberate and one-time: those rows are the device's own
+    /// highlights from before the upgrade, and the first reader to sign in
+    /// afterwards is who made them.
     func setAccount(_ id: String) throws {
         account = id
         try dbQueue.write { db in
+            // Only the rows the v6 migration marked. A NULL account now means
+            // "written while nobody was named", which is not the same claim and
+            // must never be adopted — see that migration for what it cost.
             try db.execute(
-                sql: "UPDATE annotation SET account = ? WHERE account IS NULL", arguments: [id])
+                sql: "UPDATE annotation SET account = ? WHERE account = ?",
+                arguments: [id, Self.preAccountOwner])
         }
     }
 
