@@ -30,7 +30,18 @@ BUNDLE_ID="com.benjaminissa.issareader"
 DERIVED="$ROOT/.build/dd-sweep"
 WORK="$ROOT/.build/layout-sweep"
 OUT="$ROOT/docs/screenshots/sweep"
-FIXTURE_READALONG_UUID="11111111-1111-4111-8111-111111111111"
+# Read from the fixture rather than retyped here. The script plants an EPUB at
+# a filename derived from this uuid and the app looks for it under the same
+# name, so two copies that drift produce a reader screen that silently falls
+# back to downloading — from a stub server that answers 404.
+FIXTURE_SOURCE="$ROOT/Apps/IssaReader-iOS/Sources/UITestSupport/FixtureLibrary.swift"
+FIXTURE_READALONG_UUID=$(
+    sed -n 's/.*readalongUUID = "\([0-9a-fA-F-]*\)".*/\1/p' "$FIXTURE_SOURCE" | head -1
+)
+if [ -z "$FIXTURE_READALONG_UUID" ]; then
+    echo "error: no readalongUUID in $FIXTURE_SOURCE" >&2
+    exit 1
+fi
 
 # width | slug | device type | extra
 ALL_DEVICES=(
