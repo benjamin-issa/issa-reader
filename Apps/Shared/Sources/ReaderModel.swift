@@ -693,7 +693,7 @@ public final class ReaderModel {
         guard let index = package.spine.firstIndex(where: { $0.href == entry.textHref })
         else { return nil }
         var within = 0.0
-        if let span = timeline.span(ofDocument: entry.textHref),
+        if let span = timeline.span(ofDocumentContaining: entry),
            let time = timeline.bookTime(forFragment: entry.fragmentID),
            span.duration > 0 {
             within = min(max((time - span.start) / span.duration, 0), 1)

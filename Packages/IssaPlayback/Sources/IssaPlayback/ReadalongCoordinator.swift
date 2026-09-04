@@ -279,6 +279,10 @@ extension ReadalongCoordinator: PlaybackDriving {
     /// than a walk over every entry in the book.
     public var chapterSpan: (start: TimeInterval, duration: TimeInterval)? {
         guard let href = activeEntry?.textHref else { return nil }
+        // The run the listener is actually in. A document the spine
+        // references twice has two, and the merged range used to span both
+        // plus everything between them.
+        if let entry = activeEntry { return timeline.span(ofDocumentContaining: entry) }
         return timeline.span(ofDocument: href)
     }
 }
