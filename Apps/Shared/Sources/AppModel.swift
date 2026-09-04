@@ -210,6 +210,9 @@ public final class AppModel {
         store = try? LibraryStore(serverKey: url.absoluteString)
         // Whose annotations to show, before the identity call answers — which
         // offline it never does. Cached per server by `enterLibrary`.
+        // Ratings come back with the cached shelf, so a rating set offline is
+        // on screen at launch rather than only after a refresh succeeds.
+        if let stored = try? await store?.ratings(), !stored.isEmpty { ratings = stored }
         if let account = UserDefaults.standard.string(forKey: Self.accountKey(for: url)) {
             try? await store?.setAccount(account)
         }
@@ -352,6 +355,17 @@ public final class AppModel {
         statuses = []
         ratings = [:]
         loadError = nil
+        // Everything else keyed by a value the next account shares. The server
+        // hands the same book uuids to a different reader, which is why
+        // positionGuards is cleared two lines up — and `pendingBook` is a book
+        // uuid, so a widget tap left unconsumed would open in the next
+        // account's library.
+        catalogueGeneration += 1
+        pendingBook = nil
+        readerRequest = nil
+        visibleReaderUUID = nil
+        listeningError = nil
+        NotificationCenter.default.post(name: PlaybackSettings.signOutNotification, object: nil)
 
         // The account's transfers go with it. The manager itself stays: its
         // background session owns its identifier for the life of the process,
@@ -415,6 +429,32 @@ public final class AppModel {
 
     /// Where the last signed-in account for a server is remembered, so an
     /// offline launch still knows whose annotations to show.
+    /// Bumped whenever the catalogue stops belonging to this account.
+    ///
+    /// A detached write that outlives its account is not a hypothetical: the
+    /// one below took a full merged catalogue and could put it back after
+    /// sign-out had deleted it.
+    private var catalogueGeneration = 0
+
+    /// Re-seeds the write guards when the server's position moved backwards.
+    ///
+    /// `PositionGuard.decide` does re-baseline, but only for a `.chosen` write;
+    /// nothing re-seeded the guard when `reconciled(with:)` legitimately adopted
+    /// a *lower* server position. So after restarting a finished book on another
+    /// device, pressing Play here — which produces `.derived` writes — failed
+    /// the high-water test on every tick and returned before both the queue and
+    /// the store, for the rest of the process. The widget went on advertising
+    /// progress that was persisted nowhere, and only an explicit scrub could
+    /// clear it.
+    private func reseedGuards(against catalogue: [Book]) {
+        for book in catalogue {
+            guard let guardState = positionGuards[book.uuid] else { continue }
+            guard let progress = book.progress, progress < guardState.highWater else { continue }
+            positionGuards[book.uuid] = PositionGuard(
+                highWater: progress, duration: LibraryArrangement.duration(of: book))
+        }
+    }
+
     private static func accountKey(for url: URL) -> String {
         "issa.account.\(url.absoluteString)"
     }
@@ -462,18 +502,40 @@ public final class AppModel {
             let known = Dictionary(books.map { ($0.uuid, $0) }, uniquingKeysWith: { first, _ in first })
             let merged = fetched.map { known[$0.uuid]?.reconciled(with: $0) ?? $0 }
             books = merged
+            reseedGuards(against: merged)
             rebuildDerived()
             statuses = fetchedStatuses
-            ratings = fetchedRatings
+            // Reconciled against the queue, not assigned verbatim. A rating
+            // changed offline is still pending, so taking the server's answer
+            // wholesale put the old value back on screen — and the drain
+            // kicked off below then removed it again a moment later.
+            var mergedRatings = fetchedRatings
+            for uuid in await pendingRatingBookUUIDs() {
+                if let local = ratings[uuid] { mergedRatings[uuid] = local }
+                else { mergedRatings[uuid] = nil }
+            }
+            ratings = mergedRatings
+            try? await store?.replaceRatings(mergedRatings)
             loadError = nil
             IssaLog.info("library refreshed", ["books": String(fetched.count)])
 
             // Off the refresh gesture entirely: a full catalogue rewrite and a
             // serial drain of queued writes have no business holding the
             // spinner open.
-            Task { [store, weak self] in
-                try? await store?.replaceCatalogue(merged)
-                await self?.drainPendingWrites()
+            //
+            // `weak self` for the store as well as the model. `store` used to
+            // be captured by value, so `store = nil` in signOut did not stop
+            // this — sign-out suspends on its network POST, this Task
+            // interleaved, `clearAccountData()` ran its DELETE, and then a full
+            // catalogue was written back. The next launch read it with only a
+            // `hasCredential` gate in front, which is the leak that gate exists
+            // to prevent.
+            let generation = catalogueGeneration
+            Task { [weak self] in
+                guard let self, self.catalogueGeneration == generation else { return }
+                try? await self.store?.replaceCatalogue(merged)
+                guard self.catalogueGeneration == generation else { return }
+                await self.drainPendingWrites()
             }
         } catch {
             IssaLog.failure("library refresh", error, ["server": serverAddress])
@@ -497,6 +559,17 @@ public final class AppModel {
     ///
     /// The queue is written first so that losing the connection mid-request
     /// still leaves the intent recorded.
+    /// Books whose rating is still waiting to reach the server.
+    ///
+    /// A refresh that assigns `myRatings()` verbatim overwrites a change the
+    /// queue has not drained yet, so the old value flashes back on screen and
+    /// is then removed again when the drain lands.
+    private func pendingRatingBookUUIDs() async -> Set<String> {
+        guard let mutations else { return [] }
+        let rows = (try? await mutations.pending()) ?? []
+        return Set(rows.filter { $0.kind == .rating }.map(\.bookUUID))
+    }
+
     public func enqueue(
         _ kind: MutationQueue.Kind, bookUUID: String, payload: some Encodable,
         supersedes ordering: Double? = nil,
@@ -1382,11 +1455,16 @@ public final class AppModel {
     }
 
     public func setRating(_ value: Double?, for book: Book) async {
-        guard let session else { return }
+        guard session != nil else { return }
         if let value { ratings[book.uuid] = value } else { ratings.removeValue(forKey: book.uuid) }
+        // Persisted the way `setStatus` persists a shelf change. Without this
+        // the map lived only in memory and was repopulated solely from
+        // `myRatings()`, so a rating set offline vanished on the next cold
+        // launch — the queued write still reached the server eventually, but
+        // the reader had every reason to think it was lost and enter it again.
+        try? await store?.setRating(value, forBook: book.uuid)
         await enqueue(.rating, bookUUID: book.uuid,
                       payload: MutationDrain.RatingPayload(rating: value))
-        _ = session
     }
 
     /// Records a position the app has just written, without asking the server.

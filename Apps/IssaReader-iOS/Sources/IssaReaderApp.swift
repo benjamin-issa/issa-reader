@@ -267,16 +267,51 @@ struct LibraryTabs: View {
     /// and the POST never leaves. The expiration handler must end the
     /// assertion, or iOS kills the app for holding it too long.
     private func flushOnSuspend() {
-        var identifier = UIBackgroundTaskIdentifier.invalid
-        identifier = UIApplication.shared.beginBackgroundTask(withName: "issa.flushPosition") {
-            UIApplication.shared.endBackgroundTask(identifier)
-            identifier = .invalid
-        }
-        guard identifier != .invalid else { return }
+        // A box, not a captured `var`. The expiration handler and the Task both
+        // closed over one boxed local and are not mutually exclusive: on a slow
+        // network iOS ran the handler at ~30s, it ended the real assertion and
+        // zeroed the identifier, and the Task then called endBackgroundTask on
+        // `.invalid`. In the reverse race the handler ended `.invalid` and the
+        // real assertion was never ended, which is what iOS kills the app for —
+        // the outcome the comment above says this exists to prevent.
+        let assertion = BackgroundAssertion()
+        assertion.identifier = UIApplication.shared
+            .beginBackgroundTask(withName: "issa.flushPosition") {
+                assertion.end()
+            }
+
         Task {
+            // Not gated on the assertion. `beginBackgroundTask` returns
+            // `.invalid` when background execution is unavailable — Background
+            // App Refresh off, Low Power Mode — and returning there skipped
+            // `flushOpenReaders()` altogether, including the on-device
+            // `saveProgress()` for every open reader. The network half is what
+            // needs the assertion; the local save needs nothing and is the part
+            // that must not be lost.
             await app.flushOpenReaders()
-            UIApplication.shared.endBackgroundTask(identifier)
-            identifier = .invalid
+            assertion.end()
+        }
+    }
+
+    /// One owner for the background-task identifier, so two closures cannot
+    /// each believe they hold it.
+    private final class BackgroundAssertion: @unchecked Sendable {
+        private let lock = NSLock()
+        private var stored: UIBackgroundTaskIdentifier = .invalid
+
+        var identifier: UIBackgroundTaskIdentifier {
+            get { lock.withLock { stored } }
+            set { lock.withLock { stored = newValue } }
+        }
+
+        /// Ends the assertion exactly once.
+        func end() {
+            let taken: UIBackgroundTaskIdentifier = lock.withLock {
+                defer { stored = .invalid }
+                return stored
+            }
+            guard taken != .invalid else { return }
+            UIApplication.shared.endBackgroundTask(taken)
         }
     }
 

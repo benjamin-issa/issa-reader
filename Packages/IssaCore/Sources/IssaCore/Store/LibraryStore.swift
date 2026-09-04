@@ -224,6 +224,19 @@ public actor LibraryStore {
                 arguments: [Self.preAccountOwner])
         }
 
+        // This user's ratings, which lived only in memory. `setRating` wrote a
+        // dictionary on AppModel and nothing else, and the map was repopulated
+        // solely from `myRatings()` — so a rating set offline vanished on the
+        // next cold launch, and the reader had every reason to believe it was
+        // lost and to enter it again. The queued write still reached the server
+        // eventually; the stars simply were not there in the meantime.
+        migrator.registerMigration("v7-user-ratings") { db in
+            try db.create(table: "rating") { t in
+                t.column("bookUUID", .text).primaryKey()
+                t.column("value", .double).notNull()
+            }
+        }
+
         return migrator
     }
 
@@ -309,6 +322,42 @@ public actor LibraryStore {
         try await dbQueue.write { db in
             try db.execute(sql: "DELETE FROM book")
             try db.execute(sql: "DELETE FROM mutation")
+            try db.execute(sql: "DELETE FROM rating")
+        }
+    }
+
+    /// This user's ratings, as book uuid to score.
+    public func ratings() throws -> [String: Double] {
+        try dbQueue.read { db in
+            try Row.fetchAll(db, sql: "SELECT bookUUID, value FROM rating")
+                .reduce(into: [:]) { result, row in
+                    result[row["bookUUID"] as String] = row["value"] as Double
+                }
+        }
+    }
+
+    /// Records a rating, or removes it when the reader clears one.
+    public func setRating(_ value: Double?, forBook uuid: String) throws {
+        try dbQueue.write { db in
+            if let value {
+                try db.execute(
+                    sql: "INSERT OR REPLACE INTO rating (bookUUID, value) VALUES (?, ?)",
+                    arguments: [uuid, value])
+            } else {
+                try db.execute(sql: "DELETE FROM rating WHERE bookUUID = ?", arguments: [uuid])
+            }
+        }
+    }
+
+    /// Replaces the whole set, for a refresh that has the server's answer.
+    public func replaceRatings(_ ratings: [String: Double]) throws {
+        try dbQueue.write { db in
+            try db.execute(sql: "DELETE FROM rating")
+            for (uuid, value) in ratings {
+                try db.execute(
+                    sql: "INSERT OR REPLACE INTO rating (bookUUID, value) VALUES (?, ?)",
+                    arguments: [uuid, value])
+            }
         }
     }
 

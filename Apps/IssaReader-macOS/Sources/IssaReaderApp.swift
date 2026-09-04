@@ -21,6 +21,18 @@ struct IssaReaderMacApp: App {
         BookContentService.migrateFromCachesIfNeeded()
     }
 
+    /// Saves the open book when the Mac app quits.
+    ///
+    /// `flushOpenReaders()` had exactly one caller in the whole repo, in the
+    /// iOS target's scene-phase handler. The Mac had no scenePhase observer, no
+    /// app delegate and no applicationWillTerminate, and SwiftUI does not
+    /// unmount the hierarchy on termination — so `ReaderView.onDisappear`'s
+    /// unstructured Task raced process teardown and usually lost. Position
+    /// writes are debounced at two seconds with a twenty-second ceiling, so
+    /// every Cmd-Q dropped up to twenty seconds of turned pages, and the queued
+    /// write never left either because drainPendingWrites() never ran.
+    @State private var terminationWatcher = TerminationWatcher()
+
     var body: some Scene {
         WindowGroup {
             MacRootView()
@@ -30,6 +42,7 @@ struct IssaReaderMacApp: App {
                 .task {
                     nowPlaying.configure(settings: settings)
                     app.nowPlayingController = nowPlaying
+                    terminationWatcher.flush = { [app] in await app.flushOpenReaders() }
                 }
                 .tint(Palette.tangerine)
                 .frame(minWidth: 900, minHeight: 560)

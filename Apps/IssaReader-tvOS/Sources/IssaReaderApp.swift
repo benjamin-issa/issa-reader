@@ -17,6 +17,8 @@ struct IssaReaderTVApp: App {
         // guards itself too; this is the second lock on the same door.
     }
 
+    @Environment(\.scenePhase) private var scenePhase
+
     var body: some Scene {
         WindowGroup {
             TVRootView()
@@ -28,6 +30,20 @@ struct IssaReaderTVApp: App {
                     app.nowPlayingController = nowPlaying
                 }
                 .tint(Palette.tangerine)
+                // Pressing the TV button leaves the app the same way pressing
+                // Home does on a phone, and `flushOpenReaders()` had exactly
+                // one caller in the repo — in the iOS target. Position writes
+                // are debounced at two seconds with a twenty-second ceiling, so
+                // without this every exit dropped up to twenty seconds of
+                // narration, and the queued write never left either.
+                //
+                // No background assertion: tvOS has no `beginBackgroundTask`.
+                // The local save is what matters here and it needs none.
+                .onChange(of: scenePhase) { _, phase in
+                    if phase != .active {
+                        Task { await app.flushOpenReaders() }
+                    }
+                }
         }
     }
 }

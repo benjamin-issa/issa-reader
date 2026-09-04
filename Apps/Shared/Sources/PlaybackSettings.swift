@@ -34,12 +34,37 @@ public final class PlaybackSettings {
         didSet { persist(bookStyles, as: Self.bookStylesKey) }
     }
 
+    /// Posted when an account signs out, so per-book state keyed by a book
+    /// uuid is dropped.
+    ///
+    /// A notification rather than a direct call because `AppModel` does not own
+    /// this object — `AppServices` does — and clearing only the stored value
+    /// would leave the live instance's copy in memory for the rest of the
+    /// process, which is the half-fix that keeps the leak.
+    public static let signOutNotification = Notification.Name("issa.playbackSettings.signOut")
+
     private static let commandMapKey = "issa.commandMap"
     private static let readerStyleKey = "issa.readerStyle"
     private static let bookStylesKey = "issa.bookStyles"
     private static let rateKey = "issa.playbackRate"
     private static let progressScopeKey = "issa.progressScope"
     private static let faceMigrationKey = "issa.migratedDefaultFaceToLiterata"
+
+    /// The observer token, in a box `deinit` can reach.
+    ///
+    /// A nonisolated `deinit` cannot read a main-actor property, and dropping
+    /// the removal instead is how a released object leaves a live observer
+    /// behind — which is the same defect this codebase already carries in
+    /// `RemoteCommandCenter`, and which `RemoteCommands` solves the same way
+    /// for its route observer.
+    private final class ObserverBox: @unchecked Sendable {
+        var token: (any NSObjectProtocol)?
+        deinit {
+            if let token { NotificationCenter.default.removeObserver(token) }
+        }
+    }
+
+    private let signOutObserver = ObserverBox()
 
     private let defaults: UserDefaults
 
@@ -83,6 +108,13 @@ public final class PlaybackSettings {
         progressScope = store.string(forKey: Self.progressScopeKey)
             .flatMap(ProgressScope.init(rawValue:)) ?? .chapter
         moveOffTheOldDefaultFace()
+        // After every stored property: `self` is not usable in a closure until
+        // the initialiser has finished.
+        signOutObserver.token = NotificationCenter.default.addObserver(
+            forName: Self.signOutNotification, object: nil, queue: .main,
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.bookStyles = [:] }
+        }
     }
 
     /// Moves anyone still on the previous default reading face onto the new one,

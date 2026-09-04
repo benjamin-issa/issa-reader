@@ -986,13 +986,28 @@ public final class ReaderModel {
         // face is resolved during `open`, and assigning it fires this. There is
         // no chapter to reload yet, and `open` is about to parse one anyway.
         guard package != nil else { return }
-        let fragment = firstFragmentOnCurrentPage()
+        // `firstFragment(beginningOn:)`, not `firstFragmentOnCurrentPage()`.
+        // The latter returns the first id it finds from the page's start, which
+        // is normally the sentence straddling the break — one that *began on
+        // the previous page* — while `page(containingFragment:)` resolves by
+        // where a fragment starts. So every typography change walked a narrated
+        // book one page backwards, and each further tap of the size stepper
+        // repeated it. `saveProgress` already uses the right helper.
+        let fragment = currentPage.flatMap { layout?.firstFragment(beginningOn: $0) }
+            ?? firstFragmentOnCurrentPage()
         let anchor = currentPage?.characterRange.location ?? 0
         guard await loadChapter(chapterIndex), let layout else { return }
         if let fragment, let page = layout.page(containingFragment: fragment) {
             pageIndex = page.index
         } else {
-            pageIndex = layout.pages.firstIndex { NSLocationInRange(anchor, $0.characterRange) } ?? 0
+            // `NSLocationInRange` is false for a zero-length range, and
+            // `computePages` can emit a synthetic trailing page at
+            // {totalLength, 0} — so an anchor at the very end matched no page
+            // and `?? 0` sent the reader to the top of the chapter. Fall back
+            // to the last page, which is where that anchor actually is.
+            pageIndex = layout.pages.firstIndex { NSLocationInRange(anchor, $0.characterRange) }
+                ?? (anchor >= (layout.pages.last?.characterRange.location ?? 0)
+                    ? max(layout.pages.count - 1, 0) : 0)
         }
     }
 
@@ -1350,8 +1365,23 @@ public final class ReaderModel {
     /// Opens the page an annotation is on.
     public func go(to annotation: Annotation) async {
         guard let package else { return }
-        if let index = package.spine.firstIndex(where: { annotation.locator.matchesHref($0.href) }),
-           index != chapterIndex {
+        // The annotation has to belong to a chapter this book still has. When
+        // it does not — the publisher renamed a file between downloads, so
+        // `matchesHref` no longer matches — the old code fell through to the
+        // `else` and applied the stored offset to whatever chapter happened to
+        // be loaded. `page(containingOffset:)` falls back to `pages.last`, so
+        // the reader landed on an arbitrary page of an unrelated chapter, and
+        // the two lines below then marked it `.chosen` and saved it: the one
+        // origin PositionGuard may not refuse, over their real place.
+        guard let index = package.spine.firstIndex(
+            where: { annotation.locator.matchesHref($0.href) })
+        else {
+            IssaLog.warning("annotation names no chapter in this book", [
+                "book": book.uuid, "href": annotation.locator.href,
+            ])
+            return
+        }
+        if index != chapterIndex {
             guard await loadChapter(index, restoring: annotation.locator) else { return }
         } else if let layout, let offset = annotation.locator.locations?.charOffset,
                   let page = layout.page(containingOffset: offset) {
