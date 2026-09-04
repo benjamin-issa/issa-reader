@@ -112,6 +112,19 @@ public enum IssaLog {
     public static func count() -> Int { store.count(since: Date() - window) }
 
     public static func clear() { store.clear() }
+
+    /// Writes everything buffered, now.
+    ///
+    /// `append` buffers and schedules a flush on a utility-priority detached
+    /// task, because a page turn can log several times in a few milliseconds
+    /// and opening the file for each would put disk I/O on the main thread
+    /// during the one animation that must not stutter. Nothing called this,
+    /// though — so the entries immediately before a crash, a force-quit or a
+    /// suspension that the system then kills are exactly the ones that never
+    /// reached the file, and they are the entries this log exists to capture.
+    ///
+    /// Called from the app's own suspend and terminate handlers.
+    public static func flush() { store.flush() }
     /// Removes any diagnostics file written for sharing.
     public static func discardExports() { store.discardExports() }
 

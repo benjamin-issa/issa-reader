@@ -1048,6 +1048,14 @@ public final class AppModel {
             await model.saveProgress()
         }
         await drainPendingWrites()
+        // The log too, and here rather than in each scene-phase handler,
+        // because all three platforms already route their exit through this
+        // one method — which is the arrangement `TerminationDelegate` exists to
+        // guarantee. `IssaLog.append` buffers and flushes on a utility-priority
+        // detached task, so the entries immediately before a suspension the
+        // system then kills are exactly the ones that never reached the file:
+        // the entries the log exists to capture.
+        IssaLog.flush()
     }
 
     /// Releases every open reader and stops whichever is narrating. Every open
