@@ -173,13 +173,26 @@ public final class AppModel {
         isConnecting = true
         defer { isConnecting = false }
 
+        // Cleared up front. Without this a failed connect to a *new* address
+        // left the previous attempt's sentence on screen beside the previous
+        // server's name, so the chooser described a server the reader had just
+        // moved away from.
+        loadError = nil
         let candidates = Self.candidateServerURLs(for: address)
         guard !candidates.isEmpty else {
             loadError = "That doesn't look like a server address."
+            // `.chooseServer`, not left at `.launching`. Both of these returns
+            // used to leave the phase where it started, and the launch path
+            // renders that as a bare `Palette.paper` with no content and no
+            // controls — so a stored address this cannot parse gave a blank app
+            // on every launch, with the reason written to a `loadError` only
+            // the library screen displays. Uninstalling was the way out.
+            if phase == .launching { phase = .chooseServer }
             return
         }
         guard let url = await Self.firstReachable(of: candidates) else {
             loadError = "Couldn't reach a Storyteller server at that address."
+            if phase == .launching { phase = .chooseServer }
             return
         }
         // The RESOLVED address, not the raw text. Everything downstream —

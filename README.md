@@ -19,7 +19,7 @@ and highlight-sync latency.
 
 | | |
 | --- | --- |
-| Sign-in | Three routes on iPhone and Mac — a username and password, the server's own page in the system browser, or a pairing code — all ending in the same token. The device authorization grant (RFC 8628) is the only route on Apple TV; verified end to end against Keycloak on iPhone and Apple TV |
+| Sign-in | Two routes on iPhone and Mac — the server's own page in the system browser, or a pairing code — both ending in the same token. The browser route covers a password and every identity provider the server offers, so nobody has to know which kind of account they have. The device authorization grant (RFC 8628) is the only route on Apple TV; verified end to end against Keycloak on iPhone and Apple TV |
 | Library | Whole catalogue in one fetch, cached locally; instant search, and every shelf and Explore rail derived on device |
 | Reader | Native TextKit 2 pagination, bundled Newsreader, four page themes, adjustable size and leading |
 | Readalong | SMIL media overlays parsed into a book timeline; the highlight tracks real narration with exact glyph rectangles and turns pages to follow it |

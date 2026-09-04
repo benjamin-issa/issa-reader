@@ -253,36 +253,37 @@ public struct SignInView: View {
                 // Was `storyteller.home.arpa` — RFC 8375's home-network domain,
                 // correct and completely opaque to anyone who has not read the
                 // RFC. A placeholder's job is to show the shape of the answer.
+                // A string literal handed to `Text` is a `LocalizedStringKey`
+                // and gets parsed as Markdown, which autolinks a bare URL and
+                // paints it in the tint — so the example address came out
+                // looking like text somebody had already typed and tapped.
+                // `verbatim` skips that parse, and a `Text` carries its own
+                // colour, so the prompt can hold both.
                 //
-                // `Text(verbatim:)`, and drawn as an overlay rather than given
-                // to the field. A string literal handed to `Text` is a
-                // `LocalizedStringKey` and gets parsed as Markdown, which
-                // autolinks a bare URL and paints it in the tint — so the
-                // example address came out looking like text somebody had
-                // already typed and tapped. `verbatim` skips the parse, and the
-                // overlay is what makes the colour ours to set.
-                TextField("", text: $address)
-                    .overlay(alignment: .leading) {
-                        if address.isEmpty {
-                            Text(verbatim: "https://yourlibrary.com")
-                                .font(Typography.body)
-                                .foregroundStyle(Palette.inkTertiary)
-                                .allowsHitTesting(false)
-                                .accessibilityHidden(true)
-                        }
-                    }
-                    // Explicit, the way LibrarySearchField is: a field that
-                    // sets no colour takes the system label, which is white in
-                    // Dark Mode.
-                    .foregroundStyle(Palette.ink)
-                    .textFieldStyle(.plain)
-                    .font(Typography.body)
-                    .padding(Metrics.spacing12)
-                    .background(Palette.surface, in: RoundedRectangle(cornerRadius: Metrics.radiusMedium))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: Metrics.radiusMedium)
-                            .strokeBorder(Palette.border, lineWidth: 1),
-                    )
+                // In `prompt:`, not an overlay. The overlay was
+                // `.accessibilityHidden(true)` over a `TextField("")`, which
+                // left the field with no accessible name at all: VoiceOver
+                // announced a bare "text field" on the first screen of the app.
+                TextField(
+                    "Server",
+                    text: $address,
+                    prompt: Text(verbatim: "https://yourlibrary.com")
+                        .foregroundStyle(Palette.inkTertiary),
+                )
+                .labelsHidden()
+                .accessibilityIdentifier("field.serverAddress")
+                // Explicit, the way LibrarySearchField is: a field that
+                // sets no colour takes the system label, which is white in
+                // Dark Mode.
+                .foregroundStyle(Palette.ink)
+                .textFieldStyle(.plain)
+                .font(Typography.body)
+                .padding(Metrics.spacing12)
+                .background(Palette.surface, in: RoundedRectangle(cornerRadius: Metrics.radiusMedium))
+                .overlay(
+                    RoundedRectangle(cornerRadius: Metrics.radiusMedium)
+                        .strokeBorder(Palette.border, lineWidth: 1),
+                )
                     #if os(iOS)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
@@ -329,6 +330,14 @@ public struct SignInView: View {
         // by probing, and re-normalising what was typed would throw that away
         // and start a grant against the port it just ruled out.
         guard app.phase != .ready, serverURL != nil else { return }
+        // And only when the connect actually succeeded. `connect`'s early
+        // returns leave the previous session in place, and `serverURL` falls
+        // back to it — so typing a new address with a typo advanced to the
+        // chooser showing the *old* server, and "In your browser" opened that
+        // one's token route. Build 24 shortened that to a single tap, because
+        // the route now returns a granted token off one redirect rather than
+        // behind an explicit Approve page.
+        guard app.loadError == nil else { return }
         route = .chooser
     }
 }

@@ -99,13 +99,16 @@ public protocol DeviceGrantTransport: Sendable {
 
 /// Drives the RFC 8628 device authorization grant to completion.
 ///
-/// The only sign-in path on tvOS, and on iOS and macOS it does double duty: it
-/// is the pairing-code route, and it is also what runs behind "Continue in
-/// browser" — there the browser is only a place for the reader to prove who
-/// they are, and it is this poll that learns the answer. Approval happens in the
-/// server's own web login either way, so whichever OIDC provider the server
-/// admin configured is the one the user sees, and the client never implements
-/// an OIDC client itself.
+/// The only sign-in path on tvOS, and on iOS and macOS the pairing-code route.
+///
+/// It no longer runs behind "In your browser": that route is
+/// `AppTokenSignInFlow`, which takes a token straight out of a redirect and
+/// never polls. This doc described the older arrangement for two builds after
+/// it was deleted, which is an invitation to wire the poll back in.
+///
+/// Approval happens in the server's own web login either way, so whichever
+/// OIDC provider the server admin configured is the one the reader sees, and
+/// the client never implements an OIDC client itself.
 public struct DeviceGrantFlow: Sendable {
     private let transport: any DeviceGrantTransport
 

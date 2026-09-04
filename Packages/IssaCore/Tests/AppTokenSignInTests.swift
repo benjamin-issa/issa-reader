@@ -51,16 +51,42 @@ struct AppTokenSignInTests {
     func callbackWithoutAToken() async {
         let browser = ScriptedBrowser(.completed(URL(string: "storyteller://settings")!))
         let outcome = await AppTokenSignInFlow(serverURL: server, browser: browser).run()
-        guard case let .failed(reason) = outcome else { return #expect(Bool(false)) }
-        #expect(reason.contains("token"))
+        guard case let .failed(failure) = outcome else { return #expect(Bool(false)) }
+        #expect(failure == .noToken)
     }
 
-    @Test("a browser that will not open falls out to a sentence")
+    @Test("a browser that will not open carries its reason through")
     func couldNotOpen() async {
         let browser = ScriptedBrowser(.couldNotOpen("Couldn't open your server's sign-in page."))
         let outcome = await AppTokenSignInFlow(serverURL: server, browser: browser).run()
-        guard case let .failed(reason) = outcome else { return #expect(Bool(false)) }
-        #expect(reason.contains("Couldn't open"))
+        guard case let .failed(failure) = outcome else { return #expect(Bool(false)) }
+        #expect(failure == .couldNotOpen(reason: "Couldn't open your server's sign-in page."))
+    }
+
+    /// `ServerAddress.normalize` only needs a parseable host, so a one-character
+    /// typo in the scheme survives it — and `ASWebAuthenticationSession` opens
+    /// http and https only. The reader used to be told the *browser* had failed
+    /// and steered to a pairing code that would fail identically.
+    @Test("an address a browser cannot open is refused before the browser is asked")
+    func refusesNonWebAddress() async {
+        let browser = ScriptedBrowser(.byUser)
+        let outcome = await AppTokenSignInFlow(
+            serverURL: URL(string: "htp://library.example")!, browser: browser).run()
+        guard case let .failed(failure) = outcome else { return #expect(Bool(false)) }
+        #expect(failure == .notAWebAddress)
+        #expect(
+            await browser.presented.isEmpty,
+            "and the browser is never opened at all")
+    }
+
+    /// The failure is a case, not a sentence. It said "Try a username and
+    /// password" for two builds after that route was deleted, because the flow
+    /// wrote its own copy and had no way to know what the chooser offered.
+    @Test("the flow reports what went wrong, not what to do about it")
+    func failureCarriesNoUserCopy() async {
+        let browser = ScriptedBrowser(.completed(URL(string: "storyteller://settings")!))
+        let outcome = await AppTokenSignInFlow(serverURL: server, browser: browser).run()
+        #expect(outcome == .failed(.noToken))
     }
 }
 

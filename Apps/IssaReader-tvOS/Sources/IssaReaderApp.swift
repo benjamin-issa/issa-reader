@@ -203,7 +203,8 @@ struct TVSignInView: View {
                     // `verbatim`, for the reason SignInView records: a string
                     // literal is a `LocalizedStringKey`, Markdown autolinks a
                     // bare URL, and the example then draws as a tinted link.
-                    TextField("", text: $address, prompt: Text(verbatim: "https://yourlibrary.com"))
+                    TextField("", text: $address, prompt: Text(verbatim: "https://yourlibrary.com")
+                        .foregroundStyle(Palette.inkTertiary))
                         .font(Typography.sans(30))
                         .frame(maxWidth: 900)
                     Button {

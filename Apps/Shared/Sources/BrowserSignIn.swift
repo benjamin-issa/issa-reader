@@ -36,16 +36,37 @@ final class BrowserApprovalController: NSObject {
                     // `storyteller://settings?token=…`, which this session
                     // intercepts before the system opener sees it.
                     callback: .customScheme(AppTokenGrant.callbackScheme),
-                ) { [weak self] callback, _ in
+                ) { [weak self] callback, error in
                     guard let self else { return }
                     if let callback {
                         self.finish(.completed(callback))
                         return
                     }
-                    // "Closed the window" and "declined the share-your-Safari-
-                    // login alert" both arrive as .canceledLogin and cannot be
-                    // told apart.
-                    self.finish(self.closedByApp ? .byApp : .byUser)
+                    // The error, not `_`. Discarding it collapsed all three
+                    // SDK outcomes into "the reader closed the window", which
+                    // renders a flash of "Taking you back…" and hands back to
+                    // the chooser with nothing on screen and nothing in the
+                    // log — so someone in Stage Manager, or who declined the
+                    // share-your-Safari-login alert, could tap the row forever.
+                    //
+                    // Only `canceledLogin` is genuinely the reader's doing, and
+                    // even that is ambiguous: closing the window and declining
+                    // the consent alert both arrive as it, and cannot be told
+                    // apart.
+                    let code = (error as? NSError).flatMap {
+                        $0.domain == ASWebAuthenticationSessionErrorDomain
+                            ? ASWebAuthenticationSessionError.Code(rawValue: $0.code) : nil
+                    }
+                    switch code {
+                    case .presentationContextNotProvided, .presentationContextInvalid:
+                        IssaLog.error("browser sign-in could not be presented", [
+                            "code": String(describing: code),
+                        ])
+                        self.finish(.couldNotOpen(
+                            "This window could not be opened here. Try a pairing code instead."))
+                    default:
+                        self.finish(self.closedByApp ? .byApp : .byUser)
+                    }
                 }
                 session.presentationContextProvider = self
                 // Not ephemeral, and this is the whole point: a reader already
@@ -54,6 +75,16 @@ final class BrowserApprovalController: NSObject {
                 session.prefersEphemeralWebBrowserSession = false
                 self.session = session
 
+                // Checked *before* starting. The anchor provider falls back to
+                // a bare `ASPresentationAnchor()` — a window with no scene,
+                // which the SDK header names as the thing that produces
+                // `presentationContextInvalid`. Fabricating one turned "there is
+                // nowhere to show this" into an error that was then discarded.
+                guard Self.hasPresentableWindow else {
+                    finish(.couldNotOpen(
+                        "There is no window to show your server's sign-in page in."))
+                    return
+                }
                 guard session.start() else {
                     finish(.couldNotOpen(
                         "Couldn't open your server's sign-in page. Try a pairing code instead."))
@@ -83,6 +114,20 @@ final class BrowserApprovalController: NSObject {
         guard let pending else { return }
         self.pending = nil
         pending.resume(returning: dismissal)
+    }
+}
+
+extension BrowserApprovalController {
+    /// Whether there is a real window to anchor the sheet to.
+    static var hasPresentableWindow: Bool {
+        #if os(macOS)
+        return NSApplication.shared.keyWindow != nil || !NSApplication.shared.windows.isEmpty
+        #else
+        return UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive }
+            .map { $0.keyWindow != nil || !$0.windows.isEmpty } ?? false
+        #endif
     }
 }
 
@@ -155,24 +200,50 @@ public final class BrowserSignInModel {
         self.serverURL = serverURL
     }
 
+    /// Bumped by every `begin`, so a superseded attempt cannot write.
+    private var generation = 0
+
     public func begin() {
         task?.cancel()
+        generation &+= 1
+        let attempt = generation
         stage = .starting
         let url = serverURL
         task = Task { [weak self] in
             let outcome = await AppTokenSignInFlow(
                 serverURL: url, browser: SafariApprovalBrowser()).run()
-            await self?.finish(outcome)
+            await self?.finish(outcome, from: attempt)
         }
     }
 
-    private func finish(_ outcome: AppTokenOutcome) {
+    private func finish(_ outcome: AppTokenOutcome, from attempt: Int) {
+        // Awaiting a `@MainActor` method from a cancelled task neither throws
+        // nor skips, so without this the old attempt's dismissal wrote over the
+        // fresh `.starting` — and the change handler then ejected the reader to
+        // the chooser with the second browser session live on screen.
+        guard attempt == generation else { return }
         switch outcome {
         case let .granted(token): stage = .granted(token)
         // Not a failure. The reader closed the window, so the chooser is what
         // they want next, not an error about a thing they chose to do.
         case .dismissed: stage = .dismissed
-        case let .failed(reason): stage = .failed(reason)
+        case let .failed(failure): stage = .failed(Self.sentence(for: failure))
+        }
+    }
+
+    /// The words for a failure, written here because the view knows what its
+    /// own rows are called and the flow does not.
+    ///
+    /// The flow used to write these, which is how it came to name the password
+    /// route for two builds after that route was deleted.
+    private static func sentence(for failure: AppTokenFailure) -> String {
+        switch failure {
+        case .noToken:
+            "Your server sent this app back without a sign-in token. Try a device code instead."
+        case .notAWebAddress:
+            "That server address isn't one this app can open. Check it and try again."
+        case let .couldNotOpen(reason):
+            reason
         }
     }
 

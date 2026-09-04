@@ -85,7 +85,19 @@ public final class DeviceSignInModel {
             renewals += 1
             isRenewing = true
             IssaLog.info("device code renewed", ["attempt": String(renewals)])
-            await begin()
+            // Disowned before renewing, and renewed from a *new* task.
+            //
+            // This method runs inside `pollTask`, and `begin()` opens by
+            // cancelling `pollTask` — so `await begin()` cancelled the task it
+            // was executing in. Two lines later `flow.begin()` reaches
+            // URLSession, which honours cancellation, throws `URLError.cancelled`
+            // and lands in the catch as "Couldn't sign in". Every renewal
+            // failed instantly, `maxRenewals` was unreachable dead code, and on
+            // Apple TV — where this is the only sign-in route — a code left for
+            // fifteen minutes gave a dead end instead of the promised number
+            // changing on screen.
+            pollTask = nil
+            Task { [weak self] in await self?.begin() }
         case let .failed(reason): stage = .failed(reason)
         }
     }
