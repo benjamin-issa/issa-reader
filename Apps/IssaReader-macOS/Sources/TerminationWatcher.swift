@@ -3,43 +3,56 @@ import SwiftUI
 
 /// Runs one last save before the Mac app exits.
 ///
-/// `NSApplication.willTerminateNotification` rather than a `scenePhase`
-/// observer: SwiftUI does not tear down its scenes on termination, so
-/// `onDisappear` never runs and `.background` is never reached. AppKit does
-/// deliver this, and it is delivered on the main thread with the run loop still
-/// alive, which is what makes the write possible at all.
+/// `flushOpenReaders()` had exactly one caller in the whole repo, in the iOS
+/// target's scene-phase handler. The Mac had no scenePhase observer, no app
+/// delegate and no `applicationWillTerminate`, and SwiftUI does not unmount its
+/// scenes on termination — so `ReaderView.onDisappear`'s unstructured Task
+/// raced process teardown and usually lost. Position writes are debounced at
+/// two seconds with a twenty-second ceiling, so every ⌘Q dropped up to twenty
+/// seconds of turned pages, and the queued write never left either because
+/// `drainPendingWrites()` never ran.
 ///
-/// The wait is bounded. `applicationShouldTerminate` would be the tidy place
-/// for an asynchronous answer, but it needs an `NSApplicationDelegate`, and a
-/// SwiftUI app that installs one loses the scene plumbing this app relies on.
-/// A short, explicit block is the honest trade: a save that cannot finish in
-/// two seconds was not going to finish during a quit either.
+/// `applicationShouldTerminate` returning `.terminateLater`, not a
+/// `willTerminate` observer with a semaphore. The first attempt at this did the
+/// latter: it blocked the main thread on a `DispatchSemaphore` while a detached
+/// Task called `flushOpenReaders()`. That is a guaranteed deadlock — `AppModel`
+/// is `@MainActor`, so the task has to acquire the main actor the semaphore is
+/// holding — and its effect was to hang every quit for the full timeout and
+/// then exit *without* saving, which is worse than the bug it was fixing.
+/// `.terminateLater` is the mechanism AppKit provides for exactly this: the app
+/// stays alive, the run loop keeps turning, and `reply(toApplicationShouldTerminate:)`
+/// releases it when the work is done.
+///
+/// A SwiftUI app can have a delegate — `@NSApplicationDelegateAdaptor` — without
+/// giving up its scenes, which an earlier note in the plan wrongly claimed it
+/// could not.
 @MainActor
-@Observable
-final class TerminationWatcher {
+final class TerminationDelegate: NSObject, NSApplicationDelegate {
     /// What to run. Set once the app model exists.
-    var flush: (@Sendable () async -> Void)?
+    var flush: (() async -> Void)?
 
-    private var observer: (any NSObjectProtocol)?
+    /// Set while a flush is in flight, so a second terminate request during it
+    /// does not start another.
+    private var isFlushing = false
 
-    init() {
-        observer = NotificationCenter.default.addObserver(
-            forName: NSApplication.willTerminateNotification, object: nil, queue: .main,
-        ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.runFlush() }
-        }
-    }
+    func applicationShouldTerminate(
+        _ sender: NSApplication
+    ) -> NSApplication.TerminateReply {
+        guard let flush, !isFlushing else { return .terminateNow }
+        isFlushing = true
 
-    private func runFlush() {
-        guard let flush else { return }
-        let done = DispatchSemaphore(value: 0)
-        Task.detached {
+        Task { @MainActor in
+            // A ceiling, because quit must not be hostage to a slow server. The
+            // local save in `flushOpenReaders` happens before the network drain,
+            // so the part that matters is done first either way.
+            let deadline = Task {
+                try? await Task.sleep(for: .seconds(3))
+                if !Task.isCancelled { sender.reply(toApplicationShouldTerminate: true) }
+            }
             await flush()
-            done.signal()
+            deadline.cancel()
+            sender.reply(toApplicationShouldTerminate: true)
         }
-        // Blocking the main thread is the point: the process is about to go
-        // away, and an unawaited Task is exactly what made this unreliable
-        // before.
-        _ = done.wait(timeout: .now() + 2)
+        return .terminateLater
     }
 }
