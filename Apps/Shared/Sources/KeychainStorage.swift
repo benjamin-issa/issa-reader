@@ -4,9 +4,22 @@ import Security
 
 /// Keychain-backed token persistence.
 ///
-/// `kSecAttrAccessibleAfterFirstUnlock` rather than `WhenUnlocked` because the
-/// widget timeline provider and background download tasks both run while the
-/// device is locked and need the token to talk to the server.
+/// `…AfterFirstUnlockThisDeviceOnly`. First-unlock because background download
+/// tasks run while the device is locked and need the token; ThisDeviceOnly
+/// because without it the item is included in an encrypted backup and restores
+/// onto a *different* device, which then holds a working credential — one
+/// `Session` documents as lasting thirty-five years — with no sign-in and
+/// nothing server-side to distinguish it.
+///
+/// The widget was the stated reason for the weaker class and was never a
+/// reason: no target carries a `keychain-access-groups` entitlement, this type
+/// is only ever constructed with `accessGroup: nil`, and the widget never
+/// touches the keychain. ThisDeviceOnly satisfies the background downloader
+/// identically.
+///
+/// `kSecUseDataProtectionKeychain` on every query, because on macOS its absence
+/// puts the item in the legacy file-based keychain, where `kSecAttrAccessible`
+/// is ignored outright and the protection promised above does not exist.
 public struct KeychainStorage: TokenPersisting {
     private let service: String
     private let accessGroup: String?
@@ -23,6 +36,7 @@ public struct KeychainStorage: TokenPersisting {
             kSecAttrAccount as String: account,
         ]
         if let accessGroup { query[kSecAttrAccessGroup as String] = accessGroup }
+        query[kSecUseDataProtectionKeychain as String] = true
         return query
     }
 
@@ -39,24 +53,51 @@ public struct KeychainStorage: TokenPersisting {
         return token
     }
 
-    public func write(_ token: String, account: String) {
+    /// Stores the token, and says so when it could not.
+    ///
+    /// Every status code used to be discarded: `SecItemUpdate`'s was compared
+    /// only against `errSecItemNotFound` and `SecItemAdd`'s was never read at
+    /// all, so a failed write was indistinguishable from a successful one. The
+    /// reachable case is not exotic — a background task refreshing a token
+    /// before first unlock gets `errSecInteractionNotAllowed` — and its symptom
+    /// was a sign-in that appeared to work followed by a launch back at the
+    /// server form, with nothing anywhere saying why.
+    @discardableResult
+    public func write(_ token: String, account: String) -> Bool {
         let data = Data(token.utf8)
         let query = baseQuery(account: account)
 
         let attributes: [String: Any] = [
             kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
         ]
 
-        let status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+        var status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
         if status == errSecItemNotFound {
             var insert = query
             insert.merge(attributes) { current, _ in current }
-            SecItemAdd(insert as CFDictionary, nil)
+            status = SecItemAdd(insert as CFDictionary, nil)
         }
+        guard status == errSecSuccess else {
+            IssaLog.warning("keychain write failed", ["status": String(status)])
+            return false
+        }
+        return true
     }
 
-    public func delete(account: String) {
-        SecItemDelete(baseQuery(account: account) as CFDictionary)
+    /// Removes the token, and says so when it could not.
+    ///
+    /// A delete that silently fails is worse than a write that does: the UI
+    /// shows the reader signed out while a working credential stays on disk,
+    /// and the next launch restores straight back into the library they
+    /// believed they had left.
+    @discardableResult
+    public func delete(account: String) -> Bool {
+        let status = SecItemDelete(baseQuery(account: account) as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            IssaLog.warning("keychain delete failed", ["status": String(status)])
+            return false
+        }
+        return true
     }
 }

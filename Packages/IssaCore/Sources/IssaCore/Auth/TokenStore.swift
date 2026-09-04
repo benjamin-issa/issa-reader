@@ -55,7 +55,20 @@ public actor TokenStore: TokenProviding {
 /// in-memory dictionary in tests.
 public protocol TokenPersisting: Sendable {
     func read(account: String) -> String?
-    func write(_ token: String, account: String)
-    func delete(account: String)
+    /// Whether the token actually reached storage.
+    ///
+    /// Not `Void`. The keychain can refuse a write — a background task
+    /// refreshing a token before first unlock gets `errSecInteractionNotAllowed`
+    /// — and a caller that cannot tell the difference reports a successful
+    /// sign-in over a credential that was never saved.
+    @discardableResult
+    func write(_ token: String, account: String) -> Bool
+    /// Whether the token is now definitely gone.
+    ///
+    /// A silent failure here is worse than a silent failed write: the UI shows
+    /// the reader signed out while a working credential stays on disk, and the
+    /// next launch restores into the library they believed they had left.
+    @discardableResult
+    func delete(account: String) -> Bool
 }
 

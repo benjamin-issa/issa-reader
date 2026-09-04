@@ -133,18 +133,46 @@ struct BookFormatTests {
 /// Reading the download directory instead of asking about each book in turn.
 @Suite("Naming downloaded files")
 struct DownloadFilenameTests {
+    /// A canonical uuid — which is the only shape the catalogue now admits,
+    /// since `LibraryService.refusingUnsafeIdentifiers` drops anything else
+    /// before it reaches a shelf. This used to read "abc-123", a convenient
+    /// short string no Storyteller server sends.
+    private static let uuid = "0198ab12-cd34-4e56-8f90-123456789abc"
+
+    private func service() -> BookContentService {
+        let directory = URL(fileURLWithPath: "/tmp/does-not-matter")
+        return BookContentService(
+            client: APIClient(baseURL: directory, tokens: NoTokens()), cacheDirectory: directory)
+    }
+
+    private func book(uuid: String) -> Book {
+        let json = Data(#"{"uuid":"\#(uuid)","title":"T","authors":[],"narrators":[],"creators":[],"series":[],"collections":[],"identifiers":[],"tags":[]}"#.utf8)
+        return try! JSONDecoder().decode(Book.self, from: json)
+    }
+
     @Test("a filename round-trips to its book for every format")
     func roundTripsEveryFormat() {
-        let directory = URL(fileURLWithPath: "/tmp/does-not-matter")
-        let service = BookContentService(
-            client: APIClient(baseURL: directory, tokens: NoTokens()), cacheDirectory: directory)
-        let json = Data(#"{"uuid":"abc-123","title":"T","authors":[],"narrators":[],"creators":[],"series":[],"collections":[],"identifiers":[],"tags":[]}"#.utf8)
-        let subject = try! JSONDecoder().decode(Book.self, from: json)
-
+        let subject = book(uuid: Self.uuid)
         for format in BookContentService.Format.allCases {
-            let name = service.localURL(for: subject, format: format).lastPathComponent
-            #expect(BookContentService.bookUUID(fromFilename: name) == "abc-123")
+            let name = service().localURL(for: subject, format: format).lastPathComponent
+            #expect(BookContentService.bookUUID(fromFilename: name) == Self.uuid)
         }
+    }
+
+    /// The trade this makes, stated rather than discovered later.
+    ///
+    /// A uuid that could escape the directory is hashed instead of used, so its
+    /// filename no longer round-trips and the book reads as not-downloaded.
+    /// That costs one redundant download in a case the catalogue boundary
+    /// already refuses to create — and the alternative was letting the server
+    /// choose the path.
+    @Test("a uuid that could escape the directory is contained, not round-tripped")
+    func hostileIdentifiersAreContained() {
+        let hostile = book(uuid: "../../Library/Preferences/x")
+        let url = service().localURL(for: hostile, format: .ebook)
+        #expect(url.lastPathComponent.hasPrefix("unsafe-"))
+        #expect(!url.path.contains(".."), "the written path must stay inside Books")
+        #expect(BookContentService.bookUUID(fromFilename: url.lastPathComponent) != "../../Library/Preferences/x")
     }
 
     @Test("anything that is not one of ours is ignored")

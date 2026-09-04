@@ -125,6 +125,19 @@ public final class ReaderModel {
         self.style = style
     }
 
+    /// The href of the spine item currently loaded, when there is one.
+    ///
+    /// `chapterIndex` and `package` are set independently, so `spine[chapterIndex]`
+    /// is not safe to write bare — `saveProgress` says so in as many words and
+    /// guards with `spine.indices`, while `bookmarkOnCurrentPage` and
+    /// `locator(forRange:)` were still subscripting directly behind a `?? ""`
+    /// that only defends against a nil package. One accessor, so the next
+    /// reader of the pair cannot get it wrong either.
+    private var currentSpineHref: String? {
+        guard let package, package.spine.indices.contains(chapterIndex) else { return nil }
+        return package.spine[chapterIndex].href
+    }
+
     public var chapterTitle: String {
         guard let package, chapterIndex < package.spine.count else { return book.title }
         return title(inSpineItem: chapterIndex, atOffset: currentPage?.characterRange.location ?? 0)
@@ -640,7 +653,17 @@ public final class ReaderModel {
     public func playSelection() async {
         positionOrigin = .chosen
         guard let selection, let layout, let readalong, let timeline else { return }
-        let fragment = layout.attributedText
+        // The bound `selectedText` and `annotate` both carry, and this one did
+        // not. `attribute(at:)` raises NSRangeException — an Objective-C
+        // exception Swift cannot catch, so the process goes down — and the
+        // index is reachable: `annotatePage` assigns `page.characterRange`
+        // verbatim, `computePages` can emit a synthetic trailing page at
+        // {totalLength, 0}, and narration crossing into a shorter chapter swaps
+        // the layout synchronously while `clearSelectionIfStale` only runs on
+        // the next view update.
+        let text = layout.attributedText
+        guard selection.location >= 0, selection.location < text.length else { return }
+        let fragment = text
             .attribute(.issaFragmentID, at: selection.location, effectiveRange: nil) as? String
         guard let fragment, timeline.entry(forFragment: fragment) != nil else { return }
         await readalong.seek(toFragment: fragment)
@@ -1358,7 +1381,7 @@ public final class ReaderModel {
         guard let layout, let page = currentPage else { return nil }
         return annotations.first { annotation in
             guard annotation.kind == .bookmark,
-                  annotation.locator.matchesHref(package?.spine[chapterIndex].href ?? ""),
+                  annotation.locator.matchesHref(currentSpineHref ?? ""),
                   let offset = annotation.locator.locations?.charOffset
             else { return false }
             _ = layout
@@ -1377,7 +1400,7 @@ public final class ReaderModel {
     /// Where an annotation on this chapter lives, in the same terms as a
     /// reading position so the two restore through the same code.
     private func locator(forRange range: NSRange) -> ReadiumLocator {
-        let href = package?.spine[chapterIndex].href ?? ""
+        let href = currentSpineHref ?? ""
         let length = (layout?.attributedText.string as NSString?)?.length ?? 0
         let total = max(length, 1)
         let chapterProgress = Double(range.location) / Double(total)

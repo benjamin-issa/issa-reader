@@ -110,6 +110,13 @@ enum FixtureLibrary {
                 ],
                 "collections": [],
                 "identifiers": [],
+                // Non-optional on `Book`, so it must be present even when
+                // empty. Dropping it in favour of setting it only for the two
+                // books that have one threw every other book's decode — and a
+                // nested decode failure discards the whole catalogue, so the
+                // sweep ran against an empty library and measured the empty
+                // state's chrome instead of the app.
+                "series": [],
             ]
             if let status = row.status {
                 book["status"] = ["uuid": "status-\(status)", "name": status]

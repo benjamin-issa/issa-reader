@@ -259,8 +259,13 @@ public final class AppModel {
             downloads.reconfigure(baseURL: url, tokens: session.tokenProvider)
         } else {
             downloads = DownloadManager(baseURL: url, tokens: session.tokenProvider) { job in
-                BookContentService.defaultDirectory()
-                    .appending(path: "\(job.bookUUID)-\(job.format.rawValue).epub")
+                // The same funnel `BookContentService.localURL(for:format:)`
+                // uses. This was a second copy of the filename rule, which is
+                // how a validated read path and an unvalidated write path came
+                // to disagree about where a book lives.
+                BookContentService.localURL(
+                    in: BookContentService.defaultDirectory(),
+                    bookUUID: job.bookUUID, format: job.format)
             }
         }
         // Declared on DownloadManager and never assigned until now, which is
@@ -1476,12 +1481,20 @@ public final class AppModel {
                 "origin": origin.rawValue,
             ])
         }
+        // Locally first, then the queue. `enqueue` ends in `drainPendingWrites()`
+        // — one POST per queued item at URLSession's 60-second default — so with
+        // this pair the other way round, a page turned offline wrote the queue
+        // row, blocked on the drain, and was suspended by iOS before
+        // `recordPosition` ever ran. The in-memory catalogue and the store were
+        // never updated, which is exactly the failure this method's own doc
+        // comment says the code was changed to prevent: "a chapter read offline
+        // and then killed came back at the old percentage."
+        await recordPosition(locator, timestamp: timestamp, for: bookUUID)
         await enqueue(
             .position, bookUUID: bookUUID,
             payload: MutationDrain.PositionPayload(locator: locator, timestamp: timestamp),
             supersedes: timestamp,
         )
-        await recordPosition(locator, timestamp: timestamp, for: bookUUID)
         return true
     }
 
@@ -1491,9 +1504,17 @@ public final class AppModel {
     /// reading session the local copy is stale in a way the user can see.
     public func refresh(book: Book) async {
         guard let session,
-              let index = books.firstIndex(where: { $0.uuid == book.uuid }),
+              books.contains(where: { $0.uuid == book.uuid }),
               let fresh = try? await LibraryService(client: session.client).book(book.uuid)
         else { return }
+        // Resolved *after* the await, not before it. The index used to be bound
+        // in the same guard that then suspends on a network round trip, and
+        // `books` can be replaced entirely during that suspension — signing out
+        // empties it, and a refresh can return a shorter catalogue — so the
+        // subscript trapped. The quieter variant was worse: a merely reordered
+        // catalogue wrote this book's server data into whichever book had taken
+        // its place, and then persisted that.
+        guard let index = books.firstIndex(where: { $0.uuid == book.uuid }) else { return }
         books[index] = books[index].reconciled(with: fresh)
         rebuildDerived()
     }

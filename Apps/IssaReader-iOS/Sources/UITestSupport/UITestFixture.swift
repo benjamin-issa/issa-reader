@@ -60,7 +60,16 @@ private final class InMemoryTokens: TokenPersisting, @unchecked Sendable {
     }
 
     func read(account: String) -> String? { lock.withLock { stored[account] } }
-    func write(_ token: String, account: String) { lock.withLock { stored[account] = token } }
-    func delete(account: String) { _ = lock.withLock { stored.removeValue(forKey: account) } }
+    @discardableResult
+    func write(_ token: String, account: String) -> Bool {
+        lock.withLock { stored[account] = token }
+        return true
+    }
+
+    @discardableResult
+    func delete(account: String) -> Bool {
+        lock.withLock { _ = stored.removeValue(forKey: account) }
+        return true
+    }
 }
 #endif
