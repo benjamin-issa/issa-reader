@@ -39,7 +39,10 @@ public struct RenderedPage: Sendable, Hashable, Identifiable {
 /// again.
 @MainActor
 public final class ChapterLayout {
-    public let attributedText: NSAttributedString
+    /// `private(set) var` rather than `let` because of `recolour(to:)`, which
+    /// is the one thing that changes it — and changes nothing about its
+    /// metrics.
+    public private(set) var attributedText: NSAttributedString
     public private(set) var pages: [RenderedPage] = []
     public private(set) var pageSize: CGSize = .zero
 
@@ -127,6 +130,38 @@ public final class ChapterLayout {
                 ),
             )
         }
+    }
+
+    /// Repaints the chapter in a new ink, keeping the pagination it has.
+    ///
+    /// A theme change alters exactly one attribute — `.foregroundColor` — and
+    /// no metric: the same glyphs sit in the same rectangles on sepia paper as
+    /// on white. Treating it as a typography change meant a ZIP inflate, an XML
+    /// parse and a decode of every plate in the chapter, on the main actor,
+    /// every time the reader switched theme — or every time the system slid
+    /// into dark mode on its own, which happens at sunset while someone is
+    /// reading.
+    ///
+    /// `pages` is deliberately left alone. Recomputing it would produce the
+    /// same boundaries from the same line metrics; keeping it means the reader
+    /// does not move.
+    public func recolour(to colour: PlatformColor) {
+        let repainted = NSMutableAttributedString(attributedString: attributedText)
+        repainted.addAttribute(
+            .foregroundColor, value: colour,
+            range: NSRange(location: 0, length: repainted.length),
+        )
+        attributedText = repainted
+        contentStorage.performEditingTransaction {
+            contentStorage.attributedString = repainted
+        }
+        // The storage has been replaced, which throws the layout away. `draw`
+        // and `paintedCharacterRange` would rebuild it themselves — they
+        // enumerate with `.ensuresLayout` — but `highlightRects` enumerates
+        // *segments*, with no such option, and it is the one thing here that
+        // runs per audio tick. Paying for the layout once, now, is cheaper than
+        // finding out which caller happens to come first.
+        layoutManager.ensureLayout(for: contentStorage.documentRange)
     }
 
     // MARK: - Highlighting
@@ -420,8 +455,11 @@ public final class ChapterLayout {
     public func paintedCharacterRange(for page: RenderedPage) -> NSRange {
         var lower = Int.max
         var upper = 0
+        // Same start as `draw`, and for the same reason: this is what the
+        // accessible page text is built from, so it runs on every page turn
+        // too.
         layoutManager.enumerateTextLayoutFragments(
-            from: contentStorage.documentRange.location,
+            from: location(at: page.characterRange.location) ?? contentStorage.documentRange.location,
             options: [.ensuresLayout],
         ) { fragment in
             let frame = fragment.layoutFragmentFrame
@@ -514,8 +552,16 @@ public final class ChapterLayout {
             context.clip(to: CGRect(
                 x: -100_000, y: page.yOffset, width: 200_000, height: page.contentBottom - page.yOffset))
         }
+        // From this page's own first character, not from the top of the
+        // chapter. Enumeration begins at the fragment *containing* the given
+        // location, so a paragraph straddling the boundary is still visited —
+        // which is the whole reason the overlap test below exists — but the
+        // pages before it are not. Walking from the document start meant page
+        // forty of a chapter enumerated thirty-nine pages of fragments it had
+        // already decided to skip, on every redraw: every page turn, every
+        // narrated sentence, every tick of the highlight.
         layoutManager.enumerateTextLayoutFragments(
-            from: contentStorage.documentRange.location,
+            from: location(at: page.characterRange.location) ?? contentStorage.documentRange.location,
             options: [.ensuresLayout],
         ) { fragment in
             let frame = fragment.layoutFragmentFrame

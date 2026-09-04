@@ -255,6 +255,11 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
     /// Body font: the chosen face, then the app's own, then the system serif,
     /// so early builds and previews still render. `weight` is honoured only
     /// by the system fallback; a named face is used as it comes.
+    ///
+    /// Not cached here, deliberately — see `HTMLContentParser.FontCache`, which
+    /// caches for the length of one parse. A process-wide cache on this would
+    /// be wrong: fonts are registered while the app runs, and the first answer
+    /// given is not always the right one for ever.
     public func bodyFont(weight: PlatformFont.Weight = .regular, italic: Bool = false, scale: CGFloat = 1) -> PlatformFont {
         let size = fontSize * scale
         // The chosen face, then the app's own, then the system's. A book that

@@ -644,10 +644,32 @@ public final class AppModel {
     /// a SwiftUI body reads it more than once per frame.
     public private(set) var arrangedBooks: [Book] = []
 
+    /// Author name to their books, for the book screen's "More by…" rail.
+    ///
+    /// `LibraryDerivation.byAuthor` builds this by grouping the whole library,
+    /// and it is a computed property — so reading it from a view body grouped
+    /// the whole library, and `relatedRails` read two of them. That body
+    /// re-runs on every debounced position save, which while narrating is
+    /// every two seconds. Authors do not change with a page turn.
+    public private(set) var booksByAuthor: [String: [Book]] = [:]
+    public private(set) var booksByNarrator: [String: [Book]] = [:]
+
+    /// The catalogue by uuid.
+    ///
+    /// `BookDetailView` re-resolves its book from `app.books` on every line it
+    /// draws — deliberately, so status, rating and progress stay honest — and
+    /// that was a linear scan of the library, fifty-two times per body. Rebuilt
+    /// with the position-dependent state rather than with the facets, because
+    /// the whole point of re-resolving is that a position change must show.
+    public private(set) var bookByUUID: [String: Book] = [:]
+
     /// Recomputes everything derived from the catalogue.
     func rebuildDerived() {
         facets = LibraryFacets(books: books, downloadedUUIDs: downloadedUUIDs)
         rails = LibraryRails(books: books)
+        let derivation = LibraryDerivation(books: books)
+        booksByAuthor = derivation.byAuthor
+        booksByNarrator = derivation.byNarrator
         rebuildAfterPositionChange()
     }
 
@@ -658,6 +680,7 @@ public final class AppModel {
     /// every debounced save while narrating.
     private func rebuildAfterPositionChange() {
         readingHome = ReadingHome(books: books, rails: rails)
+        bookByUUID = Dictionary(books.map { ($0.uuid, $0) }, uniquingKeysWith: { first, _ in first })
         rebuildArranged()
     }
 

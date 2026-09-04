@@ -127,6 +127,34 @@ public enum HTMLText {
         return out
     }
 
+    /// The same parse, remembered.
+    ///
+    /// `attributed` scans its input character by character and assembles the
+    /// result run by run. That is fine once per blurb and not fine per body
+    /// evaluation — `BookDetailView` re-runs on every debounced position save,
+    /// which while the book it is showing is narrating is every two seconds,
+    /// and it re-parsed the whole description each time.
+    ///
+    /// Keyed on the markup itself, so a description that actually changes is a
+    /// miss rather than a stale render. Only the default styling is cached:
+    /// keying on a `Font` and three `Color`s to serve callers that do not exist
+    /// would cost more than it saves.
+    ///
+    /// Main-actor, because every caller is a view, and bounded by dropping
+    /// everything: the working set is the handful of books someone has looked
+    /// at, and re-parsing one of those costs a millisecond.
+    @MainActor
+    public static func cached(_ html: String) -> AttributedString {
+        if let hit = parsedCache[html] { return hit }
+        let result = attributed(html)
+        if parsedCache.count >= parsedCacheCapacity { parsedCache.removeAll(keepingCapacity: true) }
+        parsedCache[html] = result
+        return result
+    }
+
+    @MainActor private static var parsedCache: [String: AttributedString] = [:]
+    @MainActor private static let parsedCacheCapacity = 32
+
     /// Plain text, for a widget or an accessibility label.
     public static func plain(_ html: String) -> String {
         String(attributed(html).characters)

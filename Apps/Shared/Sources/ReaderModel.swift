@@ -55,9 +55,38 @@ public final class ReaderModel {
     public var hasNarration: Bool { readalong != nil }
     public var isPlaying: Bool { readalong?.player.isPlaying ?? false }
 
+    /// How long a burst of style changes is allowed to run together.
+    ///
+    /// Held down, the size stepper fires this several times a second, and a
+    /// reparse of a long chapter outlives the gap between taps — so the old
+    /// unstructured `Task` left several reparses in flight at once, each
+    /// having captured its own anchor and each committing `layout` and
+    /// `pageIndex` in whatever order it happened to finish. The reader landed
+    /// wherever the last one to return had been aiming.
+    private static let styleCoalesce = Duration.milliseconds(60)
+
+    /// The one in-flight response to a style change. Superseded, not stacked.
+    private var styleTask: Task<Void, Never>?
+
     public var style: ReaderStyle {
         didSet {
             guard style != oldValue else { return }
+
+            // Synchronously, inside the mutation: the canvas re-renders because
+            // `style` changed, and it has to find the repainted text when it
+            // does. Doing this from the task below would repaint after the
+            // redraw that was meant to show it, and nothing observable would
+            // ask for another.
+            if style.theme != oldValue.theme {
+                layout?.recolour(to: style.textColor)
+            }
+            // A theme change on its own is now finished. Everything else falls
+            // through — including anything added to `ReaderStyle` later, which
+            // is why this compares the whole value rather than listing fields.
+            var withoutTheme = style
+            withoutTheme.theme = oldValue.theme
+            guard withoutTheme != oldValue else { return }
+
             // Typography lives in the attributed text, which is immutable once
             // built, so a font or spacing change needs the chapter parsed again
             // — re-flowing alone would keep the old face at the old size. Page
@@ -67,8 +96,13 @@ public final class ReaderModel {
                 || style.fontSize != oldValue.fontSize
                 || style.lineSpacing != oldValue.lineSpacing
                 || style.justified != oldValue.justified
-                || style.theme != oldValue.theme
-            Task { await needsReparse ? reloadCurrentChapter() : relayoutCurrentChapter() }
+
+            styleTask?.cancel()
+            styleTask = Task { [weak self] in
+                try? await Task.sleep(for: Self.styleCoalesce)
+                guard !Task.isCancelled, let self else { return }
+                await needsReparse ? reloadCurrentChapter() : relayoutCurrentChapter()
+            }
         }
     }
 
@@ -958,27 +992,6 @@ public final class ReaderModel {
         await relayoutCurrentChapter()
     }
 
-    /// Decodes and caches a chapter's artwork, keyed by archive path.
-    ///
-    /// A chapter asks once per plate, and the cache lives as long as the chapter
-    /// does, so reflowing on a font change costs no re-decoding.
-    final class ChapterImageSource {
-        private let archive: EPUBArchive
-        private var decoded: [String: PlatformImage?] = [:]
-
-        init(archive: EPUBArchive) { self.archive = archive }
-
-        func image(for href: String) -> PlatformImage? {
-            if let cached = decoded[href] { return cached }
-            var result: PlatformImage?
-            if let data = try? archive.read(href) {
-                result = PlatformImage(data: data)
-            }
-            decoded[href] = result
-            return result
-        }
-    }
-
     /// Re-parses the current chapter under the current style, holding position.
     ///
     /// The anchor is the narrated fragment when there is one, and the character
@@ -1165,6 +1178,16 @@ public final class ReaderModel {
     public private(set) var isSearching = false
     private var searchTask: Task<Void, Never>?
 
+    /// How long the typist gets between keystrokes before a search starts.
+    ///
+    /// Every keystroke used to start a whole-book search and cancel the
+    /// previous one — but cancellation is only checked between spine items, so
+    /// typing "whale" at any normal speed left five searches each committed to
+    /// finishing the chapter they were in. The debounce is what makes the
+    /// cancel cheap: a superseded search that has not begun reading yet does no
+    /// work at all.
+    private static let searchDebounce = Duration.milliseconds(250)
+
     /// Searches the whole book, chapter by chapter, publishing as it goes.
     ///
     /// Every chapter has to be parsed to be searched, which for a long book is
@@ -1182,38 +1205,23 @@ public final class ReaderModel {
         searchHits = []
         isSearching = true
         let style = style
+        let archive = package.archive
+        let spine = package.spine
+        let navigation = package.navigation
         searchTask = Task { [weak self] in
-            for (index, item) in package.spine.enumerated() {
+            try? await Task.sleep(for: Self.searchDebounce)
+            if Task.isCancelled { return }
+            for (index, item) in spine.enumerated() {
                 if Task.isCancelled { break }
-                // Parsed with the images loaded, though search has no use for
-                // the pictures: each plate contributes characters — the object
-                // replacement character and its line break — to the rendered
-                // text, and a parse without them computes offsets that drift
-                // ahead of the laid-out chapter's, far enough on an
-                // illustrated book to land `go(to:)` on the wrong page.
-                // Decoded per chapter and released with it, as `loadChapter`
-                // does.
-                let images = ChapterImageSource(archive: package.archive)
-                guard let data = try? package.archive.read(item.href),
-                      let parsed = try? HTMLContentParser(
-                          style: style, loadImage: { images.image(for: $0) },
-                      ).parse(xhtml: data, baseHref: item.href)
-                else { continue }
-
-                let hits = BookSearch.hits(
-                    for: needle, in: parsed.text.string,
-                    chapterIndex: index,
-                    chapterTitle: package.navigation.first { $0.href == item.href }?.title
-                        ?? "Chapter \(index + 1)",
-                    navigation: package.navigation.filter { $0.href == item.href },
-                    fragmentRanges: parsed.fragmentRanges,
+                // The read, the parse and the plate decodes happen off the main
+                // actor; only the hits come back to it.
+                let hits = await Self.hits(
+                    for: needle, in: archive, item: item, at: index,
+                    navigation: navigation, style: style,
                 )
                 if Task.isCancelled { break }
                 guard let self else { return }
                 searchHits.append(contentsOf: hits)
-                // Yield between chapters so typing stays responsive on a book
-                // with hundreds of spine items.
-                await Task.yield()
             }
             // Only when this task is still the live one: a superseded search
             // resumes from that yield already cancelled, and the flag by then
@@ -1221,6 +1229,47 @@ public final class ReaderModel {
             // the spinner and showed "No matches." for a search still running.
             if !Task.isCancelled { self?.isSearching = false }
         }
+    }
+
+    /// Reads, parses and searches one spine item, away from the drawing thread.
+    ///
+    /// `nonisolated` *and* `async`, which is the whole point of the change. An
+    /// unstructured `Task` created inside a `@MainActor` type inherits that
+    /// isolation, so the ZIP inflate, the XML parse and every plate decode ran
+    /// on the thread that draws — for every spine item in the book, on every
+    /// keystroke. A `nonisolated async` function does not adopt its caller's
+    /// executor, so the same work runs on the global one and the main actor is
+    /// free between chapters.
+    ///
+    /// Parsed with the images loaded, though search has no use for the
+    /// pictures: each plate contributes characters — the object replacement
+    /// character and its line break — to the rendered text, and a parse without
+    /// them computes offsets that drift ahead of the laid-out chapter's, far
+    /// enough on an illustrated book to land `go(to:)` on the wrong page.
+    /// Decoded per chapter and released with it, as `loadChapter` does.
+    private nonisolated static func hits(
+        for needle: String,
+        in archive: EPUBArchive,
+        item: EPUBPackage.SpineItem,
+        at index: Int,
+        navigation: [EPUBPackage.NavPoint],
+        style: ReaderStyle,
+    ) async -> [SearchHit] {
+        let images = ChapterImageSource(archive: archive)
+        guard let data = try? archive.read(item.href),
+              let parsed = try? HTMLContentParser(
+                  style: style, loadImage: { images.image(for: $0) },
+              ).parse(xhtml: data, baseHref: item.href)
+        else { return [] }
+
+        return BookSearch.hits(
+            for: needle, in: parsed.text.string,
+            chapterIndex: index,
+            chapterTitle: navigation.first { $0.href == item.href }?.title
+                ?? "Chapter \(index + 1)",
+            navigation: navigation.filter { $0.href == item.href },
+            fragmentRanges: parsed.fragmentRanges,
+        )
     }
 
     public func cancelSearch() {
@@ -1661,4 +1710,30 @@ extension ReaderModel {
 
     /// Whether choosing the publisher's font would actually change anything.
     public var hasPublisherFont: Bool { style.publisherFamily != nil }
+}
+
+/// Decodes and caches a chapter's artwork, keyed by archive path.
+///
+/// A chapter asks once per plate, and the cache lives as long as the chapter
+/// does, so reflowing on a font change costs no re-decoding.
+///
+/// File scope rather than nested inside `ReaderModel`, which is `@MainActor`:
+/// a type declared inside a globally-isolated one inherits that isolation, and
+/// the search path now decodes plates off the main actor. Nothing outside this
+/// file ever named it.
+private final class ChapterImageSource {
+    private let archive: EPUBArchive
+    private var decoded: [String: PlatformImage?] = [:]
+
+    init(archive: EPUBArchive) { self.archive = archive }
+
+    func image(for href: String) -> PlatformImage? {
+        if let cached = decoded[href] { return cached }
+        var result: PlatformImage?
+        if let data = try? archive.read(href) {
+            result = PlatformImage(data: data)
+        }
+        decoded[href] = result
+        return result
+    }
 }

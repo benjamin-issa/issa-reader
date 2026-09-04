@@ -91,6 +91,12 @@ targets:
     platform: iOS
     sources:
       - path: Apps/IssaSharedTests/Sources
+      # The EPUB the IssaEPUB and IssaRender suites already use. The contents
+      # list lives in Apps/Shared, so the only way to test it against a real
+      # book's navigation is to bundle one here; a hand-built package would
+      # test the assertion rather than the book.
+      - path: Packages/IssaEPUB/Tests/Fixtures/alice.epub
+        buildPhase: resources
     dependencies:
       - target: IssaReader-iOS
     settings:

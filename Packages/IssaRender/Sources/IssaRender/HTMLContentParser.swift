@@ -32,6 +32,43 @@ public struct HTMLContentParser {
     private let loadImage: ((String) -> PlatformImage?)?
     private let maxImageWidth: CGFloat
     private let maxImageHeight: CGFloat
+    private let fonts = FontCache()
+
+    /// One chapter's fonts, resolved once each.
+    ///
+    /// `attributes(for:)` runs per attribute run — hundreds of times on an
+    /// ordinary chapter, thousands on a marked-up one — and `bodyFont` runs a
+    /// CoreText descriptor match every time, plus a second one for `<strong>`,
+    /// for one of about four distinct answers. Within a parse the style is
+    /// fixed, so the only things that vary are these three.
+    ///
+    /// Owned by the parser and thrown away with it, rather than kept for the
+    /// process. That is the part that matters: fonts are registered *while the
+    /// app runs* — the bundled faces at launch, a reader's imported face
+    /// whenever they add one, a book's own embedded face when it opens — so an
+    /// answer cached before a registration is an answer to a different
+    /// question, and a process-wide cache would serve the system fallback for
+    /// the rest of the session. A parse begins and ends after whichever
+    /// registration it depends on.
+    private final class FontCache {
+        private struct Key: Hashable {
+            let italic: Bool
+            let bold: Bool
+            let scale: CGFloat
+        }
+
+        private var faces: [Key: PlatformFont] = [:]
+
+        func face(
+            italic: Bool, bold: Bool, scale: CGFloat, resolve: () -> PlatformFont,
+        ) -> PlatformFont {
+            let key = Key(italic: italic, bold: bold, scale: scale)
+            if let hit = faces[key] { return hit }
+            let face = resolve()
+            faces[key] = face
+            return face
+        }
+    }
 
     /// - Parameters:
     ///   - loadImage: given an archive path, the decoded artwork. Supplying it is
@@ -272,8 +309,13 @@ public struct HTMLContentParser {
     }
 
     private func attributes(for context: Context) -> [NSAttributedString.Key: Any] {
-        var font = context.style.bodyFont(italic: context.italic, scale: context.sizeScale)
-        if context.bold { font = font.withBoldTrait() }
+        let font = fonts.face(
+            italic: context.italic, bold: context.bold, scale: context.sizeScale,
+        ) {
+            var resolved = context.style.bodyFont(italic: context.italic, scale: context.sizeScale)
+            if context.bold { resolved = resolved.withBoldTrait() }
+            return resolved
+        }
 
         let paragraph = NSMutableParagraphStyle()
         // Large type needs proportionally less leading; applying the body

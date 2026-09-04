@@ -22,11 +22,15 @@ enum SharedFixtures {
         readaloud: Bool = false,
         audiobook: Bool = false,
         ebook: Bool = true,
+        authors: [String] = [],
+        narrators: [String] = [],
     ) -> Book {
         var json: [String: Any] = [
             "uuid": uuid ?? title,
             "title": title,
-            "authors": [], "narrators": [], "creators": [], "collections": [],
+            "authors": authors.map { ["uuid": $0, "name": $0] },
+            "narrators": narrators.map { ["uuid": $0, "name": $0] },
+            "creators": [], "collections": [],
             "identifiers": [], "tags": [], "series": [],
         ]
         if let status { json["status"] = ["uuid": status, "name": status] }
