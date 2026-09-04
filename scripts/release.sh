@@ -22,6 +22,66 @@ ROOT="$PWD"
 KEY_PATH="$HOME/.app-store-connect-key.p8"
 KEY_META="$HOME/.app-store-connect-key.json"
 
+# The string that must never reach a shipping binary. It is the launch
+# argument UITestFixture.installIfRequested() checks for, so it exists only
+# inside the fixture code.
+FIXTURE_MARKER='IssaUITestFixture'
+
+# Whether the marker is in this binary.
+#
+# The capture into a variable is the whole point, and replaces
+# `strings "$binary" | grep -q "$FIXTURE_MARKER"`. That form could never report
+# a leak: `grep -q` exits at the first match, `strings` then dies of SIGPIPE,
+# and `set -o pipefail` promotes 141 to the pipeline status — so the `if` took
+# the false branch precisely when the marker WAS present, and the guard was
+# correct only in the case where there was nothing to find. `grep -c` reads to
+# the end, so nothing is closed early and there is no signal to mistake.
+#
+# `-a` scans every section. Swift stores string literals of fifteen UTF-8 bytes
+# or fewer in (__TEXT,__text), which plain `strings` skips; the marker survives
+# that today only by being eighteen bytes long.
+fixture_present() {
+    local binary="$1" hits
+    hits=$(strings -a "$binary" 2>/dev/null | grep -c "$FIXTURE_MARKER" || true)
+    [ "${hits:-0}" -gt 0 ]
+}
+
+# Prove the guard can fire before trusting it to stay silent.
+#
+# This is the lesson of the bug above: for a whole release cycle the check
+# reported "clean" on every build, and that was indistinguishable from working.
+# A guard nobody has seen fail is not evidence.
+fixture_guard_selftest() {
+    local probe status=0
+    probe="$(mktemp "${TMPDIR:-/tmp}/issa-fixture-probe.XXXXXX")"
+    printf 'padding %s padding\n' "$FIXTURE_MARKER" > "$probe"
+    # Push the marker well back from the end so a truncated read cannot pass by
+    # luck, and keep it printable so `strings` emits it.
+    head -c 200000 /dev/zero | tr '\0' 'a' >> "$probe"
+    fixture_present "$probe" || status=1
+    rm -f "$probe"
+    if [ "$status" -ne 0 ]; then
+        echo "error: the fixture-leak guard failed its own self-test." >&2
+        echo "       It cannot find $FIXTURE_MARKER in a file that contains it," >&2
+        echo "       so it cannot be trusted to find it in a shipping binary." >&2
+        return 1
+    fi
+    return 0
+}
+
+# The build-number bump edits a tracked file. A failure anywhere downstream used
+# to leave it bumped on disk, so a failed archive silently consumed a build
+# number and the next run started from the wrong one.
+PROJECT_YML_BACKUP=""
+restore_project_yml() {
+    [ -n "$PROJECT_YML_BACKUP" ] || return 0
+    [ -f "$PROJECT_YML_BACKUP" ] || return 0
+    mv "$PROJECT_YML_BACKUP" "$ROOT/project.yml"
+    echo "project.yml: build number restored — this run did not consume one" >&2
+    PROJECT_YML_BACKUP=""
+}
+trap restore_project_yml EXIT
+
 PLATFORMS="ios,tvos,macos"
 BUILD=""
 BUMP=1
@@ -104,10 +164,14 @@ if [ "$DESTINATION" = upload ] && [ "$ARCHIVE_ONLY" = 0 ]; then
     done
 fi
 
+fixture_guard_selftest || exit 1
+
 if [ "$BUILD" != "$CURRENT" ]; then
     # The build number is one value for every target, on purpose: App Store
     # Connect counts it per platform, so sharing it keeps the three apps
     # legible as one release.
+    PROJECT_YML_BACKUP="$(mktemp "${TMPDIR:-/tmp}/issa-project-yml.XXXXXX")"
+    cp project.yml "$PROJECT_YML_BACKUP"
     /usr/bin/sed -i '' "s/^\( *CURRENT_PROJECT_VERSION: \).*$/\1\"$BUILD\"/" project.yml
     echo "project.yml: CURRENT_PROJECT_VERSION $CURRENT → $BUILD"
 fi
@@ -140,21 +204,42 @@ for platform in "${REQUESTED[@]}"; do
         echo "  archived"
 
         # The layout-sweep fixture is compiled out of Release by
-        # ISSA_UITEST_FIXTURE. This is the check that the condition has not
-        # quietly drifted into the wrong configuration: the string below exists
+        # EXCLUDED_SOURCE_FILE_NAMES, and ISSA_UITEST_FIXTURE on top of that.
+        # This is the check that neither has quietly drifted: the marker exists
         # only inside the guarded code, so finding it in a shipping binary means
         # a stub server and an in-memory token store went with it. Fails the
         # release rather than the review.
+        #
+        # `shopt -s nullglob` matters. Without it an unmatched pattern stays
+        # literal, `[ -f ]` skips it, and the loop body never runs — so the
+        # release passed having inspected nothing at all.
+        shopt -s nullglob
+        scanned=0
         for binary in "$archive"/Products/Applications/*.app/IssaReader-* \
-                      "$archive"/Products/Applications/*.app/Contents/MacOS/IssaReader-*; do
+                      "$archive"/Products/Applications/*.app/Contents/MacOS/IssaReader-* \
+                      "$archive"/Products/Applications/*.app/PlugIns/*.appex/IssaWidgets; do
             [ -f "$binary" ] || continue
-            if strings "$binary" 2>/dev/null | grep -q 'IssaUITestFixture'; then
+            scanned=$((scanned + 1))
+            if fixture_present "$binary"; then
                 echo "  ERROR: the UI-test fixture is present in $binary"
                 RESULTS+=("$platform: fixture leaked into the Release binary")
                 FAILED=1
+                shopt -u nullglob
                 continue 2
             fi
         done
+        shopt -u nullglob
+
+        # A guard that inspected nothing is not a guard. The product name is
+        # $(TARGET_NAME) today, so these globs match by coincidence; setting
+        # PRODUCT_NAME would make them vacuous with no other visible change.
+        if [ "$scanned" -eq 0 ]; then
+            echo "  ERROR: found no binary to scan for the fixture marker in $archive"
+            RESULTS+=("$platform: fixture guard inspected no binaries")
+            FAILED=1
+            continue
+        fi
+        echo "  fixture guard: $scanned binar$([ "$scanned" = 1 ] && echo y || echo ies) clean"
     else
         echo "  ARCHIVE FAILED — $log"
         grep -m 5 "error:" "$log" | sed 's/^/    /' || true
@@ -198,6 +283,15 @@ for platform in "${REQUESTED[@]}"; do
     echo
 done
 
+if [ "$FAILED" = 0 ]; then
+    # The bump stands only when every requested platform got through. Keeping
+    # the backup until here is what makes a partial failure cost nothing.
+    rm -f "$PROJECT_YML_BACKUP"
+    PROJECT_YML_BACKUP=""
+fi
+
 echo "── build $BUILD ──"
-for line in "${RESULTS[@]}"; do echo "  $line"; done
+# `${arr[@]}` on an empty array is a fatal unbound-variable error under `set -u`
+# on bash 3.2, which is what /usr/bin/env bash is on macOS.
+for line in ${RESULTS[@]+"${RESULTS[@]}"}; do echo "  $line"; done
 exit "$FAILED"
