@@ -32,26 +32,42 @@ struct LayoutReference {
         }
 
         // "margin=16.0;left=0.0;right=0.0"
+        //
+        // Every field is required, and a malformed one throws. The parse used
+        // to `continue` past anything it could not read and then fall back to
+        // `?? 16` and `?? 0`, which degraded silently into the worst possible
+        // state: a reference claiming the safe area is the whole window, and a
+        // margin token hardcoded in the very file whose doc comment above
+        // argues against a second copy of it. Every invariant then passed
+        // while measuring nothing — a green sweep that had checked the app
+        // against numbers the app no longer used.
         var fields: [String: CGFloat] = [:]
         for pair in raw.split(separator: ";") {
             let parts = pair.split(separator: "=")
-            guard parts.count == 2, let value = Double(parts[1]) else { continue }
+            guard parts.count == 2, let value = Double(parts[1]) else {
+                throw LayoutError.unreadableProbe(raw)
+            }
             fields[String(parts[0])] = CGFloat(value)
         }
+        guard let margin = fields["margin"],
+              let left = fields["left"],
+              let right = fields["right"]
+        else { throw LayoutError.unreadableProbe(raw) }
 
         let box = window.frame
         let safe = CGRect(
-            x: box.minX + (fields["left"] ?? 0),
+            x: box.minX + left,
             y: box.minY,
-            width: box.width - (fields["left"] ?? 0) - (fields["right"] ?? 0),
+            width: box.width - left - right,
             height: box.height)
-        return LayoutReference(window: box, safe: safe, screenMargin: fields["margin"] ?? 16)
+        return LayoutReference(window: box, safe: safe, screenMargin: margin)
     }
 }
 
 enum LayoutError: Error, CustomStringConvertible {
     case noWindow
     case noProbe
+    case unreadableProbe(String)
 
     var description: String {
         switch self {
@@ -60,6 +76,13 @@ enum LayoutError: Error, CustomStringConvertible {
             """
             The app published no probe.layout. Either -IssaUITestFixture was not \
             passed, or this build has ISSA_UITEST_FIXTURE compiled out.
+            """
+        case let .unreadableProbe(raw):
+            """
+            probe.layout published "\(raw)", which is not margin=…;left=…;right=… \
+            with all three present. Failing rather than assuming a default: a \
+            guessed margin makes every invariant pass against a number the app \
+            does not use.
             """
         }
     }

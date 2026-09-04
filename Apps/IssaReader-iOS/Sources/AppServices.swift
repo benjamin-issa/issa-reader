@@ -31,8 +31,9 @@ final class AppServices {
         #if ISSA_UITEST_FIXTURE
         // Before `AppModel` exists rather than in a property initialiser: it
         // reads `issa.lastServer` in its own init, and the stub has to be
-        // registered before any request can be made. Compiled out entirely
-        // outside Debug; see `UITestFixture` for the two gates.
+        // registered before any request can be made. Not compiled on Release at
+        // all — `EXCLUDED_SOURCE_FILE_NAMES` drops the files; see
+        // `UITestFixture` for what each gate is actually worth.
         if let fixture = UITestFixture.installIfRequested() {
             app = AppModel(keychain: fixture.tokens)
         } else {

@@ -12,20 +12,37 @@ import SwiftUI
 ///
 /// An invisible element rather than a modifier on real content: it must not
 /// change anything it measures.
+///
+/// The value is `@State` refreshed from `.task` and on rotation, not a computed
+/// property read inline. This struct has no stored properties, so SwiftUI
+/// compares two instances as equal and is free to evaluate `body` exactly once
+/// — which latched whatever `ReaderInsets.current()` returned at that moment.
+/// At launch that is `EdgeInsets()`, because there is no key window yet, so the
+/// sweep could measure a landscape iPad against a safe area of zero and pass.
+/// It has not bitten only because every row of `ALL_DEVICES` is portrait.
 struct LayoutProbe: View {
+    @State private var value = ""
+
     var body: some View {
         Color.clear
             .frame(width: 1, height: 1)
             .accessibilityElement()
             .accessibilityIdentifier(Self.identifier)
             .accessibilityLabel("layout probe")
-            .accessibilityValue(Self.value)
+            .accessibilityValue(value)
             .allowsHitTesting(false)
+            .task { value = Self.reading() }
+            .onReceive(
+                NotificationCenter.default.publisher(
+                    for: UIDevice.orientationDidChangeNotification)
+            ) { _ in
+                value = Self.reading()
+            }
     }
 
     static let identifier = "probe.layout"
 
-    private static var value: String {
+    private static func reading() -> String {
         let safe = ReaderInsets.current()
         return "margin=\(Metrics.screenMargin);left=\(safe.leading);right=\(safe.trailing)"
     }
