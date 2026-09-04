@@ -396,3 +396,64 @@ struct SignOutCleanupTests {
             "bob did not make it, so bob must not inherit it")
     }
 }
+
+@Suite("This user's ratings survive a relaunch")
+struct RatingPersistenceTests {
+    private func temporary() -> URL {
+        URL(fileURLWithPath: NSTemporaryDirectory())
+            .appending(path: "issa-ratings-\(UUID().uuidString)", directoryHint: .isDirectory)
+    }
+
+    /// They lived only in memory and were repopulated solely from
+    /// `myRatings()`, so a rating set offline vanished on the next cold launch.
+    @Test("a rating written offline is still there after the store is reopened")
+    func ratingsRoundTrip() async throws {
+        let directory = temporary()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let store = try LibraryStore(serverKey: "http://example.test", directory: directory)
+        try await store.setRating(4.5, forBook: "book-a")
+        try await store.setRating(2, forBook: "book-b")
+
+        let reopened = try LibraryStore(serverKey: "http://example.test", directory: directory)
+        let ratings = try await reopened.ratings()
+        #expect(ratings["book-a"] == 4.5)
+        #expect(ratings["book-b"] == 2)
+    }
+
+    @Test("clearing a rating removes it rather than storing a zero")
+    func clearingRemoves() async throws {
+        let directory = temporary()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try LibraryStore(serverKey: "http://example.test", directory: directory)
+
+        try await store.setRating(3, forBook: "book-a")
+        try await store.setRating(nil, forBook: "book-a")
+        #expect(try await store.ratings()["book-a"] == nil, "zero stars is not the same as none")
+    }
+
+    /// They belong to the account, like the catalogue and the queue.
+    @Test("signing out takes them")
+    func signOutClearsRatings() async throws {
+        let directory = temporary()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try LibraryStore(serverKey: "http://example.test", directory: directory)
+
+        try await store.setRating(5, forBook: "book-a")
+        try await store.clearAccountData()
+        #expect(try await store.ratings().isEmpty)
+    }
+
+    @Test("replacing the set is atomic — the old ones do not linger")
+    func replaceIsWholesale() async throws {
+        let directory = temporary()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try LibraryStore(serverKey: "http://example.test", directory: directory)
+
+        try await store.setRating(1, forBook: "gone")
+        try await store.replaceRatings(["kept": 4])
+        let ratings = try await store.ratings()
+        #expect(ratings["gone"] == nil)
+        #expect(ratings["kept"] == 4)
+    }
+}
