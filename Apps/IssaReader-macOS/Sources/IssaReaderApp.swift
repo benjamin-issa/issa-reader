@@ -331,7 +331,16 @@ struct MacRootView: View {
     private var showsInspector: Binding<Bool> {
         Binding(
             get: { inspected.bookID != nil },
-            set: { if !$0 { inspected.bookID = nil } },
+            // Both directions. The `true` case used to be unreachable, which
+            // together with the `.disabled` below made this a switch that could
+            // be turned off and never on.
+            set: { shown in
+                if shown {
+                    inspected.bookID = inspected.bookID ?? inspected.lastShownBookID
+                } else {
+                    inspected.bookID = nil
+                }
+            },
         )
     }
 
@@ -406,7 +415,10 @@ struct MacRootView: View {
                 Toggle(isOn: showsInspector) {
                     Label("Book Info", systemImage: "sidebar.trailing")
                 }
-                .disabled(inspected.bookID == nil)
+                // Enabled while there is a book to show *or* one to show
+                // again. Keyed on `bookID` alone it disabled itself the instant
+                // it was switched off.
+                .disabled(inspected.bookID == nil && inspected.lastShownBookID == nil)
                 .help("Show or hide the selected book's details")
             }
         }

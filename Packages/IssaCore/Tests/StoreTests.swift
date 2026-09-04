@@ -457,3 +457,61 @@ struct RatingPersistenceTests {
         #expect(ratings["kept"] == 4)
     }
 }
+
+@Suite("A lapsed session is not the same as never having signed in")
+@MainActor
+struct SessionRestoreStateTests {
+    private struct RejectingProtocolStub {
+        static func session() -> URLSession {
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.protocolClasses = [Rejecting.self]
+            return URLSession(configuration: configuration)
+        }
+    }
+
+    /// Answers 401 to everything, which is what an expired token gets.
+    final class Rejecting: URLProtocol, @unchecked Sendable {
+        override class func canInit(with request: URLRequest) -> Bool { true }
+        override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+        override func startLoading() {
+            let response = HTTPURLResponse(
+                url: request.url!, statusCode: 401, httpVersion: nil, headerFields: nil)!
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: Data())
+            client?.urlProtocolDidFinishLoading(self)
+        }
+        override func stopLoading() {}
+    }
+
+    /// `loadIdentity` hard-coded `.signedOut` for both callers, so a returning
+    /// reader with a lapsed token was dropped to a blank server form — their
+    /// address forgotten — instead of the screen that keeps it and explains.
+    @Test("restoring with a token the server refuses reports expiry")
+    func restoreReportsExpiry() async {
+        let keychain = HoldingTokens(token: "stale")
+        let session = Session(
+            serverURL: URL(string: "http://example.test")!,
+            keychain: keychain,
+            session: RejectingProtocolStub.session())
+        await session.restore()
+        #expect(session.state == .expired)
+    }
+
+    @Test("with no token at all it is simply signed out")
+    func noTokenIsSignedOut() async {
+        let session = Session(
+            serverURL: URL(string: "http://example.test")!,
+            keychain: HoldingTokens(token: nil),
+            session: RejectingProtocolStub.session())
+        await session.restore()
+        #expect(session.state == .signedOut)
+    }
+}
+
+private final class HoldingTokens: TokenPersisting, @unchecked Sendable {
+    private let token: String?
+    init(token: String?) { self.token = token }
+    func read(account: String) -> String? { token }
+    @discardableResult func write(_ token: String, account: String) -> Bool { true }
+    @discardableResult func delete(account: String) -> Bool { true }
+}
