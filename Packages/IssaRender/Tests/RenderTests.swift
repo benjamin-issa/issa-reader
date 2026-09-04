@@ -432,3 +432,64 @@ struct PageBoundaryTests {
         }
     }
 }
+
+// `.serialized`, like `CustomFontsTests`. Each case builds a `ReaderStyle`,
+// whose `bodyFont` reaches CoreText's process-global font matching, and
+// parameterised cases otherwise run in parallel — which deadlocked the whole
+// test process at 0% CPU with no output at all.
+@Suite("A chapter using ordinary named entities opens", .serialized)
+struct NamedEntityTests {
+    private func parse(_ body: String) throws -> String {
+        // The HTML5 short DOCTYPE, which is what an EPUB 3 chapter carries and
+        // which declares no entities at all.
+        let xhtml = Data("""
+            <!DOCTYPE html>
+            <html xmlns="http://www.w3.org/1999/xhtml"><body><p>\(body)</p></body></html>
+            """.utf8)
+        return try HTMLContentParser(style: ReaderStyle())
+            .parse(xhtml: xhtml, baseHref: "c.xhtml").text.string
+    }
+
+    /// The hazard: without substitution the parse fails outright, and
+    /// `loadChapter` turns that into "Couldn't open this chapter."
+    @Test("an unsubstituted entity really does fail the parse")
+    func theHazardIsReal() {
+        let raw = Data("""
+            <!DOCTYPE html>
+            <html xmlns="http://www.w3.org/1999/xhtml"><body><p>Stra&szlig;e</p></body></html>
+            """.utf8)
+        let parser = XMLParser(data: raw)
+        parser.shouldResolveExternalEntities = false
+        #expect(!parser.parse(), "undefined entity — this is why the table exists")
+    }
+
+    /// An accented capital opening a sentence was enough to lose the chapter,
+    /// because the table held only lowercase forms and the substitution is
+    /// case-sensitive.
+    @Test("French and German prose survives", arguments: [
+        ("&Eacute;t&eacute;", "Été"),
+        ("Stra&szlig;e", "Straße"),
+        ("&Agrave; propos", "À propos"),
+        ("c&oelig;ur", "cœur"),
+        ("&Ccedil;a", "Ça"),
+    ])
+    func accentedProse(_ input: String, _ expected: String) throws {
+        #expect(try parse(input) == expected)
+    }
+
+    @Test("symbols and Greek that appear in footnotes", arguments: [
+        ("3 &times; 4", "3 × 4"),
+        ("10 &divide; 2", "10 ÷ 2"),
+        ("&alpha; and &Omega;", "α and Ω"),
+        ("a &ne; b", "a ≠ b"),
+        ("&larr; back", "← back"),
+    ])
+    func symbols(_ input: String, _ expected: String) throws {
+        #expect(try parse(input) == expected)
+    }
+
+    @Test("the five XML predefined entities are left to the parser")
+    func predefinedStillWork() throws {
+        #expect(try parse("a &amp; b &lt; c") == "a & b < c")
+    }
+}
