@@ -217,9 +217,9 @@ public final class AudiobookCoordinator {
         case .previousSentence, .previousParagraph:
             await skip(by: -map.skipBackwardInterval)
         case .speedUp:
-            player.rate = min(player.rate + 0.25, 5.0)
+            player.rate = Float(PlaybackRate.clamped(Double(player.rate) + PlaybackRate.step))
         case .speedDown:
-            player.rate = max(player.rate - 0.25, 0.5)
+            player.rate = Float(PlaybackRate.clamped(Double(player.rate) - PlaybackRate.step))
         // Discrete on purpose, never a toggle: the system sends these when it
         // has already decided which one it means, and its idea of the state —
         // the published rate — can lag `isPlaying` through a stall.

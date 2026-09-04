@@ -240,8 +240,16 @@ public struct MutationDrain: Sendable {
         // correct: the writes it would have sent are the ones already in
         // flight, and it will be re-triggered by whatever enqueues next.
         guard await queue.beginDraining() else { return 0 }
-        defer { Task { await queue.endDraining() } }
+        let sent = await drainHoldingTheLock()
+        // Released before returning, not from `defer { Task { … } }`. A
+        // deferred Task releases *asynchronously*, so a caller draining twice
+        // in a row — which `enqueue` does on every debounced save — found the
+        // lock still held and got a spurious 0.
+        await queue.endDraining()
+        return sent
+    }
 
+    private func drainHoldingTheLock() async -> Int {
         guard let pending = try? await queue.pending(), !pending.isEmpty else { return 0 }
         var sent = 0
 

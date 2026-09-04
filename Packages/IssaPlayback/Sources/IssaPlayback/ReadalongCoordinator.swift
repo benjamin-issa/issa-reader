@@ -99,7 +99,25 @@ public final class ReadalongCoordinator {
             player.pause()
             return
         }
-        await play(from: next)
+        // Was it playing when the file ended? `onFinishedFile` hops through a
+        // Task, so anything that pauses in the intervening turn — the route
+        // handler when AirPods come out, an interruption, a sleep timer landing
+        // exactly on the boundary — happens before this runs, and `play(from:)`
+        // calls `player.play()` unconditionally. The next chapter then started
+        // narrating aloud in a quiet room, which is precisely what the
+        // route-loss pause exists to prevent. `AudiobookCoordinator.advance()`
+        // has carried this guard, and a regression test for it, all along.
+        let shouldContinue = player.isPlaying
+        let endedDocument = entry.textHref
+        guard await move(to: next) else { return }
+        // A chapter that ran out, which is what the end-of-chapter timer is
+        // waiting for. `advance(to:)` cannot see this one: `move(to:)` has
+        // already set `activeFragmentID`, so the clock's next tick finds its
+        // own boundary test false. A book with one audio file per chapter
+        // therefore never reported an ending at all, and a timer set at bedtime
+        // played through the night.
+        if endedDocument != next.textHref { onChapterChangeObserved?() }
+        if shouldContinue { player.play() }
     }
 
     // MARK: - Seeking
@@ -138,6 +156,7 @@ public final class ReadalongCoordinator {
         } else {
             await player.seek(to: entry.start)
         }
+        let previousDocument = activeEntry?.textHref
         activeFragmentID = entry.fragmentID
         activeEntry = entry
         // Set here rather than left to the time observer: a paused player's
@@ -145,6 +164,28 @@ public final class ReadalongCoordinator {
         // the scrubber or the Lock Screen.
         bookProgress = timeline.progression(atBookTime: entry.cumulativeEnd - entry.duration)
         onFragmentChange?(entry.fragmentID)
+        // The boundary, announced from the one funnel every seek, skip,
+        // sentence, paragraph and chapter command passes through.
+        //
+        // `advance(to:)` cannot do it for these: this method sets
+        // `activeFragmentID` before returning, so the clock's next tick finds
+        // its `entry.fragmentID != activeFragmentID` test already false, and by
+        // the tick after that `previousDocument` is the new document. A seek
+        // across a chapter therefore fired `onChapterChange` *never* — not
+        // late — so the page did not turn and `SleepTimer.chapterDidEnd()` was
+        // never called, and an end-of-chapter timer set at bedtime played all
+        // night. `ReaderModel.startNarration` compensated by hand for the play
+        // path only.
+        // `onChapterChange` only. **Not** `onChapterChangeObserved`: that one
+        // means a chapter *ended*, and it drives the end-of-chapter sleep
+        // timer. A seek, a skip, or a chapter picked from the list is not a
+        // chapter ending — hanging the timer off the general signal is what
+        // used to stop the book the moment a chapter was chosen, which
+        // `NowPlayingController` documents at the point it wires them up. The
+        // natural end-of-file path fires the other one, and only it.
+        if let previousDocument, previousDocument != entry.textHref {
+            onChapterChange?(entry.textHref)
+        }
         return true
     }
 
@@ -224,9 +265,9 @@ public final class ReadalongCoordinator {
         case .previousChapter:
             await moveChapter(forward: false)
         case .speedUp:
-            player.rate = min(player.rate + 0.25, 5.0)
+            player.rate = Float(PlaybackRate.clamped(Double(player.rate) + PlaybackRate.step))
         case .speedDown:
-            player.rate = max(player.rate - 0.25, 0.5)
+            player.rate = Float(PlaybackRate.clamped(Double(player.rate) - PlaybackRate.step))
         // Discrete on purpose, never a toggle: the system sends these when it
         // has already decided which one it means, and its idea of the state —
         // the published rate — can lag `isPlaying` through a stall.

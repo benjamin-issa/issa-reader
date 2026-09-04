@@ -173,12 +173,12 @@ struct IssaCommands: Commands {
 
             Divider()
             Button("Faster") {
-                settings.playbackRate = min(settings.playbackRate + 0.25, 5)
+                settings.playbackRate = PlaybackRate.clamped(settings.playbackRate + PlaybackRate.step)
                 nowPlaying.coordinator?.player.rate = Float(settings.playbackRate)
             }
             .keyboardShortcut("]", modifiers: .command)
             Button("Slower") {
-                settings.playbackRate = max(settings.playbackRate - 0.25, 0.5)
+                settings.playbackRate = PlaybackRate.clamped(settings.playbackRate - PlaybackRate.step)
                 nowPlaying.coordinator?.player.rate = Float(settings.playbackRate)
             }
             .keyboardShortcut("[", modifiers: .command)

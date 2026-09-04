@@ -772,9 +772,12 @@ public final class ReaderModel {
         // place, and pressing play is not. Keeping this on the derived side of
         // the line is what leaves the position guard armed.
         await readalong.play(from: entry)
-        // The coordinator only notices a document change between two observed
-        // fragments, so a start in another chapter never fires `onChapterChange`
-        // and the page would never follow.
+        // Belt and braces, and idempotent: `followNarration` returns
+        // immediately when the chapter is already loaded. `move(to:)` now
+        // announces the boundary itself, so this no longer carries the case
+        // alone — it used to be the only compensation for a coordinator that
+        // could not see a document change it had caused, and that was true for
+        // the play path only, leaving every seek uncovered.
         await followNarration(toDocument: entry.textHref, fragment: entry.fragmentID)
     }
 

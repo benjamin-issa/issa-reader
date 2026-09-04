@@ -62,8 +62,13 @@ public final class NowPlayingController {
             }
         }
         remote.onRateChange = { [weak self] rate in
-            self?.coordinator?.player.rate = rate
-            self?.settings?.playbackRate = Double(rate)
+            // Clamped: this value comes from
+            // `MPChangePlaybackRateCommandEvent`, which is the system's to
+            // populate, and it went straight into both the player and the
+            // persisted setting with no bound of any kind.
+            let legal = PlaybackRate.clamped(Double(rate))
+            self?.coordinator?.player.rate = Float(legal)
+            self?.settings?.playbackRate = legal
         }
         remote.activate()
         observeCommandMap()
@@ -125,6 +130,12 @@ public final class NowPlayingController {
             onExpire: { [weak coordinator] in coordinator?.player.pause() },
             fade: { [weak coordinator] level in coordinator?.player.volume = level },
         )
+        // A duration timer counts time spent *listening*, not wall-clock time.
+        // Without this, pausing to answer the door and coming back twenty
+        // minutes later found it had expired against a paused player, faded the
+        // volume down and reset its own mode to off — so the moon read "not
+        // armed" and the listener pressed play believing it still was.
+        timer.isPlaying = { [weak coordinator] in coordinator?.player.isPlaying ?? false }
         sleepTimer = timer
         // "End of chapter" is driven by the audio running off the end of one,
         // not by a clock, so the timer has to be told — and only of that. A

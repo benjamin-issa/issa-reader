@@ -13,7 +13,19 @@ import Observation
 public final class PlaybackSettings {
     public var commandMap: CommandMap { didSet { persist(commandMap, as: Self.commandMapKey) } }
     public var readerStyle: ReaderStyle { didSet { persist(readerStyle, as: Self.readerStyleKey) } }
-    public var playbackRate: Double { didSet { defaults.set(playbackRate, forKey: Self.rateKey) } }
+    /// Clamped on the way in and on the way out.
+    ///
+    /// It accepted anything: the bound speed controls walked to 5.0×, a value
+    /// no menu offers and the transport renders as "5×", and `storedRate > 0`
+    /// let it back in on the next launch — so a rate reached by holding a
+    /// button was persisted with no control able to show or undo it.
+    public var playbackRate: Double {
+        didSet {
+            let legal = PlaybackRate.clamped(playbackRate)
+            if legal != playbackRate { playbackRate = legal; return }
+            defaults.set(playbackRate, forKey: Self.rateKey)
+        }
+    }
 
     /// Whether a progress bar stands for the whole book or the current chapter.
     ///
@@ -99,7 +111,7 @@ public final class PlaybackSettings {
         bookStyles = Self.load(
             [String: ReaderStyleOverride].self, from: store, key: Self.bookStylesKey) ?? [:]
         let storedRate = store.double(forKey: Self.rateKey)
-        playbackRate = storedRate > 0 ? storedRate : 1.0
+        playbackRate = storedRate > 0 ? PlaybackRate.clamped(storedRate) : 1.0
         // No migration needed, and this is the part to get right: a stored
         // property assigned in `init` does not fire its `didSet`, so the key is
         // absent from defaults until someone actually moves the picker. Moving

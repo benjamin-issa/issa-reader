@@ -53,7 +53,11 @@ public struct EPUBArchive: Sendable {
         return try extract(entry)
     }
 
-    static func normalize(_ path: String) -> String {
+    /// Public because callers outside this package have to agree with it about
+    /// what a path *is* — `AudioExtraction` names an extracted file from an
+    /// archive href, and a name derived from a different spelling of the same
+    /// path is a file neither side can find again.
+    public static func normalize(_ path: String) -> String {
         var p = path
         if p.hasPrefix("/") { p.removeFirst() }
         // Resolve any ".." / "." segments so a manifest href and a ZIP entry

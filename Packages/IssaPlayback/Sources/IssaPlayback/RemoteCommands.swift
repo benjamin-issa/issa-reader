@@ -21,7 +21,17 @@ import MediaPlayer
 @MainActor
 public final class RemoteCommandCenter {
     private let center = MPRemoteCommandCenter.shared()
-    private var handlers: [MPRemoteCommand] = []
+    /// The commands this instance has registered a target on.
+    ///
+    /// In a box, so the nonisolated `deinit` can reach it — the same shape
+    /// `routeObserver` already uses below, and for the same reason: a
+    /// `@MainActor` class's `deinit` cannot touch main-actor storage, and the
+    /// answer to that is not to skip the teardown. `MPRemoteCommandCenter` is
+    /// process-wide, so a released instance that left its targets registered
+    /// leaves blocks capturing a nil `self` that still answer `.success` —
+    /// telling iOS the command was handled while nothing happens, which makes
+    /// lock-screen and CarPlay controls dead rather than falling through.
+    private let handlers = HandlerBox()
 
     public var commandMap: CommandMap
     /// Which surface a command should be interpreted as coming from.
@@ -53,6 +63,7 @@ public final class RemoteCommandCenter {
 
     deinit {
         routeObserver.tearDown()
+        handlers.tearDown()
     }
 
     /// Which surface a control's binding resolves against right now.
@@ -221,8 +232,7 @@ public final class RemoteCommandCenter {
     }
 
     public func tearDown() {
-        for command in handlers { command.removeTarget(nil) }
-        handlers.removeAll()
+        handlers.tearDown()
     }
 
     /// Publishes what is playing, for the lock screen and CarPlay.
@@ -259,6 +269,33 @@ public final class RemoteCommandCenter {
 /// A `@MainActor` type's `deinit` is nonisolated, so it cannot read isolated
 /// stored properties; keeping the token here lets teardown happen wherever the
 /// object is released.
+/// The registered commands, reachable from a nonisolated `deinit`.
+///
+/// `@unchecked Sendable` because `MPRemoteCommand` is not Sendable. Every
+/// mutation happens on the main actor; the only nonisolated reader is `deinit`,
+/// by which point nothing else holds this.
+private final class HandlerBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var commands: [MPRemoteCommand] = []
+
+    func append(_ command: MPRemoteCommand) {
+        lock.withLock { commands.append(command) }
+    }
+
+    /// Removes every target this instance added.
+    ///
+    /// `isEnabled` is deliberately left alone: it is shared process-wide state
+    /// that a later instance may legitimately have set, and the flags are
+    /// re-established by the next `activate()`.
+    func tearDown() {
+        let taken: [MPRemoteCommand] = lock.withLock {
+            defer { commands.removeAll() }
+            return commands
+        }
+        for command in taken { command.removeTarget(nil) }
+    }
+}
+
 private final class RouteObserverToken: @unchecked Sendable {
     var token: (any NSObjectProtocol)?
 

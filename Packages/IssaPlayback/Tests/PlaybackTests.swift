@@ -542,3 +542,78 @@ private final class OrderLog {
     func append(_ event: String) { events.append(event) }
     func reset() { events.removeAll() }
 }
+
+@Suite("A playback rate is bounded wherever it comes from")
+struct PlaybackRateTests {
+    /// The bound controls walked to 5.0× and down to 0.5× — speeds in no menu
+    /// anywhere, which the transport renders as "5×" — while the menus offered
+    /// 0.75 to 3.0 and CarPlay stopped at 2.0. Three ceilings for one setting.
+    @Test("the ladder's ends are the bounds")
+    func boundsMatchTheLadder() {
+        #expect(PlaybackRate.minimum == 0.75)
+        #expect(PlaybackRate.maximum == 3.0)
+        #expect(PlaybackRate.ladder.first == PlaybackRate.minimum)
+        #expect(PlaybackRate.ladder.last == PlaybackRate.maximum)
+    }
+
+    @Test("anything outside them is brought back", arguments: [
+        (5.0, 3.0), (0.5, 0.75), (10.0, 3.0), (-1.0, 0.75), (0.0, 0.75),
+    ])
+    func clampsOutOfRange(_ value: Double, _ expected: Double) {
+        #expect(PlaybackRate.clamped(value) == expected)
+    }
+
+    /// This value also arrives from `MPChangePlaybackRateCommandEvent`, which
+    /// is the system's to populate and was applied with no bound at all.
+    @Test("a non-finite rate becomes normal speed, not a silent player")
+    func refusesNonFinite() {
+        #expect(PlaybackRate.clamped(.nan) == 1.0)
+        #expect(PlaybackRate.clamped(.infinity) == 1.0)
+    }
+
+    @Test("a legal rate is untouched", arguments: PlaybackRate.ladder)
+    func leavesLegalRatesAlone(_ rate: Double) {
+        #expect(PlaybackRate.clamped(rate) == rate)
+    }
+}
+
+@Suite("Extracted audio keeps two same-named tracks apart")
+struct AudioExtractionNamingTests {
+    /// A CLI-aligned readaloud lays audio out per chapter. `lastPathComponent`
+    /// mapped every one of these onto a single `track.mp3`: the first was
+    /// written, the `fileExists` check skipped the rest, and each chapter was
+    /// then pointed at the first one's bytes — so chapter one narrated over
+    /// chapter twelve's text for the whole book, with no error anywhere.
+    @Test("two tracks with the same basename get different files")
+    func basenamesDoNotCollide() {
+        let first = AudioExtraction.filename(for: "Audio/ch01/track.mp3")
+        let second = AudioExtraction.filename(for: "Audio/ch02/track.mp3")
+        #expect(first != second)
+    }
+
+    /// The href is normalised first, so two spellings of one path do not
+    /// produce two files that neither side can find again.
+    @Test("differently spelled paths for one file agree")
+    func spellingsAgree() {
+        #expect(
+            AudioExtraction.filename(for: "./Audio/ch01/track.mp3")
+                == AudioExtraction.filename(for: "Audio/ch01/track.mp3"))
+    }
+
+    @Test("the name is a single path component")
+    func staysOneComponent() {
+        let name = AudioExtraction.filename(for: "Audio/ch01/track.mp3")
+        #expect(!name.contains("/"))
+        #expect(!name.contains(".."))
+    }
+
+    /// A component longer than the filesystem allows would fail the write.
+    @Test("an unreasonable href is hashed rather than truncated")
+    func longHrefsAreHashed() {
+        let long = "Audio/" + String(repeating: "deep/", count: 60) + "track.mp3"
+        let name = AudioExtraction.filename(for: long)
+        #expect(name.utf8.count <= 255)
+        #expect(name.hasSuffix(".mp3"))
+        #expect(name == AudioExtraction.filename(for: long), "and stable, so it is found again")
+    }
+}

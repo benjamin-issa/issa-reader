@@ -126,6 +126,29 @@ public final class AudioPlayer {
         #endif
     }
 
+    /// Gives the route back, and tells whoever we interrupted that they may
+    /// resume.
+    ///
+    /// `setActive(false)` appeared nowhere in this app, so the `.playback`
+    /// session stayed active for the life of the process: the Music or podcast
+    /// playback this app interrupted never received the `.ended` interruption
+    /// with `.shouldResume` — that notification is only generated when the
+    /// interrupting app deactivates with this option — and stayed silent until
+    /// the listener restarted it by hand.
+    ///
+    /// Deliberately not called from `pause()`. There are several `AudioPlayer`
+    /// instances alive at once — one per open reader plus the audiobook — and
+    /// exclusivity between them is enforced by pausing, not by tearing down. So
+    /// "this player stopped" is not "the app has stopped making sound", and only
+    /// `AppModel`, which owns all of them, can tell the difference. It calls
+    /// this; individual players must not.
+    static func deactivateAudioSession() {
+        #if os(iOS) || os(tvOS)
+        try? AVAudioSession.sharedInstance().setActive(
+            false, options: [.notifyOthersOnDeactivation])
+        #endif
+    }
+
     /// Handles the two things that stop audio without the app asking.
     ///
     /// A phone call interrupts; the system says when it is over and whether it
@@ -149,13 +172,23 @@ public final class AudioPlayer {
                 else { return }
                 switch type {
                 case .began:
-                    self.wasPlayingBeforeInterruption = self.isPlaying
+                    // Latched *after* the pause, not before: `pause()` clears
+                    // it, because an explicit pause during an interruption must
+                    // not be undone when the interruption ends. Setting it
+                    // first would have this pause wipe the very flag it is
+                    // recording.
+                    let wasPlaying = self.isPlaying
                     self.pause()
+                    self.wasPlayingBeforeInterruption = wasPlaying
                     self.onInterruption?(false)
                 case .ended:
                     let options = rawOptions.map(AVAudioSession.InterruptionOptions.init) ?? []
                     let shouldResume = options.contains(.shouldResume)
                         && self.wasPlayingBeforeInterruption
+                    // Spent, either way. Without clearing it a second `.ended`
+                    // with no intervening `.began` — which the system does
+                    // deliver — resumed a book the listener had stopped.
+                    self.wasPlayingBeforeInterruption = false
                     if shouldResume {
                         try? AVAudioSession.sharedInstance().setActive(true)
                         self.play()
@@ -229,10 +262,30 @@ public final class AudioPlayer {
     /// credentials, and `cookies` is how they travel: Storyteller accepts its
     /// session token as an `st_token` cookie, and `AVURLAssetHTTPCookiesKey` is
     /// public API, unlike the header field key everyone reaches for first.
+    /// Loads a file, and says whether this call is still the current one.
+    ///
+    /// The guard lives here rather than only in `AudiobookCoordinator`, where it
+    /// sat *after* the damage: everything past the `await` below writes player
+    /// state, so two overlapping loads — a scrub racing an end-of-track advance,
+    /// two remote commands in a burst — left `duration` describing one file
+    /// while the queue held another, and seeked the new item to the old one's
+    /// clip time. The read-along path had no guard at all.
+    ///
+    /// - Returns: false when a later `load` superseded this one, in which case
+    ///   the caller must not write its own state either.
+    @discardableResult
     public func load(
         url: URL, href: String, startAt offset: TimeInterval = 0, cookies: [HTTPCookie] = [],
-    ) async {
+    ) async -> Bool {
+        loadGeneration &+= 1
+        let generation = loadGeneration
         currentAudioHref = href
+        // The clock belongs to the file being replaced. Left alone it kept
+        // reporting the previous file's position until the periodic observer
+        // next fired — up to a second with the screen off, which is exactly
+        // when `previousChapter` reads it to decide between "restart this
+        // chapter" and "go back one".
+        currentTime = 0
         let asset = AVURLAsset(
             url: url,
             options: cookies.isEmpty ? nil : [AVURLAssetHTTPCookiesKey: cookies],
@@ -252,9 +305,11 @@ public final class AudioPlayer {
         // `?? 0` cannot catch NaN, and a streamed asset with an indefinite
         // duration reports exactly that.
         let loaded = (try? await asset.load(.duration).seconds) ?? 0
+        guard generation == loadGeneration else { return false }
         duration = loaded.isFinite ? loaded : 0
         if offset > 0 {
             await seek(to: offset)
+            guard generation == loadGeneration else { return false }
         } else if isPlaying {
             // Replacing the queue item drops AVPlayer's rate to 0, and the
             // seek above is the only path in this method that restores it. An
@@ -263,7 +318,11 @@ public final class AudioPlayer {
             // true, so the transport drew a pause glyph over a stopped player.
             player.rate = rate
         }
+        return true
     }
+
+    /// Bumped by every `load`, so a superseded one can decline to write.
+    private var loadGeneration = 0
 
     public func play() {
         // Activated here, not in `init`: a non-mixable session interrupts
@@ -279,7 +338,14 @@ public final class AudioPlayer {
         notifyRateObservers(rate)
     }
 
+    /// Stops, and forgets that we were playing before an interruption.
+    ///
+    /// The latch is set on `.began` and read on `.ended`, and nothing cleared
+    /// it in between — so a listener who took a call and then deliberately
+    /// paused on the lock screen had the book start again by itself when the
+    /// call ended, against an explicit instruction.
     public func pause() {
+        wasPlayingBeforeInterruption = false
         isPlaying = false
         player.rate = 0
         notifyRateObservers(0)

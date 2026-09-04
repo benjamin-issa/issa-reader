@@ -67,8 +67,16 @@ public final class SleepTimer {
             var left = seconds
             while left > 0, !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(step))
-                left -= step
                 guard let self, !Task.isCancelled else { return }
+                // Only while something is actually playing. This counted
+                // wall-clock time regardless, so pausing to answer the door and
+                // coming back twenty minutes later found the timer had run out,
+                // faded the volume down, paused an already-paused player and
+                // called `reset()` — which sets the mode to off. The moon icon
+                // then read "not armed", and the listener pressed play believing
+                // it still was.
+                guard isPlaying?() ?? true else { continue }
+                left -= step
                 remaining = max(0, left)
                 if left <= Self.fadeDuration {
                     fade(Float(max(0, left / Self.fadeDuration)))
@@ -80,6 +88,13 @@ public final class SleepTimer {
             reset()
         }
     }
+
+    /// Whether audio is playing, so a paused book does not burn the timer.
+    ///
+    /// A closure rather than a coordinator reference: this type is deliberately
+    /// ignorant of which kind of book it is timing, and `NowPlayingController`
+    /// already holds whichever coordinator is live.
+    public var isPlaying: (@MainActor () -> Bool)?
 
     /// Called when a chapter boundary is crossed, for the end-of-chapter mode.
     public func chapterDidEnd() {
