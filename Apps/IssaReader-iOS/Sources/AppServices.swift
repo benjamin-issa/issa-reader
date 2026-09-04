@@ -21,13 +21,27 @@ import UIKit
 final class AppServices {
     static let shared = AppServices()
 
-    let app = AppModel()
+    let app: AppModel
     let settings = PlaybackSettings()
     let nowPlaying = NowPlayingController()
 
     private var started = false
 
-    private init() {}
+    private init() {
+        #if ISSA_UITEST_FIXTURE
+        // Before `AppModel` exists rather than in a property initialiser: it
+        // reads `issa.lastServer` in its own init, and the stub has to be
+        // registered before any request can be made. Compiled out entirely
+        // outside Debug; see `UITestFixture` for the two gates.
+        if let fixture = UITestFixture.installIfRequested() {
+            app = AppModel(keychain: fixture.tokens)
+        } else {
+            app = AppModel()
+        }
+        #else
+        app = AppModel()
+        #endif
+    }
 
     func start() {
         guard !started else { return }

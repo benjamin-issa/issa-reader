@@ -100,6 +100,10 @@ public struct BookDetailView: View {
                 externalRatings
                 relatedRails
             }
+            // Before the padding: this container's frame is what the sweep
+            // measures the margin against, and it has to be the content rect.
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("content.bookDetail")
             .padding(Metrics.screenMargin)
             // The scroll view centres content that overflows its cross axis,
             // which turns one over-wide subview into wrong margins for the
@@ -107,6 +111,7 @@ public struct BookDetailView: View {
             // failure visible as clipping inside one row instead.
             .containerRelativeFrame(.horizontal)
         }
+        .accessibilityIdentifier("screen.bookDetail")
         .background(Palette.paper)
         .navigationTitle(book.title)
         // Writing a position moves the status server-side, so the shelf shown
@@ -214,6 +219,7 @@ public struct BookDetailView: View {
         VStack(alignment: .leading, spacing: Metrics.spacing8) {
             FlowRow(spacing: Metrics.spacing12) {
                 primaryControl
+                    .accessibilityIdentifier("action.read")
                 listenButton
             }
             // On an aligned book Read opens the read-along edition, so the

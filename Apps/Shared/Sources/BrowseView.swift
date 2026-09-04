@@ -92,6 +92,7 @@ struct SeriesRail: View {
             .scrollClipDisabled()
             .padding(.horizontal, -Metrics.screenMargin)
             .contentMargins(.horizontal, Metrics.screenMargin, for: .scrollContent)
+            .accessibilityIdentifier("rail.series")
         }
     }
 }

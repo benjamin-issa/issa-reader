@@ -40,8 +40,16 @@ public struct LibraryView: View {
                 shelf
                 #endif
             }
+            // Before the padding, deliberately. Applied after it, the
+            // container's frame would include the margin and measuring it
+            // would prove nothing. `.contain` keeps children individually
+            // accessible; `.combine` would flatten the whole library into one
+            // VoiceOver element.
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("content.library")
             .padding(Metrics.screenMargin)
         }
+        .accessibilityIdentifier("screen.library")
         .refreshable { await app.refreshLibrary() }
     }
 
@@ -198,8 +206,10 @@ public struct BookGrid: View {
                     // LazyVGrid's alignment is horizontal only — so a title
                     // wrapping to two lines pushed its neighbours down.
                     .frame(maxHeight: .infinity, alignment: .top)
+                    .accessibilityIdentifier("cell.book.\(book.uuid)")
             }
         }
+        .accessibilityIdentifier("grid.library")
     }
 }
 
@@ -471,12 +481,18 @@ struct ContinueCardLink: View {
                 ContinueCard(book: book, session: session)
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier("card.continue")
             #else
             ContinueCard(book: book, session: session) {
                 // The same resume path a widget tap takes; the reader fetches
                 // on open when the file is absent (item 02).
                 app.requestBook(book.uuid, .read)
             }
+            // Exists only once the library has arrived and something is in
+            // progress, which is what the layout sweep waits on: the Reading
+            // tab renders its empty state first, and measuring that instead of
+            // the real screen is measuring nothing.
+            .accessibilityIdentifier("card.continue")
             #endif
         } else {
             ContinueCard(book: book, session: session)

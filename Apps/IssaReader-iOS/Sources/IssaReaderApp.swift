@@ -49,6 +49,15 @@ struct RootView: View {
     @Environment(AppModel.self) private var app
 
     var body: some View {
+        content
+        #if ISSA_UITEST_FIXTURE
+            // Zero-sized and invisible; see `LayoutProbe`.
+            .overlay(alignment: .topLeading) { LayoutProbe() }
+        #endif
+    }
+
+    @ViewBuilder
+    private var content: some View {
         Group {
             switch app.phase {
             case .launching:

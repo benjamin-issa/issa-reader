@@ -195,6 +195,10 @@ struct BookRail: View {
             .scrollClipDisabled()
             .padding(.horizontal, -Metrics.screenMargin)
             .contentMargins(.horizontal, Metrics.screenMargin, for: .scrollContent)
+            // Says out loud that this one is meant to reach the screen edge.
+            // The sweep has to be told which containers bleed on purpose,
+            // rather than inferring it and being wrong in both directions.
+            .accessibilityIdentifier("rail.\(title.lowercased().replacingOccurrences(of: " ", with: "-"))")
         }
     }
 }

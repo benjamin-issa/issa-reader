@@ -16,6 +16,7 @@ public struct SettingsView: View {
             // The design commits to warm paper everywhere; a stock grouped List
             // would reintroduce system grey behind and between the rows.
             .paperListBackground()
+            .accessibilityIdentifier("screen.settings")
     }
 
     private var list: some View {

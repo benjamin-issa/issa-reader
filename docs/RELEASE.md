@@ -134,3 +134,27 @@ plist, so a reused number fails loudly as
 - A Release-signed build **will not launch on this machine** (`Launchd job spawn
   failed`): Gatekeeper refuses a Mac App Store signature outside the store. Test
   the sandboxed behaviour in the Debug build, which carries the same sandbox.
+
+## Before a release: the layout sweep
+
+```bash
+scripts/layout-sweep.sh          # 375 / 402 / 440, about 8 minutes
+scripts/layout-sweep.sh --all    # every width and the iPad, about 25 minutes
+```
+
+Builds once, then runs the layout invariants on one simulator at a time,
+creating and **deleting** each device so peak disk is one of them. Contact
+sheets land in `docs/screenshots/sweep/_sheets`, one per screen, every width
+side by side with a hairline at `Metrics.screenMargin`.
+
+Four of the recent shipped bugs were one bug — a subview with a rigid minimum
+width larger than its container, or a margin that drifted from the token — and
+each was found by eye, on one simulator, after shipping. Two of those four are
+catchable by assertion. The other two are a control whose *inner* padding
+drifted, and no assertion can see them: the text inside a `TextField` is not an
+accessibility element and has no frame. **The contact sheets are the only
+coverage for that class**, so do not drop them for being slow.
+
+`LayoutInvariantsTests` is the test for the tests: it feeds the invariants
+hand-built trees shaped like each of the four bugs and asserts that each one
+fails. If those ever start passing, the sweep has stopped working.

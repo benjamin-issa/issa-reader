@@ -4,8 +4,11 @@ import Foundation
 ///
 /// The server's `/api/v2/token` response carries an `expires_in` of
 /// `epochMillis * 1000`, which is not a duration and not usable for anything.
-/// Token validity is therefore established by calling `GET /api/v2/validate`
-/// rather than by arithmetic on a bogus number.
+/// Token validity is therefore established by calling the API — `GET
+/// /api/v2/user` on adopt — never by arithmetic on that number. (`/validate`
+/// was named here for years and nothing ever called it; it is now used, but as
+/// the corroborating leg of the pre-auth password-login probe, which is a
+/// different question.)
 public actor TokenStore: TokenProviding {
     private var token: String?
     private let keychain: any TokenPersisting

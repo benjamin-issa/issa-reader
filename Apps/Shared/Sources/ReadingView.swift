@@ -38,8 +38,11 @@ public struct ReadingView: View {
                     }
                 }
             }
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("content.reading")
             .padding(Metrics.screenMargin)
         }
+        .accessibilityIdentifier("screen.reading")
         .background(Palette.paper)
         .refreshable { await app.refreshLibrary() }
         .overlay {

@@ -35,6 +35,7 @@ struct LibraryHeader: View {
         VStack(alignment: .leading, spacing: Metrics.spacing12) {
             #if os(iOS)
             LibrarySearchField(text: $search)
+                .accessibilityIdentifier("field.librarySearch")
             shelfChips
             // A count and a sort describe a grid. Browse has rails, and
             // search results are already the answer to a question — but the
@@ -82,6 +83,7 @@ struct LibraryHeader: View {
         // The row is padded internally so chips can scroll to the screen edge,
         // which is why the outer padding is removed here and added back inside.
         .padding(.horizontal, -Metrics.screenMargin)
+        .accessibilityIdentifier("chips.shelf")
     }
     #endif
 

@@ -138,6 +138,23 @@ for platform in "${REQUESTED[@]}"; do
         -authenticationKeyIssuerID "$ISSUER_ID" \
         -allowProvisioningUpdates archive > "$log" 2>&1; then
         echo "  archived"
+
+        # The layout-sweep fixture is compiled out of Release by
+        # ISSA_UITEST_FIXTURE. This is the check that the condition has not
+        # quietly drifted into the wrong configuration: the string below exists
+        # only inside the guarded code, so finding it in a shipping binary means
+        # a stub server and an in-memory token store went with it. Fails the
+        # release rather than the review.
+        for binary in "$archive"/Products/Applications/*.app/IssaReader-* \
+                      "$archive"/Products/Applications/*.app/Contents/MacOS/IssaReader-*; do
+            [ -f "$binary" ] || continue
+            if strings "$binary" 2>/dev/null | grep -q 'IssaUITestFixture'; then
+                echo "  ERROR: the UI-test fixture is present in $binary"
+                RESULTS+=("$platform: fixture leaked into the Release binary")
+                FAILED=1
+                continue 2
+            fi
+        done
     else
         echo "  ARCHIVE FAILED — $log"
         grep -m 5 "error:" "$log" | sed 's/^/    /' || true
