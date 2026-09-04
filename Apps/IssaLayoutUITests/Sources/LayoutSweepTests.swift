@@ -100,7 +100,7 @@ final class LayoutSweepTests: XCTestCase {
         // margin against it would be asserting the wrong rule, and writing 32
         // into this file would put a second copy of a token where the whole
         // point is that there is one.
-        assertScrollContentFits(root)
+        assertScrollContentFits(root, reference)
         capture(app, "signIn")
     }
 
@@ -164,7 +164,7 @@ final class LayoutSweepTests: XCTestCase {
 
         assertHorizontallyContained(root, reference, screen: screen)
         assertContentStartsAtTheMargin(root, reference, screen: screen)
-        assertScrollContentFits(root)
+        assertScrollContentFits(root, reference)
         assertRailsReachTheEdge(root, reference)
         // No container-frame check. An accessibility container's frame is the
         // union of its children, not a layout rect — a screen holding a rail,

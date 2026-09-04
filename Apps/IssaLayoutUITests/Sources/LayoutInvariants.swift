@@ -69,7 +69,26 @@ enum LayoutInvariants {
         return node.children.contains(where: containsOurContent)
     }
 
-    /// Every node, depth first, carrying its ancestors' identifiers.
+    /// Where a node sits, relative to the two things the walk has to tell apart.
+    struct Placement {
+        /// The identifiers of this node's ancestors.
+        var ancestry: [String] = []
+        /// Inside a system container the walk entered only because this app's
+        /// content is hosted in it.
+        var insideSystemHost = false
+        /// …and past the app's own node within that container, so everything
+        /// from here down is this app's to lay out.
+        var underOurContent = false
+
+        /// Whether an invariant may measure this node.
+        ///
+        /// Outside a system host, everything is fair game. Inside one, only
+        /// what this app labelled — Apple's tab-bar buttons are not ours to
+        /// have an opinion about, in either direction.
+        var isMeasurable: Bool { !insideSystemHost || underOurContent }
+    }
+
+    /// Every node, depth first, carrying where it sits.
     ///
     /// A system subtree is skipped whole — a navigation bar's back chevron sits
     /// at 8 points on a phone and 20 on an iPad, and neither is this app's to
@@ -77,16 +96,35 @@ enum LayoutInvariants {
     /// content. iOS 26 hosts a `TabView`'s pages *inside* the bar's element,
     /// so skipping on type alone discarded every signed-in screen and left the
     /// margin check with nothing to measure.
+    ///
+    /// Descending is not the same as measuring, though, and conflating the two
+    /// was the bug: once `containsOurContent` was true the exemption came off
+    /// wholesale, and Apple's own tab-bar buttons — type `.button`, no system
+    /// identifier, no `rail.` ancestor — went into the margin histogram beside
+    /// this app's content. A screen whose every element had drifted to 140
+    /// still passed, because one system button sat near 16. It failed the other
+    /// way too: the first time Apple retunes that bar in a point release, the
+    /// sweep reports their metrics as this app's regression.
     static func walk(
         _ node: XCUIElementSnapshot,
-        ancestry: [String] = [],
-        visit: (XCUIElementSnapshot, [String]) -> Void
+        at placement: Placement = Placement(),
+        visit: (XCUIElementSnapshot, Placement) -> Void
     ) {
-        if system.contains(node.elementType), !containsOurContent(node) { return }
-        visit(node, ancestry)
-        let path = node.identifier.isEmpty ? ancestry : ancestry + [node.identifier]
+        var here = placement
+        if system.contains(node.elementType) {
+            guard containsOurContent(node) else { return }
+            here.insideSystemHost = true
+        }
+        if here.insideSystemHost, isOurs(node.identifier) {
+            here.underOurContent = true
+        }
+        visit(node, here)
+
+        var below = here
+        below.ancestry =
+            node.identifier.isEmpty ? here.ancestry : here.ancestry + [node.identifier]
         for child in node.children {
-            walk(child, ancestry: path, visit: visit)
+            walk(child, at: below, visit: visit)
         }
     }
 
@@ -137,10 +175,13 @@ extension XCTestCase {
         line: UInt = #line
     ) {
         var failures: [String] = []
-        LayoutInvariants.walk(root) { node, ancestry in
+        LayoutInvariants.walk(root) { node, placement in
+            guard placement.isMeasurable else { return }
             guard LayoutInvariants.measured.contains(node.elementType) else { return }
-            guard !ancestry.contains(where: LayoutInvariants.isDeliberateBleed) else { return }
-            guard !LayoutInvariants.isSystemChrome(node, ancestry: ancestry) else { return }
+            guard !placement.ancestry.contains(where: LayoutInvariants.isDeliberateBleed)
+            else { return }
+            guard !LayoutInvariants.isSystemChrome(node, ancestry: placement.ancestry)
+            else { return }
             let frame = node.frame
             guard LayoutInvariants.isOnScreen(frame, in: reference.window) else { return }
 
@@ -192,10 +233,13 @@ extension XCTestCase {
         line: UInt = #line
     ) {
         var edges: [CGFloat: Int] = [:]
-        LayoutInvariants.walk(root) { node, ancestry in
+        LayoutInvariants.walk(root) { node, placement in
+            guard placement.isMeasurable else { return }
             guard LayoutInvariants.measured.contains(node.elementType) else { return }
-            guard !ancestry.contains(where: LayoutInvariants.isDeliberateBleed) else { return }
-            guard !LayoutInvariants.isSystemChrome(node, ancestry: ancestry) else { return }
+            guard !placement.ancestry.contains(where: LayoutInvariants.isDeliberateBleed)
+            else { return }
+            guard !LayoutInvariants.isSystemChrome(node, ancestry: placement.ancestry)
+            else { return }
             let frame = node.frame
             guard LayoutInvariants.isOnScreen(frame, in: reference.window) else { return }
             edges[(frame.minX - reference.safe.minX).rounded(), default: 0] += 1
@@ -272,21 +316,35 @@ extension XCTestCase {
     /// that refuses the proposal is *centred* — so a symmetric overflow shows
     /// up as symmetrically wrong margins rather than as clipping, which is why
     /// it took a photograph to notice.
+    /// Scope matches its three siblings, which it did not before. It alone
+    /// omitted the `isOnScreen` filter — so a lazy container prefetching a cell
+    /// below the viewport with a transient over-wide placeholder produced an
+    /// intermittent, device-specific red on a screen where nothing was visibly
+    /// wrong — and it alone checked deliberate bleed on the node and its
+    /// children rather than on ancestry, so a scroll view nested under a
+    /// `rail.*` container was held to its parent's width though every other
+    /// invariant exempts that subtree whole. The identifier convention meant
+    /// one thing in three functions and something else here.
     func assertScrollContentFits(
         _ root: XCUIElementSnapshot,
+        _ reference: LayoutReference,
         tolerance: CGFloat = 0.5,
         file: StaticString = #filePath,
         line: UInt = #line
     ) {
         var failures: [String] = []
-        LayoutInvariants.walk(root) { node, _ in
+        LayoutInvariants.walk(root) { node, placement in
+            guard placement.isMeasurable else { return }
             guard node.elementType == .scrollView || node.elementType == .collectionView else { return }
             // A horizontal rail is meant to overflow its own width, and a
             // snapshot carries no axis — which is why the identifier convention
             // has to carry it instead.
             guard !LayoutInvariants.isDeliberateBleed(node.identifier) else { return }
+            guard !placement.ancestry.contains(where: LayoutInvariants.isDeliberateBleed)
+            else { return }
             let box = node.frame
             guard box.width > 1 else { return }
+            guard LayoutInvariants.isOnScreen(box, in: reference.window) else { return }
             for child in node.children where !LayoutInvariants.isDeliberateBleed(child.identifier) {
                 let frame = child.frame
                 guard frame.width > box.width + tolerance else { continue }
@@ -315,7 +373,8 @@ extension XCTestCase {
         file: StaticString = #filePath,
         line: UInt = #line
     ) {
-        LayoutInvariants.walk(root) { node, _ in
+        LayoutInvariants.walk(root) { node, placement in
+            guard placement.isMeasurable else { return }
             guard node.identifier.hasPrefix("rail.") || node.identifier.hasPrefix("chips.") else { return }
             guard LayoutInvariants.isOnScreen(node.frame, in: reference.window) else { return }
             XCTAssertEqual(
