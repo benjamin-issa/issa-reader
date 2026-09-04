@@ -7,9 +7,15 @@ import SwiftUI
 ///
 /// Three routes, all ending in the same place — `AppModel.adopt(token:)`. A
 /// username and password posted to the server's own `/api/v2/token`, where the
-/// server has one; the server's approval page opened in the system browser, with
-/// the device grant polling behind it; and the pairing code, unchanged, for
+/// server has one; the server's own sign-in page opened in the system browser,
+/// which hands a token straight back; and the pairing code, unchanged, for
 /// anything else.
+///
+/// The browser route was first built as the device grant behind a browser,
+/// which meant asking somebody to approve the very phone they were holding.
+/// `GET /api/v2/token/app` does the whole thing in one redirect and reuses the
+/// Safari session, so a reader already signed in to their library taps once.
+/// See `AppTokenGrant`.
 ///
 /// The client still never implements an OIDC client. The password route is the
 /// server's own local credential check, not a federated one, and the browser
@@ -139,11 +145,8 @@ public struct SignInView: View {
             VStack(spacing: Metrics.spacing12) {
                 passwordRow
                 methodRow(
-                    title: "Continue in browser",
-                    detail: """
-                        Sign in on your server's own page — use this if it signs you in \
-                        with Google, Keycloak, Authelia or another provider.
-                        """,
+                    title: browserTitle,
+                    detail: browserDetail,
                     symbol: "safari",
                 ) {
                     guard let url = serverURL else { return }
@@ -167,35 +170,59 @@ public struct SignInView: View {
                     .foregroundStyle(Palette.alert)
             }
         }
-        .task { await app.probePasswordLogin() }
+        .task { await app.probeAuthMethods() }
+    }
+
+    /// Named, where the server has told us the name.
+    ///
+    /// `GET /api/v2/auth/providers` answers unauthenticated and lists exactly
+    /// what is configured, so a reader whose library signs them in with
+    /// Keycloak is offered "Continue with Keycloak" rather than a sentence
+    /// listing four providers they may never have heard of.
+    private var browserTitle: String {
+        let providers = app.authMethods.identityProviders
+        guard providers.count == 1, let only = providers.first else { return "Continue in browser" }
+        return "Continue with \(only.name)"
+    }
+
+    private var browserDetail: String {
+        let providers = app.authMethods.identityProviders
+        switch providers.count {
+        case 0:
+            return "Sign in on your server's own page. Fastest if you're already signed in there."
+        case 1:
+            return "Opens your server's sign-in page. If you're already signed in there, you're done."
+        default:
+            let names = providers.map(\.name).joined(separator: ", ")
+            return "Sign in on your server's own page — \(names)."
+        }
     }
 
     /// The password row keeps its slot whatever the probe says, so nothing
     /// reflows underneath a reader who is already reaching for it.
     @ViewBuilder
     private var passwordRow: some View {
-        switch app.passwordLogin {
-        case .unavailable:
-            Text("This server signs you in on its own page — use one of the options below.")
-                .font(Typography.footnote)
-                .foregroundStyle(Palette.inkTertiary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        case .available, .unknown:
+        if app.authMethods.password {
             methodRow(
                 title: "Username and password",
-                // Fail open when the probe was inconclusive. Being wrong costs
-                // one clear error; failing closed would silently hide the
-                // fastest route on any server whose proxy answered oddly.
-                detail: app.passwordLogin == .available
-                    ? "Type them into the app."
-                    : "Your server may not accept a password — the app will say so if it doesn't.",
+                // Fail open when the server did not answer. Being wrong costs
+                // one clear error; failing closed would silently hide a route
+                // on any server whose proxy answered oddly.
+                detail: app.authMethods.isUnknown
+                    ? "Your server may not accept a password — the app will say so if it doesn't."
+                    : "Type them into the app.",
                 symbol: "person.crop.circle",
-                isBusy: app.isProbingPasswordLogin,
+                isBusy: app.isProbingAuthMethods,
             ) {
                 guard let url = serverURL else { return }
                 route = .password(PasswordSignInModel(serverURL: url))
             }
-            .disabled(app.isProbingPasswordLogin)
+            .disabled(app.isProbingAuthMethods)
+        } else {
+            Text("This server signs you in on its own page — use one of the options below.")
+                .font(Typography.footnote)
+                .foregroundStyle(Palette.inkTertiary)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 

@@ -31,25 +31,26 @@ final class BrowserApprovalController: NSObject {
                 pending = continuation
                 let session = ASWebAuthenticationSession(
                     url: url,
-                    // Never fires. The server has never been told this app
-                    // exists and will not redirect to a scheme it has never
-                    // heard of; the argument exists because the initialiser
-                    // demands one. Completion is the poll's job.
-                    callback: .customScheme("issareader"),
-                ) { [weak self] _, _ in
+                    // The server's scheme, and it really does fire: the app
+                    // token route ends in a 302 to
+                    // `storyteller://settings?token=…`, which this session
+                    // intercepts before the system opener sees it.
+                    callback: .customScheme(AppTokenGrant.callbackScheme),
+                ) { [weak self] callback, _ in
                     guard let self else { return }
+                    if let callback {
+                        self.finish(.completed(callback))
+                        return
+                    }
                     // "Closed the window" and "declined the share-your-Safari-
                     // login alert" both arrive as .canceledLogin and cannot be
                     // told apart.
                     self.finish(self.closedByApp ? .byApp : .byUser)
                 }
                 session.presentationContextProvider = self
-                // Not ephemeral, deliberately: sharing the Safari session is
-                // this route's whole advantage — a reader already signed in to
-                // their server's web UI sees one Approve button and nothing
-                // else. The cost, stated rather than discovered later, is that
-                // a URL carrying `device_code` lands in Safari's history. It is
-                // single-use, dies at approval, and lives at most `expiresIn`.
+                // Not ephemeral, and this is the whole point: a reader already
+                // signed in to their library in Safari is redirected straight
+                // back with a token and never sees a form at all.
                 session.prefersEphemeralWebBrowserSession = false
                 self.session = session
 
@@ -136,14 +137,11 @@ where Value: Sendable {
 public final class BrowserSignInModel {
     public enum Stage: Equatable {
         case starting
-        case awaitingApproval
-        /// The window closed; collecting an approval that may already exist.
-        case finishing
         case granted(String)
-        /// The window closed and no approval arrived. Its own case, not a
-        /// return to `.starting`: `.starting` renders as "Contacting your
-        /// server…", so folding the two left the screen spinning forever on a
-        /// sign-in the reader had already walked away from.
+        /// The window closed with nothing. Its own case, not a return to
+        /// `.starting`: `.starting` renders as "Opening your server…", so
+        /// folding the two left the screen spinning on a sign-in the reader had
+        /// already walked away from.
         case dismissed
         case failed(String)
     }
@@ -161,43 +159,16 @@ public final class BrowserSignInModel {
         task?.cancel()
         stage = .starting
         let url = serverURL
-        // Built here, in the enclosing main-actor scope, rather than inside the
-        // task below. A `[weak self]` capture is a mutable binding, so a closure
-        // nested inside another one that already captured `self` weakly cannot
-        // capture it again.
-        let report = progressReporter()
         task = Task { [weak self] in
-            let flow = BrowserSignInFlow(
-                transport: HTTPDeviceGrantTransport(baseURL: url),
-                browser: SafariApprovalBrowser(),
-            )
-            let outcome = await flow.run(reporting: report)
+            let outcome = await AppTokenSignInFlow(
+                serverURL: url, browser: SafariApprovalBrowser()).run()
             await self?.finish(outcome)
         }
     }
 
-    private func progressReporter() -> @Sendable (BrowserSignInFlow.Progress) -> Void {
-        { [weak self] progress in
-            guard let self else { return }
-            Task { @MainActor in self.apply(progress) }
-        }
-    }
-
-    private func apply(_ progress: BrowserSignInFlow.Progress) {
-        // A progress report that arrives after the outcome must not talk over
-        // it; the reports are detached, so this is not hypothetical.
-        switch stage {
-        case .granted, .failed: return
-        default: break
-        }
-        stage = progress == .awaitingApproval ? .awaitingApproval : .finishing
-    }
-
-    private func finish(_ outcome: BrowserApprovalOutcome) {
+    private func finish(_ outcome: AppTokenOutcome) {
         switch outcome {
         case let .granted(token): stage = .granted(token)
-        case .denied: stage = .failed("Sign-in was denied.")
-        case .expired: stage = .failed("The sign-in request expired. Try again.")
         // Not a failure. The reader closed the window, so the chooser is what
         // they want next, not an error about a thing they chose to do.
         case .dismissed: stage = .dismissed
@@ -232,12 +203,7 @@ struct BrowserSignInView: View {
 
             switch model.stage {
             case .starting:
-                row(ProgressView().controlSize(.small), "Contacting your server…")
-            case .awaitingApproval:
-                row(ProgressView().controlSize(.small),
-                    "Approve this app in the window that just opened.")
-            case .finishing:
-                row(ProgressView().controlSize(.small), "Finishing sign-in…")
+                row(ProgressView().controlSize(.small), "Opening your server's sign-in page…")
             case .granted:
                 row(Image(systemName: "checkmark.circle.fill").foregroundStyle(Palette.tangerine),
                     "Signed in.")

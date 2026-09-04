@@ -129,6 +129,35 @@ public struct HTTPPasswordGrantTransport: PasswordGrantTransport {
 
     // MARK: - Probing
 
+    /// Everything this server will accept, asked directly where it can be.
+    ///
+    /// `GET /api/v2/auth/providers` answers 200 unauthenticated and names each
+    /// configured provider, so on any server that has it there is nothing to
+    /// infer. The status-code probe below stays as the fallback for a server
+    /// that does not.
+    public func authMethods() async -> ServerAuthMethods {
+        var request = URLRequest(url: baseURL.appending(path: Endpoint.authProviders))
+        request.setValue(baseURL.absoluteString, forHTTPHeaderField: "Origin")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        request.timeoutInterval = 8
+
+        if let (data, response) = try? await session.data(for: request),
+           let http = response as? HTTPURLResponse, http.statusCode == 200,
+           let methods = ServerAuthMethods.decode(data) {
+            return methods
+        }
+
+        // No provider list. Fall back to asking about the password route alone,
+        // and say nothing about identity providers rather than claiming there
+        // are none.
+        switch await probeSupport() {
+        case .available: return ServerAuthMethods(password: true, identityProviders: [])
+        case .unavailable: return ServerAuthMethods(password: false, identityProviders: [])
+        case .unknown: return .unknown
+        }
+    }
+
     public func probeSupport() async -> PasswordLoginSupport {
         let primary = Self.support(fromProbeStatus: await status(of: Endpoint.token))
         guard primary == .unknown else { return primary }

@@ -7,7 +7,16 @@ import Foundation
 public enum Endpoint {
     // Auth
     public static let token = "/api/v2/token"
+    /// Mints a token for a native app from an existing *browser* session and
+    /// hands it back by redirecting to `storyteller://settings?token=…`.
+    /// Unauthenticated it redirects to `/login?callbackUrl=…` and comes back
+    /// here afterwards, so one URL covers both "already signed in" and "not".
+    public static let appToken = "/api/v2/token/app"
     public static let validate = "/api/v2/validate"
+    /// Auth.js's provider list. Unauthenticated, and the only pre-auth
+    /// discovery this server offers: it names every configured identity
+    /// provider and says whether password login is among them.
+    public static let authProviders = "/api/v2/auth/providers"
     public static let deviceStart = "/api/v2/device/start"
     public static let deviceToken = "/api/v2/device/token"
 
