@@ -121,8 +121,17 @@ public struct EPUBArchive: Sendable {
             // malformed archive into an uncatchable crash instead of a thrown
             // error. The record guard subtracts rather than adds for the same
             // reason — `zip64 + 56` overflows on a value near `Int.max`.
+            // `PK\x06\x06`, the zip64 end-of-central-directory signature from
+            // APPNOTE 4.3.14 — not `PK\x05\x06`, which is the *regular* EOCD's
+            // and is what this line held. Every other signature in the file was
+            // right, and the consequence ran both ways: a genuine zip64 EPUB
+            // threw "bad zip64 record" and was permanently unopenable, since
+            // the download is cached; and the guard could reject nothing, since
+            // pointing the locator at the regular EOCD's own offset satisfied
+            // it and the count and offset were then read out of whatever bytes
+            // trailed it.
             guard let zip64 = Int(exactly: data.u64(locator + 8)),
-                  zip64 <= data.count - 56, data.u32(zip64) == 0x0605_4B50,
+                  zip64 <= data.count - 56, data.u32(zip64) == 0x0606_4B50,
                   let zip64Count = Int(exactly: data.u64(zip64 + 32)),
                   let zip64Offset = Int(exactly: data.u64(zip64 + 48))
             else {

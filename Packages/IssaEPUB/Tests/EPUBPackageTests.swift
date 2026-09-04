@@ -147,3 +147,35 @@ struct NavigationFragmentTests {
         }
     }
 }
+
+@Suite("A clip time that is not a duration cannot poison the book")
+struct SMILClockValidationTests {
+    /// The hazard, proved before the guard. `Double` parses all three of these
+    /// happily, and each reached the timeline as a duration.
+    @Test("Swift really does parse these as numbers")
+    func theHazardIsReal() {
+        #expect(Double("inf")?.isInfinite == true)
+        #expect(Double("nan")?.isNaN == true)
+        #expect(Double("1e400")?.isInfinite == true)
+        #expect(Double("-5") == -5)
+    }
+
+    @Test("a non-finite or negative clip time is refused", arguments: [
+        "inf", "-inf", "nan", "1e400s", "infs", "-5s", "-5", "-0.5min", "nans",
+    ])
+    func refusesUnusableValues(_ raw: String) {
+        #expect(
+            SMILClock.seconds(from: raw) == nil,
+            "\"\(raw)\" must not become a duration: one of these made every later cumulativeEnd infinite and saved the reader's place as 0")
+    }
+
+    @Test("the forms a real overlay uses still parse", arguments: [
+        ("12.345s", 12.345), ("300ms", 0.3), ("1.5min", 90.0), ("2h", 7200.0),
+        ("00:00:12.345", 12.345), ("01:02:03", 3723.0), ("02:03", 123.0), ("0s", 0.0),
+    ])
+    func acceptsRealValues(_ raw: String, _ expected: Double) {
+        let parsed = SMILClock.seconds(from: raw)
+        #expect(parsed != nil, "\(raw) is legal SMIL")
+        #expect(abs((parsed ?? -1) - expected) < 0.0005)
+    }
+}

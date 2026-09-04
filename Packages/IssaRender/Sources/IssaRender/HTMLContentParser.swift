@@ -103,6 +103,13 @@ public struct HTMLContentParser {
 
         switch node.name.lowercased() {
         case "script", "style", "head", "title":
+            // Recorded before the return, not after it. The only assignment to
+            // `hasScripting` sat forty lines below this early exit and was
+            // therefore unreachable, so the flag was permanently false and
+            // `requiresWebView` never fired: a chapter carrying <script> was
+            // silently linearised by the native path instead of being routed to
+            // a web view, and its interactive content dropped with no fallback.
+            if node.name.lowercased() == "script" { complexity.hasScripting = true }
             return
 
         case "b", "strong":
@@ -145,8 +152,6 @@ public struct HTMLContentParser {
         default:
             break
         }
-
-        if node.name.lowercased() == "script" { complexity.hasScripting = true }
 
         // Text content of this element, before descending. `child`, not
         // `context`: a <pre>'s own preformatted flag was set on `child` just

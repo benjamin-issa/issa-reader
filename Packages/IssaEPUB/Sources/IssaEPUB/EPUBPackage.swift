@@ -142,7 +142,17 @@ public extension EPUBPackage {
     /// bare `%` fails to decode and is kept verbatim, which is what its
     /// producer meant by it.
     static func resolve(_ href: String, relativeTo base: String) -> String {
-        let target = href.split(separator: "#", maxSplits: 1).first.map(String.init) ?? href
+        // `omittingEmptySubsequences: false`, which is not the default. For a
+        // fragment-only href — `#chapter-1`, what a single-file book's nav uses
+        // and what `NavPoint.fragment` exists for — the default drops the empty
+        // leading piece, so `.first` was "chapter-1" rather than "", and the
+        // result was `<base dir>/chapter-1`: a path no entry has. Every row of
+        // such a book's table of contents pointed at a missing resource.
+        let target = href
+            .split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false)
+            .first.map(String.init) ?? href
+        // A pure fragment names the document it sits in.
+        if target.isEmpty { return EPUBArchive.normalize(base) }
         let decoded = target.removingPercentEncoding ?? target
         if decoded.hasPrefix("/") { return EPUBArchive.normalize(decoded) }
         let directory = (base as NSString).deletingLastPathComponent

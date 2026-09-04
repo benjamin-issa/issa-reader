@@ -6,7 +6,27 @@ import Foundation
 /// `"HH:MM:SS.ss"`. Both forms are legal SMIL, and both appear in the same book,
 /// so a reader must handle the full grammar rather than just the one it expects.
 public enum SMILClock {
+    /// Seconds, or nil when the value is not a duration this app can use.
+    ///
+    /// Every route out of here goes through `usable`, because `Double("inf")`,
+    /// `Double("nan")` and `Double("1e400")` all succeed — verified — and one
+    /// such `clipEnd` poisoned the whole book. An infinite duration cleared the
+    /// minimum-length guard, so `cumulative +=` made that entry's
+    /// `cumulativeEnd` and every later one infinite; `totalDuration` went
+    /// infinite, `progression(atBookTime:)` collapsed to zero for every
+    /// position, and `spineProgress` wrote that zero back as the reader's saved
+    /// place. Negative values are refused for the same reason: they are not a
+    /// place in a book, and they reached `player.seek` unclamped.
     public static func seconds(from raw: String) -> TimeInterval? {
+        usable(unchecked(from: raw))
+    }
+
+    private static func usable(_ value: TimeInterval?) -> TimeInterval? {
+        guard let value, value.isFinite, value >= 0 else { return nil }
+        return value
+    }
+
+    private static func unchecked(from raw: String) -> TimeInterval? {
         let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return nil }
 
