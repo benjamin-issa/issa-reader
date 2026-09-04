@@ -184,13 +184,10 @@ struct TVSignInView: View {
                         .font(Typography.sans(28))
                         .foregroundStyle(Palette.inkSecondary)
                         .frame(maxWidth: 1100, alignment: .leading)
-                    // See SignInView, for the domain and for why the example
-                    // is a coloured `prompt:` rather than a title string.
-                    TextField(
-                        "",
-                        text: $address,
-                        prompt: Text("https://yourlibrary.com").foregroundStyle(Palette.inkTertiary),
-                    )
+                    // `verbatim`, for the reason SignInView records: a string
+                    // literal is a `LocalizedStringKey`, Markdown autolinks a
+                    // bare URL, and the example then draws as a tinted link.
+                    TextField("", text: $address, prompt: Text(verbatim: "https://yourlibrary.com"))
                         .font(Typography.sans(30))
                         .frame(maxWidth: 900)
                     Button {

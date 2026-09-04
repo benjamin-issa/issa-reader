@@ -30,15 +30,6 @@ public final class AppModel {
     public var phase: Phase = .launching
     public var serverAddress: String = ""
     public var session: Session?
-    /// Whether this server has a username-and-password route, established
-    /// before any sign-in has happened.
-    ///
-    /// Deliberately not on `ServerCapabilities`: that is probed *after* the
-    /// identity call, with a bearer token, and cached on the session. This one
-    /// has to be answered with no credential at all, while the reader is still
-    /// standing in front of the sign-in screen, so it lives with the address.
-    public private(set) var authMethods: ServerAuthMethods = .unknown
-    public private(set) var isProbingAuthMethods = false
     /// Rebuilt explicitly by whatever changes the catalogue, not from a
     /// `didSet`: a position write mutates one element, and the observer
     /// re-faceted and re-sorted the whole library on every debounced save —
@@ -181,8 +172,6 @@ public final class AppModel {
         guard !isConnecting else { return }
         isConnecting = true
         defer { isConnecting = false }
-        // A new address is a new question.
-        authMethods = .unknown
 
         let candidates = Self.candidateServerURLs(for: address)
         guard !candidates.isEmpty else {
@@ -302,28 +291,6 @@ public final class AppModel {
             // `.expired` keeps the server and makes signing in again one tap.
             phase = phase == .ready ? .expired : .chooseServer
         }
-    }
-
-    /// Asks the server what it accepts, so the chooser can name the reader's
-    /// actual identity provider rather than guessing on their behalf.
-    ///
-    /// Not called from `connect`: a returning reader whose token is in the
-    /// keychain never sees the chooser, and should not pay for a request they
-    /// will not use. The chooser's `.task` is what starts it.
-    public func probeAuthMethods() async {
-        guard authMethods.isUnknown, !isProbingAuthMethods else { return }
-        guard let url = session?.serverURL ?? Self.normalizeServerURL(serverAddress) else { return }
-        isProbingAuthMethods = true
-        defer { isProbingAuthMethods = false }
-        authMethods = await HTTPPasswordGrantTransport(baseURL: url).authMethods()
-        IssaLog.info("auth methods", [
-            "server": url.absoluteString,
-            // Not "password": the redaction set scrubs that key by name, and
-            // rightly so -- but this one is a fact about the server, not a
-            // credential, and a scrubbed boolean helps nobody.
-            "acceptsPassword": String(authMethods.password),
-            "providers": authMethods.identityProviders.map(\.name).joined(separator: ","),
-        ])
     }
 
     public func adopt(token: String) async {

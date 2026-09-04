@@ -6,6 +6,10 @@ import Foundation
 /// own route tree (`applications/web/src/app/api/v2/...`).
 public enum Endpoint {
     // Auth
+    /// Username and password, form-encoded. Not used by this client: the
+    /// browser route signs a reader in with their password *or* their identity
+    /// provider without the app needing to know which, so a second form asking
+    /// for one specifically was a choice nobody could make from the outside.
     public static let token = "/api/v2/token"
     /// Mints a token for a native app from an existing *browser* session and
     /// hands it back by redirecting to `storyteller://settings?token=…`.
@@ -13,9 +17,10 @@ public enum Endpoint {
     /// here afterwards, so one URL covers both "already signed in" and "not".
     public static let appToken = "/api/v2/token/app"
     public static let validate = "/api/v2/validate"
-    /// Auth.js's provider list. Unauthenticated, and the only pre-auth
-    /// discovery this server offers: it names every configured identity
-    /// provider and says whether password login is among them.
+    /// Auth.js's provider list — unauthenticated, and the only pre-auth
+    /// discovery this server offers. Recorded here because it is genuinely
+    /// useful and was hard to find; nothing reads it now that the browser
+    /// route covers every provider without naming any.
     public static let authProviders = "/api/v2/auth/providers"
     public static let deviceStart = "/api/v2/device/start"
     public static let deviceToken = "/api/v2/device/token"

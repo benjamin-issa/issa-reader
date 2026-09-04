@@ -5,17 +5,18 @@ import SwiftUI
 
 /// Server address, then how to sign in.
 ///
-/// Three routes, all ending in the same place — `AppModel.adopt(token:)`. A
-/// username and password posted to the server's own `/api/v2/token`, where the
-/// server has one; the server's own sign-in page opened in the system browser,
-/// which hands a token straight back; and the pairing code, unchanged, for
-/// anything else.
+/// Two routes, both ending in the same place — `AppModel.adopt(token:)`.
 ///
-/// The browser route was first built as the device grant behind a browser,
-/// which meant asking somebody to approve the very phone they were holding.
-/// `GET /api/v2/token/app` does the whole thing in one redirect and reuses the
-/// Safari session, so a reader already signed in to their library taps once.
-/// See `AppTokenGrant`.
+/// The browser is the answer for nearly everyone: `GET /api/v2/token/app`
+/// shows the server's own sign-in page, which offers a password *and* every
+/// identity provider its operator configured, and hands a token straight back.
+/// That is why there is no separate password form. Asking "password or
+/// provider?" up front is a question the reader often cannot answer — it is a
+/// fact about their server, not about them — and the server's own page never
+/// has to ask it. See `AppTokenGrant`.
+///
+/// The device code stays for a television, which has no browser worth using,
+/// and as the fallback when a browser cannot be opened at all.
 ///
 /// The client still never implements an OIDC client. The password route is the
 /// server's own local credential check, not a federated one, and the browser
@@ -30,7 +31,6 @@ public struct SignInView: View {
     private enum Route {
         case address
         case chooser
-        case password(PasswordSignInModel)
         case browser(BrowserSignInModel)
         case pairing(DeviceSignInModel)
     }
@@ -81,12 +81,6 @@ public struct SignInView: View {
                 serverForm
             case .chooser:
                 chooser
-            case let .password(model):
-                PasswordSignInView(model: model, serverAddress: serverLabel) { token in
-                    adopt(token)
-                } onCancel: {
-                    route = .chooser
-                }
             case let .browser(model):
                 BrowserSignInView(model: model, serverAddress: serverLabel) { token in
                     adopt(token)
@@ -143,17 +137,19 @@ public struct SignInView: View {
             }
 
             VStack(spacing: Metrics.spacing12) {
-                passwordRow
                 methodRow(
-                    title: browserTitle,
-                    detail: browserDetail,
+                    title: "In your browser",
+                    detail: """
+                        Your server's own page, with your password or whichever \
+                        provider it uses. Fastest if you're already signed in there.
+                        """,
                     symbol: "safari",
                 ) {
                     guard let url = serverURL else { return }
                     route = .browser(BrowserSignInModel(serverURL: url))
                 }
                 methodRow(
-                    title: "Pairing code",
+                    title: "With a device code",
                     detail: "Get a short code to approve on your phone or another computer.",
                     symbol: "rectangle.and.hand.point.up.left",
                 ) {
@@ -170,67 +166,12 @@ public struct SignInView: View {
                     .foregroundStyle(Palette.alert)
             }
         }
-        .task { await app.probeAuthMethods() }
-    }
-
-    /// Named, where the server has told us the name.
-    ///
-    /// `GET /api/v2/auth/providers` answers unauthenticated and lists exactly
-    /// what is configured, so a reader whose library signs them in with
-    /// Keycloak is offered "Continue with Keycloak" rather than a sentence
-    /// listing four providers they may never have heard of.
-    private var browserTitle: String {
-        let providers = app.authMethods.identityProviders
-        guard providers.count == 1, let only = providers.first else { return "Continue in browser" }
-        return "Continue with \(only.name)"
-    }
-
-    private var browserDetail: String {
-        let providers = app.authMethods.identityProviders
-        switch providers.count {
-        case 0:
-            return "Sign in on your server's own page. Fastest if you're already signed in there."
-        case 1:
-            return "Opens your server's sign-in page. If you're already signed in there, you're done."
-        default:
-            let names = providers.map(\.name).joined(separator: ", ")
-            return "Sign in on your server's own page — \(names)."
-        }
-    }
-
-    /// The password row keeps its slot whatever the probe says, so nothing
-    /// reflows underneath a reader who is already reaching for it.
-    @ViewBuilder
-    private var passwordRow: some View {
-        if app.authMethods.password {
-            methodRow(
-                title: "Username and password",
-                // Fail open when the server did not answer. Being wrong costs
-                // one clear error; failing closed would silently hide a route
-                // on any server whose proxy answered oddly.
-                detail: app.authMethods.isUnknown
-                    ? "Your server may not accept a password — the app will say so if it doesn't."
-                    : "Type them into the app.",
-                symbol: "person.crop.circle",
-                isBusy: app.isProbingAuthMethods,
-            ) {
-                guard let url = serverURL else { return }
-                route = .password(PasswordSignInModel(serverURL: url))
-            }
-            .disabled(app.isProbingAuthMethods)
-        } else {
-            Text("This server signs you in on its own page — use one of the options below.")
-                .font(Typography.footnote)
-                .foregroundStyle(Palette.inkTertiary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
     }
 
     private func methodRow(
         title: String,
         detail: String,
         symbol: String,
-        isBusy: Bool = false,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
@@ -243,15 +184,11 @@ public struct SignInView: View {
                     Text(title)
                         .font(Typography.headline)
                         .foregroundStyle(Palette.ink)
-                    if isBusy {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        Text(detail)
-                            .font(Typography.footnote)
-                            .foregroundStyle(Palette.inkSecondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .multilineTextAlignment(.leading)
-                    }
+                    Text(detail)
+                        .font(Typography.footnote)
+                        .foregroundStyle(Palette.inkSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .multilineTextAlignment(.leading)
                 }
                 Spacer(minLength: 0)
                 Image(systemName: "chevron.right")
@@ -317,15 +254,23 @@ public struct SignInView: View {
                 // correct and completely opaque to anyone who has not read the
                 // RFC. A placeholder's job is to show the shape of the answer.
                 //
-                // As a `prompt:` with its own colour, not a title string: an
-                // address-shaped placeholder gets drawn in link blue, which
-                // reads as text somebody already typed rather than as an
-                // example of what to type.
-                TextField(
-                    "",
-                    text: $address,
-                    prompt: Text("https://yourlibrary.com").foregroundStyle(Palette.inkTertiary),
-                )
+                // `Text(verbatim:)`, and drawn as an overlay rather than given
+                // to the field. A string literal handed to `Text` is a
+                // `LocalizedStringKey` and gets parsed as Markdown, which
+                // autolinks a bare URL and paints it in the tint — so the
+                // example address came out looking like text somebody had
+                // already typed and tapped. `verbatim` skips the parse, and the
+                // overlay is what makes the colour ours to set.
+                TextField("", text: $address)
+                    .overlay(alignment: .leading) {
+                        if address.isEmpty {
+                            Text(verbatim: "https://yourlibrary.com")
+                                .font(Typography.body)
+                                .foregroundStyle(Palette.inkTertiary)
+                                .allowsHitTesting(false)
+                                .accessibilityHidden(true)
+                        }
+                    }
                     // Explicit, the way LibrarySearchField is: a field that
                     // sets no colour takes the system label, which is white in
                     // Dark Mode.
@@ -370,11 +315,6 @@ public struct SignInView: View {
             }
             .buttonStyle(.plain)
             .disabled(address.isEmpty || connecting)
-
-            Text("Next you'll choose how to sign in — a password, your server's own page, or a pairing code.")
-                .font(Typography.footnote)
-                .foregroundStyle(Palette.inkTertiary)
-                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
