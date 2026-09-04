@@ -77,6 +77,30 @@ targets:
           # proves that grep can fire before trusting it.
           EXCLUDED_SOURCE_FILE_NAMES: "$(inherited) Apps/IssaReader-iOS/Sources/UITestSupport/*"
 
+  # Unit tests over Apps/Shared, which no other target can reach.
+  #
+  # AppModel and ReaderModel hold forty-plus of the review's findings and had no
+  # test coverage of any kind: `Apps/Shared/Sources` is a source *path* compiled
+  # into each app target, not a package, so `swift test` cannot see it and
+  # IssaLayoutUITests is black-box XCUITest that can only drive the accessibility
+  # tree. Hosting a unit bundle on the iOS app puts those types in reach of
+  # `@testable import`, which is what makes the position and sign-out fixes
+  # testable rather than simulator-only.
+  IssaSharedTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Apps/IssaSharedTests/Sources
+    dependencies:
+      - target: IssaReader-iOS
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.benjaminissa.issareader.sharedtests
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/IssaReader-iOS.app/IssaReader-iOS"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        GENERATE_INFOPLIST_FILE: YES
+        TARGETED_DEVICE_FAMILY: "1,2"
+
   # Not `IssaUITests`: that name is already a SwiftPM *unit* test target for
   # the IssaUI package, and two targets with one name in a project that
   # consumes that package is a collision waiting to happen.
@@ -212,6 +236,7 @@ schemes:
       targets:
         IssaReader-iOS: all
         IssaLayoutUITests: [test]
+        IssaSharedTests: [test]
     run:
       config: Debug
     test:
@@ -220,6 +245,10 @@ schemes:
       # one result bundle and race the fixture's URLProtocol registration.
       parallelizable: false
       targets:
+        # Both, and listed explicitly. A target missing from here runs zero
+        # tests while the build still succeeds — the failure this block exists
+        # to prevent.
+        - IssaSharedTests
         - IssaLayoutUITests
     profile:
       config: Release
