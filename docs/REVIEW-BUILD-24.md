@@ -108,12 +108,47 @@ reader's server for third-party IdPs. Over http an on-path attacker injects
 client-side (the server echoes nothing), so the fixes are refusing this route
 over http and comparing the adopted identity against the stored account key.
 
+> **Build 25 · partial.** The identity check landed —
+> `AppModel.handOverIfTheAccountChanged(to:on:)` compares the adopted identity
+> against `issa.account.<server>` and, on a mismatch, hands the device over
+> cleanly instead of showing the arriving reader the departing one's shelf and
+> posting the departing one's queued writes under the arriving one's token. A
+> mismatch is not refused: a second reader on a household iPad is legitimate and
+> is indistinguishable from an injected token from here. The browser row now also
+> states, on an http server, that the sign-in page and the token it returns are
+> both readable and the token replaceable.
+>
+> **The http refusal did not land and will not while 1.2 stands.** The residual
+> is therefore unchanged: over http an on-path attacker can still inject
+> `302 Location: storyteller://x?token=…` into the login chain, and this app will
+> still adopt that token. What the identity check does is bound the blast radius
+> and leave a trace. Over https the injection is not reachable at all —
+> `ASWebAuthenticationSession` intercepts its callback scheme only from
+> navigations inside its own web view. Reopen this if 1.2 is ever reopened.
+
 **F-3.6 · High · `Apps/Shared/Sources/BrowserSignIn.swift:54`**
 `prefersEphemeralWebBrowserSession = false` plus a route that mints a token with
 zero interaction makes sign-out one-way. `Session.signOut()` has no handle on
 Safari's cookie jar and `startURL` appends no `prompt=login`, so on a household
 iPad reader B taps "In your browser" and lands in A's library holding a fresh
 long-lived token.
+
+> **Build 25 · won't fix, deliberately.** Non-ephemeral is the reason this route
+> exists and `BrowserSignIn.swift:75` already says so: a reader already signed in
+> to their library in Safari taps once and is done, which is what let the browser
+> route replace the device grant on iPhone and Mac. Making the session ephemeral
+> turns every sign-in back into a full login form and gives that up.
+>
+> The household-iPad case is **accepted, not overlooked**. What reduces it: the
+> account hand-over added for F-3.5 means reader B landing in A's library is now
+> a clean switch rather than A's shelf under B's name, and `Session.signOut()`
+> revokes the token server-side rather than merely dropping it. What remains: B
+> can still obtain a working token for A's account in one tap, because A's
+> *browser* session was never this app's to end.
+>
+> Filed here so the next review does not re-file it as an oversight. Revisit if
+> the server ever honours `prompt=login`, which would close it without costing
+> the one-tap path.
 
 **F-3.7 · High · `IssaEPUB/EPUBContainer.swift:125`**
 The Zip64 EOCD magic is written as `0x06054B50` — the *regular* EOCD signature —
@@ -458,6 +493,15 @@ lacking `/api/v2/token/app` dead-ends silently. The same diff deleted two workin
 probes that would have answered the question; `Endpoint.authProviders` survives
 as a constant nothing reads.
 
+> **Build 25 · closed.** `AppTokenGrant.isOffered(by:using:)` asks the route
+> itself, unauthenticated, on an ephemeral session. It **fails open**: only a
+> definite 404 or 405 hides the row, because a wrong "unavailable" hides the
+> fastest way in from someone who has it while a wrong "available" costs one tap
+> and lands on an error F-8.2 now words properly. The row is shown *disabled with
+> the reason* rather than hidden — a row that silently disappears is the same
+> failure as one that silently dead-ends. `Endpoint.authProviders` is untouched;
+> it answers "does Auth.js exist", which is not the question.
+
 **F-8.6 · Medium · `Apps/Shared/Sources/BrowserSignIn.swift:100`**
 The presentation-anchor fallback fabricates a detached `ASPresentationAnchor()`
 with no window scene — precisely the condition the SDK header warns produces
@@ -671,6 +715,15 @@ self-re-arming `withObservationTracking` chain that nothing removes. Open a doze
 books and the next nudge of the skip interval fires fourteen
 `remote.activate()` cycles, tearing down and re-registering the whole
 `MPRemoteCommandCenter` target set each time.
+
+> **Build 25 · closed.** Two guards. `configure` returns early when handed the
+> same `PlaybackSettings` instance again, which covers every one of those scenes
+> since they are all given the same `@State`-owned object; and the observation
+> chain carries a generation, bumped by each real reconfiguration, so a chain
+> installed against a *superseded* settings object stops re-arming instead of
+> republishing forever. `NowPlayingController.remoteActivations` counts the
+> cycles and is what the tests assert on — three configures produce one, and one
+> change to the skip interval produces exactly one more.
 
 **F-10.12 · Medium · `scripts/layout-sweep.sh:96`**
 `$WORK` is cleared but `$OUT` never is, and the contact-sheet step is wrapped in

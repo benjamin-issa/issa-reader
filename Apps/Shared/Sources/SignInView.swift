@@ -39,6 +39,11 @@ public struct SignInView: View {
     @State private var route: Route = .address
     @State private var address: String = ""
     @State private var connecting = false
+    /// Whether this server offers `/api/v2/token/app` — `nil` until the probe
+    /// answers, and offered while it is nil. The row was offered
+    /// unconditionally, so on a server without the route the reader tapped,
+    /// watched a browser open on a 404, and came back here with nothing said.
+    @State private var browserRouteOffered: Bool?
 
     public init() {}
 
@@ -144,6 +149,26 @@ public struct SignInView: View {
                         provider it uses. Fastest if you're already signed in there.
                         """,
                     symbol: "safari",
+                    // Shown disabled with the reason, never hidden. A row that
+                    // silently disappears is the same failure as a row that
+                    // silently dead-ends: the reader is left to work out on
+                    // their own why the way in they were told about is not
+                    // there.
+                    unavailable: browserRouteOffered == false
+                        ? "This server doesn't offer browser sign-in. Use a device code."
+                        : nil,
+                    // What *this* route puts on an unencrypted connection,
+                    // which is not what the line above the rows says. That one
+                    // is about the connection; this is about the credential and
+                    // the token travelling over it, and about the fact that
+                    // anything on the network can replace the second one.
+                    warning: serverURL?.scheme?.lowercased() == "http"
+                        ? """
+                          Over http:// your sign-in page and the token it sends \
+                          back are both readable on this network, and the token \
+                          can be replaced.
+                          """
+                        : nil,
                 ) {
                     guard let url = serverURL else { return }
                     route = .browser(BrowserSignInModel(serverURL: url))
@@ -159,6 +184,14 @@ public struct SignInView: View {
                     Task { await model.begin() }
                 }
             }
+            // Re-run when the address changes, because "does this server have
+            // the route" is a fact about that server and no other. Nothing is
+            // gated on it finishing: while the answer is nil the row is live.
+            .task(id: serverURL) {
+                guard let url = serverURL else { return }
+                browserRouteOffered = await AppTokenGrant.isOffered(
+                    by: url, using: AppTokenGrant.probingSession())
+            }
 
             if let error = app.loadError {
                 Text(error)
@@ -168,32 +201,52 @@ public struct SignInView: View {
         }
     }
 
+    /// - Parameters:
+    ///   - unavailable: why this way in cannot be used, when it cannot. The row
+    ///     stays on screen and stops responding, rather than vanishing.
+    ///   - warning: what choosing it costs on this particular server. Not an
+    ///     error — the row still works — so it is stated and left to the reader.
     private func methodRow(
         title: String,
         detail: String,
         symbol: String,
+        unavailable: String? = nil,
+        warning: String? = nil,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
             HStack(alignment: .top, spacing: Metrics.spacing12) {
                 Image(systemName: symbol)
                     .font(Typography.headline)
-                    .foregroundStyle(Palette.tangerine)
+                    .foregroundStyle(unavailable == nil ? Palette.tangerine : Palette.inkQuaternary)
                     .frame(width: 24)
                 VStack(alignment: .leading, spacing: Metrics.spacing4) {
                     Text(title)
                         .font(Typography.headline)
-                        .foregroundStyle(Palette.ink)
-                    Text(detail)
+                        .foregroundStyle(unavailable == nil ? Palette.ink : Palette.inkTertiary)
+                    Text(unavailable ?? detail)
                         .font(Typography.footnote)
                         .foregroundStyle(Palette.inkSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                         .multilineTextAlignment(.leading)
+                    // Under the description, not instead of it: the reader
+                    // needs to know both what this route is and what it costs
+                    // here. Suppressed when the row is unavailable, because
+                    // then there is nothing to weigh.
+                    if let warning, unavailable == nil {
+                        Text(warning)
+                            .font(Typography.caption)
+                            .foregroundStyle(Palette.alert)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .multilineTextAlignment(.leading)
+                    }
                 }
                 Spacer(minLength: 0)
-                Image(systemName: "chevron.right")
-                    .font(Typography.footnote)
-                    .foregroundStyle(Palette.inkTertiary)
+                if unavailable == nil {
+                    Image(systemName: "chevron.right")
+                        .font(Typography.footnote)
+                        .foregroundStyle(Palette.inkTertiary)
+                }
             }
             .padding(Metrics.spacing16)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -204,6 +257,7 @@ public struct SignInView: View {
             )
         }
         .buttonStyle(.plain)
+        .disabled(unavailable != nil)
     }
 
     // MARK: - The address, and coming back to it

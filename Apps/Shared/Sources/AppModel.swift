@@ -318,7 +318,8 @@ public final class AppModel {
         guard let session else { return }
         await session.adopt(token: token)
         switch session.state {
-        case .signedIn:
+        case let .signedIn(user):
+            await handOverIfTheAccountChanged(to: user, on: session.serverURL)
             await enterLibrary()
         case let .failed(reason):
             // The grant worked and the token is in the keychain — only the
@@ -332,12 +333,75 @@ public final class AppModel {
         }
     }
 
+    /// The only binding available on a token that arrives through the browser
+    /// route: is the identity it resolves to the identity this server was last
+    /// signed in as?
+    ///
+    /// The callback carries no `state` and no nonce, and cannot — the server
+    /// echoes nothing back, so there is nothing to bind at the moment it
+    /// arrives. `ASWebAuthenticationSession` intercepts its callback scheme only
+    /// from navigations inside its own web view, so over https there is no way
+    /// in; over http, which this app still permits by decision, an on-path
+    /// attacker can inject `302 Location: storyteller://x?token=…` into the
+    /// login chain. This check does not prevent that. It bounds it.
+    ///
+    /// A mismatch is **not** refused. A second reader on a household iPad is
+    /// entirely legitimate, and from here it is indistinguishable from an
+    /// injected token. What a mismatch *is* is a fact about the state already
+    /// in memory: the catalogue, the ratings, the download set, the high-water
+    /// marks, the queued position writes and any pending deep link all belong
+    /// to the previous account — and `enterLibrary` walked straight into them,
+    /// so the arriving reader was shown the departing one's shelf until the
+    /// first refresh returned, and the departing one's undrained writes were
+    /// posted under the arriving one's token.
+    private func handOverIfTheAccountChanged(to user: User, on server: URL) async {
+        let previous = UserDefaults.standard.string(forKey: Self.accountKey(for: server))
+        guard let previous, previous != user.id else { return }
+        // Ids and the server, never the token. Worth a warning rather than an
+        // info: on a shared device this is an ordinary hand-over, and on an
+        // unencrypted network it is the only trace an injected token leaves.
+        IssaLog.warning("adopted token resolves to a different account", [
+            "server": server.absoluteString,
+            "from": previous,
+            "to": user.id,
+        ])
+        await clearAccountScopedState(nowPlaying: nowPlayingController)
+    }
+
     /// Signs out and leaves nothing behind.
     ///
     /// - Parameter keepDownloads: books already on the device are expensive to
     ///   fetch again, so the choice is offered rather than assumed.
     public func signOut(keepDownloads: Bool = false, nowPlaying: NowPlayingController? = nil) async {
         await session?.signOut()
+        await clearAccountScopedState(nowPlaying: nowPlaying)
+
+        // What only a sign-out lets go of. A switch between accounts on this
+        // same server keeps all three: the store file is per server, the
+        // session is about to be reused, and the reader is going to a library
+        // rather than back to the form.
+        store = nil
+        session = nil
+        if !keepDownloads {
+            // Through StorageRoot, or "delete my downloads" would look at
+            // Application Support on an Apple TV and delete nothing.
+            for folder in ["Books", "Audio"] {
+                try? FileManager.default.removeItem(at: StorageRoot.directory(folder))
+            }
+        }
+        phase = .chooseServer
+    }
+
+    /// Everything held in memory, on the lock screen or on the device that
+    /// belongs to the account being left — and to no other.
+    ///
+    /// Shared by `signOut` and by an account *switch*: adopting a token whose
+    /// identity is not the one this server was last signed in as. The two
+    /// differ only in what they keep, and agree completely on what has to go,
+    /// so they are one method rather than two lists. A second list written
+    /// later would be missing fields, and every field missing from it is one
+    /// account's data shown to another.
+    private func clearAccountScopedState(nowPlaying: NowPlayingController?) async {
         // Stop the audio, and stop anything listening for it, before the
         // stopping itself is announced.
         //
@@ -350,12 +414,15 @@ public final class AppModel {
         // button resumed it.
         stopListening(nowPlaying: nowPlaying)
         // And the open book, which since it outlives its screen would otherwise
-        // keep narrating the signed-out account's library out loud.
+        // keep narrating the departed account's library out loud.
         releaseAllReaders()
         // The catalogue belongs to the account, so it goes with it. Annotations
         // do not: they are device-local and this is their only copy.
+        //
+        // This clears the `mutation` table too, which is what stops the
+        // departed account's undrained position writes being posted under the
+        // arriving account's token.
         try? await store?.clearAccountData()
-        store = nil
         mutations = nil
         // The high-water marks go too. They are keyed by book uuid, and the
         // same server hands the same uuids to a different account — so without
@@ -384,9 +451,10 @@ public final class AppModel {
         // background session owns its identifier for the life of the process,
         // and tearing it down here made the session the next sign-in built
         // invalid from birth — its first task raised an uncatchable
-        // `NSGenericException`. `connect` points this one at the new account.
+        // `NSGenericException`. `connect` points this one at the new account,
+        // and on a switch it needs no re-pointing: same server, and the token
+        // provider reads the keychain, which now holds the arriving account's.
         downloads?.stop()
-        session = nil
         CoverCache.shared.clear()
         // The widget keeps showing the last book on a signed-out device unless
         // its snapshot is cleared and its timeline reloaded.
@@ -398,17 +466,8 @@ public final class AppModel {
         CurrentBookPublisher.shared.clear()
         // And the device-wide Spotlight index, which otherwise keeps this
         // account's titles, bylines and blurbs answering Home Screen searches
-        // for up to 30 days after sign-out.
+        // for up to 30 days after it stopped being the account signed in.
         await SpotlightIndex.clear()
-
-        if !keepDownloads {
-            // Through StorageRoot, or "delete my downloads" would look at
-            // Application Support on an Apple TV and delete nothing.
-            for folder in ["Books", "Audio"] {
-                try? FileManager.default.removeItem(at: StorageRoot.directory(folder))
-            }
-        }
-        phase = .chooseServer
     }
 
     /// Opens the durable write queue, if it is not open already.
