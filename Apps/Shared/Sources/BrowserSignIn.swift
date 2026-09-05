@@ -36,36 +36,41 @@ final class BrowserApprovalController: NSObject {
                     // `storyteller://settings?token=…`, which this session
                     // intercepts before the system opener sees it.
                     callback: .customScheme(AppTokenGrant.callbackScheme),
-                ) { [weak self] callback, error in
-                    guard let self else { return }
-                    if let callback {
-                        self.finish(.completed(callback))
-                        return
-                    }
-                    // The error, not `_`. Discarding it collapsed all three
-                    // SDK outcomes into "the reader closed the window", which
-                    // renders a flash of "Taking you back…" and hands back to
-                    // the chooser with nothing on screen and nothing in the
-                    // log — so someone in Stage Manager, or who declined the
-                    // share-your-Safari-login alert, could tap the row forever.
+                    // `@Sendable`, so this closure does **not** inherit the
+                    // class's main-actor isolation — which is the whole of the
+                    // macOS crash. A closure written inside a `@MainActor` type
+                    // inherits that isolation, and Swift 6 verifies the
+                    // assumption at the closure's *entry*, before its first
+                    // statement. AuthenticationServices never promised it:
+                    // the header carries `NS_SWIFT_UI_ACTOR` on the
+                    // presentation-context protocol and pointedly not on
+                    // `ASWebAuthenticationSessionCompletionHandler`. On macOS
+                    // `start()` goes through an XPC dry run against the Safari
+                    // launch agent, and when the server redirects straight back
+                    // — a reader already signed in to their library, which is
+                    // the case this whole route exists for — the *callback*
+                    // arrives on that connection's reply queue. So the check
+                    // failed and the process took SIGTRAP before a line of this
+                    // body ran. Worth being exact: the Mac was not failing to
+                    // sign in. It was signing in, and dying as it handed the
+                    // token over. iOS happens to call back on the main thread,
+                    // which is the only reason the phone never died.
                     //
-                    // Only `canceledLogin` is genuinely the reader's doing, and
-                    // even that is ambiguous: closing the window and declining
-                    // the consent alert both arrive as it, and cannot be told
-                    // apart.
-                    let code = (error as? NSError).flatMap {
-                        $0.domain == ASWebAuthenticationSessionErrorDomain
-                            ? ASWebAuthenticationSessionError.Code(rawValue: $0.code) : nil
-                    }
-                    switch code {
-                    case .presentationContextNotProvided, .presentationContextInvalid:
-                        IssaLog.error("browser sign-in could not be presented", [
-                            "code": String(describing: code),
-                        ])
-                        self.finish(.couldNotOpen(
-                            "This window could not be opened here. Try a pairing code instead."))
-                    default:
-                        self.finish(self.closedByApp ? .byApp : .byUser)
+                    // Nothing warns you about this. Drop the `@Sendable` and the
+                    // app still compiles, on every platform — the check is
+                    // emitted, not diagnosed — and the Mac then traps the first
+                    // time anyone presses the button. Only `outcome` being
+                    // `nonisolated` is enforced at build time, by the tests.
+                ) { @Sendable [weak self] callback, error in
+                    // Pure and nonisolated, so nothing it does can trip the
+                    // same wire a second time.
+                    let known = Self.outcome(callback: callback, error: error)
+                    // The hop the SDK does not make for us.
+                    Task { @MainActor in
+                        guard let self else { return }
+                        // The one answer `outcome` cannot give, because
+                        // `closedByApp` is main-actor state.
+                        self.finish(known ?? (self.closedByApp ? .byApp : .byUser))
                     }
                 }
                 session.presentationContextProvider = self
@@ -97,6 +102,59 @@ final class BrowserApprovalController: NSObject {
             // what takes the sheet off the screen before the library appears
             // underneath it.
             Task { @MainActor [weak self] in self?.close() }
+        }
+    }
+
+    /// What the SDK's completion handler means, worked out without touching
+    /// anything on the main actor.
+    ///
+    /// Split out of the closure for two reasons: the closure has to be
+    /// `@Sendable` — see `present(_:)` — and a mapping that decides what the
+    /// reader is told should be testable without a window to open.
+    ///
+    /// `nil` means the window merely closed. Whether that was the app or the
+    /// reader depends on `closedByApp`, which this cannot see.
+    nonisolated static func outcome(callback: URL?, error: (any Error)?) -> BrowserDismissal? {
+        if let callback { return .completed(callback) }
+        // No callback and no error is the shape nothing documents; treat it as
+        // the window closing, which is what it looks like from here.
+        guard let error else { return nil }
+        let ns = error as NSError
+
+        // Logged before it is mapped, and for every domain — which is new.
+        // Until this line, anything that was not a presentation-context error
+        // came back as "you closed the window", and the reader was then shown a
+        // note asking whether they had declined a Safari alert. For any error
+        // the session does not raise itself, both halves of that are invented.
+        IssaLog.error("browser sign-in ended with an error", [
+            "domain": ns.domain,
+            "code": String(ns.code),
+            "reason": ns.localizedDescription,
+        ])
+
+        guard ns.domain == ASWebAuthenticationSessionErrorDomain,
+              let code = ASWebAuthenticationSessionError.Code(rawValue: ns.code)
+        else {
+            // Not the session's own error at all, so it is certainly not the
+            // reader closing a window, and must not be dressed up as one — that
+            // is what sent people to a "did you decline the Safari alert?" note
+            // about an alert they were never shown.
+            return .couldNotOpen(
+                "Your Mac wouldn't open your server's sign-in page. Try a device code instead.")
+        }
+
+        switch code {
+        case .presentationContextNotProvided, .presentationContextInvalid:
+            return .couldNotOpen(
+                "This window could not be opened here. Try a pairing code instead.")
+        // `canceledLogin` and anything later added to the enum. Only
+        // `canceledLogin` is genuinely the reader's doing, and even that is
+        // ambiguous: closing the window and declining the consent alert arrive
+        // as the same code and cannot be told apart. It is also what
+        // `close()`'s own `cancel()` produces, which is why this has to fall
+        // through to the `closedByApp` question rather than answer it here.
+        default:
+            return nil
         }
     }
 

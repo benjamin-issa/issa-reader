@@ -61,9 +61,9 @@ struct TVRootView: View {
         Group {
             switch app.phase {
             case .launching:
-                Palette.paper.ignoresSafeArea().task { await app.restoreIfPossible() }
+                Palette.paper.ignoresSafeArea().onAppear { app.startRestore() }
             case .chooseServer, .signingIn, .expired:
-                TVSignInView().task { await app.restoreIfPossible() }
+                TVSignInView().onAppear { app.startRestore() }
             case .ready:
                 tabs
             }

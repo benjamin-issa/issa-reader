@@ -123,7 +123,11 @@ public final class ReaderModel {
     /// Exposed so the player sheet can load cover art through the same client.
     public var readerSession: Session { session }
     private var pageSize: CGSize = .zero
+    /// The debounce timer. Cancelled freely on every change: it is only a wait.
     private var saveTask: Task<Void, Never>?
+    /// The write itself, once it has begun. Never cancelled by the debounce
+    /// -- see beginSave() for the day of cancelled requests that caused.
+    private var saveInFlight: Task<Void, Never>?
 
     /// Playback rate to start narration at, supplied by the app's preferences.
     public var preferredRate: Double = 1.0
@@ -161,6 +165,22 @@ public final class ReaderModel {
     /// Returns whether the write was accepted: the app's guard may refuse a
     /// derived one, and a refused position must not reach the widget either.
     public var enqueuePosition: ((ReadiumLocator, Double, PositionOrigin) async -> Bool)?
+
+    /// Records where the narration is, in terms the audiobook engine can act on.
+    ///
+    /// Injected the same way `enqueuePosition` is, and for the same reason: the
+    /// store belongs to `AppModel`. See `AudioAnchor` — without this, a book
+    /// read on the phone and then resumed in the car had nothing on the audio
+    /// clock to resume from, and the fraction that got used instead was a
+    /// fraction of the *text*.
+    public var recordAudioAnchor: ((AudioAnchor) async -> Void)?
+
+    /// Reads back the anchor written by whichever engine last played.
+    ///
+    /// The other direction of `recordAudioAnchor`: it is how the reader lands
+    /// on the right sentence after the audiobook — in the car, say — has moved
+    /// the position onto the audio clock.
+    public var loadAudioAnchor: (() async -> AudioAnchor?)?
     /// When the oldest unwritten change happened, for the debounce ceiling.
     private var firstUnsavedChangeAt: Date?
 
@@ -366,13 +386,50 @@ public final class ReaderModel {
             // locator itself; replaced when that locator names no chapter.
             var restoring = stored?.locator
             if let position = stored, resumed == nil {
+                // An audiobook wrote this position, so its `totalProgression`
+                // is a fraction of the *audio* clock — a different timeline
+                // entirely. Reading it as a fraction of the text is the mirror
+                // image of the bug that resumed the car tens of minutes early,
+                // and it is what produced the `storedFragment=kobo.1.1
+                // storedProgress=0.7284` pairs in the logs: a fragment at the
+                // front of a chapter beside a progress three-quarters through
+                // the book, because the fragment was synthesised by the branch
+                // below after the number had already been misread.
+                //
+                // The media overlay is the bridge. The anchor names an audio
+                // file and an offset; the timeline says which sentence that is.
+                // See `AudioAnchor`.
+                if position.locator.isAudioScaled,
+                   let anchor = await loadAudioAnchor?(),
+                   let entry = timeline.entry(inFile: anchor.audioHref, at: anchor.offset),
+                   let index = package.spine.firstIndex(where: {
+                       ReadiumLocator(href: entry.textHref, type: "application/xhtml+xml")
+                           .matchesHref($0.href)
+                   })
+                {
+                    resumed = index
+                    restoring = ReadiumLocator(
+                        href: package.spine[index].href,
+                        type: "application/xhtml+xml",
+                        locations: .init(fragments: [entry.fragmentID]),
+                    )
+                    IssaLog.info("stored position resolved by audio anchor", [
+                        "book": book.title,
+                        "fragment": entry.fragmentID,
+                        "chapter": String(index),
+                    ])
+                }
                 // An href no spine entry can match — an audiobook position,
                 // whose href is an audio track's path, or a chapter file a
                 // revision renamed. The whole-book progression still says
                 // where the reader was, so land there: falling back to the
                 // front of the book put the first page turn's save over their
                 // real position.
-                if let progress = position.locator.totalProgression, progress.isFinite,
+                //
+                // Last resort, and approximate when the position came from the
+                // audiobook: the two clocks do not convert by arithmetic. Said
+                // in the log rather than left to be inferred.
+                else if let progress = position.locator.totalProgression, progress.isFinite,
                    let landing = Self.spinePosition(atTotalProgression: progress, in: package) {
                     resumed = landing.index
                     // A synthetic anchor rather than the stored locator: its
@@ -459,6 +516,29 @@ public final class ReaderModel {
             opened["narratedDocuments"] = String(narratedDocuments.count)
             opened["spineItems"] = String(package.spine.count)
             IssaLog.info("book opened", opened)
+            // Seed the anchor from wherever this open landed, if nothing has
+            // written one yet.
+            //
+            // Without this, a book read before this build has no anchor at all,
+            // so the first drive after updating would find nothing on the audio
+            // clock and start the book from the beginning -- which is the same
+            // complaint ("too early") with a different cause. Opening the book
+            // once on the phone is enough to fix that, and opening it is what
+            // a reader does anyway.
+            //
+            // Only when there is none: an anchor written by actual playback
+            // knows more than one inferred from a restored page.
+            if let fragment = restoredSentenceID,
+               let entry = timeline.entry(
+                   forFragment: fragment, inDocument: package.spine[chapterIndex].href),
+               await loadAudioAnchor?() == nil
+            {
+                await recordAudioAnchor?(AudioAnchor(
+                    audioHref: entry.audioHref,
+                    offset: entry.start,
+                    writtenAt: Date().timeIntervalSince1970,
+                ))
+            }
             // The widget reads a file that was written only by `saveProgress`,
             // and nothing saves on open — so a reader who opened a book and put
             // the phone down left the widget showing the previous session, or
@@ -1561,7 +1641,7 @@ public final class ReaderModel {
         if let first = firstUnsavedChangeAt, now.timeIntervalSince(first) >= Self.saveMaximumWait {
             saveTask?.cancel()
             firstUnsavedChangeAt = nil
-            saveTask = Task { [weak self] in await self?.saveProgress() }
+            beginSave()
             return
         }
         if firstUnsavedChangeAt == nil { firstUnsavedChangeAt = now }
@@ -1569,8 +1649,36 @@ public final class ReaderModel {
         saveTask?.cancel()
         saveTask = Task { [weak self] in
             try? await Task.sleep(for: Self.saveDebounce)
-            guard !Task.isCancelled else { return }
-            self?.firstUnsavedChangeAt = nil
+            guard !Task.isCancelled, let self else { return }
+            self.firstUnsavedChangeAt = nil
+            self.beginSave()
+        }
+    }
+
+    /// Starts the write, in a task the debounce does not own.
+    ///
+    /// This separation is the whole point. `saveTask` used to both wait *and*
+    /// write, and `scheduleSave` cancels it on every page turn and every
+    /// narrated sentence — so a change arriving while the previous save was
+    /// already inside `POST /positions` cancelled the request. A full day of
+    /// logs shows the result: hundreds of
+    /// `request failed code=-999 … NSLocalizedDescription=cancelled` on
+    /// `/positions`, each followed by `sync mutation failed … retryable=true`.
+    /// Nothing was lost — the mutation queue is written before the send — but
+    /// no position reached the server until some later drain happened to
+    /// survive, and the log was unreadable.
+    ///
+    /// So the debounce now cancels only the *wait*. Once a write has begun it
+    /// runs to completion.
+    ///
+    /// Chained on the previous write rather than run beside it: two position
+    /// POSTs for one book race, and the server treats rapid writes with equal
+    /// timestamps as conflicts. The debounce collapses bursts, so the chain is
+    /// at most a link or two deep.
+    private func beginSave() {
+        let previous = saveInFlight
+        saveInFlight = Task { [weak self] in
+            await previous?.value
             await self?.saveProgress()
         }
     }
@@ -1583,6 +1691,12 @@ public final class ReaderModel {
     public func cancelPendingSave() {
         saveTask?.cancel()
         saveTask = nil
+        // The in-flight write too, and only here. Sign-out is the one caller,
+        // and a POST already on the wire is being sent with a token that has
+        // just been revoked -- which is the one case where cancelling a request
+        // mid-flight is the correct thing to do rather than the bug above.
+        saveInFlight?.cancel()
+        saveInFlight = nil
         firstUnsavedChangeAt = nil
     }
 
@@ -1642,6 +1756,14 @@ public final class ReaderModel {
         // published regardless, so the Home Screen showed a place the book
         // was never at, or the book of an account that had left.
         if accepted { publishSnapshot(progress: overall) }
+
+        // The anchor, whenever narration has actually played. The locator above
+        // is a fraction of the *text*; this is a file and an offset, which is
+        // the only thing the audiobook engine can act on — and the whole reason
+        // switching to the car mid-book can now land on the same sentence.
+        if let anchor = readalong?.currentAnchor {
+            await recordAudioAnchor?(anchor)
+        }
     }
 
     /// Publishes the small record the widget reads.

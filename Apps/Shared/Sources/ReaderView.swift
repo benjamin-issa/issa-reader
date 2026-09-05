@@ -75,6 +75,20 @@ public struct ReaderView: View {
     /// position fetch with it and logging a failure for something nothing was
     /// waiting on any more.
     @State private var deviceInsets = ReaderInsets.current()
+    /// Whether the reader draws its own bar across the top of the page.
+    ///
+    /// The Mac does not: it has a real window toolbar, declared a few hundred
+    /// lines below with `.toolbar` and `.toolbarBackground`. Everywhere else
+    /// the bar is drawn over the page so that showing and hiding it cannot
+    /// re-paginate the chapter.
+    static var drawsOwnTopBar: Bool {
+        #if os(macOS)
+        false
+        #else
+        true
+        #endif
+    }
+
     /// Whether a finger is currently down, so `selecting` can be cleared at the
     /// start of a touch rather than the end of one.
     @State private var touching = false
@@ -137,6 +151,7 @@ public struct ReaderView: View {
                 safeAreaTop: deviceInsets.top,
                 safeAreaBottom: deviceInsets.bottom,
                 margin: model.style.pageMargin,
+                drawsOwnTopBar: Self.drawsOwnTopBar,
             )
             let pageSize = chrome.pageSize(in: geometry.size)
 
@@ -278,6 +293,7 @@ public struct ReaderView: View {
                 }
             }
             .presentationDetents([.medium, .large])
+            .macSheetSize()
         }
         // Not on the Mac, where the player is a window several open books can
         // share rather than a sheet owned by whichever one summoned it.
@@ -310,6 +326,7 @@ public struct ReaderView: View {
                     }
                 }
             }
+            .macSheetSize()
         }
         .sheet(isPresented: $showsAnnotations) {
             NavigationStack {
@@ -318,6 +335,7 @@ public struct ReaderView: View {
                 }
             }
             .presentationDetents([.medium, .large])
+            .macSheetSize()
         }
         // At body level like every other reader sheet, not inside pageContent:
         // that view exists only at `.ready`, while the "Aa" button lives in
@@ -331,6 +349,7 @@ public struct ReaderView: View {
                 publisherNote: model.publisherFontDescription,
                 onChange: applyStyle,
             )
+            .macSheetSize()
         }
         #if os(macOS)
         // The Mac keeps a real toolbar: its window chrome never moved the page.
@@ -529,7 +548,15 @@ public struct ReaderView: View {
             // adding to it: 44 points of empty bar is already more breathing
             // room than the margin gave, and stacking both is how the screen
             // ended up spending a fifth of its height before the first word.
-            Color.clear.frame(height: ReaderChrome.barHeight)
+            //
+            // Nothing on the Mac, which draws no such bar: there the window's
+            // own toolbar is the top chrome, and `deviceInsets.top` — measured
+            // from `contentLayoutRect` — is what holds the page clear of it.
+            // Reserving 44 here as well put the page's first line 8 points
+            // under a 52-point toolbar.
+            if Self.drawsOwnTopBar {
+                Color.clear.frame(height: ReaderChrome.barHeight)
+            }
 
             PageCanvas(model: model, pageSize: size)
                 .padding(.horizontal, model.style.pageMargin)
@@ -832,6 +859,26 @@ public struct ReaderView: View {
         CGPoint(x: point.x - model.style.pageMargin, y: point.y)
     }
 
+    /// Whether this book is playing, by whichever engine happens to own it.
+    ///
+    /// The audiobook takes precedence exactly as `AppModel.playback` does, so
+    /// the footer, the mini bar and the lock screen cannot disagree.
+    private var bookIsPlaying: Bool {
+        if app.listeningBook?.uuid == model.book.uuid, let listening = app.listening {
+            return listening.player.isPlaying
+        }
+        return model.isPlaying
+    }
+
+    /// Pauses or resumes whichever engine is playing this book.
+    private func togglePlaybackForThisBook() async {
+        if app.listeningBook?.uuid == model.book.uuid, let listening = app.listening {
+            if listening.player.isPlaying { listening.player.pause() } else { listening.player.play() }
+            return
+        }
+        await model.togglePlayback()
+    }
+
     /// The strip below the page.
     ///
     /// Its `ReaderChrome.barHeight` is reserved whether or not the controls are
@@ -846,15 +893,24 @@ public struct ReaderView: View {
                     // to the one button and moved skip ±N and the waveform into
                     // the full player behind a swipe — and the phone lost every
                     // visible way to move through the audio. Back as they were.
+                    // Reflects whatever is actually playing *this book*, not
+                    // only this screen's own narration.
+                    //
+                    // The reader has a read-along coordinator; the audiobook
+                    // has a separate one, and CarPlay drives that. So with the
+                    // car playing, `model.isPlaying` was false and an open
+                    // reader showed a paused book while it was audibly playing
+                    // — "when I opened the app on my phone, it didn't appear to
+                    // be playing". The button drove the silent engine too.
                     Button {
-                        Task { await model.togglePlayback() }
+                        Task { await togglePlaybackForThisBook() }
                     } label: {
-                        Image(systemName: model.isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                        Image(systemName: bookIsPlaying ? "pause.circle.fill" : "play.circle.fill")
                             .font(.system(size: 26))
                             .foregroundStyle(model.style.theme.accent)
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel(model.isPlaying ? "Pause narration" : "Play narration")
+                    .accessibilityLabel(bookIsPlaying ? "Pause narration" : "Play narration")
                     // VoiceOver has no swipe-up, so it reaches the player through
                     // a named action as well as the waveform button.
                     .accessibilityAction(named: "Open player") { openPlayer() }

@@ -263,9 +263,9 @@ struct MacRootView: View {
         Group {
             switch app.phase {
             case .launching:
-                Palette.paper.ignoresSafeArea().task { await app.restoreIfPossible() }
+                Palette.paper.ignoresSafeArea().onAppear { app.startRestore() }
             case .chooseServer, .signingIn, .expired:
-                SignInView().task { await app.restoreIfPossible() }
+                SignInView().onAppear { app.startRestore() }
             case .ready:
                 readyBody
             }
@@ -422,6 +422,18 @@ struct MacRootView: View {
                 .help("Show or hide the selected book's details")
             }
         }
+        // The toolbar is painted, and the search field is why. Left on the
+        // system material it is very nearly the same white as the search
+        // field's own bezel, so the field had no visible edge at all — it read
+        // as a gap in the toolbar rather than as somewhere to type. Against
+        // paper (0xEFE8DC) the field's surface (0xFFFDF8) stands out properly.
+        //
+        // It also closes the seam: everything below this line is already paper,
+        // so a system-white strip across the top was the one place in the
+        // window where the app's ground gave way. The reader window has done
+        // this for its own toolbar since it was written; the library window
+        // simply never got the same treatment.
+        .toolbarBackground(Palette.paper, for: .windowToolbar)
         // Picking a sidebar shelf sets the same arrangement the phone
         // uses, rather than a second, parallel idea of what a shelf is.
         .onChange(of: selection) { _, new in

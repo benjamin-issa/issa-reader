@@ -11,6 +11,17 @@ import Testing
 struct PositionWritingTests {
     static let uuid = "11111111-1111-4111-8111-111111111111"
 
+    /// The guard for this book's *reading* position.
+    ///
+    /// Guards are keyed by book and by clock — the reader's text progression
+    /// and the audiobook's audio progression are separate high-water marks,
+    /// because they are fractions of different timelines. Through the
+    /// production helper, so a change to the key cannot leave these green while
+    /// `reseedGuards` quietly matches nothing.
+    static var textGuardKey: String {
+        AppModel.positionGuardKey(uuid, isAudioScaled: false)
+    }
+
     /// `PositionGuard` does re-baseline — but only on `.chosen`. Nothing
     /// re-seeded it when a refresh legitimately adopted a *lower* server
     /// position, so every `.derived` write afterwards was refused for the rest
@@ -23,16 +34,16 @@ struct PositionWritingTests {
     @Test("a guard whose book moved backwards on the server stops refusing")
     func guardFollowsTheServerBackwards() throws {
         let app = AppModel()
-        app.positionGuards[Self.uuid] = PositionGuard(highWater: 0.85, duration: 40 * 3600)
+        app.positionGuards[Self.textGuardKey] = PositionGuard(highWater: 0.85, duration: 40 * 3600)
 
         // Where it was before: a derived write from chapter one is refused.
-        var before = try #require(app.positionGuards[Self.uuid])
+        var before = try #require(app.positionGuards[Self.textGuardKey])
         #expect(before.decide(0.02, origin: .derived).isRefusal)
 
         // The server now says 0.02 — the book was restarted elsewhere.
         app.reseedGuards(against: [SharedFixtures.book("Dracula", uuid: Self.uuid, progress: 0.02)])
 
-        var after = try #require(app.positionGuards[Self.uuid])
+        var after = try #require(app.positionGuards[Self.textGuardKey])
         #expect(abs(after.highWater - 0.02) < 0.0001, "the guard was not re-seeded from the server")
         #expect(!after.decide(0.03, origin: .derived).isRefusal, "reading on must be recordable")
     }
@@ -43,11 +54,11 @@ struct PositionWritingTests {
     @Test("a guard whose book moved forwards on the server is left alone")
     func forwardMoveDoesNotReseed() throws {
         let app = AppModel()
-        app.positionGuards[Self.uuid] = PositionGuard(highWater: 0.85, duration: 40 * 3600)
+        app.positionGuards[Self.textGuardKey] = PositionGuard(highWater: 0.85, duration: 40 * 3600)
 
         app.reseedGuards(against: [SharedFixtures.book("Dracula", uuid: Self.uuid, progress: 0.90)])
 
-        let after = try #require(app.positionGuards[Self.uuid])
+        let after = try #require(app.positionGuards[Self.textGuardKey])
         #expect(abs(after.highWater - 0.85) < 0.0001, "a forward move must not lower the mark")
     }
 

@@ -237,6 +237,21 @@ public actor LibraryStore {
             }
         }
 
+        // Where playback is, as an audio file and an offset into it, for the
+        // one book being listened to on this device. Local on purpose: it is
+        // the bridge between the read-along's clock and the audiobook's, both
+        // of which live here, and making it depend on the server round-tripping
+        // an unknown locator key would put the correctness of a car resume at
+        // the mercy of a field nothing has agreed on. See `AudioAnchor`.
+        migrator.registerMigration("v8-audio-anchor") { db in
+            try db.create(table: "audioAnchor") { t in
+                t.column("bookUUID", .text).primaryKey()
+                t.column("audioHref", .text).notNull()
+                t.column("offset", .double).notNull()
+                t.column("writtenAt", .double).notNull()
+            }
+        }
+
         return migrator
     }
 
@@ -361,7 +376,41 @@ public actor LibraryStore {
         }
     }
 
+    // MARK: - The audio anchor
+
+    /// Records where playback is, for whichever engine asks next.
+    ///
+    /// Refuses an anchor older than the one held. Both engines write these and
+    /// the reader may have been running while the car was not, so "last writer
+    /// wins" has to mean *last in time*, not last to reach the database.
+    public func setAudioAnchor(_ anchor: AudioAnchor, forBook uuid: String) throws {
+        try dbQueue.write { db in
+            try db.execute(
+                sql: "INSERT INTO audioAnchor (bookUUID, audioHref, offset, writtenAt) "
+                    + "VALUES (?, ?, ?, ?) "
+                    + "ON CONFLICT(bookUUID) DO UPDATE SET "
+                    + "audioHref = excluded.audioHref, offset = excluded.offset, "
+                    + "writtenAt = excluded.writtenAt "
+                    + "WHERE excluded.writtenAt > audioAnchor.writtenAt",
+                arguments: [uuid, anchor.audioHref, anchor.offset, anchor.writtenAt])
+        }
+    }
+
+    public func audioAnchor(forBook uuid: String) throws -> AudioAnchor? {
+        try dbQueue.read { db in
+            try Row.fetchOne(
+                db,
+                sql: "SELECT audioHref, offset, writtenAt FROM audioAnchor WHERE bookUUID = ?",
+                arguments: [uuid],
+            ).map {
+                AudioAnchor(
+                    audioHref: $0["audioHref"], offset: $0["offset"], writtenAt: $0["writtenAt"])
+            }
+        }
+    }
+
     // MARK: - Test hooks
+
 
     /// Blanks the flattened search columns, standing in for a row written
     /// before they existed.
