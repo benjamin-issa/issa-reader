@@ -55,9 +55,46 @@ public final class ReaderModel {
     public var hasNarration: Bool { readalong != nil }
     public var isPlaying: Bool { readalong?.player.isPlaying ?? false }
 
+    /// How long a burst of style changes is allowed to run together.
+    ///
+    /// Held down, the size stepper fires this several times a second, and a
+    /// reparse of a long chapter outlives the gap between taps — so the old
+    /// unstructured `Task` left several reparses in flight at once, each
+    /// having captured its own anchor and each committing `layout` and
+    /// `pageIndex` in whatever order it happened to finish. The reader landed
+    /// wherever the last one to return had been aiming.
+    private static let styleCoalesce = Duration.milliseconds(60)
+
+    /// The one in-flight response to a style change. Superseded, not stacked.
+    private var styleTask: Task<Void, Never>?
+    /// Whether any change in the current burst needs a reparse.
+    ///
+    /// Accumulated, not recomputed per change: the task is cancelled and
+    /// replaced on every mutation, so a margin change landing within the
+    /// coalesce window of a size change used to replace a task that would
+    /// have reparsed with one that only re-flowed, and the size change was
+    /// lost until the next reparse for some other reason.
+    private var pendingReparse = false
+
     public var style: ReaderStyle {
         didSet {
             guard style != oldValue else { return }
+
+            // Synchronously, inside the mutation: the canvas re-renders because
+            // `style` changed, and it has to find the repainted text when it
+            // does. Doing this from the task below would repaint after the
+            // redraw that was meant to show it, and nothing observable would
+            // ask for another.
+            if style.theme != oldValue.theme {
+                layout?.recolour(to: style.textColor)
+            }
+            // A theme change on its own is now finished. Everything else falls
+            // through — including anything added to `ReaderStyle` later, which
+            // is why this compares the whole value rather than listing fields.
+            var withoutTheme = style
+            withoutTheme.theme = oldValue.theme
+            guard withoutTheme != oldValue else { return }
+
             // Typography lives in the attributed text, which is immutable once
             // built, so a font or spacing change needs the chapter parsed again
             // — re-flowing alone would keep the old face at the old size. Page
@@ -67,8 +104,16 @@ public final class ReaderModel {
                 || style.fontSize != oldValue.fontSize
                 || style.lineSpacing != oldValue.lineSpacing
                 || style.justified != oldValue.justified
-                || style.theme != oldValue.theme
-            Task { await needsReparse ? reloadCurrentChapter() : relayoutCurrentChapter() }
+
+            pendingReparse = pendingReparse || needsReparse
+            styleTask?.cancel()
+            styleTask = Task { [weak self] in
+                try? await Task.sleep(for: Self.styleCoalesce)
+                guard !Task.isCancelled, let self else { return }
+                let reparse = pendingReparse
+                pendingReparse = false
+                await reparse ? reloadCurrentChapter() : relayoutCurrentChapter()
+            }
         }
     }
 
@@ -123,6 +168,19 @@ public final class ReaderModel {
         self.book = book
         self.session = session
         self.style = style
+    }
+
+    /// The href of the spine item currently loaded, when there is one.
+    ///
+    /// `chapterIndex` and `package` are set independently, so `spine[chapterIndex]`
+    /// is not safe to write bare — `saveProgress` says so in as many words and
+    /// guards with `spine.indices`, while `bookmarkOnCurrentPage` and
+    /// `locator(forRange:)` were still subscripting directly behind a `?? ""`
+    /// that only defends against a nil package. One accessor, so the next
+    /// reader of the pair cannot get it wrong either.
+    private var currentSpineHref: String? {
+        guard let package, package.spine.indices.contains(chapterIndex) else { return nil }
+        return package.spine[chapterIndex].href
     }
 
     public var chapterTitle: String {
@@ -464,7 +522,7 @@ public final class ReaderModel {
         atTotalProgression progression: Double, in package: EPUBPackage,
     ) -> (index: Int, within: Double)? {
         guard !package.spine.isEmpty else { return nil }
-        let clamped = min(max(progression, 0), 1)
+        let clamped = (progression.asProgression ?? 0)
         let weights = package.spineWeights
         let total = weights.reduce(0, +)
         guard total > 0 else {
@@ -640,7 +698,17 @@ public final class ReaderModel {
     public func playSelection() async {
         positionOrigin = .chosen
         guard let selection, let layout, let readalong, let timeline else { return }
-        let fragment = layout.attributedText
+        // The bound `selectedText` and `annotate` both carry, and this one did
+        // not. `attribute(at:)` raises NSRangeException — an Objective-C
+        // exception Swift cannot catch, so the process goes down — and the
+        // index is reachable: `annotatePage` assigns `page.characterRange`
+        // verbatim, `computePages` can emit a synthetic trailing page at
+        // {totalLength, 0}, and narration crossing into a shorter chapter swaps
+        // the layout synchronously while `clearSelectionIfStale` only runs on
+        // the next view update.
+        let text = layout.attributedText
+        guard selection.location >= 0, selection.location < text.length else { return }
+        let fragment = text
             .attribute(.issaFragmentID, at: selection.location, effectiveRange: nil) as? String
         guard let fragment, timeline.entry(forFragment: fragment) != nil else { return }
         await readalong.seek(toFragment: fragment)
@@ -670,10 +738,10 @@ public final class ReaderModel {
         guard let index = package.spine.firstIndex(where: { $0.href == entry.textHref })
         else { return nil }
         var within = 0.0
-        if let span = timeline.span(ofDocument: entry.textHref),
+        if let span = timeline.span(ofDocumentContaining: entry),
            let time = timeline.bookTime(forFragment: entry.fragmentID),
            span.duration > 0 {
-            within = min(max((time - span.start) / span.duration, 0), 1)
+            within = (((time - span.start) / span.duration).asProgression ?? 0)
         }
         return package.bookProgress(spineIndex: index, within: within)
     }
@@ -749,9 +817,12 @@ public final class ReaderModel {
         // place, and pressing play is not. Keeping this on the derived side of
         // the line is what leaves the position guard armed.
         await readalong.play(from: entry)
-        // The coordinator only notices a document change between two observed
-        // fragments, so a start in another chapter never fires `onChapterChange`
-        // and the page would never follow.
+        // Belt and braces, and idempotent: `followNarration` returns
+        // immediately when the chapter is already loaded. `move(to:)` now
+        // announces the boundary itself, so this no longer carries the case
+        // alone — it used to be the only compensation for a coordinator that
+        // could not see a document change it had caused, and that was true for
+        // the play path only, leaving every seek uncovered.
         await followNarration(toDocument: entry.textHref, fragment: entry.fragmentID)
     }
 
@@ -932,27 +1003,6 @@ public final class ReaderModel {
         await relayoutCurrentChapter()
     }
 
-    /// Decodes and caches a chapter's artwork, keyed by archive path.
-    ///
-    /// A chapter asks once per plate, and the cache lives as long as the chapter
-    /// does, so reflowing on a font change costs no re-decoding.
-    final class ChapterImageSource {
-        private let archive: EPUBArchive
-        private var decoded: [String: PlatformImage?] = [:]
-
-        init(archive: EPUBArchive) { self.archive = archive }
-
-        func image(for href: String) -> PlatformImage? {
-            if let cached = decoded[href] { return cached }
-            var result: PlatformImage?
-            if let data = try? archive.read(href) {
-                result = PlatformImage(data: data)
-            }
-            decoded[href] = result
-            return result
-        }
-    }
-
     /// Re-parses the current chapter under the current style, holding position.
     ///
     /// The anchor is the narrated fragment when there is one, and the character
@@ -963,13 +1013,28 @@ public final class ReaderModel {
         // face is resolved during `open`, and assigning it fires this. There is
         // no chapter to reload yet, and `open` is about to parse one anyway.
         guard package != nil else { return }
-        let fragment = firstFragmentOnCurrentPage()
+        // `firstFragment(beginningOn:)`, not `firstFragmentOnCurrentPage()`.
+        // The latter returns the first id it finds from the page's start, which
+        // is normally the sentence straddling the break — one that *began on
+        // the previous page* — while `page(containingFragment:)` resolves by
+        // where a fragment starts. So every typography change walked a narrated
+        // book one page backwards, and each further tap of the size stepper
+        // repeated it. `saveProgress` already uses the right helper.
+        let fragment = currentPage.flatMap { layout?.firstFragment(beginningOn: $0) }
+            ?? firstFragmentOnCurrentPage()
         let anchor = currentPage?.characterRange.location ?? 0
         guard await loadChapter(chapterIndex), let layout else { return }
         if let fragment, let page = layout.page(containingFragment: fragment) {
             pageIndex = page.index
         } else {
-            pageIndex = layout.pages.firstIndex { NSLocationInRange(anchor, $0.characterRange) } ?? 0
+            // `NSLocationInRange` is false for a zero-length range, and
+            // `computePages` can emit a synthetic trailing page at
+            // {totalLength, 0} — so an anchor at the very end matched no page
+            // and `?? 0` sent the reader to the top of the chapter. Fall back
+            // to the last page, which is where that anchor actually is.
+            pageIndex = layout.pages.firstIndex { NSLocationInRange(anchor, $0.characterRange) }
+                ?? (anchor >= (layout.pages.last?.characterRange.location ?? 0)
+                    ? max(layout.pages.count - 1, 0) : 0)
         }
     }
 
@@ -1004,6 +1069,7 @@ public final class ReaderModel {
             let parsed = try HTMLContentParser(
                 style: style,
                 maxImageWidth: max(pageSize.width, 1),
+                maxImageHeight: max(pageSize.height, 1),
                 loadImage: { images.image(for: $0) },
             ).parse(xhtml: data, baseHref: item.href)
             let layout = ChapterLayout(text: parsed.text, fragmentRanges: parsed.fragmentRanges)
@@ -1123,6 +1189,16 @@ public final class ReaderModel {
     public private(set) var isSearching = false
     private var searchTask: Task<Void, Never>?
 
+    /// How long the typist gets between keystrokes before a search starts.
+    ///
+    /// Every keystroke used to start a whole-book search and cancel the
+    /// previous one — but cancellation is only checked between spine items, so
+    /// typing "whale" at any normal speed left five searches each committed to
+    /// finishing the chapter they were in. The debounce is what makes the
+    /// cancel cheap: a superseded search that has not begun reading yet does no
+    /// work at all.
+    private static let searchDebounce = Duration.milliseconds(250)
+
     /// Searches the whole book, chapter by chapter, publishing as it goes.
     ///
     /// Every chapter has to be parsed to be searched, which for a long book is
@@ -1140,38 +1216,23 @@ public final class ReaderModel {
         searchHits = []
         isSearching = true
         let style = style
+        let archive = package.archive
+        let spine = package.spine
+        let navigation = package.navigation
         searchTask = Task { [weak self] in
-            for (index, item) in package.spine.enumerated() {
+            try? await Task.sleep(for: Self.searchDebounce)
+            if Task.isCancelled { return }
+            for (index, item) in spine.enumerated() {
                 if Task.isCancelled { break }
-                // Parsed with the images loaded, though search has no use for
-                // the pictures: each plate contributes characters — the object
-                // replacement character and its line break — to the rendered
-                // text, and a parse without them computes offsets that drift
-                // ahead of the laid-out chapter's, far enough on an
-                // illustrated book to land `go(to:)` on the wrong page.
-                // Decoded per chapter and released with it, as `loadChapter`
-                // does.
-                let images = ChapterImageSource(archive: package.archive)
-                guard let data = try? package.archive.read(item.href),
-                      let parsed = try? HTMLContentParser(
-                          style: style, loadImage: { images.image(for: $0) },
-                      ).parse(xhtml: data, baseHref: item.href)
-                else { continue }
-
-                let hits = BookSearch.hits(
-                    for: needle, in: parsed.text.string,
-                    chapterIndex: index,
-                    chapterTitle: package.navigation.first { $0.href == item.href }?.title
-                        ?? "Chapter \(index + 1)",
-                    navigation: package.navigation.filter { $0.href == item.href },
-                    fragmentRanges: parsed.fragmentRanges,
+                // The read, the parse and the plate decodes happen off the main
+                // actor; only the hits come back to it.
+                let hits = await Self.hits(
+                    for: needle, in: archive, item: item, at: index,
+                    navigation: navigation, style: style,
                 )
                 if Task.isCancelled { break }
                 guard let self else { return }
                 searchHits.append(contentsOf: hits)
-                // Yield between chapters so typing stays responsive on a book
-                // with hundreds of spine items.
-                await Task.yield()
             }
             // Only when this task is still the live one: a superseded search
             // resumes from that yield already cancelled, and the flag by then
@@ -1179,6 +1240,47 @@ public final class ReaderModel {
             // the spinner and showed "No matches." for a search still running.
             if !Task.isCancelled { self?.isSearching = false }
         }
+    }
+
+    /// Reads, parses and searches one spine item, away from the drawing thread.
+    ///
+    /// `nonisolated` *and* `async`, which is the whole point of the change. An
+    /// unstructured `Task` created inside a `@MainActor` type inherits that
+    /// isolation, so the ZIP inflate, the XML parse and every plate decode ran
+    /// on the thread that draws — for every spine item in the book, on every
+    /// keystroke. A `nonisolated async` function does not adopt its caller's
+    /// executor, so the same work runs on the global one and the main actor is
+    /// free between chapters.
+    ///
+    /// Parsed with the images loaded, though search has no use for the
+    /// pictures: each plate contributes characters — the object replacement
+    /// character and its line break — to the rendered text, and a parse without
+    /// them computes offsets that drift ahead of the laid-out chapter's, far
+    /// enough on an illustrated book to land `go(to:)` on the wrong page.
+    /// Decoded per chapter and released with it, as `loadChapter` does.
+    private nonisolated static func hits(
+        for needle: String,
+        in archive: EPUBArchive,
+        item: EPUBPackage.SpineItem,
+        at index: Int,
+        navigation: [EPUBPackage.NavPoint],
+        style: ReaderStyle,
+    ) async -> [SearchHit] {
+        let images = ChapterImageSource(archive: archive)
+        guard let data = try? archive.read(item.href),
+              let parsed = try? HTMLContentParser(
+                  style: style, loadImage: { images.image(for: $0) },
+              ).parse(xhtml: data, baseHref: item.href)
+        else { return [] }
+
+        return BookSearch.hits(
+            for: needle, in: parsed.text.string,
+            chapterIndex: index,
+            chapterTitle: navigation.first { $0.href == item.href }?.title
+                ?? "Chapter \(index + 1)",
+            navigation: navigation.filter { $0.href == item.href },
+            fragmentRanges: parsed.fragmentRanges,
+        )
     }
 
     public func cancelSearch() {
@@ -1327,8 +1429,23 @@ public final class ReaderModel {
     /// Opens the page an annotation is on.
     public func go(to annotation: Annotation) async {
         guard let package else { return }
-        if let index = package.spine.firstIndex(where: { annotation.locator.matchesHref($0.href) }),
-           index != chapterIndex {
+        // The annotation has to belong to a chapter this book still has. When
+        // it does not — the publisher renamed a file between downloads, so
+        // `matchesHref` no longer matches — the old code fell through to the
+        // `else` and applied the stored offset to whatever chapter happened to
+        // be loaded. `page(containingOffset:)` falls back to `pages.last`, so
+        // the reader landed on an arbitrary page of an unrelated chapter, and
+        // the two lines below then marked it `.chosen` and saved it: the one
+        // origin PositionGuard may not refuse, over their real place.
+        guard let index = package.spine.firstIndex(
+            where: { annotation.locator.matchesHref($0.href) })
+        else {
+            IssaLog.warning("annotation names no chapter in this book", [
+                "book": book.uuid, "href": annotation.locator.href,
+            ])
+            return
+        }
+        if index != chapterIndex {
             guard await loadChapter(index, restoring: annotation.locator) else { return }
         } else if let layout, let offset = annotation.locator.locations?.charOffset,
                   let page = layout.page(containingOffset: offset) {
@@ -1358,7 +1475,7 @@ public final class ReaderModel {
         guard let layout, let page = currentPage else { return nil }
         return annotations.first { annotation in
             guard annotation.kind == .bookmark,
-                  annotation.locator.matchesHref(package?.spine[chapterIndex].href ?? ""),
+                  annotation.locator.matchesHref(currentSpineHref ?? ""),
                   let offset = annotation.locator.locations?.charOffset
             else { return false }
             _ = layout
@@ -1377,7 +1494,7 @@ public final class ReaderModel {
     /// Where an annotation on this chapter lives, in the same terms as a
     /// reading position so the two restore through the same code.
     private func locator(forRange range: NSRange) -> ReadiumLocator {
-        let href = package?.spine[chapterIndex].href ?? ""
+        let href = currentSpineHref ?? ""
         let length = (layout?.attributedText.string as NSString?)?.length ?? 0
         let total = max(length, 1)
         let chapterProgress = Double(range.location) / Double(total)
@@ -1604,4 +1721,30 @@ extension ReaderModel {
 
     /// Whether choosing the publisher's font would actually change anything.
     public var hasPublisherFont: Bool { style.publisherFamily != nil }
+}
+
+/// Decodes and caches a chapter's artwork, keyed by archive path.
+///
+/// A chapter asks once per plate, and the cache lives as long as the chapter
+/// does, so reflowing on a font change costs no re-decoding.
+///
+/// File scope rather than nested inside `ReaderModel`, which is `@MainActor`:
+/// a type declared inside a globally-isolated one inherits that isolation, and
+/// the search path now decodes plates off the main actor. Nothing outside this
+/// file ever named it.
+private final class ChapterImageSource {
+    private let archive: EPUBArchive
+    private var decoded: [String: PlatformImage?] = [:]
+
+    init(archive: EPUBArchive) { self.archive = archive }
+
+    func image(for href: String) -> PlatformImage? {
+        if let cached = decoded[href] { return cached }
+        var result: PlatformImage?
+        if let data = try? archive.read(href) {
+            result = PlatformImage(data: data)
+        }
+        decoded[href] = result
+        return result
+    }
 }

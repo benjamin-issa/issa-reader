@@ -28,6 +28,57 @@ public actor MutationQueue {
 
     private let dbQueue: DatabaseQueue
 
+    /// Whether a drain is already in flight.
+    ///
+    /// `drain()` is called from `enqueue` (so, every debounced save), from the
+    /// reachability hook, from `refreshLibrary` and on foreground, and it had
+    /// no mutual exclusion: `pending()` never marked a row in flight, so two
+    /// overlapping drains read the same rows and sent them twice, concurrently,
+    /// in no defined order. Mark a book "Reading" and immediately "Read" and
+    /// the two PUTs raced; whichever landed second won, so the server could
+    /// end on the status the reader did not choose. Both also called
+    /// `recordFailure` on failure, halving the effective abandon budget.
+    private var isDraining = false
+
+    /// Claims the right to drain, or declines because someone else holds it.
+    func beginDraining() -> Bool {
+        guard !isDraining else { return false }
+        isDraining = true
+        return true
+    }
+
+    /// Callers waiting for the lock, handed it in order by `endDraining`.
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    /// Claims the right to drain, waiting for it if someone else holds it.
+    ///
+    /// For the exit paths — suspend, ⌘Q, the TV button — and nothing else.
+    /// `beginDraining` declining is right for every ordinary caller: the rows
+    /// it would have sent are already in flight and the next enqueue drains
+    /// again. On the way out there is no next enqueue. The first version of
+    /// the lock made `flushOpenReaders()` a silent no-op whenever a background
+    /// drain happened to be blocked on a slow POST, which undid the three exit
+    /// paths added in the same branch for exactly that flush.
+    ///
+    /// The lock is handed over directly rather than released and re-taken, so
+    /// a waiter cannot lose it to a `beginDraining` that arrives in between.
+    func waitToDrain() async {
+        if !isDraining {
+            isDraining = true
+            return
+        }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func endDraining() {
+        if !waiters.isEmpty {
+            // Still held — by the waiter now.
+            waiters.removeFirst().resume()
+        } else {
+            isDraining = false
+        }
+    }
+
     public init(store: LibraryStore) throws {
         // This opens a second connection to the same file `LibraryStore`
         // already has open — the queue and the catalogue live in one SQLite
@@ -65,10 +116,10 @@ public actor MutationQueue {
         try dbQueue.write { db in
             let existing = try Row.fetchOne(
                 db,
-                sql: "SELECT ordering, attempts, createdAt FROM mutation WHERE bookUUID = ? AND kind = ?",
+                sql: "SELECT ordering, attempts, createdAt, payload FROM mutation WHERE bookUUID = ? AND kind = ?",
                 arguments: [bookUUID, kind.rawValue],
             )
-            if let ordering, let held = existing?["ordering"] as Double?, ordering < held {
+            if let ordering, let held = Self.heldOrdering(of: existing), ordering < held {
                 // The queued write is newer than this one. Keeping it is the
                 // whole point: it may be the only remaining copy of where the
                 // reader actually is.
@@ -94,6 +145,40 @@ public actor MutationQueue {
                 arguments: [bookUUID, kind.rawValue, payload, createdAt, attempts, ordering],
             )
             return true
+        }
+    }
+
+    /// How new the queued row is, from its column or from its payload.
+    ///
+    /// The guard above used to be `let held = existing?["ordering"] as Double?`,
+    /// which silently skips the whole check when that column is NULL — and it
+    /// is NULL for every row written before the `v4-mutation-ordering`
+    /// migration, which added the column with no backfill. A reader who queued
+    /// a position offline on the old build, upgraded, and took an out-of-order
+    /// write before the queue drained had that row deleted and replaced by the
+    /// older one. The doc two lines up calls it possibly the only remaining
+    /// copy of where the reader is.
+    ///
+    /// The timestamp is already inside the encoded payload, so a row from
+    /// before the migration can still say how new it is.
+    private static func heldOrdering(of row: Row?) -> Double? {
+        guard let row else { return nil }
+        if let ordering = row["ordering"] as Double? { return ordering }
+        guard let payload = row["payload"] as Data?,
+              let position = try? JSONDecoder().decode(
+                  MutationDrain.PositionPayload.self, from: payload)
+        else { return nil }
+        return position.timestamp
+    }
+
+    /// Blanks the ordering column, to stand in for a row written before the
+    /// v4 migration added it. Tests only — there is no other way to produce a
+    /// pre-migration row against a freshly-migrated database.
+    func clearOrderingForTesting(bookUUID: String) throws {
+        try dbQueue.write { db in
+            try db.execute(
+                sql: "UPDATE mutation SET ordering = NULL WHERE bookUUID = ?",
+                arguments: [bookUUID])
         }
     }
 
@@ -180,7 +265,30 @@ public struct MutationDrain: Sendable {
     ///
     /// - Returns: how many were accepted.
     @discardableResult
-    public func drain() async -> Int {
+    /// - Parameter waitingForInFlight: wait for a drain already running rather
+    ///   than declining. Only the exit paths pass `true`; see
+    ///   `MutationQueue.waitToDrain`.
+    public func drain(waitingForInFlight: Bool = false) async -> Int {
+        // One drain at a time. A second caller returning 0 immediately is
+        // correct: the writes it would have sent are the ones already in
+        // flight, and it will be re-triggered by whatever enqueues next —
+        // except on the way out, where nothing enqueues next, which is what
+        // the waiting form is for.
+        if waitingForInFlight {
+            await queue.waitToDrain()
+        } else {
+            guard await queue.beginDraining() else { return 0 }
+        }
+        let sent = await drainHoldingTheLock()
+        // Released before returning, not from `defer { Task { … } }`. A
+        // deferred Task releases *asynchronously*, so a caller draining twice
+        // in a row — which `enqueue` does on every debounced save — found the
+        // lock still held and got a spurious 0.
+        await queue.endDraining()
+        return sent
+    }
+
+    private func drainHoldingTheLock() async -> Int {
         guard let pending = try? await queue.pending(), !pending.isEmpty else { return 0 }
         var sent = 0
 

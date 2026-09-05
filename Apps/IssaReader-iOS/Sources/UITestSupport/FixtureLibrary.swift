@@ -24,6 +24,19 @@ enum FixtureLibrary {
         let author: String
         let progress: Double?
         let formats: [String]
+        /// The server's shelf name. Without one, `LibraryFilter.stage(of:)`
+        /// files a book as `.toRead` — it never consults position — so a
+        /// fixture with no statuses put all six books on one shelf, the chips
+        /// read "Reading 0 · To read 6 · Finished 0" beside a book at 99%, and
+        /// the Reading tab's "Also reading" block was empty at every width.
+        var status: String? = nil
+        /// Drives the Recently-added rail, which filters on a non-nil value and
+        /// so never rendered at all.
+        var createdAt: String? = nil
+        /// Two books share a series so `SeriesRail` — the only producer of the
+        /// `rail.series` identifier, and the one rail with a differently shaped
+        /// header — is actually on screen to be measured.
+        var series: (name: String, position: Double)? = nil
     }
 
     private static let rows: [Row] = [
@@ -31,35 +44,49 @@ enum FixtureLibrary {
             title: "Peter and Wendy",
             author: "J. M. Barrie",
             progress: 0.51,
-            formats: ["readaloud", "ebook"]),
+            formats: ["readaloud", "ebook"],
+            status: "Reading",
+            createdAt: "2026-08-30T09:00:00.000Z"),
         Row(uuid: "22222222-2222-4222-8222-222222222222",
             // Long enough to wrap, which is the case that broke the shelf.
             title: "Frankenstein; or, the Modern Prometheus",
             author: "Mary Wollstonecraft Shelley",
             progress: 0.04,
-            formats: ["ebook"]),
+            formats: ["ebook"],
+            status: "Reading",
+            createdAt: "2026-08-28T09:00:00.000Z"),
         Row(uuid: "33333333-3333-4333-8333-333333333333",
             title: "This Is How You Lose the Time War",
             // Two authors, which is what pushed a byline past its cover.
             author: "Amal El-Mohtar and Max Gladstone",
             progress: nil,
-            formats: ["ebook", "audiobook"]),
+            formats: ["ebook", "audiobook"],
+            status: "To read",
+            createdAt: "2026-09-01T09:00:00.000Z"),
         Row(uuid: "44444444-4444-4444-8444-444444444444",
             title: "Dracula",
             author: "Bram Stoker",
             // Nearly finished: the bar at its widest, and "99%" not "100%".
             progress: 0.99,
-            formats: ["ebook"]),
+            formats: ["ebook"],
+            status: "Finished",
+            createdAt: "2026-07-04T09:00:00.000Z",
+            series: (name: "Gothic Horror", position: 1)),
         Row(uuid: "55555555-5555-4555-8555-555555555555",
             title: "Pride and Prejudice",
             author: "Jane Austen",
             progress: 0.33,
-            formats: ["ebook", "readaloud"]),
+            formats: ["ebook", "readaloud"],
+            status: "Reading",
+            createdAt: "2026-08-15T09:00:00.000Z"),
         Row(uuid: "66666666-6666-4666-8666-666666666666",
             title: "The Ballad of Songbirds and Snakes",
             author: "Suzanne Collins",
             progress: nil,
-            formats: ["ebook"]),
+            formats: ["ebook"],
+            status: "To read",
+            createdAt: "2026-08-20T09:00:00.000Z",
+            series: (name: "Gothic Horror", position: 2)),
     ]
 
     static var booksJSON: Data {
@@ -77,14 +104,31 @@ enum FixtureLibrary {
                 "narrators": row.formats.contains("readaloud")
                     ? [["uuid": "\(row.uuid)-nrt", "name": "A Narrator", "role": "nrt"]] : [],
                 "creators": [],
-                "series": [],
-                "tags": [
+                                "tags": [
                     ["uuid": "tag-classics", "name": "Classics"],
                     ["uuid": "tag-fiction", "name": "Fiction"],
                 ],
                 "collections": [],
                 "identifiers": [],
+                // Non-optional on `Book`, so it must be present even when
+                // empty. Dropping it in favour of setting it only for the two
+                // books that have one threw every other book's decode — and a
+                // nested decode failure discards the whole catalogue, so the
+                // sweep ran against an empty library and measured the empty
+                // state's chrome instead of the app.
+                "series": [],
             ]
+            if let status = row.status {
+                book["status"] = ["uuid": "status-\(status)", "name": status]
+            }
+            if let createdAt = row.createdAt { book["createdAt"] = createdAt }
+            if let series = row.series {
+                book["series"] = [[
+                    "uuid": "series-\(series.name)",
+                    "name": series.name,
+                    "position": series.position,
+                ]]
+            }
             // One key per format, as the server sends them — not a `formats`
             // array. `servableFormats` reads `filepath` and `missing`, and a
             // shape it does not recognise is a book with no way to open it.
@@ -100,7 +144,11 @@ enum FixtureLibrary {
             if let progress = row.progress {
                 book["position"] = [
                     "locator": [
-                        "href": "OEBPS/text/ch01.xhtml",
+                        // What make-readalong-fixture.py actually writes. It was
+                        // OEBPS/text/ch01.xhtml, a path in no generated archive —
+                        // invisible only because no sweep destination opened the
+                        // reader, so the cost of planting the EPUB bought nothing.
+                        "href": "OEBPS/ch01.xhtml",
                         "type": "application/xhtml+xml",
                         "locations": ["totalProgression": progress, "progression": progress],
                     ],

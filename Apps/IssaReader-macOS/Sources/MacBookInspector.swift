@@ -20,6 +20,14 @@ struct MacBookInspector: View {
         NavigationStack {
             if let bookID, let book = app.books.first(where: { $0.uuid == bookID }) {
                 BookDetailView(book: book, layout: .inspector)
+                    // Identity, so selecting another book is a different view.
+                    // At a fixed structural position SwiftUI reuses this one:
+                    // `initialBook` updated but every `@State` survived and the
+                    // one-shot `.task`/`.onAppear` never re-fired, so book B
+                    // showed "Downloaded" for a file never fetched and book A's
+                    // listen error under B's button — the exact bug
+                    // `BookDetailView`'s own doc comment claims to have fixed.
+                    .id(bookID)
             } else {
                 VStack(spacing: Metrics.spacing12) {
                     Image(systemName: "book.closed")

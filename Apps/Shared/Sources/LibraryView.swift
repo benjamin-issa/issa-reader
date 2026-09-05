@@ -434,7 +434,7 @@ public struct ProgressBar: View {
             ZStack(alignment: .leading) {
                 Capsule().fill(Palette.ink.opacity(0.25))
                 Capsule().fill(Palette.tangerine)
-                    .frame(width: max(2, geo.size.width * min(max(value, 0), 1)))
+                    .frame(width: max(2, geo.size.width * (value.asProgression ?? 0)))
             }
         }
         .frame(height: Self.thickness)

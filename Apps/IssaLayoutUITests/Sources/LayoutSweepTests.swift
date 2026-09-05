@@ -79,6 +79,28 @@ final class LayoutSweepTests: XCTestCase {
         add(attachment)
     }
 
+    /// Records what the app measured, so the contact sheet can draw guides
+    /// without a second copy of the numbers.
+    ///
+    /// `make-contact-sheet.py` used to carry its own table of device point
+    /// widths *and* its own `MARGIN_PT = 16` — a second and third copy of two
+    /// values the app already knows, in a script whose whole job is to show
+    /// whether the app's margin is where the token says. Both are read from
+    /// here now, so a device added to the sweep needs no edit there and a
+    /// margin that changes cannot leave the guides behind.
+    private func recordReference(_ reference: LayoutReference) {
+        let text = """
+            margin=\(reference.screenMargin)
+            width=\(reference.window.width)
+            left=\(reference.safe.minX - reference.window.minX)
+            right=\(reference.window.maxX - reference.safe.maxX)
+            """
+        let attachment = XCTAttachment(string: text)
+        attachment.name = "\(deviceSlug)__reference.txt"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
     // MARK: - Signed out
 
     func testSignedOutScreen() throws {
@@ -100,7 +122,7 @@ final class LayoutSweepTests: XCTestCase {
         // margin against it would be asserting the wrong rule, and writing 32
         // into this file would put a second copy of a token where the whole
         // point is that there is one.
-        assertScrollContentFits(root)
+        assertScrollContentFits(root, reference)
         capture(app, "signIn")
     }
 
@@ -161,10 +183,11 @@ final class LayoutSweepTests: XCTestCase {
             "\(identifier) never appeared")
         let reference = try LayoutReference.read(from: app)
         let root = try app.snapshot()
+        recordReference(reference)
 
         assertHorizontallyContained(root, reference, screen: screen)
         assertContentStartsAtTheMargin(root, reference, screen: screen)
-        assertScrollContentFits(root)
+        assertScrollContentFits(root, reference)
         assertRailsReachTheEdge(root, reference)
         // No container-frame check. An accessibility container's frame is the
         // union of its children, not a layout rect — a screen holding a rail,

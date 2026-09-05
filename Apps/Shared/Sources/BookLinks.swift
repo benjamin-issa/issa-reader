@@ -12,7 +12,18 @@ import SwiftUI
 @MainActor
 @Observable
 public final class MacBookSelection {
-    public var bookID: String?
+    public var bookID: String? {
+        didSet { if let bookID { lastShownBookID = bookID } }
+    }
+
+    /// The last book the inspector showed, so closing it is undoable.
+    ///
+    /// Without this the "Book Info" toggle was one-way: its setter ignored
+    /// `true`, and clearing the id immediately satisfied the `.disabled`
+    /// condition, so the control greyed out the moment it was switched off and
+    /// the only way back was clicking a cover again.
+    public private(set) var lastShownBookID: String?
+
     public init() {}
 }
 

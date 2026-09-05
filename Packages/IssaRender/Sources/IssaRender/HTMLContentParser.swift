@@ -31,6 +31,44 @@ public struct HTMLContentParser {
     private let style: ReaderStyle
     private let loadImage: ((String) -> PlatformImage?)?
     private let maxImageWidth: CGFloat
+    private let maxImageHeight: CGFloat
+    private let fonts = FontCache()
+
+    /// One chapter's fonts, resolved once each.
+    ///
+    /// `attributes(for:)` runs per attribute run — hundreds of times on an
+    /// ordinary chapter, thousands on a marked-up one — and `bodyFont` runs a
+    /// CoreText descriptor match every time, plus a second one for `<strong>`,
+    /// for one of about four distinct answers. Within a parse the style is
+    /// fixed, so the only things that vary are these three.
+    ///
+    /// Owned by the parser and thrown away with it, rather than kept for the
+    /// process. That is the part that matters: fonts are registered *while the
+    /// app runs* — the bundled faces at launch, a reader's imported face
+    /// whenever they add one, a book's own embedded face when it opens — so an
+    /// answer cached before a registration is an answer to a different
+    /// question, and a process-wide cache would serve the system fallback for
+    /// the rest of the session. A parse begins and ends after whichever
+    /// registration it depends on.
+    private final class FontCache {
+        private struct Key: Hashable {
+            let italic: Bool
+            let bold: Bool
+            let scale: CGFloat
+        }
+
+        private var faces: [Key: PlatformFont] = [:]
+
+        func face(
+            italic: Bool, bold: Bool, scale: CGFloat, resolve: () -> PlatformFont,
+        ) -> PlatformFont {
+            let key = Key(italic: italic, bold: bold, scale: scale)
+            if let hit = faces[key] { return hit }
+            let face = resolve()
+            faces[key] = face
+            return face
+        }
+    }
 
     /// - Parameters:
     ///   - loadImage: given an archive path, the decoded artwork. Supplying it is
@@ -39,13 +77,22 @@ public struct HTMLContentParser {
     ///     Results are expected to be cached by the caller — a chapter asks once
     ///     per plate.
     ///   - maxImageWidth: the column width images are scaled to fit.
+    ///   - maxImageHeight: the page height images are scaled to fit. Without
+    ///     it a tall plate was scaled to the column and left taller than the
+    ///     page: `computePages` gives that oversized line a page of its own
+    ///     whose content extent exceeds the canvas, `draw` clips to the canvas,
+    ///     and the rest of the picture is painted outside it — unreachable on
+    ///     every page, with the page turn skipping straight past. A full-page
+    ///     cover or map showed only its top.
     public init(
         style: ReaderStyle,
         maxImageWidth: CGFloat = 320,
+        maxImageHeight: CGFloat = .greatestFiniteMagnitude,
         loadImage: ((String) -> PlatformImage?)? = nil,
     ) {
         self.style = style
         self.maxImageWidth = maxImageWidth
+        self.maxImageHeight = maxImageHeight
         self.loadImage = loadImage
     }
 
@@ -103,6 +150,13 @@ public struct HTMLContentParser {
 
         switch node.name.lowercased() {
         case "script", "style", "head", "title":
+            // Recorded before the return, not after it. The only assignment to
+            // `hasScripting` sat forty lines below this early exit and was
+            // therefore unreachable, so the flag was permanently false and
+            // `requiresWebView` never fired: a chapter carrying <script> was
+            // silently linearised by the native path instead of being routed to
+            // a web view, and its interactive content dropped with no fallback.
+            if node.name.lowercased() == "script" { complexity.hasScripting = true }
             return
 
         case "b", "strong":
@@ -145,8 +199,6 @@ public struct HTMLContentParser {
         default:
             break
         }
-
-        if node.name.lowercased() == "script" { complexity.hasScripting = true }
 
         // Text content of this element, before descending. `child`, not
         // `context`: a <pre>'s own preformatted flag was set on `child` just
@@ -213,9 +265,11 @@ public struct HTMLContentParser {
         let pixelSize = image.size
         guard pixelSize.width > 0, pixelSize.height > 0 else { return }
 
-        // Scale to the column, never up: an upscaled 60px decoration looks worse
-        // than a small one.
-        let scale = min(1, maxImageWidth / pixelSize.width)
+        // Both bounds, never up: an upscaled 60px decoration looks worse than a
+        // small one, and a plate taller than the page cannot be paged through.
+        let scale = min(
+            1,
+            min(maxImageWidth / pixelSize.width, maxImageHeight / pixelSize.height))
         let displaySize = CGSize(width: pixelSize.width * scale, height: pixelSize.height * scale)
 
         let attachment = ImageAttachment(displaySize: displaySize, image: image)
@@ -255,8 +309,13 @@ public struct HTMLContentParser {
     }
 
     private func attributes(for context: Context) -> [NSAttributedString.Key: Any] {
-        var font = context.style.bodyFont(italic: context.italic, scale: context.sizeScale)
-        if context.bold { font = font.withBoldTrait() }
+        let font = fonts.face(
+            italic: context.italic, bold: context.bold, scale: context.sizeScale,
+        ) {
+            var resolved = context.style.bodyFont(italic: context.italic, scale: context.sizeScale)
+            if context.bold { resolved = resolved.withBoldTrait() }
+            return resolved
+        }
 
         let paragraph = NSMutableParagraphStyle()
         // Large type needs proportionally less leading; applying the body
@@ -343,29 +402,118 @@ public struct HTMLContentParser {
     /// `&nbsp;` above all. XMLParser treats those as fatal, so they are rewritten
     /// to numeric references before parsing — otherwise perfectly ordinary books
     /// fail to open.
+    /// One pass, not one pass per entity.
+    ///
+    /// This used to be `for (name, code) in namedEntities { replacingOccurrences }`
+    /// — a full scan and a whole new String allocated for each of them. At
+    /// sixty-two entities that was merely wasteful on a 400 KB chapter; taking
+    /// the table to two hundred, which is what makes French and German books
+    /// openable, made it slow enough to notice in the test suite. Scanning once
+    /// and looking each name up costs the same for a table of any size, which
+    /// is what lets the table be complete.
     static func substituteNamedEntities(in data: Data) -> Data {
-        guard var text = String(data: data, encoding: .utf8) else { return data }
+        guard let text = String(data: data, encoding: .utf8) else { return data }
         guard text.contains("&") else { return data }
-        for (name, code) in namedEntities {
-            text = text.replacingOccurrences(of: "&\(name);", with: "&#\(code);")
+
+        var out = String()
+        out.reserveCapacity(text.count)
+        var index = text.startIndex
+
+        while let amp = text[index...].firstIndex(of: "&") {
+            out.append(contentsOf: text[index ..< amp])
+            // A name is letters and digits, then a semicolon. Bail out at a
+            // reasonable width rather than scanning to the end of the document
+            // for a stray `&` — prose is full of them.
+            let after = text.index(after: amp)
+            let limit = text.index(after, offsetBy: 12, limitedBy: text.endIndex) ?? text.endIndex
+            if let semicolon = text[after ..< limit].firstIndex(of: ";") {
+                let name = String(text[after ..< semicolon])
+                if let code = namedEntities[name] {
+                    out.append("&#\(code);")
+                    index = text.index(after: semicolon)
+                    continue
+                }
+            }
+            // Not one of ours: the five XML predefined entities, a numeric
+            // reference, or a bare ampersand. All are the parser's business.
+            out.append("&")
+            index = after
         }
-        return Data(text.utf8)
+        out.append(contentsOf: text[index...])
+        return Data(out.utf8)
     }
 
+    /// Named entities that are not predefined in XML, mapped to numeric form.
+    ///
+    /// Only `&amp;` `&lt;` `&gt;` `&apos;` `&quot;` are built into XML, and an
+    /// EPUB 3 chapter carries the HTML5 short DOCTYPE, which declares nothing —
+    /// so anything else reaches `XMLParser` as an undefined entity, fails the
+    /// parse with error 111, and `loadChapter` reports "Couldn't open this
+    /// chapter."
+    ///
+    /// The uppercase accented block was missing, and `replacingOccurrences` is
+    /// case-sensitive: a French chapter opening `&Eacute;tait` or a German one
+    /// containing `&szlig;` was simply unopenable. So were `&oelig;`, `&times;`,
+    /// `&divide;` and the Greek block. Books carrying the long XHTML 1.1
+    /// DOCTYPE survived only because libxml2 has that entity set built in.
     static let namedEntities: [String: Int] = [
-        "nbsp": 160, "iexcl": 161, "cent": 162, "pound": 163, "sect": 167,
-        "copy": 169, "laquo": 171, "reg": 174, "deg": 176, "plusmn": 177,
-        "para": 182, "middot": 183, "raquo": 187, "frac14": 188, "frac12": 189,
-        "frac34": 190, "iquest": 191, "agrave": 224, "aacute": 225, "acirc": 226,
-        "atilde": 227, "auml": 228, "aring": 229, "aelig": 230, "ccedil": 231,
-        "egrave": 232, "eacute": 233, "ecirc": 234, "euml": 235, "igrave": 236,
-        "iacute": 237, "icirc": 238, "iuml": 239, "ntilde": 241, "ograve": 242,
+        // Latin-1 punctuation and symbols
+        "nbsp": 160, "iexcl": 161, "cent": 162, "pound": 163, "curren": 164,
+        "yen": 165, "brvbar": 166, "sect": 167, "uml": 168, "copy": 169,
+        "ordf": 170, "laquo": 171, "not": 172, "shy": 173, "reg": 174,
+        "macr": 175, "deg": 176, "plusmn": 177, "sup2": 178, "sup3": 179,
+        "acute": 180, "micro": 181, "para": 182, "middot": 183, "cedil": 184,
+        "sup1": 185, "ordm": 186, "raquo": 187, "frac14": 188, "frac12": 189,
+        "frac34": 190, "iquest": 191, "times": 215, "divide": 247,
+
+        // Latin-1 letters, uppercase — the block whose absence made an accented
+        // capital at the start of a sentence enough to lose the chapter.
+        "Agrave": 192, "Aacute": 193, "Acirc": 194, "Atilde": 195, "Auml": 196,
+        "Aring": 197, "AElig": 198, "Ccedil": 199, "Egrave": 200, "Eacute": 201,
+        "Ecirc": 202, "Euml": 203, "Igrave": 204, "Iacute": 205, "Icirc": 206,
+        "Iuml": 207, "ETH": 208, "Ntilde": 209, "Ograve": 210, "Oacute": 211,
+        "Ocirc": 212, "Otilde": 213, "Ouml": 214, "Oslash": 216, "Ugrave": 217,
+        "Uacute": 218, "Ucirc": 219, "Uuml": 220, "Yacute": 221, "THORN": 222,
+
+        // Latin-1 letters, lowercase
+        "szlig": 223, "agrave": 224, "aacute": 225, "acirc": 226, "atilde": 227,
+        "auml": 228, "aring": 229, "aelig": 230, "ccedil": 231, "egrave": 232,
+        "eacute": 233, "ecirc": 234, "euml": 235, "igrave": 236, "iacute": 237,
+        "icirc": 238, "iuml": 239, "eth": 240, "ntilde": 241, "ograve": 242,
         "oacute": 243, "ocirc": 244, "otilde": 245, "ouml": 246, "oslash": 248,
-        "ugrave": 249, "uacute": 250, "ucirc": 251, "uuml": 252, "yuml": 255,
-        "ndash": 8211, "mdash": 8212, "lsquo": 8216, "rsquo": 8217, "sbquo": 8218,
-        "ldquo": 8220, "rdquo": 8221, "bdquo": 8222, "dagger": 8224, "Dagger": 8225,
-        "bull": 8226, "hellip": 8230, "prime": 8242, "Prime": 8243, "euro": 8364,
-        "trade": 8482, "ensp": 8194, "emsp": 8195, "thinsp": 8201, "shy": 173,
+        "ugrave": 249, "uacute": 250, "ucirc": 251, "uuml": 252, "yacute": 253,
+        "thorn": 254, "yuml": 255,
+
+        // Latin Extended-A, the ligatures and carons a European text uses
+        "OElig": 338, "oelig": 339, "Scaron": 352, "scaron": 353, "Yuml": 376,
+        "fnof": 402,
+
+        // Greek, which a classics text or a footnote reaches for
+        "Alpha": 913, "Beta": 914, "Gamma": 915, "Delta": 916, "Epsilon": 917,
+        "Zeta": 918, "Eta": 919, "Theta": 920, "Iota": 921, "Kappa": 922,
+        "Lambda": 923, "Mu": 924, "Nu": 925, "Xi": 926, "Omicron": 927,
+        "Pi": 928, "Rho": 929, "Sigma": 931, "Tau": 932, "Upsilon": 933,
+        "Phi": 934, "Chi": 935, "Psi": 936, "Omega": 937,
+        "alpha": 945, "beta": 946, "gamma": 947, "delta": 948, "epsilon": 949,
+        "zeta": 950, "eta": 951, "theta": 952, "iota": 953, "kappa": 954,
+        "lambda": 955, "mu": 956, "nu": 957, "xi": 958, "omicron": 959,
+        "pi": 960, "rho": 961, "sigmaf": 962, "sigma": 963, "tau": 964,
+        "upsilon": 965, "phi": 966, "chi": 967, "psi": 968, "omega": 969,
+
+        // Punctuation and spaces
+        "ensp": 8194, "emsp": 8195, "thinsp": 8201, "zwnj": 8204, "zwj": 8205,
+        "lrm": 8206, "rlm": 8207, "ndash": 8211, "mdash": 8212, "lsquo": 8216,
+        "rsquo": 8217, "sbquo": 8218, "ldquo": 8220, "rdquo": 8221, "bdquo": 8222,
+        "dagger": 8224, "Dagger": 8225, "bull": 8226, "hellip": 8230,
+        "permil": 8240, "prime": 8242, "Prime": 8243, "lsaquo": 8249,
+        "rsaquo": 8250, "oline": 8254, "frasl": 8260, "euro": 8364,
+
+        // Arrows and maths, which appear in footnotes and technical prose
+        "trade": 8482, "larr": 8592, "uarr": 8593, "rarr": 8594, "darr": 8595,
+        "harr": 8596, "minus": 8722, "lowast": 8727, "radic": 8730,
+        "infin": 8734, "cap": 8745, "cup": 8746, "int": 8747, "ne": 8800,
+        "equiv": 8801, "le": 8804, "ge": 8805, "loz": 9674, "spades": 9824,
+        "clubs": 9827, "hearts": 9829, "diams": 9830,
     ]
 
     /// How many characters `trimTrailingNewlines` removes from the front.

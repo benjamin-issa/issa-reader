@@ -13,10 +13,19 @@ public struct DownloadsView: View {
     @State private var segments: [Segment] = []
     @State private var totalBytes: Int64 = 0
     @State private var freeBytes: Int64 = 0
+    /// Bumped by each removal, so the one `.task(id:)` below re-runs. A bare
+    /// `Task { await refresh() }` in `remove` reintroduced the racing disk
+    /// scan that keying the task had just removed.
+    @State private var removals = 0
+
+    private struct RefreshKey: Equatable {
+        let pending: Int
+        let removals: Int
+    }
 
     public init() {}
 
-    struct Entry: Identifiable {
+    struct Entry: Identifiable, Sendable {
         let book: Book
         let format: BookContentService.Format
         let bytes: Int64
@@ -41,10 +50,15 @@ public struct DownloadsView: View {
         }
         .paperListBackground()
         .navigationTitle("Downloads")
-        .task { refresh() }
         // Rows appear and disappear as transfers finish, so the totals have to
-        // follow rather than being read once when the screen opened.
-        .onChange(of: app.downloadsPending.count) { refresh() }
+        // follow rather than being read once when the screen opened — and
+        // `.task(id:)` rather than a `.task` plus an `.onChange` spawning its
+        // own task, because two scans of the disk in flight at once finish in
+        // whichever order they finish and the loser writes its stale totals
+        // last.
+        .task(id: RefreshKey(pending: app.downloadsPending.count, removals: removals)) {
+            await refresh()
+        }
     }
 
     // MARK: - Sections
@@ -226,49 +240,89 @@ public struct DownloadsView: View {
 
     // MARK: - Data
 
-    private func refresh() {
-        guard let session = app.session else { return }
-        let service = BookContentService(client: session.client)
+    /// Everything this screen needs off disk, with no colours and no view in it.
+    struct Scan: Sendable {
         var found: [Entry] = []
         var byFormat: [BookContentService.Format: Int64] = [:]
-        for book in app.books {
+        var cache: Int64 = 0
+        var audio: Int64 = 0
+        var covers: Int64 = 0
+        var free: Int64 = 0
+    }
+
+    private func refresh() async {
+        guard let session = app.session else { return }
+        let scan = await Self.scan(
+            books: app.books,
+            downloaded: app.downloadedUUIDs,
+            service: BookContentService(client: session.client),
+        )
+        // Superseded while it was walking the disk. `scan` has nothing to check
+        // cancellation against — it is one straight pass — so the check that
+        // matters is the one before it writes.
+        if Task.isCancelled { return }
+
+        entries = scan.found.sorted { $0.bytes > $1.bytes }
+        totalBytes = scan.cache + scan.audio + scan.covers
+        segments = [
+            Segment(label: "Readaloud", bytes: scan.byFormat[.readaloud] ?? 0, color: Palette.tangerine),
+            Segment(label: "Ebooks", bytes: scan.byFormat[.ebook] ?? 0, color: Palette.moss),
+            Segment(label: "Audiobooks", bytes: scan.byFormat[.audiobook] ?? 0, color: Palette.slate),
+            // Narration extracted from a readaloud for playback: real disk use
+            // that no book row accounts for, so it gets its own band.
+            Segment(label: "Extracted narration", bytes: scan.audio, color: Palette.borderStrong),
+            Segment(label: "Covers", bytes: scan.covers, color: Palette.inkQuaternary),
+        ].filter { $0.bytes > 0 }
+        freeBytes = scan.free
+    }
+
+    /// Walks the disk. `nonisolated async`, so it does not adopt the caller's
+    /// executor and none of this runs on the thread that draws.
+    ///
+    /// It was synchronous and on the main actor, called from `.task` and again
+    /// on every change to the pending-transfer count — which is to say
+    /// repeatedly, while a download is running. Per call it did three `stat`s
+    /// per book in the library, then a recursive walk of the extracted-audio
+    /// tree (one directory per narrated book, one file per chapter) and another
+    /// of the cover cache (one file per book), all of it on the actor
+    /// responsible for the progress bar next to it.
+    ///
+    /// The per-book part is now bounded by what is actually on the device:
+    /// `downloadedUUIDs` is the set the download engine already maintains, so a
+    /// library of a thousand books whose owner has kept three costs three
+    /// `stat`s rather than three thousand.
+    private nonisolated static func scan(
+        books: [Book],
+        downloaded: Set<String>,
+        service: BookContentService,
+    ) async -> Scan {
+        var scan = Scan()
+        for book in books where downloaded.contains(book.uuid) {
             for format in [BookContentService.Format.readaloud, .ebook, .audiobook]
                 where service.isDownloaded(book, format: format) {
                 let url = service.localURL(for: book, format: format)
                 let size = Int64((try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
-                found.append(Entry(book: book, format: format, bytes: size))
-                byFormat[format, default: 0] += size
+                scan.found.append(Entry(book: book, format: format, bytes: size))
+                scan.byFormat[format, default: 0] += size
             }
         }
-        entries = found.sorted { $0.bytes > $1.bytes }
 
-        let books = service.cacheSize()
-        let audio = Self.directorySize(StorageRoot.directory("Audio"))
+        scan.cache = service.cacheSize()
+        scan.audio = directorySize(StorageRoot.directory("Audio"))
         // Must match CoverCache.diskDirectory: Caches, not Application
         // Support. Sizing a Covers folder nothing ever creates reported the
         // cover cache as zero and dropped its band from the legend.
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-        let covers = Self.directorySize(caches.appending(path: "Covers", directoryHint: .isDirectory))
-        totalBytes = books + audio + covers
-
-        segments = [
-            Segment(label: "Readaloud", bytes: byFormat[.readaloud] ?? 0, color: Palette.tangerine),
-            Segment(label: "Ebooks", bytes: byFormat[.ebook] ?? 0, color: Palette.moss),
-            Segment(label: "Audiobooks", bytes: byFormat[.audiobook] ?? 0, color: Palette.slate),
-            // Narration extracted from a readaloud for playback: real disk use
-            // that no book row accounts for, so it gets its own band.
-            Segment(label: "Extracted narration", bytes: audio, color: Palette.borderStrong),
-            Segment(label: "Covers", bytes: covers, color: Palette.inkQuaternary),
-        ].filter { $0.bytes > 0 }
-
-        freeBytes = DiskSpace.available(at: StorageRoot.url) ?? 0
+        scan.covers = directorySize(caches.appending(path: "Covers", directoryHint: .isDirectory))
+        scan.free = DiskSpace.available(at: StorageRoot.url) ?? 0
+        return scan
     }
 
     private func remove(_ entry: Entry) {
         // Shared with the book screen, so the readaloud audio cleanup cannot be
         // remembered in one place and forgotten in the other.
         app.removeDownload(entry.book, format: entry.format)
-        refresh()
+        removals += 1
     }
 
     static func statusText(_ job: DownloadManager.Job, _ state: DownloadManager.State) -> String {
@@ -289,7 +343,7 @@ public struct DownloadsView: View {
     }
 
     /// Recursive, because narration is extracted into a directory per book.
-    static func directorySize(_ url: URL) -> Int64 {
+    nonisolated static func directorySize(_ url: URL) -> Int64 {
         guard let walker = FileManager.default.enumerator(
             at: url, includingPropertiesForKeys: [.fileSizeKey],
         ) else { return 0 }

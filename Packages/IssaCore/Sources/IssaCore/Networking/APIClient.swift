@@ -77,16 +77,27 @@ public actor APIClient {
         guard let http = response as? HTTPURLResponse else {
             throw StorytellerError.transport("Non-HTTP response")
         }
-        guard (200 ..< 300).contains(http.statusCode) else {
-            if http.statusCode == 401 { await tokens.invalidate(); throw StorytellerError.notAuthenticated }
-            if http.statusCode == 404 { throw StorytellerError.notFound }
-            throw StorytellerError.server(status: http.statusCode, message: nil)
-        }
+        // The same mapping `send` uses, rather than a second one written here.
+        // The two had drifted: this one had no 403 and no 409 leg, so a reader
+        // whose account may not fetch that book was told "The server had a
+        // problem (403). It may be restarting" — which is not what happened,
+        // and suggests waiting, which will never help.
+        if let failure = await failure(for: http, data: nil) { throw failure }
 
-        try FileManager.default.createDirectory(
-            at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try? FileManager.default.removeItem(at: destination)
-        try FileManager.default.moveItem(at: location, to: destination)
+        // Wrapped, because a `CocoaError` escaping from here is rendered by the
+        // generic handler as "Something went wrong." The reasons this fails are
+        // ones a reader can act on — a full disk, a folder that cannot be
+        // created on a locked device — and `.download` is the case that carries
+        // them through.
+        do {
+            try FileManager.default.createDirectory(
+                at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? FileManager.default.removeItem(at: destination)
+            try FileManager.default.moveItem(at: location, to: destination)
+        } catch {
+            IssaLog.failure("download move", error, ["path": req.url?.path ?? "?"])
+            throw StorytellerError.download(error.localizedDescription)
+        }
     }
 
     /// Returns the raw status without throwing, for capability probing.
@@ -136,20 +147,31 @@ public actor APIClient {
             throw StorytellerError.transport("Non-HTTP response")
         }
 
+        if let failure = await failure(for: http, data: data) { throw failure }
+        return (data, http)
+    }
+
+    /// What a status code means, in one place.
+    ///
+    /// - Returns: nil for a success, the error to throw otherwise. Invalidating
+    ///   the token on a 401 happens here too, which is why this is not `static`:
+    ///   a second copy of this mapping that forgot to do that would leave a
+    ///   dead token in the keychain looking live.
+    private func failure(for http: HTTPURLResponse, data: Data?) async -> StorytellerError? {
         switch http.statusCode {
         case 200 ..< 300:
-            return (data, http)
+            return nil
         case 401:
             await tokens.invalidate()
-            throw StorytellerError.notAuthenticated
+            return .notAuthenticated
         case 403:
-            throw StorytellerError.forbidden
+            return .forbidden
         case 404:
-            throw StorytellerError.notFound
+            return .notFound
         case 409:
-            throw StorytellerError.positionConflict
+            return .positionConflict
         default:
-            throw StorytellerError.server(status: http.statusCode, message: Self.message(from: data))
+            return .server(status: http.statusCode, message: data.flatMap(Self.message(from:)))
         }
     }
 

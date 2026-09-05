@@ -55,12 +55,57 @@ targets:
         CODE_SIGN_ENTITLEMENTS: Apps/IssaReader-iOS/IssaReader.entitlements
       configs:
         Debug:
-          # DEBUG is XcodeGen's own default for this configuration; the second
-          # condition is named separately so that `#if DEBUG` is not the only
-          # thing standing between the layout-sweep fixture and a shipped
-          # build. `scripts/release.sh` greps the archived binary for the
-          # fixture's launch argument and fails the release if it finds it.
-          SWIFT_ACTIVE_COMPILATION_CONDITIONS: "DEBUG ISSA_UITEST_FIXTURE"
+          # ISSA_UITEST_FIXTURE is defined here and nowhere else, over exactly
+          # the configurations DEBUG covers — so on its own it is not a second
+          # lock, it is `#if DEBUG` under another name, and it was described as
+          # an independent gate for two builds while being no such thing.
+          #
+          # The real gate is EXCLUDED_SOURCE_FILE_NAMES on Release below: the
+          # compiler is never handed the fixture files at all, so no textual
+          # condition can leak them. This flag stays because it keeps the
+          # fixture out of a *Debug* build that is not the sweep, and because
+          # `#if` is what makes the intent legible at each site.
+          #
+          # `$(inherited)` matters: without it this replaces the project-level
+          # list rather than extending it.
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) ISSA_UITEST_FIXTURE"
+        Release:
+          # The layout-sweep fixture ships a stub server and an in-memory token
+          # store. Excluding the sources is what makes "it cannot reach a
+          # release" a fact about the build rather than a claim about a macro;
+          # scripts/release.sh then greps the archived binary as a backstop, and
+          # proves that grep can fire before trusting it.
+          EXCLUDED_SOURCE_FILE_NAMES: "$(inherited) Apps/IssaReader-iOS/Sources/UITestSupport/*"
+
+  # Unit tests over Apps/Shared, which no other target can reach.
+  #
+  # AppModel and ReaderModel hold forty-plus of the review's findings and had no
+  # test coverage of any kind: `Apps/Shared/Sources` is a source *path* compiled
+  # into each app target, not a package, so `swift test` cannot see it and
+  # IssaLayoutUITests is black-box XCUITest that can only drive the accessibility
+  # tree. Hosting a unit bundle on the iOS app puts those types in reach of
+  # `@testable import`, which is what makes the position and sign-out fixes
+  # testable rather than simulator-only.
+  IssaSharedTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Apps/IssaSharedTests/Sources
+      # The EPUB the IssaEPUB and IssaRender suites already use. The contents
+      # list lives in Apps/Shared, so the only way to test it against a real
+      # book's navigation is to bundle one here; a hand-built package would
+      # test the assertion rather than the book.
+      - path: Packages/IssaEPUB/Tests/Fixtures/alice.epub
+        buildPhase: resources
+    dependencies:
+      - target: IssaReader-iOS
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.benjaminissa.issareader.sharedtests
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/IssaReader-iOS.app/IssaReader-iOS"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        GENERATE_INFOPLIST_FILE: YES
+        TARGETED_DEVICE_FAMILY: "1,2"
 
   # Not `IssaUITests`: that name is already a SwiftPM *unit* test target for
   # the IssaUI package, and two targets with one name in a project that
@@ -197,6 +242,7 @@ schemes:
       targets:
         IssaReader-iOS: all
         IssaLayoutUITests: [test]
+        IssaSharedTests: [test]
     run:
       config: Debug
     test:
@@ -205,6 +251,10 @@ schemes:
       # one result bundle and race the fixture's URLProtocol registration.
       parallelizable: false
       targets:
+        # Both, and listed explicitly. A target missing from here runs zero
+        # tests while the build still succeeds — the failure this block exists
+        # to prevent.
+        - IssaSharedTests
         - IssaLayoutUITests
     profile:
       config: Release

@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import IssaCore
 import IssaEPUB
 import Observation
 
@@ -98,7 +99,30 @@ public final class ReadalongCoordinator {
             player.pause()
             return
         }
-        await play(from: next)
+        let endedDocument = entry.textHref
+        guard await move(to: next) else { return }
+        // A chapter that ran out, which is what the end-of-chapter timer is
+        // waiting for. `advance(to:)` cannot see this one: `move(to:)` has
+        // already set `activeFragmentID`, so the clock's next tick finds its
+        // own boundary test false. A book with one audio file per chapter
+        // therefore never reported an ending at all, and a timer set at bedtime
+        // played through the night.
+        if endedDocument != next.textHref { onChapterChangeObserved?() }
+        // Only if the boundary left it playing — read *after* the callback,
+        // exactly as `AudiobookCoordinator.advance()` reads it. An
+        // end-of-chapter sleep timer pauses inside that callback, and the first
+        // version of this guard latched `isPlaying` *before* `move(to:)`, so it
+        // then called `play()` and undid the pause in the same turn, after the
+        // timer had already reset itself — the book played on into the night,
+        // which is the failure the callback above exists to stop.
+        //
+        // The same late read also covers what the early one was for: anything
+        // that paused between `onFinishedFile` and here — the route handler
+        // when AirPods come out, an interruption — still reads as not playing.
+        // `isPlaying` is the coordinator's intent, not AVPlayer's rate, and
+        // `load` preserves it, so a file boundary alone never clears it.
+        guard player.isPlaying else { return }
+        player.play()
     }
 
     // MARK: - Seeking
@@ -137,6 +161,7 @@ public final class ReadalongCoordinator {
         } else {
             await player.seek(to: entry.start)
         }
+        let previousDocument = activeEntry?.textHref
         activeFragmentID = entry.fragmentID
         activeEntry = entry
         // Set here rather than left to the time observer: a paused player's
@@ -144,6 +169,28 @@ public final class ReadalongCoordinator {
         // the scrubber or the Lock Screen.
         bookProgress = timeline.progression(atBookTime: entry.cumulativeEnd - entry.duration)
         onFragmentChange?(entry.fragmentID)
+        // The boundary, announced from the one funnel every seek, skip,
+        // sentence, paragraph and chapter command passes through.
+        //
+        // `advance(to:)` cannot do it for these: this method sets
+        // `activeFragmentID` before returning, so the clock's next tick finds
+        // its `entry.fragmentID != activeFragmentID` test already false, and by
+        // the tick after that `previousDocument` is the new document. A seek
+        // across a chapter therefore fired `onChapterChange` *never* — not
+        // late — so the page did not turn and `SleepTimer.chapterDidEnd()` was
+        // never called, and an end-of-chapter timer set at bedtime played all
+        // night. `ReaderModel.startNarration` compensated by hand for the play
+        // path only.
+        // `onChapterChange` only. **Not** `onChapterChangeObserved`: that one
+        // means a chapter *ended*, and it drives the end-of-chapter sleep
+        // timer. A seek, a skip, or a chapter picked from the list is not a
+        // chapter ending — hanging the timer off the general signal is what
+        // used to stop the book the moment a chapter was chosen, which
+        // `NowPlayingController` documents at the point it wires them up. The
+        // natural end-of-file path fires the other one, and only it.
+        if let previousDocument, previousDocument != entry.textHref {
+            onChapterChange?(entry.textHref)
+        }
         return true
     }
 
@@ -181,7 +228,13 @@ public final class ReadalongCoordinator {
     }
 
     public func seek(toBookProgress progress: Double) async {
-        let time = timeline.totalDuration * min(max(progress, 0), 1)
+        // A non-finite progress is not a place in the book. Refusing it is
+        // the point: the inline clamp let NaN through, `totalDuration * NaN`
+        // is NaN, and the seek that followed set `steeredAt`, so the position
+        // writer persisted the result as a listener-*chosen* position — the one
+        // origin PositionGuard may not refuse.
+        guard let place = progress.asProgression else { return }
+        let time = timeline.totalDuration * place
         guard let entry = timeline.entry(atBookTime: time) else { return }
         // A seek is not a play button: it lands paused when paused, playing
         // when playing, exactly as the audiobook implementation of this same
@@ -217,9 +270,9 @@ public final class ReadalongCoordinator {
         case .previousChapter:
             await moveChapter(forward: false)
         case .speedUp:
-            player.rate = min(player.rate + 0.25, 5.0)
+            player.rate = Float(PlaybackRate.clamped(Double(player.rate) + PlaybackRate.step))
         case .speedDown:
-            player.rate = max(player.rate - 0.25, 0.5)
+            player.rate = Float(PlaybackRate.clamped(Double(player.rate) - PlaybackRate.step))
         // Discrete on purpose, never a toggle: the system sends these when it
         // has already decided which one it means, and its idea of the state —
         // the published rate — can lag `isPlaying` through a stall.
@@ -272,6 +325,10 @@ extension ReadalongCoordinator: PlaybackDriving {
     /// than a walk over every entry in the book.
     public var chapterSpan: (start: TimeInterval, duration: TimeInterval)? {
         guard let href = activeEntry?.textHref else { return nil }
+        // The run the listener is actually in. A document the spine
+        // references twice has two, and the merged range used to span both
+        // plus everything between them.
+        if let entry = activeEntry { return timeline.span(ofDocumentContaining: entry) }
         return timeline.span(ofDocument: href)
     }
 }

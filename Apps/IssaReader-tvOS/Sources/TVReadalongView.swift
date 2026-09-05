@@ -28,7 +28,14 @@ struct TVReadalongView: View {
         }
         .onAppear {
             if model == nil { model = app.reader(for: book, session: session) }
+            // The only callers of this were in `ReaderView`, which tvOS does
+            // not render — so `isReaderVisible` stayed false, the audio observer
+            // kept the 1.0s idle interval instead of 0.20s, and the sentence
+            // highlight (the entire point of this screen) stepped once a second
+            // while any sentence shorter than the tick was never marked at all.
+            model?.setReaderVisible(true)
         }
+        .onDisappear { model?.setReaderVisible(false) }
     }
 }
 
@@ -154,7 +161,7 @@ private struct TVReadalongContent: View {
     private var progressLine: String {
         var parts = ["\(ReadingProgress.percent(progress))%"]
         if let coordinator = model.readalong, coordinator.totalDuration > 0 {
-            let remaining = coordinator.totalDuration * (1 - min(max(coordinator.bookProgress, 0), 1))
+            let remaining = coordinator.totalDuration * (1 - (coordinator.bookProgress.asProgression ?? 0))
             parts.append("\(Self.durationText(remaining)) left")
         }
         return parts.joined(separator: " · ")

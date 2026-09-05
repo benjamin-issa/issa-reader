@@ -83,6 +83,25 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         return CPTabBarTemplate(templates: Array(templates.prefix(CPTabBarTemplate.maximumTabCount)))
     }
 
+    /// Brings the Now Playing tab to the front.
+    ///
+    /// Falls back to a push only if it is somehow *not* a tab — and reports
+    /// the failure rather than passing `nil`, because a control that silently
+    /// does nothing is the worst outcome available here.
+    private func showNowPlaying() {
+        guard let controller = interfaceController else { return }
+        if let tabBar = controller.rootTemplate as? CPTabBarTemplate,
+           tabBar.templates.contains(where: { $0 === CPNowPlayingTemplate.shared }) {
+            tabBar.select(CPNowPlayingTemplate.shared)
+            return
+        }
+        controller.pushTemplate(CPNowPlayingTemplate.shared, animated: true) { ok, error in
+            guard !ok else { return }
+            IssaLog.failure(
+                "carplay now playing", error ?? StorytellerError.notFound, [:])
+        }
+    }
+
     private func section(for shelf: CarPlayCatalogue.Shelf) -> CPListSection {
         let playing = CarPlayBridge.shared.playingBookUUID?()
         return CPListSection(
@@ -99,8 +118,15 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
                 if let message = await CarPlayBridge.shared.play(bookID: entry.bookUUID) {
                     self?.presentError(message)
                 } else {
-                    self?.interfaceController?.pushTemplate(
-                        CPNowPlayingTemplate.shared, animated: true, completion: nil)
+                    // Selected, not pushed. `CPNowPlayingTemplate.shared` is
+                    // already installed as a tab of the root tab bar, and one
+                    // instance cannot occupy two places in the hierarchy — so
+                    // the push was rejected, `completion: nil` threw the
+                    // rejection away, and the driver tapped a row, heard audio
+                    // start, and watched the screen not change. This file's own
+                    // comment calls that indistinguishable from a crash at the
+                    // wheel.
+                    self?.showNowPlaying()
                 }
                 completion()
             }

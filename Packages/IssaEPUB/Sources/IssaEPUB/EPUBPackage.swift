@@ -1,4 +1,5 @@
 import Foundation
+import IssaCore
 
 /// An opened EPUB: its package document, spine, manifest and navigation.
 public struct EPUBPackage: Sendable {
@@ -60,7 +61,12 @@ public struct EPUBPackage: Sendable {
             return (Double(spineIndex) + within) / Double(spine.count)
         }
         let before = weights.prefix(spineIndex).reduce(0, +)
-        return min(max((before + weights[spineIndex] * min(max(within, 0), 1)) / total, 0), 1)
+        // `asProgression`, not `min(max(…))`: Swift's max returns the other
+        // operand against NaN, so the inline clamp passed one straight through
+        // and `ReaderModel.spinePosition` then fed `Int(scaled)` a NaN, which
+        // traps.
+        let place = within.asProgression ?? 0
+        return ((before + weights[spineIndex] * place) / total).asProgression ?? 0
     }
 
     public struct NavPoint: Sendable, Hashable {
@@ -142,7 +148,17 @@ public extension EPUBPackage {
     /// bare `%` fails to decode and is kept verbatim, which is what its
     /// producer meant by it.
     static func resolve(_ href: String, relativeTo base: String) -> String {
-        let target = href.split(separator: "#", maxSplits: 1).first.map(String.init) ?? href
+        // `omittingEmptySubsequences: false`, which is not the default. For a
+        // fragment-only href — `#chapter-1`, what a single-file book's nav uses
+        // and what `NavPoint.fragment` exists for — the default drops the empty
+        // leading piece, so `.first` was "chapter-1" rather than "", and the
+        // result was `<base dir>/chapter-1`: a path no entry has. Every row of
+        // such a book's table of contents pointed at a missing resource.
+        let target = href
+            .split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false)
+            .first.map(String.init) ?? href
+        // A pure fragment names the document it sits in.
+        if target.isEmpty { return EPUBArchive.normalize(base) }
         let decoded = target.removingPercentEncoding ?? target
         if decoded.hasPrefix("/") { return EPUBArchive.normalize(decoded) }
         let directory = (base as NSString).deletingLastPathComponent
@@ -211,6 +227,17 @@ public extension EPUBPackage {
         }
     }
 
+    /// Whether this `<nav>` is the table of contents.
+    ///
+    /// `epub:type` holds a space-separated token list, so `"toc bodymatter"` is
+    /// a table of contents and an equality test says it is not.
+    private static func isTableOfContents(_ node: EPUBXMLNode) -> Bool {
+        let declared = [node["type"], node["epub:type"]].compactMap { $0 }
+        return declared.contains { value in
+            value.split(whereSeparator: \.isWhitespace).contains("toc")
+        }
+    }
+
     private static func parseNavigation(
         opf: EPUBXMLNode, archive: EPUBArchive,
         manifest: [String: ManifestItem], rootDirectory: String,
@@ -224,8 +251,24 @@ public extension EPUBPackage {
         if let nav = manifest.values.first(where: { $0.properties.contains("nav") }) {
             if let document = try? EPUBXML.parse(archive.read(nav.href)) {
                 for navElement in document.descendants("nav") {
-                    guard navElement["type"] == "toc" || navElement["epub:type"] == "toc" else { continue }
-                    return flatten(list: navElement.descendants("ol").first, base: nav.href, depth: 0)
+                    // `epub:type` is a space-separated token list per spec, so
+                    // exact equality skipped `epub:type="toc bodymatter"`
+                    // entirely and such a book showed no contents at all.
+                    guard Self.isTableOfContents(navElement) else { continue }
+                    // `<ul>` as well as `<ol>`: several conversion tools emit
+                    // it, invalidly but commonly.
+                    let list = navElement.descendants("ol").first
+                        ?? navElement.descendants("ul").first
+                    let points = flatten(list: list, base: nav.href, depth: 0)
+                    // Only return when there is something to return. An empty
+                    // result used to short-circuit the NCX below, so a nav
+                    // document that *parsed* but yielded nothing — a `<ul>`, or
+                    // list items carrying headings with no anchor — left the
+                    // reader with no table of contents while a perfectly good
+                    // toc.ncx sat unread in the manifest. The comment above
+                    // promised this fallback covered "there but broken"; it
+                    // only covered "throws".
+                    if !points.isEmpty { return points }
                 }
             }
         }

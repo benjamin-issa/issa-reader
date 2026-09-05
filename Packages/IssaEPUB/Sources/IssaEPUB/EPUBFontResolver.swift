@@ -21,7 +21,16 @@ public enum EPUBFontResolver {
         /// Where the file is inside the container.
         public let path: String
         /// The file's extension, lowercased.
-        public var format: String { (path as NSString).pathExtension.lowercased() }
+        ///
+        /// `path` carries no query string — see `fontFaces(in:relativeTo:)`,
+        /// which strips it before resolving. The first fix for the bulletproof
+        /// `url('fonts/Charis.otf?#iefix')` syntax stripped it *here* only, so
+        /// `format` said "otf" while `path` still ended in `?`: the face was
+        /// reported `.found` and then failed silently in `archive.read`, which
+        /// is worse than the `.unreadableFormat("otf?")` it replaced.
+        public var format: String {
+            (path as NSString).pathExtension.lowercased()
+        }
     }
 
     /// Why a book cannot be set in its own face.
@@ -86,6 +95,12 @@ public enum EPUBFontResolver {
             .sorted()
     }
 
+    /// Everything before the first `?`. Written once here rather than inline,
+    /// because the last inline copy lived on the wrong property.
+    static func withoutQuery(_ url: String) -> String {
+        url.split(separator: "?", maxSplits: 1).first.map(String.init) ?? url
+    }
+
     /// `@font-face { font-family: X; src: url(Y) }`, and nothing else.
     static func fontFaces(in css: String, relativeTo sheet: String) -> [Face] {
         var faces: [Face] = []
@@ -96,7 +111,11 @@ public enum EPUBFontResolver {
             else { continue }
             faces.append(Face(
                 family: family,
-                path: EPUBPackage.resolve(source, relativeTo: sheet),
+                // Query stripped before resolving, so `path` is the archive
+                // path `archive.read` will be handed. `EPUBPackage.resolve`
+                // strips a fragment but not a query, and publishers ship
+                // `url('fonts/Charis.otf?#iefix')`.
+                path: EPUBPackage.resolve(withoutQuery(source), relativeTo: sheet),
             ))
         }
         return faces
@@ -233,7 +252,15 @@ public enum EPUBFontResolver {
         var paths: Set<String> = []
         for reference in root.descendants("CipherReference") {
             guard let uri = reference.attributes["URI"] else { continue }
-            paths.insert(uri.removingPercentEncoding ?? uri)
+            // Normalised, because `chosen.path` came through
+            // `EPUBArchive.normalize` and this is compared against it. Adobe
+            // InDesign and several Java toolchains write
+            // `URI="./OEBPS/fonts/Body.otf"`, so the two spellings never
+            // matched, the guard missed, and CoreText was handed 1040
+            // XOR-scrambled bytes as a font — the book rendered in a broken
+            // face instead of reporting `.obfuscated`.
+            let decoded = uri.removingPercentEncoding ?? uri
+            paths.insert(EPUBArchive.normalize(decoded))
         }
         return paths
     }

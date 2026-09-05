@@ -19,6 +19,25 @@ final class LayoutInvariantsTests: XCTestCase {
         LayoutReference(window: window, safe: window, screenMargin: margin)
     }
 
+    /// An expectation that only the intended failure satisfies.
+    ///
+    /// Every `XCTExpectFailure` here used to take a bare description, which is
+    /// the non-strict form: it is satisfied by *any* recorded failure. That is
+    /// not a detail. `assertContentStartsAtTheMargin` has a second, unrelated
+    /// failure path — "too few measurable elements" — so breaking the walk badly
+    /// enough to discard the whole tree made these tests pass, which is exactly
+    /// the regression they exist to catch.
+    private func expectingFailure(
+        containing fragment: String,
+        _ block: () -> Void,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let options = XCTExpectedFailure.Options()
+        options.issueMatcher = { $0.compactDescription.contains(fragment) }
+        XCTExpectFailure(fragment, options: options, failingBlock: block)
+    }
+
     // MARK: - The four shipped bugs, as trees
 
     /// Build 22: 430 points of content in a 402-point screen. A vertical scroll
@@ -29,7 +48,7 @@ final class LayoutInvariantsTests: XCTestCase {
             Fake.text(x: 2, width: 200),
             Fake.text(x: 2, width: 150),
         ])
-        XCTExpectFailure("content at 2pt, not the 16pt token") {
+        expectingFailure(containing: "content starts 2.0pt from the safe edge") {
             assertContentStartsAtTheMargin(root, reference(), screen: "collapsed")
         }
     }
@@ -37,7 +56,7 @@ final class LayoutInvariantsTests: XCTestCase {
     /// A frame at `x = -10, width = 422` in a 402-point window.
     func testContentOutsideTheWindowFails() {
         let root = Fake.screen([Fake.text(x: -10, width: 422)])
-        XCTExpectFailure("wider than the window, and left of the safe area") {
+        expectingFailure(containing: "the safe area starts at") {
             assertHorizontallyContained(root, reference(), screen: "overflowing")
         }
     }
@@ -47,8 +66,8 @@ final class LayoutInvariantsTests: XCTestCase {
         let root = Fake.node(type: .scrollView, x: 0, width: 402, children: [
             Fake.node(type: .other, x: -14, width: 430, children: []),
         ])
-        XCTExpectFailure("a 430pt child inside a 402pt scroll view") {
-            assertScrollContentFits(root)
+        expectingFailure(containing: "pt scroll view") {
+            assertScrollContentFits(root, reference())
         }
     }
 
@@ -57,7 +76,10 @@ final class LayoutInvariantsTests: XCTestCase {
         let root = Fake.screen([
             Fake.node(type: .scrollView, x: 16, width: 370, identifier: "rail.up-next", children: []),
         ])
-        XCTExpectFailure("the rail should reach the safe edge") {
+        // The identifier, not one of the two sentences: a rail inset on both
+        // sides records a failure for each edge, and a matcher that accepts
+        // only the leading one leaves the trailing one unexpected.
+        expectingFailure(containing: "rail.up-next") {
             assertRailsReachTheEdge(root, reference())
         }
     }
@@ -98,13 +120,30 @@ final class LayoutInvariantsTests: XCTestCase {
     }
 
     /// The system's own chrome sits outside the window on purpose.
+    ///
+    /// The overlay is an `.image`, not an `.other`. As an `.other` this test
+    /// proved nothing: that type is not in `measured`, so the assertion returned
+    /// before `isSystemChrome` was ever consulted, and the test passed just as
+    /// happily with that function deleted.
     func testSystemChromeIsIgnored() {
         let root = Fake.screen([
             Fake.text(x: 16, width: 370),
-            Fake.node(type: .other, x: -120, width: 642,
+            Fake.node(type: .image, x: -120, width: 642,
                       identifier: "AdditionalDimmingOverlay", children: []),
         ])
         assertHorizontallyContained(root, reference(), screen: "chrome")
+    }
+
+    /// …and a node under one, which is the ancestry half of the same rule.
+    func testContentInsideSystemChromeIsIgnored() {
+        let root = Fake.screen([
+            Fake.text(x: 16, width: 370),
+            Fake.node(type: .other, x: 0, width: 402,
+                      identifier: "UITransitionView", children: [
+                          Fake.node(type: .image, x: -120, width: 642, children: []),
+                      ]),
+        ])
+        assertHorizontallyContained(root, reference(), screen: "under-chrome")
     }
 
     /// iOS 26 hosts a `TabView`'s pages inside the tab bar's element, so
@@ -117,9 +156,50 @@ final class LayoutInvariantsTests: XCTestCase {
                 Fake.text(x: 2, width: 150),
             ]),
         ])
-        XCTExpectFailure("the content under the bar is still this app's") {
+        expectingFailure(containing: "content starts 2.0pt from the safe edge") {
             assertContentStartsAtTheMargin(root, reference(), screen: "under-the-bar")
         }
+    }
+
+    /// Descending into the bar is not the same as measuring the bar.
+    ///
+    /// This is the hole that made the headline invariant fail open on every
+    /// signed-in screen. Apple's tab-bar buttons are `.button`, carry no system
+    /// identifier and have no `rail.` ancestor, so once the walk was inside the
+    /// bar they went into the margin histogram beside this app's content — and
+    /// a screen whose every element had drifted to 140 still passed, because one
+    /// of Apple's buttons happened to sit at the margin.
+    func testTabBarSystemButtonsAreNotMeasuredAsOurs() {
+        let root = Fake.node(type: .tabBar, x: 0, width: 402, children: [
+            // Apple's, at a healthy-looking edge.
+            Fake.node(type: .button, x: 16, width: 60, children: []),
+            Fake.node(type: .button, x: 96, width: 60, children: []),
+            Fake.node(type: .button, x: 176, width: 60, children: []),
+            // Ours, every one of them drifted.
+            Fake.node(type: .other, x: 0, width: 402, identifier: "screen.library", children: [
+                Fake.text(x: 140, width: 246),
+                Fake.text(x: 140, width: 200),
+                Fake.text(x: 140, width: 180),
+            ]),
+        ])
+        expectingFailure(containing: "content starts 140.0pt from the safe edge") {
+            assertContentStartsAtTheMargin(root, reference(), screen: "bar-buttons")
+        }
+    }
+
+    /// …and the same shape, laid out correctly, still passes — so the fix above
+    /// is a narrowing rather than a refusal to measure hosted screens at all.
+    func testTabBarHostedContentAtTheMarginPasses() {
+        let root = Fake.node(type: .tabBar, x: 0, width: 402, children: [
+            Fake.node(type: .button, x: 300, width: 60, children: []),
+            Fake.node(type: .other, x: 0, width: 402, identifier: "screen.library", children: [
+                Fake.text(x: 16, width: 370),
+                Fake.text(x: 16, width: 200),
+                Fake.text(x: 16, width: 150),
+            ]),
+        ])
+        assertContentStartsAtTheMargin(root, reference(), screen: "bar-healthy")
+        assertHorizontallyContained(root, reference(), screen: "bar-healthy")
     }
 }
 

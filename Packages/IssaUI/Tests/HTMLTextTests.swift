@@ -139,3 +139,45 @@ struct HTMLTextSafetyTests {
         #expect(HTMLText.plain("<p>A</p><p>B</p>") == "A\n\nB")
     }
 }
+
+/// The parse is remembered, and remembering it must not make it wrong.
+///
+/// `BookDetailView` re-evaluates its body on every debounced position save —
+/// every two seconds while the book it is showing is narrating — and re-scanned
+/// the whole description each time. A cache keyed on anything but the markup
+/// itself would show one book's blurb under another's title; a cache that never
+/// forgets would show a stale one after an edit. Both are worse than the cost
+/// it saves, so both are pinned here.
+@Suite("Remembering a rendered description")
+@MainActor
+struct HTMLTextCacheTests {
+    @Test("the remembered answer is the same as the computed one")
+    func agreesWithTheUncachedParse() {
+        let html = "<p>It is a truth <i>universally acknowledged</i>.</p>"
+        #expect(String(HTMLText.cached(html).characters) == String(HTMLText.attributed(html).characters))
+        // And again, now that it is a hit rather than a miss.
+        #expect(String(HTMLText.cached(html).characters) == String(HTMLText.attributed(html).characters))
+    }
+
+    @Test("two descriptions do not share an answer")
+    func distinctMarkupIsDistinct() {
+        let alice = "<p>Down the rabbit hole.</p>"
+        let bleak = "<p>Fog everywhere.</p>"
+        #expect(String(HTMLText.cached(alice).characters) == "Down the rabbit hole.")
+        #expect(String(HTMLText.cached(bleak).characters) == "Fog everywhere.")
+        #expect(String(HTMLText.cached(alice).characters) == "Down the rabbit hole.",
+                "the second book's blurb displaced the first one's")
+    }
+
+    /// The cache drops everything when it fills rather than evicting one entry,
+    /// so what comes back after a flush has to be a fresh answer and not a
+    /// stale one — a library of any size walks past the cap in an afternoon.
+    @Test("a full cache still answers correctly")
+    func survivesAFlush() {
+        for index in 1 ... 100 {
+            #expect(String(HTMLText.cached("<p>Blurb number \(index).</p>").characters)
+                == "Blurb number \(index).")
+        }
+        #expect(String(HTMLText.cached("<p>Blurb number 1.</p>").characters) == "Blurb number 1.")
+    }
+}

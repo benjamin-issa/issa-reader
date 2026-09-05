@@ -1,3 +1,4 @@
+import Compression
 import Foundation
 import Testing
 
@@ -150,6 +151,28 @@ private enum ZIPBytes {
 struct MalformedArchiveTests {
     /// The trap the fix removes: `Int(UInt64)` has no representable result for
     /// a locator offset with the top bit set, and aborted the process.
+    /// The shape a real zip64 EPUB has: a well-formed record the parser must
+    /// read rather than reject. With the wrong signature constant this threw
+    /// "bad zip64 record", so every genuine zip64 archive was permanently
+    /// unopenable — permanently because the download is cached.
+    @Test("a well-formed zip64 record is read, not rejected")
+    func acceptsARealZip64Record() throws {
+        var record = Data([0x50, 0x4B, 0x06, 0x06])
+        record.append(ZIPBytes.le64(44))
+        record.append(ZIPBytes.le16(45))
+        record.append(ZIPBytes.le16(45))
+        record.append(ZIPBytes.le32(0))
+        record.append(ZIPBytes.le32(0))
+        record.append(ZIPBytes.le64(0))   // entries on disk
+        record.append(ZIPBytes.le64(0))   // total entries
+        record.append(ZIPBytes.le64(0))   // directory size
+        record.append(ZIPBytes.le64(0))   // directory offset
+        let data = ZIPBytes.zip64Locator(recordOffset: 0, prefix: record)
+        // An empty directory: nothing to read, but the record itself parsed.
+        let archive = try EPUBArchive(data: data)
+        #expect(!archive.contains("anything"))
+    }
+
     @Test("a zip64 locator offset above Int.max is a thrown error")
     func locatorOffsetAboveIntMax() {
         let data = ZIPBytes.zip64Locator(recordOffset: 0x8000_0000_0000_0000)
@@ -166,10 +189,14 @@ struct MalformedArchiveTests {
 
     /// A fake Zip64 EOCD record the parser accepts, whose entry count no file
     /// this size could hold — unbounded, it fed `reserveCapacity` directly.
-    /// The record deliberately opens with the signature the parser checks for.
+    ///
+    /// `PK\x06\x06`, the real zip64 signature. This used to be `PK\x05\x06`
+    /// with a comment calling it "the signature the parser checks for" — which
+    /// was true, and was the bug: the parser checked for the regular EOCD's
+    /// signature, so the fixture encoded the defect rather than catching it.
     @Test("a zip64 record declaring an impossible entry count is a thrown error")
     func implausibleZip64Count() {
-        var record = Data([0x50, 0x4B, 0x05, 0x06])
+        var record = Data([0x50, 0x4B, 0x06, 0x06])
         record.append(ZIPBytes.le64(44)) // record size
         record.append(ZIPBytes.le16(45))
         record.append(ZIPBytes.le16(45))
@@ -440,5 +467,108 @@ struct NavigationFallbackTests {
         let package = try EPUBPackage.open(archive: archive)
         #expect(package.navigation.map(\.title) == ["Down the Rabbit-Hole"])
         #expect(package.navigation.first?.href == "OEBPS/c1.xhtml")
+    }
+}
+
+@Suite("Inflate answers honestly about what it decoded")
+struct InflateHonestyTests {
+    /// The canonical empty DEFLATE stream, which Python's zipfile writes for
+    /// any zero-byte member. `compression_decode_buffer` returns 0 for it —
+    /// indistinguishable from failure to the old loop, which retried four times
+    /// and then threw, so a book with an empty stylesheet had that entry
+    /// permanently unreadable.
+    @Test("a valid empty entry decodes to nothing, not to an error")
+    func emptyEntryIsNotAFailure() throws {
+        let empty = try Inflate.raw(Data([0x03, 0x00]), expectedSize: 0)
+        #expect(empty.isEmpty)
+    }
+
+    /// An entry whose declared size understates the truth used to come back
+    /// silently truncated: the codec returns `dst_size` both when it filled the
+    /// buffer exactly and when it had more to write, and the old code read the
+    /// first as success. A chapter came back as a fragment.
+    @Test("an entry that inflates past its declared size is refused, not truncated")
+    func understatedSizeIsRefused() throws {
+        let payload = String(repeating: "the quick brown fox ", count: 400)
+        let compressed = try #require(Self.deflate(Data(payload.utf8)))
+        #expect(throws: EPUBError.self) {
+            try Inflate.raw(compressed, expectedSize: 16)
+        }
+        // …and the honest size still round-trips.
+        let round = try Inflate.raw(compressed, expectedSize: payload.utf8.count)
+        #expect(String(decoding: round, as: UTF8.self) == payload)
+    }
+
+    /// The ratio ceiling bounds compression ratio, not memory. A 4 MB entry
+    /// declaring 4 GB passed it and the next line asked for a 4 GB allocation.
+    @Test("a declared size beyond the absolute cap is refused whatever the ratio")
+    func absoluteCapIsEnforced() {
+        let fourMegabytes = Data(repeating: 0x41, count: 4 * 1024 * 1024)
+        #expect(throws: EPUBError.self) {
+            try Inflate.raw(fourMegabytes, expectedSize: 4_000_000_000)
+        }
+        #expect(Inflate.maximumEntrySize < 4_000_000_000)
+    }
+
+    private static func deflate(_ data: Data) -> Data? {
+        let room = data.count + 1024
+        var out = Data(count: room)
+        let written: Int = out.withUnsafeMutableBytes { dst in
+            data.withUnsafeBytes { src -> Int in
+                guard let d = dst.bindMemory(to: UInt8.self).baseAddress,
+                      let s = src.bindMemory(to: UInt8.self).baseAddress else { return 0 }
+                return compression_encode_buffer(
+                    d, room, s, data.count, nil, COMPRESSION_ZLIB)
+            }
+        }
+        guard written > 0 else { return nil }
+        out.removeSubrange(written ..< out.count)
+        return out
+    }
+}
+
+/// Two central-directory records for one normalised name.
+///
+/// `normalize` folds `./META-INF/container.xml` and `META-INF/container.xml`
+/// into one key, and the first record has to win — `unzip`, epubcheck and every
+/// server-side scanner take the first, so an archive whose trailing duplicate
+/// points at a different OPF looked clean to all of them and loaded the second
+/// here. That guard shipped as a bare `continue` above the loop's cursor
+/// advance, so the one archive it existed for stalled the cursor on the
+/// duplicate and lost every entry after it, throwing nothing. A book that opens
+/// everywhere else became permanently unopenable, and the download is cached.
+@Suite("A duplicate directory record")
+struct DuplicateRecordTests {
+    static let benign = "<container>benign</container>"
+    static let hostile = "<container>hostile</container>"
+    static let chapter = "<html>chapter one</html>"
+
+    static func archive() -> Data {
+        ZIPBytes.archive([
+            .init(name: "META-INF/container.xml", payload: Data(benign.utf8)),
+            .init(name: "./META-INF/container.xml", payload: Data(hostile.utf8)),
+            .init(name: "OEBPS/ch1.xhtml", payload: Data(chapter.utf8)),
+        ])
+    }
+
+    @Test("the first record wins")
+    func firstRecordWins() throws {
+        let archive = try EPUBArchive(data: Self.archive())
+        let container = try archive.read("META-INF/container.xml")
+        #expect(String(decoding: container, as: UTF8.self) == Self.benign,
+                "the trailing duplicate shadowed the first record")
+    }
+
+    /// The regression the guard introduced: everything after the duplicate
+    /// vanished. `ch1.xhtml` is the third record, behind the duplicate, and it
+    /// has to still be there.
+    @Test("the entries after the duplicate are still read")
+    func laterEntriesSurvive() throws {
+        let archive = try EPUBArchive(data: Self.archive())
+        #expect(archive.contains("OEBPS/ch1.xhtml"),
+                "the directory scan stalled on the duplicate and dropped what followed")
+        let chapter = try archive.read("OEBPS/ch1.xhtml")
+        #expect(String(decoding: chapter, as: UTF8.self) == Self.chapter)
+        #expect(archive.paths.count == 2, "one key for the duplicate pair, plus the chapter")
     }
 }

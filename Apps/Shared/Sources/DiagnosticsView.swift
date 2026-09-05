@@ -83,6 +83,7 @@ struct DiagnosticsView: View {
         .navigationTitle("Diagnostics")
         .paperListBackground()
         .task { reload() }
+        .onDisappear { discardExport() }
     }
 
     /// Re-reads the log, and re-writes the export file.
@@ -96,5 +97,13 @@ struct DiagnosticsView: View {
         // The tail, not the head: what just went wrong is at the end.
         preview = text.split(separator: "\n").suffix(12).joined(separator: "\n")
         exported = IssaLog.exportFile()
+    }
+
+    /// The export is a full copy of the log on disk. It exists because
+    /// `ShareLink` needs its item to exist before the sheet opens, not because
+    /// it should outlive the screen.
+    private func discardExport() {
+        exported = nil
+        IssaLog.discardExports()
     }
 }

@@ -424,6 +424,67 @@ struct ReadalongCoordinatorTests {
         return (ReadalongCoordinator(timeline: timeline, audioFiles: files), timeline, directory)
     }
 
+    /// An end-of-chapter sleep timer pauses inside `onChapterChangeObserved`.
+    /// The first version of the end-of-file guard latched `isPlaying` *before*
+    /// `move(to:)`, then called `play()` after the callback — undoing the pause
+    /// in the same turn, after the timer had already reset itself to off. The
+    /// book played on into the night, which is the failure the callback exists
+    /// to stop. `AudiobookCoordinator.advance()` reads the flag after the
+    /// callback; this pins that the read-along path does too.
+    @Test("a pause from the end-of-chapter callback is not undone by the advance")
+    func chapterEndPauseSurvivesTheAdvance() async throws {
+        let (subject, timeline, directory) = try Self.make()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        // The last entry of an audio file whose successor is in another
+        // document: the one boundary that is both an end of file (so
+        // `onFinishedFile` is what moves on) and an end of chapter (so the
+        // callback fires).
+        let entries = timeline.entries
+        let index = try #require(
+            entries.indices.dropLast().first { i in
+                entries[i].audioHref != entries[i + 1].audioHref
+                    && entries[i].textHref != entries[i + 1].textHref
+            },
+            "the fixture needs a chapter boundary that is also a file boundary")
+        await subject.play(from: entries[index])
+        #expect(subject.player.isPlaying)
+        // The test owns the clock from here. `play(from:)` starts genuine
+        // playback of a short fixture file, and two things then race the
+        // manual end-of-file below: the periodic observer's first tick can
+        // report a time a hair *before* the entry's start — seek tolerance —
+        // and `advance(to:)` then moves `activeEntry` back one sentence, so
+        // the advance seeks within the file instead of loading the next one
+        // and no chapter callback fires; and the real
+        // `AVPlayerItemDidPlayToEndTime` can arrive on its own and run a
+        // second advance. Both happened; the first version of this test was
+        // green twice and red the third time. Silencing the observer and
+        // freezing the underlying player leaves `isPlaying` — the intent flag
+        // the guard reads — true, with nothing else able to move.
+        subject.player.onTimeUpdate = nil
+        subject.player.rate = 0
+        #expect(subject.player.isPlaying, "freezing the rate must not read as a pause")
+
+        subject.onChapterChangeObserved = { subject.player.pause() }
+        subject.player.onFinishedFile?()
+        // The advance hops through a Task and then awaits a real
+        // `AVURLAsset.load(.duration)`. Under a parallel full-suite run that
+        // took more than the one second this first waited, and the test failed
+        // on "the advance did not happen" after passing twice in isolation — a
+        // flake that shipped in a commit claiming the suite green. Bounded at
+        // ten seconds and asserted separately, so a timeout reads as a timeout.
+        let deadline = ContinuousClock.now + .seconds(10)
+        while subject.activeEntry?.fragmentID == entries[index].fragmentID,
+              ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        try #require(subject.activeEntry?.fragmentID != entries[index].fragmentID,
+                     "the advance did not complete within ten seconds")
+
+        #expect(subject.activeEntry?.textHref == entries[index + 1].textHref, "the advance landed in the wrong document")
+        #expect(subject.player.isPlaying == false,
+                "the advance restarted playback after the timer had paused it")
+    }
+
     /// The coordinator is built eagerly on open and the reader footer draws
     /// the skip buttons regardless, so before narration has played a skip had
     /// no anchor — `bookProgress` still read 0 — and resolved to sentence one
@@ -541,4 +602,79 @@ private final class OrderLog {
     private(set) var events: [String] = []
     func append(_ event: String) { events.append(event) }
     func reset() { events.removeAll() }
+}
+
+@Suite("A playback rate is bounded wherever it comes from")
+struct PlaybackRateTests {
+    /// The bound controls walked to 5.0× and down to 0.5× — speeds in no menu
+    /// anywhere, which the transport renders as "5×" — while the menus offered
+    /// 0.75 to 3.0 and CarPlay stopped at 2.0. Three ceilings for one setting.
+    @Test("the ladder's ends are the bounds")
+    func boundsMatchTheLadder() {
+        #expect(PlaybackRate.minimum == 0.75)
+        #expect(PlaybackRate.maximum == 3.0)
+        #expect(PlaybackRate.ladder.first == PlaybackRate.minimum)
+        #expect(PlaybackRate.ladder.last == PlaybackRate.maximum)
+    }
+
+    @Test("anything outside them is brought back", arguments: [
+        (5.0, 3.0), (0.5, 0.75), (10.0, 3.0), (-1.0, 0.75), (0.0, 0.75),
+    ])
+    func clampsOutOfRange(_ value: Double, _ expected: Double) {
+        #expect(PlaybackRate.clamped(value) == expected)
+    }
+
+    /// This value also arrives from `MPChangePlaybackRateCommandEvent`, which
+    /// is the system's to populate and was applied with no bound at all.
+    @Test("a non-finite rate becomes normal speed, not a silent player")
+    func refusesNonFinite() {
+        #expect(PlaybackRate.clamped(.nan) == 1.0)
+        #expect(PlaybackRate.clamped(.infinity) == 1.0)
+    }
+
+    @Test("a legal rate is untouched", arguments: PlaybackRate.ladder)
+    func leavesLegalRatesAlone(_ rate: Double) {
+        #expect(PlaybackRate.clamped(rate) == rate)
+    }
+}
+
+@Suite("Extracted audio keeps two same-named tracks apart")
+struct AudioExtractionNamingTests {
+    /// A CLI-aligned readaloud lays audio out per chapter. `lastPathComponent`
+    /// mapped every one of these onto a single `track.mp3`: the first was
+    /// written, the `fileExists` check skipped the rest, and each chapter was
+    /// then pointed at the first one's bytes — so chapter one narrated over
+    /// chapter twelve's text for the whole book, with no error anywhere.
+    @Test("two tracks with the same basename get different files")
+    func basenamesDoNotCollide() {
+        let first = AudioExtraction.filename(for: "Audio/ch01/track.mp3")
+        let second = AudioExtraction.filename(for: "Audio/ch02/track.mp3")
+        #expect(first != second)
+    }
+
+    /// The href is normalised first, so two spellings of one path do not
+    /// produce two files that neither side can find again.
+    @Test("differently spelled paths for one file agree")
+    func spellingsAgree() {
+        #expect(
+            AudioExtraction.filename(for: "./Audio/ch01/track.mp3")
+                == AudioExtraction.filename(for: "Audio/ch01/track.mp3"))
+    }
+
+    @Test("the name is a single path component")
+    func staysOneComponent() {
+        let name = AudioExtraction.filename(for: "Audio/ch01/track.mp3")
+        #expect(!name.contains("/"))
+        #expect(!name.contains(".."))
+    }
+
+    /// A component longer than the filesystem allows would fail the write.
+    @Test("an unreasonable href is hashed rather than truncated")
+    func longHrefsAreHashed() {
+        let long = "Audio/" + String(repeating: "deep/", count: 60) + "track.mp3"
+        let name = AudioExtraction.filename(for: long)
+        #expect(name.utf8.count <= 255)
+        #expect(name.hasSuffix(".mp3"))
+        #expect(name == AudioExtraction.filename(for: long), "and stable, so it is found again")
+    }
 }

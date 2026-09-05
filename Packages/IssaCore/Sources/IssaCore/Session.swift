@@ -34,11 +34,19 @@ public final class Session {
     /// which builds its own requests rather than going through APIClient.
     public var tokenProvider: any TokenProviding { tokens }
 
-    public init(serverURL: URL, keychain: any TokenPersisting) {
+    /// - Parameter session: the transport, so a test can answer without a
+    ///   server. The same seam `LibraryStore` has for its directory and
+    ///   `DownloadManager` for its destination — without one, the states this
+    ///   type exists to distinguish can only be reached by running the app.
+    public init(
+        serverURL: URL,
+        keychain: any TokenPersisting,
+        session: URLSession = .shared,
+    ) {
         self.serverURL = serverURL
         let store = TokenStore(serverKey: serverURL.absoluteString, keychain: keychain)
         tokens = store
-        client = APIClient(baseURL: serverURL, tokens: store)
+        client = APIClient(baseURL: serverURL, tokens: store, session: session)
 
         Task { [weak self] in
             await store.setInvalidationHandler { [weak self] in
@@ -73,7 +81,13 @@ public final class Session {
     public func restore() async {
         guard await tokens.hasToken else { state = .signedOut; return }
         state = .signingIn
-        await loadIdentity()
+        // Restoring, not signing in fresh: we had a token and the server
+        // refused it, which is a *lapsed session*, not "never signed in".
+        // `loadIdentity` hard-coded `.signedOut` for both, so a returning
+        // reader whose token had expired was dropped to a blank server form
+        // with their address forgotten — which is precisely the state
+        // `.expired` exists to avoid.
+        await loadIdentity(rejectionMeans: .expired)
     }
 
     public func signOut() async {
@@ -97,7 +111,7 @@ public final class Session {
     /// token that was just minted deserves more than one attempt.
     private static let identityAttempts = 3
 
-    private func loadIdentity() async {
+    private func loadIdentity(rejectionMeans rejection: State = .signedOut) async {
         for attempt in 1 ... Self.identityAttempts {
             do {
                 let user: User = try await client.get(Endpoint.user)
@@ -112,8 +126,11 @@ public final class Session {
                 }
                 return
             } catch StorytellerError.notAuthenticated {
-                // The token is genuinely bad; retrying cannot help.
-                state = .signedOut
+                // The token is genuinely bad; retrying cannot help. *What* that
+                // means differs by caller: a fresh sign-in that is refused
+                // never had a session, while a restore that is refused had one
+                // that lapsed — and the second keeps the reader's server.
+                state = rejection
                 return
             } catch let error as StorytellerError where error.isRetryable
                 && attempt < Self.identityAttempts {

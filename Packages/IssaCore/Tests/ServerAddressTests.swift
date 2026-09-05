@@ -114,3 +114,26 @@ struct ServerAddressTests {
             == "http://192.168.68.125:8001")
     }
 }
+
+@Suite("Credentials in a typed address do not survive normalisation")
+struct ServerAddressUserinfoTests {
+    /// A reader behind HTTP basic auth types the whole thing. It used to reach
+    /// plaintext UserDefaults, a keychain account attribute and the Settings
+    /// screen — while IssaLog.Redaction had a rule for exactly this shape, so
+    /// the log was the only sink that was protected.
+    @Test("userinfo is stripped the way the query and fragment already were")
+    func stripsUserinfo() throws {
+        let url = try #require(ServerAddress.normalize("https://ben:hunter2@library.home.arpa"))
+        #expect(url.user == nil)
+        #expect(url.password == nil)
+        #expect(!url.absoluteString.contains("hunter2"))
+        #expect(!url.absoluteString.contains("ben"))
+        #expect(url.host == "library.home.arpa", "the server itself is still reachable")
+    }
+
+    @Test("an address with no credentials is untouched")
+    func leavesOrdinaryAddressesAlone() throws {
+        let url = try #require(ServerAddress.normalize("https://library.home.arpa/books"))
+        #expect(url.absoluteString == "https://library.home.arpa/books")
+    }
+}

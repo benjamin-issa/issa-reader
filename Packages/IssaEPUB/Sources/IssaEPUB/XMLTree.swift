@@ -84,7 +84,12 @@ public enum EPUBXML {
         parser.shouldReportNamespacePrefixes = false
         parser.shouldResolveExternalEntities = false
         parser.delegate = delegate
-        guard parser.parse(), let root = delegate.root else {
+        let parsed = parser.parse()
+        if delegate.exceededDepth {
+            throw EPUBError.malformedPackage(
+                "elements nested deeper than \(EPUBXML.maximumDepth); refusing to walk it")
+        }
+        guard parsed, let root = delegate.root else {
             throw EPUBError.malformedPackage(
                 parser.parserError?.localizedDescription ?? "XML parse failed",
             )
@@ -92,9 +97,32 @@ public enum EPUBXML {
         return root
     }
 
+    /// How deeply an element may nest before the document is refused.
+    ///
+    /// `XMLParser` imposes no limit of its own — measured: 200, 300, 1,000 and
+    /// 50,000 levels all parse successfully with this exact delegate
+    /// configuration — and the tree it produces is walked recursively by
+    /// `descendants`, `firstDescendant`, `allText`, `HTMLContentParser.render`,
+    /// `SMILParser.walk` and `EPUBPackage.flatten`, none of which has a base
+    /// case other than running out of children. The ARC release chain through
+    /// `children` recurses too, so even an iterative rewrite of the walks would
+    /// leave teardown exposed.
+    ///
+    /// That makes deep nesting a stack overflow — `EXC_BAD_ACCESS`, not a
+    /// thrown error, so the `try?` wrappers around every parse catch nothing.
+    /// 150,000 nested elements is about 1.2 MB of XHTML that deflates to a few
+    /// hundred bytes, a ratio well inside the archive guards. The iOS main
+    /// thread has a 1 MB stack against macOS's 8, so a desktop repro understates
+    /// the real threshold by an order of magnitude.
+    ///
+    /// 512 is far past anything a book does — real XHTML rarely exceeds twenty —
+    /// and far short of what any of those walks can survive.
+    static let maximumDepth = 512
+
     private final class Builder: NSObject, XMLParserDelegate {
         var root: EPUBXMLNode?
         private var stack: [EPUBXMLNode] = []
+        private(set) var exceededDepth = false
 
         func parser(
             _ parser: XMLParser, didStartElement elementName: String,
@@ -110,6 +138,15 @@ public enum EPUBXML {
                 if let colon = key.firstIndex(of: ":") {
                     attributes[String(key[key.index(after: colon)...])] = value
                 }
+            }
+            guard stack.count < EPUBXML.maximumDepth else {
+                // Abort rather than keep building: the tree is already deep
+                // enough that walking it is the hazard, and `abortParsing`
+                // makes `parse()` return false so this surfaces as a thrown
+                // `malformedPackage` at the call site.
+                exceededDepth = true
+                parser.abortParsing()
+                return
             }
             let node = EPUBXMLNode(name: elementName, attributes: attributes)
             if let current = stack.last { current.add(node) } else { root = node }

@@ -1,4 +1,5 @@
 import Foundation
+import IssaCore
 
 /// How much of a book a progress bar stands for.
 ///
@@ -49,7 +50,7 @@ public struct PlaybackProgress: Sendable, Equatable {
         chapterSpan: (start: TimeInterval, duration: TimeInterval)?,
     ) {
         let total = totalDuration.isFinite && totalDuration > 0 ? totalDuration : 0
-        self.bookProgress = bookProgress.isFinite ? min(max(bookProgress, 0), 1) : 0
+        self.bookProgress = bookProgress.isFinite ? (bookProgress.asProgression ?? 0) : 0
         bookDuration = total
 
         // Falls back to the whole book whenever a chapter cannot be described:
@@ -86,9 +87,9 @@ public struct PlaybackProgress: Sendable, Equatable {
     /// The book position a drag to `fraction` of this bar means.
     public func bookProgress(forFraction fraction: Double) -> Double {
         guard bookDuration > 0 else { return 0 }
-        let clamped = fraction.isFinite ? min(max(fraction, 0), 1) : 0
+        let clamped = fraction.isFinite ? (fraction.asProgression ?? 0) : 0
         let time = spanStart + clamped * spanDuration
-        return min(max(time / bookDuration, 0), 1)
+        return ((time / bookDuration).asProgression ?? 0)
     }
 
     /// The book position a Lock Screen scrub to `seconds` means.

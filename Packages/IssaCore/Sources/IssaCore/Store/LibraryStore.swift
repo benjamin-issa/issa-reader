@@ -205,6 +205,38 @@ public actor LibraryStore {
             try db.create(index: "annotation_on_account", on: "annotation", columns: ["account"])
         }
 
+        // Marks the rows that predate accounts, so "made before accounts
+        // existed" stops being spelled the same way as "made while no account
+        // was known".
+        //
+        // `setAccount` claimed every NULL row for the first reader to sign in
+        // afterwards, which is right for the upgrade and wrong for everything
+        // since: an annotation written when the store had no account — a launch
+        // that reached the cached shelf without a successful `enterLibrary`, so
+        // no `issa.account.<server>` key was ever stored — was also NULL, and
+        // was handed to whoever signed in next. On a shared device that is one
+        // reader's highlights and quoted excerpts transferring to another, by a
+        // one-way UPDATE with no undo, in the one datum the class doc says
+        // "exists nowhere else".
+        migrator.registerMigration("v6-annotation-preaccount") { db in
+            try db.execute(
+                sql: "UPDATE annotation SET account = ? WHERE account IS NULL",
+                arguments: [Self.preAccountOwner])
+        }
+
+        // This user's ratings, which lived only in memory. `setRating` wrote a
+        // dictionary on AppModel and nothing else, and the map was repopulated
+        // solely from `myRatings()` — so a rating set offline vanished on the
+        // next cold launch, and the reader had every reason to believe it was
+        // lost and to enter it again. The queued write still reached the server
+        // eventually; the stars simply were not there in the meantime.
+        migrator.registerMigration("v7-user-ratings") { db in
+            try db.create(table: "rating") { t in
+                t.column("bookUUID", .text).primaryKey()
+                t.column("value", .double).notNull()
+            }
+        }
+
         return migrator
     }
 
@@ -290,6 +322,42 @@ public actor LibraryStore {
         try await dbQueue.write { db in
             try db.execute(sql: "DELETE FROM book")
             try db.execute(sql: "DELETE FROM mutation")
+            try db.execute(sql: "DELETE FROM rating")
+        }
+    }
+
+    /// This user's ratings, as book uuid to score.
+    public func ratings() throws -> [String: Double] {
+        try dbQueue.read { db in
+            try Row.fetchAll(db, sql: "SELECT bookUUID, value FROM rating")
+                .reduce(into: [:]) { result, row in
+                    result[row["bookUUID"] as String] = row["value"] as Double
+                }
+        }
+    }
+
+    /// Records a rating, or removes it when the reader clears one.
+    public func setRating(_ value: Double?, forBook uuid: String) throws {
+        try dbQueue.write { db in
+            if let value {
+                try db.execute(
+                    sql: "INSERT OR REPLACE INTO rating (bookUUID, value) VALUES (?, ?)",
+                    arguments: [uuid, value])
+            } else {
+                try db.execute(sql: "DELETE FROM rating WHERE bookUUID = ?", arguments: [uuid])
+            }
+        }
+    }
+
+    /// Replaces the whole set, for a refresh that has the server's answer.
+    public func replaceRatings(_ ratings: [String: Double]) throws {
+        try dbQueue.write { db in
+            try db.execute(sql: "DELETE FROM rating")
+            for (uuid, value) in ratings {
+                try db.execute(
+                    sql: "INSERT OR REPLACE INTO rating (bookUUID, value) VALUES (?, ?)",
+                    arguments: [uuid, value])
+            }
         }
     }
 
@@ -380,18 +448,28 @@ extension Book {
 // MARK: - Annotations
 
 public extension LibraryStore {
-    /// Names the signed-in account, and claims for it every annotation made
-    /// before accounts were recorded.
+    /// The owner of rows made before this database recorded accounts at all.
     ///
-    /// The claim is deliberate: those rows are the device's own highlights
-    /// from before the upgrade, and the first reader to sign in afterwards is
-    /// who made them. Leaving them unowned would show them to everyone, which
-    /// is the leak this closes.
+    /// A sentinel rather than NULL, because NULL has to keep meaning something
+    /// else: an annotation written while no account was known. Claiming those
+    /// for the next reader is the leak, not the fix.
+    static var preAccountOwner: String { "__pre-account__" }
+
+    /// Names the signed-in account, and claims for it the annotations made
+    /// before accounts were recorded at all.
+    ///
+    /// That claim is deliberate and one-time: those rows are the device's own
+    /// highlights from before the upgrade, and the first reader to sign in
+    /// afterwards is who made them.
     func setAccount(_ id: String) throws {
         account = id
         try dbQueue.write { db in
+            // Only the rows the v6 migration marked. A NULL account now means
+            // "written while nobody was named", which is not the same claim and
+            // must never be adopted — see that migration for what it cost.
             try db.execute(
-                sql: "UPDATE annotation SET account = ? WHERE account IS NULL", arguments: [id])
+                sql: "UPDATE annotation SET account = ? WHERE account = ?",
+                arguments: [id, Self.preAccountOwner])
         }
     }
 

@@ -23,13 +23,16 @@ def main(source: Path, destination: Path) -> int:
         for attachment in entry.get("attachments", []):
             name = attachment.get("suggestedHumanReadableName") or ""
             exported = attachment.get("exportedFileName")
-            if not exported or "__" not in name or not name.endswith(".png"):
+            suffix = next(
+                (s for s in (".png", ".txt") if name.endswith(s)), None)
+            if not exported or "__" not in name or suffix is None:
                 continue
             # XCTest appends `_<index>_<UUID>` to the name the test asked for,
             # so "iphone-17-pro__library.png" comes back as
             # "iphone-17-pro__library_0_A1084AA1-….png". Strip it, or every run
             # writes a new file and the contact sheet grows one column per run.
-            screen = re.sub(r"_\d+_[0-9A-F-]{36}\.png$", ".png", name.split("__", 1)[1])
+            screen = re.sub(
+                rf"_\d+_[0-9A-F-]{{36}}\{suffix}$", suffix, name.split("__", 1)[1])
             source_file = source / exported
             if not source_file.exists():
                 continue

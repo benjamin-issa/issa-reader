@@ -347,8 +347,14 @@ struct SignOutCleanupTests {
                 excerpt: excerpt)
         }
 
-        // Made before the upgrade that records accounts.
-        try await store.save(mark("legacy"))
+        // Written while the store had no account named. This used to be
+        // spelled the same way as "made before the upgrade that records
+        // accounts" — both NULL — and `setAccount` claimed both for whoever
+        // signed in next. On a shared device that handed one reader's
+        // highlights to another, by a one-way UPDATE, in the one datum that
+        // exists nowhere else. Genuinely pre-upgrade rows are marked by the
+        // v6 migration instead, so only they are ever adopted.
+        try await store.save(mark("unowned"))
 
         try await store.setAccount("alice")
         try await store.save(mark("alice's"))
@@ -360,9 +366,195 @@ struct SignOutCleanupTests {
         #expect(try await store.allAnnotations().map(\.excerpt) == ["bob's"])
         try await store.deleteAnnotations(forBook: "shared-book")
 
-        // The first account to sign in after the upgrade owns the legacy
-        // rows, and nothing another account did since touched hers.
+        // Alice keeps her own, and nothing another account did since touched
+        // them.
         try await store.setAccount("alice")
-        #expect(Set(try await store.allAnnotations().map(\.excerpt)) == ["legacy", "alice's"])
+        #expect(Set(try await store.allAnnotations().map(\.excerpt)) == ["alice's"])
     }
+
+    /// The other half of the same rule, which nothing asserted: rows the v6
+    /// migration marked as pre-account *are* adopted by the next sign-in. They
+    /// are the device's own highlights from before accounts existed, and the
+    /// first reader to sign in afterwards is who made them. Without this case,
+    /// a `setAccount` that adopted nothing at all passed every test here — the
+    /// second review demonstrated it by no-op'ing the UPDATE.
+    ///
+    /// The v6 migration cannot be re-run on a database that already has it, so
+    /// the row is marked the way the migration marks it — the same stand-in
+    /// `migrationBackfillsExistingRows` uses for its own columns.
+    @Test("marks from before accounts existed go to the first account that signs in")
+    func preAccountMarksAreAdoptedOnce() async throws {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appending(path: "issa-preaccount-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try LibraryStore(serverKey: "http://example.test", directory: directory)
+        func mark(_ excerpt: String) -> Annotation {
+            Annotation(
+                bookUUID: "shared-book", kind: .highlight,
+                locator: ReadiumLocator(
+                    href: "chapter1.xhtml", type: "application/xhtml+xml",
+                    locations: .init(progression: 0.1, totalProgression: 0.1, charOffset: 10)),
+                excerpt: excerpt)
+        }
+
+        // Written with nobody named, then marked as the v6 migration marks a
+        // pre-upgrade row.
+        try await store.save(mark("from before"))
+        try await store.dbQueue.write { db in
+            try db.execute(
+                sql: "UPDATE annotation SET account = ? WHERE account IS NULL",
+                arguments: [LibraryStore.preAccountOwner])
+        }
+
+        try await store.setAccount("carol")
+        #expect(try await store.allAnnotations().map(\.excerpt) == ["from before"],
+                "the pre-account mark was not adopted by the first sign-in")
+
+        // Once. It is carol's now, and a second reader does not inherit it.
+        try await store.setAccount("dave")
+        #expect(try await store.allAnnotations().isEmpty)
+    }
+
+    /// The leak, stated as a rule.
+    @Test("a mark made while nobody was signed in is not handed to the next account")
+    func unownedMarksAreNotAdopted() async throws {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appending(path: "issa-unowned-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try LibraryStore(serverKey: "http://shared.test", directory: directory)
+
+        func mark(_ excerpt: String) -> Annotation {
+            Annotation(
+                bookUUID: "shared-book", kind: .highlight,
+                locator: ReadiumLocator(
+                    href: "chapter1.xhtml", type: "application/xhtml+xml",
+                    locations: .init(progression: 0.1, totalProgression: 0.1, charOffset: 10)),
+                excerpt: excerpt)
+        }
+
+        try await store.save(mark("made with nobody named"))
+        try await store.setAccount("bob")
+        #expect(
+            try await store.allAnnotations().isEmpty,
+            "bob did not make it, so bob must not inherit it")
+    }
+}
+
+@Suite("This user's ratings survive a relaunch")
+struct RatingPersistenceTests {
+    private func temporary() -> URL {
+        URL(fileURLWithPath: NSTemporaryDirectory())
+            .appending(path: "issa-ratings-\(UUID().uuidString)", directoryHint: .isDirectory)
+    }
+
+    /// They lived only in memory and were repopulated solely from
+    /// `myRatings()`, so a rating set offline vanished on the next cold launch.
+    @Test("a rating written offline is still there after the store is reopened")
+    func ratingsRoundTrip() async throws {
+        let directory = temporary()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let store = try LibraryStore(serverKey: "http://example.test", directory: directory)
+        try await store.setRating(4.5, forBook: "book-a")
+        try await store.setRating(2, forBook: "book-b")
+
+        let reopened = try LibraryStore(serverKey: "http://example.test", directory: directory)
+        let ratings = try await reopened.ratings()
+        #expect(ratings["book-a"] == 4.5)
+        #expect(ratings["book-b"] == 2)
+    }
+
+    @Test("clearing a rating removes it rather than storing a zero")
+    func clearingRemoves() async throws {
+        let directory = temporary()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try LibraryStore(serverKey: "http://example.test", directory: directory)
+
+        try await store.setRating(3, forBook: "book-a")
+        try await store.setRating(nil, forBook: "book-a")
+        #expect(try await store.ratings()["book-a"] == nil, "zero stars is not the same as none")
+    }
+
+    /// They belong to the account, like the catalogue and the queue.
+    @Test("signing out takes them")
+    func signOutClearsRatings() async throws {
+        let directory = temporary()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try LibraryStore(serverKey: "http://example.test", directory: directory)
+
+        try await store.setRating(5, forBook: "book-a")
+        try await store.clearAccountData()
+        #expect(try await store.ratings().isEmpty)
+    }
+
+    @Test("replacing the set is atomic — the old ones do not linger")
+    func replaceIsWholesale() async throws {
+        let directory = temporary()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try LibraryStore(serverKey: "http://example.test", directory: directory)
+
+        try await store.setRating(1, forBook: "gone")
+        try await store.replaceRatings(["kept": 4])
+        let ratings = try await store.ratings()
+        #expect(ratings["gone"] == nil)
+        #expect(ratings["kept"] == 4)
+    }
+}
+
+@Suite("A lapsed session is not the same as never having signed in")
+@MainActor
+struct SessionRestoreStateTests {
+    private struct RejectingProtocolStub {
+        static func session() -> URLSession {
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.protocolClasses = [Rejecting.self]
+            return URLSession(configuration: configuration)
+        }
+    }
+
+    /// Answers 401 to everything, which is what an expired token gets.
+    final class Rejecting: URLProtocol, @unchecked Sendable {
+        override class func canInit(with request: URLRequest) -> Bool { true }
+        override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+        override func startLoading() {
+            let response = HTTPURLResponse(
+                url: request.url!, statusCode: 401, httpVersion: nil, headerFields: nil)!
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: Data())
+            client?.urlProtocolDidFinishLoading(self)
+        }
+        override func stopLoading() {}
+    }
+
+    /// `loadIdentity` hard-coded `.signedOut` for both callers, so a returning
+    /// reader with a lapsed token was dropped to a blank server form — their
+    /// address forgotten — instead of the screen that keeps it and explains.
+    @Test("restoring with a token the server refuses reports expiry")
+    func restoreReportsExpiry() async {
+        let keychain = HoldingTokens(token: "stale")
+        let session = Session(
+            serverURL: URL(string: "http://example.test")!,
+            keychain: keychain,
+            session: RejectingProtocolStub.session())
+        await session.restore()
+        #expect(session.state == .expired)
+    }
+
+    @Test("with no token at all it is simply signed out")
+    func noTokenIsSignedOut() async {
+        let session = Session(
+            serverURL: URL(string: "http://example.test")!,
+            keychain: HoldingTokens(token: nil),
+            session: RejectingProtocolStub.session())
+        await session.restore()
+        #expect(session.state == .signedOut)
+    }
+}
+
+private final class HoldingTokens: TokenPersisting, @unchecked Sendable {
+    private let token: String?
+    init(token: String?) { self.token = token }
+    func read(account: String) -> String? { token }
+    @discardableResult func write(_ token: String, account: String) -> Bool { true }
+    @discardableResult func delete(account: String) -> Bool { true }
 }

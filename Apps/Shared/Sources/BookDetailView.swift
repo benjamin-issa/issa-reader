@@ -43,8 +43,13 @@ public struct BookDetailView: View {
     /// library does: setting a status updated the model and left this screen
     /// showing the old one. Looking it up each time keeps the screen honest
     /// about status, rating and progress, all of which change from here.
+    /// Looked up by key, not scanned for. This property is read on 52 separate
+    /// lines of this file, each of which was a linear pass over the whole
+    /// library — and the body they sit in re-runs on every debounced position
+    /// save. `bookByUUID` is rebuilt on exactly the paths that can change what
+    /// this screen shows, so the answer is as live as the scan was.
     private var book: Book {
-        app.books.first { $0.uuid == initialBook.uuid } ?? initialBook
+        app.bookByUUID[initialBook.uuid] ?? initialBook
     }
 
     /// How much width this screen has to work with.
@@ -86,7 +91,7 @@ public struct BookDetailView: View {
                 if let description = book.description, !description.isEmpty {
                     // Server descriptions carry markup. Rendered as a raw
                     // string, <p> and &amp; showed up on screen verbatim.
-                    Text(HTMLText.attributed(description))
+                    Text(HTMLText.cached(description))
                         #if !os(tvOS)
                         .textSelection(.enabled)
                         #endif
@@ -899,7 +904,11 @@ public struct BookDetailView: View {
 
     /// The design's Explore rails, all derived from the one catalogue fetch.
     private var relatedRails: some View {
-        let derivation = app.derivation
+        // The memoised groupings, not `app.derivation`, whose `byAuthor` and
+        // `byNarrator` each group the entire library on every access — twice
+        // per evaluation of this view.
+        let byAuthor = app.booksByAuthor
+        let byNarrator = app.booksByNarrator
         return VStack(alignment: .leading, spacing: Metrics.spacing24) {
             if let series = book.series.first,
                let siblings = app.rails.series.first(where: { $0.name == series.name })?
@@ -908,12 +917,12 @@ public struct BookDetailView: View {
                 rail("The \(series.name)", books: siblings)
             }
             if let author = book.authors.first,
-               let others = derivation.byAuthor[author.name]?.filter({ $0.uuid != book.uuid }),
+               let others = byAuthor[author.name]?.filter({ $0.uuid != book.uuid }),
                !others.isEmpty {
                 rail("More by \(author.name)", books: others)
             }
             if let narrator = book.narrators.first,
-               let others = derivation.byNarrator[narrator.name]?.filter({ $0.uuid != book.uuid }),
+               let others = byNarrator[narrator.name]?.filter({ $0.uuid != book.uuid }),
                !others.isEmpty {
                 rail("Narrated by \(narrator.name)", books: others)
             }

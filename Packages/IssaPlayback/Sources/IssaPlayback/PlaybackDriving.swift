@@ -1,5 +1,33 @@
 import Foundation
 
+/// What a playback rate may be.
+///
+/// One statement of the range, because there were six and they disagreed three
+/// ways. The bound controls — a headphone command, the macOS Playback menu —
+/// walked to 5.0× and down to 0.5×, speeds that appear in *no* menu anywhere
+/// and that the transport renders as "5×"; the rate menus offer 0.75 to 3.0;
+/// CarPlay's cycle stops at 2.0. And `PlaybackSettings.playbackRate` clamped
+/// nothing, so a 5.0 reached by holding a button was persisted and restored on
+/// the next launch, with no control able to show it.
+///
+/// The offered ladder is what the menus already list; the bounds are its ends.
+/// This is not a merge of the six sites — each still owns its own control — but
+/// they now agree about what is legal.
+public enum PlaybackRate {
+    public static let ladder: [Double] = [0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0]
+    public static let step: Double = 0.25
+    public static var minimum: Double { ladder.first ?? 0.75 }
+    public static var maximum: Double { ladder.last ?? 3.0 }
+
+    /// The nearest legal rate. Non-finite and out-of-range values included:
+    /// this is read from persisted defaults and from a remote-command event,
+    /// neither of which is under this app's control.
+    public static func clamped(_ value: Double) -> Double {
+        guard value.isFinite else { return 1.0 }
+        return Swift.min(Swift.max(value, minimum), maximum)
+    }
+}
+
 /// What every playback surface needs, whichever kind of book is playing.
 ///
 /// A readaloud is driven by a SMIL timeline and an audiobook by a track list,

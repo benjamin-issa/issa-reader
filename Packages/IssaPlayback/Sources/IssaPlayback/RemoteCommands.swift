@@ -21,7 +21,17 @@ import MediaPlayer
 @MainActor
 public final class RemoteCommandCenter {
     private let center = MPRemoteCommandCenter.shared()
-    private var handlers: [MPRemoteCommand] = []
+    /// The commands this instance has registered a target on.
+    ///
+    /// In a box, so the nonisolated `deinit` can reach it — the same shape
+    /// `routeObserver` already uses below, and for the same reason: a
+    /// `@MainActor` class's `deinit` cannot touch main-actor storage, and the
+    /// answer to that is not to skip the teardown. `MPRemoteCommandCenter` is
+    /// process-wide, so a released instance that left its targets registered
+    /// leaves blocks capturing a nil `self` that still answer `.success` —
+    /// telling iOS the command was handled while nothing happens, which makes
+    /// lock-screen and CarPlay controls dead rather than falling through.
+    private let handlers = HandlerBox()
 
     public var commandMap: CommandMap
     /// Which surface a command should be interpreted as coming from.
@@ -53,6 +63,7 @@ public final class RemoteCommandCenter {
 
     deinit {
         routeObserver.tearDown()
+        handlers.tearDown()
     }
 
     /// Which surface a control's binding resolves against right now.
@@ -180,7 +191,7 @@ public final class RemoteCommandCenter {
         // — the artwork request handler in `NowPlayingController` documents
         // the same framework doing exactly that — and `assumeIsolated` off the
         // main thread is a trap, not a hop.
-        center.changePlaybackRateCommand.addTarget { [weak self] event in
+        let rateToken = center.changePlaybackRateCommand.addTarget { [weak self] event in
             guard let event = event as? MPChangePlaybackRateCommandEvent else { return .commandFailed }
             let rate = event.playbackRate
             Task { @MainActor in self?.onRateChange?(rate) }
@@ -189,18 +200,18 @@ public final class RemoteCommandCenter {
         // Recorded so tearDown can remove it. These two were added directly and
         // never tracked, so every activate() stacked another target: one
         // scrubber drag fired a seek per accumulated registration.
-        handlers.append(center.changePlaybackRateCommand)
+        handlers.append(center.changePlaybackRateCommand, token: rateToken)
 
         // Without this the Lock Screen scrubber is a read-only progress bar;
         // with it, dragging seeks. CarPlay surfaces the same control.
         center.changePlaybackPositionCommand.isEnabled = true
-        center.changePlaybackPositionCommand.addTarget { [weak self] event in
+        let positionToken = center.changePlaybackPositionCommand.addTarget { [weak self] event in
             guard let event = event as? MPChangePlaybackPositionCommandEvent else { return .commandFailed }
             let position = event.positionTime
             Task { @MainActor in self?.onSeek?(position) }
             return .success
         }
-        handlers.append(center.changePlaybackPositionCommand)
+        handlers.append(center.changePlaybackPositionCommand, token: positionToken)
     }
 
     private func fire(_ control: PlaybackControl) {
@@ -213,16 +224,15 @@ public final class RemoteCommandCenter {
 
     private func register(_ command: MPRemoteCommand, handler: @escaping @MainActor @Sendable () -> Void) {
         command.isEnabled = true
-        command.addTarget { _ in
+        let token = command.addTarget { _ in
             Task { @MainActor in handler() }
             return .success
         }
-        handlers.append(command)
+        handlers.append(command, token: token)
     }
 
     public func tearDown() {
-        for command in handlers { command.removeTarget(nil) }
-        handlers.removeAll()
+        handlers.tearDown()
     }
 
     /// Publishes what is playing, for the lock screen and CarPlay.
@@ -259,6 +269,62 @@ public final class RemoteCommandCenter {
 /// A `@MainActor` type's `deinit` is nonisolated, so it cannot read isolated
 /// stored properties; keeping the token here lets teardown happen wherever the
 /// object is released.
+/// The registered commands, reachable from a nonisolated `deinit`.
+///
+/// `@unchecked Sendable` because `MPRemoteCommand` is not Sendable. Every
+/// mutation happens on the main actor; the only nonisolated reader is `deinit`,
+/// by which point nothing else holds this.
+/// The one thing `HandlerBox` needs from a command, so a test can hand it a
+/// recording fake — `MPRemoteCommand` exposes no way to list its targets, and
+/// the only other way to observe "removed exactly its own" is to watch the Lock
+/// Screen.
+protocol RemoteCommandTargets: AnyObject {
+    func removeTarget(_ target: Any?)
+}
+
+extension MPRemoteCommand: RemoteCommandTargets {}
+
+final class HandlerBox: @unchecked Sendable {
+    private let lock = NSLock()
+    /// The command and the token `addTarget` returned for it. The token is what
+    /// lets `tearDown` remove *this* registration and no other.
+    private var targets: [(command: any RemoteCommandTargets, token: Any)] = []
+
+    func append(_ command: any RemoteCommandTargets, token: Any) {
+        lock.withLock { targets.append((command, token)) }
+    }
+
+    /// Removes the targets this instance added — and only those.
+    ///
+    /// The first version called `removeTarget(nil)`, which removes *every*
+    /// target on the command, and these commands belong to the process-wide
+    /// `MPRemoteCommandCenter.shared()` — so a transient instance being
+    /// deallocated stripped a live instance's handlers while `isEnabled`
+    /// stayed set: lit buttons on the Lock Screen and in the car that did
+    /// nothing. `isEnabled` is still deliberately left alone; it is shared
+    /// state a later instance may legitimately have set.
+    ///
+    /// On the main thread, because `MPRemoteCommand` is a main-thread object
+    /// and this is reached from a nonisolated `deinit`: synchronously when
+    /// already there, hopped otherwise. `nonisolated(unsafe)` on the capture
+    /// because `Any` is not `Sendable`; the pairs are handed over once and
+    /// never touched again from this side.
+    func tearDown() {
+        nonisolated(unsafe) let taken: [(command: any RemoteCommandTargets, token: Any)] = lock.withLock {
+            defer { targets.removeAll() }
+            return targets
+        }
+        guard !taken.isEmpty else { return }
+        if Thread.isMainThread {
+            for (command, token) in taken { command.removeTarget(token) }
+        } else {
+            DispatchQueue.main.async {
+                for (command, token) in taken { command.removeTarget(token) }
+            }
+        }
+    }
+}
+
 private final class RouteObserverToken: @unchecked Sendable {
     var token: (any NSObjectProtocol)?
 

@@ -196,7 +196,7 @@ public struct PlayerView: View {
 
     private var rateControl: some View {
         Menu {
-            ForEach([0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0], id: \.self) { rate in
+            ForEach(PlaybackRate.ladder, id: \.self) { rate in
                 Button(Self.rateText(rate)) {
                     coordinator?.player.rate = Float(rate)
                     settings.playbackRate = rate

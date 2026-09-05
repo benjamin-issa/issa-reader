@@ -108,7 +108,10 @@ public final class AudiobookCoordinator {
     /// Starts, or resumes, at a fraction of the whole book.
     public func start(atProgress progress: Double = 0) async {
         defer { steeredAt = false }
-        await seek(toBookTime: totalDuration * min(max(progress, 0), 1))
+        // See ReadalongCoordinator: a NaN survived the inline clamp and was
+        // then written back as a chosen position.
+        guard let place = progress.asProgression else { return }
+        await seek(toBookTime: totalDuration * place)
         player.play()
     }
 
@@ -138,7 +141,10 @@ public final class AudiobookCoordinator {
 
     public func seek(toProgress progress: Double) async {
         steeredAt = true
-        await seek(toBookTime: totalDuration * min(max(progress, 0), 1))
+        // See ReadalongCoordinator: a NaN survived the inline clamp and was
+        // then written back as a chosen position.
+        guard let place = progress.asProgression else { return }
+        await seek(toBookTime: totalDuration * place)
     }
 
     public func play(chapter index: Int) async {
@@ -211,9 +217,9 @@ public final class AudiobookCoordinator {
         case .previousSentence, .previousParagraph:
             await skip(by: -map.skipBackwardInterval)
         case .speedUp:
-            player.rate = min(player.rate + 0.25, 5.0)
+            player.rate = Float(PlaybackRate.clamped(Double(player.rate) + PlaybackRate.step))
         case .speedDown:
-            player.rate = max(player.rate - 0.25, 0.5)
+            player.rate = Float(PlaybackRate.clamped(Double(player.rate) - PlaybackRate.step))
         // Discrete on purpose, never a toggle: the system sends these when it
         // has already decided which one it means, and its idea of the state —
         // the published rate — can lag `isPlaying` through a stall.

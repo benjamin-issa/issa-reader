@@ -312,3 +312,106 @@ struct SMILTimelineWindowTests {
         #expect(timeline.window(around: stranger, before: 1, after: 1) == nil)
     }
 }
+
+@Suite("Fragment ids are unique per document, not per book")
+struct ScopedFragmentTests {
+    /// A book that numbers sentences from scratch in every chapter — legal,
+    /// and what any aligner other than Storyteller's produces.
+    private func timeline() -> SMILTimeline {
+        var entries: [SMILEntry] = []
+        var cumulative: TimeInterval = 0
+        for chapter in 1 ... 3 {
+            for sentence in 1 ... 3 {
+                cumulative += 10
+                entries.append(SMILEntry(
+                    fragmentID: "s\(sentence)",
+                    textHref: "OEBPS/ch0\(chapter).xhtml",
+                    audioHref: "OEBPS/ch0\(chapter).mp3",
+                    start: 0, end: 10, cumulativeEnd: cumulative))
+            }
+        }
+        return SMILTimeline(entries: entries)
+    }
+
+    @Test("next sentence stays in the chapter it was asked about")
+    func nextStaysPut() throws {
+        let line = timeline()
+        let third = try #require(line.entry(forFragment: "s1", inDocument: "OEBPS/ch03.xhtml"))
+        #expect(third.textHref == "OEBPS/ch03.xhtml")
+
+        let next = try #require(line.entry(after: third))
+        #expect(
+            next.textHref == "OEBPS/ch03.xhtml",
+            "resolving by id alone sent this to chapter 1's second sentence")
+        #expect(next.fragmentID == "s2")
+    }
+
+    @Test("previous sentence likewise")
+    func previousStaysPut() throws {
+        let line = timeline()
+        let entry = try #require(line.entry(forFragment: "s2", inDocument: "OEBPS/ch02.xhtml"))
+        let previous = try #require(line.entry(before: entry))
+        #expect(previous.textHref == "OEBPS/ch02.xhtml")
+        #expect(previous.fragmentID == "s1")
+    }
+
+    /// The read-along screen shows sentences either side of the spoken one.
+    @Test("the window comes from the right chapter")
+    func windowStaysPut() throws {
+        let line = timeline()
+        let entry = try #require(line.entry(forFragment: "s2", inDocument: "OEBPS/ch03.xhtml"))
+        let window = try #require(line.window(around: entry, before: 1, after: 1))
+        #expect(window.entries.allSatisfy { $0.textHref == "OEBPS/ch03.xhtml" })
+    }
+
+    @Test("an unscoped lookup still answers, with the first occurrence")
+    func unscopedFallsBack() throws {
+        let line = timeline()
+        let entry = try #require(line.entry(forFragment: "s1"))
+        #expect(entry.textHref == "OEBPS/ch01.xhtml", "documented as best effort")
+    }
+}
+
+@Suite("A document the spine visits twice has two spans, not one")
+struct RepeatedDocumentSpanTests {
+    /// notes → chapter → notes. Legal: a shared page referenced twice.
+    private func timeline() -> SMILTimeline {
+        let rows: [(String, TimeInterval)] = [
+            ("OEBPS/notes.xhtml", 2), ("OEBPS/ch01.xhtml", 12),
+            ("OEBPS/ch01.xhtml", 22), ("OEBPS/notes.xhtml", 24),
+        ]
+        var entries: [SMILEntry] = []
+        for (index, row) in rows.enumerated() {
+            entries.append(SMILEntry(
+                fragmentID: "f\(index)", textHref: row.0, audioHref: "a.mp3",
+                start: 0, end: 2, cumulativeEnd: row.1))
+        }
+        return SMILTimeline(entries: entries)
+    }
+
+    /// The merged range ran 0 → 24, swallowing chapter one's twenty seconds.
+    @Test("the first run does not swallow what lies between the two")
+    func firstRunIsItsOwn() throws {
+        let span = try #require(timeline().span(ofDocument: "OEBPS/notes.xhtml"))
+        #expect(span.start == 0)
+        #expect(span.duration == 2, "a 2-second page, not a 24-second one")
+    }
+
+    @Test("and the second run is reported where it actually is")
+    func secondRunIsItsOwn() throws {
+        let line = timeline()
+        let second = try #require(line.entries.last)
+        let span = try #require(line.span(ofDocumentContaining: second))
+        #expect(span.start == 22)
+        #expect(span.duration == 2)
+    }
+
+    /// One run, spanning both of its entries: the first ends at 12 after a
+    /// 2-second clip, so it begins at 10, and the second ends at 22.
+    @Test("a document visited once is unchanged")
+    func singleRunUnchanged() throws {
+        let span = try #require(timeline().span(ofDocument: "OEBPS/ch01.xhtml"))
+        #expect(span.start == 10)
+        #expect(span.duration == 12)
+    }
+}

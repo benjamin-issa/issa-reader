@@ -255,6 +255,11 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
     /// Body font: the chosen face, then the app's own, then the system serif,
     /// so early builds and previews still render. `weight` is honoured only
     /// by the system fallback; a named face is used as it comes.
+    ///
+    /// Not cached here, deliberately — see `HTMLContentParser.FontCache`, which
+    /// caches for the length of one parse. A process-wide cache on this would
+    /// be wrong: fonts are registered while the app runs, and the first answer
+    /// given is not always the right one for ever.
     public func bodyFont(weight: PlatformFont.Weight = .regular, italic: Bool = false, scale: CGFloat = 1) -> PlatformFont {
         let size = fontSize * scale
         // The chosen face, then the app's own, then the system's. A book that
@@ -291,45 +296,69 @@ extension PlatformFont {
         ]
         let wanted = CTFontDescriptorCreateWithAttributes(attributes as CFDictionary)
         let mandatory: Set<CFString> = [kCTFontFamilyNameAttribute, kCTFontTraitsAttribute]
-        guard let matched = CTFontDescriptorCreateMatchingFontDescriptor(wanted, mandatory as CFSet),
-              let name = CTFontDescriptorCopyAttribute(matched, kCTFontNameAttribute) as? String
-        else { return nil }
-        return PlatformFont(name: name, size: size)
+        return fontMatchingLock.withLock {
+            guard let matched = CTFontDescriptorCreateMatchingFontDescriptor(wanted, mandatory as CFSet),
+                  let name = CTFontDescriptorCopyAttribute(matched, kCTFontNameAttribute) as? String
+            else { return nil }
+            return PlatformFont(name: name, size: size)
+        }
     }
 
     /// Adds an italic trait where the face has one, otherwise returns self.
     /// Never synthesises an oblique — a faked italic in a serif reading face
     /// looks visibly wrong.
     func withItalicTrait() -> PlatformFont {
-        #if canImport(UIKit)
-        guard let descriptor = fontDescriptor.withSymbolicTraits(
-            fontDescriptor.symbolicTraits.union(.traitItalic),
-        ) else { return self }
-        return UIFont(descriptor: descriptor, size: pointSize)
-        #elseif canImport(AppKit)
-        let descriptor = fontDescriptor.withSymbolicTraits(.italic)
-        return NSFont(descriptor: descriptor, size: pointSize) ?? self
-        #endif
+        fontMatchingLock.withLock {
+            #if canImport(UIKit)
+            guard let descriptor = fontDescriptor.withSymbolicTraits(
+                fontDescriptor.symbolicTraits.union(.traitItalic),
+            ) else { return self }
+            return UIFont(descriptor: descriptor, size: pointSize)
+            #elseif canImport(AppKit)
+            let descriptor = fontDescriptor.withSymbolicTraits(.italic)
+            return NSFont(descriptor: descriptor, size: pointSize) ?? self
+            #endif
+        }
     }
 
     func withBoldTrait() -> PlatformFont {
-        #if canImport(UIKit)
-        guard let descriptor = fontDescriptor.withSymbolicTraits(
-            fontDescriptor.symbolicTraits.union(.traitBold),
-        ) else { return self }
-        return UIFont(descriptor: descriptor, size: pointSize)
-        #elseif canImport(AppKit)
-        // Union, not a bare `.bold`: AppKit's `withSymbolicTraits(_:)` REPLACES
-        // the descriptor's traits, so passing the trait alone strips italic
-        // from an already-italic face — `<strong><em>` rendered bold upright on
-        // the Mac while the identical book was bold italic on iOS.
-        let descriptor = fontDescriptor.withSymbolicTraits(
-            fontDescriptor.symbolicTraits.union(.bold),
-        )
-        return NSFont(descriptor: descriptor, size: pointSize) ?? self
-        #endif
+        fontMatchingLock.withLock {
+            #if canImport(UIKit)
+            guard let descriptor = fontDescriptor.withSymbolicTraits(
+                fontDescriptor.symbolicTraits.union(.traitBold),
+            ) else { return self }
+            return UIFont(descriptor: descriptor, size: pointSize)
+            #elseif canImport(AppKit)
+            // Union, not a bare `.bold`: AppKit's `withSymbolicTraits(_:)` REPLACES
+            // the descriptor's traits, so passing the trait alone strips italic
+            // from an already-italic face — `<strong><em>` rendered bold upright on
+            // the Mac while the identical book was bold italic on iOS.
+            let descriptor = fontDescriptor.withSymbolicTraits(
+                fontDescriptor.symbolicTraits.union(.bold),
+            )
+            return NSFont(descriptor: descriptor, size: pointSize) ?? self
+            #endif
+        }
     }
 }
+
+/// One lock around every CoreText descriptor match this file makes.
+///
+/// `upright`'s note above says descriptor matching is thread-safe, and under
+/// load it is not reliably so: the second review wedged the test process at
+/// 0 % CPU inside `CTFontDescriptorCreateMatchingFontDescriptor`, entered from
+/// two suites at once. That is not only a test problem. This branch moved
+/// in-book search off the main actor, so production now asks CoreText from two
+/// threads — the search parser on the global executor while `loadChapter`
+/// parses on the main actor.
+///
+/// Every `.serialized` trait in the test tree was documented as the cure for
+/// that hang, and is not: the trait serialises the cases *within* one suite,
+/// not suites against each other, so two suites that both build a
+/// `ReaderStyle` still race. This lock is the guard; the traits are left in
+/// place for the ordinary reason — shared static state in a stub — where they
+/// have one.
+private let fontMatchingLock = NSLock()
 
 public extension ReaderStyle {
     /// Moves a style still sitting on the old default face onto the new one.

@@ -18,7 +18,10 @@ import AppKit
 ///   grey page with a folded corner. Handing it the real artwork is what
 ///   replaces that placeholder with the illustration.
 final class ImageAttachment: NSTextAttachment {
-    private let displaySize: CGSize
+    /// Internal rather than private: the scaling decision is the thing worth
+    /// testing, and it is not observable any other way — a text view's
+    /// attachment bounds depend on a live container.
+    let displaySize: CGSize
 
     init(displaySize: CGSize, image: PlatformImage?) {
         self.displaySize = displaySize

@@ -15,8 +15,12 @@ public enum ReadingProgress {
     /// whole of its last page, and that a ring drawn from the same value appears
     /// closed while the number beside it disagrees.
     public static func percent(_ progression: Double) -> Int {
-        guard progression.isFinite else { return 0 }
-        return Int((min(max(progression, 0), 1) * 100).rounded())
+        // `asProgression`, the shared clamp, rather than an inline
+        // `min(max(…))`: Swift's `max` returns the other operand against NaN, so
+        // whether an inline clamp catches one depends on which way round the
+        // operands were written. Bounded to 0...1 first, so the conversion
+        // cannot be handed anything out of range.
+        Int(((progression.asProgression ?? 0) * 100).rounded())
     }
 
     /// The same number as a label: "42%".

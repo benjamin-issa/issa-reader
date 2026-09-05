@@ -13,7 +13,29 @@ import Observation
 public final class PlaybackSettings {
     public var commandMap: CommandMap { didSet { persist(commandMap, as: Self.commandMapKey) } }
     public var readerStyle: ReaderStyle { didSet { persist(readerStyle, as: Self.readerStyleKey) } }
-    public var playbackRate: Double { didSet { defaults.set(playbackRate, forKey: Self.rateKey) } }
+    /// Clamped on the way in and on the way out.
+    ///
+    /// It accepted anything: the bound speed controls walked to 5.0×, a value
+    /// no menu offers and the transport renders as "5×", and `storedRate > 0`
+    /// let it back in on the next launch — so a rate reached by holding a
+    /// button was persisted with no control able to show or undo it.
+    public var playbackRate: Double {
+        didSet {
+            // Clamp, then persist the clamped value, in one pass. An earlier
+            // form was `if legal != playbackRate { playbackRate = legal; return }`
+            // and a review read it as skipping the write, on the rule that a
+            // stored property's observer is not re-entered by an assignment
+            // inside it. That rule does not hold here: this class is
+            // `@Observable`, so the property is macro-synthesised and the
+            // inner assignment ran the observer again, which then wrote. The
+            // review was wrong on that point — `PlaybackRatePersistenceTests`
+            // passed against both forms. This form is kept because it does not
+            // depend on the reader knowing that.
+            let legal = PlaybackRate.clamped(playbackRate)
+            if legal != playbackRate { playbackRate = legal }
+            defaults.set(legal, forKey: Self.rateKey)
+        }
+    }
 
     /// Whether a progress bar stands for the whole book or the current chapter.
     ///
@@ -34,12 +56,37 @@ public final class PlaybackSettings {
         didSet { persist(bookStyles, as: Self.bookStylesKey) }
     }
 
+    /// Posted when an account signs out, so per-book state keyed by a book
+    /// uuid is dropped.
+    ///
+    /// A notification rather than a direct call because `AppModel` does not own
+    /// this object — `AppServices` does — and clearing only the stored value
+    /// would leave the live instance's copy in memory for the rest of the
+    /// process, which is the half-fix that keeps the leak.
+    public static let signOutNotification = Notification.Name("issa.playbackSettings.signOut")
+
     private static let commandMapKey = "issa.commandMap"
     private static let readerStyleKey = "issa.readerStyle"
     private static let bookStylesKey = "issa.bookStyles"
     private static let rateKey = "issa.playbackRate"
     private static let progressScopeKey = "issa.progressScope"
     private static let faceMigrationKey = "issa.migratedDefaultFaceToLiterata"
+
+    /// The observer token, in a box `deinit` can reach.
+    ///
+    /// A nonisolated `deinit` cannot read a main-actor property, and dropping
+    /// the removal instead is how a released object leaves a live observer
+    /// behind — which is the same defect this codebase already carries in
+    /// `RemoteCommandCenter`, and which `RemoteCommands` solves the same way
+    /// for its route observer.
+    private final class ObserverBox: @unchecked Sendable {
+        var token: (any NSObjectProtocol)?
+        deinit {
+            if let token { NotificationCenter.default.removeObserver(token) }
+        }
+    }
+
+    private let signOutObserver = ObserverBox()
 
     private let defaults: UserDefaults
 
@@ -74,7 +121,7 @@ public final class PlaybackSettings {
         bookStyles = Self.load(
             [String: ReaderStyleOverride].self, from: store, key: Self.bookStylesKey) ?? [:]
         let storedRate = store.double(forKey: Self.rateKey)
-        playbackRate = storedRate > 0 ? storedRate : 1.0
+        playbackRate = storedRate > 0 ? PlaybackRate.clamped(storedRate) : 1.0
         // No migration needed, and this is the part to get right: a stored
         // property assigned in `init` does not fire its `didSet`, so the key is
         // absent from defaults until someone actually moves the picker. Moving
@@ -83,6 +130,13 @@ public final class PlaybackSettings {
         progressScope = store.string(forKey: Self.progressScopeKey)
             .flatMap(ProgressScope.init(rawValue:)) ?? .chapter
         moveOffTheOldDefaultFace()
+        // After every stored property: `self` is not usable in a closure until
+        // the initialiser has finished.
+        signOutObserver.token = NotificationCenter.default.addObserver(
+            forName: Self.signOutNotification, object: nil, queue: .main,
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.bookStyles = [:] }
+        }
     }
 
     /// Moves anyone still on the previous default reading face onto the new one,

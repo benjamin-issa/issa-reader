@@ -23,6 +23,8 @@ public final class DeviceSignInModel {
 
     private let serverURL: URL
     private var pollTask: Task<Void, Never>?
+    /// The renewal in flight, if any; see the renewal site.
+    private var renewalTask: Task<Void, Never>?
     private var renewals = 0
 
     /// A code lives 15 minutes on a default server, so this is about two hours
@@ -85,7 +87,25 @@ public final class DeviceSignInModel {
             renewals += 1
             isRenewing = true
             IssaLog.info("device code renewed", ["attempt": String(renewals)])
-            await begin()
+            // Disowned before renewing, and renewed from a *new* task.
+            //
+            // This method runs inside `pollTask`, and `begin()` opens by
+            // cancelling `pollTask` — so `await begin()` cancelled the task it
+            // was executing in. Two lines later `flow.begin()` reaches
+            // URLSession, which honours cancellation, throws `URLError.cancelled`
+            // and lands in the catch as "Couldn't sign in". Every renewal
+            // failed instantly, `maxRenewals` was unreachable dead code, and on
+            // Apple TV — where this is the only sign-in route — a code left for
+            // fifteen minutes gave a dead end instead of the promised number
+            // changing on screen.
+            pollTask = nil
+            // Held, so `cancel()` can reach it. A bare `Task {}` here outlived
+            // the screen: up to eight renewals carried on after the reader had
+            // left, each minting a code nobody would see. Not `pollTask`,
+            // because `begin()` cancels that on entry — which is the
+            // self-cancellation this branch fixed.
+            renewalTask?.cancel()
+            renewalTask = Task { [weak self] in await self?.begin() }
         case let .failed(reason): stage = .failed(reason)
         }
     }
@@ -93,5 +113,7 @@ public final class DeviceSignInModel {
     public func cancel() {
         pollTask?.cancel()
         pollTask = nil
+        renewalTask?.cancel()
+        renewalTask = nil
     }
 }

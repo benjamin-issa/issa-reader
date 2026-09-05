@@ -1,4 +1,5 @@
 import Foundation
+import IssaCore
 
 /// Parses SMIL clock values.
 ///
@@ -6,7 +7,27 @@ import Foundation
 /// `"HH:MM:SS.ss"`. Both forms are legal SMIL, and both appear in the same book,
 /// so a reader must handle the full grammar rather than just the one it expects.
 public enum SMILClock {
+    /// Seconds, or nil when the value is not a duration this app can use.
+    ///
+    /// Every route out of here goes through `usable`, because `Double("inf")`,
+    /// `Double("nan")` and `Double("1e400")` all succeed — verified — and one
+    /// such `clipEnd` poisoned the whole book. An infinite duration cleared the
+    /// minimum-length guard, so `cumulative +=` made that entry's
+    /// `cumulativeEnd` and every later one infinite; `totalDuration` went
+    /// infinite, `progression(atBookTime:)` collapsed to zero for every
+    /// position, and `spineProgress` wrote that zero back as the reader's saved
+    /// place. Negative values are refused for the same reason: they are not a
+    /// place in a book, and they reached `player.seek` unclamped.
     public static func seconds(from raw: String) -> TimeInterval? {
+        usable(unchecked(from: raw))
+    }
+
+    private static func usable(_ value: TimeInterval?) -> TimeInterval? {
+        guard let value, value.isFinite, value >= 0 else { return nil }
+        return value
+    }
+
+    private static func unchecked(from raw: String) -> TimeInterval? {
         let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return nil }
 
@@ -52,8 +73,25 @@ public struct SMILEntry: Sendable, Hashable {
 /// tick while the reader is on screen.
 public struct SMILTimeline: Sendable {
     public let entries: [SMILEntry]
-    /// Fragment id to entry index, for seeking from a tapped word.
-    private let indexByFragment: [String: Int]
+    /// A fragment, scoped to the document it lives in.
+    ///
+    /// EPUB requires element ids to be unique *within a document*, not across
+    /// the book, and only Storyteller's own aligner happens to prefix them.
+    /// Keying on the id alone made every navigation call resolve to the first
+    /// chapter that used that id: tapping a word in chapter 12 seeked to
+    /// chapter 1, and `advanceToNextFile` looped back there forever instead of
+    /// advancing.
+    struct FragmentKey: Hashable {
+        let document: String
+        let fragment: String
+    }
+
+    /// Fragment to entry index, exact.
+    private let indexByFragment: [FragmentKey: Int]
+    /// The same by id alone, first occurrence winning, for a caller that has a
+    /// tapped id and no document to scope it with. Best effort by construction
+    /// — every caller that *can* say which document should.
+    private let firstIndexByFragmentID: [String: Int]
     /// Contiguous runs of entries belonging to each audio file, in the order
     /// they occur in the book — usually one run, occasionally more when a file
     /// (a shared intro or outro clip) is referenced from more than one place in
@@ -67,21 +105,34 @@ public struct SMILTimeline: Sendable {
     /// mis-highlighting or mis-seeking while the correct audio keeps playing.
     private let fileRanges: [String: [Range<Int>]]
     /// The same, per text document — which is what a reader calls a chapter.
-    private let documentRanges: [String: Range<Int>]
+    ///
+    /// A list of runs, exactly like `fileRanges`, and for the same reason its
+    /// doc comment gives. These used to be merged into one spanning range, so a
+    /// spine that revisits a document — a shared notes page, a chapter split
+    /// across two itemrefs, both legal — produced a span that swallowed every
+    /// intervening chapter's narration. That span is `chapterSpan`, so the
+    /// chapter scrubber reported a length tens of minutes too long and a
+    /// lock-screen drag landed in a different chapter, and it is also what
+    /// `spineProgress` reports to the server.
+    private let documentRanges: [String: [Range<Int>]]
 
     public var totalDuration: TimeInterval { entries.last?.cumulativeEnd ?? 0 }
     public var isEmpty: Bool { entries.isEmpty }
 
     public init(entries: [SMILEntry]) {
         self.entries = entries
-        var index: [String: Int] = [:]
+        var index: [FragmentKey: Int] = [:]
         index.reserveCapacity(entries.count)
-        // First occurrence wins: ids are unique in practice, and if a book
-        // repeats one, seeking to the earlier position is the safer reading.
-        for (i, entry) in entries.enumerated() where index[entry.fragmentID] == nil {
-            index[entry.fragmentID] = i
+        var byIDOnly: [String: Int] = [:]
+        for (i, entry) in entries.enumerated() {
+            let key = FragmentKey(document: entry.textHref, fragment: entry.fragmentID)
+            if index[key] == nil { index[key] = i }
+            // First occurrence wins here, as it always did — but this map is now
+            // only the fallback, not what navigation resolves through.
+            if byIDOnly[entry.fragmentID] == nil { byIDOnly[entry.fragmentID] = i }
         }
         indexByFragment = index
+        firstIndexByFragmentID = byIDOnly
 
         var ranges: [String: [Range<Int>]] = [:]
         var start = 0
@@ -100,17 +151,13 @@ public struct SMILTimeline: Sendable {
         // The same shape again, keyed by text document. Built here rather than
         // filtered on demand because a progress bar scoped to the chapter asks
         // for this on every tick, and `entries.filter` walks the whole book.
-        var documents: [String: Range<Int>] = [:]
+        var documents: [String: [Range<Int>]] = [:]
         start = 0
         while start < entries.count {
             let href = entries[start].textHref
             var end = start + 1
             while end < entries.count, entries[end].textHref == href { end += 1 }
-            if let existing = documents[href] {
-                documents[href] = min(existing.lowerBound, start) ..< max(existing.upperBound, end)
-            } else {
-                documents[href] = start ..< end
-            }
+            documents[href, default: []].append(start ..< end)
             start = end
         }
         documentRanges = documents
@@ -122,14 +169,44 @@ public struct SMILTimeline: Sendable {
     /// several chapters into one file, so this can be coarser than the chapter
     /// name shown beside it — but it is the only boundary the media overlay
     /// actually knows.
-    public func span(ofDocument href: String) -> (start: TimeInterval, duration: TimeInterval)? {
-        guard let range = documentRanges[href], !range.isEmpty else { return nil }
+    /// - Parameter occurrence: which run of this document to describe, when the
+    ///   spine references it more than once. Defaults to the first, which is
+    ///   what every caller wants and what the merged range used to approximate
+    ///   — badly, by spanning everything in between.
+    public func span(
+        ofDocument href: String, occurrence: Int = 0
+    ) -> (start: TimeInterval, duration: TimeInterval)? {
+        guard let runs = documentRanges[href], runs.indices.contains(occurrence) else { return nil }
+        let range = runs[occurrence]
+        guard !range.isEmpty else { return nil }
         let first = entries[range.lowerBound]
         let last = entries[range.upperBound - 1]
         let start = first.cumulativeEnd - first.duration
         let duration = last.cumulativeEnd - start
         guard duration > 0 else { return nil }
         return (start, duration)
+    }
+
+    /// The run of this document that contains `index`, so a caller that knows
+    /// *where* it is gets that run rather than the first one.
+    public func span(
+        ofDocument href: String, containing index: Int
+    ) -> (start: TimeInterval, duration: TimeInterval)? {
+        guard let runs = documentRanges[href],
+              let which = runs.firstIndex(where: { $0.contains(index) })
+        else { return span(ofDocument: href) }
+        return span(ofDocument: href, occurrence: which)
+    }
+
+    /// The span of the chapter this entry is actually in.
+    ///
+    /// What a chapter-scoped progress bar wants. A document referenced twice in
+    /// the spine has two runs, and the reader is in exactly one of them.
+    public func span(
+        ofDocumentContaining entry: SMILEntry
+    ) -> (start: TimeInterval, duration: TimeInterval)? {
+        guard let index = index(of: entry) else { return span(ofDocument: entry.textHref) }
+        return span(ofDocument: entry.textHref, containing: index)
     }
 
     /// The entry playing at `time` on the virtual book timeline.
@@ -163,20 +240,49 @@ public struct SMILTimeline: Sendable {
     }
 
     /// Where a fragment sits on the virtual timeline, for seeking.
-    public func bookTime(forFragment fragmentID: String) -> TimeInterval? {
-        guard let index = indexByFragment[fragmentID] else { return nil }
+    /// - Parameter document: the text document the id came from. Supply it
+    ///   whenever it is known: ids are unique per document, not per book, so
+    ///   without it this can only answer with the first chapter that happens to
+    ///   use that id.
+    public func bookTime(forFragment fragmentID: String, inDocument document: String? = nil)
+        -> TimeInterval?
+    {
+        guard let index = resolve(fragmentID, in: document) else { return nil }
         let entry = entries[index]
         return entry.cumulativeEnd - entry.duration
     }
 
-    public func entry(forFragment fragmentID: String) -> SMILEntry? {
-        indexByFragment[fragmentID].map { entries[$0] }
+    public func entry(forFragment fragmentID: String, inDocument document: String? = nil)
+        -> SMILEntry?
+    {
+        resolve(fragmentID, in: document).map { entries[$0] }
+    }
+
+    private func resolve(_ fragmentID: String, in document: String?) -> Int? {
+        if let document,
+           let exact = indexByFragment[FragmentKey(document: document, fragment: fragmentID)] {
+            return exact
+        }
+        return firstIndexByFragmentID[fragmentID]
+    }
+
+    /// The index of an entry we already hold, resolved exactly.
+    ///
+    /// The three navigation calls below used to look their argument up by
+    /// fragment id alone, which is how a book that numbers sentences per
+    /// chapter sent "next sentence" in chapter 12 to chapter 1's second
+    /// sentence, and made end-of-file advance loop back there forever.
+    private func index(of entry: SMILEntry) -> Int? {
+        indexByFragment[FragmentKey(document: entry.textHref, fragment: entry.fragmentID)]
     }
 
     /// Fraction of the book narrated, 0...1.
     public func progression(atBookTime time: TimeInterval) -> Double {
         guard totalDuration > 0 else { return 0 }
-        return min(max(time / totalDuration, 0), 1)
+        // The last inline clamp in this package. `min(max(x, 0), 1)` does not
+        // filter NaN — Swift's max returns the other operand against it — and a
+        // zero progression is a claim about where the reader is.
+        return (time / totalDuration).asProgression ?? 0
     }
 
     /// The entries belonging to one text document, in reading order.
@@ -222,12 +328,12 @@ public struct SMILTimeline: Sendable {
 
     /// The entry that follows `entry` in reading order, if any.
     public func entry(after entry: SMILEntry) -> SMILEntry? {
-        guard let index = indexByFragment[entry.fragmentID], index + 1 < entries.count else { return nil }
+        guard let index = index(of: entry), index + 1 < entries.count else { return nil }
         return entries[index + 1]
     }
 
     public func entry(before entry: SMILEntry) -> SMILEntry? {
-        guard let index = indexByFragment[entry.fragmentID], index > 0 else { return nil }
+        guard let index = index(of: entry), index > 0 else { return nil }
         return entries[index - 1]
     }
 
@@ -243,7 +349,7 @@ public struct SMILTimeline: Sendable {
     public func window(
         around entry: SMILEntry, before: Int, after: Int
     ) -> (entries: [SMILEntry], currentIndex: Int)? {
-        guard let index = indexByFragment[entry.fragmentID] else { return nil }
+        guard let index = index(of: entry) else { return nil }
         let lower = max(0, index - max(before, 0))
         let upper = min(entries.count - 1, index + max(after, 0))
         return (Array(entries[lower ... upper]), index - lower)

@@ -5,6 +5,7 @@ import SwiftUI
 
 @main
 struct IssaReaderMacApp: App {
+    @NSApplicationDelegateAdaptor(TerminationDelegate.self) private var termination
     @State private var app = AppModel()
     @State private var settings = PlaybackSettings()
     @State private var nowPlaying = NowPlayingController()
@@ -30,6 +31,7 @@ struct IssaReaderMacApp: App {
                 .task {
                     nowPlaying.configure(settings: settings)
                     app.nowPlayingController = nowPlaying
+                    termination.flush = { await app.flushOpenReaders() }
                 }
                 .tint(Palette.tangerine)
                 .frame(minWidth: 900, minHeight: 560)
@@ -171,12 +173,12 @@ struct IssaCommands: Commands {
 
             Divider()
             Button("Faster") {
-                settings.playbackRate = min(settings.playbackRate + 0.25, 5)
+                settings.playbackRate = PlaybackRate.clamped(settings.playbackRate + PlaybackRate.step)
                 nowPlaying.coordinator?.player.rate = Float(settings.playbackRate)
             }
             .keyboardShortcut("]", modifiers: .command)
             Button("Slower") {
-                settings.playbackRate = max(settings.playbackRate - 0.25, 0.5)
+                settings.playbackRate = PlaybackRate.clamped(settings.playbackRate - PlaybackRate.step)
                 nowPlaying.coordinator?.player.rate = Float(settings.playbackRate)
             }
             .keyboardShortcut("[", modifiers: .command)
@@ -329,7 +331,16 @@ struct MacRootView: View {
     private var showsInspector: Binding<Bool> {
         Binding(
             get: { inspected.bookID != nil },
-            set: { if !$0 { inspected.bookID = nil } },
+            // Both directions. The `true` case used to be unreachable, which
+            // together with the `.disabled` below made this a switch that could
+            // be turned off and never on.
+            set: { shown in
+                if shown {
+                    inspected.bookID = inspected.bookID ?? inspected.lastShownBookID
+                } else {
+                    inspected.bookID = nil
+                }
+            },
         )
     }
 
@@ -404,7 +415,10 @@ struct MacRootView: View {
                 Toggle(isOn: showsInspector) {
                     Label("Book Info", systemImage: "sidebar.trailing")
                 }
-                .disabled(inspected.bookID == nil)
+                // Enabled while there is a book to show *or* one to show
+                // again. Keyed on `bookID` alone it disabled itself the instant
+                // it was switched off.
+                .disabled(inspected.bookID == nil && inspected.lastShownBookID == nil)
                 .help("Show or hide the selected book's details")
             }
         }

@@ -4,17 +4,19 @@ import IssaCore
 
 /// Puts the app in front of a stub server for the layout sweep.
 ///
-/// Two gates, and both must pass. The code compiles only under
-/// `ISSA_UITEST_FIXTURE`, which `project.yml` sets on the Debug configuration
-/// alone and names separately from `DEBUG` so that `#if DEBUG` is not the only
-/// thing standing between this and a shipped build. And it does nothing unless
-/// a launch **argument** asks for it — an argument can only be set by whoever
-/// launches the process, unlike a `UserDefaults` key, which anything able to
-/// write the app's preferences could set and which would survive relaunches.
+/// Three things keep this out of a shipping build, and only the first is
+/// structural. `project.yml` sets `EXCLUDED_SOURCE_FILE_NAMES` for this
+/// directory on Release, so the compiler is never handed these files and no
+/// textual condition can leak them. `ISSA_UITEST_FIXTURE` then keeps the
+/// fixture out of an ordinary Debug build — note it is defined over exactly
+/// the configurations `DEBUG` covers, so on its own it is `#if DEBUG` under
+/// another name and was wrongly described here as an independent second gate.
+/// And it does nothing unless a launch **argument** asks for it, which only
+/// whoever launches the process can set.
 ///
 /// `scripts/release.sh` greps the archived binary for the argument string below
-/// and fails the release if it finds it, so a condition that drifts into the
-/// wrong configuration fails the release rather than the review.
+/// and fails the release if it finds it — and proves that grep can fire before
+/// trusting it, which it could not for the first two builds it guarded.
 enum UITestFixture {
     static let argument = "-IssaUITestFixture"
 
@@ -30,7 +32,18 @@ enum UITestFixture {
     static func installIfRequested() -> (tokens: any TokenPersisting, server: String)? {
         guard ProcessInfo.processInfo.arguments.contains(argument) else { return nil }
         URLProtocol.registerClass(FixtureServer.self)
-        UserDefaults.standard.set(server, forKey: "issa.lastServer")
+        // `register(defaults:)`, not `set(_:forKey:)`. `AppModel.init` reads
+        // this key, so the fixture does have to supply it — but the
+        // registration domain is volatile, so nothing is written to the app's
+        // preferences and a later ordinary launch has no trace of the stub. The
+        // previous `set` persisted: run the sweep with `--keep-devices`, then
+        // launch the app by hand, and it would still be pointed at a host that
+        // does not resolve, over cleartext, with ATS permitting it.
+        //
+        // It also sits below NSArgumentDomain in the lookup order, so
+        // `LayoutSweepTests`' `-issa.lastServer ""` still wins where it wants
+        // the signed-out screen.
+        UserDefaults.standard.register(defaults: ["issa.lastServer": server])
         return (InMemoryTokens(), server)
     }
 }
@@ -47,7 +60,16 @@ private final class InMemoryTokens: TokenPersisting, @unchecked Sendable {
     }
 
     func read(account: String) -> String? { lock.withLock { stored[account] } }
-    func write(_ token: String, account: String) { lock.withLock { stored[account] = token } }
-    func delete(account: String) { _ = lock.withLock { stored.removeValue(forKey: account) } }
+    @discardableResult
+    func write(_ token: String, account: String) -> Bool {
+        lock.withLock { stored[account] = token }
+        return true
+    }
+
+    @discardableResult
+    func delete(account: String) -> Bool {
+        lock.withLock { _ = stored.removeValue(forKey: account) }
+        return true
+    }
 }
 #endif

@@ -70,7 +70,7 @@ public enum LocatorAnchoring {
     /// is nothing finite to clamp.
     static func offset(forProgression progression: Double?, length: Int) -> Int? {
         guard let progression, progression.isFinite, length > 0 else { return nil }
-        let clamped = min(max(progression, 0), 1)
+        let clamped = (progression.asProgression ?? 0)
         return min(Int(Double(length) * clamped), length - 1)
     }
 

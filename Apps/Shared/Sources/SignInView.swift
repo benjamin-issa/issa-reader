@@ -39,6 +39,11 @@ public struct SignInView: View {
     @State private var route: Route = .address
     @State private var address: String = ""
     @State private var connecting = false
+    /// Whether this server offers `/api/v2/token/app` — `nil` until the probe
+    /// answers, and offered while it is nil. The row was offered
+    /// unconditionally, so on a server without the route the reader tapped,
+    /// watched a browser open on a 404, and came back here with nothing said.
+    @State private var browserRouteOffered: Bool?
 
     public init() {}
 
@@ -144,6 +149,26 @@ public struct SignInView: View {
                         provider it uses. Fastest if you're already signed in there.
                         """,
                     symbol: "safari",
+                    // Shown disabled with the reason, never hidden. A row that
+                    // silently disappears is the same failure as a row that
+                    // silently dead-ends: the reader is left to work out on
+                    // their own why the way in they were told about is not
+                    // there.
+                    unavailable: browserRouteOffered == false
+                        ? "This server doesn't offer browser sign-in. Use a device code."
+                        : nil,
+                    // What *this* route puts on an unencrypted connection,
+                    // which is not what the line above the rows says. That one
+                    // is about the connection; this is about the credential and
+                    // the token travelling over it, and about the fact that
+                    // anything on the network can replace the second one.
+                    warning: serverURL?.scheme?.lowercased() == "http"
+                        ? """
+                          Over http:// your sign-in page and the token it sends \
+                          back are both readable on this network, and the token \
+                          can be replaced.
+                          """
+                        : nil,
                 ) {
                     guard let url = serverURL else { return }
                     route = .browser(BrowserSignInModel(serverURL: url))
@@ -159,6 +184,17 @@ public struct SignInView: View {
                     Task { await model.begin() }
                 }
             }
+            // Re-run when the address changes, because "does this server have
+            // the route" is a fact about that server and no other. Nothing is
+            // gated on it finishing: while the answer is nil the row is live.
+            .task(id: serverURL) {
+                // Forgotten first. The answer is about one server, and without
+                // this server A's "doesn't offer browser sign-in" greyed out
+                // the row on server B until B's probe came back.
+                browserRouteOffered = nil
+                guard let url = serverURL else { return }
+                browserRouteOffered = await AppTokenGrant.isOffered(by: url)
+            }
 
             if let error = app.loadError {
                 Text(error)
@@ -168,32 +204,52 @@ public struct SignInView: View {
         }
     }
 
+    /// - Parameters:
+    ///   - unavailable: why this way in cannot be used, when it cannot. The row
+    ///     stays on screen and stops responding, rather than vanishing.
+    ///   - warning: what choosing it costs on this particular server. Not an
+    ///     error — the row still works — so it is stated and left to the reader.
     private func methodRow(
         title: String,
         detail: String,
         symbol: String,
+        unavailable: String? = nil,
+        warning: String? = nil,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
             HStack(alignment: .top, spacing: Metrics.spacing12) {
                 Image(systemName: symbol)
                     .font(Typography.headline)
-                    .foregroundStyle(Palette.tangerine)
+                    .foregroundStyle(unavailable == nil ? Palette.tangerine : Palette.inkQuaternary)
                     .frame(width: 24)
                 VStack(alignment: .leading, spacing: Metrics.spacing4) {
                     Text(title)
                         .font(Typography.headline)
-                        .foregroundStyle(Palette.ink)
-                    Text(detail)
+                        .foregroundStyle(unavailable == nil ? Palette.ink : Palette.inkTertiary)
+                    Text(unavailable ?? detail)
                         .font(Typography.footnote)
                         .foregroundStyle(Palette.inkSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                         .multilineTextAlignment(.leading)
+                    // Under the description, not instead of it: the reader
+                    // needs to know both what this route is and what it costs
+                    // here. Suppressed when the row is unavailable, because
+                    // then there is nothing to weigh.
+                    if let warning, unavailable == nil {
+                        Text(warning)
+                            .font(Typography.caption)
+                            .foregroundStyle(Palette.alert)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .multilineTextAlignment(.leading)
+                    }
                 }
                 Spacer(minLength: 0)
-                Image(systemName: "chevron.right")
-                    .font(Typography.footnote)
-                    .foregroundStyle(Palette.inkTertiary)
+                if unavailable == nil {
+                    Image(systemName: "chevron.right")
+                        .font(Typography.footnote)
+                        .foregroundStyle(Palette.inkTertiary)
+                }
             }
             .padding(Metrics.spacing16)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -204,6 +260,7 @@ public struct SignInView: View {
             )
         }
         .buttonStyle(.plain)
+        .disabled(unavailable != nil)
     }
 
     // MARK: - The address, and coming back to it
@@ -253,36 +310,37 @@ public struct SignInView: View {
                 // Was `storyteller.home.arpa` — RFC 8375's home-network domain,
                 // correct and completely opaque to anyone who has not read the
                 // RFC. A placeholder's job is to show the shape of the answer.
+                // A string literal handed to `Text` is a `LocalizedStringKey`
+                // and gets parsed as Markdown, which autolinks a bare URL and
+                // paints it in the tint — so the example address came out
+                // looking like text somebody had already typed and tapped.
+                // `verbatim` skips that parse, and a `Text` carries its own
+                // colour, so the prompt can hold both.
                 //
-                // `Text(verbatim:)`, and drawn as an overlay rather than given
-                // to the field. A string literal handed to `Text` is a
-                // `LocalizedStringKey` and gets parsed as Markdown, which
-                // autolinks a bare URL and paints it in the tint — so the
-                // example address came out looking like text somebody had
-                // already typed and tapped. `verbatim` skips the parse, and the
-                // overlay is what makes the colour ours to set.
-                TextField("", text: $address)
-                    .overlay(alignment: .leading) {
-                        if address.isEmpty {
-                            Text(verbatim: "https://yourlibrary.com")
-                                .font(Typography.body)
-                                .foregroundStyle(Palette.inkTertiary)
-                                .allowsHitTesting(false)
-                                .accessibilityHidden(true)
-                        }
-                    }
-                    // Explicit, the way LibrarySearchField is: a field that
-                    // sets no colour takes the system label, which is white in
-                    // Dark Mode.
-                    .foregroundStyle(Palette.ink)
-                    .textFieldStyle(.plain)
-                    .font(Typography.body)
-                    .padding(Metrics.spacing12)
-                    .background(Palette.surface, in: RoundedRectangle(cornerRadius: Metrics.radiusMedium))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: Metrics.radiusMedium)
-                            .strokeBorder(Palette.border, lineWidth: 1),
-                    )
+                // In `prompt:`, not an overlay. The overlay was
+                // `.accessibilityHidden(true)` over a `TextField("")`, which
+                // left the field with no accessible name at all: VoiceOver
+                // announced a bare "text field" on the first screen of the app.
+                TextField(
+                    "Server",
+                    text: $address,
+                    prompt: Text(verbatim: "https://yourlibrary.com")
+                        .foregroundStyle(Palette.inkTertiary),
+                )
+                .labelsHidden()
+                .accessibilityIdentifier("field.serverAddress")
+                // Explicit, the way LibrarySearchField is: a field that
+                // sets no colour takes the system label, which is white in
+                // Dark Mode.
+                .foregroundStyle(Palette.ink)
+                .textFieldStyle(.plain)
+                .font(Typography.body)
+                .padding(Metrics.spacing12)
+                .background(Palette.surface, in: RoundedRectangle(cornerRadius: Metrics.radiusMedium))
+                .overlay(
+                    RoundedRectangle(cornerRadius: Metrics.radiusMedium)
+                        .strokeBorder(Palette.border, lineWidth: 1),
+                )
                     #if os(iOS)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
@@ -329,6 +387,14 @@ public struct SignInView: View {
         // by probing, and re-normalising what was typed would throw that away
         // and start a grant against the port it just ruled out.
         guard app.phase != .ready, serverURL != nil else { return }
+        // And only when the connect actually succeeded. `connect`'s early
+        // returns leave the previous session in place, and `serverURL` falls
+        // back to it — so typing a new address with a typo advanced to the
+        // chooser showing the *old* server, and "In your browser" opened that
+        // one's token route. Build 24 shortened that to a single tap, because
+        // the route now returns a granted token off one redirect rather than
+        // behind an explicit Approve page.
+        guard app.loadError == nil else { return }
         route = .chooser
     }
 }

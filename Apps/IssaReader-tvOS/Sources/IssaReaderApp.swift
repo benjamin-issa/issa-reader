@@ -17,6 +17,8 @@ struct IssaReaderTVApp: App {
         // guards itself too; this is the second lock on the same door.
     }
 
+    @Environment(\.scenePhase) private var scenePhase
+
     var body: some Scene {
         WindowGroup {
             TVRootView()
@@ -28,6 +30,23 @@ struct IssaReaderTVApp: App {
                     app.nowPlayingController = nowPlaying
                 }
                 .tint(Palette.tangerine)
+                // Pressing the TV button leaves the app the same way pressing
+                // Home does on a phone, and `flushOpenReaders()` had exactly
+                // one caller in the repo — in the iOS target. Position writes
+                // are debounced at two seconds with a twenty-second ceiling, so
+                // without this every exit dropped up to twenty seconds of
+                // narration, and the queued write never left either.
+                //
+                // No background assertion: tvOS has no `beginBackgroundTask`.
+                // The local save is what matters here and it needs none.
+                // `.background`, as iOS has it — not `!= .active`, which is
+                // also `.inactive` and so fired twice per exit and on every
+                // Siri, overlay and Control Centre interruption.
+                .onChange(of: scenePhase) { _, phase in
+                    if phase == .background {
+                        Task { await app.flushOpenReaders() }
+                    }
+                }
         }
     }
 }
@@ -187,7 +206,8 @@ struct TVSignInView: View {
                     // `verbatim`, for the reason SignInView records: a string
                     // literal is a `LocalizedStringKey`, Markdown autolinks a
                     // bare URL, and the example then draws as a tinted link.
-                    TextField("", text: $address, prompt: Text(verbatim: "https://yourlibrary.com"))
+                    TextField("", text: $address, prompt: Text(verbatim: "https://yourlibrary.com")
+                        .foregroundStyle(Palette.inkTertiary))
                         .font(Typography.sans(30))
                         .frame(maxWidth: 900)
                     Button {

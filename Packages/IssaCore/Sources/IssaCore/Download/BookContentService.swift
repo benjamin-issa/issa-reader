@@ -112,7 +112,35 @@ public struct BookContentService: Sendable {
     }
 
     public func localURL(for book: Book, format: Format) -> URL {
-        cacheDirectory.appending(path: "\(book.uuid)-\(format.rawValue).epub")
+        Self.localURL(in: cacheDirectory, bookUUID: book.uuid, format: format)
+    }
+
+    /// The one place a book's file is named.
+    ///
+    /// `AppModel` built this same string a second time for the download
+    /// manager's destination, so the rule lived in two places and only one
+    /// could be fixed.
+    ///
+    /// The identifier is checked before it names anything.
+    /// `URL.appending(path:)` neither encodes nor collapses `../` — verified by
+    /// running it — so an unvalidated uuid let a hostile or compromised server
+    /// choose the path a downloaded file was written to, and the bytes as well.
+    /// A malformed one is hashed rather than stripped, which is the rule
+    /// `LibraryStore.filename(for:)` already states for server-supplied keys:
+    /// "hash it rather than trying to sanitise". Stripping invites the next
+    /// encoding that means the same thing; a hash cannot escape a directory,
+    /// and it stays stable so the file is still found again afterwards.
+    public static func localURL(in directory: URL, bookUUID: String, format: Format) -> URL {
+        let component = bookUUID.isBareUUID ? bookUUID : "unsafe-\(Self.digest(bookUUID))"
+        return directory.appending(path: "\(component)-\(format.rawValue).epub")
+    }
+
+    private static func digest(_ value: String) -> String {
+        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+        for byte in Data(value.utf8) {
+            hash = (hash ^ UInt64(byte)) &* 0x100_0000_01b3
+        }
+        return String(hash, radix: 16)
     }
 
     public func isDownloaded(_ book: Book, format: Format) -> Bool {

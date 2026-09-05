@@ -30,7 +30,18 @@ BUNDLE_ID="com.benjaminissa.issareader"
 DERIVED="$ROOT/.build/dd-sweep"
 WORK="$ROOT/.build/layout-sweep"
 OUT="$ROOT/docs/screenshots/sweep"
-FIXTURE_READALONG_UUID="11111111-1111-4111-8111-111111111111"
+# Read from the fixture rather than retyped here. The script plants an EPUB at
+# a filename derived from this uuid and the app looks for it under the same
+# name, so two copies that drift produce a reader screen that silently falls
+# back to downloading — from a stub server that answers 404.
+FIXTURE_SOURCE="$ROOT/Apps/IssaReader-iOS/Sources/UITestSupport/FixtureLibrary.swift"
+FIXTURE_READALONG_UUID=$(
+    sed -n 's/.*readalongUUID = "\([0-9a-fA-F-]*\)".*/\1/p' "$FIXTURE_SOURCE" | head -1
+)
+if [ -z "$FIXTURE_READALONG_UUID" ]; then
+    echo "error: no readalongUUID in $FIXTURE_SOURCE" >&2
+    exit 1
+fi
 
 # width | slug | device type | extra
 ALL_DEVICES=(
@@ -93,7 +104,20 @@ trap cleanup EXIT INT TERM
 command -v xcodegen >/dev/null || { echo "xcodegen not found" >&2; exit 1; }
 xcodegen generate >/dev/null
 
+# The per-device folders under $OUT too, not just $WORK. collect-sweep-shots
+# copies by name and never deletes, so an --all run followed by a quick one
+# left five stale device folders in place and make-contact-sheet.py sheeted
+# them beside the three fresh ones — a regression that only shows at 402pt
+# presented as fixed, with nothing marking the panels as coming from different
+# code.
+#
+# But not `_sheets`. It holds six *tracked* contact sheets, and clearing $OUT
+# wholesale deleted them before anything had been regenerated — so a failed or
+# Pillow-less run left the repository's own documentation deleted.
+# make-contact-sheet.py overwrites them in place on success and leaves them
+# alone on failure, which is the behaviour wanted.
 rm -rf "$WORK"; mkdir -p "$WORK" "$OUT"
+find "$OUT" -mindepth 1 -maxdepth 1 -type d ! -name _sheets -exec rm -rf {} +
 
 echo "▸ building once for all destinations"
 # Signed, deliberately: CODE_SIGNING_ALLOWED=NO breaks the simulator keychain
@@ -148,8 +172,15 @@ for row in "${SELECTED[@]}"; do
   RESULT="$WORK/$slug.xcresult"
   rm -rf "$RESULT"
   set +e
+  # The UI suite alone. IssaSharedTests joined the scheme's Test action on
+  # this branch, and with ~60 unit tests in the same xctestrun the "zero tests
+  # ran" check below could never fire again — a scheme that dropped the UI
+  # target would have run the unit suite on each simulator, copied no
+  # screenshots and printed "ok". Restricting the run restores the check's
+  # meaning, and stops the unit suite running once per device width.
   xcodebuild test-without-building \
       -xctestrun "$XCTESTRUN" \
+      -only-testing:IssaLayoutUITests \
       -destination "platform=iOS Simulator,id=$CURRENT_UDID" \
       -resultBundlePath "$RESULT" \
       -parallel-testing-enabled NO \
@@ -161,9 +192,17 @@ for row in "${SELECTED[@]}"; do
   # Extract before deleting the device, and before reacting to the status: a
   # failing sweep is exactly when the screenshots are wanted.
   rm -rf "$WORK/$slug-attachments"
-  xcrun xcresulttool export attachments \
-      --path "$RESULT" --output-path "$WORK/$slug-attachments" >/dev/null 2>&1 || true
-  python3 Tools/scripts/collect-sweep-shots.py "$WORK/$slug-attachments" "$OUT/$slug" || true
+  if ! xcrun xcresulttool export attachments \
+      --path "$RESULT" --output-path "$WORK/$slug-attachments" >/dev/null 2>&1; then
+    echo "error: could not export attachments for $slug" >&2
+    FAILED=1
+    RESULTS+=("$slug: attachment export failed")
+  elif ! python3 Tools/scripts/collect-sweep-shots.py \
+      "$WORK/$slug-attachments" "$OUT/$slug"; then
+    echo "error: could not collect screenshots for $slug" >&2
+    FAILED=1
+    RESULTS+=("$slug: screenshot collection failed")
+  fi
 
   # A scheme whose Test action omits the UI-test target builds fine, runs
   # nothing, and exits 0. That would be the worst outcome this whole exercise
@@ -186,11 +225,18 @@ for row in "${SELECTED[@]}"; do
   rm -rf "$RESULT"
 done
 
-python3 Tools/scripts/make-contact-sheet.py "$OUT" || true
+# Not `|| true`. Without Pillow the import raises, every device still reported
+# "ok", and the script named a sheets directory it had never written — while
+# the sheets are documented as the only coverage for inner-padding drift.
+if ! python3 Tools/scripts/make-contact-sheet.py "$OUT"; then
+  echo "error: contact sheets were not written" >&2
+  FAILED=1
+  RESULTS+=("contact sheets: FAILED")
+fi
 
 echo
 echo "── sweep ──"
-for line in "${RESULTS[@]}"; do echo "  $line"; done
+for line in ${RESULTS[@]+"${RESULTS[@]}"}; do echo "  $line"; done
 echo "  screenshots: $OUT"
 echo "  contact sheets: $OUT/_sheets"
 exit "$FAILED"

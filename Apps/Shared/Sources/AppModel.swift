@@ -173,13 +173,26 @@ public final class AppModel {
         isConnecting = true
         defer { isConnecting = false }
 
+        // Cleared up front. Without this a failed connect to a *new* address
+        // left the previous attempt's sentence on screen beside the previous
+        // server's name, so the chooser described a server the reader had just
+        // moved away from.
+        loadError = nil
         let candidates = Self.candidateServerURLs(for: address)
         guard !candidates.isEmpty else {
             loadError = "That doesn't look like a server address."
+            // `.chooseServer`, not left at `.launching`. Both of these returns
+            // used to leave the phase where it started, and the launch path
+            // renders that as a bare `Palette.paper` with no content and no
+            // controls — so a stored address this cannot parse gave a blank app
+            // on every launch, with the reason written to a `loadError` only
+            // the library screen displays. Uninstalling was the way out.
+            if phase == .launching { phase = .chooseServer }
             return
         }
         guard let url = await Self.firstReachable(of: candidates) else {
             loadError = "Couldn't reach a Storyteller server at that address."
+            if phase == .launching { phase = .chooseServer }
             return
         }
         // The RESOLVED address, not the raw text. Everything downstream —
@@ -210,6 +223,9 @@ public final class AppModel {
         store = try? LibraryStore(serverKey: url.absoluteString)
         // Whose annotations to show, before the identity call answers — which
         // offline it never does. Cached per server by `enterLibrary`.
+        // Ratings come back with the cached shelf, so a rating set offline is
+        // on screen at launch rather than only after a refresh succeeds.
+        if let stored = try? await store?.ratings(), !stored.isEmpty { ratings = stored }
         if let account = UserDefaults.standard.string(forKey: Self.accountKey(for: url)) {
             try? await store?.setAccount(account)
         }
@@ -259,8 +275,13 @@ public final class AppModel {
             downloads.reconfigure(baseURL: url, tokens: session.tokenProvider)
         } else {
             downloads = DownloadManager(baseURL: url, tokens: session.tokenProvider) { job in
-                BookContentService.defaultDirectory()
-                    .appending(path: "\(job.bookUUID)-\(job.format.rawValue).epub")
+                // The same funnel `BookContentService.localURL(for:format:)`
+                // uses. This was a second copy of the filename rule, which is
+                // how a validated read path and an unvalidated write path came
+                // to disagree about where a book lives.
+                BookContentService.localURL(
+                    in: BookContentService.defaultDirectory(),
+                    bookUUID: job.bookUUID, format: job.format)
             }
         }
         // Declared on DownloadManager and never assigned until now, which is
@@ -297,7 +318,8 @@ public final class AppModel {
         guard let session else { return }
         await session.adopt(token: token)
         switch session.state {
-        case .signedIn:
+        case let .signedIn(user):
+            await handOverIfTheAccountChanged(to: user, on: session.serverURL)
             await enterLibrary()
         case let .failed(reason):
             // The grant worked and the token is in the keychain — only the
@@ -311,12 +333,81 @@ public final class AppModel {
         }
     }
 
+    /// The only binding available on a token that arrives through the browser
+    /// route: is the identity it resolves to the identity this server was last
+    /// signed in as?
+    ///
+    /// The callback carries no `state` and no nonce, and cannot — the server
+    /// echoes nothing back, so there is nothing to bind at the moment it
+    /// arrives. `ASWebAuthenticationSession` intercepts its callback scheme only
+    /// from navigations inside its own web view, so over https there is no way
+    /// in; over http, which this app still permits by decision, an on-path
+    /// attacker can inject `302 Location: storyteller://x?token=…` into the
+    /// login chain. This check does not prevent that. It bounds it.
+    ///
+    /// A mismatch is **not** refused. A second reader on a household iPad is
+    /// entirely legitimate, and from here it is indistinguishable from an
+    /// injected token. What a mismatch *is* is a fact about the state already
+    /// in memory: the catalogue, the ratings, the download set, the high-water
+    /// marks, the queued position writes and any pending deep link all belong
+    /// to the previous account — and `enterLibrary` walked straight into them,
+    /// so the arriving reader was shown the departing one's shelf until the
+    /// first refresh returned, and the departing one's undrained writes were
+    /// posted under the arriving one's token.
+    private func handOverIfTheAccountChanged(to user: User, on server: URL) async {
+        let previous = UserDefaults.standard.string(forKey: Self.accountKey(for: server))
+        guard let previous, previous != user.id else { return }
+        // Ids and the server, never the token. Worth a warning rather than an
+        // info: on a shared device this is an ordinary hand-over, and on an
+        // unencrypted network it is the only trace an injected token leaves.
+        IssaLog.warning("adopted token resolves to a different account", [
+            "server": server.absoluteString,
+            "from": previous,
+            "to": user.id,
+        ])
+        await clearAccountScopedState(nowPlaying: nowPlayingController)
+    }
+
     /// Signs out and leaves nothing behind.
     ///
     /// - Parameter keepDownloads: books already on the device are expensive to
     ///   fetch again, so the choice is offered rather than assumed.
     public func signOut(keepDownloads: Bool = false, nowPlaying: NowPlayingController? = nil) async {
         await session?.signOut()
+        await clearAccountScopedState(nowPlaying: nowPlaying)
+
+        // What only a sign-out lets go of. A switch between accounts on this
+        // same server keeps all three: the store file is per server, the
+        // session is about to be reused, and the reader is going to a library
+        // rather than back to the form.
+        store = nil
+        session = nil
+        if !keepDownloads {
+            // Through StorageRoot, or "delete my downloads" would look at
+            // Application Support on an Apple TV and delete nothing.
+            for folder in ["Books", "Audio"] {
+                try? FileManager.default.removeItem(at: StorageRoot.directory(folder))
+            }
+        }
+        phase = .chooseServer
+    }
+
+    /// Everything held in memory, on the lock screen or on the device that
+    /// belongs to the account being left — and to no other.
+    ///
+    /// Shared by `signOut` and by an account *switch*: adopting a token whose
+    /// identity is not the one this server was last signed in as. The two
+    /// differ only in what they keep, and agree completely on what has to go,
+    /// so they are one method rather than two lists. A second list written
+    /// later would be missing fields, and every field missing from it is one
+    /// account's data shown to another.
+    private func clearAccountScopedState(nowPlaying: NowPlayingController?) async {
+        // First, before anything suspends. This is the fence every detached
+        // catalogue write checks, and it sat after two awaits — the server
+        // sign-out and the store's DELETE — so a refresh resuming in that
+        // window captured the old generation, passed every guard, and wrote
+        // the departed account's catalogue back over the DELETE.
+        catalogueGeneration += 1
         // Stop the audio, and stop anything listening for it, before the
         // stopping itself is announced.
         //
@@ -329,12 +420,15 @@ public final class AppModel {
         // button resumed it.
         stopListening(nowPlaying: nowPlaying)
         // And the open book, which since it outlives its screen would otherwise
-        // keep narrating the signed-out account's library out loud.
+        // keep narrating the departed account's library out loud.
         releaseAllReaders()
         // The catalogue belongs to the account, so it goes with it. Annotations
         // do not: they are device-local and this is their only copy.
+        //
+        // This clears the `mutation` table too, which is what stops the
+        // departed account's undrained position writes being posted under the
+        // arriving account's token.
         try? await store?.clearAccountData()
-        store = nil
         mutations = nil
         // The high-water marks go too. They are keyed by book uuid, and the
         // same server hands the same uuids to a different account — so without
@@ -347,14 +441,25 @@ public final class AppModel {
         statuses = []
         ratings = [:]
         loadError = nil
+        // Everything else keyed by a value the next account shares. The server
+        // hands the same book uuids to a different reader, which is why
+        // positionGuards is cleared two lines up — and `pendingBook` is a book
+        // uuid, so a widget tap left unconsumed would open in the next
+        // account's library.
+        pendingBook = nil
+        readerRequest = nil
+        visibleReaderUUID = nil
+        listeningError = nil
+        NotificationCenter.default.post(name: PlaybackSettings.signOutNotification, object: nil)
 
         // The account's transfers go with it. The manager itself stays: its
         // background session owns its identifier for the life of the process,
         // and tearing it down here made the session the next sign-in built
         // invalid from birth — its first task raised an uncatchable
-        // `NSGenericException`. `connect` points this one at the new account.
+        // `NSGenericException`. `connect` points this one at the new account,
+        // and on a switch it needs no re-pointing: same server, and the token
+        // provider reads the keychain, which now holds the arriving account's.
         downloads?.stop()
-        session = nil
         CoverCache.shared.clear()
         // The widget keeps showing the last book on a signed-out device unless
         // its snapshot is cleared and its timeline reloaded.
@@ -366,17 +471,8 @@ public final class AppModel {
         CurrentBookPublisher.shared.clear()
         // And the device-wide Spotlight index, which otherwise keeps this
         // account's titles, bylines and blurbs answering Home Screen searches
-        // for up to 30 days after sign-out.
+        // for up to 30 days after it stopped being the account signed in.
         await SpotlightIndex.clear()
-
-        if !keepDownloads {
-            // Through StorageRoot, or "delete my downloads" would look at
-            // Application Support on an Apple TV and delete nothing.
-            for folder in ["Books", "Audio"] {
-                try? FileManager.default.removeItem(at: StorageRoot.directory(folder))
-            }
-        }
-        phase = .chooseServer
     }
 
     /// Opens the durable write queue, if it is not open already.
@@ -406,6 +502,32 @@ public final class AppModel {
         }
         phase = .ready
         await refreshLibrary()
+    }
+
+    /// Bumped whenever the catalogue stops belonging to this account.
+    ///
+    /// A detached write that outlives its account is not a hypothetical: the
+    /// one below took a full merged catalogue and could put it back after
+    /// sign-out had deleted it.
+    private(set) var catalogueGeneration = 0
+
+    /// Re-seeds the write guards when the server's position moved backwards.
+    ///
+    /// `PositionGuard.decide` does re-baseline, but only for a `.chosen` write;
+    /// nothing re-seeded the guard when `reconciled(with:)` legitimately adopted
+    /// a *lower* server position. So after restarting a finished book on another
+    /// device, pressing Play here — which produces `.derived` writes — failed
+    /// the high-water test on every tick and returned before both the queue and
+    /// the store, for the rest of the process. The widget went on advertising
+    /// progress that was persisted nowhere, and only an explicit scrub could
+    /// clear it.
+    func reseedGuards(against catalogue: [Book]) {
+        for book in catalogue {
+            guard let guardState = positionGuards[book.uuid] else { continue }
+            guard let progress = book.progress, progress < guardState.highWater else { continue }
+            positionGuards[book.uuid] = PositionGuard(
+                highWater: progress, duration: LibraryArrangement.duration(of: book))
+        }
     }
 
     /// Where the last signed-in account for a server is remembered, so an
@@ -457,18 +579,47 @@ public final class AppModel {
             let known = Dictionary(books.map { ($0.uuid, $0) }, uniquingKeysWith: { first, _ in first })
             let merged = fetched.map { known[$0.uuid]?.reconciled(with: $0) ?? $0 }
             books = merged
+            reseedGuards(against: merged)
             rebuildDerived()
             statuses = fetchedStatuses
-            ratings = fetchedRatings
+            // Reconciled against the queue, not assigned verbatim. A rating
+            // changed offline is still pending, so taking the server's answer
+            // wholesale put the old value back on screen — and the drain
+            // kicked off below then removed it again a moment later.
+            var mergedRatings = fetchedRatings
+            for uuid in await pendingRatingBookUUIDs() {
+                if let local = ratings[uuid] { mergedRatings[uuid] = local }
+                else { mergedRatings[uuid] = nil }
+            }
+            ratings = mergedRatings
             loadError = nil
             IssaLog.info("library refreshed", ["books": String(fetched.count)])
 
             // Off the refresh gesture entirely: a full catalogue rewrite and a
             // serial drain of queued writes have no business holding the
             // spinner open.
-            Task { [store, weak self] in
-                try? await store?.replaceCatalogue(merged)
-                await self?.drainPendingWrites()
+            //
+            // `weak self` for the store as well as the model. `store` used to
+            // be captured by value, so `store = nil` in signOut did not stop
+            // this — sign-out suspends on its network POST, this Task
+            // interleaved, `clearAccountData()` ran its DELETE, and then a full
+            // catalogue was written back. The next launch read it with only a
+            // `hasCredential` gate in front, which is the leak that gate exists
+            // to prevent.
+            let generation = catalogueGeneration
+            let ratingsToPersist = mergedRatings
+            Task { [weak self] in
+                guard let self, self.catalogueGeneration == generation else { return }
+                try? await self.store?.replaceCatalogue(merged)
+                // Behind the same fence as the catalogue. This write sat in
+                // the body above, outside every generation check, and the
+                // `rating` table has no account column — so a refresh racing
+                // a sign-out persisted the departed account's ratings for the
+                // next one to read back at launch.
+                guard self.catalogueGeneration == generation else { return }
+                try? await self.store?.replaceRatings(ratingsToPersist)
+                guard self.catalogueGeneration == generation else { return }
+                await self.drainPendingWrites()
             }
         } catch {
             IssaLog.failure("library refresh", error, ["server": serverAddress])
@@ -482,10 +633,27 @@ public final class AppModel {
     }
 
     /// Sends anything written while there was no connection.
-    public func drainPendingWrites() async {
+    ///
+    /// - Parameter waitingForInFlight: wait for a drain already running rather
+    ///   than declining. `true` only from `flushOpenReaders`, the exit path,
+    ///   where declining meant sending nothing and there is no next enqueue to
+    ///   try again.
+    public func drainPendingWrites(waitingForInFlight: Bool = false) async {
         guard let session, let mutations else { return }
-        _ = await MutationDrain(queue: mutations, client: session.client).drain()
+        _ = await MutationDrain(queue: mutations, client: session.client)
+            .drain(waitingForInFlight: waitingForInFlight)
         pendingWrites = (try? await mutations.count) ?? 0
+    }
+
+    /// Books whose rating is still waiting to reach the server.
+    ///
+    /// A refresh that assigns `myRatings()` verbatim overwrites a change the
+    /// queue has not drained yet, so the old value flashes back on screen and
+    /// is then removed again when the drain lands.
+    private func pendingRatingBookUUIDs() async -> Set<String> {
+        guard let mutations else { return [] }
+        let rows = (try? await mutations.pending()) ?? []
+        return Set(rows.filter { $0.kind == .rating }.map(\.bookUUID))
     }
 
     /// Records a write locally, then attempts it.
@@ -553,10 +721,32 @@ public final class AppModel {
     /// a SwiftUI body reads it more than once per frame.
     public private(set) var arrangedBooks: [Book] = []
 
+    /// Author name to their books, for the book screen's "More by…" rail.
+    ///
+    /// `LibraryDerivation.byAuthor` builds this by grouping the whole library,
+    /// and it is a computed property — so reading it from a view body grouped
+    /// the whole library, and `relatedRails` read two of them. That body
+    /// re-runs on every debounced position save, which while narrating is
+    /// every two seconds. Authors do not change with a page turn.
+    public private(set) var booksByAuthor: [String: [Book]] = [:]
+    public private(set) var booksByNarrator: [String: [Book]] = [:]
+
+    /// The catalogue by uuid.
+    ///
+    /// `BookDetailView` re-resolves its book from `app.books` on every line it
+    /// draws — deliberately, so status, rating and progress stay honest — and
+    /// that was a linear scan of the library, fifty-two times per body. Rebuilt
+    /// with the position-dependent state rather than with the facets, because
+    /// the whole point of re-resolving is that a position change must show.
+    public private(set) var bookByUUID: [String: Book] = [:]
+
     /// Recomputes everything derived from the catalogue.
     func rebuildDerived() {
         facets = LibraryFacets(books: books, downloadedUUIDs: downloadedUUIDs)
         rails = LibraryRails(books: books)
+        let derivation = LibraryDerivation(books: books)
+        booksByAuthor = derivation.byAuthor
+        booksByNarrator = derivation.byNarrator
         rebuildAfterPositionChange()
     }
 
@@ -567,6 +757,7 @@ public final class AppModel {
     /// every debounced save while narrating.
     private func rebuildAfterPositionChange() {
         readingHome = ReadingHome(books: books, rails: rails)
+        bookByUUID = Dictionary(books.map { ($0.uuid, $0) }, uniquingKeysWith: { first, _ in first })
         rebuildArranged()
     }
 
@@ -933,7 +1124,17 @@ public final class AppModel {
         for model in readers.values {
             await model.saveProgress()
         }
-        await drainPendingWrites()
+        await drainPendingWrites(waitingForInFlight: true)
+        // The log too, and here rather than in each scene-phase handler,
+        // because all three platforms already route their exit through this
+        // one method — which is the arrangement `TerminationDelegate` exists to
+        // guarantee. `IssaLog.append` buffers and flushes on a utility-priority
+        // detached task, so the entries immediately before a suspension the
+        // system then kills are exactly the ones that never reached the file:
+        // the entries the log exists to capture. Awaited off the main actor:
+        // the flush is lock-held file I/O, and this runs inside the background
+        // assertion and the terminate deadline.
+        await IssaLog.flush()
     }
 
     /// Releases every open reader and stops whichever is narrating. Every open
@@ -1231,7 +1432,7 @@ public final class AppModel {
             type: track?.type ?? "audio/mpeg",
             title: track.map { coordinator.manifest.title(of: $0, at: index) },
             locations: .init(
-                progression: min(max(within, 0), 1),
+                progression: (within.asProgression ?? 0),
                 totalProgression: coordinator.bookProgress,
             ),
         )
@@ -1377,11 +1578,16 @@ public final class AppModel {
     }
 
     public func setRating(_ value: Double?, for book: Book) async {
-        guard let session else { return }
+        guard session != nil else { return }
         if let value { ratings[book.uuid] = value } else { ratings.removeValue(forKey: book.uuid) }
+        // Persisted the way `setStatus` persists a shelf change. Without this
+        // the map lived only in memory and was repopulated solely from
+        // `myRatings()`, so a rating set offline vanished on the next cold
+        // launch — the queued write still reached the server eventually, but
+        // the reader had every reason to think it was lost and enter it again.
+        try? await store?.setRating(value, forBook: book.uuid)
         await enqueue(.rating, bookUUID: book.uuid,
                       payload: MutationDrain.RatingPayload(rating: value))
-        _ = session
     }
 
     /// Records a position the app has just written, without asking the server.
@@ -1413,7 +1619,10 @@ public final class AppModel {
     }
 
     /// One high-water mark per book, for the life of the session.
-    private var positionGuards: [String: PositionGuard] = [:]
+    /// Internal, not private, for `PositionWritingTests` — which used to build
+    /// its own `PositionGuard` and assert on that, proving nothing about the
+    /// re-seed it was named for. Nothing outside the tests writes this.
+    var positionGuards: [String: PositionGuard] = [:]
 
     /// The single place a reading position is written.
     ///
@@ -1476,12 +1685,20 @@ public final class AppModel {
                 "origin": origin.rawValue,
             ])
         }
+        // Locally first, then the queue. `enqueue` ends in `drainPendingWrites()`
+        // — one POST per queued item at URLSession's 60-second default — so with
+        // this pair the other way round, a page turned offline wrote the queue
+        // row, blocked on the drain, and was suspended by iOS before
+        // `recordPosition` ever ran. The in-memory catalogue and the store were
+        // never updated, which is exactly the failure this method's own doc
+        // comment says the code was changed to prevent: "a chapter read offline
+        // and then killed came back at the old percentage."
+        await recordPosition(locator, timestamp: timestamp, for: bookUUID)
         await enqueue(
             .position, bookUUID: bookUUID,
             payload: MutationDrain.PositionPayload(locator: locator, timestamp: timestamp),
             supersedes: timestamp,
         )
-        await recordPosition(locator, timestamp: timestamp, for: bookUUID)
         return true
     }
 
@@ -1491,9 +1708,17 @@ public final class AppModel {
     /// reading session the local copy is stale in a way the user can see.
     public func refresh(book: Book) async {
         guard let session,
-              let index = books.firstIndex(where: { $0.uuid == book.uuid }),
+              books.contains(where: { $0.uuid == book.uuid }),
               let fresh = try? await LibraryService(client: session.client).book(book.uuid)
         else { return }
+        // Resolved *after* the await, not before it. The index used to be bound
+        // in the same guard that then suspends on a network round trip, and
+        // `books` can be replaced entirely during that suspension — signing out
+        // empties it, and a refresh can return a shorter catalogue — so the
+        // subscript trapped. The quieter variant was worse: a merely reordered
+        // catalogue wrote this book's server data into whichever book had taken
+        // its place, and then persisted that.
+        guard let index = books.firstIndex(where: { $0.uuid == book.uuid }) else { return }
         books[index] = books[index].reconciled(with: fresh)
         rebuildDerived()
     }

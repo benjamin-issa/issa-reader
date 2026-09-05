@@ -37,9 +37,33 @@ public final class NowPlayingController {
     /// the same guard `CurrentBookPublisher.fetchCover` keeps for the widget.
     private var artworkGeneration = 0
 
+    /// How many times the remote command centre has been re-registered.
+    ///
+    /// Test-visible, and it is the finding's own unit: `configure` used to be
+    /// called once per scene and again per reader window, so a dozen open books
+    /// meant fourteen `MPRemoteCommandCenter` teardown-and-re-register cycles on
+    /// the next nudge of the skip interval. Counting them is the only way to
+    /// assert that is over.
+    public private(set) var remoteActivations = 0
+
+    /// Bumped by each `configure` that does real work, so an observation chain
+    /// installed by an earlier one stops re-arming itself.
+    private var observationGeneration = 0
+
     public init() {}
 
+    /// Idempotent, which it was not.
+    ///
+    /// Four scenes call this — three on macOS, one each on iOS and tvOS — and
+    /// the macOS reader window calls it again for every book opened. Each call
+    /// re-registered the whole command set and installed a fresh
+    /// `observeCommandMap()` chain that re-arms itself forever and that nothing
+    /// removed, so the chains accumulated for the life of the process.
     public func configure(settings: PlaybackSettings) {
+        // Identity, not equality: these scenes are all handed the same
+        // `@State`-owned instance, so a second call with it is the same
+        // configuration and has nothing to do.
+        guard self.settings !== settings else { return }
         self.settings = settings
         remote.commandMap = settings.commandMap
         remote.onAction = { [weak self] action in
@@ -62,11 +86,22 @@ public final class NowPlayingController {
             }
         }
         remote.onRateChange = { [weak self] rate in
-            self?.coordinator?.player.rate = rate
-            self?.settings?.playbackRate = Double(rate)
+            // Clamped: this value comes from
+            // `MPChangePlaybackRateCommandEvent`, which is the system's to
+            // populate, and it went straight into both the player and the
+            // persisted setting with no bound of any kind.
+            let legal = PlaybackRate.clamped(Double(rate))
+            self?.coordinator?.player.rate = Float(legal)
+            self?.settings?.playbackRate = legal
         }
         remote.activate()
-        observeCommandMap()
+        remoteActivations += 1
+        // Every chain installed before this one stops re-arming when it next
+        // fires. Re-pointing at a *different* settings object is the case that
+        // needs this — the guard above handles the common one — and without it
+        // the old object's chain would go on republishing its values forever.
+        observationGeneration &+= 1
+        observeCommandMap(generation: observationGeneration)
     }
 
     /// Keeps the system's buttons in step with the reader's choices.
@@ -77,8 +112,8 @@ public final class NowPlayingController {
     /// settings) but not `preferredIntervals`, so the lock screen said "30" and
     /// jumped by whatever had been typed. One observer here rather than an
     /// `.onChange` in each of the three app targets, none of which had one.
-    private func observeCommandMap() {
-        guard let settings else { return }
+    private func observeCommandMap(generation: Int) {
+        guard let settings, generation == observationGeneration else { return }
         withObservationTracking {
             _ = settings.commandMap
             // The scope changes what the Lock Screen's numbers mean, so it has
@@ -89,9 +124,10 @@ public final class NowPlayingController {
             // The callback runs before the value changes, so read it back on
             // the next turn — and re-arm, because tracking is one-shot.
             Task { @MainActor [weak self] in
-                self?.syncCommandMap()
-                self?.publish()
-                self?.observeCommandMap()
+                guard let self, generation == observationGeneration else { return }
+                syncCommandMap()
+                publish()
+                observeCommandMap(generation: generation)
             }
         }
     }
@@ -125,6 +161,12 @@ public final class NowPlayingController {
             onExpire: { [weak coordinator] in coordinator?.player.pause() },
             fade: { [weak coordinator] level in coordinator?.player.volume = level },
         )
+        // A duration timer counts time spent *listening*, not wall-clock time.
+        // Without this, pausing to answer the door and coming back twenty
+        // minutes later found it had expired against a paused player, faded the
+        // volume down and reset its own mode to off — so the moon read "not
+        // armed" and the listener pressed play believing it still was.
+        timer.isPlaying = { [weak coordinator] in coordinator?.player.isPlaying ?? false }
         sleepTimer = timer
         // "End of chapter" is driven by the audio running off the end of one,
         // not by a clock, so the timer has to be told — and only of that. A
@@ -179,6 +221,7 @@ public final class NowPlayingController {
         // Skip intervals are baked into the system's buttons, so they have to be
         // re-declared when the user changes them.
         remote.activate()
+        remoteActivations += 1
     }
 
     private var currentChapterTitle: () -> String? = { nil }

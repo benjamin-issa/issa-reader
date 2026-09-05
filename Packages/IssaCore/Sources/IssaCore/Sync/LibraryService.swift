@@ -16,7 +16,32 @@ public struct LibraryService: Sendable {
     }
 
     public func allBooks() async throws -> [Book] {
-        try await client.get(Endpoint.books)
+        Self.refusingUnsafeIdentifiers(try await client.get(Endpoint.books))
+    }
+
+    /// Drops catalogue entries whose uuid could not safely name a path.
+    ///
+    /// The boundary, so nothing downstream has to remember. A uuid reaches four
+    /// filesystem sinks and every `/books/{uuid}/…` route, and none of that
+    /// interpolation escapes anything — so one malformed entry is enough to let
+    /// a hostile or compromised server pick where a download lands. Dropping
+    /// the row loses one book from the shelf; keeping it risks the container.
+    ///
+    /// Logged rather than silent: a book vanishing from the library with no
+    /// explanation is its own support problem.
+    static func refusingUnsafeIdentifiers(_ books: [Book]) -> [Book] {
+        var kept: [Book] = []
+        kept.reserveCapacity(books.count)
+        for book in books {
+            if book.uuid.isBareUUID {
+                kept.append(book)
+            } else {
+                IssaLog.warning("catalogue entry refused: uuid is not a uuid", [
+                    "title": book.title,
+                ])
+            }
+        }
+        return kept
     }
 
     public func statuses() async throws -> [Status] {
@@ -36,7 +61,12 @@ public struct LibraryService: Sendable {
     }
 
     public func book(_ uuid: String) async throws -> Book {
-        try await client.get(Endpoint.book(uuid))
+        let book: Book = try await client.get(Endpoint.book(uuid))
+        guard book.uuid.isBareUUID else {
+            IssaLog.warning("book refused: uuid is not a uuid", ["title": book.title])
+            throw StorytellerError.notFound
+        }
+        return book
     }
 
     /// Storyteller keeps two covers per book and serves them from one route.
