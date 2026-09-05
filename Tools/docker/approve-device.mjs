@@ -9,7 +9,7 @@ import { chromium } from "playwright"
 const HOST = process.env.PUBLIC_HOST ?? "localhost"
 const BASE = process.env.STORYTELLER_URL ?? `http://${HOST}:8001`
 const MODE = process.env.MODE ?? "oidc"
-const OIDC_USER = { username: "benjamin", password: "reader" }
+const OIDC_USER = { username: "reader", password: "reader" }
 const ADMIN = { username: "admin", password: "issareader" }
 const userCode = process.argv[2]
 

@@ -9,7 +9,7 @@ import { chromium } from "playwright"
 const STORYTELLER = process.env.STORYTELLER_URL ?? "http://localhost:8001"
 const ADMIN = { username: "admin", password: "issareader" }
 // The Keycloak realm user, used to prove the third-party OIDC path.
-const OIDC_USER = { username: "benjamin", password: "reader" }
+const OIDC_USER = { username: "reader", password: "reader" }
 // "password" signs in with local credentials; "oidc" goes out to Keycloak.
 const MODE = process.env.MODE ?? "password"
 const log = (...a) => console.log("[device]", ...a)

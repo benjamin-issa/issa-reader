@@ -62,10 +62,10 @@
   ],
   "users": [
     {
-      "username": "benjamin",
-      "email": "benjamin@issa.test",
-      "firstName": "Benjamin",
-      "lastName": "Issa",
+      "username": "reader",
+      "email": "reader@issa.test",
+      "firstName": "Test",
+      "lastName": "Reader",
       "enabled": true,
       "emailVerified": true,
       "credentials": [
