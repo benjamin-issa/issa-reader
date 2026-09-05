@@ -117,6 +117,21 @@ public extension ReadiumLocator {
     /// The media-overlay sentence id this locator points at, when there is one.
     var sentenceID: String? { locations?.fragments?.first }
 
+    /// Whether `totalProgression` is a fraction of the **audio** rather than of
+    /// the text.
+    ///
+    /// One field, two clocks. `ReaderModel` writes a text progression with
+    /// `type: "application/xhtml+xml"`; `AppModel.audioLocator` writes an audio
+    /// progression with the track's own type. Both have always written the type
+    /// correctly — nothing was reading it, so each side helpfully interpreted
+    /// the other's number on its own scale. That is how a reading position
+    /// resumed an audiobook tens of minutes early, and how an audiobook
+    /// position dropped the reader into the wrong chapter.
+    ///
+    /// Deliberately a property of the locator rather than a new field on the
+    /// wire: the evidence is already there and already round-trips.
+    var isAudioScaled: Bool { type.lowercased().hasPrefix("audio/") }
+
     /// Matches this locator's href against a publication's spine hrefs.
     ///
     /// The href a locator carries is not reliably the one the OPF spine uses.

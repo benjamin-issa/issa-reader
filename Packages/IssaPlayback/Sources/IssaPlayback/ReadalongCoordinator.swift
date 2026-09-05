@@ -64,6 +64,35 @@ public final class ReadalongCoordinator {
     public var isEmpty: Bool { timeline.isEmpty }
     public var totalDuration: TimeInterval { timeline.totalDuration }
 
+    /// Where the narration is, in terms the audiobook engine can also act on.
+    ///
+    /// This is the bridge between the two clocks — see `AudioAnchor`. The media
+    /// overlay already names the audio file and the offset within it for every
+    /// sentence, so the read-along can hand the audiobook an exact place rather
+    /// than a fraction of a different timeline.
+    ///
+    /// Anchored on the player's own clock rather than on `bookProgress`, for
+    /// the reason `skipBook` gives: `bookProgress` is written by the periodic
+    /// observer and still reads zero in the first moments after a jump.
+    ///
+    /// `nil` before anything has played. A book with no anchor yet is exactly
+    /// the case the resume order in `AppModel.startListening` exists to handle,
+    /// and inventing one here would defeat it.
+    public var currentAnchor: AudioAnchor? {
+        guard let entry = activeEntry else { return nil }
+        // The player's time is already an offset into `entry.audioHref` — clip
+        // times restart per file — so it is the anchor's offset directly.
+        // Clamped into the entry it belongs to: between clips the clock can sit
+        // fractionally past the end.
+        let time = player.currentTime
+        guard time.isFinite else { return nil }
+        return AudioAnchor(
+            audioHref: entry.audioHref,
+            offset: min(max(entry.start, time), entry.end),
+            writtenAt: Date().timeIntervalSince1970,
+        )
+    }
+
     // MARK: - Clock
 
     /// Maps the player's position within the current file onto a fragment.

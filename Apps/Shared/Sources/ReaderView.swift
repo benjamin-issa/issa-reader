@@ -859,6 +859,26 @@ public struct ReaderView: View {
         CGPoint(x: point.x - model.style.pageMargin, y: point.y)
     }
 
+    /// Whether this book is playing, by whichever engine happens to own it.
+    ///
+    /// The audiobook takes precedence exactly as `AppModel.playback` does, so
+    /// the footer, the mini bar and the lock screen cannot disagree.
+    private var bookIsPlaying: Bool {
+        if app.listeningBook?.uuid == model.book.uuid, let listening = app.listening {
+            return listening.player.isPlaying
+        }
+        return model.isPlaying
+    }
+
+    /// Pauses or resumes whichever engine is playing this book.
+    private func togglePlaybackForThisBook() async {
+        if app.listeningBook?.uuid == model.book.uuid, let listening = app.listening {
+            if listening.player.isPlaying { listening.player.pause() } else { listening.player.play() }
+            return
+        }
+        await model.togglePlayback()
+    }
+
     /// The strip below the page.
     ///
     /// Its `ReaderChrome.barHeight` is reserved whether or not the controls are
@@ -873,15 +893,24 @@ public struct ReaderView: View {
                     // to the one button and moved skip ±N and the waveform into
                     // the full player behind a swipe — and the phone lost every
                     // visible way to move through the audio. Back as they were.
+                    // Reflects whatever is actually playing *this book*, not
+                    // only this screen's own narration.
+                    //
+                    // The reader has a read-along coordinator; the audiobook
+                    // has a separate one, and CarPlay drives that. So with the
+                    // car playing, `model.isPlaying` was false and an open
+                    // reader showed a paused book while it was audibly playing
+                    // — "when I opened the app on my phone, it didn't appear to
+                    // be playing". The button drove the silent engine too.
                     Button {
-                        Task { await model.togglePlayback() }
+                        Task { await togglePlaybackForThisBook() }
                     } label: {
-                        Image(systemName: model.isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                        Image(systemName: bookIsPlaying ? "pause.circle.fill" : "play.circle.fill")
                             .font(.system(size: 26))
                             .foregroundStyle(model.style.theme.accent)
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel(model.isPlaying ? "Pause narration" : "Play narration")
+                    .accessibilityLabel(bookIsPlaying ? "Pause narration" : "Play narration")
                     // VoiceOver has no swipe-up, so it reaches the player through
                     // a named action as well as the waveform button.
                     .accessibilityAction(named: "Open player") { openPlayer() }

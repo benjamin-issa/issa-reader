@@ -66,6 +66,28 @@ public final class AudiobookCoordinator {
     }
 
     public var tracks: [AudiobookManifest.Track] { manifest.playableTracks }
+
+    /// Where the audiobook is, in terms the read-along engine can also act on.
+    ///
+    /// The other half of `AudioAnchor`'s bridge — see `ReadalongCoordinator`'s
+    /// property of the same name. A track and an offset into it, which is what
+    /// this engine natively knows and what the media overlay can be matched
+    /// against, so the two clocks never have to be converted by arithmetic.
+    public var currentAnchor: AudioAnchor? {
+        let all = tracks
+        guard all.indices.contains(trackIndex) else { return nil }
+        let start = manifest.startTime(ofTrackAt: trackIndex)
+        // Derived from the book clock rather than read off the player, so it
+        // agrees with whatever this coordinator last published — the player's
+        // own time is per-item and briefly zero across a track change.
+        let within = bookTime - start
+        guard within.isFinite else { return nil }
+        return AudioAnchor(
+            audioHref: all[trackIndex].href,
+            offset: within,
+            writtenAt: Date().timeIntervalSince1970,
+        )
+    }
     public var totalDuration: TimeInterval { manifest.totalDuration }
     public var isEmpty: Bool { tracks.isEmpty }
 
