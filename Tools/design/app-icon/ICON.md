@@ -27,9 +27,9 @@ python3 Tools/scripts/make-tvos-assets.py           # tvOS brand assets
 ```
 
 Change the numbers in one place and the other: `icon_mark.py` carries the
-geometry table below, and docs/VERIFICATION.md records how the Pillow output
-was diffed against a browser render of these SVGs (mean difference under
-0.2/255, the rest antialiasing).
+geometry table below, and the two are kept in step by diffing the Pillow output
+against a browser render of these SVGs — last measured at a mean difference
+under 0.2/255, the rest antialiasing.
 
 ## What each platform gets
 

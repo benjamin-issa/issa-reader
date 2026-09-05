@@ -9,7 +9,7 @@ Mac icon and a 4640 px top shelf are both crisp.
 Both generators import this: `make-app-icon.py` renders the square tile for
 iOS and macOS, `make-tvos-assets.py` renders the same mark split across the
 parallax layers tvOS wants. Keep the numbers here equal to the SVGs; the
-fidelity check in docs/VERIFICATION.md diffs the two.
+fidelity check diffs a render of each against the other.
 """
 from PIL import Image, ImageDraw
 

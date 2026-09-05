@@ -50,8 +50,6 @@ accommodate it.
 | Mac | Sidebar library, each book in its own window, menu-bar transport, `issareader://` links and Handoff |
 | Widget | Current book, chapter and progress from a shared App Group snapshot |
 
-`docs/VERIFICATION.md` records exactly what has been run, and what has not.
-
 ## Layout
 
 ```

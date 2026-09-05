@@ -128,8 +128,8 @@ find "$OUT" -mindepth 1 -maxdepth 1 -type d ! -name _sheets -exec rm -rf {} +
 
 echo "▸ building once for all destinations"
 # Signed, deliberately: CODE_SIGNING_ALLOWED=NO breaks the simulator keychain
-# and every background download (docs/VERIFICATION.md). The sweep needs neither,
-# but the rule is not worth a special case.
+# and every background download. The sweep needs neither, but the rule is not
+# worth a special case.
 xcodebuild build-for-testing \
     -project IssaReader.xcodeproj \
     -scheme "$SCHEME" \
