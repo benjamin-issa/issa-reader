@@ -62,6 +62,27 @@ struct ReaderChromeTests {
         #expect(flat.bottomReserve == ReaderChrome.barHeight + 24)
     }
 
+    @Test("the Mac's rounded corner is reserved like any other unsafe edge")
+    func macCornerIsReserved() {
+        // The Mac has no notch and no home indicator, so `ReaderInsets` handed
+        // it nothing at all — and the footer, being the last thing in the
+        // reader's stack, ended exactly at the window's bottom edge with the
+        // play button, the chapter title and the percentage sitting inside the
+        // corner radius.
+        //
+        // The fix is an inset, and the reason it belongs in `ReaderInsets`
+        // rather than as a padding on the footer is this second assertion: the
+        // page's budget has to shrink by exactly as much as the footer moves
+        // up, or the last line is pushed under the bar instead of clearing it.
+        let mac = ReaderChrome(safeAreaTop: 0, safeAreaBottom: 14, margin: 24)
+        let flat = ReaderChrome(safeAreaTop: 0, safeAreaBottom: 0, margin: 24)
+
+        #expect(mac.bottomReserve == flat.bottomReserve + 14)
+        #expect(mac.topReserve == flat.topReserve, "the titlebar is AppKit's business, not ours")
+        #expect(
+            mac.pageSize(in: Self.window).height == flat.pageSize(in: Self.window).height - 14)
+    }
+
     @Test("negative insets cannot shrink the reserve")
     func negativeInsetsAreClamped() {
         let odd = ReaderChrome(safeAreaTop: -20, safeAreaBottom: -5, margin: -10)

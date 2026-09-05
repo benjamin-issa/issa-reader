@@ -152,6 +152,36 @@ public final class AppModel {
         ServerAddress.normalize(input)
     }
 
+    /// The launch restore, started rather than awaited.
+    ///
+    /// Deliberately not bound to any view's lifetime, and that is the whole
+    /// point. `restoreIfPossible` moves `phase` — `connect` sets `.signingIn`
+    /// — and on the Mac and the television that phase change swaps the branch
+    /// of the root `switch` the calling `.task` was attached to. SwiftUI tears
+    /// the old branch down, the `.task` is cancelled, and the restore is
+    /// killed by the very state change it just made. The reader then saw three
+    /// `/api/v2/user` requests fail with `-999 cancelled` inside 153ms — both
+    /// backoffs skipped, because a cancelled `Task.sleep` returns at once — and
+    /// was told "Couldn't reach your server", a network diagnosis for an app
+    /// that had hung up on itself.
+    ///
+    /// The phone never had this: `AppServices` already starts the restore in an
+    /// unstructured `Task`. This gives the other two platforms the same thing.
+    ///
+    /// Once per launch. The guard also retires the accidental second attempt —
+    /// the sign-in branch's own `.task` re-firing — that had been quietly
+    /// papering over the first one being killed.
+    public func startRestore() {
+        guard restoreTask == nil else { return }
+        restoreTask = Task { [weak self] in await self?.restoreIfPossible() }
+    }
+
+    /// Held so `startRestore` can tell "already ran" from "never ran". Never
+    /// cancelled: nothing should ever cancel the launch restore, which is the
+    /// bug this exists to close.
+    private var restoreTask: Task<Void, Never>?
+
+
     /// Reconnects to the last server on launch when a token is already stored,
     /// so a returning reader lands in their library rather than on a form.
     public func restoreIfPossible() async {

@@ -74,7 +74,7 @@ final class AppServices {
         // displacing the other.
         app.nowPlayingController = nowPlaying
         connectCarPlay()
-        Task { await app.restoreIfPossible() }
+        app.startRestore()
     }
 
     /// Hands CarPlay the things it cannot reach on its own: the library,

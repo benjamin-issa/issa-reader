@@ -113,6 +113,18 @@ public final class Session {
 
     private func loadIdentity(rejectionMeans rejection: State = .signedOut) async {
         for attempt in 1 ... Self.identityAttempts {
+            // Cancellation is not a network fault and must not be retried as
+            // one. A cancelled task fails every request instantly with -999 and
+            // returns from every `try? await Task.sleep` at once, so the three
+            // attempts and both backoffs were spent inside 153ms — and the
+            // reader was then told to check they were on the same network as
+            // their server. Leaving `state` alone is the point: whatever
+            // cancelled this knows more about why than a guess at the network
+            // does.
+            if Task.isCancelled {
+                IssaLog.warning("identity check cancelled", ["attempt": String(attempt)])
+                return
+            }
             do {
                 let user: User = try await client.get(Endpoint.user)
                 state = .signedIn(user)
@@ -140,6 +152,13 @@ public final class Session {
                 state = .failed(AppFacingError.text(for: error))
                 return
             }
+        }
+        // The same reason as above: three transport failures caused by
+        // cancellation must not arrive as a sentence about the reader's
+        // network.
+        guard !Task.isCancelled else {
+            IssaLog.warning("identity check cancelled", ["attempt": "final"])
+            return
         }
         state = .failed("Couldn't reach your server. Check that you're on the same network as your server.")
     }

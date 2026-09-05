@@ -140,7 +140,7 @@ public struct BookDetailView: View {
         // expansion — so there is one full player, not a second one here.
         // The Mac's player is a window, opened by `presentPlayer` below.
         #if !os(macOS)
-        .sheet(isPresented: $showsPlayer) { NowPlayingSheet() }
+        .sheet(isPresented: $showsPlayer) { NowPlayingSheet().macSheetSize() }
         #endif
         // Nothing to expand into once playback has stopped.
         .onChange(of: app.playback == nil) { _, stopped in

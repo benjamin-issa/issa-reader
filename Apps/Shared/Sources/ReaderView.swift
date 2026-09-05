@@ -278,6 +278,7 @@ public struct ReaderView: View {
                 }
             }
             .presentationDetents([.medium, .large])
+            .macSheetSize()
         }
         // Not on the Mac, where the player is a window several open books can
         // share rather than a sheet owned by whichever one summoned it.
@@ -310,6 +311,7 @@ public struct ReaderView: View {
                     }
                 }
             }
+            .macSheetSize()
         }
         .sheet(isPresented: $showsAnnotations) {
             NavigationStack {
@@ -318,6 +320,7 @@ public struct ReaderView: View {
                 }
             }
             .presentationDetents([.medium, .large])
+            .macSheetSize()
         }
         // At body level like every other reader sheet, not inside pageContent:
         // that view exists only at `.ready`, while the "Aa" button lives in
@@ -331,6 +334,7 @@ public struct ReaderView: View {
                 publisherNote: model.publisherFontDescription,
                 onChange: applyStyle,
             )
+            .macSheetSize()
         }
         #if os(macOS)
         // The Mac keeps a real toolbar: its window chrome never moved the page.
