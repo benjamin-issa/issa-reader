@@ -141,7 +141,65 @@ public struct PlayerView: View {
             }
             .font(Typography.caption.monospacedDigit())
             .foregroundStyle(Palette.inkTertiary)
+
+            bookReadout
         }
+    }
+
+    /// How much of the *book* is left, under a bar that is usually a chapter.
+    ///
+    /// The scope setting exists because a five-hour bar makes a chapter a
+    /// sliver you cannot aim at — but it left the player with nothing anywhere
+    /// saying how far through the book the listener is. One quiet line answers
+    /// that without giving the bar back.
+    @ViewBuilder
+    private var bookReadout: some View {
+        // A manifest that has not loaded would otherwise read
+        // "0m left in book · 0%", which is worse than saying nothing.
+        if bookLine.bookDuration > 0 {
+            Text(bookReadoutText)
+                .font(Typography.footnote)
+                .foregroundStyle(Palette.inkTertiary)
+                .frame(maxWidth: .infinity)
+                .multilineTextAlignment(.center)
+                .padding(.top, 2)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(bookReadoutSpoken)
+        }
+    }
+
+    /// At book scope the right-hand time above already *is* the book's
+    /// remaining time. Printing it again in a second format invites the reader
+    /// to hunt for a difference between two renderings of one number; the
+    /// percent is the only part that is new information there.
+    private var bookReadoutText: String {
+        let percent = "\(bookLine.bookPercentComplete)%"
+        guard settings.progressScope != .book else { return percent }
+        return "\(Self.durationText(bookLine.bookRemaining)) left in book · \(percent)"
+    }
+
+    private var bookReadoutSpoken: String {
+        let percent = "\(bookLine.bookPercentComplete) percent complete"
+        guard settings.progressScope != .book else { return percent }
+        return "\(Self.spokenDuration(bookLine.bookRemaining)) left in the book, \(percent)"
+    }
+
+    /// The book numbers, following a drag in progress.
+    ///
+    /// While `scrubbing`, the two times above are drawn from `scrubValue` and
+    /// move with the thumb. A line read straight off `readout` would sit still
+    /// through the drag and jump when it ended — three readouts of one position
+    /// disagreeing, which is the thing `PlaybackProgress` exists to prevent.
+    /// Built through the bar's own inverse, so the dragged fraction becomes a
+    /// book position the same way a released drag does.
+    private var bookLine: PlaybackProgress {
+        guard scrubbing else { return readout }
+        return PlaybackProgress(
+            scope: .book,
+            bookProgress: readout.bookProgress(forFraction: scrubValue),
+            totalDuration: readout.bookDuration,
+            chapterSpan: nil,
+        )
     }
 
     private var transport: some View {
@@ -255,6 +313,33 @@ public struct PlayerView: View {
         // %g, not %.2g: two *significant* digits printed 1.25 as "1.2" and
         // 1.75 as "1.8" — a menu offering speeds the player never plays.
         rate == rate.rounded() ? "\(Int(rate))×" : String(format: "%g×", rate)
+    }
+
+    /// A length in units a person says out loud: `4h 12m`, `47m`, `1h 0m`.
+    ///
+    /// Not `timeText`. That prints `4:12:00`, which is a correct clock reading
+    /// and the wrong thing here: beside a scrubber, a colon-separated figure
+    /// reads as a position in the book rather than an amount of it left.
+    ///
+    /// Rounded to the nearest minute rather than truncated, so a book with four
+    /// hours, twelve minutes and fifty seconds left does not claim 4h 12m for
+    /// most of a minute.
+    static func durationText(_ seconds: TimeInterval) -> String {
+        guard seconds.isFinite, seconds > 0 else { return "0m" }
+        let minutes = Int((seconds / 60).rounded())
+        return minutes >= 60 ? "\(minutes / 60)h \(minutes % 60)m" : "\(minutes)m"
+    }
+
+    /// The same length for VoiceOver, which must not be handed `4h 12m`.
+    static func spokenDuration(_ seconds: TimeInterval) -> String {
+        guard seconds.isFinite, seconds > 0 else { return "no time" }
+        let minutes = Int((seconds / 60).rounded())
+        let hours = minutes / 60
+        let mins = minutes % 60
+        let hourPart = hours == 1 ? "1 hour" : "\(hours) hours"
+        let minutePart = mins == 1 ? "1 minute" : "\(mins) minutes"
+        if hours == 0 { return minutePart }
+        return mins == 0 ? hourPart : "\(hourPart) \(minutePart)"
     }
 
     static func timeText(_ seconds: TimeInterval) -> String {

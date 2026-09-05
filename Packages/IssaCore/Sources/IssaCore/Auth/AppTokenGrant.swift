@@ -35,54 +35,17 @@ public enum AppTokenGrant: Sendable {
         server.appending(path: Endpoint.appToken)
     }
 
-    /// Whether this server offers the route at all, asked before the row that
-    /// uses it is offered.
-    ///
-    /// Not every Storyteller server has `/api/v2/token/app` — it is newer than
-    /// the device grant — and the chooser offered "In your browser"
-    /// unconditionally, so on a server without it the reader tapped, watched a
-    /// browser open on a 404, and came back to the chooser with nothing said.
-    /// The same change that introduced this route deleted the two probes that
-    /// could have answered the question.
-    ///
-    /// Unauthenticated, on a session of the caller's choosing so this is
-    /// testable: a server that has the route redirects to
-    /// `/login?callbackUrl=…` and resolves 200, and one that does not answers
-    /// 404. There is no token to send and none is sent — a browser session
-    /// belongs to the browser, not to `URLSession`, so this can only ever be
-    /// the unauthenticated leg and can never mint anything.
-    ///
-    /// **Fails open**, and deliberately: only a definite 404 or 405 answers
-    /// "no". A timeout, a refused connection, a captive portal — anything that
-    /// is not the server saying the route is absent — answers "yes". A wrong
-    /// "unavailable" hides the fastest way in from someone who has it; a wrong
-    /// "available" costs one tap and lands on an error that now says what
-    /// happened.
-    public static func isOffered(by server: URL, using session: URLSession) async -> Bool {
-        var request = URLRequest(url: startURL(server: server))
-        request.httpMethod = "GET"
-        request.timeoutInterval = 6
-        guard let (_, response) = try? await session.data(for: request),
-              let http = response as? HTTPURLResponse
-        else { return true }
-        return http.statusCode != 404 && http.statusCode != 405
-    }
-
-    /// `isOffered(by:using:)` on a session of its own, invalidated afterwards.
-    ///
-    /// The first version handed the view `probingSession()` and nothing ever
-    /// invalidated it, so every probe leaked a `URLSession` — `AppModel.probe`,
-    /// the function it was copied from, has `defer { invalidateAndCancel() }`
-    /// for exactly this. The two-argument form stays for the tests.
-    public static func isOffered(by server: URL) async -> Bool {
-        let session = probingSession()
-        defer { session.invalidateAndCancel() }
-        return await isOffered(by: server, using: session)
-    }
-
     /// Ephemeral, so nothing it touches joins the shared cookie jar or cache,
     /// and short-timeout, because this runs while someone is looking at the
     /// screen.
+    ///
+    /// One caller left: the token exchange. It also served `isOffered`, the
+    /// probe that greyed out the browser row when a server had no
+    /// `/api/v2/token/app` — deleted with the chooser that row lived on. The
+    /// collapsed screen has no window to run a probe in, and the answer that
+    /// probe existed to give is now a sentence the reader gets after one
+    /// browser trip: "Your server sent this app back without a sign-in token.
+    /// Try a device code instead."
     private static func probingSession(timeout: TimeInterval = 6) -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = timeout

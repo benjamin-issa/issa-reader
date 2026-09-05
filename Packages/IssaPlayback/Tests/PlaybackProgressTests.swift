@@ -185,6 +185,61 @@ struct PlaybackProgressTests {
         #expect(p.bookProgress(forSeconds: -100) >= 0)
         #expect(p.bookProgress(forSeconds: 99_999) <= 1)
     }
+
+    // MARK: - The whole book, whatever the bar is scoped to
+
+    /// The player's new line reads these two, and the point of them is that
+    /// they ignore the scope. A chapter-scoped bar is the default, so if these
+    /// followed the span they would be wrong almost all of the time.
+    @Test("the book figures ignore the chapter the bar is showing")
+    func bookFiguresIgnoreScope() {
+        let chapterScoped = PlaybackProgress(
+            scope: .chapter, bookProgress: 0.25, totalDuration: 36000,
+            chapterSpan: (start: 7200, duration: 3600))
+        #expect(chapterScoped.isChapterScoped, "the bar really is chapter-scoped")
+        // 25% of ten hours gone, so seven and a half hours left — not the
+        // remainder of the chapter, which is what `remaining` gives.
+        #expect(chapterScoped.bookRemaining == 27000)
+        #expect(chapterScoped.bookPercentComplete == 25)
+        #expect(chapterScoped.remaining != chapterScoped.bookRemaining)
+
+        let bookScoped = PlaybackProgress(
+            scope: .book, bookProgress: 0.25, totalDuration: 36000, chapterSpan: nil)
+        #expect(bookScoped.bookRemaining == chapterScoped.bookRemaining)
+        #expect(bookScoped.bookPercentComplete == chapterScoped.bookPercentComplete)
+    }
+
+    /// The condition the player hides the whole line on. If this ever returned
+    /// something other than zero, a book whose manifest had not loaded would
+    /// print a confident "0m left in book".
+    @Test("a book with no duration has nothing left and nothing done")
+    func noDurationLeavesNothingInTheBook() {
+        let progress = PlaybackProgress(
+            scope: .book, bookProgress: 0.5, totalDuration: 0, chapterSpan: nil)
+        #expect(progress.bookDuration == 0)
+        #expect(progress.bookRemaining == 0)
+    }
+
+    @Test(
+        "the ends of the book read as nothing done and nothing left",
+        arguments: [(0.0, 36000.0, 0), (1.0, 0.0, 100)])
+    func bookEnds(_ bookProgress: Double, _ remaining: TimeInterval, _ percent: Int) {
+        let progress = PlaybackProgress(
+            scope: .book, bookProgress: bookProgress, totalDuration: 36000, chapterSpan: nil)
+        #expect(progress.bookRemaining == remaining)
+        #expect(progress.bookPercentComplete == percent)
+    }
+
+    /// Never negative, whatever a server sends. `bookProgress` is clamped by
+    /// the initialiser, and this is the assertion that says so out loud.
+    @Test("progress past the end does not read as negative time left")
+    func pastTheEnd() {
+        let progress = PlaybackProgress(
+            scope: .book, bookProgress: 1.4, totalDuration: 36000, chapterSpan: nil)
+        #expect(progress.bookRemaining >= 0)
+        #expect(progress.bookPercentComplete <= 100)
+    }
+
 }
 
 /// The read-along's idea of a chapter: a spine text document.

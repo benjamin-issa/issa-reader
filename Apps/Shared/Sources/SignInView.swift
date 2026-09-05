@@ -29,8 +29,8 @@ public struct SignInView: View {
     /// way to be in a route without its model, or to hold a model for a route
     /// nobody is looking at.
     private enum Route {
+        /// The whole of signing in, now: the field, the button, and the link.
         case address
-        case chooser
         case browser(BrowserSignInModel)
         case pairing(DeviceSignInModel)
     }
@@ -39,14 +39,9 @@ public struct SignInView: View {
     @State private var route: Route = .address
     @State private var address: String = ""
     @State private var connecting = false
-    /// Whether this server offers `/api/v2/token/app` — `nil` until the probe
-    /// answers, and offered while it is nil. The row was offered
-    /// unconditionally, so on a server without the route the reader tapped,
-    /// watched a browser open on a 404, and came back here with nothing said.
-    @State private var browserRouteOffered: Bool?
-    /// Why the reader is back at the chooser, when the browser route ended
-    /// without either a token or an error — which is a real outcome the SDK
-    /// cannot describe, and used to be rendered as nothing at all.
+    /// Why the reader is back here, when the browser route ended without
+    /// either a token or an error — a real outcome the SDK cannot describe,
+    /// and one that used to be rendered as nothing at all.
     @State private var signInNote: String?
 
     public init() {}
@@ -88,8 +83,6 @@ public struct SignInView: View {
             switch route {
             case .address:
                 serverForm
-            case .chooser:
-                chooser
             case let .browser(model):
                 BrowserSignInView(model: model, serverAddress: serverLabel) { token in
                     adopt(token, from: model)
@@ -101,14 +94,14 @@ public struct SignInView: View {
                     // that actually means "stop".
                     model.cancel()
                     signInNote = note
-                    route = .chooser
+                    route = .address
                 }
             case let .pairing(model):
                 DeviceCodeView(model: model) { token in
                     adopt(token)
                 } onCancel: {
                     model.cancel()
-                    route = .chooser
+                    route = .address
                 }
             }
         }
@@ -122,176 +115,12 @@ public struct SignInView: View {
             browser?.cancel()
             // Only when it did not work. A successful adopt ends at
             // `.ready`, and `RootView` swaps this whole screen out — rewinding
-            // to the chooser first put the chooser on screen for a frame on
-            // every successful sign-in. When it *did* fail, `AppModel.adopt`
-            // has now set `loadError`, so the chooser has something to show.
+            // first put the entry screen up for a frame on every successful
+            // sign-in. When it *did* fail, `AppModel.adopt` has now set
+            // `loadError`, so there is something to show.
             guard app.phase != .ready else { return }
-            route = .chooser
+            route = .address
         }
-    }
-
-    // MARK: - Choosing a way in
-
-    private var chooser: some View {
-        VStack(alignment: .leading, spacing: Metrics.spacing24) {
-            VStack(alignment: .leading, spacing: Metrics.spacing8) {
-                Text("Issa Reader").overlineStyle(Palette.tangerine)
-                Text("How would you like to sign in?")
-                    .font(Typography.display)
-                    .foregroundStyle(Palette.ink)
-                HStack(spacing: Metrics.spacing8) {
-                    Text(serverLabel)
-                        .font(Typography.footnote.monospaced())
-                        .foregroundStyle(Palette.inkTertiary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Button("Change") { route = .address }
-                        .font(Typography.footnote)
-                        .foregroundStyle(Palette.tangerine)
-                        .buttonStyle(.plain)
-                }
-            }
-
-            if serverURL?.scheme?.lowercased() == "http" {
-                // Stated once here so the choice is made with the fact in view.
-                // It is about the connection, not the route: approving in the
-                // browser sends the same password to the same server.
-                Text("Not encrypted — this server is on http://.")
-                    .font(Typography.footnote)
-                    .foregroundStyle(Palette.alert)
-            }
-
-            VStack(spacing: Metrics.spacing12) {
-                methodRow(
-                    title: "In your browser",
-                    detail: """
-                        Your server's own page, with your password or whichever \
-                        provider it uses. Fastest if you're already signed in there.
-                        """,
-                    symbol: "safari",
-                    // Shown disabled with the reason, never hidden. A row that
-                    // silently disappears is the same failure as a row that
-                    // silently dead-ends: the reader is left to work out on
-                    // their own why the way in they were told about is not
-                    // there.
-                    unavailable: browserRouteOffered == false
-                        ? "This server doesn't offer browser sign-in. Use a device code."
-                        : nil,
-                    // What *this* route puts on an unencrypted connection,
-                    // which is not what the line above the rows says. That one
-                    // is about the connection; this is about the credential and
-                    // the token travelling over it, and about the fact that
-                    // anything on the network can replace the second one.
-                    warning: serverURL?.scheme?.lowercased() == "http"
-                        ? """
-                          Over http:// your sign-in page and the token it sends \
-                          back are both readable on this network, and the token \
-                          can be replaced.
-                          """
-                        : nil,
-                ) {
-                    guard let url = serverURL else { return }
-                    signInNote = nil
-                    route = .browser(BrowserSignInModel(serverURL: url))
-                }
-                methodRow(
-                    title: "With a device code",
-                    detail: "Get a short code to approve on your phone or another computer.",
-                    symbol: "rectangle.and.hand.point.up.left",
-                ) {
-                    guard let url = serverURL else { return }
-                    signInNote = nil
-                    let model = DeviceSignInModel(serverURL: url)
-                    route = .pairing(model)
-                    Task { await model.begin() }
-                }
-            }
-            // Re-run when the address changes, because "does this server have
-            // the route" is a fact about that server and no other. Nothing is
-            // gated on it finishing: while the answer is nil the row is live.
-            .task(id: serverURL) {
-                // Forgotten first. The answer is about one server, and without
-                // this server A's "doesn't offer browser sign-in" greyed out
-                // the row on server B until B's probe came back.
-                browserRouteOffered = nil
-                guard let url = serverURL else { return }
-                browserRouteOffered = await AppTokenGrant.isOffered(by: url)
-            }
-
-            // Above `loadError`, and separate from it: this is about the
-            // attempt just made, not about the server.
-            if let signInNote {
-                Text(signInNote)
-                    .font(Typography.footnote)
-                    .foregroundStyle(Palette.inkSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            if let error = app.loadError {
-                Text(error)
-                    .font(Typography.footnote)
-                    .foregroundStyle(Palette.alert)
-            }
-        }
-    }
-
-    /// - Parameters:
-    ///   - unavailable: why this way in cannot be used, when it cannot. The row
-    ///     stays on screen and stops responding, rather than vanishing.
-    ///   - warning: what choosing it costs on this particular server. Not an
-    ///     error — the row still works — so it is stated and left to the reader.
-    private func methodRow(
-        title: String,
-        detail: String,
-        symbol: String,
-        unavailable: String? = nil,
-        warning: String? = nil,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            HStack(alignment: .top, spacing: Metrics.spacing12) {
-                Image(systemName: symbol)
-                    .font(Typography.headline)
-                    .foregroundStyle(unavailable == nil ? Palette.tangerine : Palette.inkQuaternary)
-                    .frame(width: 24)
-                VStack(alignment: .leading, spacing: Metrics.spacing4) {
-                    Text(title)
-                        .font(Typography.headline)
-                        .foregroundStyle(unavailable == nil ? Palette.ink : Palette.inkTertiary)
-                    Text(unavailable ?? detail)
-                        .font(Typography.footnote)
-                        .foregroundStyle(Palette.inkSecondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .multilineTextAlignment(.leading)
-                    // Under the description, not instead of it: the reader
-                    // needs to know both what this route is and what it costs
-                    // here. Suppressed when the row is unavailable, because
-                    // then there is nothing to weigh.
-                    if let warning, unavailable == nil {
-                        Text(warning)
-                            .font(Typography.caption)
-                            .foregroundStyle(Palette.alert)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .multilineTextAlignment(.leading)
-                    }
-                }
-                Spacer(minLength: 0)
-                if unavailable == nil {
-                    Image(systemName: "chevron.right")
-                        .font(Typography.footnote)
-                        .foregroundStyle(Palette.inkTertiary)
-                }
-            }
-            .padding(Metrics.spacing16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Palette.surface, in: RoundedRectangle(cornerRadius: Metrics.radiusMedium))
-            .overlay(
-                RoundedRectangle(cornerRadius: Metrics.radiusMedium)
-                    .strokeBorder(Palette.border, lineWidth: 1),
-            )
-        }
-        .buttonStyle(.plain)
-        .disabled(unavailable != nil)
     }
 
     // MARK: - The address, and coming back to it
@@ -311,7 +140,7 @@ public struct SignInView: View {
                 .font(Typography.body.monospaced())
                 .foregroundStyle(Palette.inkTertiary)
             Button {
-                Task { await startSignIn() }
+                Task { await startSignIn(then: .browser) }
             } label: {
                 Text("Sign in again")
                     .font(Typography.headline)
@@ -381,35 +210,118 @@ public struct SignInView: View {
                     .font(Typography.footnote)
                     .foregroundStyle(Palette.inkTertiary)
                     .fixedSize(horizontal: false, vertical: true)
+
+                // Moved here from the deleted chooser, so the fact is in view
+                // while the address that causes it is being typed. It is about
+                // the connection, not the route: both ways in send the same
+                // credential to the same server over the same wire.
+                if serverURL?.scheme?.lowercased() == "http" {
+                    Text("Not encrypted — this server is on http://.")
+                        .font(Typography.footnote)
+                        .foregroundStyle(Palette.alert)
+                }
             }
 
+            // The server's answer, then this attempt's. Two slots, because
+            // they say different things: `loadError` is about reaching the
+            // server at all, `signInNote` about a browser session that closed
+            // without finishing.
             if let error = app.loadError {
                 Text(error)
                     .font(Typography.footnote)
                     .foregroundStyle(Palette.alert)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let signInNote {
+                Text(signInNote)
+                    .font(Typography.footnote)
+                    .foregroundStyle(Palette.inkSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
-            Button {
-                Task { await startSignIn() }
-            } label: {
-                HStack {
-                    if connecting { ProgressView().controlSize(.small) }
-                    Text(connecting ? "Connecting…" : "Continue")
-                        .font(Typography.headline)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, Metrics.spacing12)
-                .background(Palette.tangerine, in: RoundedRectangle(cornerRadius: Metrics.radiusMedium))
-                .foregroundStyle(.white)
-            }
-            .buttonStyle(.plain)
-            .disabled(address.isEmpty || connecting)
+            primaryAction
+            separator
+            deviceCodeLink
         }
     }
 
-    private func startSignIn() async {
+    /// The one way in the design puts forward.
+    ///
+    /// Not a row among equals any more: the chooser asked "password or
+    /// provider?", which is a fact about the reader's *server* and not about
+    /// them, and the server's own page never has to ask it. So the browser is
+    /// the button and the device code is a link.
+    private var primaryAction: some View {
+        VStack(spacing: Metrics.spacing8 + 2) {
+            Button {
+                Task { await startSignIn(then: .browser) }
+            } label: {
+                HStack(spacing: Metrics.spacing8) {
+                    if connecting { ProgressView().controlSize(.small) }
+                    Text(connecting ? "Connecting…" : "Continue in browser")
+                        .font(Typography.headline)
+                    if !connecting {
+                        // The system's glyph, not a drawn one: the HTML
+                        // reference strokes it by hand only because it has no
+                        // symbol set.
+                        Image(systemName: "arrow.up.right")
+                            .font(Typography.footnote.weight(.semibold))
+                    }
+                }
+            }
+            .buttonStyle(PressedFillButtonStyle())
+            .disabled(address.isEmpty || connecting)
+
+            // One line where two sentences used to name identity providers and
+            // passwords. What the reader needs to know is where they are about
+            // to be sent and that they are coming back.
+            Text("Your library's own sign-in page opens, then you land back here.")
+                .font(Typography.footnote)
+                .foregroundStyle(Palette.inkTertiary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity)
+        }
+    }
+
+    private var separator: some View {
+        Rectangle()
+            .fill(Palette.border)
+            .frame(height: 1)
+            .frame(maxWidth: .infinity)
+            .accessibilityHidden(true)
+    }
+
+    /// The television's way in, and the fallback when a browser cannot open.
+    ///
+    /// A link rather than a second button, and still a full-width 44pt target:
+    /// demoting it in the hierarchy must not demote it as something to hit.
+    private var deviceCodeLink: some View {
+        Button {
+            Task { await startSignIn(then: .deviceCode) }
+        } label: {
+            Text("Use a device code")
+                .font(Typography.subhead.weight(.medium))
+                .foregroundStyle(Palette.inkTertiary)
+                .underline(true, color: Palette.borderStrong)
+                .baselineOffset(0)
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(address.isEmpty || connecting)
+    }
+
+    /// Resolves the server, then goes wherever the tapped control said.
+    ///
+    /// Both ways in need this first: the address has to become a `serverURL`
+    /// before either a browser session or a device grant can be started
+    /// against it. The screen the reader used to land on in between is gone,
+    /// so this is now the whole of it — connect, then straight on.
+    private func startSignIn(then destination: Destination) async {
         connecting = true
         defer { connecting = false }
+        signInNote = nil
         if address.isEmpty { address = app.serverAddress }
         await app.connect(to: address)
         // A stored token may have signed us straight in.
@@ -417,16 +329,45 @@ public struct SignInView: View {
         // `app.serverAddress`, not the field: connect resolves a bare hostname
         // by probing, and re-normalising what was typed would throw that away
         // and start a grant against the port it just ruled out.
-        guard app.phase != .ready, serverURL != nil else { return }
+        guard app.phase != .ready, let url = serverURL else { return }
         // And only when the connect actually succeeded. `connect`'s early
         // returns leave the previous session in place, and `serverURL` falls
-        // back to it — so typing a new address with a typo advanced to the
-        // chooser showing the *old* server, and "In your browser" opened that
-        // one's token route. Build 24 shortened that to a single tap, because
-        // the route now returns a granted token off one redirect rather than
-        // behind an explicit Approve page.
+        // back to it — so typing a new address with a typo used to advance
+        // showing the *old* server and open that one's token route.
         guard app.loadError == nil else { return }
-        route = .chooser
+
+        switch destination {
+        case .browser:
+            route = .browser(BrowserSignInModel(serverURL: url))
+        case .deviceCode:
+            let model = DeviceSignInModel(serverURL: url)
+            route = .pairing(model)
+            await model.begin()
+        }
+    }
+
+    /// Which way in the reader asked for. Not `Route`: these are the two things
+    /// a tap can mean, and neither can be entered without a resolved server.
+    private enum Destination { case browser, deviceCode }
+}
+
+/// A filled button whose fill darkens while it is held.
+///
+/// `.buttonStyle(.plain)` — what every other button in this app uses — has no
+/// pressed state at all, and this one is the screen's single primary action, so
+/// the design names a colour for it. Both colours live here rather than in the
+/// label, so there is one place that knows the pair.
+private struct PressedFillButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 14)
+            .background(
+                configuration.isPressed ? Palette.tangerinePressed : Palette.tangerine,
+                in: RoundedRectangle(cornerRadius: Metrics.radiusMedium),
+            )
+            .foregroundStyle(.white)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }
 #endif
