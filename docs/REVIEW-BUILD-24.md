@@ -155,6 +155,16 @@ over http and comparing the adopted identity against the stored account key.
 > and leave a trace. Over https the injection is not reachable at all —
 > `ASWebAuthenticationSession` intercepts its callback scheme only from
 > navigations inside its own web view. Reopen this if 1.2 is ever reopened.
+>
+> **Build 28 · the warning was shortened, deliberately.** The sign-in redesign
+> collapses the two-card chooser into one screen, and the longer sentence lived
+> on the browser card — "Over http:// your sign-in page and the token it sends
+> back are both readable on this network, and the token can be replaced." What
+> survives is the short line, now under the address field: "Not encrypted — this
+> server is on http://." The identity check is untouched; only the wording of
+> the visible half is narrower. Recorded here rather than left to be discovered,
+> because the paragraph above still described a sentence that is no longer on
+> screen.
 
 **F-3.6 · High · `Apps/Shared/Sources/BrowserSignIn.swift:54`**
 `prefersEphemeralWebBrowserSession = false` plus a route that mints a token with

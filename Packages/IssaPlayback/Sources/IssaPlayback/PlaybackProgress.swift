@@ -84,6 +84,26 @@ public struct PlaybackProgress: Sendable, Equatable {
         spanDuration > 0 ? elapsed / spanDuration : 0
     }
 
+    /// Time left in the whole book, whatever the bar is scoped to.
+    ///
+    /// Deliberately not `remaining`, which is the span's. On a chapter-scoped
+    /// bar — the default — nothing on the player answers "how much of the book
+    /// is left", and that is the question someone deciding whether to start
+    /// the washing-up is actually asking.
+    ///
+    /// Here rather than in the view because the type is pure and tested, and
+    /// because the mini bar, the Lock Screen and the car would otherwise each
+    /// grow their own arithmetic and disagree.
+    public var bookRemaining: TimeInterval {
+        max(bookDuration * (1 - bookProgress), 0)
+    }
+
+    /// 0...100, rounded. `bookProgress` is already clamped by the initialiser,
+    /// so this needs no guard of its own.
+    public var bookPercentComplete: Int {
+        Int((bookProgress * 100).rounded())
+    }
+
     /// The book position a drag to `fraction` of this bar means.
     public func bookProgress(forFraction fraction: Double) -> Double {
         guard bookDuration > 0 else { return 0 }

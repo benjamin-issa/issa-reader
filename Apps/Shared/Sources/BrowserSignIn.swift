@@ -321,7 +321,10 @@ struct BrowserSignInView: View {
                     .foregroundStyle(Palette.alert)
             }
 
-            Button("Use a different way to sign in") {
+            // Names its destination. It used to say "a different way", which
+            // was true when there was a chooser to go back to; there is one
+            // other way in now, so say which.
+            Button("Use a device code instead") {
                 model.cancel()
                 onCancel(nil)
             }

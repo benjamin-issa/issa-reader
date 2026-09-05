@@ -154,6 +154,18 @@ public struct DeviceCodeView: View {
     private func steps(_ auth: DeviceAuthorization) -> some View {
         VStack(alignment: .leading, spacing: Metrics.spacing8) {
             Text("Approve this device").overlineStyle(Palette.tangerine)
+            // Why anyone would be here rather than in a browser. It was one of
+            // two equal cards, each with its own paragraph; now it is the
+            // secondary route, so it carries its own reason.
+            //
+            // tvOS excepted: there is no browser route on a television, so
+            // "for a television" would be describing the reader to themselves.
+            #if !os(tvOS)
+            Text("For a television, or when a browser can't open here.")
+                .font(Typography.subhead)
+                .foregroundStyle(Palette.inkSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            #endif
             // Three steps in order, rather than one instruction with the
             // address printed below the code it refers to.
             #if os(tvOS)
@@ -263,7 +275,9 @@ public struct DeviceCodeView: View {
                     .foregroundStyle(Palette.inkSecondary)
             }
             Spacer()
-            Button("Cancel", action: onCancel).font(Typography.footnote)
+            // "Cancel" was right when this was one of two equal cards. It is
+            // the secondary route now, so the way out names where it goes.
+            Button("Use the browser instead", action: onCancel).font(Typography.footnote)
         }
         .accessibilityElement(children: .combine)
     }
