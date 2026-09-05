@@ -27,11 +27,31 @@ public struct ReaderChrome: Sendable, Equatable {
     public let safeAreaBottom: CGFloat
     /// The page's own margin, from `ReaderStyle.pageMargin`.
     public let margin: CGFloat
+    /// Whether the reader draws its own top bar over the page.
+    ///
+    /// False on the Mac, which has a real window toolbar instead — and getting
+    /// this wrong is not cosmetic. The reserve assumed a 44-point in-page bar
+    /// on every platform, so on macOS the page began 44 points below the window
+    /// top while the titlebar and toolbar together occupy about 52. The first
+    /// line's box sat underneath the toolbar, and only stayed legible because
+    /// the leading above the glyphs happened to cover the difference: tighten
+    /// the line spacing or shrink the face and the first line goes under the
+    /// chrome.
+    ///
+    /// Where it is false, `safeAreaTop` carries the real toolbar height and is
+    /// the whole of the top reserve.
+    public let drawsOwnTopBar: Bool
 
-    public init(safeAreaTop: CGFloat, safeAreaBottom: CGFloat, margin: CGFloat) {
+    public init(
+        safeAreaTop: CGFloat,
+        safeAreaBottom: CGFloat,
+        margin: CGFloat,
+        drawsOwnTopBar: Bool = true,
+    ) {
         self.safeAreaTop = max(0, safeAreaTop)
         self.safeAreaBottom = max(0, safeAreaBottom)
         self.margin = max(0, margin)
+        self.drawsOwnTopBar = drawsOwnTopBar
     }
 
     /// Distance from the top of the window to the first line of text.
@@ -40,7 +60,9 @@ public struct ReaderChrome: Sendable, Equatable {
     /// with it. Forty-four points of empty bar is already more breathing room
     /// than the margin was providing, and adding both is how a reading screen
     /// ends up spending a fifth of its height before the first word.
-    public var topReserve: CGFloat { safeAreaTop + Self.barHeight }
+    public var topReserve: CGFloat {
+        safeAreaTop + (drawsOwnTopBar ? Self.barHeight : 0)
+    }
 
     /// Distance from the bottom of the window to the last line of text: the home
     /// indicator, the footer, and the page's own margin above it.

@@ -75,6 +75,20 @@ public struct ReaderView: View {
     /// position fetch with it and logging a failure for something nothing was
     /// waiting on any more.
     @State private var deviceInsets = ReaderInsets.current()
+    /// Whether the reader draws its own bar across the top of the page.
+    ///
+    /// The Mac does not: it has a real window toolbar, declared a few hundred
+    /// lines below with `.toolbar` and `.toolbarBackground`. Everywhere else
+    /// the bar is drawn over the page so that showing and hiding it cannot
+    /// re-paginate the chapter.
+    static var drawsOwnTopBar: Bool {
+        #if os(macOS)
+        false
+        #else
+        true
+        #endif
+    }
+
     /// Whether a finger is currently down, so `selecting` can be cleared at the
     /// start of a touch rather than the end of one.
     @State private var touching = false
@@ -137,6 +151,7 @@ public struct ReaderView: View {
                 safeAreaTop: deviceInsets.top,
                 safeAreaBottom: deviceInsets.bottom,
                 margin: model.style.pageMargin,
+                drawsOwnTopBar: Self.drawsOwnTopBar,
             )
             let pageSize = chrome.pageSize(in: geometry.size)
 
@@ -533,7 +548,15 @@ public struct ReaderView: View {
             // adding to it: 44 points of empty bar is already more breathing
             // room than the margin gave, and stacking both is how the screen
             // ended up spending a fifth of its height before the first word.
-            Color.clear.frame(height: ReaderChrome.barHeight)
+            //
+            // Nothing on the Mac, which draws no such bar: there the window's
+            // own toolbar is the top chrome, and `deviceInsets.top` — measured
+            // from `contentLayoutRect` — is what holds the page clear of it.
+            // Reserving 44 here as well put the page's first line 8 points
+            // under a 52-point toolbar.
+            if Self.drawsOwnTopBar {
+                Color.clear.frame(height: ReaderChrome.barHeight)
+            }
 
             PageCanvas(model: model, pageSize: size)
                 .padding(.horizontal, model.style.pageMargin)

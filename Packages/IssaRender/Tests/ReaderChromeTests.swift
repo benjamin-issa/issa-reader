@@ -83,6 +83,37 @@ struct ReaderChromeTests {
             mac.pageSize(in: Self.window).height == flat.pageSize(in: Self.window).height - 14)
     }
 
+    @Test("a platform with a real toolbar does not also reserve an in-page bar")
+    func macToolbarIsTheWholeTopReserve() {
+        // The Mac draws no bar over the page — it has a window toolbar — but
+        // the reserve added `barHeight` on every platform regardless. So the
+        // page began 44 points below the window top while the titlebar and
+        // toolbar together take about 52, and the first line's box sat under
+        // the chrome. It stayed readable only because the leading above the
+        // glyphs covered the difference, which is luck, not layout: tighten the
+        // line spacing and the first line goes under the toolbar.
+        //
+        // With the toolbar's real height as `safeAreaTop`, the top reserve is
+        // that height and nothing else.
+        let mac = ReaderChrome(safeAreaTop: 52, safeAreaBottom: 14, margin: 24, drawsOwnTopBar: false)
+        #expect(mac.topReserve == 52)
+
+        // And the page starts exactly at the toolbar's edge — not above it,
+        // which is the bug, and not 44 points below it, which would waste a
+        // band the toolbar has already paid for.
+        let phone = ReaderChrome(safeAreaTop: 59, safeAreaBottom: 34, margin: 24)
+        #expect(phone.topReserve == 59 + ReaderChrome.barHeight, "unchanged off the Mac")
+    }
+
+    @Test("the reserves still exactly fill the window when there is no in-page top bar")
+    func macReservesAndPageFillTheWindow() {
+        let mac = ReaderChrome(safeAreaTop: 52, safeAreaBottom: 14, margin: 24, drawsOwnTopBar: false)
+        let size = mac.pageSize(in: Self.window)
+        // The same invariant the phone is held to: nothing unaccounted for in
+        // either direction. An under-count here is text under the toolbar.
+        #expect(mac.topReserve + size.height + mac.bottomReserve == Self.window.height)
+    }
+
     @Test("negative insets cannot shrink the reserve")
     func negativeInsetsAreClamped() {
         let odd = ReaderChrome(safeAreaTop: -20, safeAreaBottom: -5, margin: -10)
