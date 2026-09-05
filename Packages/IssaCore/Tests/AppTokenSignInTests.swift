@@ -15,6 +15,65 @@ private actor ScriptedBrowser: ApprovalBrowsing {
     }
 }
 
+/// A browser that stays open, the way a real one does.
+///
+/// `ScriptedBrowser` answers before `run()` has finished starting, so a flow
+/// driven by it is never *in progress* — and every fault worth catching here
+/// happens while the window is up. Built to the same shape as
+/// `BrowserApprovalController`: a continuation held until something resumes it,
+/// and a cancellation handler that closes the window and reports `.byApp`.
+///
+/// A lock rather than an actor, because the cancellation handler is
+/// `@Sendable` and nonisolated and must be able to resume the continuation
+/// without a hop — which is exactly the constraint the real controller has.
+private final class SuspendingBrowser: ApprovalBrowsing, @unchecked Sendable {
+    private let lock = NSLock()
+    private var pending: CheckedContinuation<BrowserDismissal, Never>?
+    private var presentedWaiters: [CheckedContinuation<Void, Never>] = []
+    private var isPresented = false
+
+    func present(_ url: URL) async -> BrowserDismissal {
+        await withTaskCancellationHandler {
+            await withCheckedContinuation {
+                (continuation: CheckedContinuation<BrowserDismissal, Never>) in
+                let waiters: [CheckedContinuation<Void, Never>] = lock.withLock {
+                    pending = continuation
+                    isPresented = true
+                    defer { presentedWaiters.removeAll() }
+                    return presentedWaiters
+                }
+                for waiter in waiters { waiter.resume() }
+            }
+        } onCancel: {
+            resume(with: .byApp)
+        }
+    }
+
+    /// Returns once the window is actually up, so a test cancels a live flow
+    /// rather than racing its start.
+    func waitUntilPresented() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let already: Bool = lock.withLock {
+                if isPresented { return true }
+                presentedWaiters.append(continuation)
+                return false
+            }
+            if already { continuation.resume() }
+        }
+    }
+
+    /// The server redirecting back, or the reader closing the window.
+    func finish(with dismissal: BrowserDismissal) { resume(with: dismissal) }
+
+    private func resume(with dismissal: BrowserDismissal) {
+        let taken: CheckedContinuation<BrowserDismissal, Never>? = lock.withLock {
+            defer { pending = nil }
+            return pending
+        }
+        taken?.resume(returning: dismissal)
+    }
+}
+
 @Suite("Taking a token from the server's own sign-in page")
 struct AppTokenSignInTests {
     private let server = URL(string: "http://library.example:8001")!
@@ -38,13 +97,53 @@ struct AppTokenSignInTests {
         #expect(outcome == .granted("header.payload.signature"))
     }
 
-    @Test("closing the window is not an error")
-    func dismissal() async {
-        for dismissal in [BrowserDismissal.byUser, .byApp] {
-            let outcome = await AppTokenSignInFlow(
-                serverURL: server, browser: ScriptedBrowser(dismissal)).run()
-            #expect(outcome == .dismissed)
-        }
+    /// Which of the two it was is carried, not collapsed.
+    ///
+    /// They look identical to a reader — a browser that appears and vanishes —
+    /// and one of them is a bug in this app. Folding them into one `.dismissed`
+    /// is how a build shipped in which the app cancelled every sign-in it
+    /// started and nothing anywhere said so.
+    @Test(
+        "closing the window is not an error, and says who closed it",
+        arguments: [
+            (BrowserDismissal.byUser, AppTokenDismissal.byReader),
+            (BrowserDismissal.byApp, AppTokenDismissal.byApp),
+        ])
+    func dismissal(_ from: BrowserDismissal, _ expected: AppTokenDismissal) async {
+        let outcome = await AppTokenSignInFlow(
+            serverURL: server, browser: ScriptedBrowser(from)).run()
+        #expect(outcome == .dismissed(expected))
+    }
+
+    /// The bug this suite could not see.
+    ///
+    /// `ScriptedBrowser` answers immediately, so the flow was never *running*
+    /// when anything could cancel it — and the real failure was that the view
+    /// cancelled it one frame after the browser appeared, every single time.
+    /// This browser suspends the way a real one does, so the window is open
+    /// when the cancel lands.
+    @Test("a flow cancelled while the browser is up reports that the app closed it")
+    func cancelledWhileOpen() async {
+        let browser = SuspendingBrowser()
+        let flow = AppTokenSignInFlow(serverURL: server, browser: browser)
+        let task = Task { await flow.run() }
+        await browser.waitUntilPresented()
+        task.cancel()
+        #expect(await task.value == .dismissed(.byApp))
+    }
+
+    /// And the other half: left alone, the same browser completes.
+    ///
+    /// Without this the fix above could be "never cancel", which would leave a
+    /// browser on screen after the reader had walked away from the route.
+    @Test("a flow left alone completes even though the browser takes its time")
+    func survivesTheBrowserBeingOpen() async {
+        let browser = SuspendingBrowser()
+        let flow = AppTokenSignInFlow(serverURL: server, browser: browser)
+        let task = Task { await flow.run() }
+        await browser.waitUntilPresented()
+        browser.finish(with: .completed(URL(string: "storyteller://settings?token=late")!))
+        #expect(await task.value == .granted("late"))
     }
 
     @Test("a callback with no token says so rather than signing nobody in")

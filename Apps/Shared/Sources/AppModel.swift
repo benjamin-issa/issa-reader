@@ -315,7 +315,16 @@ public final class AppModel {
     }
 
     public func adopt(token: String) async {
-        guard let session else { return }
+        guard let session else {
+            // Not reachable through either route as they stand — both resolve a
+            // server before offering a way in — but a token adopted with no
+            // session went nowhere and said nothing, which is the same
+            // "sign-in did nothing" the branches below were fixed for.
+            IssaLog.error("adopted a token with no session")
+            loadError = "Connect to your server before signing in."
+            phase = .chooseServer
+            return
+        }
         await session.adopt(token: token)
         switch session.state {
         case let .signedIn(user):
@@ -329,6 +338,17 @@ public final class AppModel {
             loadError = reason
             phase = .chooseServer
         default:
+            // The same fault as `.failed` above, in the branch next door, left
+            // there when that one was fixed. `.signedOut` is the state
+            // `loadIdentity` sets when the server *refuses* a token — a real
+            // outcome, and the one a browser callback carrying somebody else's
+            // or a stale token produces — and it arrived here as a bare
+            // `phase = .chooseServer`: no message, no log line, the chooser
+            // simply reappearing. Indistinguishable from the app doing nothing.
+            IssaLog.error("adopted token was not accepted", [
+                "state": String(describing: session.state),
+            ])
+            loadError = "Your server didn't accept that sign-in. Try again, or use a device code."
             phase = .chooseServer
         }
     }

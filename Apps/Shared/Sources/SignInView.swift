@@ -44,6 +44,10 @@ public struct SignInView: View {
     /// unconditionally, so on a server without the route the reader tapped,
     /// watched a browser open on a 404, and came back here with nothing said.
     @State private var browserRouteOffered: Bool?
+    /// Why the reader is back at the chooser, when the browser route ended
+    /// without either a token or an error — which is a real outcome the SDK
+    /// cannot describe, and used to be rendered as nothing at all.
+    @State private var signInNote: String?
 
     public init() {}
 
@@ -88,8 +92,15 @@ public struct SignInView: View {
                 chooser
             case let .browser(model):
                 BrowserSignInView(model: model, serverAddress: serverLabel) { token in
-                    adopt(token)
-                } onCancel: {
+                    adopt(token, from: model)
+                } onCancel: { note in
+                    // Cancelled here rather than in the view's `onDisappear`.
+                    // The browser covers this hierarchy, so `onDisappear` fires
+                    // while the sign-in is still going and cancelling there
+                    // killed every attempt; leaving the route is the moment
+                    // that actually means "stop".
+                    model.cancel()
+                    signInNote = note
                     route = .chooser
                 }
             case let .pairing(model):
@@ -103,9 +114,18 @@ public struct SignInView: View {
         }
     }
 
-    private func adopt(_ token: String) {
+    /// - Parameter browser: the flow the token came from, stopped once it has
+    ///   handed one over. Nothing else stops it now that the view does not.
+    private func adopt(_ token: String, from browser: BrowserSignInModel? = nil) {
         Task {
             await app.adopt(token: token)
+            browser?.cancel()
+            // Only when it did not work. A successful adopt ends at
+            // `.ready`, and `RootView` swaps this whole screen out — rewinding
+            // to the chooser first put the chooser on screen for a frame on
+            // every successful sign-in. When it *did* fail, `AppModel.adopt`
+            // has now set `loadError`, so the chooser has something to show.
+            guard app.phase != .ready else { return }
             route = .chooser
         }
     }
@@ -171,6 +191,7 @@ public struct SignInView: View {
                         : nil,
                 ) {
                     guard let url = serverURL else { return }
+                    signInNote = nil
                     route = .browser(BrowserSignInModel(serverURL: url))
                 }
                 methodRow(
@@ -179,6 +200,7 @@ public struct SignInView: View {
                     symbol: "rectangle.and.hand.point.up.left",
                 ) {
                     guard let url = serverURL else { return }
+                    signInNote = nil
                     let model = DeviceSignInModel(serverURL: url)
                     route = .pairing(model)
                     Task { await model.begin() }
@@ -194,6 +216,15 @@ public struct SignInView: View {
                 browserRouteOffered = nil
                 guard let url = serverURL else { return }
                 browserRouteOffered = await AppTokenGrant.isOffered(by: url)
+            }
+
+            // Above `loadError`, and separate from it: this is about the
+            // attempt just made, not about the server.
+            if let signInNote {
+                Text(signInNote)
+                    .font(Typography.footnote)
+                    .foregroundStyle(Palette.inkSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             if let error = app.loadError {
