@@ -189,14 +189,16 @@ notes of the version that introduces them.
 
 ## Contact
 
-<!-- Replace this with the address you want published. It must be one you are
-     willing to have on a public page indefinitely; Apple also requires a
-     working contact route for the App Store listing. -->
+Questions about this policy, or about the app's handling of data, can be sent to:
 
-**[CONTACT EMAIL]**
+**issa-reader@protonmail.com**
 
-Issa Reader is developed by **[DEVELOPER NAME OR ENTITY]**, and this policy is
-governed by the laws of **[JURISDICTION]**.
+Issa Reader is developed by **Benjamin Issa** in the **United States**.
+
+Please note that a question about the contents of a particular library, or a
+request to access or delete data held there, has to go to whoever runs that
+Storyteller server — see *Your rights* above. The developer has no access to any
+server and cannot act on such a request.
 
 ---
 
