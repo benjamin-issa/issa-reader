@@ -14,16 +14,18 @@ IssaReader.xcodeproj/
 .swiftpm/
 Package.resolved.bak
 
+# This checkout's own Apple signing identity, overriding Signing.xcconfig
+Signing.local.xcconfig
+
 # Local test stack state
 Tools/docker/data/
 Tools/docker/.env
-# The App Review server's sign-in, which must never enter history
-Tools/deploy/review-server/credentials.local.md
 Tools/docker/node_modules/
 
 # macOS
 .DS_Store
 .playwright-mcp/
+.claude/
 
 # Python bytecode from the icon generators
 __pycache__/

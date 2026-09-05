@@ -14,7 +14,7 @@ hard-coded:
 
 Usage:
 
-    scripts/asc-api.py get  '/v1/apps?filter[bundleId]=com.benjaminissa.issareader'
+    scripts/asc-api.py get  '/v1/apps?filter[bundleId]=<the app>'
     scripts/asc-api.py post /v1/profiles < body.json
     scripts/asc-api.py platforms                 # which platforms the record has
     scripts/asc-api.py builds --platform MAC_OS  # build numbers already spent
@@ -29,8 +29,34 @@ import time
 import urllib.error
 import urllib.request
 
-BUNDLE_ID = "com.benjaminissa.issareader"
 HOST = "https://api.appstoreconnect.apple.com"
+
+
+def _signing_value(key, default=""):
+    """Read one setting out of Signing.xcconfig, letting the local file win.
+
+    The same two files, in the same order, that Xcode reads through `#include?`
+    and that `release.sh` parses — so which app record this talks to and which
+    app the build produces cannot disagree.
+    """
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    value = default
+    for name in ("Signing.xcconfig", "Signing.local.xcconfig"):
+        path = os.path.join(root, name)
+        if not os.path.exists(path):
+            continue
+        with open(path) as handle:
+            for line in handle:
+                stripped = line.strip()
+                if stripped.startswith("//") or "=" not in stripped:
+                    continue
+                name_part, _, val = stripped.partition("=")
+                if name_part.strip() == key:
+                    value = val.strip()
+    return value
+
+
+BUNDLE_ID = _signing_value("ISSA_BUNDLE_ID")
 
 
 def _credentials():

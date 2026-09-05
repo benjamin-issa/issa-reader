@@ -26,7 +26,14 @@ ROOT="$PWD"
 
 RUNTIME="com.apple.CoreSimulator.SimRuntime.iOS-26-5"
 SCHEME="IssaReader-iOS"
-BUNDLE_ID="com.benjaminissa.issareader"
+# The same file the build reads, so the sweep launches the app it just built
+# rather than a bundle identifier that has drifted from it.
+BUNDLE_ID=$(
+    for f in "$ROOT/Signing.xcconfig" "$ROOT/Signing.local.xcconfig"; do
+        [ -f "$f" ] && sed -n 's/^[[:space:]]*ISSA_BUNDLE_ID[[:space:]]*=[[:space:]]*//p' "$f"
+    done | tail -1 | sed 's/[[:space:]]*$//'
+)
+[ -n "$BUNDLE_ID" ] || { echo "ISSA_BUNDLE_ID is not set in Signing.xcconfig" >&2; exit 1; }
 DERIVED="$ROOT/.build/dd-sweep"
 WORK="$ROOT/.build/layout-sweep"
 OUT="$ROOT/docs/screenshots/sweep"

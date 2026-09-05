@@ -41,20 +41,44 @@ scripts/asc-api.py builds --platform MAC_OS  # build numbers already spent
 scripts/asc-api.py get '/v1/profiles'
 ```
 
+## Signing as somebody else
+
+Every Apple-account-specific value is in **`Signing.xcconfig`**: the team, the
+bundle identifier, and the names of the two App Store profiles that Release pins
+to. `project.yml` refers to them as `$(ISSA_TEAM_ID)`, `$(ISSA_BUNDLE_ID)`,
+`$(ISSA_MACOS_PROFILE)` and `$(ISSA_TVOS_PROFILE)`, and `scripts/release.sh`
+reads the same file to fill in the export plists, which carry no identity of
+their own.
+
+To build under a different account, do not edit that file — create
+`Signing.local.xcconfig` beside it. It is gitignored, `#include?`d last, and
+anything it sets wins:
+
+```
+ISSA_TEAM_ID = ABCDE12345
+ISSA_BUNDLE_ID = com.yourname.issareader
+```
+
+The team identifier alone is enough to build and run. Shipping needs your own
+App ID and profiles, and the App Group in the three `.entitlements` files plus
+`CurrentBookSnapshot.appGroup` has to be renamed to match — those four are
+literal strings on both sides of a container lookup, so they are changed
+together or not at all.
+
 ## One team, one App ID, three different signing stories
 
-The App ID `com.benjaminissa.issareader` is `UNIVERSAL`, so a single record and a
-single Apple Distribution certificate cover all three platforms. How each
-archive is signed is not uniform, and the reason is the same in two of the three
-cases: **automatic signing mints a Development profile before it reaches the
-distribution one, and a Development profile enumerates device UDIDs.** This team
-has registered iOS devices and no others.
+The App ID is `UNIVERSAL`, so a single record and a single Apple Distribution
+certificate cover all three platforms. How each archive is signed is not
+uniform, and the reason is the same in two of the three cases: **automatic
+signing mints a Development profile before it reaches the distribution one, and
+a Development profile enumerates device UDIDs.** This team has registered iOS
+devices and no others.
 
 | Platform | Signing | Why |
 | --- | --- | --- |
 | iOS | automatic | there are registered iOS devices, so automatic works |
-| tvOS | manual, `tvOS Store Provisioning Profile: com.benjaminissa.issareader` | no registered Apple TV |
-| macOS | manual, `macOS Store Provisioning Profile: com.benjaminissa.issareader` | no registered Mac |
+| tvOS | manual, pinned to `$(ISSA_TVOS_PROFILE)` | no registered Apple TV |
+| macOS | manual, pinned to `$(ISSA_MACOS_PROFILE)` | no registered Mac |
 
 macOS needs one thing the other two do not: **a Mac Installer Distribution
 certificate**, because a Mac App Store upload is a signed `.pkg` and the `.app`
@@ -68,17 +92,17 @@ the API on 2026-09-02:
 # '3rd Party Mac Developer Installer'".
 scripts/asc-api.py post /v1/profiles <<'JSON'
 {"data": {"type": "profiles",
-          "attributes": {"name": "macOS Store Provisioning Profile: com.benjaminissa.issareader",
+          "attributes": {"name": "<the name in ISSA_MACOS_PROFILE>",
                          "profileType": "MAC_APP_STORE"},
           "relationships": {"bundleId": {"data": {"type": "bundleIds", "id": "<bundle id record>"}},
-                            "certificates": {"data": [{"type": "certificates", "id": "<Apple Distribution certificate>"},
-                                                      {"type": "certificates", "id": "<Mac Installer Distribution certificate>"}]}}}}
+                            "certificates": {"data": [{"type": "certificates", "id": "<Apple Distribution>"},
+                                                      {"type": "certificates", "id": "<Mac Installer Distribution>"}]}}}}
 JSON
 
 # installer certificate — a plain RSA-2048 CSR, then import key and certificate
 # together as a PKCS#12, which is the only format `security import` accepts here.
 openssl req -new -newkey rsa:2048 -nodes -keyout k.key -out k.csr \
-  -subj "/CN=Benjamin Issa/O=Benjamin Issa/C=US"
+  -subj "/CN=<your name>/O=<your name>/C=US"
 scripts/asc-api.py post /v1/certificates   # certificateType MAC_INSTALLER_DISTRIBUTION
 openssl pkcs12 -export -inkey k.key -in cert.pem -out k.p12 -passout pass:…
 security import k.p12 -k ~/Library/Keychains/login.keychain-db -f pkcs12 -P … \
@@ -93,9 +117,9 @@ Xcode picked the installer certificate to sign the app with and failed with
 "this identity cannot be used for signing code".
 
 Replacing the **Apple Distribution** certificate invalidates every cached App
-Store profile on the machine and breaks sibling projects (`another project`,
-`another project`) at the same time. The installer certificate is a separate type
-and carries no such risk.
+Store profile on the machine, and so breaks every other project signing with the
+same team at the same time. The installer certificate is a separate type and
+carries no such risk.
 
 ## The things no API can do
 
@@ -106,7 +130,7 @@ Two steps exist only as a checkbox in a web page. Both have cost real time.
   for it and which still reads "No Status" afterwards. The writable
   `capabilityType` enumeration has 28 values and none of them is CarPlay.
 - **Adding a platform to the app record.** App Store Connect → Apps → Issa
-  Reader → **Add Platform** in the left sidebar → macOS. Until that is done a
+  record → **Add Platform** in the left sidebar → macOS. Until that is done a
   macOS upload is rejected, and `scripts/asc-api.py platforms` will show only
   `IOS` and `TV_OS`.
 

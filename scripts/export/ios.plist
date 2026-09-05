@@ -17,8 +17,9 @@
        instead of ENTITY_ERROR.ATTRIBUTE.INVALID.DUPLICATE. -->
   <key>manageAppVersionAndBuildNumber</key>
   <false/>
-  <!-- The OU of the signing certificate, not the CN suffix (<certificate CN suffix>). -->
-  <key>teamID</key>
-  <string>D8455BV6NN</string>
+  <!-- `teamID` and `provisioningProfiles` are not here. `scripts/release.sh`
+       adds them to its working copy from Signing.xcconfig, so the identity
+       this repo signs as is stated in exactly one place. The value it writes
+       is the OU of the signing certificate, not the CN suffix. -->
 </dict>
 </plist>

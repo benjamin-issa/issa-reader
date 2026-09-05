@@ -11,14 +11,10 @@
        enumerates device UDIDs, and this team has no tvOS devices registered. -->
   <key>signingStyle</key>
   <string>manual</string>
-  <key>provisioningProfiles</key>
-  <dict>
-    <key>com.benjaminissa.issareader</key>
-    <string>tvOS Store Provisioning Profile: com.benjaminissa.issareader</string>
-  </dict>
   <key>manageAppVersionAndBuildNumber</key>
   <false/>
-  <key>teamID</key>
-  <string>D8455BV6NN</string>
+  <!-- `teamID` and `provisioningProfiles` are added by `scripts/release.sh`
+       from ISSA_TEAM_ID, ISSA_BUNDLE_ID and ISSA_TVOS_PROFILE in
+       Signing.xcconfig, so a fork overrides them in one file. -->
 </dict>
 </plist>

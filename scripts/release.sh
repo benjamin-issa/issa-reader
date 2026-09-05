@@ -22,6 +22,37 @@ ROOT="$PWD"
 KEY_PATH="$HOME/.app-store-connect-key.p8"
 KEY_META="$HOME/.app-store-connect-key.json"
 
+# The one place this checkout's Apple identity is written down. `Signing.xcconfig`
+# holds the defaults and `Signing.local.xcconfig`, if present, overrides them —
+# the same precedence Xcode applies through `#include?`, reproduced here because
+# `xcodebuild -exportArchive` reads a plist and knows nothing about xcconfigs.
+signing_value() {
+    local key="$1" value="" line
+    local file
+    for file in "$ROOT/Signing.xcconfig" "$ROOT/Signing.local.xcconfig"; do
+        [ -f "$file" ] || continue
+        # Last assignment wins within a file, as it does in xcconfig.
+        line=$(sed -n "s/^[[:space:]]*$key[[:space:]]*=[[:space:]]*//p" "$file" | tail -1)
+        [ -n "$line" ] && value="$line"
+    done
+    # Trim the trailing whitespace a hand-edited file collects.
+    printf '%s' "${value%"${value##*[![:space:]]}"}"
+}
+
+TEAM_ID=$(signing_value ISSA_TEAM_ID)
+BUNDLE_ID=$(signing_value ISSA_BUNDLE_ID)
+[ -n "$TEAM_ID" ] || { echo "ISSA_TEAM_ID is not set in Signing.xcconfig" >&2; exit 1; }
+[ -n "$BUNDLE_ID" ] || { echo "ISSA_BUNDLE_ID is not set in Signing.xcconfig" >&2; exit 1; }
+
+# The App Store profile each manually-signed platform pins to, by name.
+profile_for() {
+    case "$1" in
+        macos) signing_value ISSA_MACOS_PROFILE ;;
+        tvos)  signing_value ISSA_TVOS_PROFILE ;;
+        *)     printf '' ;;
+    esac
+}
+
 # The string that must never reach a shipping binary. It is the launch
 # argument UITestFixture.installIfRequested() checks for, so it exists only
 # inside the fixture code.
@@ -258,6 +289,16 @@ for platform in "${REQUESTED[@]}"; do
     plist="$WORK/$platform-export.plist"
     cp "$ROOT/scripts/export/$platform.plist" "$plist"
     /usr/libexec/PlistBuddy -c "Set :destination $DESTINATION" "$plist" >/dev/null
+
+    # Identity comes from Signing.xcconfig, never from the committed plist, so
+    # there is one file to change to build as somebody else. Added rather than
+    # set: the key is absent by design.
+    /usr/libexec/PlistBuddy -c "Add :teamID string $TEAM_ID" "$plist" >/dev/null
+    profile=$(profile_for "$platform")
+    if [ -n "$profile" ]; then
+        /usr/libexec/PlistBuddy -c "Add :provisioningProfiles dict" "$plist" >/dev/null
+        /usr/libexec/PlistBuddy -c "Add :provisioningProfiles:$BUNDLE_ID string $profile" "$plist" >/dev/null
+    fi
 
     export_log="$WORK/$platform-export.log"
     echo "▸ $scheme — ${DESTINATION}ing"

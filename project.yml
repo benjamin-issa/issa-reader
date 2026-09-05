@@ -1,7 +1,6 @@
 name: IssaReader
 
 options:
-  bundleIdPrefix: com.benjaminissa.issareader
   deploymentTarget:
     iOS: "26.0"
     macOS: "26.0"
@@ -9,11 +8,18 @@ options:
   createIntermediateGroups: true
   groupSortPosition: top
 
+# Apple-account-specific values live in one file, overridable per checkout by
+# an untracked Signing.local.xcconfig. Applied at project level so every
+# target inherits the definitions.
+configFiles:
+  Debug: Signing.xcconfig
+  Release: Signing.xcconfig
+
 settings:
   base:
     SWIFT_VERSION: "6.0"
     SWIFT_STRICT_CONCURRENCY: complete
-    DEVELOPMENT_TEAM: D8455BV6NN
+    DEVELOPMENT_TEAM: "$(ISSA_TEAM_ID)"
     CODE_SIGN_STYLE: Automatic
     ENABLE_USER_SCRIPT_SANDBOXING: YES
     MARKETING_VERSION: "1.0"
@@ -47,7 +53,7 @@ targets:
         codeSign: true
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.benjaminissa.issareader
+        PRODUCT_BUNDLE_IDENTIFIER: "$(ISSA_BUNDLE_ID)"
         INFOPLIST_FILE: Apps/IssaReader-iOS/Info.plist
         TARGETED_DEVICE_FAMILY: "1,2"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
@@ -101,7 +107,7 @@ targets:
       - target: IssaReader-iOS
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.benjaminissa.issareader.sharedtests
+        PRODUCT_BUNDLE_IDENTIFIER: "$(ISSA_BUNDLE_ID).sharedtests"
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/IssaReader-iOS.app/IssaReader-iOS"
         BUNDLE_LOADER: "$(TEST_HOST)"
         GENERATE_INFOPLIST_FILE: YES
@@ -119,7 +125,7 @@ targets:
       - target: IssaReader-iOS
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.benjaminissa.issareader.layoutuitests
+        PRODUCT_BUNDLE_IDENTIFIER: "$(ISSA_BUNDLE_ID).layoutuitests"
         # XcodeGen writes the target dependency but not this, and without it
         # xcodebuild has no host app to launch.
         TEST_TARGET_NAME: IssaReader-iOS
@@ -140,7 +146,7 @@ targets:
         product: IssaUI
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.benjaminissa.issareader.widgets
+        PRODUCT_BUNDLE_IDENTIFIER: "$(ISSA_BUNDLE_ID).widgets"
         INFOPLIST_FILE: Apps/IssaWidgets/Info.plist
         CODE_SIGN_ENTITLEMENTS: Apps/IssaWidgets/IssaWidgets.entitlements
 
@@ -164,7 +170,7 @@ targets:
         product: IssaPlayback
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.benjaminissa.issareader
+        PRODUCT_BUNDLE_IDENTIFIER: "$(ISSA_BUNDLE_ID)"
         INFOPLIST_FILE: Apps/IssaReader-macOS/Info.plist
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
@@ -182,7 +188,7 @@ targets:
           CODE_SIGN_STYLE: Manual
           CODE_SIGN_IDENTITY: "Apple Development"
           PROVISIONING_PROFILE_SPECIFIER: ""
-          DEVELOPMENT_TEAM: D8455BV6NN
+          DEVELOPMENT_TEAM: "$(ISSA_TEAM_ID)"
         # Real Mac App Store signing, pinned the same way tvOS is and for the
         # same reason: Automatic archiving mints a Development profile first,
         # which enumerates device UDIDs, and this team has none registered for
@@ -193,8 +199,8 @@ targets:
           CODE_SIGN_ENTITLEMENTS: Apps/IssaReader-macOS/IssaReader.entitlements
           CODE_SIGN_STYLE: Manual
           CODE_SIGN_IDENTITY: "Apple Distribution"
-          PROVISIONING_PROFILE_SPECIFIER: "macOS Store Provisioning Profile: com.benjaminissa.issareader"
-          DEVELOPMENT_TEAM: D8455BV6NN
+          PROVISIONING_PROFILE_SPECIFIER: "$(ISSA_MACOS_PROFILE)"
+          DEVELOPMENT_TEAM: "$(ISSA_TEAM_ID)"
           ENABLE_HARDENED_RUNTIME: YES
 
   IssaReader-tvOS:
@@ -217,7 +223,7 @@ targets:
         product: IssaPlayback
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.benjaminissa.issareader
+        PRODUCT_BUNDLE_IDENTIFIER: "$(ISSA_BUNDLE_ID)"
         INFOPLIST_FILE: Apps/IssaReader-tvOS/Info.plist
         ASSETCATALOG_COMPILER_APPICON_NAME: "App Icon & Top Shelf Image"
       configs:
@@ -228,7 +234,7 @@ targets:
           # so Release pins straight to the one already created for this app.
           CODE_SIGN_STYLE: Manual
           CODE_SIGN_IDENTITY: "Apple Distribution"
-          PROVISIONING_PROFILE_SPECIFIER: "tvOS Store Provisioning Profile: com.benjaminissa.issareader"
+          PROVISIONING_PROFILE_SPECIFIER: "$(ISSA_TVOS_PROFILE)"
 
 schemes:
   # Shared, and explicit about its test action.
