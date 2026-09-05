@@ -55,6 +55,25 @@ unbounded overlay placeholder. One agent's `ImageRenderer` probe saw truncation
 rather than overflow. The configuration that would settle it (`--all`, at
 accessibility-extra-large) was not run.
 
+**Build 25 — two claims from the second review, also measured and also wrong.**
+
+**The Release source exclusion does match.** The review of this branch said
+`EXCLUDED_SOURCE_FILE_NAMES: "Apps/IssaReader-iOS/Sources/UITestSupport/*"` is a
+form Xcode does not match against, leaving the fixture gate nominal. Measured:
+a line of invalid Swift appended to `UITestFixture.swift` builds clean in
+Release (`BUILD SUCCEEDED`), so the file is not compiled there. F-10.3 stands
+closed — and this is the discriminating evidence the earlier "proved on a
+Release binary" lacked, since a `strings` check on a binary from which
+`#if ISSA_UITEST_FIXTURE` had already excluded the code could not tell the two
+gates apart.
+
+**`PlaybackSettings.playbackRate` did persist a clamped value.** The review said
+`if legal != playbackRate { playbackRate = legal; return }` skipped the write, on
+the rule that a stored property's observer is not re-entered by an assignment
+inside it. The class is `@Observable`; the property is macro-synthesised; the
+inner assignment ran the observer again, which wrote. `PlaybackRatePersistenceTests`
+passes against the original form. The clearer form is kept anyway.
+
 ---
 
 ## 3 · Security · 9 findings
@@ -91,6 +110,17 @@ Line 51 also discards every status code: `SecItemAdd`'s result is never read, so
 a failed write is silent and the next launch drops to the sign-in form. On macOS
 the query omits `kSecUseDataProtectionKeychain`, so items land in the legacy file
 keychain where `kSecAttrAccessible` is ignored outright.
+
+> **Build 25 · PARTIAL.** `KeychainStorage` now uses the ThisDeviceOnly class,
+> the data-protection keychain (with a one-time migration from the login
+> keychain on macOS, added after the first version dropped every existing Mac
+> reader to the sign-in form), and returns every status code. **But
+> `TokenStore.set` and `TokenStore.invalidate` discard both results** — the
+> `Bool` was added to the protocol and never read one layer up — so a refused
+> `SecItemAdd` still reports a successful sign-in and a refused `SecItemDelete`
+> still shows the reader signed out with a working credential on disk. The
+> "line 51 discards every status code" half of this finding is therefore still
+> true where it matters. Commit `508645d` claimed it closed.
 
 **F-3.4 · Critical · `IssaCore/Store/LibraryStore.swift:390`**
 `setAccount` runs `UPDATE annotation SET account = ? WHERE account IS NULL`
@@ -329,6 +359,19 @@ chapter 1, end-of-track advance loops forever, and `narrationWindow` renders the
 wrong chapter's sentences. `NarratedLine.id` is the fragment id, so SwiftUI also
 gets duplicate Identifiable ids. Key on `(textHref, fragmentID)`.
 
+> **Build 25 · UNFIXED.** `SMILTimeline.entry(forFragment:inDocument:)` and
+> `bookTime(forFragment:inDocument:)` exist and are tested, and **not one of the
+> nine production call sites passes a document**: `ReaderModel.swift:652, 702,
+> 731, 751, 759, 936, 951` and `ReadalongCoordinator.swift:193` (`seek(toFragment:)`,
+> the tap-to-seek funnel, has no document to pass). Every lookup still falls
+> through to `firstIndexByFragmentID`. Tapping a word in chapter 12 still seeks
+> to chapter 1. Commit `91a80cf`, "Resolve narration fragments in the chapter
+> they came from", is true only of its tests. Two sites are worse than
+> unscoped: `:730-731` pairs a correctly scoped `span(ofDocumentContaining:)`
+> with a first-occurrence `bookTime(forFragment:)`, so `within` clamps to 0 or
+> 1; and `narrationStart` rung 1 (`:751`) returns a wrong-chapter hit with no
+> `textHref` check, short-circuiting the rungs below it.
+
 **F-6.4 · High · `IssaEPUB/EPUBPackage.swift:145`** · corroborated ×2
 `resolve()` mis-parses a fragment-only href: `"#ch2".split(separator: "#",
 maxSplits: 1).first` is `"ch2"`, not `""`, because `omittingEmptySubsequences`
@@ -368,6 +411,15 @@ archive whose *first* `container.xml` is benign — what `unzip` and epubcheck s
 — and whose trailing duplicate points elsewhere makes this reader load the
 second. Shadows any spine document or `encryption.xml`. No duplicate detection.
 
+> **Build 25 · PARTIAL.** First-record-wins landed — and its first version
+> stalled the directory cursor on the duplicate and dropped every later entry,
+> bricking the book; fixed and mutation-tested in `DuplicateRecordTests`. **The
+> stored-entry size check is in `extract()` only.** `size(of:)` still returns
+> the unvalidated central-directory number, and that is what `spineWeights`
+> reads — so one member declaring 0xFFFFFFFE still pins the book at 0 %
+> throughout, exactly the consequence the guard's own comment claims to have
+> fixed. A spine item never opened is never validated at all.
+
 **F-6.10 · Medium · `IssaEPUB/EPUBPackage.swift:228`**
 A nav document that parses but yields no entries short-circuits the NCX fallback
 the comment promises — it covers only the throwing case. A book whose nav uses
@@ -395,12 +447,31 @@ and `.notifyOthersOnDeactivation` appear nowhere in the repository. Music
 interrupted by this app never receives the `.ended` interruption with
 `.shouldResume` and stays silent until manually restarted.
 
+> **Build 25 · UNFIXED.** `AudioPlayer.deactivateAudioSession()` was written,
+> with a doc naming `AppModel` as its only legitimate caller, and **has no
+> callers** — `grep` over the tree finds the declaration and nothing else. It is
+> also `internal`, so `AppModel`, in another module, could not call it. The
+> non-mixable session is still never deactivated with
+> `.notifyOthersOnDeactivation`; interrupted Music still never resumes. Commit
+> `70e9fd2` claimed it closed.
+
 **F-7.2 · High · `IssaPlayback/AudioPlayer.swift:254`** · corroborated ×3
 `load()` writes `duration` and seeks across an `await` with no generation guard,
 so a superseded load applies its values to the item that replaced it — the
 highlight and the audio land on different sentences. `AudiobookCoordinator` has a
 `loadGeneration` guard for exactly this, but it sits outside `player.load`, after
 the damage; the read-along path has none.
+
+> **Build 25 · PARTIAL.** `AudioPlayer.load` now carries its own generation and
+> returns `Bool`, documented as "the caller must not write its own state
+> either". **`ReadalongCoordinator.move(to:)` discards that `Bool`** and writes
+> `activeFragmentID`, `activeEntry` and `bookProgress` unconditionally, and has
+> no generation of its own — so two overlapping moves still leave the
+> highlight from the loser under the winner's audio. Separately, the
+> in-player guard on the offset path is read *after* `await seek(to:)`, so a
+> superseded load has already seeked the newer file to the old one's time
+> before returning false. Commit `70e9fd2` says "the read-along path had no
+> guard at all"; after it, the read-along path still has none.
 
 **F-7.3 · High · `IssaPlayback/AudioExtraction.swift:35`** · corroborated ×2
 Extracted audio is named by `lastPathComponent` only, so `Audio/ch01/track.mp3`
@@ -450,6 +521,9 @@ and the mid-fade abandonment path returns without restoring volume.
 interval, i.e. screen off) the player reports the previous file's position.
 `previousChapter()` tests `currentTime > 3` against it and restarts the chapter
 that just started.
+
+> **Build 25 · closed.** `load` resets `currentTime` to 0 before the asset
+> loads. (The generation half of the same commit is F-7.2, and is partial.)
 
 **F-7.10 · Medium · `IssaPlayback/RemoteCommands.swift:55`**
 `deinit` tears down the route observer but never the `MPRemoteCommandCenter`
@@ -643,6 +717,9 @@ travel together, leaving only the guard that F-10.1 shows cannot fire. The value
 also lacks `$(inherited)`. Deeper fix: `EXCLUDED_SOURCE_FILE_NAMES` for
 `UITestSupport/*` on Release, so the compiler is never handed the fixture.
 
+> **Build 25 · closed, with discriminating evidence.** The exclusion is in place
+> and the second review disputed that its pattern matches. It does: see §2.
+
 **F-10.4 · High · `Apps/IssaLayoutUITests/Sources/LayoutInvariants.swift:85`**
 The system-subtree exemption is all-or-nothing. Once `containsOurContent` is true
 for the `.tabBar` — which on iOS 26 is every signed-in screen, the reason the
@@ -739,6 +816,17 @@ screenshot half has no equivalent.
 ## 11 · Everything else · 82 secondary entries
 
 Verified, but displaced by each pass's reporting cap. Grouped by area.
+
+> **Build 25 · status of this section.** Annotations in §3–§10 above mark only
+> the findings whose *claimed* fixes the second review showed to be inert or
+> partial (F-3.3, F-6.3, F-6.9, F-7.1, F-7.2) and the two review claims that
+> were themselves wrong (§2). **The absence of an annotation on a finding does
+> not mean it is open** — the closed-annotation pass over Phases 0–B has not
+> been done, and the authoritative record of what landed is the commit history
+> on `review/build-25`. Of the 82 entries below, roughly twenty were closed as
+> a side effect of the primary work, roughly fifteen are out of scope by the
+> consolidation/dead-code decision, and the rest are open. Those figures are
+> estimates and are labelled as such.
 
 ### IssaCore
 
