@@ -15,10 +15,11 @@ import Testing
 /// previous one asked for. Every case below is a pair that must not collide,
 /// asserted through the parser's own output rather than against the cache.
 ///
-/// `.serialized`, like every suite here that builds a `ReaderStyle`: `bodyFont`
-/// reaches CoreText's process-global font matching, and cases doing that in
-/// parallel deadlock the whole test process at 0% CPU.
-@Suite("Fonts within one parse", .serialized)
+/// Not `.serialized`. An earlier version carried the trait and said it was what
+/// stopped a CoreText deadlock; it was not — the trait serialises cases within
+/// one suite, not suites against each other. The guard is `fontMatchingLock`
+/// in `ReaderStyle.swift`, around every descriptor match.
+@Suite("Fonts within one parse")
 struct FontParseCacheTests {
     init() { IssaFonts.register() }
 

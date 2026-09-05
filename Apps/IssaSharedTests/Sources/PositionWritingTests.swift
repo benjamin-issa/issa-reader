@@ -9,21 +9,46 @@ import Testing
 @Suite("Reading position")
 @MainActor
 struct PositionWritingTests {
+    static let uuid = "11111111-1111-4111-8111-111111111111"
+
     /// `PositionGuard` does re-baseline — but only on `.chosen`. Nothing
     /// re-seeded it when a refresh legitimately adopted a *lower* server
     /// position, so every `.derived` write afterwards was refused for the rest
     /// of the process and the reader's progress was persisted nowhere.
+    ///
+    /// Through `AppModel.reseedGuards`, the production function. The first
+    /// version of this test built a fresh `PositionGuard(highWater: 0.02)` by
+    /// hand and asserted on it — so emptying `reseedGuards` left it green,
+    /// which the second review demonstrated.
     @Test("a guard whose book moved backwards on the server stops refusing")
-    func guardFollowsTheServerBackwards() {
-        var state = PositionGuard(highWater: 0.85, duration: 40 * 3600)
+    func guardFollowsTheServerBackwards() throws {
+        let app = AppModel()
+        app.positionGuards[Self.uuid] = PositionGuard(highWater: 0.85, duration: 40 * 3600)
 
         // Where it was before: a derived write from chapter one is refused.
-        #expect(state.decide(0.02, origin: .derived).isRefusal)
+        var before = try #require(app.positionGuards[Self.uuid])
+        #expect(before.decide(0.02, origin: .derived).isRefusal)
 
-        // The server now says 0.02 — the book was restarted elsewhere — and the
-        // guard is re-seeded from it.
-        state = PositionGuard(highWater: 0.02, duration: 40 * 3600)
-        #expect(!state.decide(0.03, origin: .derived).isRefusal, "reading on must be recordable")
+        // The server now says 0.02 — the book was restarted elsewhere.
+        app.reseedGuards(against: [SharedFixtures.book("Dracula", uuid: Self.uuid, progress: 0.02)])
+
+        var after = try #require(app.positionGuards[Self.uuid])
+        #expect(abs(after.highWater - 0.02) < 0.0001, "the guard was not re-seeded from the server")
+        #expect(!after.decide(0.03, origin: .derived).isRefusal, "reading on must be recordable")
+    }
+
+    /// Only a move *backwards* re-seeds. A server that is further ahead is the
+    /// ordinary case — this device is behind — and the high-water mark must
+    /// keep refusing the stale derived writes it exists to refuse.
+    @Test("a guard whose book moved forwards on the server is left alone")
+    func forwardMoveDoesNotReseed() throws {
+        let app = AppModel()
+        app.positionGuards[Self.uuid] = PositionGuard(highWater: 0.85, duration: 40 * 3600)
+
+        app.reseedGuards(against: [SharedFixtures.book("Dracula", uuid: Self.uuid, progress: 0.90)])
+
+        let after = try #require(app.positionGuards[Self.uuid])
+        #expect(abs(after.highWater - 0.85) < 0.0001, "a forward move must not lower the mark")
     }
 
     /// The tolerance is the smaller of five per cent and five minutes, so a long

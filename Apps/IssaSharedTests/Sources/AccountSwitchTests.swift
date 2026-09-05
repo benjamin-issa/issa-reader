@@ -66,6 +66,11 @@ struct AccountSwitchTests {
         UserDefaults.standard.set(previous, forKey: "issa.account.\(server.absoluteString)")
         let app = AppModel(keychain: InMemoryTokens())
         app.session = session(for: server)
+        // Seeded, so the assertions that these are cleared are about the
+        // clearing. The first version asserted `books` and `statuses` empty
+        // in a fixture that never filled them.
+        app.books = [SharedFixtures.book("Dracula", uuid: "11111111-1111-4111-8111-111111111111")]
+        app.statuses = [Status(uuid: "reading", name: "Reading")]
         app.ratings["11111111-1111-4111-8111-111111111111"] = 4
         app.requestBook("11111111-1111-4111-8111-111111111111", .read)
         return app
@@ -113,6 +118,8 @@ struct AccountSwitchTests {
 
         #expect(app.catalogueGeneration == generation, "the same reader is not a hand-over")
         #expect(app.pendingBook != nil, "the reader's own pending link was discarded")
+        #expect(!app.books.isEmpty, "the reader's own shelf was discarded")
+        #expect(!app.statuses.isEmpty)
         #expect(app.ratings.isEmpty == false, "the reader's own ratings were discarded")
     }
 

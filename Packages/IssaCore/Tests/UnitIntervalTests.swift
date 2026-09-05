@@ -34,10 +34,10 @@ struct UnitIntervalTests {
     @Test("a refused progression never reaches an Int conversion")
     func doesNotReachIntConversion() {
         let poisoned = Double.nan
-        let safe = poisoned.asProgression
-        #expect(safe == nil)
-        // Int(nan) traps; Int(0) does not. The guard is what keeps the second
-        // line reachable.
-        #expect(Int((safe ?? 0) * 100) == 0)
+        #expect(poisoned.asProgression == nil)
+        // No conversion here on purpose: an earlier version followed this with
+        // `Int((safe ?? 0) * 100) == 0`, which tests the literal 0 and nothing
+        // else. The trap it names is pinned where it can be reached — in
+        // `ReadingProgress.percent` and the callers that go through it.
     }
 }

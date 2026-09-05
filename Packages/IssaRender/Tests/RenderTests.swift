@@ -434,11 +434,12 @@ struct PageBoundaryTests {
     }
 }
 
-// `.serialized`, like `CustomFontsTests`. Each case builds a `ReaderStyle`,
-// whose `bodyFont` reaches CoreText's process-global font matching, and
-// parameterised cases otherwise run in parallel — which deadlocked the whole
-// test process at 0% CPU with no output at all.
-@Suite("A chapter using ordinary named entities opens", .serialized)
+// Not `.serialized`. This carried the trait with a note that it was what
+// stopped a CoreText deadlock at 0% CPU; the trait serialises cases within one
+// suite, not suites against each other, and the second review watched the
+// process wedge from an unserialised neighbour anyway. The guard is
+// `fontMatchingLock` in `ReaderStyle.swift`, around every descriptor match.
+@Suite("A chapter using ordinary named entities opens")
 struct NamedEntityTests {
     private func parse(_ body: String) throws -> String {
         // The HTML5 short DOCTYPE, which is what an EPUB 3 chapter carries and

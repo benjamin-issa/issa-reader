@@ -15,10 +15,11 @@ import Testing
 /// main actor, every time the reader switched theme — or every time the system
 /// slid into dark mode on its own, mid-sentence, at sunset.
 ///
-/// `.serialized` because every case here builds a `ReaderStyle`, and
-/// `bodyFont` reaches CoreText's process-global font matching: parameterised
-/// cases that do so in parallel deadlock the whole test process at 0% CPU.
-@Suite("Repainting a chapter", .serialized)
+/// Not `.serialized`. An earlier version carried the trait and said it was what
+/// stopped a CoreText deadlock; it was not — the trait serialises cases within
+/// one suite, not suites against each other. The guard is `fontMatchingLock`
+/// in `ReaderStyle.swift`, around every descriptor match.
+@Suite("Repainting a chapter")
 @MainActor
 struct RecolourTests {
     static func longChapter() throws -> ChapterLayout {
@@ -35,6 +36,14 @@ struct RecolourTests {
         throw EPUBError.missingResource("a chapter long enough to paginate")
     }
 
+    /// The ink of the first run — what every invariant below checks *changed*
+    /// before it checks what stayed the same. Four of these five cases used to
+    /// assert only invariance, and a `recolour` that did nothing satisfied all
+    /// four; the second review proved it by gutting the method.
+    static func ink(of layout: ChapterLayout) -> PlatformColor? {
+        layout.attributedText.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? PlatformColor
+    }
+
     /// The consequence if this were false: the reader taps Night in the middle
     /// of a sentence and lands somewhere else in the chapter.
     @Test("the reader does not move")
@@ -43,7 +52,9 @@ struct RecolourTests {
         let before = layout.pages
         #expect(before.count > 2, "a one-page chapter would prove nothing")
 
-        layout.recolour(to: PlatformColor(ReaderTheme.night.text))
+        let wanted = PlatformColor(ReaderTheme.night.text)
+        layout.recolour(to: wanted)
+        #expect(Self.ink(of: layout) == wanted, "nothing was repainted, so nothing below is evidence")
 
         #expect(layout.pages.count == before.count)
         for (old, new) in zip(before, layout.pages) {
@@ -64,7 +75,13 @@ struct RecolourTests {
         let idsInText = Self.fragmentIDs(in: layout)
         #expect(!idsInText.isEmpty, "the fixture has to carry ids for this to test anything")
 
-        layout.recolour(to: PlatformColor(ReaderTheme.sepia.text))
+        // Night, not sepia: sepia's ink is paper's ink (both 0x221F1A), so a
+        // repaint to it is indistinguishable from no repaint — which is how
+        // the first version of this precondition passed with `recolour`
+        // gutted, on the very case meant to catch that.
+        let wanted = PlatformColor(ReaderTheme.night.text)
+        layout.recolour(to: wanted)
+        #expect(Self.ink(of: layout) == wanted, "nothing was repainted, so nothing below is evidence")
 
         #expect(layout.attributedText.string == text)
         #expect(layout.fragmentRanges == ids)
@@ -121,7 +138,14 @@ struct RecolourTests {
         let before = DrawingTests.inkCoverage(layout, page: page)
         #expect(before > 0.001, "the fixture page has to have ink on it to start with")
 
-        layout.recolour(to: PlatformColor(ReaderTheme.sepia.text))
+        // Slate, not sepia and not night. Sepia's ink is paper's ink, so a
+        // repaint to it is indistinguishable from none; night's ink is a light
+        // cream that `inkCoverage` cannot see against its white canvas, so a
+        // successful repaint to it read as a blank page. Slate is dark enough
+        // to count and different enough to prove the repaint happened.
+        let wanted = PlatformColor(ReaderTheme.slate.text)
+        layout.recolour(to: wanted)
+        #expect(Self.ink(of: layout) == wanted, "nothing was repainted, so nothing below is evidence")
         let after = DrawingTests.inkCoverage(layout, page: page)
         #expect(after > 0.001, "the page went blank: coverage \(before) → \(after)")
     }
@@ -131,7 +155,9 @@ struct RecolourTests {
     @Test("a repainted page still paints its own characters")
     func paintedRangeSurvives() throws {
         let layout = try Self.longChapter()
-        layout.recolour(to: PlatformColor(ReaderTheme.slate.text))
+        let wanted = PlatformColor(ReaderTheme.slate.text)
+        layout.recolour(to: wanted)
+        #expect(Self.ink(of: layout) == wanted, "nothing was repainted, so nothing below is evidence")
 
         for page in layout.pages {
             let painted = layout.paintedCharacterRange(for: page)

@@ -372,6 +372,49 @@ struct SignOutCleanupTests {
         #expect(Set(try await store.allAnnotations().map(\.excerpt)) == ["alice's"])
     }
 
+    /// The other half of the same rule, which nothing asserted: rows the v6
+    /// migration marked as pre-account *are* adopted by the next sign-in. They
+    /// are the device's own highlights from before accounts existed, and the
+    /// first reader to sign in afterwards is who made them. Without this case,
+    /// a `setAccount` that adopted nothing at all passed every test here — the
+    /// second review demonstrated it by no-op'ing the UPDATE.
+    ///
+    /// The v6 migration cannot be re-run on a database that already has it, so
+    /// the row is marked the way the migration marks it — the same stand-in
+    /// `migrationBackfillsExistingRows` uses for its own columns.
+    @Test("marks from before accounts existed go to the first account that signs in")
+    func preAccountMarksAreAdoptedOnce() async throws {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appending(path: "issa-preaccount-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try LibraryStore(serverKey: "http://example.test", directory: directory)
+        func mark(_ excerpt: String) -> Annotation {
+            Annotation(
+                bookUUID: "shared-book", kind: .highlight,
+                locator: ReadiumLocator(
+                    href: "chapter1.xhtml", type: "application/xhtml+xml",
+                    locations: .init(progression: 0.1, totalProgression: 0.1, charOffset: 10)),
+                excerpt: excerpt)
+        }
+
+        // Written with nobody named, then marked as the v6 migration marks a
+        // pre-upgrade row.
+        try await store.save(mark("from before"))
+        try await store.dbQueue.write { db in
+            try db.execute(
+                sql: "UPDATE annotation SET account = ? WHERE account IS NULL",
+                arguments: [LibraryStore.preAccountOwner])
+        }
+
+        try await store.setAccount("carol")
+        #expect(try await store.allAnnotations().map(\.excerpt) == ["from before"],
+                "the pre-account mark was not adopted by the first sign-in")
+
+        // Once. It is carol's now, and a second reader does not inherit it.
+        try await store.setAccount("dave")
+        #expect(try await store.allAnnotations().isEmpty)
+    }
+
     /// The leak, stated as a rule.
     @Test("a mark made while nobody was signed in is not handed to the next account")
     func unownedMarksAreNotAdopted() async throws {

@@ -504,8 +504,6 @@ public final class AppModel {
         await refreshLibrary()
     }
 
-    /// Where the last signed-in account for a server is remembered, so an
-    /// offline launch still knows whose annotations to show.
     /// Bumped whenever the catalogue stops belonging to this account.
     ///
     /// A detached write that outlives its account is not a hypothetical: the
@@ -523,7 +521,7 @@ public final class AppModel {
     /// the store, for the rest of the process. The widget went on advertising
     /// progress that was persisted nowhere, and only an explicit scrub could
     /// clear it.
-    private func reseedGuards(against catalogue: [Book]) {
+    func reseedGuards(against catalogue: [Book]) {
         for book in catalogue {
             guard let guardState = positionGuards[book.uuid] else { continue }
             guard let progress = book.progress, progress < guardState.highWater else { continue }
@@ -532,6 +530,8 @@ public final class AppModel {
         }
     }
 
+    /// Where the last signed-in account for a server is remembered, so an
+    /// offline launch still knows whose annotations to show.
     private static func accountKey(for url: URL) -> String {
         "issa.account.\(url.absoluteString)"
     }
@@ -645,10 +645,6 @@ public final class AppModel {
         pendingWrites = (try? await mutations.count) ?? 0
     }
 
-    /// Records a write locally, then attempts it.
-    ///
-    /// The queue is written first so that losing the connection mid-request
-    /// still leaves the intent recorded.
     /// Books whose rating is still waiting to reach the server.
     ///
     /// A refresh that assigns `myRatings()` verbatim overwrites a change the
@@ -660,6 +656,10 @@ public final class AppModel {
         return Set(rows.filter { $0.kind == .rating }.map(\.bookUUID))
     }
 
+    /// Records a write locally, then attempts it.
+    ///
+    /// The queue is written first so that losing the connection mid-request
+    /// still leaves the intent recorded.
     public func enqueue(
         _ kind: MutationQueue.Kind, bookUUID: String, payload: some Encodable,
         supersedes ordering: Double? = nil,
@@ -1619,7 +1619,10 @@ public final class AppModel {
     }
 
     /// One high-water mark per book, for the life of the session.
-    private var positionGuards: [String: PositionGuard] = [:]
+    /// Internal, not private, for `PositionWritingTests` — which used to build
+    /// its own `PositionGuard` and assert on that, proving nothing about the
+    /// re-seed it was named for. Nothing outside the tests writes this.
+    var positionGuards: [String: PositionGuard] = [:]
 
     /// The single place a reading position is written.
     ///
