@@ -526,3 +526,49 @@ struct InflateHonestyTests {
         return out
     }
 }
+
+/// Two central-directory records for one normalised name.
+///
+/// `normalize` folds `./META-INF/container.xml` and `META-INF/container.xml`
+/// into one key, and the first record has to win — `unzip`, epubcheck and every
+/// server-side scanner take the first, so an archive whose trailing duplicate
+/// points at a different OPF looked clean to all of them and loaded the second
+/// here. That guard shipped as a bare `continue` above the loop's cursor
+/// advance, so the one archive it existed for stalled the cursor on the
+/// duplicate and lost every entry after it, throwing nothing. A book that opens
+/// everywhere else became permanently unopenable, and the download is cached.
+@Suite("A duplicate directory record")
+struct DuplicateRecordTests {
+    static let benign = "<container>benign</container>"
+    static let hostile = "<container>hostile</container>"
+    static let chapter = "<html>chapter one</html>"
+
+    static func archive() -> Data {
+        ZIPBytes.archive([
+            .init(name: "META-INF/container.xml", payload: Data(benign.utf8)),
+            .init(name: "./META-INF/container.xml", payload: Data(hostile.utf8)),
+            .init(name: "OEBPS/ch1.xhtml", payload: Data(chapter.utf8)),
+        ])
+    }
+
+    @Test("the first record wins")
+    func firstRecordWins() throws {
+        let archive = try EPUBArchive(data: Self.archive())
+        let container = try archive.read("META-INF/container.xml")
+        #expect(String(decoding: container, as: UTF8.self) == Self.benign,
+                "the trailing duplicate shadowed the first record")
+    }
+
+    /// The regression the guard introduced: everything after the duplicate
+    /// vanished. `ch1.xhtml` is the third record, behind the duplicate, and it
+    /// has to still be there.
+    @Test("the entries after the duplicate are still read")
+    func laterEntriesSurvive() throws {
+        let archive = try EPUBArchive(data: Self.archive())
+        #expect(archive.contains("OEBPS/ch1.xhtml"),
+                "the directory scan stalled on the duplicate and dropped what followed")
+        let chapter = try archive.read("OEBPS/ch1.xhtml")
+        #expect(String(decoding: chapter, as: UTF8.self) == Self.chapter)
+        #expect(archive.paths.count == 2, "one key for the duplicate pair, plus the chapter")
+    }
+}

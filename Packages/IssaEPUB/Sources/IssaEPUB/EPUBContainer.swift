@@ -207,6 +207,16 @@ public struct EPUBArchive: Sendable {
             // whose trailing duplicate points at a different OPF looked clean
             // to every one of them and loaded the second here. The same trick
             // shadowed any spine document or encryption.xml.
+            //
+            // The cursor advances on *both* paths. The first version of this
+            // guard was a bare `continue` above the advance at the bottom of
+            // the loop, so the one archive it was written for — a duplicate
+            // record — stalled the cursor on that record, re-read the same 46
+            // bytes for every remaining iteration, and returned a directory
+            // missing everything after the duplicate. The book became
+            // permanently unopenable, and the download is cached.
+            let next = nameStart + nameLength + extraLength + commentLength
+            defer { cursor = next }
             let key = normalize(name)
             if result[key] != nil { continue }
             result[key] = Entry(
@@ -216,7 +226,6 @@ public struct EPUBArchive: Sendable {
                 uncompressedSize: uncompressed,
                 localHeaderOffset: localOffset,
             )
-            cursor = nameStart + nameLength + extraLength + commentLength
         }
         return result
     }

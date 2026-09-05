@@ -20,6 +20,16 @@ import Security
 /// `kSecUseDataProtectionKeychain` on every query, because on macOS its absence
 /// puts the item in the legacy file-based keychain, where `kSecAttrAccessible`
 /// is ignored outright and the protection promised above does not exist.
+///
+/// And a one-time migration on macOS, because adding that flag moved the
+/// *lookup* without moving the *item*: every token build 24 wrote on a Mac is
+/// in the login keychain, the flagged query looks in the data-protection one,
+/// and the first version of this change dropped every existing Mac reader to
+/// the sign-in form on update — while `delete` aimed at the new keychain,
+/// reported not-found as success, and left the old thirty-five-year credential
+/// in the login keychain for good. `read` now falls through to the legacy
+/// keychain on a miss and, on a hit, moves the item across; `delete` clears
+/// both. On iOS the flag is a no-op and there is nothing to migrate.
 public struct KeychainStorage: TokenPersisting {
     private let service: String
     private let accessGroup: String?
@@ -29,19 +39,44 @@ public struct KeychainStorage: TokenPersisting {
         self.accessGroup = accessGroup
     }
 
-    private func baseQuery(account: String) -> [String: Any] {
+    /// - Parameter dataProtection: which keychain. `false` names the legacy
+    ///   login keychain, and exists only for the macOS migration below.
+    private func baseQuery(account: String, dataProtection: Bool = true) -> [String: Any] {
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
         ]
         if let accessGroup { query[kSecAttrAccessGroup as String] = accessGroup }
-        query[kSecUseDataProtectionKeychain as String] = true
+        if dataProtection { query[kSecUseDataProtectionKeychain as String] = true }
         return query
     }
 
     public func read(account: String) -> String? {
-        var query = baseQuery(account: account)
+        if let token = read(account: account, dataProtection: true) { return token }
+        #if os(macOS)
+        // The migration. A token in the login keychain is one build 24 wrote;
+        // it is moved rather than merely read, so this path runs once per
+        // account and the legacy copy does not outlive it.
+        guard let legacy = read(account: account, dataProtection: false) else { return nil }
+        if write(legacy, account: account) {
+            let status = SecItemDelete(baseQuery(account: account, dataProtection: false) as CFDictionary)
+            IssaLog.info("keychain token migrated", [
+                "legacyDeleted": String(status == errSecSuccess),
+            ])
+        } else {
+            // Left where it was, and still returned: a reader stays signed in
+            // either way, and the next launch tries the move again.
+            IssaLog.warning("keychain token could not be migrated")
+        }
+        return legacy
+        #else
+        return nil
+        #endif
+    }
+
+    private func read(account: String, dataProtection: Bool) -> String? {
+        var query = baseQuery(account: account, dataProtection: dataProtection)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
 
@@ -93,9 +128,22 @@ public struct KeychainStorage: TokenPersisting {
     /// believed they had left.
     @discardableResult
     public func delete(account: String) -> Bool {
-        let status = SecItemDelete(baseQuery(account: account) as CFDictionary)
+        var deleted = delete(account: account, dataProtection: true)
+        #if os(macOS)
+        // Both keychains. Signing out on a Mac that had not yet launched the
+        // migrated build must not leave the login-keychain copy behind — that
+        // is the credential the reader believes they just revoked.
+        deleted = delete(account: account, dataProtection: false) && deleted
+        #endif
+        return deleted
+    }
+
+    private func delete(account: String, dataProtection: Bool) -> Bool {
+        let status = SecItemDelete(baseQuery(account: account, dataProtection: dataProtection) as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
-            IssaLog.warning("keychain delete failed", ["status": String(status)])
+            IssaLog.warning("keychain delete failed", [
+                "status": String(status), "dataProtection": String(dataProtection),
+            ])
             return false
         }
         return true
