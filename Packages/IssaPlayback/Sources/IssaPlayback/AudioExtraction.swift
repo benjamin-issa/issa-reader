@@ -31,6 +31,16 @@ public enum AudioExtraction {
         // of thousands of entries.
         let hrefs = Set(timeline.entries.map(\.audioHref))
 
+        // How many hrefs each *old* name stood for. Files were named by
+        // `lastPathComponent` until this branch, and changing the scheme with
+        // no migration meant every already-extracted narration was extracted
+        // again in full while the old files sat beside the new ones for good.
+        // An old name claimed by exactly one href is that href's file and is
+        // moved into place; one claimed by more than one is the very collision
+        // the rename exists for, so it is ambiguous — deleted, and re-extracted.
+        var legacyClaims: [String: Int] = [:]
+        for href in hrefs { legacyClaims[(href as NSString).lastPathComponent, default: 0] += 1 }
+
         for href in hrefs {
             // The whole href, flattened — not `lastPathComponent`, which collides.
             // A book laid out as Audio/ch01/track.mp3, Audio/ch02/track.mp3 —
@@ -42,6 +52,17 @@ public enum AudioExtraction {
             // because `hrefs` is a Set the winner was not even stable between
             // launches. Cached across sessions, so it persisted.
             let destination = base.appending(path: Self.filename(for: href))
+            let legacyName = (href as NSString).lastPathComponent
+            let legacy = base.appending(path: legacyName)
+            if !FileManager.default.fileExists(atPath: destination.path),
+               legacyName != Self.filename(for: href),
+               FileManager.default.fileExists(atPath: legacy.path) {
+                if legacyClaims[legacyName] == 1 {
+                    try FileManager.default.moveItem(at: legacy, to: destination)
+                } else {
+                    try? FileManager.default.removeItem(at: legacy)
+                }
+            }
             if !FileManager.default.fileExists(atPath: destination.path) {
                 let data = try package.archive.read(href)
                 try data.write(to: destination, options: .atomic)

@@ -21,9 +21,19 @@ public final class PlaybackSettings {
     /// button was persisted with no control able to show or undo it.
     public var playbackRate: Double {
         didSet {
+            // Clamp, then persist the clamped value, in one pass. An earlier
+            // form was `if legal != playbackRate { playbackRate = legal; return }`
+            // and a review read it as skipping the write, on the rule that a
+            // stored property's observer is not re-entered by an assignment
+            // inside it. That rule does not hold here: this class is
+            // `@Observable`, so the property is macro-synthesised and the
+            // inner assignment ran the observer again, which then wrote. The
+            // review was wrong on that point — `PlaybackRatePersistenceTests`
+            // passed against both forms. This form is kept because it does not
+            // depend on the reader knowing that.
             let legal = PlaybackRate.clamped(playbackRate)
-            if legal != playbackRate { playbackRate = legal; return }
-            defaults.set(playbackRate, forKey: Self.rateKey)
+            if legal != playbackRate { playbackRate = legal }
+            defaults.set(legal, forKey: Self.rateKey)
         }
     }
 

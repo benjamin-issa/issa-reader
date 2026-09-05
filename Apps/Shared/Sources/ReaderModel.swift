@@ -67,6 +67,14 @@ public final class ReaderModel {
 
     /// The one in-flight response to a style change. Superseded, not stacked.
     private var styleTask: Task<Void, Never>?
+    /// Whether any change in the current burst needs a reparse.
+    ///
+    /// Accumulated, not recomputed per change: the task is cancelled and
+    /// replaced on every mutation, so a margin change landing within the
+    /// coalesce window of a size change used to replace a task that would
+    /// have reparsed with one that only re-flowed, and the size change was
+    /// lost until the next reparse for some other reason.
+    private var pendingReparse = false
 
     public var style: ReaderStyle {
         didSet {
@@ -97,11 +105,14 @@ public final class ReaderModel {
                 || style.lineSpacing != oldValue.lineSpacing
                 || style.justified != oldValue.justified
 
+            pendingReparse = pendingReparse || needsReparse
             styleTask?.cancel()
             styleTask = Task { [weak self] in
                 try? await Task.sleep(for: Self.styleCoalesce)
                 guard !Task.isCancelled, let self else { return }
-                await needsReparse ? reloadCurrentChapter() : relayoutCurrentChapter()
+                let reparse = pendingReparse
+                pendingReparse = false
+                await reparse ? reloadCurrentChapter() : relayoutCurrentChapter()
             }
         }
     }

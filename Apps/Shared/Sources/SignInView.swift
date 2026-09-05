@@ -188,9 +188,12 @@ public struct SignInView: View {
             // the route" is a fact about that server and no other. Nothing is
             // gated on it finishing: while the answer is nil the row is live.
             .task(id: serverURL) {
+                // Forgotten first. The answer is about one server, and without
+                // this server A's "doesn't offer browser sign-in" greyed out
+                // the row on server B until B's probe came back.
+                browserRouteOffered = nil
                 guard let url = serverURL else { return }
-                browserRouteOffered = await AppTokenGrant.isOffered(
-                    by: url, using: AppTokenGrant.probingSession())
+                browserRouteOffered = await AppTokenGrant.isOffered(by: url)
             }
 
             if let error = app.loadError {

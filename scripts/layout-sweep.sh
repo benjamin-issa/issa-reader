@@ -104,12 +104,20 @@ trap cleanup EXIT INT TERM
 command -v xcodegen >/dev/null || { echo "xcodegen not found" >&2; exit 1; }
 xcodegen generate >/dev/null
 
-# $OUT too, not just $WORK. collect-sweep-shots copies by name and never
-# deletes, so an --all run followed by a quick one left five stale device
-# folders in place and make-contact-sheet.py sheeted them beside the three
-# fresh ones — a regression that only shows at 402pt presented as fixed, with
-# nothing marking the panels as coming from different code.
-rm -rf "$WORK" "$OUT"; mkdir -p "$WORK" "$OUT"
+# The per-device folders under $OUT too, not just $WORK. collect-sweep-shots
+# copies by name and never deletes, so an --all run followed by a quick one
+# left five stale device folders in place and make-contact-sheet.py sheeted
+# them beside the three fresh ones — a regression that only shows at 402pt
+# presented as fixed, with nothing marking the panels as coming from different
+# code.
+#
+# But not `_sheets`. It holds six *tracked* contact sheets, and clearing $OUT
+# wholesale deleted them before anything had been regenerated — so a failed or
+# Pillow-less run left the repository's own documentation deleted.
+# make-contact-sheet.py overwrites them in place on success and leaves them
+# alone on failure, which is the behaviour wanted.
+rm -rf "$WORK"; mkdir -p "$WORK" "$OUT"
+find "$OUT" -mindepth 1 -maxdepth 1 -type d ! -name _sheets -exec rm -rf {} +
 
 echo "▸ building once for all destinations"
 # Signed, deliberately: CODE_SIGNING_ALLOWED=NO breaks the simulator keychain
@@ -164,8 +172,15 @@ for row in "${SELECTED[@]}"; do
   RESULT="$WORK/$slug.xcresult"
   rm -rf "$RESULT"
   set +e
+  # The UI suite alone. IssaSharedTests joined the scheme's Test action on
+  # this branch, and with ~60 unit tests in the same xctestrun the "zero tests
+  # ran" check below could never fire again — a scheme that dropped the UI
+  # target would have run the unit suite on each simulator, copied no
+  # screenshots and printed "ok". Restricting the run restores the check's
+  # meaning, and stops the unit suite running once per device width.
   xcodebuild test-without-building \
       -xctestrun "$XCTESTRUN" \
+      -only-testing:IssaLayoutUITests \
       -destination "platform=iOS Simulator,id=$CURRENT_UDID" \
       -resultBundlePath "$RESULT" \
       -parallel-testing-enabled NO \

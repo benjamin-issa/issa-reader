@@ -99,15 +99,6 @@ public final class ReadalongCoordinator {
             player.pause()
             return
         }
-        // Was it playing when the file ended? `onFinishedFile` hops through a
-        // Task, so anything that pauses in the intervening turn — the route
-        // handler when AirPods come out, an interruption, a sleep timer landing
-        // exactly on the boundary — happens before this runs, and `play(from:)`
-        // calls `player.play()` unconditionally. The next chapter then started
-        // narrating aloud in a quiet room, which is precisely what the
-        // route-loss pause exists to prevent. `AudiobookCoordinator.advance()`
-        // has carried this guard, and a regression test for it, all along.
-        let shouldContinue = player.isPlaying
         let endedDocument = entry.textHref
         guard await move(to: next) else { return }
         // A chapter that ran out, which is what the end-of-chapter timer is
@@ -117,7 +108,21 @@ public final class ReadalongCoordinator {
         // therefore never reported an ending at all, and a timer set at bedtime
         // played through the night.
         if endedDocument != next.textHref { onChapterChangeObserved?() }
-        if shouldContinue { player.play() }
+        // Only if the boundary left it playing — read *after* the callback,
+        // exactly as `AudiobookCoordinator.advance()` reads it. An
+        // end-of-chapter sleep timer pauses inside that callback, and the first
+        // version of this guard latched `isPlaying` *before* `move(to:)`, so it
+        // then called `play()` and undid the pause in the same turn, after the
+        // timer had already reset itself — the book played on into the night,
+        // which is the failure the callback above exists to stop.
+        //
+        // The same late read also covers what the early one was for: anything
+        // that paused between `onFinishedFile` and here — the route handler
+        // when AirPods come out, an interruption — still reads as not playing.
+        // `isPlaying` is the coordinator's intent, not AVPlayer's rate, and
+        // `load` preserves it, so a file boundary alone never clears it.
+        guard player.isPlaying else { return }
+        player.play()
     }
 
     // MARK: - Seeking

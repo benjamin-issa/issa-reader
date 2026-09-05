@@ -19,6 +19,20 @@ struct EPUBFontResolverTests {
 
     // MARK: - Finding it
 
+    /// Bulletproof `@font-face` syntax, which publishers actually ship. The
+    /// first fix stripped the query from `format` alone, so the face was
+    /// reported `.found` for a path still ending in `?` and then failed
+    /// silently in `archive.read` — worse than the honest `.unreadableFormat`
+    /// it replaced.
+    @Test("a query string is not part of the path")
+    func queryIsStrippedFromThePath() throws {
+        let css = "@font-face { font-family: Charis; src: url('fonts/Charis.otf?#iefix'); }"
+        let face = try #require(EPUBFontResolver.fontFaces(in: css, relativeTo: "OEBPS/styles.css").first)
+        #expect(!face.path.contains("?"), "the path \(face.path) is not one the archive holds")
+        #expect(face.path.hasSuffix("fonts/Charis.otf"))
+        #expect(face.format == "otf")
+    }
+
     @Test("a book that embeds its body face offers it")
     func findsEmbeddedFont() throws {
         guard case let .found(face) = EPUBFontResolver.resolve(in: try package("embedded-font"))

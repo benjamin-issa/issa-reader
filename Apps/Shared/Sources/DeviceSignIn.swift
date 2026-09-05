@@ -23,6 +23,8 @@ public final class DeviceSignInModel {
 
     private let serverURL: URL
     private var pollTask: Task<Void, Never>?
+    /// The renewal in flight, if any; see the renewal site.
+    private var renewalTask: Task<Void, Never>?
     private var renewals = 0
 
     /// A code lives 15 minutes on a default server, so this is about two hours
@@ -97,7 +99,13 @@ public final class DeviceSignInModel {
             // fifteen minutes gave a dead end instead of the promised number
             // changing on screen.
             pollTask = nil
-            Task { [weak self] in await self?.begin() }
+            // Held, so `cancel()` can reach it. A bare `Task {}` here outlived
+            // the screen: up to eight renewals carried on after the reader had
+            // left, each minting a code nobody would see. Not `pollTask`,
+            // because `begin()` cancels that on entry — which is the
+            // self-cancellation this branch fixed.
+            renewalTask?.cancel()
+            renewalTask = Task { [weak self] in await self?.begin() }
         case let .failed(reason): stage = .failed(reason)
         }
     }
@@ -105,5 +113,7 @@ public final class DeviceSignInModel {
     public func cancel() {
         pollTask?.cancel()
         pollTask = nil
+        renewalTask?.cancel()
+        renewalTask = nil
     }
 }

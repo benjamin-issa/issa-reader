@@ -68,10 +68,22 @@ public enum AppTokenGrant: Sendable {
         return http.statusCode != 404 && http.statusCode != 405
     }
 
-    /// The session `isOffered` should use in the app: ephemeral, so nothing it
-    /// touches joins the shared cookie jar or cache, and short-timeout, because
-    /// this runs while someone is looking at the screen.
-    public static func probingSession(timeout: TimeInterval = 6) -> URLSession {
+    /// `isOffered(by:using:)` on a session of its own, invalidated afterwards.
+    ///
+    /// The first version handed the view `probingSession()` and nothing ever
+    /// invalidated it, so every probe leaked a `URLSession` — `AppModel.probe`,
+    /// the function it was copied from, has `defer { invalidateAndCancel() }`
+    /// for exactly this. The two-argument form stays for the tests.
+    public static func isOffered(by server: URL) async -> Bool {
+        let session = probingSession()
+        defer { session.invalidateAndCancel() }
+        return await isOffered(by: server, using: session)
+    }
+
+    /// Ephemeral, so nothing it touches joins the shared cookie jar or cache,
+    /// and short-timeout, because this runs while someone is looking at the
+    /// screen.
+    private static func probingSession(timeout: TimeInterval = 6) -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = timeout
         configuration.timeoutIntervalForResource = timeout

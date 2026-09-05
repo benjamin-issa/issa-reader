@@ -13,6 +13,15 @@ public struct DownloadsView: View {
     @State private var segments: [Segment] = []
     @State private var totalBytes: Int64 = 0
     @State private var freeBytes: Int64 = 0
+    /// Bumped by each removal, so the one `.task(id:)` below re-runs. A bare
+    /// `Task { await refresh() }` in `remove` reintroduced the racing disk
+    /// scan that keying the task had just removed.
+    @State private var removals = 0
+
+    private struct RefreshKey: Equatable {
+        let pending: Int
+        let removals: Int
+    }
 
     public init() {}
 
@@ -47,7 +56,9 @@ public struct DownloadsView: View {
         // own task, because two scans of the disk in flight at once finish in
         // whichever order they finish and the loser writes its stale totals
         // last.
-        .task(id: app.downloadsPending.count) { await refresh() }
+        .task(id: RefreshKey(pending: app.downloadsPending.count, removals: removals)) {
+            await refresh()
+        }
     }
 
     // MARK: - Sections
@@ -311,7 +322,7 @@ public struct DownloadsView: View {
         // Shared with the book screen, so the readaloud audio cleanup cannot be
         // remembered in one place and forgotten in the other.
         app.removeDownload(entry.book, format: entry.format)
-        Task { await refresh() }
+        removals += 1
     }
 
     static func statusText(_ job: DownloadManager.Job, _ state: DownloadManager.State) -> String {

@@ -20,17 +20,16 @@ public enum EPUBFontResolver {
         public let family: String
         /// Where the file is inside the container.
         public let path: String
-        /// The file's extension, lowercased, with any query string removed.
+        /// The file's extension, lowercased.
         ///
-        /// `EPUBPackage.resolve` strips a fragment but not a query, and the
-        /// bulletproof `@font-face` syntax publishers actually ship is
-        /// `url('fonts/Charis.otf?#iefix')`. That made the extension `"otf?"`,
-        /// which is in no readable-format list, so the reader was told a
-        /// perfectly good OTF was in a format it could not read and the
-        /// publisher's-font option disappeared.
+        /// `path` carries no query string — see `fontFaces(in:relativeTo:)`,
+        /// which strips it before resolving. The first fix for the bulletproof
+        /// `url('fonts/Charis.otf?#iefix')` syntax stripped it *here* only, so
+        /// `format` said "otf" while `path` still ended in `?`: the face was
+        /// reported `.found` and then failed silently in `archive.read`, which
+        /// is worse than the `.unreadableFormat("otf?")` it replaced.
         public var format: String {
-            let withoutQuery = path.split(separator: "?", maxSplits: 1).first.map(String.init) ?? path
-            return (withoutQuery as NSString).pathExtension.lowercased()
+            (path as NSString).pathExtension.lowercased()
         }
     }
 
@@ -96,6 +95,12 @@ public enum EPUBFontResolver {
             .sorted()
     }
 
+    /// Everything before the first `?`. Written once here rather than inline,
+    /// because the last inline copy lived on the wrong property.
+    static func withoutQuery(_ url: String) -> String {
+        url.split(separator: "?", maxSplits: 1).first.map(String.init) ?? url
+    }
+
     /// `@font-face { font-family: X; src: url(Y) }`, and nothing else.
     static func fontFaces(in css: String, relativeTo sheet: String) -> [Face] {
         var faces: [Face] = []
@@ -106,7 +111,11 @@ public enum EPUBFontResolver {
             else { continue }
             faces.append(Face(
                 family: family,
-                path: EPUBPackage.resolve(source, relativeTo: sheet),
+                // Query stripped before resolving, so `path` is the archive
+                // path `archive.read` will be handed. `EPUBPackage.resolve`
+                // strips a fragment but not a query, and publishers ship
+                // `url('fonts/Charis.otf?#iefix')`.
+                path: EPUBPackage.resolve(withoutQuery(source), relativeTo: sheet),
             ))
         }
         return faces

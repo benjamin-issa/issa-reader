@@ -270,6 +270,12 @@ for platform in "${REQUESTED[@]}"; do
         && grep -q "EXPORT SUCCEEDED" "$export_log"; then
         if [ "$DESTINATION" = upload ]; then
             RESULTS+=("$platform: uploaded build $BUILD")
+            # Spent, the moment one platform's upload lands: App Store Connect
+            # now holds this build number, so reverting project.yml because a
+            # *later* platform failed — which the EXIT trap did — made the next
+            # release collide with a number the store already has.
+            rm -f "$PROJECT_YML_BACKUP"
+            PROJECT_YML_BACKUP=""
         else
             RESULTS+=("$platform: exported to $WORK/$platform-export")
         fi
