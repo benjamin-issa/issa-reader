@@ -90,11 +90,80 @@ public enum AppTokenGrant: Sendable {
         return URLSession(configuration: configuration)
     }
 
+    /// Trades the callback's short-lived token for a session token.
+    ///
+    /// **The callback does not carry a session token**, and this is the step
+    /// that was missing. `GET /api/v2/token/app` signs a JWT whose only claim
+    /// is `sub` and which expires in *five minutes*
+    /// (`addMinutes(new Date(), 5)` in the server's own route), and redirects
+    /// with it. `POST` to the same path, `{"token": …}`, verifies that and
+    /// creates the real session — `createSessionTokenForUserId`, a fresh
+    /// `randomUUID` row in the `session` table, good for thirty-five years —
+    /// and answers with `access_token`.
+    ///
+    /// Sending the callback token as a bearer instead gets a flat 401 from
+    /// every endpoint, because it is not a session token and was never in the
+    /// session table. That is exactly what build 26 did: the browser opened,
+    /// the token arrived, and `GET /api/v2/user` refused it 110ms later. The
+    /// server's own comment beside `maxAge` — "Leave mobile app logged in
+    /// basically indefinitely" — describes the token this call returns, not the
+    /// one in the callback.
+    ///
+    /// Unauthenticated: the short-lived token *is* the credential, in the body.
+    public static func exchange(
+        _ callbackToken: String, on server: URL, using session: URLSession,
+    ) async -> Result<String, AppTokenFailure> {
+        var request = URLRequest(url: startURL(server: server))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 15
+        request.httpBody = try? JSONEncoder().encode(["token": callbackToken])
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch {
+            // A timeout here is fatal in a way it is not elsewhere: the token
+            // being traded is good for five minutes and there is no way to ask
+            // for another without sending the reader back through the browser.
+            IssaLog.failure("app token exchange", error, [:])
+            return .failure(.couldNotExchange(status: nil))
+        }
+
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard (200 ..< 300).contains(status) else {
+            IssaLog.error("app token exchange refused", ["status": String(status)])
+            return .failure(.couldNotExchange(status: status))
+        }
+        guard let token = try? JSONDecoder().decode(AccessTokenResponse.self, from: data),
+              !token.accessToken.isEmpty
+        else {
+            IssaLog.error("app token exchange returned no access token", [
+                "bytes": String(data.count),
+            ])
+            return .failure(.couldNotExchange(status: status))
+        }
+        return .success(token.accessToken)
+    }
+
+    /// `exchange(_:on:using:)` on a session of its own, invalidated afterwards.
+    public static func exchange(
+        _ callbackToken: String, on server: URL,
+    ) async -> Result<String, AppTokenFailure> {
+        let session = probingSession(timeout: 15)
+        defer { session.invalidateAndCancel() }
+        return await exchange(callbackToken, on: server, using: session)
+    }
+
     /// The token out of the callback the browser was redirected to.
     ///
     /// Tolerant about the path — the server sends `storyteller://settings`
     /// today and the app has no stake in which screen it names — and strict
     /// about the scheme and the parameter, because this is the credential.
+    ///
+    /// Note what this returns: the *short-lived* token, which still has to go
+    /// through `exchange(_:on:)`. It is not usable as a bearer token.
     public static func token(from callback: URL) -> String? {
         guard callback.scheme?.lowercased() == callbackScheme else { return nil }
         guard let components = URLComponents(url: callback, resolvingAgainstBaseURL: false),

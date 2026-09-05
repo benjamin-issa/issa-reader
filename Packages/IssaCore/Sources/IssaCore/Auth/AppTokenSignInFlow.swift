@@ -7,13 +7,20 @@ import Foundation
 /// tell readers to "try a username and password" for two builds after that
 /// route was deleted, and to name a chooser row that had been renamed. The
 /// view knows what its own rows are called; this type does not and should not.
-public enum AppTokenFailure: Sendable, Equatable {
+/// `Error` only so it can be a `Result` failure — `AppTokenGrant.exchange`
+/// returns one. Nothing throws it; the flow matches on it.
+public enum AppTokenFailure: Error, Sendable, Equatable {
     /// The server redirected back, but with no token in the callback.
     case noToken
     /// The browser could not be opened at all.
     case couldNotOpen(reason: String)
     /// The address is not one a browser can open.
     case notAWebAddress
+    /// The callback's short-lived token could not be traded for a session one.
+    ///
+    /// `nil` status means the request never got an answer. See
+    /// `AppTokenGrant.exchange(_:on:)` for why there is a trade at all.
+    case couldNotExchange(status: Int?)
 }
 
 /// Who closed the window, when nothing went wrong and nothing was granted.
@@ -46,10 +53,17 @@ public enum AppTokenOutcome: Sendable, Equatable {
 public struct AppTokenSignInFlow: Sendable {
     private let serverURL: URL
     private let browser: any ApprovalBrowsing
+    /// The transport for the token exchange, so a test can answer without a
+    /// server — the seam `Session` and `APIClient` already have. `nil` means
+    /// one of its own, invalidated after use.
+    private let exchangeSession: URLSession?
 
-    public init(serverURL: URL, browser: any ApprovalBrowsing) {
+    public init(
+        serverURL: URL, browser: any ApprovalBrowsing, exchangeSession: URLSession? = nil,
+    ) {
         self.serverURL = serverURL
         self.browser = browser
+        self.exchangeSession = exchangeSession
     }
 
     public func run() async -> AppTokenOutcome {
@@ -85,8 +99,20 @@ public struct AppTokenSignInFlow: Sendable {
             // the callback URL, which carries it — only that one arrived. Its
             // absence is what made "the browser flashed and nothing happened"
             // undiagnosable from an export: three failures logged, two silences.
-            IssaLog.info("app token granted")
-            return .granted(token)
+            //
+            // "Callback", not "granted": that word was wrong, and being wrong
+            // cost a build. What arrives here is a five-minute claim ticket,
+            // not a session.
+            IssaLog.info("app token callback carried a token")
+            // The step the flow was missing entirely. Without it the app used
+            // the claim ticket as a bearer token and every request 401'd.
+            switch await exchange(token) {
+            case let .success(session):
+                IssaLog.info("app token exchanged for a session")
+                return .granted(session)
+            case let .failure(failure):
+                return .failed(failure)
+            }
         case .byUser:
             IssaLog.info("app token window closed by the reader")
             return .dismissed(.byReader)
@@ -103,5 +129,13 @@ public struct AppTokenSignInFlow: Sendable {
             IssaLog.error("could not open the app token route", ["reason": reason])
             return .failed(.couldNotOpen(reason: reason))
         }
+    }
+
+    private func exchange(_ callbackToken: String) async -> Result<String, AppTokenFailure> {
+        if let exchangeSession {
+            return await AppTokenGrant.exchange(
+                callbackToken, on: serverURL, using: exchangeSession)
+        }
+        return await AppTokenGrant.exchange(callbackToken, on: serverURL)
     }
 }

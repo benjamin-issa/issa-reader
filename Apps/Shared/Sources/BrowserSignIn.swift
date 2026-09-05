@@ -266,6 +266,15 @@ public final class BrowserSignInModel {
             "That server address isn't one this app can open. Check it and try again."
         case let .couldNotOpen(reason):
             reason
+        // Named separately from `.noToken` because it is a different fault with
+        // a different remedy: the server *did* sign the reader in, and the
+        // second half of the handshake is what failed. Retrying is worth a go —
+        // the token being traded lasts five minutes — and the device code is
+        // the fallback if it is the server that is refusing.
+        case let .couldNotExchange(status):
+            status.map {
+                "Your server signed you in but wouldn't finish (\($0)). Try again, or use a device code."
+            } ?? "Your server signed you in but didn't answer in time. Try again, or use a device code."
         }
     }
 
