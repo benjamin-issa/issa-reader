@@ -275,9 +275,18 @@ public struct DeviceCodeView: View {
                     .foregroundStyle(Palette.inkSecondary)
             }
             Spacer()
+            #if os(tvOS)
+            // A television has no browser to send anyone to, so the label that
+            // works on the other two platforms is a lie here twice over: there
+            // is no browser route, and `onCancel` does not open one — it
+            // returns to the address form. It is also the only way back to that
+            // form once a code is showing, so it stays and names where it goes.
+            Button("Use a different server", action: onCancel).font(Typography.footnote)
+            #else
             // "Cancel" was right when this was one of two equal cards. It is
             // the secondary route now, so the way out names where it goes.
             Button("Use the browser instead", action: onCancel).font(Typography.footnote)
+            #endif
         }
         .accessibilityElement(children: .combine)
     }

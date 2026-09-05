@@ -178,7 +178,7 @@ private struct TVReadalongContent: View {
     /// the rest roll past it.
     @ViewBuilder
     private var sentences: some View {
-        let lines = model.narrationWindow(before: 3, after: 3)
+        let lines = model.narrationWindow(before: 2, after: 2)
         if lines.isEmpty {
             // Extracting the audio and finding the first fragment takes a
             // moment on a cold open, and an empty column reads as a broken
@@ -195,10 +195,38 @@ private struct TVReadalongContent: View {
         }
     }
 
+    /// The sentences, at the largest density this screen will hold.
+    ///
+    /// Three candidates, widest first. This is the whole fix for sentences
+    /// arriving truncated: a bare `VStack` whose children want more height than
+    /// the parent offers does not overflow, it *compresses* them, and a `Text`
+    /// compressed to its minimum is one line with an ellipsis. So the layout is
+    /// given somewhere to give — it drops context rather than clipping words.
+    ///
+    /// `reservesSpace` below is what makes this stable rather than merely
+    /// adaptive: each candidate's height stops depending on what the sentences
+    /// happen to say, so `ViewThatFits` settles on one row count for the screen
+    /// and does not re-pick as narration advances. Without it the column would
+    /// change density sentence by sentence.
     private func window(_ lines: [ReaderModel.NarratedLine]) -> some View {
-        let currentIndex = lines.firstIndex(where: \.isCurrent) ?? 0
-        return VStack(alignment: .leading, spacing: Metrics.spacing24) {
-            ForEach(Array(lines.enumerated()), id: \.element.id) { offset, line in
+        ViewThatFits(in: .vertical) {
+            stack(lines, neighbours: 2)
+            stack(lines, neighbours: 1)
+            stack(lines, neighbours: 0)
+        }
+        // Outside the candidates, deliberately. A candidate carrying
+        // `maxHeight: .infinity` reports a flexible height, every candidate
+        // then "fits", and `ViewThatFits` always picks the first.
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+    }
+
+    private func stack(
+        _ lines: [ReaderModel.NarratedLine], neighbours: Int
+    ) -> some View {
+        let visible = NarrationColumn.trimmed(lines, neighbours: neighbours)
+        let currentIndex = visible.firstIndex(where: \.isCurrent) ?? 0
+        return VStack(alignment: .leading, spacing: Metrics.spacing16) {
+            ForEach(Array(visible.enumerated()), id: \.element.id) { offset, line in
                 Text(line.text)
                     .font(line.isCurrent
                         ? Typography.serif(48, weight: .regular)
@@ -208,7 +236,12 @@ private struct TVReadalongContent: View {
                     // neighbour: at three lines a side, a single dimmed value
                     // makes the furthest sentence as loud as the nearest.
                     .opacity(line.isCurrent ? 1 : max(0.18, 0.55 - 0.14 * Double(abs(offset - currentIndex) - 1)))
-                    .padding(.horizontal, line.isCurrent ? Metrics.spacing24 : 0)
+                    .lineLimit(NarrationColumn.lineAllowance(isCurrent: line.isCurrent), reservesSpace: true)
+                    // The pair that stops the squeeze. `fixedSize` refuses the
+                    // compression; `reservesSpace` above keeps the height it
+                    // refuses with constant.
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, line.isCurrent ? Metrics.spacing16 : 0)
                     .padding(.vertical, line.isCurrent ? Metrics.spacing12 : 0)
                     .background {
                         if line.isCurrent {
@@ -219,8 +252,7 @@ private struct TVReadalongContent: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .animation(.easeOut(duration: 0.25), value: lines.first?.id)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        .animation(.easeOut(duration: 0.25), value: visible.first?.id)
     }
 
     // MARK: - Moving through the book
