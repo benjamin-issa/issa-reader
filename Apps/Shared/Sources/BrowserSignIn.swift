@@ -187,7 +187,7 @@ public final class BrowserSignInModel {
         /// `.starting`: `.starting` renders as "Opening your server…", so
         /// folding the two left the screen spinning on a sign-in the reader had
         /// already walked away from.
-        case dismissed
+        case dismissed(AppTokenDismissal)
         case failed(String)
     }
 
@@ -226,8 +226,30 @@ public final class BrowserSignInModel {
         case let .granted(token): stage = .granted(token)
         // Not a failure. The reader closed the window, so the chooser is what
         // they want next, not an error about a thing they chose to do.
-        case .dismissed: stage = .dismissed
+        case let .dismissed(who): stage = .dismissed(who)
         case let .failed(failure): stage = .failed(Self.sentence(for: failure))
+        }
+    }
+
+    /// What the chooser should say when the reader lands back on it, if
+    /// anything.
+    ///
+    /// Only for `.byReader`, and only because the SDK cannot tell "closed the
+    /// window" from "declined the alert asking whether this app may use your
+    /// Safari sign-in" — they are one error code. Someone who tapped Cancel on
+    /// that alert has done something they may not realise was a decision about
+    /// signing in, and returning them to an unchanged chooser reads as the
+    /// feature being broken.
+    static func note(for dismissal: AppTokenDismissal) -> String? {
+        switch dismissal {
+        case .byReader:
+            """
+            The browser closed before your server signed you in. If you were \
+            asked whether Issa Reader may use your library's website to sign \
+            in, that has to be allowed — or use a device code instead.
+            """
+        case .byApp:
+            nil
         }
     }
 
@@ -258,7 +280,9 @@ struct BrowserSignInView: View {
     let model: BrowserSignInModel
     let serverAddress: String
     let onGranted: (String) -> Void
-    let onCancel: () -> Void
+    /// - Parameter note: what the chooser should say about why this ended, when
+    ///   there is anything worth saying.
+    let onCancel: (_ note: String?) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: Metrics.spacing24) {
@@ -290,7 +314,7 @@ struct BrowserSignInView: View {
 
             Button("Use a different way to sign in") {
                 model.cancel()
-                onCancel()
+                onCancel(nil)
             }
             .font(Typography.footnote)
             .foregroundStyle(Palette.inkSecondary)
@@ -299,9 +323,26 @@ struct BrowserSignInView: View {
         .onAppear { model.begin() }
         .onChange(of: model.stage) { _, stage in
             if case let .granted(token) = stage { onGranted(token) }
-            if case .dismissed = stage { onCancel() }
+            if case let .dismissed(who) = stage {
+                onCancel(BrowserSignInModel.note(for: who))
+            }
         }
-        .onDisappear { model.cancel() }
+        // No `.onDisappear { model.cancel() }`, and this is the whole of the
+        // "the browser opens and shuts again" bug.
+        //
+        // `ASWebAuthenticationSession.start()` presents the system browser
+        // full-screen over this hierarchy, and SwiftUI treats that the way it
+        // treats a `fullScreenCover`: the covered view disappears. So the flow
+        // cancelled itself one frame after opening — `cancel()` → the task's
+        // cancellation handler → `close()` → `session.cancel()` → `.byApp` —
+        // and the route was silent about it, so the reader saw a browser flash
+        // and the chooser come back. It had been that way since the route was
+        // written, and no test could see it: they drive a fake browser that
+        // presents nothing and therefore never covers anything.
+        //
+        // Cancellation is now deliberate, from the two places the route is
+        // actually left — see `SignInView.content` — plus `begin()`, which
+        // supersedes its own previous attempt.
     }
 
     private var headline: String {

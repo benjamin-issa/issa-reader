@@ -16,10 +16,24 @@ public enum AppTokenFailure: Sendable, Equatable {
     case notAWebAddress
 }
 
+/// Who closed the window, when nothing went wrong and nothing was granted.
+///
+/// Carried rather than collapsed. The two are the same picture — a browser that
+/// appears and vanishes — and completely different faults, and folding them into
+/// one silent `.dismissed` is why a build shipped in which the app cancelled its
+/// own sign-in on every attempt and left nothing behind to say so.
+public enum AppTokenDismissal: Sendable, Equatable {
+    /// The reader closed it — or declined the "share your Safari login" alert,
+    /// which arrives as the same code and cannot be told apart from it.
+    case byReader
+    /// The app took it down, because something cancelled the flow.
+    case byApp
+}
+
 public enum AppTokenOutcome: Sendable, Equatable {
     case granted(String)
     /// The window closed without the server redirecting anywhere.
-    case dismissed
+    case dismissed(AppTokenDismissal)
     case failed(AppTokenFailure)
 }
 
@@ -67,9 +81,22 @@ public struct AppTokenSignInFlow: Sendable {
                 IssaLog.error("app token callback carried no token", ["parameters": names])
                 return .failed(.noToken)
             }
+            // The success line this flow did not have. Not the token, and not
+            // the callback URL, which carries it — only that one arrived. Its
+            // absence is what made "the browser flashed and nothing happened"
+            // undiagnosable from an export: three failures logged, two silences.
+            IssaLog.info("app token granted")
             return .granted(token)
-        case .byUser, .byApp:
-            return .dismissed
+        case .byUser:
+            IssaLog.info("app token window closed by the reader")
+            return .dismissed(.byReader)
+        case .byApp:
+            // Worth a warning, not an info. Nothing in the app should be
+            // cancelling this while the reader is looking at it, so if this
+            // line appears without the reader having navigated away, it is a
+            // bug — and for two builds it was one.
+            IssaLog.warning("app token window closed by the app")
+            return .dismissed(.byApp)
         case let .couldNotOpen(reason):
             // Logged at all, which it was not: this leg was silent, where the
             // flow it replaced logged its start failure.

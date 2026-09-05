@@ -131,6 +131,23 @@ public enum IssaLog {
     /// awaiting this from the main actor does the write elsewhere and only the
     /// completion comes back.
     public static func flush() async { store.flush() }
+
+    /// Writes everything buffered *before this function returns*.
+    ///
+    /// The narrow case `flush()` cannot serve: a line written immediately
+    /// before a call that may abort the process. Scheduling the write — even
+    /// awaiting it — loses the race, because `abort()` does not run pending
+    /// tasks. Five CarPlay crash reports came with a diagnostics export taken
+    /// ninety seconds later that contained not one line about CarPlay, because
+    /// every entry from that launch was still in `pending`.
+    ///
+    /// The cost `flush()`'s comment warns about is real and is accepted here:
+    /// this is lock-held file I/O on the caller's thread. Use it where a few
+    /// milliseconds are affordable and losing the line is not — which is
+    /// approximately nowhere except the moment before handing an argument to a
+    /// framework that validates it by throwing.
+    public static func flushNow() { store.flush() }
+
     /// Removes any diagnostics file written for sharing.
     public static func discardExports() { store.discardExports() }
 

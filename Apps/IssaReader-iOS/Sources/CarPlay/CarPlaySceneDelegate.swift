@@ -26,11 +26,41 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
     ) {
         self.interfaceController = interfaceController
         CarPlayBridge.shared.surfaceDidConnect()
-        interfaceController.setRootTemplate(makeRootTemplate(), animated: false, completion: nil)
+        // Written and *flushed* before the root template is built, because
+        // building it is the thing that used to abort the process. Five crash
+        // reports arrived with a log that said nothing about CarPlay at all;
+        // this is the line that makes the next one diagnosable from the
+        // reader's own export. See `IssaLog.flushNow`.
+        IssaLog.info("carplay connected", [
+            "maximumTabCount": String(CPTabBarTemplate.maximumTabCount),
+            "maximumItemCount": String(CPListTemplate.maximumItemCount),
+        ])
+        IssaLog.flushNow()
+
+        let root = makeRootTemplate()
+        interfaceController.setRootTemplate(root, animated: false) { ok, error in
+            // Never `nil`. `CPInterfaceController.h` states that a presentation
+            // which fails *without* a completion block throws — so passing nil
+            // makes every rejection a process kill rather than a bad screen.
+            guard !ok else {
+                IssaLog.info("carplay root template set", ["template": Self.name(of: root)])
+                return
+            }
+            IssaLog.failure(
+                "carplay root template", error ?? StorytellerError.notFound,
+                ["template": Self.name(of: root)])
+        }
         // Updating sections in place rather than rebuilding the root: replacing
         // the root template in a moving car dumps the driver back to the first
         // tab, which is exactly the wrong moment for that.
         CarPlayBridge.shared.onLibraryChange = { [weak self] in self?.refreshLists() }
+    }
+
+    /// The class name, for a log line. `String(describing:)` on a CarPlay
+    /// template prints its whole description including a fresh identifier,
+    /// which makes two lines about the same template look different.
+    private static func name(of template: CPTemplate) -> String {
+        String(describing: type(of: template))
     }
 
     func templateApplicationScene(
@@ -43,6 +73,7 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         lists.removeAll()
         covers.removeAll()
         CarPlayBridge.shared.surfaceDidDisconnect()
+        IssaLog.info("carplay disconnected")
     }
 
     private func refreshLists() {
@@ -52,7 +83,7 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
     }
 
     private func makeRootTemplate() -> CPTemplate {
-        var templates: [CPTemplate] = []
+        var shelves: [CPListTemplate] = []
         for shelf in CarPlayCatalogue.Shelf.allCases {
             let list = CPListTemplate(title: shelf.title, sections: [section(for: shelf)])
             list.tabTitle = shelf.title
@@ -61,12 +92,57 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
             // crashed, so every shelf says why it is empty.
             list.emptyViewTitleVariants = [shelf.emptyMessage]
             lists[shelf] = list
-            templates.append(list)
+            shelves.append(list)
         }
+        configureNowPlaying()
 
+        // Filtered and clamped *before* the tab bar is constructed, because
+        // `CPTabBarTemplate.init(templates:)` validates its argument by
+        // throwing an Objective-C exception — which Swift cannot catch. There
+        // is no recovering from a bad array; there is only not building one.
+        let chosen = Self.tabs(from: shelves, limit: CPTabBarTemplate.maximumTabCount)
+        IssaLog.info("carplay tabs", [
+            "chosen": chosen.map(Self.name(of:)).joined(separator: ","),
+            "offered": String(shelves.count),
+        ])
+        // A tab bar needs something to hold, and one tab is a tab bar drawn
+        // around a single list for no reason.
+        guard chosen.count > 1 else {
+            return chosen.first ?? shelves.first
+                ?? CPListTemplate(title: "Library", sections: [])
+        }
+        return CPTabBarTemplate(templates: chosen)
+    }
+
+    /// The templates that may legally be tabs, at most `limit` of them.
+    ///
+    /// This function exists because of what it excludes. `CPNowPlayingTemplate`
+    /// was a tab here, and `-[CPTabBarTemplate validateTemplates:]` rejects it:
+    /// five identical `SIGABRT`s on build 24, one per time the car connected,
+    /// thrown from `initWithTemplates:` before `setRootTemplate` was ever
+    /// reached. Now Playing is reached by *pushing* it — see `showNowPlaying()`,
+    /// whose fallback path was already written for exactly this arrangement.
+    ///
+    /// `limit` comes from `CPTabBarTemplate.maximumTabCount`, which the header
+    /// says varies with the app's entitlements and which the system throws over
+    /// as well. Clamping is not belt-and-braces; it is the other half of the
+    /// same guard.
+    static func tabs(from candidates: [CPTemplate], limit: Int) -> [CPTemplate] {
+        guard limit > 0 else { return [] }
+        // List and grid, and nothing else. Stated as an allow-list rather than
+        // a deny-list: a template type added here later should have to be
+        // shown to be legal, not merely fail to be recognised as illegal.
+        let legal = candidates.filter { $0 is CPListTemplate || $0 is CPGridTemplate }
+        return Array(legal.prefix(limit))
+    }
+
+    /// Everything the Now Playing screen needs, whether or not it is on screen.
+    ///
+    /// Configured at connect time and never as a tab: the observer and the
+    /// buttons have to be in place before the driver reaches the screen, and
+    /// pushing an unconfigured shared template is how Up Next comes up empty.
+    private func configureNowPlaying() {
         let nowPlaying = CPNowPlayingTemplate.shared
-        nowPlaying.tabTitle = "Now"
-        nowPlaying.tabImage = UIImage(systemName: "play.circle")
         // The rate button is the control drivers reach for most; the system
         // draws transport, so this is the one worth adding.
         nowPlaying.updateNowPlayingButtons([
@@ -78,23 +154,25 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         nowPlaying.upNextTitle = "Chapters"
         nowPlaying.isUpNextButtonEnabled = true
         nowPlaying.add(self)
-        templates.append(nowPlaying)
-
-        return CPTabBarTemplate(templates: Array(templates.prefix(CPTabBarTemplate.maximumTabCount)))
     }
 
-    /// Brings the Now Playing tab to the front.
+    /// Brings the Now Playing screen up.
     ///
-    /// Falls back to a push only if it is somehow *not* a tab — and reports
-    /// the failure rather than passing `nil`, because a control that silently
-    /// does nothing is the worst outcome available here.
+    /// A push, which is how an audio app is meant to reach it. It was briefly a
+    /// tab instead, on the reasoning that one shared instance cannot be in two
+    /// places — true, but the conclusion was backwards: the tab bar will not
+    /// accept it at all, and said so by aborting the process. See `tabs(from:limit:)`.
+    ///
+    /// Reports the failure rather than passing `nil`, because a control that
+    /// silently does nothing is the worst outcome available here — and because
+    /// a `nil` completion turns a refused push into a crash at the wheel.
     private func showNowPlaying() {
         guard let controller = interfaceController else { return }
-        if let tabBar = controller.rootTemplate as? CPTabBarTemplate,
-           tabBar.templates.contains(where: { $0 === CPNowPlayingTemplate.shared }) {
-            tabBar.select(CPNowPlayingTemplate.shared)
-            return
-        }
+        // Already there. Pushing a template that is on top of the stack is
+        // refused, and the refusal would be logged as though something had
+        // gone wrong — a driver tapping a second row while Now Playing is up
+        // is the ordinary case, not a fault.
+        guard controller.topTemplate !== CPNowPlayingTemplate.shared else { return }
         controller.pushTemplate(CPNowPlayingTemplate.shared, animated: true) { ok, error in
             guard !ok else { return }
             IssaLog.failure(
@@ -115,17 +193,18 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         let item = CPListItem(text: entry.title, detailText: entry.subtitle)
         item.handler = { [weak self] _, completion in
             Task { @MainActor in
+                IssaLog.info("carplay row tapped", ["book": entry.bookUUID])
                 if let message = await CarPlayBridge.shared.play(bookID: entry.bookUUID) {
+                    IssaLog.error("carplay could not play", [
+                        "book": entry.bookUUID, "reason": message,
+                    ])
                     self?.presentError(message)
                 } else {
-                    // Selected, not pushed. `CPNowPlayingTemplate.shared` is
-                    // already installed as a tab of the root tab bar, and one
-                    // instance cannot occupy two places in the hierarchy — so
-                    // the push was rejected, `completion: nil` threw the
-                    // rejection away, and the driver tapped a row, heard audio
-                    // start, and watched the screen not change. This file's own
-                    // comment calls that indistinguishable from a crash at the
-                    // wheel.
+                    // The driver tapped a row and must see the screen change.
+                    // An earlier version pushed with `completion: nil` and
+                    // threw the rejection away, so audio started and the screen
+                    // did not move — which this file's own comment calls
+                    // indistinguishable from a crash at the wheel.
                     self?.showNowPlaying()
                 }
                 completion()
@@ -161,10 +240,22 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         let alert = CPAlertTemplate(
             titleVariants: [message],
             actions: [CPAlertAction(title: "OK", style: .default) { [weak self] _ in
-                self?.interfaceController?.dismissTemplate(animated: true, completion: nil)
+                self?.interfaceController?.dismissTemplate(animated: true) { ok, error in
+                    guard !ok else { return }
+                    IssaLog.failure(
+                        "carplay dismiss alert", error ?? StorytellerError.notFound, [:])
+                }
             }],
         )
-        interfaceController?.presentTemplate(alert, animated: true, completion: nil)
+        interfaceController?.presentTemplate(alert, animated: true) { ok, error in
+            // If even the error alert cannot be shown, the message still has to
+            // land somewhere — and a `nil` completion here would have turned
+            // "could not start that book" into a crash.
+            guard !ok else { return }
+            IssaLog.failure(
+                "carplay present alert", error ?? StorytellerError.notFound,
+                ["message": message])
+        }
     }
 }
 
@@ -174,21 +265,36 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
 extension CarPlaySceneDelegate: @preconcurrency CPNowPlayingTemplateObserver {
     func nowPlayingTemplateUpNextButtonTapped(_ nowPlayingTemplate: CPNowPlayingTemplate) {
         let titles = CarPlayBridge.shared.chapters?() ?? []
-        guard !titles.isEmpty else { return }
+        guard !titles.isEmpty else {
+            IssaLog.warning("carplay up next was empty")
+            return
+        }
         let current = CarPlayBridge.shared.currentChapter?()
         let items = titles.prefix(itemLimit).enumerated().map { index, title -> CPListItem in
             let item = CPListItem(text: title, detailText: nil)
             item.isPlaying = index == current
             item.handler = { [weak self] _, completion in
                 Task { @MainActor in
+                    IssaLog.info("carplay chapter tapped", ["index": String(index)])
                     await CarPlayBridge.shared.onPlayChapter?(index)
-                    self?.interfaceController?.popTemplate(animated: true, completion: nil)
+                    self?.interfaceController?.popTemplate(animated: true) { ok, error in
+                        guard !ok else { return }
+                        IssaLog.failure(
+                            "carplay pop chapters", error ?? StorytellerError.notFound, [:])
+                    }
                     completion()
                 }
             }
             return item
         }
         let list = CPListTemplate(title: "Chapters", sections: [CPListSection(items: items)])
-        interfaceController?.pushTemplate(list, animated: true, completion: nil)
+        // A `CPListTemplate` is the one thing an audio app may push on top of
+        // Now Playing, which is why this is a list and not a grid.
+        interfaceController?.pushTemplate(list, animated: true) { ok, error in
+            guard !ok else { return }
+            IssaLog.failure(
+                "carplay push chapters", error ?? StorytellerError.notFound,
+                ["chapters": String(items.count)])
+        }
     }
 }
