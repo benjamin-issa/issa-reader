@@ -13,13 +13,15 @@ import Foundation
 enum NarrationColumn {
     /// How many lines a sentence may use before it truncates.
     ///
-    /// The spoken line gets three because it is the one being read; its
-    /// neighbours get two, which covers all but a long sentence and keeps the
-    /// column's height within reach of a 1080-point screen. Beyond three lines
-    /// in the 48-point face — roughly 180 characters — a sentence does end in
-    /// an ellipsis, which is the "unless it won't fit on the screen" case. The
-    /// alternative is shrinking type that is read from across a room.
-    static func lineAllowance(isCurrent: Bool) -> Int { isCurrent ? 3 : 2 }
+    /// The spoken line gets four because it is the one being read; its
+    /// neighbours get three. Both numbers were set by looking at a television
+    /// rather than by arithmetic: at three and two, a long neighbour still
+    /// ended in an ellipsis with a third of the column standing empty below
+    /// it, which is the complaint this whole change exists to answer. Beyond
+    /// these a sentence does truncate, and that is the "unless it won't fit on
+    /// the screen" case — the alternative is shrinking type that is being read
+    /// from across a room.
+    static func lineAllowance(isCurrent: Bool) -> Int { isCurrent ? 4 : 3 }
 
     /// The window narrowed to `neighbours` sentences either side of the spoken
     /// one.

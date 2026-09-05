@@ -195,29 +195,31 @@ private struct TVReadalongContent: View {
         }
     }
 
-    /// The sentences, at the largest density this screen will hold.
+    /// The sentences, at a density the column can hold.
     ///
-    /// Three candidates, widest first. This is the whole fix for sentences
-    /// arriving truncated: a bare `VStack` whose children want more height than
-    /// the parent offers does not overflow, it *compresses* them, and a `Text`
-    /// compressed to its minimum is one line with an ellipsis. So the layout is
-    /// given somewhere to give — it drops context rather than clipping words.
+    /// This is the fix for sentences arriving truncated. A bare `VStack` whose
+    /// children want more height than the parent offers does not overflow, it
+    /// *compresses* them — and a `Text` compressed to its minimum is one line
+    /// with an ellipsis. So each row is given a reserved height it cannot be
+    /// squeezed below, and the budget is made to fit by asking for two
+    /// neighbours a side rather than three and by spending less on gaps.
     ///
-    /// `reservesSpace` below is what makes this stable rather than merely
-    /// adaptive: each candidate's height stops depending on what the sentences
-    /// happen to say, so `ViewThatFits` settles on one row count for the screen
-    /// and does not re-pick as narration advances. Without it the column would
-    /// change density sentence by sentence.
+    /// `reservesSpace` earns its place twice: it stops the compression, and it
+    /// makes each row's height independent of what its sentence says — which is
+    /// what keeps the spoken line at a fixed point on screen as narration
+    /// advances, the property the note at the top of this file protects.
+    ///
+    /// **Not `ViewThatFits`.** Shedding neighbours automatically when the
+    /// column runs short is the obvious next move and it crashes: `ViewThatFits`
+    /// measures its candidates on SwiftUI's async renderer thread, the `ForEach`
+    /// row closure below is `@MainActor` by declaration, and Swift's isolation
+    /// check traps in `dispatch_assert_queue` the moment a candidate is sized.
+    /// Hoisting the model reads out of the closure does not help — the check
+    /// fires on entry, not on what the body touches. Verified on the simulator:
+    /// EXC_BREAKPOINT on com.apple.SwiftUI.AsyncRenderer, twice.
     private func window(_ lines: [ReaderModel.NarratedLine]) -> some View {
-        ViewThatFits(in: .vertical) {
-            stack(lines, neighbours: 2)
-            stack(lines, neighbours: 1)
-            stack(lines, neighbours: 0)
-        }
-        // Outside the candidates, deliberately. A candidate carrying
-        // `maxHeight: .infinity` reports a flexible height, every candidate
-        // then "fits", and `ViewThatFits` always picks the first.
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        stack(lines, neighbours: 2)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
     }
 
     private func stack(
@@ -225,13 +227,20 @@ private struct TVReadalongContent: View {
     ) -> some View {
         let visible = NarrationColumn.trimmed(lines, neighbours: neighbours)
         let currentIndex = visible.firstIndex(where: \.isCurrent) ?? 0
+        // Read out here, not inside the `ForEach`. `ViewThatFits` measures its
+        // candidates on SwiftUI's async renderer thread, and `model` is
+        // `@MainActor` — so touching it from inside the row closure traps in
+        // `dispatch_assert_queue` the moment a candidate is sized. Plain
+        // `Color` values carry across threads; the model does not.
+        let ink = model.style.theme.text
+        let highlight = model.style.theme.highlight
         return VStack(alignment: .leading, spacing: Metrics.spacing16) {
             ForEach(Array(visible.enumerated()), id: \.element.id) { offset, line in
                 Text(line.text)
                     .font(line.isCurrent
                         ? Typography.serif(48, weight: .regular)
                         : Typography.serif(32))
-                    .foregroundStyle(model.style.theme.text)
+                    .foregroundStyle(ink)
                     // Fading with distance rather than one opacity for every
                     // neighbour: at three lines a side, a single dimmed value
                     // makes the furthest sentence as loud as the nearest.
@@ -246,7 +255,7 @@ private struct TVReadalongContent: View {
                     .background {
                         if line.isCurrent {
                             RoundedRectangle(cornerRadius: Metrics.radiusLarge, style: .continuous)
-                                .fill(model.style.theme.highlight)
+                                .fill(highlight)
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
