@@ -39,8 +39,11 @@ struct IssaReaderTVApp: App {
                 //
                 // No background assertion: tvOS has no `beginBackgroundTask`.
                 // The local save is what matters here and it needs none.
+                // `.background`, as iOS has it — not `!= .active`, which is
+                // also `.inactive` and so fired twice per exit and on every
+                // Siri, overlay and Control Centre interruption.
                 .onChange(of: scenePhase) { _, phase in
-                    if phase != .active {
+                    if phase == .background {
                         Task { await app.flushOpenReaders() }
                     }
                 }

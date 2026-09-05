@@ -123,8 +123,14 @@ public enum IssaLog {
     /// suspension that the system then kills are exactly the ones that never
     /// reached the file, and they are the entries this log exists to capture.
     ///
-    /// Called from the app's own suspend and terminate handlers.
-    public static func flush() { store.flush() }
+    /// Called from the app's own suspend and terminate handlers — and `async`
+    /// so that it is not called *on* them. The first version was synchronous,
+    /// which put lock-held file I/O on the main actor inside the iOS
+    /// background-assertion window and the macOS three-second terminate budget.
+    /// A non-isolated async function does not adopt its caller's executor, so
+    /// awaiting this from the main actor does the write elsewhere and only the
+    /// completion comes back.
+    public static func flush() async { store.flush() }
     /// Removes any diagnostics file written for sharing.
     public static func discardExports() { store.discardExports() }
 

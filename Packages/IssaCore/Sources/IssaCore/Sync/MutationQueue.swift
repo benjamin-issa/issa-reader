@@ -47,7 +47,37 @@ public actor MutationQueue {
         return true
     }
 
-    func endDraining() { isDraining = false }
+    /// Callers waiting for the lock, handed it in order by `endDraining`.
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    /// Claims the right to drain, waiting for it if someone else holds it.
+    ///
+    /// For the exit paths — suspend, ⌘Q, the TV button — and nothing else.
+    /// `beginDraining` declining is right for every ordinary caller: the rows
+    /// it would have sent are already in flight and the next enqueue drains
+    /// again. On the way out there is no next enqueue. The first version of
+    /// the lock made `flushOpenReaders()` a silent no-op whenever a background
+    /// drain happened to be blocked on a slow POST, which undid the three exit
+    /// paths added in the same branch for exactly that flush.
+    ///
+    /// The lock is handed over directly rather than released and re-taken, so
+    /// a waiter cannot lose it to a `beginDraining` that arrives in between.
+    func waitToDrain() async {
+        if !isDraining {
+            isDraining = true
+            return
+        }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func endDraining() {
+        if !waiters.isEmpty {
+            // Still held — by the waiter now.
+            waiters.removeFirst().resume()
+        } else {
+            isDraining = false
+        }
+    }
 
     public init(store: LibraryStore) throws {
         // This opens a second connection to the same file `LibraryStore`
@@ -235,11 +265,20 @@ public struct MutationDrain: Sendable {
     ///
     /// - Returns: how many were accepted.
     @discardableResult
-    public func drain() async -> Int {
+    /// - Parameter waitingForInFlight: wait for a drain already running rather
+    ///   than declining. Only the exit paths pass `true`; see
+    ///   `MutationQueue.waitToDrain`.
+    public func drain(waitingForInFlight: Bool = false) async -> Int {
         // One drain at a time. A second caller returning 0 immediately is
         // correct: the writes it would have sent are the ones already in
-        // flight, and it will be re-triggered by whatever enqueues next.
-        guard await queue.beginDraining() else { return 0 }
+        // flight, and it will be re-triggered by whatever enqueues next —
+        // except on the way out, where nothing enqueues next, which is what
+        // the waiting form is for.
+        if waitingForInFlight {
+            await queue.waitToDrain()
+        } else {
+            guard await queue.beginDraining() else { return 0 }
+        }
         let sent = await drainHoldingTheLock()
         // Released before returning, not from `defer { Task { … } }`. A
         // deferred Task releases *asynchronously*, so a caller draining twice

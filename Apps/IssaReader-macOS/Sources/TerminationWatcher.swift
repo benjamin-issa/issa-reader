@@ -31,28 +31,46 @@ final class TerminationDelegate: NSObject, NSApplicationDelegate {
     /// What to run. Set once the app model exists.
     var flush: (() async -> Void)?
 
-    /// Set while a flush is in flight, so a second terminate request during it
-    /// does not start another.
+    /// Set while a flush is in flight.
     private var isFlushing = false
+    /// One reply per `.terminateLater`. The deadline and the completion can
+    /// both reach `reply`, and the first version let both call AppKit.
+    private var hasReplied = false
 
     func applicationShouldTerminate(
         _ sender: NSApplication
     ) -> NSApplication.TerminateReply {
-        guard let flush, !isFlushing else { return .terminateNow }
+        guard let flush else { return .terminateNow }
+        // A second quit request while the first is still flushing. Cancelled,
+        // not `.terminateNow`: the first request is in flight and will exit
+        // the process; `.terminateNow` here killed it mid-save, which is the
+        // one outcome this class exists to prevent. And not a second
+        // `.terminateLater`, which AppKit would expect a second reply for.
+        guard !isFlushing else { return .terminateCancel }
         isFlushing = true
+        hasReplied = false
 
         Task { @MainActor in
             // A ceiling, because quit must not be hostage to a slow server. The
             // local save in `flushOpenReaders` happens before the network drain,
             // so the part that matters is done first either way.
-            let deadline = Task {
+            let deadline = Task { @MainActor in
                 try? await Task.sleep(for: .seconds(3))
-                if !Task.isCancelled { sender.reply(toApplicationShouldTerminate: true) }
+                if !Task.isCancelled { self.reply(sender) }
             }
             await flush()
             deadline.cancel()
-            sender.reply(toApplicationShouldTerminate: true)
+            self.reply(sender)
         }
         return .terminateLater
+    }
+
+    /// Replies once. Past the deadline the flush still completes, and without
+    /// this it replied a second time to a termination no longer pending.
+    private func reply(_ sender: NSApplication) {
+        guard !hasReplied else { return }
+        hasReplied = true
+        isFlushing = false
+        sender.reply(toApplicationShouldTerminate: true)
     }
 }

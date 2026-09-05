@@ -402,6 +402,12 @@ public final class AppModel {
     /// later would be missing fields, and every field missing from it is one
     /// account's data shown to another.
     private func clearAccountScopedState(nowPlaying: NowPlayingController?) async {
+        // First, before anything suspends. This is the fence every detached
+        // catalogue write checks, and it sat after two awaits — the server
+        // sign-out and the store's DELETE — so a refresh resuming in that
+        // window captured the old generation, passed every guard, and wrote
+        // the departed account's catalogue back over the DELETE.
+        catalogueGeneration += 1
         // Stop the audio, and stop anything listening for it, before the
         // stopping itself is announced.
         //
@@ -440,7 +446,6 @@ public final class AppModel {
         // positionGuards is cleared two lines up — and `pendingBook` is a book
         // uuid, so a widget tap left unconsumed would open in the next
         // account's library.
-        catalogueGeneration += 1
         pendingBook = nil
         readerRequest = nil
         visibleReaderUUID = nil
@@ -506,7 +511,7 @@ public final class AppModel {
     /// A detached write that outlives its account is not a hypothetical: the
     /// one below took a full merged catalogue and could put it back after
     /// sign-out had deleted it.
-    private var catalogueGeneration = 0
+    private(set) var catalogueGeneration = 0
 
     /// Re-seeds the write guards when the server's position moved backwards.
     ///
@@ -587,7 +592,6 @@ public final class AppModel {
                 else { mergedRatings[uuid] = nil }
             }
             ratings = mergedRatings
-            try? await store?.replaceRatings(mergedRatings)
             loadError = nil
             IssaLog.info("library refreshed", ["books": String(fetched.count)])
 
@@ -603,9 +607,17 @@ public final class AppModel {
             // `hasCredential` gate in front, which is the leak that gate exists
             // to prevent.
             let generation = catalogueGeneration
+            let ratingsToPersist = mergedRatings
             Task { [weak self] in
                 guard let self, self.catalogueGeneration == generation else { return }
                 try? await self.store?.replaceCatalogue(merged)
+                // Behind the same fence as the catalogue. This write sat in
+                // the body above, outside every generation check, and the
+                // `rating` table has no account column — so a refresh racing
+                // a sign-out persisted the departed account's ratings for the
+                // next one to read back at launch.
+                guard self.catalogueGeneration == generation else { return }
+                try? await self.store?.replaceRatings(ratingsToPersist)
                 guard self.catalogueGeneration == generation else { return }
                 await self.drainPendingWrites()
             }
@@ -621,9 +633,15 @@ public final class AppModel {
     }
 
     /// Sends anything written while there was no connection.
-    public func drainPendingWrites() async {
+    ///
+    /// - Parameter waitingForInFlight: wait for a drain already running rather
+    ///   than declining. `true` only from `flushOpenReaders`, the exit path,
+    ///   where declining meant sending nothing and there is no next enqueue to
+    ///   try again.
+    public func drainPendingWrites(waitingForInFlight: Bool = false) async {
         guard let session, let mutations else { return }
-        _ = await MutationDrain(queue: mutations, client: session.client).drain()
+        _ = await MutationDrain(queue: mutations, client: session.client)
+            .drain(waitingForInFlight: waitingForInFlight)
         pendingWrites = (try? await mutations.count) ?? 0
     }
 
@@ -1106,15 +1124,17 @@ public final class AppModel {
         for model in readers.values {
             await model.saveProgress()
         }
-        await drainPendingWrites()
+        await drainPendingWrites(waitingForInFlight: true)
         // The log too, and here rather than in each scene-phase handler,
         // because all three platforms already route their exit through this
         // one method — which is the arrangement `TerminationDelegate` exists to
         // guarantee. `IssaLog.append` buffers and flushes on a utility-priority
         // detached task, so the entries immediately before a suspension the
         // system then kills are exactly the ones that never reached the file:
-        // the entries the log exists to capture.
-        IssaLog.flush()
+        // the entries the log exists to capture. Awaited off the main actor:
+        // the flush is lock-held file I/O, and this runs inside the background
+        // assertion and the terminate deadline.
+        await IssaLog.flush()
     }
 
     /// Releases every open reader and stops whichever is narrating. Every open

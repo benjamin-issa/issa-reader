@@ -84,9 +84,15 @@ struct AccountSwitchTests {
         defer { Self.forget(server) }
         let app = Self.model(on: server, lastSignedInAs: Self.account(1))
         #expect(app.pendingBook != nil, "the link has to be armed for this to mean anything")
+        let generation = app.catalogueGeneration
 
         await app.adopt(token: "a-token-belonging-to-reader-2")
 
+        // The fence every detached catalogue write checks. Bumped, and bumped
+        // before anything in the hand-over suspends — the ordering is
+        // verified by inspection; this pins that it happens at all.
+        #expect(app.catalogueGeneration == generation + 1,
+                "a refresh in flight would write reader 1's catalogue back")
         #expect(app.pendingBook == nil, "reader 1's widget tap opened in reader 2's library")
         #expect(app.ratings.isEmpty, "reader 1's ratings were shown as reader 2's")
         #expect(app.books.isEmpty)
@@ -101,9 +107,11 @@ struct AccountSwitchTests {
         let server = Self.server(identifying: 1)
         defer { Self.forget(server) }
         let app = Self.model(on: server, lastSignedInAs: Self.account(1))
+        let generation = app.catalogueGeneration
 
         await app.adopt(token: "a-token-belonging-to-reader-1")
 
+        #expect(app.catalogueGeneration == generation, "the same reader is not a hand-over")
         #expect(app.pendingBook != nil, "the reader's own pending link was discarded")
         #expect(app.ratings.isEmpty == false, "the reader's own ratings were discarded")
     }
