@@ -60,9 +60,9 @@ struct TVPageView: View {
         let annotations = page.map { model.highlightBlocks(on: $0) } ?? []
         let selection = model.selection
         let theme = model.style.theme
-        // `theme.highlight` for now; this becomes `model.style.highlightColor`
-        // when the per-theme highlighter (item 3) lands.
-        let highlight = theme.highlight
+        // The reader's own highlighter for this page colour, so the television
+        // paints the block the same colour the phone and the Mac do.
+        let highlight = model.style.highlightColor
         let highlightStyle = HighlightBlock.Style(fontSize: model.style.fontSize)
 
         ZStack {
