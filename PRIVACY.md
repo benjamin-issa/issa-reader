@@ -1,6 +1,6 @@
 # Privacy Policy — Issa Reader
 
-**Effective 5 September 2026.**
+**Effective 6 September 2026.**
 
 ## The short version
 
@@ -72,6 +72,13 @@ described in the next section.
   rather than when the log is read, so a token never reaches the file at all.
   This log stays on your device unless you deliberately export and send it (see
   below).
+- **A text index of a book you ask questions about** — one small database per
+  book, holding that book's own words so the app can search what you have
+  already read. It is built on your device the first time you ask a question
+  about that book, is excluded from iCloud backup, and is deleted when you
+  delete the download or sign out. Your questions and the answers are never
+  written down: they exist while the sheet is open and are gone when you close
+  it.
 
 Deleting the app deletes all of the above.
 
@@ -91,6 +98,15 @@ reading so you can continue on another of your Apple devices. This is carried by
 Apple between devices signed into your Apple Account, is governed by
 [Apple's Privacy Policy](https://www.apple.com/legal/privacy/), and can be turned
 off in system settings. The developer receives nothing from it.
+
+**"Ask AI about this book" sends nothing at all.** It is answered by Apple's
+Foundation Models framework — the on-device model behind Apple Intelligence —
+running on the device in your hand. Your question, and the excerpts from your own
+book that it is answered from, are processed there and sent to no one: not to the
+developer, not to Apple, and not to your server. The feature is off unless you
+turn it on in Settings, and it needs a device that supports Apple Intelligence;
+where the hardware cannot run the model, the feature is simply not offered rather
+than being answered somewhere else.
 
 **If you choose to share a diagnostics log**, the export goes wherever *you* send
 it — mail, messages, a file. Credentials are redacted before they are written, but

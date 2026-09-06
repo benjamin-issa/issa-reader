@@ -1,6 +1,7 @@
 #if canImport(FoundationModels)
 import Foundation
 import FoundationModels
+import IssaCore
 
 /// The one way the model is allowed to ask for more of the book.
 ///
@@ -81,6 +82,12 @@ public final class SearchBookTool: AskTool, Tool {
         let terms = QueryTerms.extract(from: arguments.query)
         let candidates = (try? await store.retrieve(terms: terms, before: boundary, limit: 20)) ?? []
         let ranked = PassageRanker.rank(candidates, terms: terms, limit: Self.passageLimit)
+        // Counts only, never the query: whether the model searches at all — and
+        // what that costs in seconds — is the measurement the tool ships behind
+        // a kill switch for, and there is no other way to see it from outside.
+        IssaLog.debug("ask tool searched", [
+            "terms": String(terms.searchTokens.count), "found": String(ranked.count),
+        ])
         guard !ranked.isEmpty else { return Self.noMatches }
         return Self.excerpts(ranked.map(\.passage), numberingFrom: firstOrdinal)
     }

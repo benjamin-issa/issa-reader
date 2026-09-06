@@ -3,6 +3,11 @@ import IssaPlayback
 import IssaRender
 import IssaUI
 import SwiftUI
+#if !os(tvOS)
+// Not on the television: FoundationModels is not in that SDK, and there is no
+// Ask anywhere on it.
+import IssaAsk
+#endif
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -62,6 +67,14 @@ public struct ReaderView: View {
     @State private var showsSearch = false
     @State private var showsAnnotations = false
     @State private var showsTypography = false
+    #if !os(tvOS)
+    /// The Ask sheet on the phone, the Ask popover on the Mac.
+    @State private var showsAsk = false
+    /// Whether the answer has outgrown the half sheet. Measured rather than
+    /// guessed: a two-line answer and a nine-line one are different failures in
+    /// a medium detent.
+    @State private var askDetent: PresentationDetent = .medium
+    #endif
     /// The last place a finger was, so a long press that never moves still
     /// knows where it happened.
     @State private var touchPoint: CGPoint = .zero
@@ -110,6 +123,11 @@ public struct ReaderView: View {
     // The skip buttons move the audio from the strip, so the lock screen has
     // to be told where it landed.
     @Environment(NowPlayingController.self) private var nowPlaying
+    #if !os(tvOS)
+    /// Owned above the reader, because `AppModel.readerDidClose` evicts this
+    /// screen's model the moment it goes away and an answer has to outlive that.
+    @Environment(AskCoordinator.self) private var ask
+    #endif
     #if os(macOS)
     @Environment(\.controlActiveState) private var controlActiveState
     /// The Now Playing panel is a window on the Mac, so the reader opens it
@@ -124,6 +142,7 @@ public struct ReaderView: View {
     @FocusState private var pageHasKeyboardFocus: Bool
     private var anySheetShowing: Bool {
         showsPlayer || showsContents || showsSearch || showsAnnotations || showsTypography
+            || showsAsk
     }
     #endif
 
@@ -354,6 +373,33 @@ public struct ReaderView: View {
             )
             .macSheetSize()
         }
+        #if !os(macOS)
+        // Medium first so the page the question is about stays visible behind
+        // it, growing only when an answer genuinely needs the room. The Mac
+        // gets a popover instead, anchored on its toolbar button.
+        .sheet(isPresented: $showsAsk, onDismiss: {
+            ask.sheetDismissed(bookUUID: model.book.uuid)
+            // Back to half height for the next question. Without this one long
+            // answer leaves every later sheet opening full-height over the page,
+            // which is the thing the medium detent exists to avoid.
+            askDetent = .medium
+        }) {
+            AskSheet(model: model) { height in
+                // A little slack: the detent is about whether the answer fits,
+                // not about the last two points of a footer.
+                if height > 300 { askDetent = .large }
+            }
+            .presentationDetents([.medium, .large], selection: $askDetent)
+            .presentationBackground(Palette.paper)
+        }
+        #endif
+        // Reopened from a notification tap, whichever platform it arrived on.
+        .onChange(of: ask.reopenRequest) { _, requested in
+            guard requested == model.book.uuid else { return }
+            ask.reopenRequest = nil
+            askDetent = .medium
+            showsAsk = true
+        }
         #if os(macOS)
         // The Mac keeps a real toolbar: its window chrome never moved the page.
         .toolbar { ToolbarItemGroup(placement: .primaryAction) { macToolbar } }
@@ -369,6 +415,11 @@ public struct ReaderView: View {
         // Drawn over the page rather than above it, so showing it cannot
         // change the page's size.
         .overlay(alignment: .top) { topBar }
+        // The one cue that survives the chrome going away. Reading with the bars
+        // hidden is the ordinary case, and it is exactly when a reader is most
+        // likely to have closed the sheet and be waiting — without this the only
+        // sign the app is working disappears with the top bar.
+        .overlay(alignment: .topTrailing) { askBadge }
         // The first-run gesture guide sits above even the chrome and swallows
         // the tap that dismisses it, so the page below does not also turn.
         .overlay { coachOverlay }
@@ -423,6 +474,37 @@ public struct ReaderView: View {
                 .help("Show Player (⌥⌘P)")
                 .accessibilityLabel("Open player")
         }
+
+        if showsAskPill {
+            Button { showsAsk = true } label: {
+                Image(systemName: "sparkles")
+                    .symbolEffect(
+                        .pulse.byLayer, options: .repeating,
+                        isActive: ask.job(for: model.book.uuid)?.state.isWorking ?? false,
+                    )
+                    .overlay(alignment: .topTrailing) {
+                        if ask.job(for: model.book.uuid)?.state.isAnswered == true {
+                            Circle()
+                                .fill(model.style.theme.accent)
+                                .frame(width: 6, height: 6)
+                                .offset(x: 3, y: -2)
+                        }
+                    }
+            }
+            .help("Ask about this book (⇧⌘A)")
+            .accessibilityLabel("Ask about this book")
+            // A popover, not a sheet: the page the question is about has to
+            // stay on screen, and a Mac sheet covers the window it belongs to.
+            .popover(isPresented: $showsAsk, arrowEdge: .top) {
+                AskSheet(model: model)
+                    .frame(width: 420)
+                    .frame(minHeight: 220)
+            }
+            .onChange(of: showsAsk) { _, showing in
+                // A popover has no `onDismiss`, so the close is observed here.
+                if !showing { ask.sheetDismissed(bookUUID: model.book.uuid) }
+            }
+        }
     }
 
     /// What each reading command does, in one place.
@@ -443,12 +525,31 @@ public struct ReaderView: View {
         // Guarded on narration as well as on the key window, so ⌘⌥↑ over a
         // plain ebook does not quietly store a level for a book that has
         // nothing to play it at.
+        case .ask:
+            guard showsAskPill else { return }
+            showsAsk = true
         case .volumeUp, .volumeDown:
             guard model.hasNarration else { return }
             VolumeTrimControl.nudge(
                 by: command == .volumeUp ? VolumeTrim.step : -VolumeTrim.step,
                 for: model.book, coordinator: model.readalong, settings: settings,
             )
+        }
+    }
+    #endif
+
+    #if !os(tvOS)
+    /// Whether the reader offers to answer questions about this book.
+    ///
+    /// The setting *and* the hardware. `.appleIntelligenceOff` and
+    /// `.modelDownloading` still show it: both come right without the reader
+    /// touching this app again, and a control that vanishes and reappears is
+    /// harder to find than one that explains itself when tapped.
+    private var showsAskPill: Bool {
+        guard settings.askEnabled else { return false }
+        switch AskAvailability.current() {
+        case .available, .appleIntelligenceOff, .modelDownloading: return true
+        case .unsupportedDevice, .unsupportedOnThisPlatform: return false
         }
     }
     #endif
@@ -465,6 +566,16 @@ public struct ReaderView: View {
     /// Bookmark, and the rest behind an ellipsis.
     @ViewBuilder
     private var readerActions: some View {
+        #if !os(tvOS)
+        if showsAskPill {
+            Button { showsAsk = true } label: {
+                AskPill(theme: model.style.theme, job: ask.job(for: model.book.uuid))
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("reader.ask")
+        }
+        #endif
+
         Button { showsTypography = true } label: {
             Image(systemName: "textformat.size")
         }
@@ -485,6 +596,24 @@ public struct ReaderView: View {
     }
 
     #if os(iOS)
+    /// The sparkle that stays while the chrome is away.
+    @ViewBuilder
+    private var askBadge: some View {
+        let job = ask.job(for: model.book.uuid)
+        if !model.chromeVisible, showsAskPill,
+           job?.state.isWorking == true || job?.state.isAnswered == true {
+            Button { showsAsk = true } label: {
+                AskStatusBadge(theme: model.style.theme, job: job)
+            }
+            .buttonStyle(.plain)
+            // Inside the notch, like the bar it stands in for.
+            .padding(.top, deviceInsets.top + Metrics.spacing8)
+            .padding(.trailing, Metrics.spacing16)
+            .transition(.opacity)
+            .animation(.easeInOut(duration: 0.2), value: model.chromeVisible)
+        }
+    }
+
     /// The reader's own top bar, floating over the page.
     private var topBar: some View {
         HStack(spacing: Metrics.spacing16) {
@@ -761,6 +890,9 @@ public struct ReaderView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: ReaderCommand.volumeDown.notification)) { _ in
             if isActiveScene { perform(.volumeDown) }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: ReaderCommand.ask.notification)) { _ in
+            if isActiveScene { perform(.ask) }
         }
         #endif
         // A re-resolve, not an assignment: `model.style = settings.readerStyle`

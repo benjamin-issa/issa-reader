@@ -48,6 +48,7 @@ accommodate it.
 | Controls | Every external control remappable per surface — phone, CarPlay, headphones — including a car's steering-wheel buttons |
 | Apple TV | Device-code sign-in, poster-shelf library, one-sentence-at-a-time read-along |
 | Mac | Sidebar library, each book in its own window, menu-bar transport, `issareader://` links and Handoff |
+| Ask about a book | A question about the story so far, answered on the device by Apple Intelligence from the part you have actually read — never from further on. Off by default; iPhone, iPad and Mac with Apple Intelligence, not Apple TV |
 | Widget | Current book, chapter and progress from a shared App Group snapshot |
 
 ## Layout
@@ -59,6 +60,7 @@ Packages/
   IssaRender    XHTML to styled text, TextKit 2 pagination, highlight geometry
   IssaPlayback  audio engine, read-along coordinator, control remapping
   IssaUI        design tokens, type ramp, bundled fonts
+  IssaAsk       per-book text index, bounded retrieval, on-device answering
 Apps/
   IssaReader-iOS      iPhone and iPad, plus the CarPlay scene
   IssaReader-macOS    native Mac app

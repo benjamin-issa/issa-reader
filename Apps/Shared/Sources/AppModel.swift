@@ -867,6 +867,12 @@ public final class AppModel {
         BookContentService(client: session.client).removeDownload(book, format: format)
         if format == .readaloud { AudioExtraction.removeExtractedAudio(for: book.uuid) }
         downloads?.clear(.init(bookUUID: book.uuid, format: format))
+        #if !os(tvOS)
+        // The question index is derived from the file that has just gone, so it
+        // is orphaned the moment this returns — and it is text out of the
+        // reader's book sitting in a database nothing will ever open again.
+        ask?.remove(bookUUID: book.uuid)
+        #endif
         refreshDownloadedSet()
     }
 
@@ -1075,6 +1081,13 @@ public final class AppModel {
     /// starts and stops from places that have no view context to thread it
     /// through — a CarPlay list item, the end of a book, the reader closing.
     public weak var nowPlayingController: NowPlayingController?
+
+    #if !os(tvOS)
+    /// The question machinery, handed over at launch for the same reason and on
+    /// the same terms: deleting a download has to take that book's index with
+    /// it, and this object is not the owner of either.
+    weak var ask: AskCoordinator?
+    #endif
 
     /// Whatever is playing, of either kind. Nil when nothing is.
     public var playback: (any PlaybackDriving)? {
