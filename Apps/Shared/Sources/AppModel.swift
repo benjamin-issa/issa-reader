@@ -1358,6 +1358,10 @@ public final class AppModel {
 
             let coordinator = AudiobookCoordinator(manifest: manifest, source: source)
             coordinator.player.rate = Float(settings.playbackRate)
+            // The level belongs to the book, not to the surface it is played
+            // from: Listening, CarPlay and the lock screen all arrive here, and
+            // a trim set in the reader has to survive the move.
+            coordinator.player.gain = VolumeTrim.gain(settings.volumeTrim(for: book.uuid))
             listening = coordinator
             listeningBook = book
             // Play and pause both have to reach the widget, and the only

@@ -56,6 +56,17 @@ public final class PlaybackSettings {
         didSet { persist(bookStyles, as: Self.bookStylesKey) }
     }
 
+    /// How far each book departs from the level it was recorded at, keyed by
+    /// book uuid.
+    ///
+    /// Beside `bookStyles` and for the same reason: this corrects one library's
+    /// mastering on one device's speakers, and syncing it would push a phone's
+    /// correction onto a Mac that does not need it. Only departures are stored,
+    /// so a book returned to "as recorded" leaves nothing behind.
+    public private(set) var bookVolumeTrims: [String: Int] {
+        didSet { persist(bookVolumeTrims, as: Self.bookVolumesKey) }
+    }
+
     /// Posted when an account signs out, so per-book state keyed by a book
     /// uuid is dropped.
     ///
@@ -68,6 +79,7 @@ public final class PlaybackSettings {
     private static let commandMapKey = "issa.commandMap"
     private static let readerStyleKey = "issa.readerStyle"
     private static let bookStylesKey = "issa.bookStyles"
+    private static let bookVolumesKey = "issa.bookVolumes"
     private static let rateKey = "issa.playbackRate"
     private static let progressScopeKey = "issa.progressScope"
     private static let faceMigrationKey = "issa.migratedDefaultFaceToLiterata"
@@ -120,6 +132,18 @@ public final class PlaybackSettings {
         readerStyle = Self.load(ReaderStyle.self, from: store, key: Self.readerStyleKey) ?? ReaderStyle()
         bookStyles = Self.load(
             [String: ReaderStyleOverride].self, from: store, key: Self.bookStylesKey) ?? [:]
+        // Sanitised on the way out of defaults, not merely on the way in: the
+        // blob is a file on disk that an older build — or a hand edit — may
+        // have written, and a level nothing on screen can show or undo is the
+        // same defect `playbackRate` already carries a clamp for. Entries that
+        // sanitise to zero are dropped rather than kept at zero, so the
+        // dictionary means "books that depart from the recording" for every
+        // reader of it.
+        bookVolumeTrims = (Self.load([String: Int].self, from: store, key: Self.bookVolumesKey) ?? [:])
+            .compactMapValues { stored in
+                let legal = VolumeTrim.clamped(stored)
+                return legal == 0 ? nil : legal
+            }
         let storedRate = store.double(forKey: Self.rateKey)
         playbackRate = storedRate > 0 ? PlaybackRate.clamped(storedRate) : 1.0
         // No migration needed, and this is the part to get right: a stored
@@ -135,7 +159,10 @@ public final class PlaybackSettings {
         signOutObserver.token = NotificationCenter.default.addObserver(
             forName: Self.signOutNotification, object: nil, queue: .main,
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.bookStyles = [:] }
+            MainActor.assumeIsolated {
+                self?.bookStyles = [:]
+                self?.bookVolumeTrims = [:]
+            }
         }
     }
 
@@ -183,6 +210,26 @@ public final class PlaybackSettings {
             bookStyles[bookUUID] = override
         } else {
             bookStyles.removeValue(forKey: bookUUID)
+        }
+    }
+
+    /// How far this book departs from the recorded level, in percent. Zero for
+    /// every book nobody has trimmed, which is nearly all of them.
+    public func volumeTrim(for bookUUID: String) -> Int {
+        bookVolumeTrims[bookUUID] ?? 0
+    }
+
+    /// Records this book's level.
+    ///
+    /// Zero removes the entry rather than storing it, on the same rule as
+    /// `setOverride`: a book back at the recorded level has no preference, and
+    /// keeping one would be a row that means nothing and never expires.
+    public func setVolumeTrim(_ percent: Int, for bookUUID: String) {
+        let legal = VolumeTrim.clamped(percent)
+        if legal == 0 {
+            bookVolumeTrims.removeValue(forKey: bookUUID)
+        } else {
+            bookVolumeTrims[bookUUID] = legal
         }
     }
 
