@@ -47,6 +47,18 @@ public final class PlaybackSettings {
         didSet { defaults.set(progressScope.rawValue, forKey: Self.progressScopeKey) }
     }
 
+    /// Whether the reader offers to answer questions about the book.
+    ///
+    /// Off until asked for, and stored beside `progressScope` rather than in
+    /// `readerStyle` for the same reason: a reading style change re-paginates
+    /// the open book, and turning a toolbar button on or off should not cost
+    /// the reader their place. It is also not a *style* — it decides whether a
+    /// whole feature exists, which is a settings-screen question rather than an
+    /// Aa-sheet one.
+    public var askEnabled: Bool {
+        didSet { defaults.set(askEnabled, forKey: Self.askEnabledKey) }
+    }
+
     /// Per-book departures from `readerStyle`, keyed by book uuid.
     ///
     /// Device-local and deliberately not synced: a size that suits a phone is
@@ -82,6 +94,7 @@ public final class PlaybackSettings {
     private static let bookVolumesKey = "issa.bookVolumes"
     private static let rateKey = "issa.playbackRate"
     private static let progressScopeKey = "issa.progressScope"
+    private static let askEnabledKey = "issa.askAboutBook"
     private static let faceMigrationKey = "issa.migratedDefaultFaceToLiterata"
 
     /// The observer token, in a box `deinit` can reach.
@@ -153,6 +166,9 @@ public final class PlaybackSettings {
         // alone everyone who did.
         progressScope = store.string(forKey: Self.progressScopeKey)
             .flatMap(ProgressScope.init(rawValue:)) ?? .chapter
+        // `bool(forKey:)` is false for an absent key, which is the default this
+        // wants: a reader who has never seen the switch has not turned it on.
+        askEnabled = store.bool(forKey: Self.askEnabledKey)
         moveOffTheOldDefaultFace()
         // After every stored property: `self` is not usable in a closure until
         // the initialiser has finished.

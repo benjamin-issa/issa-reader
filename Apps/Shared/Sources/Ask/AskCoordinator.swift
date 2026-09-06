@@ -1,0 +1,374 @@
+#if !os(tvOS)
+import Foundation
+import IssaAsk
+import IssaCore
+import Observation
+#if canImport(UIKit)
+import UIKit
+#elseif canImport(AppKit)
+import AppKit
+#endif
+
+/// Every question in flight, and the machinery that outlives the sheets.
+///
+/// Owned above the reader — `AppServices` on iOS, `@State` in the Mac app —
+/// because `AppModel.readerDidClose` evicts the `ReaderModel` the moment the
+/// screen goes away, and a job hung off the reader would die with it. The
+/// reader is a source of two values (the boundary and the file); it is not the
+/// owner of the answer.
+@Observable
+@MainActor
+final class AskCoordinator {
+    /// The kill switch for the model's own `searchBook` tool.
+    ///
+    /// A constant rather than a preference: the choice is whether the 3B model
+    /// may refine the app's search, and the honest concern is that it is only
+    /// moderately reliable at deciding when to — and each round trip is another
+    /// three to six seconds on a phone. If the measurement goes against it,
+    /// this is the one line that changes, and the pipeline is otherwise
+    /// identical with and without it.
+    static let usesSearchTool = true
+
+    /// Remembers that the reader has been asked about notifications once, so
+    /// they are never asked twice for the same thing.
+    static let askedForNotificationsKey = "issa.askNotificationsAsked"
+
+    /// One job per book. A second question about the same book replaces the
+    /// first, which is what "Ask another" means; a question about a different
+    /// book is a different job, because a Mac reader can have three books open.
+    private(set) var jobs: [String: AskJob] = [:]
+
+    /// A book whose answer a notification tap asked to be reopened. Cleared by
+    /// whichever reader picks it up.
+    var reopenRequest: String?
+
+    /// One store per process. Two would open the same SQLite file twice, and
+    /// the app also deletes indexes through it when a download goes.
+    let store: AskIndexStore
+    private let model: any AnswerModel
+    /// For index building, prewarming and chips — everything that has no
+    /// boundary of its own, so it needs no tool.
+    private let preparer: AskEngine
+
+    private let defaults: UserDefaults
+    private let notifier: AskNotifier
+
+    /// Books whose index has been built and whose model has been warmed this
+    /// session, so opening the sheet a second time costs nothing.
+    private var prepared: Set<String> = []
+    private var preparing: [String: Task<Void, Never>] = [:]
+
+    /// The observer token, in a box `deinit` can reach.
+    ///
+    /// A nonisolated `deinit` cannot read a main-actor property, and dropping
+    /// the removal instead is how a released object leaves a live observer
+    /// behind. `PlaybackSettings` solves the same problem the same way.
+    private final class ObserverBox: @unchecked Sendable {
+        var token: (any NSObjectProtocol)?
+        deinit {
+            if let token { NotificationCenter.default.removeObserver(token) }
+        }
+    }
+
+    private let signOutObserver = ObserverBox()
+
+    init(
+        store: AskIndexStore = AskIndexStore(),
+        model: (any AnswerModel)? = nil,
+        notifier: AskNotifier = AskNotifier(),
+        defaults: UserDefaults = .standard,
+    ) {
+        self.store = store
+        // The real one unless a test hands over a scripted stand-in.
+        #if canImport(FoundationModels)
+        self.model = model ?? SystemAnswerModel()
+        #else
+        self.model = model ?? ScriptedAnswerModel()
+        #endif
+        self.notifier = notifier
+        self.defaults = defaults
+        preparer = AskEngine(model: self.model, store: store)
+
+        // The indexes are per book and the books are per account, so an account
+        // leaving takes its indexes with it. Through the same notification
+        // `PlaybackSettings` uses, because this object is not owned by
+        // `AppModel` either and there is nothing to call it directly.
+        signOutObserver.token = NotificationCenter.default.addObserver(
+            forName: PlaybackSettings.signOutNotification, object: nil, queue: .main,
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.purgeAll() }
+        }
+    }
+
+    func job(for bookUUID: String) -> AskJob? { jobs[bookUUID] }
+
+    // MARK: - Getting ready
+
+    /// Builds this book's index and warms the model, once.
+    ///
+    /// Called when the sheet opens, so the work happens while the reader is
+    /// still reading the chips and typing. On a long illustrated book the index
+    /// build is the larger half of the first question's latency, and doing it
+    /// after the question is asked is the difference between a seven-second
+    /// wait and a thirty-second one.
+    func prepare(for model: ReaderModel) {
+        guard let source = model.askSource() else { return }
+        prepare(source: source)
+    }
+
+    func prepare(source: BookSource) {
+        let uuid = source.bookUUID
+        guard !prepared.contains(uuid), preparing[uuid] == nil else { return }
+        preparing[uuid] = Task { [preparer] in
+            // Failures are not surfaced: nothing has been asked yet, and a
+            // sheet that opens onto an error before the reader has typed a word
+            // is worse than one that quietly retries when they do. The question
+            // itself builds the index again and reports properly.
+            try? await preparer.prepareIndex(source: source)
+            await preparer.prewarm()
+            guard !Task.isCancelled else { return }
+            prepared.insert(uuid)
+            preparing[uuid] = nil
+        }
+    }
+
+    /// The two chips under the field.
+    ///
+    /// Async because the top name comes out of the index; the caller draws the
+    /// generic pair until this answers, which is what `AskSuggestions` falls
+    /// back to anyway.
+    func suggestions(for model: ReaderModel) async -> [String] {
+        guard let source = model.askSource(), let boundary = model.readingBoundary() else {
+            return AskSuggestions.chips(topNames: [])
+        }
+        return await preparer.suggestions(source: source, boundary: boundary)
+    }
+
+    // MARK: - Asking
+
+    /// Starts a question about the book on screen.
+    ///
+    /// The boundary and the file are read *here*, synchronously, before any
+    /// await: they are main-actor state that the reader is free to change the
+    /// moment this returns, and an answer bounded by wherever the reader
+    /// happened to turn to while it was being written would be bounded by
+    /// nothing at all.
+    @discardableResult
+    func ask(_ question: String, in model: ReaderModel) -> AskJob? {
+        let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let source = model.askSource(),
+              let boundary = model.readingBoundary()
+        else { return nil }
+        return ask(trimmed, source: source, boundary: boundary)
+    }
+
+    @discardableResult
+    func ask(_ question: String, source: BookSource, boundary: ReadingBoundary) -> AskJob? {
+        let uuid = source.bookUUID
+        // A second question replaces the first, and the first is cancelled
+        // rather than left to finish into a job nothing is showing.
+        jobs[uuid]?.task?.cancel()
+        let job = AskJob(bookUUID: uuid, question: question, boundary: boundary)
+        jobs[uuid] = job
+        prepared.insert(uuid)
+
+        // Built per question because the tool captures the boundary, which is
+        // what makes it unable to reach past it whatever the model asks for.
+        var tools: [any AskTool] = []
+        #if canImport(FoundationModels)
+        if Self.usesSearchTool {
+            tools = [SearchBookTool(store: store, boundary: boundary)]
+        }
+        #endif
+        let engine = AskEngine(model: model, store: store, tools: tools)
+
+        job.task = Task { [weak self] in
+            var answered = false
+            do {
+                for try await event in engine.ask(
+                    question: question, source: source, boundary: boundary,
+                ) {
+                    switch event {
+                    case let .phase(phase):
+                        job.state = .working(phase)
+                    case let .partial(text):
+                        job.partial = text
+                    case let .answered(answer):
+                        answered = true
+                        job.state = .answered(answer)
+                    }
+                }
+            } catch {
+                job.state = .failed(AskCoordinator.failure(for: error))
+                self?.finished(job)
+                return
+            }
+            guard let self else { return }
+            // A stream that ends without an answer is a cancellation — the
+            // reader tapped Cancel, or asked something else. There is nothing
+            // to show and nothing to tell them, so the job goes.
+            guard answered else {
+                if jobs[uuid] === job { jobs.removeValue(forKey: uuid) }
+                releaseAssertionIfIdle()
+                return
+            }
+            finished(job)
+        }
+        return job
+    }
+
+    /// Stops a job and forgets it. What Cancel does.
+    func cancel(bookUUID: String) {
+        jobs[bookUUID]?.task?.cancel()
+        jobs.removeValue(forKey: bookUUID)
+        releaseAssertionIfIdle()
+    }
+
+    /// Throws the answer away. What Done and "Ask another" do — nothing about a
+    /// question or an answer is ever persisted.
+    func discard(bookUUID: String) {
+        cancel(bookUUID: bookUUID)
+    }
+
+    /// The sheet closed. A working job carries on.
+    func sheetDismissed(bookUUID: String) {
+        guard let job = jobs[bookUUID] else { return }
+        guard job.state.isWorking else {
+            // An answer nobody is looking at is not worth keeping: it exists
+            // only to be read, and the next open should start on a blank field
+            // rather than on the last answer.
+            discard(bookUUID: bookUUID)
+            return
+        }
+        job.wasDismissedWhileWorking = true
+        requestNotificationsOnce()
+    }
+
+    /// Asks for notification permission the first time — and only the first
+    /// time — a reader closes a sheet with a question still running.
+    ///
+    /// Contextual on purpose: a permission sheet at launch, for a feature that
+    /// is off by default, is the prompt everybody denies. This one arrives at
+    /// the moment the reader has just expressed the wish to be told later.
+    private func requestNotificationsOnce() {
+        guard !defaults.bool(forKey: Self.askedForNotificationsKey) else { return }
+        defaults.set(true, forKey: Self.askedForNotificationsKey)
+        Task { [notifier] in await notifier.requestAuthorizationIfNeeded() }
+    }
+
+    /// A job that has stopped: post the notification if one is owed, then let
+    /// the background assertion go if nothing else is running.
+    private func finished(_ job: AskJob) {
+        if job.wasDismissedWhileWorking, job.state.isAnswered {
+            Task { [notifier] in await notifier.postAnswerReady(job: job) }
+        }
+        releaseAssertionIfIdle()
+    }
+
+    /// Everything the engine can throw, as something the sheet can say.
+    static func failure(for error: any Error) -> AskFailure {
+        error as? AskFailure ?? .other("Something went wrong answering that. Try again.")
+    }
+
+    // MARK: - Leaving and coming back
+
+    var hasWorkingJob: Bool { jobs.values.contains { $0.state.isWorking } }
+
+    /// Holds the app awake long enough to finish an answer the reader has been
+    /// promised a notification about.
+    func appDidEnterBackground() {
+        #if os(iOS)
+        guard hasWorkingJob, assertion == nil else { return }
+        let held = BackgroundAssertion()
+        held.begin(name: "issa.askAnswer") { [weak self] in
+            MainActor.assumeIsolated { self?.backgroundTimeExpired() }
+        }
+        assertion = held
+        #endif
+    }
+
+    func appDidBecomeActive() {
+        releaseAssertion()
+    }
+
+    #if os(iOS)
+    private var assertion: BackgroundAssertion?
+
+    /// iOS is about to suspend the app whether the answer is finished or not.
+    ///
+    /// The job is cancelled and said so, rather than left in `.working` for
+    /// ever: a pill that pulses "Asking…" until the app is relaunched is a lie,
+    /// and the reader can ask again in a second.
+    private func backgroundTimeExpired() {
+        for job in jobs.values where job.state.isWorking {
+            job.task?.cancel()
+            job.state = .failed(.backgroundExpired)
+        }
+        releaseAssertion()
+    }
+    #endif
+
+    private func releaseAssertionIfIdle() {
+        guard !hasWorkingJob else { return }
+        releaseAssertion()
+    }
+
+    private func releaseAssertion() {
+        #if os(iOS)
+        assertion?.end()
+        assertion = nil
+        #endif
+    }
+
+    // MARK: - Deletion
+
+    /// One book's index, when its download goes.
+    func remove(bookUUID: String) {
+        cancel(bookUUID: bookUUID)
+        prepared.remove(bookUUID)
+        preparing.removeValue(forKey: bookUUID)?.cancel()
+        Task { [store] in await store.remove(bookUUID: bookUUID) }
+    }
+
+    /// Every index, on sign-out or when downloads are deleted with the account.
+    func purgeAll() {
+        for job in jobs.values { job.task?.cancel() }
+        jobs.removeAll()
+        prepared.removeAll()
+        for task in preparing.values { task.cancel() }
+        preparing.removeAll()
+        reopenRequest = nil
+        releaseAssertion()
+        Task { [store] in await store.removeAll() }
+    }
+}
+
+// MARK: -
+
+/// "iPhone", "iPad" or "Mac" — the machine the reader is holding.
+///
+/// Every sentence this feature shows names it, because "this device" reads as a
+/// support article and the promise being made is about *their* machine.
+enum AskDevice {
+    static var noun: String {
+        #if os(macOS)
+        "Mac"
+        #elseif canImport(UIKit)
+        UIDevice.current.userInterfaceIdiom == .pad ? "iPad" : "iPhone"
+        #else
+        "device"
+        #endif
+    }
+
+    /// Where Apple Intelligence is switched on, which is not the same place on
+    /// the two platforms.
+    static var settingsPath: String {
+        #if os(macOS)
+        "System Settings › Apple Intelligence & Siri"
+        #else
+        "Settings › Apple Intelligence & Siri"
+        #endif
+    }
+}
+#endif
