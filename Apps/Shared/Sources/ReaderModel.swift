@@ -88,12 +88,20 @@ public final class ReaderModel {
             if style.theme != oldValue.theme {
                 layout?.recolour(to: style.textColor)
             }
-            // A theme change on its own is now finished. Everything else falls
-            // through — including anything added to `ReaderStyle` later, which
-            // is why this compares the whole value rather than listing fields.
-            var withoutTheme = style
-            withoutTheme.theme = oldValue.theme
-            guard withoutTheme != oldValue else { return }
+            // A change of colour on its own is now finished: the page repaints
+            // because `style` changed, and neither the glyphs nor where they
+            // sit have moved. The highlighter joins the theme here because the
+            // Mac's colour panel streams a new value on every drag of the
+            // eyedropper — re-flowing the chapter, let alone reparsing it, on
+            // each of those would make picking a colour stutter.
+            //
+            // Everything else falls through — including anything added to
+            // `ReaderStyle` later, which is why this compares the whole value
+            // rather than listing fields.
+            var withoutColour = style
+            withoutColour.theme = oldValue.theme
+            withoutColour.highlighters = oldValue.highlighters
+            guard withoutColour != oldValue else { return }
 
             // Typography lives in the attributed text, which is immutable once
             // built, so a font or spacing change needs the chapter parsed again

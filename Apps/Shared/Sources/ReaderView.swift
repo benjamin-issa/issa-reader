@@ -1170,6 +1170,7 @@ struct PageCanvas: View {
         let page = model.currentPage
         let annotations = page.map { model.highlightBlocks(on: $0) } ?? []
         let theme = model.style.theme
+        let highlight = model.style.highlightColor
         let layout = model.layout
 
         Group {
@@ -1181,7 +1182,7 @@ struct PageCanvas: View {
                     annotations: annotations,
                     selection: selection,
                     theme: theme,
-                    highlight: theme.highlight,
+                    highlight: highlight,
                     highlightStyle: HighlightBlock.Style(fontSize: model.style.fontSize),
                     size: pageSize,
                 )
