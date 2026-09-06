@@ -179,9 +179,9 @@ struct AskSheet: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier("ask.answer")
 
-            // Derived from the boundary that was actually enforced, so the
-            // sentence cannot drift from what the SQL did.
-            Text(job.boundary.footer(deviceNoun: AskDevice.noun))
+            // Kept on the boundary rather than written here, so the popover and
+            // the sheet cannot come to word the same claim differently.
+            Text(job.boundary.footer)
                 .font(Typography.footnote)
                 .foregroundStyle(Palette.inkTertiary)
                 .fixedSize(horizontal: false, vertical: true)

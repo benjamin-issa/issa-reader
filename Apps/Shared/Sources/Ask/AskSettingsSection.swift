@@ -51,7 +51,7 @@ struct AskSettingsSection: View {
     private var footer: String {
         switch availability {
         case .available:
-            "Apple Intelligence answers on this \(AskDevice.noun); nothing leaves it. Issa Reader holds answers to what you've read, but can't promise it, and the model can be wrong."
+            "Apple Intelligence answers on this \(AskDevice.noun); nothing leaves it. Issa Reader tries to limit the answer to only the parts of the book you have read, but can't guarantee it, and the model can produce incorrect answers."
         case .appleIntelligenceOff:
             "Apple Intelligence is turned off. Turn it on in \(AskDevice.settingsPath), then come back."
         case .modelDownloading:

@@ -47,15 +47,21 @@ public struct ReadingBoundary: Sendable, Hashable, Codable {
         self.kind = kind
     }
 
-    /// What the answer's footer says about where the answer stopped.
+    /// What the answer's footer says under every answer.
     ///
-    /// Built here rather than in the view so the sentence is derived from the
-    /// boundary that was actually enforced, and cannot drift from it.
-    public func footer(deviceNoun: String) -> String {
-        var place = chapterTitle.isEmpty ? "what you've read" : chapterTitle
-        if let pageNumber, !chapterTitle.isEmpty {
-            place += ", page \(pageNumber)"
-        }
-        return "Answered on this \(deviceNoun) from \(place) — no further. It can still be wrong."
+    /// Fixed, and no longer naming the chapter and page: "from Chapter I, page
+    /// 6 — no further" reads as a guarantee, and it is not one. The boundary
+    /// bounds what retrieval may *show* the model; the model still has its own
+    /// idea of the world and can say something the excerpts never contained. A
+    /// sentence precise about a limit that is only best-effort is more
+    /// misleading than a vaguer sentence that is true, so the place is kept for
+    /// logs — where it is a fact about the SQL — and left out of the sheet.
+    ///
+    /// Still on `ReadingBoundary` rather than in the view because the claim is
+    /// about the boundary, and the Mac popover and the phone sheet must not be
+    /// able to word it differently.
+    public var footer: String {
+        "Answered based on content from the book up to this point. "
+            + "The AI model can hallucinate or generate incorrect answers."
     }
 }
