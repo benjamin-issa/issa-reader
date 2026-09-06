@@ -6,12 +6,14 @@ import SwiftUI
 /// The television's book screen.
 ///
 /// Not a detail screen with a reader behind it: on an Apple TV the read-along
-/// *is* the book, so this one screen carries the artwork, where the reader has
-/// got to, the words being spoken, and the controls to move through them.
+/// *is* the book, so this one screen carries the page, where the reader has got
+/// to, and the controls to move through them.
 ///
-/// The cover and the metadata hold a fixed rail on the left while the sentences
-/// roll past on the right, which is what keeps the spoken line in the same place
-/// on screen rather than making the eye chase it up and down a centred column.
+/// It draws a **page**, laid out by the same TextKit 2 engine the phone and the
+/// Mac use. What it replaced was a column of sentences, one per row, which read
+/// as a teleprompter and truncated anything long. A page brings the paragraphs,
+/// the chapter headings and the read-along block back, and it turns — which is
+/// the only thing a remote can usefully do to a book.
 struct TVReadalongView: View {
     @Environment(AppModel.self) private var app
     @Environment(PlaybackSettings.self) private var settings
@@ -46,56 +48,127 @@ private struct TVReadalongContent: View {
     let book: Book
     let session: Session
 
+    @FocusState private var focus: TVFocus?
+    /// The chapter marks, built once when the book opens.
+    ///
+    /// Held rather than computed in `body`: building them walks the whole
+    /// navigation — several hundred entries on a long book — and the answer
+    /// changes only when the book does.
+    @State private var ticks: [TVBookTimeline.Tick] = []
+
     /// The overscan-safe gutter, matching the shelf.
     private static let margin: CGFloat = Metrics.screenMargin
+    /// The footer's cover, tall enough to recognise across a room and short
+    /// enough to leave the transport its row.
+    ///
+    /// Raw points, like the bands in `TVPageMetrics` and for the same reason:
+    /// the footer is 84 pt of the television's own 1080, and a `Metrics` token
+    /// would double itself here and burst the band.
+    private static let coverHeight: CGFloat = 56
+    /// The transport capsules, sized to fit inside the footer band beside the
+    /// cover and the progress line.
+    private static let capsuleWidth: CGFloat = 76
+    private static let capsuleHeight: CGFloat = 60
 
     var body: some View {
-        ZStack {
-            model.style.theme.background.ignoresSafeArea()
+        GeometryReader { geometry in
+            // The whole window, not the safe-area content box: the title-safe
+            // margin below *is* the TV's overscan allowance, and measuring the
+            // safe box would subtract it a second time.
+            let frames = TVPageMetrics.frames(
+                in: geometry.size, margin: Self.margin, fontSize: TVReaderStyle.fontSize,
+            )
 
-            switch model.phase {
-            case let .loading(message):
-                centred {
-                    ProgressView()
-                    Text(message)
-                        .font(Typography.sans(28))
-                        .foregroundStyle(Palette.inkSecondary)
+            ZStack {
+                model.style.theme.background.ignoresSafeArea()
+
+                switch model.phase {
+                case let .loading(message):
+                    centred {
+                        ProgressView()
+                        Text(message)
+                            .font(Typography.sans(28))
+                            .foregroundStyle(Palette.inkSecondary)
+                    }
+                case let .downloading(received, total):
+                    downloading(received: received, total: total)
+                case let .failed(reason):
+                    centred {
+                        Text("Couldn't open this book")
+                            .font(Typography.serif(48, weight: .medium))
+                            .foregroundStyle(model.style.theme.text)
+                        Text(reason)
+                            .font(Typography.sans(24))
+                            .foregroundStyle(Palette.inkSecondary)
+                            .multilineTextAlignment(.center)
+                        menuHint
+                    }
+                case .ready:
+                    reading(frames)
                 }
-            case let .downloading(received, total):
-                downloading(received: received, total: total)
-            case let .failed(reason):
-                centred {
-                    Text("Couldn't open this book")
-                        .font(Typography.serif(48, weight: .medium))
-                        .foregroundStyle(model.style.theme.text)
-                    Text(reason)
-                        .font(Typography.sans(24))
-                        .foregroundStyle(Palette.inkSecondary)
-                        .multilineTextAlignment(.center)
-                    menuHint
+            }
+            // Keyed on the page, so a chapter is laid out again only when the
+            // size it must fit into actually changes.
+            .task(id: frames.pageSize) {
+                // Before `open`, so the first parse is already at ten-foot size
+                // and the book does not visibly re-flow from 18 pt to 40.
+                applyStyle()
+                switch model.phase {
+                case .loading, .downloading:
+                    await model.open(pageSize: frames.pageSize)
+                case .ready:
+                    await model.resize(to: frames.pageSize)
+                case .failed:
+                    break
                 }
-            case .ready:
-                content
+                if let package = model.package {
+                    // Off the main actor: placing a chapter mark reads the
+                    // spine documents its anchor points into, which on a long
+                    // novel is a megabyte of markup to inflate and scan. Both
+                    // arguments are `Sendable`, and nothing on screen depends
+                    // on the answer until it arrives.
+                    let timeline = model.timeline
+                    ticks = await Task.detached {
+                        TVBookTimeline.ticks(for: package, timeline: timeline)
+                    }.value
+                }
+                // The page is where the remote should be, and `defaultFocus`
+                // alone cannot deliver it: the page does not exist yet while
+                // the book is still opening, so there was nothing to focus.
+                if case .ready = model.phase { focus = .page }
+                if model.hasNarration, !model.isPlaying { await model.startNarration() }
             }
         }
-        .task {
-            model.style = settings.readerStyle
-            if case .ready = model.phase {} else {
-                await model.open(pageSize: CGSize(width: 1400, height: 900))
-            }
-            if model.hasNarration, !model.isPlaying { await model.startNarration() }
-        }
+        // Measure the window, not the safe-area content box.
+        .ignoresSafeArea()
+        // The tab bar draws over the top of the screen on tvOS and would sit
+        // exactly where the running header is. Menu still pops the navigation
+        // stack with it hidden.
+        .toolbar(.hidden, for: .tabBar)
+        .defaultFocus($focus, .page)
         .onDisappear {
             Task { await model.saveProgress() }
             Task { @MainActor in app.readerDidClose(model) }
         }
-        .onPlayPauseCommand { Task { await model.togglePlayback() } }
+        .onPlayPauseCommand { Task { await model.playFromVisiblePage() } }
         // No `.onExitCommand` here, deliberately. Adding one and calling
         // `dismiss()` from it made a single Menu press pop twice — out of the
         // book and then out of the app to the tvOS home screen. The stack
         // already pops on Menu, and `onDisappear` above already writes the
         // position; the modifier had nothing to add and something to break.
-        .onChange(of: settings.readerStyle) { _, style in model.style = style }
+        .onChange(of: settings.readerStyle) { _, _ in applyStyle() }
+    }
+
+    /// The reader's settings, re-cut for ten feet, and never written back.
+    ///
+    /// `publisherFamily` is carried across by hand because it belongs to the
+    /// book rather than to the settings: assigning `settings.readerStyle`
+    /// wholesale — which is what this screen used to do — dropped the face a
+    /// book embeds every time anything else changed.
+    private func applyStyle() {
+        model.style = TVReaderStyle.derive(
+            from: settings.readerStyle, publisherFamily: model.style.publisherFamily,
+        )
     }
 
     private func centred(@ViewBuilder content: () -> some View) -> some View {
@@ -105,185 +178,158 @@ private struct TVReadalongContent: View {
 
     // MARK: - Reading
 
-    private var content: some View {
-        HStack(alignment: .top, spacing: Metrics.spacing48) {
-            rail
-            VStack(alignment: .leading, spacing: Metrics.spacing32) {
-                if model.hasNarration {
-                    sentences
-                } else {
-                    Text("This book has no narration on your server.")
-                        .font(Typography.sans(30))
-                        .foregroundStyle(Palette.inkSecondary)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-                }
-                VStack(spacing: Metrics.spacing12) {
-                    transport
-                    menuHint
-                }
+    /// The four bands, each placed at the rectangle `TVPageMetrics` gave it.
+    ///
+    /// Absolute placement rather than a stack, because the page's height is the
+    /// input to pagination: a stack that let the footer grow by a line would
+    /// re-paginate the chapter under the reader, and a book that re-flows when
+    /// the progress readout gets longer is a book that loses your place.
+    private func reading(_ frames: TVPageMetrics.Frames) -> some View {
+        ZStack {
+            band(frames.header) { header }
+            band(frames.page) {
+                TVPageView(model: model, size: frames.page.size, focus: $focus)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+            band(frames.timeline) {
+                TVBookTimelineView(
+                    ticks: ticks,
+                    progress: timelineProgress,
+                    currentTick: TVBookTimeline.currentIndex(in: ticks, fraction: timelineProgress),
+                    track: model.style.theme.text.opacity(0.15),
+                    accent: model.style.theme.accent,
+                    paper: model.style.theme.background,
+                )
+            }
+            band(frames.footer) { footer }
         }
-        .padding(Self.margin)
     }
 
-    /// Fixed on the left: what is being read, and how far in.
-    private var rail: some View {
-        VStack(alignment: .leading, spacing: Metrics.spacing16) {
-            CoverImage(book: book, session: session)
-                .frame(width: 300)
+    private func band(_ rect: CGRect, @ViewBuilder content: () -> some View) -> some View {
+        content()
+            .frame(width: rect.width, height: rect.height)
+            .position(x: rect.midX, y: rect.midY)
+    }
+
+    /// Book on the left, chapter on the right, the way a printed book runs its
+    /// heads — so a reader glancing up knows both without either competing with
+    /// the page.
+    private var header: some View {
+        HStack(alignment: .firstTextBaseline, spacing: Metrics.spacing24) {
             Text(book.title)
-                .font(Typography.sans(26, weight: .semibold))
-                .foregroundStyle(model.style.theme.text)
-                .lineLimit(3)
-            Text(book.byline)
-                .font(Typography.sans(22))
-                .foregroundStyle(Palette.inkTertiary)
-                .lineLimit(2)
-            Text(model.chapterTitle)
-                .font(Typography.sans(22))
-                .foregroundStyle(Palette.tangerine)
-                .lineLimit(2)
-
-            ProgressBar(value: progress)
-                .padding(.top, Metrics.spacing8)
-            Text(progressLine)
-                .font(Typography.sans(20).monospacedDigit())
-                .foregroundStyle(Palette.inkTertiary)
+                .lineLimit(1)
+            Spacer(minLength: Metrics.spacing16)
+            Text(chapterLabel)
+                .lineLimit(1)
+                .multilineTextAlignment(.trailing)
         }
-        .frame(width: 300, alignment: .leading)
+        .font(Typography.sans(24, weight: .semibold))
+        .textCase(.uppercase)
+        .tracking(Metrics.overlineTracking)
+        .foregroundStyle(model.style.theme.textTertiary)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
     }
 
-    /// The whole-book fraction the phone shows on its own book screen, so the
-    /// two devices agree about where the reader is.
-    private var progress: Double { model.bookProgress }
+    /// The chapter, or where in it the reader is.
+    ///
+    /// `chapterTitle` answers with the *book's* title when a book has no
+    /// navigation entry covering this page, and a running head that says the
+    /// same thing twice tells a reader nothing. The page number does.
+    private var chapterLabel: String {
+        let title = model.chapterTitle
+        if !title.isEmpty, title != book.title { return title }
+        guard model.pageCount > 0 else { return "" }
+        return "Page \(model.pageIndex + 1) of \(model.pageCount)"
+    }
+
+    // MARK: - Where the reader is
+
+    /// How far through the book, on the clock the chapter marks were built on.
+    ///
+    /// Audio time once narration has an anchor, byte-weighted spine progress
+    /// before that and always for a book with no narration. Mixing the two on
+    /// one strip would put the marker on the wrong side of a chapter mark: a
+    /// book 40% read by audio is rarely 40% read by weight.
+    private var timelineProgress: Double {
+        if let coordinator = model.readalong, coordinator.activeEntry != nil {
+            return coordinator.bookProgress
+        }
+        return model.bookProgress
+    }
+
+    /// What is left to listen to, when there is anything to listen to.
+    private var remainingTime: TimeInterval? {
+        guard let coordinator = model.readalong, coordinator.totalDuration > 0 else { return nil }
+        return coordinator.totalDuration * (1 - (coordinator.bookProgress.asProgression ?? 0))
+    }
 
     private var progressLine: String {
-        var parts = ["\(ReadingProgress.percent(progress))%"]
-        if let coordinator = model.readalong, coordinator.totalDuration > 0 {
-            let remaining = coordinator.totalDuration * (1 - (coordinator.bookProgress.asProgression ?? 0))
-            parts.append("\(Self.durationText(remaining)) left")
-        }
-        return parts.joined(separator: " · ")
+        let place = timelineProgress
+        return TVBookTimeline.progressLine(
+            chapter: TVBookTimeline.currentIndex(in: ticks, fraction: place).map { $0 + 1 },
+            count: ticks.count,
+            progress: place,
+            remaining: remainingTime,
+        )
     }
 
-    private static func durationText(_ seconds: TimeInterval) -> String {
-        let whole = Int(seconds.rounded())
-        let hours = whole / 3600
-        let minutes = (whole % 3600) / 60
-        return hours > 0 ? "\(hours)h \(minutes)m" : "\(minutes)m"
+    /// What the remote does, said once, quietly.
+    private var hintLine: String {
+        model.hasNarration
+            ? "◀ ▶ turn the page · Play/Pause on the remote · Menu goes back"
+            : "◀ ▶ turn the page · Menu goes back"
     }
 
-    /// Several sentences either side of the spoken one, which stays put while
-    /// the rest roll past it.
-    @ViewBuilder
-    private var sentences: some View {
-        let lines = model.narrationWindow(before: 2, after: 2)
-        if lines.isEmpty {
-            // Extracting the audio and finding the first fragment takes a
-            // moment on a cold open, and an empty column reads as a broken
-            // screen rather than as a pause.
-            VStack(spacing: Metrics.spacing16) {
-                ProgressView()
-                Text(model.isPlaying ? "Finding your place…" : "Press play to start reading along.")
-                    .font(Typography.sans(28))
-                    .foregroundStyle(Palette.inkSecondary)
+    private var footer: some View {
+        HStack(spacing: Metrics.spacing16) {
+            CoverImage(book: book, session: session)
+                .frame(height: Self.coverHeight)
+            VStack(alignment: .leading, spacing: Metrics.spacing4) {
+                Text(progressLine)
+                    .font(Typography.sans(22).monospacedDigit())
+                    .foregroundStyle(model.style.theme.textSecondary)
+                Text(hintLine)
+                    .font(Typography.sans(18))
+                    .foregroundStyle(Palette.inkQuaternary)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-        } else {
-            window(lines)
-        }
-    }
-
-    /// The sentences, at a density the column can hold.
-    ///
-    /// This is the fix for sentences arriving truncated. A bare `VStack` whose
-    /// children want more height than the parent offers does not overflow, it
-    /// *compresses* them — and a `Text` compressed to its minimum is one line
-    /// with an ellipsis. So each row is given a reserved height it cannot be
-    /// squeezed below, and the budget is made to fit by asking for two
-    /// neighbours a side rather than three and by spending less on gaps.
-    ///
-    /// `reservesSpace` earns its place twice: it stops the compression, and it
-    /// makes each row's height independent of what its sentence says — which is
-    /// what keeps the spoken line at a fixed point on screen as narration
-    /// advances, the property the note at the top of this file protects.
-    ///
-    /// **Not `ViewThatFits`.** Shedding neighbours automatically when the
-    /// column runs short is the obvious next move and it crashes: `ViewThatFits`
-    /// measures its candidates on SwiftUI's async renderer thread, the `ForEach`
-    /// row closure below is `@MainActor` by declaration, and Swift's isolation
-    /// check traps in `dispatch_assert_queue` the moment a candidate is sized.
-    /// Hoisting the model reads out of the closure does not help — the check
-    /// fires on entry, not on what the body touches. Verified on the simulator:
-    /// EXC_BREAKPOINT on com.apple.SwiftUI.AsyncRenderer, twice.
-    private func window(_ lines: [ReaderModel.NarratedLine]) -> some View {
-        stack(lines, neighbours: 2)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-    }
-
-    private func stack(
-        _ lines: [ReaderModel.NarratedLine], neighbours: Int
-    ) -> some View {
-        let visible = NarrationColumn.trimmed(lines, neighbours: neighbours)
-        let currentIndex = visible.firstIndex(where: \.isCurrent) ?? 0
-        // Read out here, not inside the `ForEach`. `ViewThatFits` measures its
-        // candidates on SwiftUI's async renderer thread, and `model` is
-        // `@MainActor` — so touching it from inside the row closure traps in
-        // `dispatch_assert_queue` the moment a candidate is sized. Plain
-        // `Color` values carry across threads; the model does not.
-        let ink = model.style.theme.text
-        let highlight = model.style.theme.highlight
-        return VStack(alignment: .leading, spacing: Metrics.spacing16) {
-            ForEach(Array(visible.enumerated()), id: \.element.id) { offset, line in
-                Text(line.text)
-                    .font(line.isCurrent
-                        ? Typography.serif(48, weight: .regular)
-                        : Typography.serif(32))
-                    .foregroundStyle(ink)
-                    // Fading with distance rather than one opacity for every
-                    // neighbour: at three lines a side, a single dimmed value
-                    // makes the furthest sentence as loud as the nearest.
-                    .opacity(line.isCurrent ? 1 : max(0.18, 0.55 - 0.14 * Double(abs(offset - currentIndex) - 1)))
-                    .lineLimit(NarrationColumn.lineAllowance(isCurrent: line.isCurrent), reservesSpace: true)
-                    // The pair that stops the squeeze. `fixedSize` refuses the
-                    // compression; `reservesSpace` above keeps the height it
-                    // refuses with constant.
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, line.isCurrent ? Metrics.spacing16 : 0)
-                    .padding(.vertical, line.isCurrent ? Metrics.spacing12 : 0)
-                    .background {
-                        if line.isCurrent {
-                            RoundedRectangle(cornerRadius: Metrics.radiusLarge, style: .continuous)
-                                .fill(highlight)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            .lineLimit(1)
+            Spacer(minLength: Metrics.spacing16)
+            if model.hasNarration {
+                transport
+            } else {
+                // A plain ebook is still a readable book here — the page turns,
+                // the timeline runs on the text — so this says what is missing
+                // rather than refusing to open the book, which is what the
+                // screen used to do.
+                Text("No narration for this book")
+                    .font(Typography.sans(22))
+                    .foregroundStyle(Palette.inkTertiary)
             }
         }
-        .animation(.easeOut(duration: 0.25), value: visible.first?.id)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: - Moving through the book
 
-    /// Focusable controls, because until now the only thing this screen answered
-    /// was play/pause and there was nothing on screen to say so.
+    /// The transport, dimmed while the page has the remote.
+    ///
+    /// A focus section, so left and right inside the row move between buttons
+    /// rather than escaping it, and up returns to the page.
     private var transport: some View {
-        HStack(spacing: Metrics.spacing24) {
+        HStack(spacing: Metrics.spacing12) {
             transportButton(
                 "gobackward", label: "Back \(Int(settings.commandMap.skipBackwardInterval)) seconds",
             ) { await model.readalong?.perform(.skipBackward, using: settings.commandMap) }
 
             transportButton(model.isPlaying ? "pause.fill" : "play.fill",
                             label: model.isPlaying ? "Pause" : "Play") {
-                await model.togglePlayback()
+                await model.playFromVisiblePage()
             }
+            .focused($focus, equals: .transport)
 
             transportButton(
                 "goforward", label: "Forward \(Int(settings.commandMap.skipForwardInterval)) seconds",
             ) { await model.readalong?.perform(.skipForward, using: settings.commandMap) }
-
-            Spacer().frame(width: Metrics.spacing32)
 
             transportButton("chevron.left.2", label: "Previous chapter") {
                 await model.readalong?.perform(.previousChapter, using: settings.commandMap)
@@ -292,8 +338,10 @@ private struct TVReadalongContent: View {
                 await model.readalong?.perform(.nextChapter, using: settings.commandMap)
             }
         }
-        .disabled(!model.hasNarration)
-        .frame(maxWidth: .infinity, alignment: .center)
+        .focusSection()
+        // Present but quiet while the reader is on the page, which is where
+        // they should be: the controls are for when they are wanted.
+        .opacity(focus == .page ? 0.7 : 1)
     }
 
     /// Explicit colours and an explicit ground.
@@ -310,9 +358,9 @@ private struct TVReadalongContent: View {
             Task { await action() }
         } label: {
             Image(systemName: symbol)
-                .font(.system(size: 34, weight: .semibold))
+                .font(.system(size: 28, weight: .semibold))
                 .foregroundStyle(model.style.theme.text)
-                .frame(width: 84, height: 66)
+                .frame(width: Self.capsuleWidth, height: Self.capsuleHeight)
                 .background(
                     model.style.theme.text.opacity(0.10),
                     in: Capsule(style: .continuous),
