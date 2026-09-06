@@ -1,4 +1,5 @@
 import IssaCore
+import IssaPlayback
 import IssaUI
 import SwiftUI
 
@@ -13,6 +14,12 @@ import SwiftUI
 /// It owns no playback state. Closing it stops nothing.
 struct NowPlayingPanel: View {
     @Environment(AppModel.self) private var app
+    @Environment(PlaybackSettings.self) private var settings
+    /// Whether this panel is the key window. The ⌘⌥↑/↓ below and the same pair
+    /// in every reader window all listen to one notification, and the guard is
+    /// what makes the shortcut mean "the book in front of me": only one window
+    /// is ever key, so exactly one of the listeners answers.
+    @Environment(\.controlActiveState) private var controlActiveState
 
     var body: some View {
         Group {
@@ -42,5 +49,19 @@ struct NowPlayingPanel: View {
             }
         }
         .background(Palette.paper)
+        .onReceive(NotificationCenter.default.publisher(for: ReaderCommand.volumeUp.notification)) { _ in
+            nudge(by: VolumeTrim.step)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: ReaderCommand.volumeDown.notification)) { _ in
+            nudge(by: -VolumeTrim.step)
+        }
+    }
+
+    /// Trims whatever this panel is showing. Nothing playing is nothing to
+    /// trim: there is no book for the level to belong to.
+    private func nudge(by delta: Int) {
+        guard controlActiveState == .key, let book = app.playbackBook else { return }
+        VolumeTrimControl.nudge(
+            by: delta, for: book, coordinator: app.playback, settings: settings)
     }
 }

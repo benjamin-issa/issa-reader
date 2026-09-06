@@ -131,6 +131,16 @@ public final class ReaderModel {
 
     /// Playback rate to start narration at, supplied by the app's preferences.
     public var preferredRate: Double = 1.0
+
+    /// This book's level, as a percentage either side of the recording,
+    /// supplied by the app's preferences.
+    ///
+    /// Applied live rather than only at open: the slider in the player sheet
+    /// writes it while the voice is running, and the whole point of the control
+    /// is that the change is audible while the reader is still holding it.
+    public var preferredVolumeTrim: Int = 0 {
+        didSet { readalong?.player.gain = VolumeTrim.gain(preferredVolumeTrim) }
+    }
     /// Records a position durably before it is sent. Supplied by the app so the
     /// reader does not need to know about the store.
     /// Persisting annotations is the app's job, not the reader's: this model
@@ -662,6 +672,10 @@ public final class ReaderModel {
         // The saved rate is otherwise written to preferences and never applied,
         // so every book starts at 1x however the reader left it.
         coordinator.player.rate = Float(preferredRate)
+        // And this book's level, for the same reason: the coordinator is built
+        // here and nothing else would tell it, so a trimmed book would open at
+        // the recorded level until the reader touched the slider again.
+        coordinator.player.gain = VolumeTrim.gain(preferredVolumeTrim)
         coordinator.onFragmentChange = { [weak self] fragment in
             guard let self else { return }
             activeFragmentID = fragment

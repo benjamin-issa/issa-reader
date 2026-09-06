@@ -19,6 +19,11 @@ enum ReaderCommand: String, Sendable {
     /// swipes up on the footer strip to reach it; the Mac has no swipe, so the
     /// menu is its route.
     case player
+    /// This book's level, one step at a time. Aimed like the rest: only the key
+    /// window answers, so ⌘⌥↑ in the Now Playing panel and ⌘⌥↑ in a reader
+    /// window both trim the book that window is about.
+    case volumeUp
+    case volumeDown
 
     var notification: Notification.Name { Notification.Name("issa.reader.\(rawValue)") }
 
