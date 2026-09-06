@@ -206,6 +206,43 @@ struct EvidenceFinderTests {
         ).isEmpty)
     }
 
+    @Test("every question in the fixture retrieves the sentences it should")
+    func fixtureEvidenceIsRight() async throws {
+        let (store, _, directory) = try await AskFixture.preparedStore()
+        defer { AskFixture.remove(directory) }
+
+        for fixture in try AskQuestionFixture.all() {
+            let boundary = try fixture.boundary
+            let known = try await store.topNames(before: boundary, limit: 200)
+            let terms = QueryTerms.extract(from: fixture.question, knownNames: known)
+            #expect(terms.kind.label == fixture.kind, "\(fixture.question) @ \(fixture.spine)")
+
+            let retriever = AskRetriever(store: store, boundary: boundary)
+            let evidence = try await retriever.evidence(for: terms)
+            let text = evidence.map(\.excerpt.text).joined(separator: "\n").lowercased()
+            for needle in fixture.evidenceContains {
+                #expect(text.contains(needle), "\(fixture.name): missing \(needle)")
+            }
+            for needle in fixture.evidenceExcludes {
+                #expect(!text.contains(needle), "\(fixture.name): leaked \(needle)")
+            }
+            // Still bounded, whatever the question.
+            #expect(evidence.allSatisfy {
+                $0.excerpt.spineIndex < boundary.spineIndex
+                    || ($0.excerpt.spineIndex == boundary.spineIndex
+                        && $0.excerpt.end <= boundary.charOffset)
+            }, "\(fixture.name)")
+
+            guard let expected = fixture.kinshipNames,
+                  case let .kinship(subject, relation, _, _) = terms.kind else { continue }
+            let names = KinshipExtractor.names(
+                subject: subject, relation: relation, in: evidence,
+                knownNames: Set(known.map { NameFinder.Name.key(for: $0) }),
+            )
+            #expect(names.count == expected, "\(fixture.name): \(names.map(\.name))")
+        }
+    }
+
     @Test("the whole scan of a chapter is quick enough to run per question")
     func scanIsFastEnough() async throws {
         let (store, _, directory) = try await AskFixture.preparedStore()
