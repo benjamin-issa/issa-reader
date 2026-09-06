@@ -213,7 +213,11 @@ public actor AskEngine {
     /// revealed that yet" for an answer that was fine; under-catching costs the
     /// one promise the feature makes.
     static func unvettedNames(in answer: String, question: String) -> [String] {
-        let asked = Set(QueryTerms.tokens(in: question))
+        // Possessive-stripped on both sides, so "Reen's" in the answer is
+        // checked against the index as `reen` — the word the book actually
+        // contains — and a name the question already asked about is still
+        // recognised when the answer inflects it.
+        let asked = Set(QueryTerms.tokens(in: question).map(QueryTerms.strippingPossessive))
         var candidates: Set<String> = []
         // The first word of the answer opens a sentence like any other.
         var opensSentence = true
@@ -230,7 +234,7 @@ public actor AskEngine {
             guard let initial = bare.first, initial.isUppercase, bare.count > 2,
                   !QueryTerms.capitalisedNonNames.contains(bare.lowercased())
             else { continue }
-            for token in QueryTerms.tokens(in: bare)
+            for token in QueryTerms.tokens(in: bare).map(QueryTerms.strippingPossessive)
                 where token.count > 2 && !asked.contains(token) {
                 candidates.insert(token)
             }

@@ -29,6 +29,27 @@ public enum NameFinder {
             self.firstOffset = firstOffset
             self.mentions = mentions
         }
+
+        /// What two spellings of one person have in common.
+        ///
+        /// A book that shouts a name in a chapter heading and prints it
+        /// normally in the prose — "VIN" and "Vin" — otherwise makes two rows,
+        /// splits the mention count between them, and drops its own
+        /// protagonist out of the top of the name table. That table is what
+        /// promotes a token the tagger missed, so losing the protagonist from
+        /// it is a question answered from the wrong paragraphs.
+        public var key: String { Name.key(for: name) }
+
+        /// Lowercased and diacritics folded, to match the index's own
+        /// `unicode61(diacritics: .remove)` tokeniser.
+        public static func key(for name: String) -> String {
+            name
+                .folding(
+                    options: [.diacriticInsensitive, .caseInsensitive],
+                    locale: Locale(identifier: "en_US"),
+                )
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
     }
 
     /// Honorifics that get joined onto a name and then make two spellings of
@@ -101,7 +122,7 @@ public enum NameFinder {
         // A lowercase "name" is the tagger mis-firing on a common noun; an
         // initial on its own ("A.", "T.") is not a person anyone asks about.
         guard let initial = display.first, initial.isUppercase else { return nil }
-        return (display, display.lowercased())
+        return (display, Name.key(for: display))
     }
 
     /// Pools per-chapter results into one table, summing mentions and keeping
@@ -109,8 +130,17 @@ public enum NameFinder {
     public static func merge(_ names: [Name]) -> [Name] {
         var pooled: [String: Name] = [:]
         for name in names {
-            let key = name.name.lowercased()
+            let key = name.key
             if var existing = pooled[key] {
+                // Whichever spelling the book prints more often wins the row,
+                // so "VIN" in a heading does not become the name a suggestion
+                // chip offers.
+                if Self.prefers(
+                    name.name, over: existing.name,
+                    mentions: name.mentions, against: existing.mentions,
+                ) {
+                    existing.name = name.name
+                }
                 existing.mentions += name.mentions
                 if name.spineIndex < existing.spineIndex
                     || (name.spineIndex == existing.spineIndex
@@ -126,5 +156,25 @@ public enum NameFinder {
         return pooled.values.sorted {
             $0.mentions == $1.mentions ? $0.name < $1.name : $0.mentions > $1.mentions
         }
+    }
+
+    /// Which of two spellings of one name to show.
+    ///
+    /// Whichever the book prints more often; on a tie the one that is not
+    /// shouted, because an all-capitals spelling is a chapter heading and the
+    /// ordinary one is the character.
+    public static func prefers(
+        _ candidate: String, over incumbent: String, mentions: Int, against existing: Int,
+    ) -> Bool {
+        if mentions != existing { return mentions > existing }
+        let candidateShouts = isAllCaps(candidate)
+        let incumbentShouts = isAllCaps(incumbent)
+        if candidateShouts != incumbentShouts { return incumbentShouts }
+        return candidate < incumbent
+    }
+
+    static func isAllCaps(_ name: String) -> Bool {
+        let letters = name.filter(\.isLetter)
+        return !letters.isEmpty && letters.allSatisfy(\.isUppercase)
     }
 }
