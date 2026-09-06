@@ -1167,7 +1167,7 @@ public final class ReaderModel {
         let item = package.spine[index]
         do {
             let data = try package.archive.read(item.href)
-            let images = ChapterImageSource(archive: package.archive)
+            let images = ArchiveImageSource(archive: package.archive)
             let parsed = try HTMLContentParser(
                 style: style,
                 maxImageWidth: max(pageSize.width, 1),
@@ -1368,7 +1368,7 @@ public final class ReaderModel {
         navigation: [EPUBPackage.NavPoint],
         style: ReaderStyle,
     ) async -> [SearchHit] {
-        let images = ChapterImageSource(archive: archive)
+        let images = ArchiveImageSource(archive: archive)
         guard let data = try? archive.read(item.href),
               let parsed = try? HTMLContentParser(
                   style: style, loadImage: { images.image(for: $0) },
@@ -1871,30 +1871,4 @@ extension ReaderModel {
 
     /// Whether choosing the publisher's font would actually change anything.
     public var hasPublisherFont: Bool { style.publisherFamily != nil }
-}
-
-/// Decodes and caches a chapter's artwork, keyed by archive path.
-///
-/// A chapter asks once per plate, and the cache lives as long as the chapter
-/// does, so reflowing on a font change costs no re-decoding.
-///
-/// File scope rather than nested inside `ReaderModel`, which is `@MainActor`:
-/// a type declared inside a globally-isolated one inherits that isolation, and
-/// the search path now decodes plates off the main actor. Nothing outside this
-/// file ever named it.
-private final class ChapterImageSource {
-    private let archive: EPUBArchive
-    private var decoded: [String: PlatformImage?] = [:]
-
-    init(archive: EPUBArchive) { self.archive = archive }
-
-    func image(for href: String) -> PlatformImage? {
-        if let cached = decoded[href] { return cached }
-        var result: PlatformImage?
-        if let data = try? archive.read(href) {
-            result = PlatformImage(data: data)
-        }
-        decoded[href] = result
-        return result
-    }
 }
