@@ -1055,7 +1055,88 @@ private struct ReadAloudDoubleTap: ViewModifier {
 }
 #endif
 
+// MARK: - The page
+
+/// One page of paper: the glyphs, and everything tinted underneath them.
+///
+/// Every input is passed in rather than read from a model, which buys two
+/// things. Nothing here can change under the renderer — the television
+/// crossfades an outgoing page while the model has already moved on to the
+/// next, and a surface that re-read the model mid-fade would draw the wrong
+/// sentence — and the view redraws only when one of these values actually
+/// differs, since they are all `Equatable` or a class reference.
+///
+/// Nothing platform-specific, either: the phone, the Mac and the television
+/// draw a page with this same view.
+struct PageSurface: View {
+    /// One stored highlight's rows on this page, kept together rather than
+    /// flattened in with every other mark's.
+    ///
+    /// A flat list of rectangles cannot say where one highlight ends and the
+    /// next begins, and filling them one at a time is what put a doubly
+    /// composited band across every seam.
+    struct AnnotationBlock: Equatable {
+        let rects: [CGRect]
+        let tint: Annotation.Tint
+    }
+
+    let layout: ChapterLayout
+    let page: RenderedPage
+    let activeFragment: String?
+    let annotations: [AnnotationBlock]
+    let selection: NSRange?
+    let theme: ReaderTheme
+    /// The fill behind the sentence being narrated, which is the reader's
+    /// choice of highlighter rather than a property of the paper.
+    let highlight: Color
+    let highlightStyle: HighlightBlock.Style
+    let size: CGSize
+
+    var body: some View {
+        Canvas(rendersAsynchronously: false) { context, _ in
+            // Everything tinted is drawn beneath the glyphs so it reads as
+            // paper tint rather than a wash over the type — and each mark is
+            // filled exactly once, as one block. Filling a rounded rectangle
+            // per line composited a translucent colour over itself along the
+            // 2 pt the two pads shared at each seam, which is the dark band
+            // that used to run through every wrapped sentence.
+            for block in annotations {
+                context.fill(
+                    Path(HighlightBlock.path(lineRects: block.rects, style: highlightStyle)),
+                    with: .color(ReaderPalette.color(for: block.tint).opacity(0.30)),
+                )
+            }
+            if let activeFragment {
+                context.fill(
+                    Path(HighlightBlock.path(
+                        lineRects: layout.highlightRects(forFragment: activeFragment, on: page),
+                        style: highlightStyle,
+                    )),
+                    with: .color(highlight),
+                )
+            }
+            if let selection {
+                context.fill(
+                    Path(HighlightBlock.path(
+                        lineRects: layout.rects(forRange: selection, on: page),
+                        style: highlightStyle,
+                    )),
+                    with: .color(theme.selection),
+                )
+            }
+
+            context.withCGContext { cgContext in
+                layout.draw(page: page, in: cgContext)
+            }
+        }
+        .frame(width: size.width, height: size.height)
+        .clipped()
+    }
+}
+
 /// Draws one page, plus the read-along highlight when audio is playing.
+///
+/// The reader's half of the split: it reads the model and `PageSurface` draws.
 struct PageCanvas: View {
     let model: ReaderModel
     let pageSize: CGSize
@@ -1069,39 +1150,30 @@ struct PageCanvas: View {
         let activeFragment = model.activeFragmentID
         let selection = model.selection
         let page = model.currentPage
-        let highlights = page.map { model.highlightRects(on: $0) } ?? []
+        let annotations = page.map { model.highlightBlocks(on: $0) } ?? []
         let theme = model.style.theme
+        let layout = model.layout
 
-        Canvas(rendersAsynchronously: false) { context, _ in
-            guard let layout = model.layout, let page else { return }
-
-            // Everything tinted is drawn beneath the glyphs so it reads as
-            // paper tint rather than a wash over the type.
-            for (rect, tint) in highlights {
-                let rounded = Path(roundedRect: rect.insetBy(dx: -1, dy: -1), cornerRadius: 3)
-                context.fill(rounded, with: .color(ReaderPalette.color(for: tint).opacity(0.30)))
-            }
-            if let activeFragment {
-                for rect in layout.highlightRects(forFragment: activeFragment, on: page) {
-                    let rounded = Path(roundedRect: rect.insetBy(dx: -2, dy: -1), cornerRadius: 3)
-                    context.fill(rounded, with: .color(theme.highlight))
-                }
-            }
-            if let selection {
-                for rect in layout.rects(forRange: selection, on: page) {
-                    context.fill(
-                        Path(roundedRect: rect.insetBy(dx: -1, dy: -1), cornerRadius: 2),
-                        with: .color(theme.selection),
-                    )
-                }
-            }
-
-            context.withCGContext { cgContext in
-                layout.draw(page: page, in: cgContext)
+        Group {
+            if let layout, let page {
+                PageSurface(
+                    layout: layout,
+                    page: page,
+                    activeFragment: activeFragment,
+                    annotations: annotations,
+                    selection: selection,
+                    theme: theme,
+                    highlight: theme.highlight,
+                    highlightStyle: HighlightBlock.Style(fontSize: model.style.fontSize),
+                    size: pageSize,
+                )
+            } else {
+                // The chapter is still being laid out. Holding the page's exact
+                // size means nothing above or below it moves when the glyphs
+                // arrive, which is the whole reason the reserve exists.
+                Color.clear.frame(width: pageSize.width, height: pageSize.height)
             }
         }
-        .frame(width: pageSize.width, height: pageSize.height)
-        .clipped()
         .modifier(PageAccessibility(model: model))
     }
 }

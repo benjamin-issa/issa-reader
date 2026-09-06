@@ -1472,7 +1472,7 @@ public final class ReaderModel {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             : chapterTitle
 
-        // `highlightRects(on:)` later rebuilds this highlight's rectangle from
+        // `highlightBlocks(on:)` later rebuilds this highlight's rectangles from
         // (charOffset, excerpt.length) — so charOffset has to name the
         // excerpt's own first character. A selection that began at a paragraph
         // break or with leading whitespace trims to a shorter excerpt without
@@ -1605,19 +1605,25 @@ public final class ReaderModel {
         )
     }
 
-    /// Rectangles for stored highlights that fall on the current page.
-    public func highlightRects(on page: RenderedPage) -> [(rect: CGRect, tint: Annotation.Tint)] {
+    /// Stored highlights that fall on the current page, one block per mark.
+    ///
+    /// Grouped rather than flattened into a list of rectangles, because each
+    /// mark is now painted as a single shape: the flat list lost the boundary
+    /// between one highlight and the next, and filling its rectangles one by
+    /// one composited the tint over itself wherever two lines met — a darker
+    /// band at every seam of every wrapped highlight.
+    func highlightBlocks(on page: RenderedPage) -> [PageSurface.AnnotationBlock] {
         guard let layout, let package, package.spine.indices.contains(chapterIndex) else { return [] }
         let href = package.spine[chapterIndex].href
-        var result: [(CGRect, Annotation.Tint)] = []
+        var result: [PageSurface.AnnotationBlock] = []
         for annotation in annotations where annotation.kind != .bookmark {
             guard annotation.locator.matchesHref(href) else { continue }
             guard let offset = annotation.locator.locations?.charOffset else { continue }
             let length = (annotation.excerpt as NSString).length
             let range = NSRange(location: offset, length: length)
-            for rect in layout.rects(forRange: range, on: page) {
-                result.append((rect, annotation.tint))
-            }
+            let rects = layout.rects(forRange: range, on: page)
+            guard !rects.isEmpty else { continue }
+            result.append(PageSurface.AnnotationBlock(rects: rects, tint: annotation.tint))
         }
         return result
     }
