@@ -29,6 +29,27 @@ public enum NameFinder {
             self.firstOffset = firstOffset
             self.mentions = mentions
         }
+
+        /// What two spellings of one person have in common.
+        ///
+        /// A book that shouts a name in a chapter heading and prints it
+        /// normally in the prose — "VIN" and "Vin" — otherwise makes two rows,
+        /// splits the mention count between them, and drops its own
+        /// protagonist out of the top of the name table. That table is what
+        /// promotes a token the tagger missed, so losing the protagonist from
+        /// it is a question answered from the wrong paragraphs.
+        public var key: String { Name.key(for: name) }
+
+        /// Lowercased and diacritics folded, to match the index's own
+        /// `unicode61(diacritics: .remove)` tokeniser.
+        public static func key(for name: String) -> String {
+            name
+                .folding(
+                    options: [.diacriticInsensitive, .caseInsensitive],
+                    locale: Locale(identifier: "en_US"),
+                )
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
     }
 
     /// Honorifics that get joined onto a name and then make two spellings of
@@ -101,30 +122,80 @@ public enum NameFinder {
         // A lowercase "name" is the tagger mis-firing on a common noun; an
         // initial on its own ("A.", "T.") is not a person anyone asks about.
         guard let initial = display.first, initial.isUppercase else { return nil }
-        return (display, display.lowercased())
+        return (display, Name.key(for: display))
     }
 
     /// Pools per-chapter results into one table, summing mentions and keeping
     /// the earliest sighting so the boundary can hide a character not yet met.
     public static func merge(_ names: [Name]) -> [Name] {
-        var pooled: [String: Name] = [:]
+        // Two passes, because choosing which spelling to show is a comparison
+        // of two complete counts. Fold straight into the key and the incumbent
+        // is a running total while the challenger is one chapter's — which
+        // makes the answer depend on the order the chapters arrived in.
+        var bySpelling: [String: Name] = [:]
         for name in names {
-            let key = name.name.lowercased()
-            if var existing = pooled[key] {
-                existing.mentions += name.mentions
-                if name.spineIndex < existing.spineIndex
-                    || (name.spineIndex == existing.spineIndex
-                        && name.firstOffset < existing.firstOffset) {
-                    existing.spineIndex = name.spineIndex
-                    existing.firstOffset = name.firstOffset
-                }
-                pooled[key] = existing
-            } else {
-                pooled[key] = name
+            let identity = name.key + "\u{0}" + name.name
+            guard var existing = bySpelling[identity] else {
+                bySpelling[identity] = name
+                continue
             }
+            existing.mentions += name.mentions
+            if earlier(name, than: existing) {
+                existing.spineIndex = name.spineIndex
+                existing.firstOffset = name.firstOffset
+            }
+            bySpelling[identity] = existing
+        }
+
+        var pooled: [String: Name] = [:]
+        for spelling in bySpelling.values {
+            guard var existing = pooled[spelling.key] else {
+                pooled[spelling.key] = spelling
+                continue
+            }
+            // Whichever spelling the book prints more often wins the row, so
+            // "VIN" in a heading does not become the name a chip offers.
+            if prefers(
+                spelling.name, over: existing.name,
+                mentions: spelling.mentions, against: existing.mentions,
+            ) {
+                existing.name = spelling.name
+            }
+            existing.mentions += spelling.mentions
+            if earlier(spelling, than: existing) {
+                existing.spineIndex = spelling.spineIndex
+                existing.firstOffset = spelling.firstOffset
+            }
+            pooled[spelling.key] = existing
         }
         return pooled.values.sorted {
             $0.mentions == $1.mentions ? $0.name < $1.name : $0.mentions > $1.mentions
         }
+    }
+
+    /// Whichever sighting the reader would have reached first, which is the one
+    /// the boundary has to compare against.
+    static func earlier(_ candidate: Name, than incumbent: Name) -> Bool {
+        (candidate.spineIndex, candidate.firstOffset) < (incumbent.spineIndex, incumbent.firstOffset)
+    }
+
+    /// Which of two spellings of one name to show.
+    ///
+    /// Whichever the book prints more often; on a tie the one that is not
+    /// shouted, because an all-capitals spelling is a chapter heading and the
+    /// ordinary one is the character.
+    public static func prefers(
+        _ candidate: String, over incumbent: String, mentions: Int, against existing: Int,
+    ) -> Bool {
+        if mentions != existing { return mentions > existing }
+        let candidateShouts = isAllCaps(candidate)
+        let incumbentShouts = isAllCaps(incumbent)
+        if candidateShouts != incumbentShouts { return incumbentShouts }
+        return candidate < incumbent
+    }
+
+    static func isAllCaps(_ name: String) -> Bool {
+        let letters = name.filter(\.isLetter)
+        return !letters.isEmpty && letters.allSatisfy(\.isUppercase)
     }
 }

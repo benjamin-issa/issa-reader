@@ -79,15 +79,24 @@ public final class SearchBookTool: AskTool, Tool {
         guard let firstOrdinal = await budget.spend(limit: callLimit) else {
             return Self.exhausted
         }
-        let terms = QueryTerms.extract(from: arguments.query)
-        let candidates = (try? await store.retrieve(terms: terms, before: boundary, limit: 20)) ?? []
-        let ranked = PassageRanker.rank(candidates, terms: terms, limit: Self.passageLimit)
+        // The same retrieval the first pass used, which is the point: the tool
+        // used to call `QueryTerms.extract` with no known names, so a name the
+        // book invented — the ones readers ask about — was not a name to it at
+        // all, and the model's follow-up search returned the wrong paragraphs.
+        //
+        // `allowsFastPath: false`: the model has already been called, and
+        // handing it a finished sentence in place of excerpts is not a search
+        // result.
+        let retriever = AskRetriever(store: store, boundary: boundary, allowsFastPath: false)
+        let retrieval = try? await retriever.retrieve(
+            question: arguments.query, limit: Self.passageLimit,
+        )
+        var ranked: [PassageRanker.Ranked] = []
+        if case let .evidence(found, _) = retrieval { ranked = Array(found.prefix(Self.passageLimit)) }
         // Counts only, never the query: whether the model searches at all — and
         // what that costs in seconds — is the measurement the tool ships behind
         // a kill switch for, and there is no other way to see it from outside.
-        IssaLog.debug("ask tool searched", [
-            "terms": String(terms.searchTokens.count), "found": String(ranked.count),
-        ])
+        IssaLog.debug("ask tool searched", ["found": String(ranked.count)])
         guard !ranked.isEmpty else { return Self.noMatches }
         return Self.excerpts(ranked.map(\.passage), numberingFrom: firstOrdinal)
     }

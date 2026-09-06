@@ -38,10 +38,38 @@ public struct QueryTerms: Sendable, Hashable {
     /// ahead of the reader, in flat defiance of instructions that told it twice
     /// not to. The model cannot be relied on to refuse; the app has to.
     public var nameCandidates: [String]
+    /// What shape of question this is, which decides which retrieval runs.
+    public var kind: QuestionKind
+
     /// "What has happened so far?" and its relatives, which take the passages
     /// before the boundary rather than a search.
-    public var isRecap: Bool
+    ///
+    /// Derived rather than stored, so there is one answer to "is this a recap"
+    /// and the retriever's `switch` cannot disagree with it.
+    public var isRecap: Bool { kind.isRecap }
 
+    /// Whoever the question is about, when it is about anybody. Every retrieval
+    /// path except the recap requires this of a passage before considering it.
+    public var subject: Subject? { kind.subject }
+
+    public init(
+        question: String,
+        names: [String],
+        terms: [String],
+        kinshipGroups: [[String]],
+        nameCandidates: [String] = [],
+        kind: QuestionKind,
+    ) {
+        self.question = question
+        self.names = names
+        self.terms = terms
+        self.kinshipGroups = kinshipGroups
+        self.nameCandidates = nameCandidates
+        self.kind = kind
+    }
+
+    /// The older shape, kept so a caller that only knows about recaps still
+    /// compiles.
     public init(
         question: String,
         names: [String],
@@ -50,12 +78,11 @@ public struct QueryTerms: Sendable, Hashable {
         nameCandidates: [String] = [],
         isRecap: Bool,
     ) {
-        self.question = question
-        self.names = names
-        self.terms = terms
-        self.kinshipGroups = kinshipGroups
-        self.nameCandidates = nameCandidates
-        self.isRecap = isRecap
+        self.init(
+            question: question, names: names, terms: terms,
+            kinshipGroups: kinshipGroups, nameCandidates: nameCandidates,
+            kind: isRecap ? .recap : .general(nil),
+        )
     }
 
     /// Longest first, so the FTS pattern leads with the most selective token.
@@ -85,7 +112,14 @@ public struct QueryTerms: Sendable, Hashable {
 
         var names = taggedNames(in: sanitised)
         var terms: [String] = []
-        for token in tokens(in: sanitised) {
+        for raw in tokens(in: sanitised) {
+            // The possessive is stripped *here* rather than inside `tokens`,
+            // which the FTS pattern tests depend on. "Vin's" has to become the
+            // name `vin`: left alone it is neither a known name nor a term the
+            // co-occurrence bonus can see, and SQLite's tokeniser reads it as
+            // `vin OR s` — which is how "What is the name of Vin's brother?"
+            // came back with a pool that never contained "Her brother, Reen".
+            let token = strippingPossessive(raw)
             if known.contains(token) || known.contains(where: { $0.hasPrefix(token + " ") }) {
                 if !names.contains(where: { $0.lowercased() == token }) { names.append(token) }
                 terms.append(token)
@@ -97,7 +131,8 @@ public struct QueryTerms: Sendable, Hashable {
         // A tagged multi-word name contributes its parts as search tokens; FTS5
         // indexes words, not phrases.
         for name in names {
-            for part in tokens(in: name) where !terms.contains(part) && part.count > 1 {
+            for part in tokens(in: name).map(strippingPossessive)
+                where !terms.contains(part) && part.count > 1 {
                 terms.append(part)
             }
         }
@@ -108,8 +143,25 @@ public struct QueryTerms: Sendable, Hashable {
             terms: terms,
             kinshipGroups: Kinship.groups(matching: terms),
             nameCandidates: nameCandidates(in: sanitised, names: names),
-            isRecap: isRecapQuestion(sanitised),
+            // Classified from the names already found, rather than running
+            // `NLTagger` a second time: one pass over a question is a
+            // millisecond, and two is two.
+            kind: QuestionReader.kind(of: sanitised, vocabulary: Vocabulary(
+                known: known,
+                tagged: Set(names.flatMap { tokens(in: $0).map(strippingPossessive) }),
+            )),
         )
+    }
+
+    /// "Vin's" → "Vin", "James'" → "James", everything else untouched.
+    ///
+    /// Applied to tokens rather than inside `tokens(in:)` on purpose: that
+    /// function's output is what the FTS pattern is built from in the older
+    /// call sites and in the tests, and changing it would move offsets nobody
+    /// asked to move.
+    public static func strippingPossessive(_ token: String) -> String {
+        guard token.count > 2, token.hasSuffix("'s") else { return token }
+        return String(token.dropLast(2))
     }
 
     /// Words the book would have had to introduce for the question to be
@@ -127,12 +179,15 @@ public struct QueryTerms: Sendable, Hashable {
     /// about a character forty pages ahead is the thing this feature promised
     /// not to do.
     public static func nameCandidates(in question: String, names: [String]) -> [String] {
-        var candidates = Set(names.flatMap { tokens(in: $0) })
+        var candidates = Set(names.flatMap { tokens(in: $0).map(strippingPossessive) })
         for (index, word) in question.split(separator: " ").enumerated() where index > 0 {
             let bare = word.trimmingCharacters(in: CharacterSet.letters.inverted)
             guard let initial = bare.first, initial.isUppercase, bare.count > 2 else { continue }
             guard !capitalisedNonNames.contains(bare.lowercased()) else { continue }
-            candidates.formUnion(tokens(in: bare))
+            // Possessive-stripped, or "Vin's" is checked against the index as
+            // `vin's` — a word no book contains as one token, so the spoiler
+            // guard tests something that is not the name.
+            candidates.formUnion(tokens(in: bare).map(strippingPossessive))
         }
         return candidates.filter { $0.count > 2 }.sorted()
     }

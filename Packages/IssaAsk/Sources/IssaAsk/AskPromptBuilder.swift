@@ -40,6 +40,8 @@ public enum AskPromptBuilder {
     - DO NOT guess, predict or hint at what happens later in the book.
     - If the excerpts do not contain the answer, reply with exactly: \
     The story hasn't revealed that yet.
+    - If the excerpts only mention a person in passing, say only what they \
+    state about them.
     - Write two to four sentences of plain prose. No lists, no headings.
     - End with a final line naming the excerpts you used, like: Sources: 1, 3
 

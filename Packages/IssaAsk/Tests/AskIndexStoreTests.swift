@@ -1,9 +1,88 @@
 import Foundation
+import GRDB
 import Testing
 
 @testable import IssaAsk
 
 struct AskIndexStoreTests {
+    // MARK: - Names, folded
+
+    /// A scratch index with nothing in it but the name rows a test writes.
+    static func nameTable(_ rows: [(String, Int, Int, Int)]) throws -> DatabaseQueue {
+        let queue = try DatabaseQueue()
+        try AskIndexStore.migrator.migrate(queue)
+        try queue.write { db in
+            for (name, spine, offset, mentions) in rows {
+                try db.execute(
+                    sql: """
+                        INSERT INTO name(name, nameKey, spineIndex, firstOffset, mentions)
+                        VALUES (?, ?, ?, ?, ?)
+                        """,
+                    arguments: [name, NameFinder.Name.key(for: name), spine, offset, mentions],
+                )
+            }
+        }
+        return queue
+    }
+
+    @Test("two spellings of one character are one row, spelled the way the book spells it")
+    func topNamesFoldCase() throws {
+        // The measured failure on a real book: the chapter headings shout
+        // "VIN" and the prose prints "Vin", so the protagonist held two rows,
+        // split her mentions between them, and fell out of the two hundred
+        // names a question is read against — which is the list that promotes a
+        // token `NLTagger` missed.
+        let queue = try Self.nameTable([
+            ("VIN", 0, 0, 40), ("Vin", 1, 10, 90), ("Elend", 1, 20, 100),
+            ("Sazed", 2, 5, 30),
+        ])
+        let names = try AskIndexStore.topNames(
+            before: ReadingBoundary(spineIndex: 9, charOffset: 0), limit: 5, in: queue,
+        )
+        #expect(names == ["Vin", "Elend", "Sazed"])
+        // 130 together beats Elend's 100; apart, neither half does.
+        #expect(names.first == "Vin")
+    }
+
+    @Test("a tie between two spellings is broken away from the shouted one")
+    func topNamesPreferTheQuietSpelling() throws {
+        let queue = try Self.nameTable([("VIN", 0, 0, 50), ("Vin", 1, 0, 50)])
+        let names = try AskIndexStore.topNames(
+            before: ReadingBoundary(spineIndex: 9, charOffset: 0), limit: 5, in: queue,
+        )
+        // An all-capitals spelling is a heading; the character is the other one.
+        #expect(names == ["Vin"])
+    }
+
+    @Test("the folded name table is still bounded by the reading position")
+    func topNamesStayBounded() throws {
+        let queue = try Self.nameTable([("VIN", 0, 0, 5), ("Vin", 4, 0, 90)])
+        let early = try AskIndexStore.topNames(
+            before: ReadingBoundary(spineIndex: 2, charOffset: 0), limit: 5, in: queue,
+        )
+        // Only the shout has been reached, so only its count is there — the
+        // fold must not drag a later chapter's mentions back over the boundary.
+        #expect(early == ["VIN"])
+    }
+
+    // MARK: - Matching words the reader has met
+
+    @Test("a word met in another case is still met")
+    func unmetWordsIgnoreCase() async throws {
+        let (store, _, directory) = try await AskFixture.preparedStore()
+        defer { AskFixture.remove(directory) }
+
+        // `unicode61` case-folds, so the guard is case-insensitive without
+        // doing anything about it — asserted rather than assumed, because a
+        // tokeniser change here would silently start refusing every question
+        // whose name the reader typed in lower case.
+        let unmet = try await store.unmetWords(
+            ["alice", "ALICE", "Alice", "dinah"],
+            before: AskFixture.endOf(spine: AskFixture.Spine.chapterI),
+        )
+        #expect(unmet.isEmpty)
+    }
+
     // MARK: - Building
 
     @Test("a build produces one file, and reports that it built")

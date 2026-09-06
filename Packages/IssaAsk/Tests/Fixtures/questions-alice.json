@@ -1,0 +1,103 @@
+{
+  "comment": "Eight questions about the alice.epub fixture, each with the spine index the reader has finished. Spine 2 is Chapter I, 3 is Chapter II, 7 is Chapter VI. Every expectation was read off the fixture's own text. `evidence` expectations are deterministic and are asserted without a model; `answer` expectations are asserted only in the gated real-model run, and are kept loose because the model is not a function of its input in the way the retrieval is.",
+  "questions": [
+    {
+      "name": "identity of a character introduced by his clothes",
+      "question": "Who is the White Rabbit?",
+      "spine": 2,
+      "kind": "identity",
+      "evidenceContains": ["pink eyes", "waistcoat", "watch"],
+      "evidenceExcludes": ["cheshire"],
+      "answerContainsAny": ["rabbit"],
+      "answerExcludes": ["cheshire", "queen of hearts"],
+      "modelCalled": true,
+      "allowsNewNames": true
+    },
+    {
+      "name": "a relative the book never names",
+      "question": "Who is Alice's sister?",
+      "spine": 2,
+      "kind": "kinship",
+      "evidenceContains": ["sister"],
+      "evidenceExcludes": [],
+      "answerContainsAny": [],
+      "answerExcludes": [],
+      "modelCalled": true,
+      "kinshipNames": 0,
+      "allowsNewNames": false
+    },
+    {
+      "name": "an ordinary question with a subject",
+      "question": "What did Alice drink?",
+      "spine": 2,
+      "kind": "general",
+      "evidenceContains": ["drink me"],
+      "evidenceExcludes": [],
+      "answerContainsAny": ["bottle", "drink me", "cordial"],
+      "answerExcludes": [],
+      "modelCalled": true,
+      "allowsNewNames": true
+    },
+    {
+      "name": "a character ten chapters ahead of the reader",
+      "question": "Who is the Cheshire Cat?",
+      "spine": 2,
+      "kind": "identity",
+      "evidenceContains": [],
+      "evidenceExcludes": [],
+      "answerContainsAny": [],
+      "answerExcludes": ["grin", "mad", "wonderland"],
+      "notYet": true,
+      "modelCalled": false,
+      "allowsNewNames": false
+    },
+    {
+      "name": "identity from the chapter that shows her",
+      "question": "Who is the Duchess?",
+      "spine": 7,
+      "kind": "identity",
+      "evidenceContains": ["baby"],
+      "evidenceExcludes": [],
+      "answerContainsAny": ["baby", "kitchen", "stool", "cook", "pepper", "sneez"],
+      "answerExcludes": [],
+      "modelCalled": true,
+      "allowsNewNames": true
+    },
+    {
+      "name": "the same character where she is only a name shouted in passing",
+      "question": "Who is the Duchess?",
+      "spine": 3,
+      "kind": "identity",
+      "evidenceContains": ["duchess"],
+      "evidenceExcludes": ["three-legged stool", "nursing a baby", "pepper", "cook"],
+      "answerContainsAny": [],
+      "answerExcludes": ["stool", "kitchen", "pepper", "cook", "pig"],
+      "modelCalled": true,
+      "allowsNewNames": true
+    },
+    {
+      "name": "somebody's something, which is not a question about the something",
+      "question": "What is Alice's cat called?",
+      "spine": 2,
+      "kind": "general",
+      "evidenceContains": ["dinah"],
+      "evidenceExcludes": [],
+      "answerContainsAny": ["dinah"],
+      "answerExcludes": [],
+      "modelCalled": true,
+      "allowsNewNames": true
+    },
+    {
+      "name": "identity of a character who is only ever talked about",
+      "question": "Who is Dinah?",
+      "spine": 2,
+      "kind": "identity",
+      "evidenceContains": ["dinah", "cat"],
+      "evidenceExcludes": [],
+      "answerContainsAny": ["cat"],
+      "answerExcludes": [],
+      "modelCalled": true,
+      "allowsNewNames": true
+    }
+  ]
+}
