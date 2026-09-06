@@ -24,6 +24,10 @@ enum ReaderCommand: String, Sendable {
     /// window both trim the book that window is about.
     case volumeUp
     case volumeDown
+    /// A question about the book in front. Aimed for the same reason the level
+    /// is: the answer is bounded by one book's reading position, and the menu
+    /// has no idea which book the reader means.
+    case ask
 
     var notification: Notification.Name { Notification.Name("issa.reader.\(rawValue)") }
 

@@ -4,6 +4,7 @@ import IssaPlayback
 import IssaUI
 import Observation
 import UIKit
+import UserNotifications
 
 /// The app's long-lived objects, and the one place it is started from.
 ///
@@ -24,6 +25,14 @@ final class AppServices {
     let app: AppModel
     let settings = PlaybackSettings()
     let nowPlaying = NowPlayingController()
+    /// Above the reader, because `AppModel.readerDidClose` evicts the
+    /// `ReaderModel` the moment its screen goes away and an answer has to
+    /// outlive that — including all the way into the background.
+    let ask = AskCoordinator()
+
+    /// Held because `UNUserNotificationCenter` keeps its delegate weakly, and a
+    /// delegate nobody owns is a notification tap that does nothing.
+    private var askNotifications: AskNotificationDelegate?
 
     private var started = false
 
@@ -73,6 +82,14 @@ final class AppServices {
         // through: a CarPlay list item, the reader closing, one kind of book
         // displacing the other.
         app.nowPlayingController = nowPlaying
+        // Deleting a download has to take that book's question index with it.
+        app.ask = ask
+        // Set at launch rather than when the first question is asked: a
+        // notification tapped from a cold launch arrives before any sheet has
+        // ever been opened, and a delegate set later would miss it.
+        let delegate = AskNotificationDelegate(coordinator: ask, app: app)
+        askNotifications = delegate
+        UNUserNotificationCenter.current().delegate = delegate
         connectCarPlay()
         app.startRestore()
     }

@@ -99,6 +99,14 @@ public struct ReadingSettingsView: View {
             }
             .listRowBackground(Palette.surface)
 
+            #if os(macOS)
+            // The Mac's Settings window has no Ask row of its own — this screen
+            // *is* its Reading tab, and there is no phone-style Settings list
+            // above it to carry the section. On iOS it lives in `SettingsView`
+            // only, so it is not offered twice.
+            AskSettingsSection()
+            #endif
+
             Section {
                 NavigationLink { FontLicencesView() } label: {
                     Label("Fonts & licences", systemImage: "textformat.alt")
