@@ -61,6 +61,24 @@ struct SentenceSplitterTests {
         #expect(rejoined == string.substring(with: window))
     }
 
+    @Test("splitting a chapter is a few milliseconds, not thirty")
+    func splittingIsCheap() throws {
+        // Deciding "is this a fragment?" by trimming each piece and splitting
+        // it into words cost 25 ms over a three-hundred-passage scan — nine
+        // times what ICU's own sentence enumeration cost. The bound here is
+        // loose on purpose: it is watching for that shape of mistake coming
+        // back, not policing microseconds.
+        let text = try AskFixture.text(spine: AskFixture.Spine.chapterI)
+        let string = text as NSString
+        let whole = NSRange(location: 0, length: string.length)
+        let start = ContinuousClock.now
+        var count = 0
+        for _ in 0 ..< 10 { count = SentenceSplitter.ranges(in: string, range: whole).count }
+        let each = (ContinuousClock.now - start) / 10
+        #expect(count > 50)
+        #expect(each < .milliseconds(20), "\(each) for \(count) sentences")
+    }
+
     @Test("an empty or impossible range yields nothing rather than trapping")
     func handlesDegenerateRanges() {
         let string = "Alice." as NSString

@@ -336,7 +336,7 @@ public actor AskIndexStore {
                 SELECT passage.spineIndex AS spineIndex, passage.ordinal AS ordinal,
                        passage.start AS start, passage.end AS end,
                        passage.words AS words, passage.text AS text,
-                       bm25(passage_fts) AS score
+                       \(order.score) AS score
                 FROM passage
                 JOIN passage_fts ON passage_fts.rowid = passage.rowid
                 WHERE passage_fts MATCH :pattern
@@ -637,6 +637,19 @@ public enum PassageOrder: Sendable, Hashable {
         switch self {
         case .relevance: "bm25(passage_fts)"
         case .bookOrder: "passage.spineIndex, passage.start"
+        }
+    }
+
+    /// What goes in the SELECT for the score.
+    ///
+    /// Zero for a book-ordered scan, because `bm25()` is not free: it is
+    /// computed per returned row, and three hundred of them was two thirds of
+    /// the whole evidence scan's time on a 300,000-word book. Nothing
+    /// downstream of the evidence path reads the score — the sentences decide.
+    var score: String {
+        switch self {
+        case .relevance: "bm25(passage_fts)"
+        case .bookOrder: "0.0"
         }
     }
 }

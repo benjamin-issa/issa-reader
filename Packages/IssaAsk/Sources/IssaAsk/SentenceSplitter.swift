@@ -35,9 +35,16 @@ public enum SentenceSplitter {
         }
         guard !found.isEmpty else { return [range] }
 
+        // The code units once, and then no substrings at all until a sentence
+        // actually needs one. Deciding "is this a fragment?" by trimming and
+        // splitting each piece into words measured at 25 ms over a 300-passage
+        // scan — nine times what the sentence enumeration itself cost.
+        var units = [UInt16](repeating: 0, count: string.length)
+        string.getCharacters(&units, range: NSRange(location: 0, length: string.length))
+
         var merged: [NSRange] = []
         for sentence in found {
-            if let last = merged.last, needsMoreAfter(string.substring(with: last)) {
+            if let last = merged.last, needsMore(units, in: last) {
                 merged[merged.count - 1] = NSRange(
                     location: last.location, length: NSMaxRange(sentence) - last.location,
                 )
@@ -67,34 +74,77 @@ public enum SentenceSplitter {
     /// an abbreviation the splitter mistook for a full stop ("Mr.", "T."), and
     /// a runt with no terminal punctuation at all — a heading, a speaker's
     /// name on its own line, the tail of a line-broken title.
-    static func needsMoreAfter(_ piece: String) -> Bool {
-        let trimmed = piece.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return true }
-        if endsInAbbreviation(trimmed) { return true }
-        return PassageChunker.wordCount(trimmed) < minimumWords && !isTerminated(trimmed)
+    static func needsMore(_ units: [UInt16], in range: NSRange) -> Bool {
+        // Back past the quotation marks and brackets that sit outside a full
+        // stop, and past the whitespace ICU left on the end.
+        var index = NSMaxRange(range) - 1
+        while index >= range.location, isSkippable(units[index]) { index -= 1 }
+        // Nothing but punctuation and space: not a sentence at all.
+        guard index >= range.location else { return true }
+
+        let last = units[index]
+        if last == period {
+            let start = wordStart(units, from: index, notBefore: range.location)
+            guard index - start <= longestAbbreviation else { return false }
+            let word = String(decoding: units[start ..< index], as: UTF16.self)
+                .trimmingCharacters(in: CharacterSet.letters.inverted)
+            if NameFinder.honorifics.contains(word.lowercased()) { return true }
+            // A single capital and a full stop is an initial — "T. Rabbit" —
+            // and splitting there loses whoever it belongs to.
+            return word.count == 1 && word.first?.isUppercase == true
+        }
+        guard !terminators.contains(last) else { return false }
+        // Not terminated at all: a heading, a speaker's name on its own line,
+        // the tail of a line-broken title. It joins what follows.
+        return words(units, in: range, upTo: minimumWords) < minimumWords
     }
 
     /// Below this a piece is not a sentence, it is a fragment of one.
     static let minimumWords = 3
+    /// Past this a word is not an abbreviation, and there is nothing to
+    /// allocate a string for. "professor" is the longest in the table.
+    static let longestAbbreviation = 12
 
-    static func endsInAbbreviation(_ piece: String) -> Bool {
-        guard let last = piece.split(whereSeparator: \.isWhitespace).last else { return false }
-        let word = String(last).trimmingCharacters(in: closingMarks)
-        guard word.hasSuffix(".") else { return false }
-        let bare = String(word.dropLast())
-        if NameFinder.honorifics.contains(bare.lowercased()) { return true }
-        // A single capital and a full stop is an initial — "T. Rabbit" — and
-        // splitting there loses whoever it belongs to.
-        return bare.count == 1 && bare.first?.isUppercase == true
+    /// Where the word ending just before `index` begins.
+    static func wordStart(_ units: [UInt16], from index: Int, notBefore floor: Int) -> Int {
+        var start = index
+        while start > floor, !isWhitespace(units[start - 1]) { start -= 1 }
+        return start
     }
 
-    static func isTerminated(_ piece: String) -> Bool {
-        let bare = piece.trimmingCharacters(in: closingMarks)
-        guard let last = bare.last else { return false }
-        return terminators.contains(last)
+    /// Whitespace-separated runs, counting no further than it has to.
+    static func words(_ units: [UInt16], in range: NSRange, upTo limit: Int) -> Int {
+        var count = 0
+        var inWord = false
+        for index in range.location ..< NSMaxRange(range) {
+            if isWhitespace(units[index]) {
+                inWord = false
+            } else if !inWord {
+                inWord = true
+                count += 1
+                if count >= limit { return count }
+            }
+        }
+        return count
     }
 
-    static let terminators: Set<Character> = [".", "!", "?", "\u{2026}", ":", ";"]
-    /// Quotation marks and brackets, which sit outside the full stop.
-    static let closingMarks = CharacterSet(charactersIn: "\"'”’)]}»›\u{00A0} \n\t")
+    // MARK: - Code units
+
+    static let period: UInt16 = 0x2E
+
+    static func isWhitespace(_ unit: UInt16) -> Bool {
+        unit == 0x20 || unit == 0x0A || unit == 0x0D || unit == 0x09
+            || unit == 0x00A0 || unit == 0x2028 || unit == 0x2029
+    }
+
+    /// Quotation marks and brackets, which sit outside the full stop, plus the
+    /// whitespace that follows it.
+    static func isSkippable(_ unit: UInt16) -> Bool {
+        isWhitespace(unit) || closingMarks.contains(unit)
+    }
+
+    static let closingMarks: Set<UInt16> = [
+        0x22, 0x27, 0x29, 0x5D, 0x7D, 0x00BB, 0x2018, 0x2019, 0x201C, 0x201D, 0x203A,
+    ]
+    static let terminators: Set<UInt16> = [0x2E, 0x21, 0x3F, 0x2026, 0x3A, 0x3B]
 }
