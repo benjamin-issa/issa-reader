@@ -159,10 +159,88 @@ public actor AskEngine {
 
         try Task.checkCancellation()
         continuation.yield(.phase(.thinking))
-        try await generate(
-            question: QueryTerms.sanitise(question), ranked: ranked, into: continuation,
+        let sanitised = QueryTerms.sanitise(question)
+        let generated = try await generate(
+            question: sanitised, ranked: ranked, into: continuation,
+        )
+
+        try Task.checkCancellation()
+        continuation.yield(.answered(
+            try await vetted(generated, question: sanitised, boundary: boundary),
+        ))
+    }
+
+    // MARK: - Vetting the answer
+
+    /// The output side of the question-side guard above.
+    ///
+    /// The question-side guard catches "Who is the Cheshire Cat?" because the
+    /// name is in the question. It cannot catch the other half of the same
+    /// defect: a question whose own words are all met — "What does Alice meet in
+    /// the wood?" — retrieves six perfectly bounded passages, and the model
+    /// answers with a character from ten chapters ahead anyway, because it has
+    /// read the book. Retrieval was never the leak; the model's memory is. So
+    /// the answer is held to the same test the question is: every name in it
+    /// must be a name the book has already used.
+    ///
+    /// Words that begin a sentence are exempt, because every sentence starts
+    /// with a capital and there is no way to tell "Alice went home" from "Rome
+    /// fell" without asking the tagger — and words already in the question are
+    /// exempt because the question-side guard has ruled on those.
+    private func vetted(
+        _ answer: AskAnswer, question: String, boundary: ReadingBoundary,
+    ) async throws -> AskAnswer {
+        guard !answer.notYetRevealed else { return answer }
+        let candidates = Self.unvettedNames(in: answer.text, question: question)
+        guard !candidates.isEmpty else { return answer }
+        let unmet = try await store.unmetWords(candidates, before: boundary)
+        guard !unmet.isEmpty else { return answer }
+
+        // Never the words themselves: an unmet name is a spoiler, and the log
+        // is exported by the reader and pasted into an email.
+        IssaLog.info("ask answered as not yet revealed", ["unmetInAnswer": String(unmet.count)])
+        return AskAnswer(
+            text: AskAnswerParser.notYetSentinel, citations: [], notYetRevealed: true,
         )
     }
+
+    /// Capitalised words in an answer that neither open a sentence nor appear in
+    /// the question.
+    ///
+    /// Deliberately the same crude test as `QueryTerms.nameCandidates`, and for
+    /// the same reason: the names readers get spoiled by are invented ones no
+    /// general-purpose tagger knows. Over-catching costs a "the story hasn't
+    /// revealed that yet" for an answer that was fine; under-catching costs the
+    /// one promise the feature makes.
+    static func unvettedNames(in answer: String, question: String) -> [String] {
+        let asked = Set(QueryTerms.tokens(in: question))
+        var candidates: Set<String> = []
+        // The first word of the answer opens a sentence like any other.
+        var opensSentence = true
+
+        for word in answer.split(whereSeparator: \.isWhitespace) {
+            // Closing marks first: `said "Hello."` ends a sentence, and its
+            // last character is a quotation mark.
+            let closed = String(word).trimmingCharacters(in: Self.closingMarks)
+            let endsSentence = closed.last.map { Self.sentenceEnders.contains($0) } ?? false
+            defer { opensSentence = endsSentence }
+
+            guard !opensSentence else { continue }
+            let bare = String(word).trimmingCharacters(in: CharacterSet.letters.inverted)
+            guard let initial = bare.first, initial.isUppercase, bare.count > 2,
+                  !QueryTerms.capitalisedNonNames.contains(bare.lowercased())
+            else { continue }
+            for token in QueryTerms.tokens(in: bare)
+                where token.count > 2 && !asked.contains(token) {
+                candidates.insert(token)
+            }
+        }
+        return candidates.sorted()
+    }
+
+    static let sentenceEnders: Set<Character> = [".", "!", "?", ":", ";"]
+    /// Quotation marks and brackets, which sit outside the full stop.
+    static let closingMarks = CharacterSet(charactersIn: "\"'”’)]}»›")
 
     // MARK: - Retrieval
 
@@ -214,7 +292,7 @@ public actor AskEngine {
         question: String,
         ranked: [PassageRanker.Ranked],
         into continuation: AsyncThrowingStream<AskEvent, any Error>.Continuation,
-    ) async throws {
+    ) async throws -> AskAnswer {
         var lastFailure = AskFailure.tooMuchContext
         for attempt in Self.attempts(for: ranked) {
             try Task.checkCancellation()
@@ -230,8 +308,7 @@ public actor AskEngine {
             }
 
             do {
-                try await stream(built, into: continuation)
-                return
+                return try await stream(built, into: continuation)
             } catch let failure as AskFailure where failure == .tooMuchContext {
                 lastFailure = failure
                 IssaLog.info("ask prompt too large", ["passages": String(built.passages.count)])
@@ -258,7 +335,7 @@ public actor AskEngine {
     private func stream(
         _ built: AskPromptBuilder.Built,
         into continuation: AsyncThrowingStream<AskEvent, any Error>.Continuation,
-    ) async throws {
+    ) async throws -> AskAnswer {
         var raw = ""
         var shown = ""
         var hasAnswered = false
@@ -285,7 +362,9 @@ public actor AskEngine {
             continuation.yield(.partial(visible))
         }
         try Task.checkCancellation()
-        continuation.yield(.answered(AskAnswerParser.parse(raw)))
+        // Returned rather than yielded: the answer still has to be vetted
+        // against the boundary before the reader sees it as final.
+        return AskAnswerParser.parse(raw)
     }
 
     // MARK: - Failures

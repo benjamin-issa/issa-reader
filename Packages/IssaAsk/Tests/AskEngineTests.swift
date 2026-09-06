@@ -209,15 +209,46 @@ struct AskEngineTests {
             boundary: try AskFixture.endOf(spine: AskFixture.Spine.chapterI),
         )
 
-        let consumer = Task { await Self.drain(stream) }
+        let seen = Collected()
+        let consumer = Task {
+            do {
+                for try await event in stream { await seen.append(event) }
+            } catch {}
+        }
         // Wait until the answer is genuinely mid-flight, so this tests
-        // cancellation rather than a race with the start of the pipeline.
+        // cancellation rather than a race with the start of the pipeline. Both
+        // waits are needed: the model holding says the partial was *sent*, and
+        // the second says it was *received* — cancelling a task mid-iteration
+        // discards whatever is still sitting in the stream's buffer, which made
+        // this fail about half the time for reasons that had nothing to do with
+        // cancellation.
         await model.waitUntilHolding()
+        await seen.waitForAPartial()
         consumer.cancel()
+        _ = await consumer.value
 
-        let (events, _) = await consumer.value
-        #expect(Self.partials(events) == ["Alice foll"])
-        #expect(Self.answer(events) == nil)
+        #expect(Self.partials(await seen.events) == ["Alice foll"])
+        #expect(Self.answer(await seen.events) == nil)
+    }
+
+    /// Events as the consumer actually saw them, and a way to wait for the
+    /// first one to land.
+    actor Collected {
+        var events: [AskEvent] = []
+        private var waiters: [CheckedContinuation<Void, Never>] = []
+
+        func append(_ event: AskEvent) {
+            events.append(event)
+            guard case .partial = event else { return }
+            for waiter in waiters { waiter.resume() }
+            waiters.removeAll()
+        }
+
+        func waitForAPartial() async {
+            guard !events.contains(where: { if case .partial = $0 { true } else { false } })
+            else { return }
+            await withCheckedContinuation { waiters.append($0) }
+        }
     }
 
     // MARK: - The short circuit
@@ -242,6 +273,72 @@ struct AskEngineTests {
         #expect(answer.notYetRevealed)
         #expect(answer.text == AskAnswerParser.notYetSentinel)
         #expect(await model.received.isEmpty)
+    }
+
+    // MARK: - The answer-side guard
+
+    /// The twin of the short circuit above, and the case it cannot reach.
+    ///
+    /// Here the *question* is entirely met — Alice and the rabbit are both in
+    /// Chapter I — so retrieval is non-empty and the model is called. The model
+    /// then answers with a character the reader has not met, which is exactly
+    /// what the live model did when the retrieval was non-empty. Nothing before
+    /// this point can catch it: the passages were bounded correctly, and the
+    /// spoiler came out of the model's memory rather than out of the book.
+    @Test("an answer naming somebody the book has not introduced is refused")
+    func unmetNameInTheAnswerIsRefused() async throws {
+        let (store, source, directory) = try await AskFixture.preparedStore()
+        defer { AskFixture.remove(directory) }
+        let model = ScriptedAnswerModel(turns: [
+            .answer("Alice followed a white rabbit down the hole. She was later guided by the Cheshire Cat.\nSources: 1"),
+        ])
+        let engine = AskEngine(model: model, store: store)
+
+        let (events, failure) = await Self.drain(engine.ask(
+            question: "What did Alice follow down the hole?", source: source,
+            boundary: try AskFixture.endOf(spine: AskFixture.Spine.chapterI),
+        ))
+        #expect(failure == nil)
+        // The model was asked — this is not the short circuit.
+        #expect(await model.received.count == 1)
+        let answer = try #require(Self.answer(events))
+        #expect(answer.notYetRevealed)
+        #expect(answer.text == AskAnswerParser.notYetSentinel)
+        #expect(answer.citations.isEmpty, "a refused answer cites nothing")
+    }
+
+    /// The same answer past the chapter that introduces the Cat is ordinary
+    /// prose. Without this the guard could be passing by refusing everything.
+    @Test("the same answer stands once the book has introduced the name")
+    func metNameInTheAnswerIsKept() async throws {
+        let (store, source, directory) = try await AskFixture.preparedStore()
+        defer { AskFixture.remove(directory) }
+        let model = ScriptedAnswerModel(turns: [
+            .answer("Alice followed a white rabbit down the hole. She was later guided by the Cheshire Cat.\nSources: 1"),
+        ])
+        let engine = AskEngine(model: model, store: store)
+
+        let (events, failure) = await Self.drain(engine.ask(
+            question: "What did Alice follow down the hole?", source: source,
+            boundary: try AskFixture.endOf(spine: AskFixture.Spine.chapterVI),
+        ))
+        #expect(failure == nil)
+        let answer = try #require(Self.answer(events))
+        #expect(!answer.notYetRevealed)
+        #expect(answer.text.contains("Cheshire"))
+    }
+
+    /// A name is only a name where it is not simply the start of a sentence.
+    @Test("sentence-initial and asked-about words are not treated as names")
+    func sentenceOpenersAreExempt() {
+        let found = AskEngine.unvettedNames(
+            in: "Rome fell. Alice met the Duchess, who knew Bilbo. Alice waved.",
+            question: "Who is Alice?",
+        )
+        // "Rome" and both "Alice"s open sentences, and "Alice" is in the
+        // question besides. What is left is the pair a reader could be spoiled
+        // by — neither of which a general-purpose name tagger would find.
+        #expect(found == ["bilbo", "duchess"])
     }
 
     // MARK: - One at a time
