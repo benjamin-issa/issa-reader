@@ -205,6 +205,67 @@ struct PaginatorTests {
             #expect(page != nil, "fragment \(fragmentID) is on no page")
         }
     }
+
+    /// The contract the television's page turn rests on.
+    ///
+    /// Turning the page while narration plays seeks the voice to the first
+    /// sentence *beginning* on the new page. If it answered with the sentence
+    /// merely visible at the top — which usually began on the page before —
+    /// the seek would turn the book straight back and the remote's right
+    /// button would be a no-op with audio.
+    @Test("the first fragment on a page never starts before the page does")
+    func firstFragmentBeginsOnThePage() throws {
+        let (text, ranges) = try Self.readalongChapter()
+        let layout = ChapterLayout(text: text, fragmentRanges: ranges)
+        layout.layout(pageSize: CGSize(width: 300, height: 220))
+        #expect(layout.pages.count > 1, "one page would not exercise a page break")
+
+        for page in layout.pages.dropFirst() {
+            guard let id = layout.firstFragment(beginningOn: page) else { continue }
+            let range = try #require(layout.fragmentRange(for: id))
+            #expect(range.location >= page.characterRange.location,
+                    "\(id) starts at \(range.location), before page \(page.index) at \(page.characterRange.location)")
+        }
+    }
+
+    /// The filter is what lets a caller say "the first *narrated* sentence".
+    ///
+    /// Element ids are not all sentences — headings, page anchors and a
+    /// publisher's own wrappers carry them too — so rejecting the answer
+    /// afterwards would leave a wrapper shadowing the sentence inside it.
+    @Test("rejecting the first fragment yields the next one beginning on the page")
+    func filterSkipsToTheNextFragment() throws {
+        let (text, ranges) = try Self.readalongChapter()
+        let layout = ChapterLayout(text: text, fragmentRanges: ranges)
+        layout.layout(pageSize: CGSize(width: 300, height: 220))
+
+        var checked = 0
+        for page in layout.pages {
+            guard let first = layout.firstFragment(beginningOn: page) else { continue }
+            guard let second = layout.firstFragment(
+                beginningOn: page, matching: { $0 != first },
+            ) else { continue }
+            checked += 1
+            #expect(second != first)
+            let firstRange = try #require(layout.fragmentRange(for: first))
+            let secondRange = try #require(layout.fragmentRange(for: second))
+            #expect(secondRange.location >= page.characterRange.location)
+            #expect(secondRange.location > firstRange.location,
+                    "the replacement must come after the id that was refused")
+        }
+        #expect(checked > 0, "no page carried two fragments, so nothing was tested")
+    }
+
+    /// A filter nothing satisfies answers with nothing, rather than falling
+    /// back to an id the caller has just said it cannot use.
+    @Test("a filter that refuses everything finds nothing")
+    func filterCanRefuseEverything() throws {
+        let (text, ranges) = try Self.readalongChapter()
+        let layout = ChapterLayout(text: text, fragmentRanges: ranges)
+        layout.layout(pageSize: CGSize(width: 340, height: 560))
+        let page = try #require(layout.pages.first)
+        #expect(layout.firstFragment(beginningOn: page, matching: { _ in false }) == nil)
+    }
 }
 
 /// Regression tests for fragment-id nesting.
