@@ -981,56 +981,6 @@ public final class ReaderModel {
         ])
     }
 
-    /// The text of one media-overlay fragment.
-    ///
-    /// Used by the TV presentation, which shows sentences rather than pages: at
-    /// ten feet a paginated book page is unreadable, but one large sentence with
-    /// its neighbours for context is comfortable.
-    public func text(forFragment fragmentID: String) -> String? {
-        guard let layout, let range = layout.fragmentRange(for: fragmentID) else { return nil }
-        return (layout.attributedText.string as NSString)
-            .substring(with: range)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    /// The narrated sentence, plus the one before and after it.
-    public func narrationContext() -> (previous: String?, current: String?, next: String?) {
-        guard let timeline, let entry = readalong?.activeEntry else { return (nil, nil, nil) }
-        return (
-            timeline.entry(before: entry).flatMap { text(forFragment: $0.fragmentID) },
-            text(forFragment: entry.fragmentID),
-            timeline.entry(after: entry).flatMap { text(forFragment: $0.fragmentID) },
-        )
-    }
-
-    /// One sentence of the read-along window: its text and whether it is the one
-    /// being spoken.
-    public struct NarratedLine: Identifiable, Equatable, Sendable {
-        public let id: String
-        public let text: String
-        public let isCurrent: Bool
-    }
-
-    /// Several sentences either side of the spoken one, in reading order.
-    ///
-    /// What `narrationContext()` gives is three lines, which is all a phone has
-    /// room for. A television has a whole column, and three sentences floating
-    /// in it reads as a teleprompter rather than as a book.
-    ///
-    /// Lines with no text on the current page are dropped rather than rendered
-    /// blank: a fragment can belong to a document the layout has not painted,
-    /// and a gap in the column would read as a pause the narrator did not take.
-    public func narrationWindow(before: Int = 3, after: Int = 3) -> [NarratedLine] {
-        guard let timeline, let entry = readalong?.activeEntry,
-              let window = timeline.window(around: entry, before: before, after: after)
-        else { return [] }
-        return window.entries.enumerated().compactMap { offset, item in
-            guard let text = text(forFragment: item.fragmentID), !text.isEmpty else { return nil }
-            return NarratedLine(
-                id: item.fragmentID, text: text, isCurrent: offset == window.currentIndex)
-        }
-    }
-
     /// The first narrated fragment at or after the top of the current page.
     ///
     /// `continuingPastPage: false` is the page-scoped question;`true` carries on
@@ -1067,6 +1017,90 @@ public final class ReaderModel {
             }
         }
         return found
+    }
+
+    /// The first narrated sentence that *begins* on a page.
+    ///
+    /// Not the first one the page shows: that is usually a sentence carried
+    /// over from the page before, and seeking to it would turn the page
+    /// straight back. The television has no scrubber, so a page turn is the
+    /// only way to move the voice, and it has to land forwards.
+    ///
+    /// Falls back to the next narrated sentence starting anywhere *after* the
+    /// page's top when nothing begins on the page itself — one long sentence
+    /// covering the whole page, or a page of heading and plate.
+    func firstNarratedFragment(beginningOn page: RenderedPage) -> String? {
+        guard let layout, let timeline else { return nil }
+        if let id = layout.firstFragment(
+            beginningOn: page, matching: { timeline.entry(forFragment: $0) != nil },
+        ) { return id }
+
+        let text = layout.attributedText
+        let length = (text.string as NSString).length
+        let start = page.characterRange.location
+        guard start < length else { return nil }
+        var found: String?
+        text.enumerateAttribute(
+            .issaFragmentID, in: NSRange(location: start, length: length - start),
+        ) { value, _, stop in
+            guard let id = value as? String, timeline.entry(forFragment: id) != nil,
+                  let whole = layout.fragmentRange(for: id), whole.location >= start
+            else { return }
+            found = id
+            stop.pointee = true
+        }
+        return found
+    }
+
+    /// Whether the voice is speaking a sentence on the page being shown.
+    private var narrationIsOnVisiblePage: Bool {
+        guard let entry = readalong?.activeEntry, let layout else { return false }
+        guard entry.textHref == currentSpineHref else { return false }
+        return layout.page(containingFragment: entry.fragmentID)?.index == pageIndex
+    }
+
+    /// Turns the page, and takes the voice with it.
+    ///
+    /// The television's page turn, not the phone's. A phone can afford to let
+    /// narration carry on where it was and snap the page back at the next
+    /// sentence, because a reader who wanted the audio moved has a scrubber and
+    /// a sentence to tap. A remote has neither, so here the page *is* the
+    /// scrubber: turning it while the voice is talking seeks narration to the
+    /// first sentence beginning on the new page.
+    ///
+    /// A paused book turns silently — pressing right on a paused book is
+    /// reading ahead, not asking to be read to. At the end of the book nothing
+    /// happens at all, which `nextPage()` already decides; this notices that
+    /// the position did not move and leaves the voice alone.
+    public func turnPage(forward: Bool) async {
+        let wasPlaying = isPlaying
+        let before = (chapterIndex, pageIndex)
+        if forward { await nextPage() } else { await previousPage() }
+        guard (chapterIndex, pageIndex) != before else { return }
+        guard wasPlaying, let readalong, let page = currentPage,
+              let fragment = firstNarratedFragment(beginningOn: page)
+        else { return }
+        await readalong.seek(toFragment: fragment)
+    }
+
+    /// Play/pause for a page the reader may have turned away from the voice.
+    ///
+    /// Pressing play should read what is on screen. After a few silent page
+    /// turns the voice is somewhere else entirely, and resuming it would start
+    /// talking about a page nobody is looking at — so a paused book whose voice
+    /// is off-page begins at the first sentence on the visible page instead.
+    /// Everything else is the ordinary toggle.
+    public func playFromVisiblePage() async {
+        guard let readalong else { return }
+        guard !readalong.player.isPlaying, !narrationIsOnVisiblePage,
+              let page = currentPage,
+              let fragment = firstNarratedFragment(beginningOn: page)
+        else {
+            await togglePlayback()
+            return
+        }
+        // `seek(toFragment:)` starts playback, which is what was asked for.
+        await readalong.seek(toFragment: fragment)
     }
 
     public func togglePlayback() async {

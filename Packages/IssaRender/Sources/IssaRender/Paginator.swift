@@ -402,13 +402,23 @@ public final class ChapterLayout {
     /// page it had landed on, and every open walked the reader back one more
     /// page. `nil` when no fragment starts here — one sentence spanning the
     /// whole page — and the position rests on its offset and quote instead.
-    public func firstFragment(beginningOn page: RenderedPage) -> String? {
+    ///
+    /// - Parameter matching: which ids count. The default takes any. A caller
+    ///   that means "the first *narrated* sentence" must say so here rather
+    ///   than reject the answer afterwards: element ids are not all sentences —
+    ///   headings, page anchors and a publisher's own paragraph wrappers carry
+    ///   them too — so a wrapper opening the page would otherwise shadow the
+    ///   sentence inside it and the caller would be told there is nothing here.
+    public func firstFragment(
+        beginningOn page: RenderedPage, matching: (String) -> Bool = { _ in true },
+    ) -> String? {
         let range = page.characterRange
         guard range.length > 0, NSMaxRange(range) <= attributedText.length else { return nil }
         var found: String?
         attributedText.enumerateAttribute(.issaFragmentID, in: range) { value, _, stop in
             guard let id = value as? String,
-                  let whole = fragmentRanges[id], whole.location >= range.location
+                  let whole = fragmentRanges[id], whole.location >= range.location,
+                  matching(id)
             else { return }
             found = id
             stop.pointee = true
