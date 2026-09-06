@@ -30,10 +30,26 @@ struct AskSheet: View {
 
     private var job: AskJob? { coordinator.job(for: model.book.uuid) }
 
+    /// Whether there is prose on screen that a machine wrote — the only state
+    /// the disclosure belongs under. A composer or an "Apple Intelligence is
+    /// off" sentence has generated nothing to disclose.
+    private var isAnswered: Bool {
+        guard availability.isReady else { return false }
+        return job?.state.isAnswered ?? false
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: Metrics.spacing16) {
             header
             content
+            // Pushed to the foot of the sheet, and outside the answer's own
+            // `VStack`: that one is measured to decide between the medium and
+            // large detents, and a pill that grew the measurement would open
+            // sheets full-height to make room for a caption.
+            if isAnswered {
+                Spacer(minLength: 0)
+                AskOriginPill()
+            }
         }
         .padding(Metrics.spacing24)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
