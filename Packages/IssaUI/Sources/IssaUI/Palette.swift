@@ -90,12 +90,15 @@ public enum ReaderTheme: String, CaseIterable, Sendable, Codable {
         }
     }
 
-    /// Fill behind the currently-narrated sentence.
+    /// Fill behind the currently-narrated sentence, when the reader has not
+    /// chosen a highlighter of their own.
+    ///
+    /// Stated as "the default preset at this ground's alpha" rather than as
+    /// its own literal, so the swatch the picker draws first and the colour an
+    /// untouched page paints are the same value by construction. Written out
+    /// per theme they drifted the moment either table was edited.
     public var highlight: Color {
-        switch self {
-        case .paper, .sepia: accent.opacity(0.22)
-        case .night, .slate: accent.opacity(0.30)
-        }
+        Color(hex: defaultHighlighter.hex, opacity: highlightAlpha)
     }
 
     /// Fill behind selected text.
