@@ -51,7 +51,10 @@ final class AskCoordinator {
     private let preparer: AskEngine
 
     private let defaults: UserDefaults
-    private let notifier: AskNotifier
+    /// Nil in tests. Everything else about a job can be driven deterministically
+    /// with a scripted model, but a permission prompt is a real system alert in
+    /// front of a real runner, and `UNUserNotificationCenter` has no stand-in.
+    private let notifier: AskNotifier?
 
     /// Books whose index has been built and whose model has been warmed this
     /// session, so opening the sheet a second time costs nothing.
@@ -75,7 +78,7 @@ final class AskCoordinator {
     init(
         store: AskIndexStore = AskIndexStore(),
         model: (any AnswerModel)? = nil,
-        notifier: AskNotifier = AskNotifier(),
+        notifier: AskNotifier? = AskNotifier(),
         defaults: UserDefaults = .standard,
     ) {
         self.store = store
@@ -254,14 +257,15 @@ final class AskCoordinator {
     private func requestNotificationsOnce() {
         guard !defaults.bool(forKey: Self.askedForNotificationsKey) else { return }
         defaults.set(true, forKey: Self.askedForNotificationsKey)
-        Task { [notifier] in await notifier.requestAuthorizationIfNeeded() }
+        guard let notifier else { return }
+        Task { await notifier.requestAuthorizationIfNeeded() }
     }
 
     /// A job that has stopped: post the notification if one is owed, then let
     /// the background assertion go if nothing else is running.
     private func finished(_ job: AskJob) {
-        if job.wasDismissedWhileWorking, job.state.isAnswered {
-            Task { [notifier] in await notifier.postAnswerReady(job: job) }
+        if job.wasDismissedWhileWorking, job.state.isAnswered, let notifier {
+            Task { await notifier.postAnswerReady(job: job) }
         }
         releaseAssertionIfIdle()
     }
