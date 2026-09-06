@@ -65,7 +65,9 @@ public struct IndexKey: Sendable, Hashable, Codable {
     /// Chunking, parsing and the image rule together. Anything that moves a
     /// character in the rendered string belongs here.
     public static let currentParserVersion = 1
-    public static let currentSchemaVersion = 1
+    /// 2 since the `name` table grew `nameKey`: an index built before it pools
+    /// two spellings of one character as two people.
+    public static let currentSchemaVersion = 2
 
     public init(
         fileSize: Int64,

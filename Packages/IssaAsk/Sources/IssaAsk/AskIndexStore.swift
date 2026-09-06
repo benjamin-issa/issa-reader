@@ -248,12 +248,17 @@ public actor AskIndexStore {
             // Summed rather than replaced: a character appears in many chapters
             // and the suggestion chip wants the total, while `firstOffset` must
             // stay the earliest so the boundary can hide someone not yet met.
+            //
+            // `nameKey` is what "VIN" and "Vin" have in common. Stored rather
+            // than folded at query time so the grouping is indexed.
             try db.execute(
                 sql: """
-                    INSERT INTO name(name, spineIndex, firstOffset, mentions)
-                    VALUES (?, ?, ?, ?)
+                    INSERT INTO name(name, nameKey, spineIndex, firstOffset, mentions)
+                    VALUES (?, ?, ?, ?, ?)
                     """,
-                arguments: [name.name, name.spineIndex, name.firstOffset, name.mentions],
+                arguments: [
+                    name.name, name.key, name.spineIndex, name.firstOffset, name.mentions,
+                ],
             )
         }
     }
@@ -294,8 +299,39 @@ public actor AskIndexStore {
         guard let pattern = FTS5Pattern(matchingAnyTokenIn: tokens.joined(separator: " ")) else {
             return []
         }
+        return try passages(
+            matching: pattern, before: boundary, order: .relevance, limit: limit, in: queue,
+        )
+    }
 
-        return try queue.read { db in
+    /// Every passage matching this pattern from before the boundary, in the
+    /// order the caller needs them.
+    ///
+    /// The one bounded query. Everything else in this file that reads passages
+    /// goes through it, so the boundary clause and the truncation of the
+    /// straddling passage exist in exactly one place — a second copy of them
+    /// is a second thing that can be got wrong, and getting it wrong shows the
+    /// reader a page they have not read.
+    public func passages(
+        matching pattern: FTS5Pattern,
+        before boundary: ReadingBoundary,
+        order: PassageOrder = .relevance,
+        limit: Int,
+    ) throws -> [RetrievedPassage] {
+        guard let queue = currentQueue() else { return [] }
+        return try Self.passages(
+            matching: pattern, before: boundary, order: order, limit: limit, in: queue,
+        )
+    }
+
+    static func passages(
+        matching pattern: FTS5Pattern,
+        before boundary: ReadingBoundary,
+        order: PassageOrder,
+        limit: Int,
+        in queue: DatabaseQueue,
+    ) throws -> [RetrievedPassage] {
+        try queue.read { db in
             let rows = try Row.fetchAll(db, sql: """
                 SELECT passage.spineIndex AS spineIndex, passage.ordinal AS ordinal,
                        passage.start AS start, passage.end AS end,
@@ -306,7 +342,7 @@ public actor AskIndexStore {
                 WHERE passage_fts MATCH :pattern
                   AND (passage.spineIndex < :spine
                        OR (passage.spineIndex = :spine AND passage.start < :offset))
-                ORDER BY bm25(passage_fts)
+                ORDER BY \(order.clause)
                 LIMIT :limit
                 """, arguments: [
                 "pattern": pattern, "spine": boundary.spineIndex,
@@ -434,18 +470,26 @@ public actor AskIndexStore {
     static func topNames(
         before boundary: ReadingBoundary, limit: Int, in queue: DatabaseQueue,
     ) throws -> [String] {
-        try queue.read { db in
-            try String.fetchAll(db, sql: """
-                SELECT name FROM name
+        // Grouped by the folded key in SQL, then folded to one spelling in
+        // Swift. The SQL alone cannot do the second half: choosing between
+        // "VIN" and "Vin" is a judgement about which the book prints more
+        // often, and — on a tie — about which of them is a heading shouting.
+        let rows = try queue.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT name, nameKey, SUM(mentions) AS mentions FROM name
                 WHERE spineIndex < :spine
                    OR (spineIndex = :spine AND firstOffset < :offset)
-                GROUP BY name
-                ORDER BY SUM(mentions) DESC, name ASC
-                LIMIT :limit
+                GROUP BY nameKey, name
                 """, arguments: [
-                "spine": boundary.spineIndex, "offset": boundary.charOffset, "limit": limit,
+                "spine": boundary.spineIndex, "offset": boundary.charOffset,
             ])
         }
+        let names = rows.map {
+            NameFinder.Name(
+                name: $0["name"], spineIndex: 0, firstOffset: 0, mentions: $0["mentions"] ?? 0,
+            )
+        }
+        return NameFinder.merge(names).prefix(limit).map(\.name)
     }
 
     // MARK: - Deletion
@@ -558,7 +602,42 @@ public actor AskIndexStore {
             }
             try db.create(index: "name_on_position", on: "name", columns: ["spineIndex", "firstOffset"])
         }
+        // One spelling per person. Without this a book that shouts "VIN" in a
+        // chapter heading and prints "Vin" in the prose keeps two rows, splits
+        // the mention count between them, and drops its own protagonist out of
+        // the top of the name table — which is the list that promotes a token
+        // `NLTagger` missed. `IndexKey.currentSchemaVersion` is bumped with it,
+        // so every index built before this rebuilds on the next `prepare`.
+        migrator.registerMigration("v2") { db in
+            try db.alter(table: "name") { t in
+                t.add(column: "nameKey", .text).notNull().defaults(to: "")
+            }
+            try db.create(index: "name_on_key", on: "name", columns: ["nameKey"])
+        }
         return migrator
+    }
+}
+
+// MARK: -
+
+/// How a bounded search hands back what it found.
+public enum PassageOrder: Sendable, Hashable {
+    /// SQLite's bm25, best first. What a general question wants.
+    case relevance
+    /// Reading order, earliest first.
+    ///
+    /// The order the evidence scan uses, and the reason its `LIMIT 300` is not
+    /// a lottery: a novel introduces a character in the first paragraphs that
+    /// mention them, so keeping the *earliest* hits keeps the sentences that
+    /// say who somebody is. Relevance order under the same cap keeps whichever
+    /// three hundred paragraphs repeat the name most, which is the opposite.
+    case bookOrder
+
+    var clause: String {
+        switch self {
+        case .relevance: "bm25(passage_fts)"
+        case .bookOrder: "passage.spineIndex, passage.start"
+        }
     }
 }
 

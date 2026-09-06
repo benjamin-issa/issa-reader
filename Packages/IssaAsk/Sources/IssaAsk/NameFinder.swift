@@ -128,34 +128,55 @@ public enum NameFinder {
     /// Pools per-chapter results into one table, summing mentions and keeping
     /// the earliest sighting so the boundary can hide a character not yet met.
     public static func merge(_ names: [Name]) -> [Name] {
-        var pooled: [String: Name] = [:]
+        // Two passes, because choosing which spelling to show is a comparison
+        // of two complete counts. Fold straight into the key and the incumbent
+        // is a running total while the challenger is one chapter's — which
+        // makes the answer depend on the order the chapters arrived in.
+        var bySpelling: [String: Name] = [:]
         for name in names {
-            let key = name.key
-            if var existing = pooled[key] {
-                // Whichever spelling the book prints more often wins the row,
-                // so "VIN" in a heading does not become the name a suggestion
-                // chip offers.
-                if Self.prefers(
-                    name.name, over: existing.name,
-                    mentions: name.mentions, against: existing.mentions,
-                ) {
-                    existing.name = name.name
-                }
-                existing.mentions += name.mentions
-                if name.spineIndex < existing.spineIndex
-                    || (name.spineIndex == existing.spineIndex
-                        && name.firstOffset < existing.firstOffset) {
-                    existing.spineIndex = name.spineIndex
-                    existing.firstOffset = name.firstOffset
-                }
-                pooled[key] = existing
-            } else {
-                pooled[key] = name
+            let identity = name.key + "\u{0}" + name.name
+            guard var existing = bySpelling[identity] else {
+                bySpelling[identity] = name
+                continue
             }
+            existing.mentions += name.mentions
+            if earlier(name, than: existing) {
+                existing.spineIndex = name.spineIndex
+                existing.firstOffset = name.firstOffset
+            }
+            bySpelling[identity] = existing
+        }
+
+        var pooled: [String: Name] = [:]
+        for spelling in bySpelling.values {
+            guard var existing = pooled[spelling.key] else {
+                pooled[spelling.key] = spelling
+                continue
+            }
+            // Whichever spelling the book prints more often wins the row, so
+            // "VIN" in a heading does not become the name a chip offers.
+            if prefers(
+                spelling.name, over: existing.name,
+                mentions: spelling.mentions, against: existing.mentions,
+            ) {
+                existing.name = spelling.name
+            }
+            existing.mentions += spelling.mentions
+            if earlier(spelling, than: existing) {
+                existing.spineIndex = spelling.spineIndex
+                existing.firstOffset = spelling.firstOffset
+            }
+            pooled[spelling.key] = existing
         }
         return pooled.values.sorted {
             $0.mentions == $1.mentions ? $0.name < $1.name : $0.mentions > $1.mentions
         }
+    }
+
+    /// Whichever sighting the reader would have reached first, which is the one
+    /// the boundary has to compare against.
+    static func earlier(_ candidate: Name, than incumbent: Name) -> Bool {
+        (candidate.spineIndex, candidate.firstOffset) < (incumbent.spineIndex, incumbent.firstOffset)
     }
 
     /// Which of two spellings of one name to show.
