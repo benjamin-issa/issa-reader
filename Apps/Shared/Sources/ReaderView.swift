@@ -552,6 +552,18 @@ public struct ReaderView: View {
         case .unsupportedDevice, .unsupportedOnThisPlatform: return false
         }
     }
+
+    /// What VoiceOver calls the sparkle.
+    ///
+    /// The last place the button's three states are said in words, now that the
+    /// glyph says them with a pulse and a dot. A reader who cannot see either
+    /// still has to be able to tell "you may ask" from "the answer you asked
+    /// for is waiting", which is the whole reason the job outlives the sheet.
+    private func askLabel(for job: AskJob?) -> String {
+        if job?.state.isWorking == true { return "Answer being prepared" }
+        if job?.state.isAnswered == true { return "Answer ready" }
+        return "Ask about this book"
+    }
     #endif
 
     /// Opens the full player: a window on the Mac, a sheet everywhere else.
@@ -567,12 +579,31 @@ public struct ReaderView: View {
     @ViewBuilder
     private var readerActions: some View {
         #if !os(tvOS)
+        let askJob = ask.job(for: model.book.uuid)
         if showsAskPill {
+            // A bare glyph, so the bar's own font and ink reach it exactly as
+            // they reach the three beside it. A tinted capsule with a word in
+            // it read as a different class of control — an advertisement in a
+            // row of tools — which is not what asking a question is. The two
+            // states it still has to show are said with the glyph itself, the
+            // way the Mac toolbar has always said them.
             Button { showsAsk = true } label: {
-                AskPill(theme: model.style.theme, job: ask.job(for: model.book.uuid))
+                Image(systemName: "sparkles")
+                    .symbolEffect(
+                        .pulse.byLayer, options: .repeating,
+                        isActive: askJob?.state.isWorking ?? false,
+                    )
+                    .overlay(alignment: .topTrailing) {
+                        if askJob?.state.isAnswered == true {
+                            Circle()
+                                .fill(model.style.theme.accent)
+                                .frame(width: 6, height: 6)
+                                .offset(x: 3, y: -2)
+                        }
+                    }
             }
-            .buttonStyle(.plain)
             .accessibilityIdentifier("reader.ask")
+            .accessibilityLabel(askLabel(for: askJob))
         }
         #endif
 
