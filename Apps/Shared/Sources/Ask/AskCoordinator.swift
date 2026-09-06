@@ -137,13 +137,18 @@ final class AskCoordinator {
 
     /// The two chips under the field.
     ///
-    /// Async because the top name comes out of the index; the caller draws the
-    /// generic pair until this answers, which is what `AskSuggestions` falls
-    /// back to anyway.
+    /// Waits for the index build it just started, because otherwise it never
+    /// sees one: `prepare` is deliberately fire-and-forget, so asking straight
+    /// after it always found an unbuilt index and always returned the generic
+    /// pair — the chip naming the book's own most-mentioned character could
+    /// only ever appear on a *second* visit to the sheet. The caller draws the
+    /// generic pair meanwhile and replaces it when this answers, which is the
+    /// right way round: two capsules immediately, better ones a second later.
     func suggestions(for model: ReaderModel) async -> [String] {
         guard let source = model.askSource(), let boundary = model.readingBoundary() else {
             return AskSuggestions.chips(topNames: [])
         }
+        await preparing[source.bookUUID]?.value
         return await preparer.suggestions(source: source, boundary: boundary)
     }
 
@@ -266,6 +271,13 @@ final class AskCoordinator {
     private func finished(_ job: AskJob) {
         if job.wasDismissedWhileWorking, job.state.isAnswered, let notifier {
             Task { await notifier.postAnswerReady(job: job) }
+        } else if notifier != nil {
+            // The other half of the notifier's own log line, so the two
+            // together say why nothing arrived. Never the question.
+            IssaLog.info("ask job finished quietly", [
+                "dismissed": String(job.wasDismissedWhileWorking),
+                "answered": String(job.state.isAnswered),
+            ])
         }
         releaseAssertionIfIdle()
     }
@@ -286,6 +298,11 @@ final class AskCoordinator {
         guard hasWorkingJob, assertion == nil else { return }
         let held = BackgroundAssertion()
         held.begin(name: "issa.askAnswer") { [weak self] in
+            // Assumed rather than hopped: UIKit documents the expiration
+            // handler as called synchronously on the main thread, and there are
+            // milliseconds left before the process is suspended — a hop would
+            // be scheduled and never run, leaving the job pulsing "Asking…"
+            // until the next launch.
             MainActor.assumeIsolated { self?.backgroundTimeExpired() }
         }
         assertion = held

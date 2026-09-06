@@ -377,7 +377,13 @@ public struct ReaderView: View {
         // Medium first so the page the question is about stays visible behind
         // it, growing only when an answer genuinely needs the room. The Mac
         // gets a popover instead, anchored on its toolbar button.
-        .sheet(isPresented: $showsAsk, onDismiss: { ask.sheetDismissed(bookUUID: model.book.uuid) }) {
+        .sheet(isPresented: $showsAsk, onDismiss: {
+            ask.sheetDismissed(bookUUID: model.book.uuid)
+            // Back to half height for the next question. Without this one long
+            // answer leaves every later sheet opening full-height over the page,
+            // which is the thing the medium detent exists to avoid.
+            askDetent = .medium
+        }) {
             AskSheet(model: model) { height in
                 // A little slack: the detent is about whether the answer fits,
                 // not about the last two points of a footer.

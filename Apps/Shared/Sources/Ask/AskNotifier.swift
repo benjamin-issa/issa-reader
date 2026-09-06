@@ -44,7 +44,13 @@ struct AskNotifier: Sendable {
     /// buzz in their hand while they watch it appear.
     @MainActor
     func postAnswerReady(job: AskJob) async {
-        guard !Self.isActive else { return }
+        guard !Self.isActive else {
+            // Logged rather than passed over in silence: "I closed the sheet
+            // and never heard anything" is the one complaint this feature will
+            // attract, and the answer is usually that the app was in front.
+            IssaLog.info("ask notification skipped", ["reason": "app active"])
+            return
+        }
         let content = UNMutableNotificationContent()
         content.title = "Your answer is ready"
         content.body = job.question
@@ -63,6 +69,7 @@ struct AskNotifier: Sendable {
         )
         do {
             try await centre().add(request)
+            IssaLog.info("ask notification posted")
         } catch {
             // Never the question, never the answer.
             IssaLog.error("ask notification failed", ["kind": String(describing: type(of: error))])
