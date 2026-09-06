@@ -75,9 +75,13 @@ struct IssaReaderMacApp: App {
                     app.nowPlayingController = nowPlaying
                 }
                 .tint(Palette.tangerine)
-                .frame(width: 320, height: 560)
+                // 640, not 560: the volume row is another 60 points under the
+                // transport, and the panel is `.contentSize`-resizable — so
+                // without the extra height the cover would be squeezed to make
+                // room rather than the window growing.
+                .frame(width: 320, height: 640)
         }
-        .defaultSize(width: 320, height: 560)
+        .defaultSize(width: 320, height: 640)
         .windowResizability(.contentSize)
         .defaultPosition(.topTrailing)
         .restorationBehavior(.disabled)
@@ -182,6 +186,16 @@ struct IssaCommands: Commands {
                 nowPlaying.coordinator?.player.rate = Float(settings.playbackRate)
             }
             .keyboardShortcut("[", modifiers: .command)
+
+            Divider()
+            // Posted rather than acted on here, unlike the rate above it: the
+            // rate is one setting for the whole app, but a level belongs to a
+            // book, and the menu has no idea which book the reader means. The
+            // key window does — and only one window is ever key.
+            Button("Louder for This Book") { ReaderCommand.volumeUp.post() }
+                .keyboardShortcut(.upArrow, modifiers: [.command, .option])
+            Button("Quieter for This Book") { ReaderCommand.volumeDown.post() }
+                .keyboardShortcut(.downArrow, modifiers: [.command, .option])
         }
     }
 

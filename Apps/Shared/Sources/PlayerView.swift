@@ -84,6 +84,13 @@ public struct PlayerView: View {
             scrubber
             transport
 
+            // Under the transport, above the rate: it belongs to this book the
+            // way the rate belongs to the reader. tvOS has no slider and no
+            // player sheet to put one in.
+            #if !os(tvOS)
+            VolumeTrimRow(book: book, coordinator: coordinator)
+            #endif
+
             HStack(spacing: Metrics.spacing24) {
                 rateControl
                 Spacer()

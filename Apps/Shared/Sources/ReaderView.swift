@@ -208,6 +208,9 @@ public struct ReaderView: View {
                 // onAppear could run the coordinator is already built — every
                 // fresh open narrated at 1× whatever rate the reader saved.
                 model.preferredRate = settings.playbackRate
+                // And this book's level, which open() fixes into the same
+                // coordinator.
+                model.preferredVolumeTrim = settings.volumeTrim(for: model.book.uuid)
                 switch model.phase {
                 case .loading, .downloading:
                     // Re-entering while downloading is safe and necessary: the
@@ -437,6 +440,15 @@ public struct ReaderView: View {
         case .player:
             guard model.hasNarration else { return }
             openWindow(id: "NowPlaying")
+        // Guarded on narration as well as on the key window, so ⌘⌥↑ over a
+        // plain ebook does not quietly store a level for a book that has
+        // nothing to play it at.
+        case .volumeUp, .volumeDown:
+            guard model.hasNarration else { return }
+            VolumeTrimControl.nudge(
+                by: command == .volumeUp ? VolumeTrim.step : -VolumeTrim.step,
+                for: model.book, coordinator: model.readalong, settings: settings,
+            )
         }
     }
     #endif
@@ -743,6 +755,12 @@ public struct ReaderView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: ReaderCommand.player.notification)) { _ in
             if isActiveScene { perform(.player) }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: ReaderCommand.volumeUp.notification)) { _ in
+            if isActiveScene { perform(.volumeUp) }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: ReaderCommand.volumeDown.notification)) { _ in
+            if isActiveScene { perform(.volumeDown) }
         }
         #endif
         // A re-resolve, not an assignment: `model.style = settings.readerStyle`
