@@ -89,6 +89,43 @@ struct SearchBookToolTests {
         #expect(try await tool.call(arguments: .init(query: "zxqwv")) == SearchBookTool.noMatches)
     }
 
+    @Test("the tool searches the way the first pass did, subject and all")
+    func usesTheSameRetrieval() async throws {
+        let (store, _, directory) = try await AskFixture.preparedStore()
+        defer { AskFixture.remove(directory) }
+        let tool = SearchBookTool(
+            store: store, boundary: try AskFixture.endOf(spine: AskFixture.Spine.chapterVI),
+        )
+        await tool.beginGeneration(numberingFrom: 7)
+
+        // The tool used to call `QueryTerms.extract` with no known names at
+        // all, and with no subject required — so a follow-up search for
+        // "Alice's cat" came back with paragraphs about cats, or about Alice,
+        // whichever bm25 liked best.
+        let result = try await tool.call(arguments: .init(query: "Alice's cat"))
+        try #require(result != SearchBookTool.noMatches)
+        for excerpt in result.components(separatedBy: "\n\n") {
+            #expect(excerpt.lowercased().contains("alice"))
+            #expect(excerpt.lowercased().contains("cat"))
+        }
+    }
+
+    @Test("the tool may not answer the question itself")
+    func neverAnswersOutright() async throws {
+        let (store, _, directory) = try await AskFixture.preparedStore()
+        defer { AskFixture.remove(directory) }
+        let tool = SearchBookTool(
+            store: store, boundary: try AskFixture.endOf(spine: AskFixture.Spine.chapterI),
+        )
+        await tool.beginGeneration(numberingFrom: 7)
+
+        // The model has already been called by the time this runs, and handing
+        // it a finished sentence in place of excerpts is not a search result.
+        let result = try await tool.call(arguments: .init(query: "Who is Alice's sister?"))
+        #expect(result.hasPrefix("[7] (Section ") || result == SearchBookTool.noMatches)
+        #expect(!result.hasPrefix("Alice's sister is"))
+    }
+
     @Test("what comes back fits in roughly three hundred tokens")
     func capsItsOutput() {
         // The answer still has to fit in the window beside the excerpts that

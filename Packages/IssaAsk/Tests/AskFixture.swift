@@ -92,6 +92,61 @@ enum AskFixture {
         return (store, source, directory)
     }
 
+    // MARK: - An index the test wrote
+
+    /// A store whose index holds text the test chose, and a source whose
+    /// fingerprint matches it so nothing rebuilds over the top.
+    ///
+    /// The kinship fast path has to be driven by sentences that do not occur in
+    /// *Alice* — nobody in it has a named brother — and writing an EPUB to hold
+    /// four sentences would be testing the EPUB writer. The rows go in through
+    /// the store's own writer, so the passages, offsets and name table are the
+    /// ones a real build would have produced.
+    ///
+    /// - Returns: the store, a source that reports the index as current, the
+    ///   boundary at the end of the last chapter, and the directory to delete.
+    static func syntheticStore(
+        chapters: [[String]],
+    ) throws -> (AskIndexStore, BookSource, ReadingBoundary, URL) {
+        let directory = try temporaryDirectory()
+        let fingerprint = directory.appending(path: "book.epub")
+        try Data("synthetic".utf8).write(to: fingerprint)
+        let source = try source(fingerprintedAt: fingerprint)
+
+        let url = AskIndexStore.indexURL(in: directory, bookUUID: bookUUID)
+        let queue = try AskIndexStore.openQueue(at: url)
+        try AskIndexStore.migrator.migrate(queue)
+        var lastLength = 0
+        try queue.write { db in
+            for (spine, paragraphs) in chapters.enumerated() {
+                let text = paragraphs.joined(separator: "\n")
+                lastLength = (text as NSString).length
+                try AskIndexStore.insert(
+                    AskIndexStore.ParsedChapter(
+                        spineIndex: spine,
+                        href: "synthetic-\(spine).xhtml",
+                        length: lastLength,
+                        passages: PassageChunker.chunk(text: text, spineIndex: spine),
+                        names: NameFinder.names(in: text, spineIndex: spine),
+                    ),
+                    into: db,
+                )
+            }
+            try db.execute(
+                sql: "INSERT OR REPLACE INTO meta(key, value) VALUES ('indexKey', ?)",
+                arguments: [source.indexKey.storedValue],
+            )
+        }
+        try queue.close()
+
+        return (
+            AskIndexStore(directory: directory),
+            source,
+            ReadingBoundary(spineIndex: max(0, chapters.count - 1), charOffset: lastLength),
+            directory
+        )
+    }
+
     // MARK: - Reading the index back
 
     /// Every passage the store wrote for one chapter, in order.

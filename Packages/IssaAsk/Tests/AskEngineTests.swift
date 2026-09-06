@@ -341,6 +341,99 @@ struct AskEngineTests {
         #expect(found == ["bilbo", "duchess"])
     }
 
+    // MARK: - The kinship fast path
+
+    /// The sentences the measured failure turned on, in a book of four
+    /// paragraphs rather than three hundred thousand words.
+    static let kinshipChapter = [
+        "Vin had grown up on the streets of Luthadel, in the ash and the mist, and she had "
+            + "learned very early that a girl who trusted anybody at all did not last long there.",
+        "Her brother, Reen, had trained her to trust nobody, and then he had left her alone in "
+            + "that city without so much as a word of warning about what was coming for them.",
+        "The crew met in the shop behind the market, where the windows were shuttered against "
+            + "the ash and somebody had left a lamp burning on the counter all night long.",
+        "She thought about the mists a great deal in those days, and about the way the ash fell "
+            + "on the city every evening without ever once seeming to bury it completely.",
+    ]
+
+    @Test("a relationship the book states is answered without calling the model")
+    func kinshipFastPathAnswersOutright() async throws {
+        let (store, source, boundary, directory) = try AskFixture.syntheticStore(
+            chapters: [Self.kinshipChapter],
+        )
+        defer { AskFixture.remove(directory) }
+        let model = ScriptedAnswerModel()
+        let engine = AskEngine(model: model, store: store)
+
+        // The question that answered "Quellion" on the real book.
+        let (events, failure) = await Self.drain(engine.ask(
+            question: "What is the name of Vin's brother?", source: source, boundary: boundary,
+        ))
+        #expect(failure == nil)
+        let answer = try #require(Self.answer(events))
+        #expect(answer.text == "Vin's brother is Reen.")
+        #expect(!answer.notYetRevealed)
+        #expect(!answer.citations.isEmpty)
+        // Nothing to think about, so nothing to wait for: no model call, and no
+        // `.thinking` phase promising one.
+        #expect(await model.received.isEmpty)
+        #expect(!events.contains(.phase(.thinking)))
+        #expect(events.contains(.phase(.retrieving)))
+    }
+
+    @Test("two candidate names go to the model, with both sentences in front of it")
+    func twoNamesFallThroughToTheModel() async throws {
+        var chapter = Self.kinshipChapter
+        chapter.append(
+            "Vin's brother, Kelsier, had said much the same thing to her once, in the same "
+                + "flat voice, on an evening when the ash was falling thickly over the market.",
+        )
+        let (store, source, boundary, directory) = try AskFixture.syntheticStore(
+            chapters: [chapter],
+        )
+        defer { AskFixture.remove(directory) }
+        let model = ScriptedAnswerModel()
+        let engine = AskEngine(model: model, store: store)
+
+        _ = await Self.drain(engine.ask(
+            question: "Who is Vin's brother?", source: source, boundary: boundary,
+        ))
+        // Two brothers, or a pattern that matched something it should not have.
+        // Either way the model reads it, with both sentences in the prompt.
+        let sent = try #require(await model.received.first)
+        #expect(sent.prompt.contains("Reen"))
+        #expect(sent.prompt.contains("Kelsier"))
+    }
+
+    // MARK: - Evidence in the prompt
+
+    @Test("an identity question sends sentences, not paragraphs, and no more than twelve")
+    func identityPromptIsSentenceSized() async throws {
+        let (store, source, directory) = try await AskFixture.preparedStore()
+        defer { AskFixture.remove(directory) }
+        let model = ScriptedAnswerModel()
+        let engine = AskEngine(model: model, store: store)
+
+        _ = await Self.drain(engine.ask(
+            question: "Who is Alice?", source: source,
+            boundary: try AskFixture.endOf(spine: AskFixture.Spine.chapterVI),
+        ))
+        let sent = try #require(await model.received.first)
+        let excerpts = sent.prompt.components(separatedBy: "] (Section ").count - 1
+        #expect(excerpts > 0)
+        #expect(excerpts <= EvidenceFinder.Limits.identityExcerpts)
+        // Sentence windows rather than six whole paragraphs: the measured
+        // prompt on the real book was 45% smaller for the same question.
+        #expect(sent.prompt.count < 6_000)
+    }
+
+    @Test("the instructions say what to do with a passing mention")
+    func instructionsCoverPassingMentions() {
+        // "Who is Vin?" was answered with a biography stitched out of the nouns
+        // standing near her name. Retrieval is the fix; this is the belt.
+        #expect(AskPromptBuilder.instructions.contains("only mention a person in passing"))
+    }
+
     // MARK: - One at a time
 
     @Test("two questions asked at once are answered one after the other")

@@ -36,7 +36,12 @@ public enum KinshipExtractor {
         let patterns = Patterns(subject: subject)
         var found: [Match] = []
         var seen = Set<String>()
-        for (index, piece) in evidence.enumerated() {
+        // Kinship sentences only. A kinship question that found too little is
+        // topped up with whole passages, and running a pattern table over a
+        // paragraph finds every name standing near a family word — which is
+        // two candidates, which declines, which throws away the answer the
+        // book actually stated.
+        for (index, piece) in evidence.enumerated() where piece.role == .kinship {
             for name in names(
                 subject: subject, relation: relation, patterns: patterns,
                 sentence: piece.sentenceText, preceding: piece.precedingText,
@@ -241,14 +246,20 @@ public enum KinshipExtractor {
     ) -> Bool {
         guard let preceding else { return false }
         guard patterns.mentions(EvidenceFinder.fold(preceding)) else { return false }
-        let words = Words.split(preceding)
-        for (index, word) in words.enumerated() where index > 0 {
-            guard word.isCapitalised, !subject.tokens.contains(word.token) else { continue }
-            guard word.display.filter(\.isLetter).count >= 2 else { continue }
-            guard !QueryTerms.stopWords.contains(word.token),
-                  !QueryTerms.capitalisedNonNames.contains(word.token),
-                  !NameFinder.honorifics.contains(word.token) else { continue }
+        // A competing *person*, not a competing capital. "Vin had grown up on
+        // the streets of Luthadel" has one person in it and one place, and a
+        // rule that counted capitals would decline every sentence that
+        // mentioned where it happened — which is most of them.
+        for found in NameFinder.names(in: preceding, spineIndex: 0) {
+            let tokens = QueryTerms.tokens(in: found.name).map(QueryTerms.strippingPossessive)
+            guard !tokens.allSatisfy({ subject.tokens.contains($0) }) else { continue }
             return false
+        }
+        // …and the book's own table besides, because the tagger tags none of
+        // the invented names, which are the ones readers ask about.
+        for word in Words.split(preceding)
+            where word.isCapitalised && !subject.tokens.contains(word.token) {
+            if knownNames.contains(word.token) { return false }
         }
         return true
     }

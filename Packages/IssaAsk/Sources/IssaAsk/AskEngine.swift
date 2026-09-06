@@ -139,8 +139,13 @@ public actor AskEngine {
 
         try Task.checkCancellation()
         continuation.yield(.phase(.retrieving))
-        let (ranked, unmet) = try await retrieve(question: question, boundary: boundary)
+        let retriever = AskRetriever(
+            store: store, boundary: boundary, allowsFastPath: Self.usesKinshipFastPath,
+        )
+        let retrieval = try await retriever.retrieve(question: question)
+        let sanitised = QueryTerms.sanitise(question)
 
+        switch retrieval {
         // Two ways the answer is "not yet", and both are settled here rather
         // than by the model. Nothing retrieved at all is the obvious one. The
         // other is a question naming somebody the book has not introduced:
@@ -149,26 +154,42 @@ public actor AskEngine {
         // end of Chapter I, handed excerpts containing no cat but Dinah —
         // answered from memory, ten chapters ahead of the reader. Instructions
         // that forbade it twice did not stop it; this does.
-        if ranked.isEmpty || !unmet.isEmpty {
+        case let .notYet(unmet):
             IssaLog.info("ask answered as not yet revealed", ["unmet": String(unmet.count)])
             continuation.yield(.answered(AskAnswer(
                 text: AskAnswerParser.notYetSentinel, citations: [], notYetRevealed: true,
             )))
-            return
+
+        // The book states the answer in so many words, so there is nothing to
+        // think about and no `.thinking` phase to show. It is still vetted:
+        // the sentence was assembled from the book, but the guard is cheap and
+        // an unvetted path is a path somebody will later route around.
+        case let .answered(answer, _):
+            continuation.yield(.answered(
+                try await vetted(answer, question: sanitised, boundary: boundary),
+            ))
+
+        case let .evidence(ranked, _):
+            try Task.checkCancellation()
+            continuation.yield(.phase(.thinking))
+            let generated = try await generate(
+                question: sanitised, ranked: ranked, into: continuation,
+            )
+            try Task.checkCancellation()
+            continuation.yield(.answered(
+                try await vetted(generated, question: sanitised, boundary: boundary),
+            ))
         }
-
-        try Task.checkCancellation()
-        continuation.yield(.phase(.thinking))
-        let sanitised = QueryTerms.sanitise(question)
-        let generated = try await generate(
-            question: sanitised, ranked: ranked, into: continuation,
-        )
-
-        try Task.checkCancellation()
-        continuation.yield(.answered(
-            try await vetted(generated, question: sanitised, boundary: boundary),
-        ))
     }
+
+    /// Whether "Who is X's brother?" may be answered from the book's own
+    /// sentence without a model call.
+    ///
+    /// A constant rather than a constructor argument because it is a kill
+    /// switch, not a choice: if the table ever answers something it should have
+    /// declined, this is the one line that turns it off, and every question
+    /// goes back to the model with the same sentences in front of it.
+    static let usesKinshipFastPath = true
 
     // MARK: - Vetting the answer
 
@@ -245,43 +266,6 @@ public actor AskEngine {
     static let sentenceEnders: Set<Character> = [".", "!", "?", ":", ";"]
     /// Quotation marks and brackets, which sit outside the full stop.
     static let closingMarks = CharacterSet(charactersIn: "\"'”’)]}»›")
-
-    // MARK: - Retrieval
-
-    /// The passages the model will see, and the words in the question the book
-    /// has not used yet.
-    private func retrieve(
-        question: String, boundary: ReadingBoundary,
-    ) async throws -> (ranked: [PassageRanker.Ranked], unmet: [String]) {
-        // The book's own names, bounded by the position, so an invented one the
-        // general-purpose tagger misses ("Cheshire") is still recognised as a
-        // name — and a character not yet met is still not.
-        let known = (try? await store.topNames(before: boundary, limit: Self.knownNameLimit)) ?? []
-        let terms = QueryTerms.extract(from: question, knownNames: known)
-
-        // A recap names nobody in particular, so it has nothing to be unmet.
-        guard !terms.isRecap else {
-            let recap = try await store.recapPassages(before: boundary, limit: Self.recapLimit)
-            // Already the passages it wants, in order; ranking them by a query
-            // with no terms in it would only shuffle them.
-            return (recap.map { PassageRanker.Ranked(retrieved: $0, score: 0) }, [])
-        }
-
-        let unmet = try await store.unmetWords(terms.nameCandidates, before: boundary)
-        // The retrieval is skipped when the answer is already known to be "not
-        // yet": it would only cost a query whose results are thrown away.
-        guard unmet.isEmpty else { return ([], unmet) }
-
-        let candidates = try await store.retrieve(terms: terms, before: boundary)
-        return (PassageRanker.rank(candidates, terms: terms, limit: Self.passageLimit), [])
-    }
-
-    /// How many of the book's names are consulted when reading a question.
-    /// Generous: it costs one indexed query, and a name the list misses is a
-    /// question that silently retrieves the wrong paragraphs.
-    static let knownNameLimit = 200
-    static let passageLimit = 6
-    static let recapLimit = 6
 
     // MARK: - Generation
 

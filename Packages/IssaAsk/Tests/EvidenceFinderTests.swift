@@ -122,4 +122,104 @@ struct EvidenceFinderTests {
         )
         #expect(evidence.count == 1)
     }
+
+    // MARK: - Against the real book
+
+    /// Retrieval as the retriever runs it, so the tests are about the sentences
+    /// rather than about the query.
+    static func evidence(
+        for question: String, spine: Int,
+    ) async throws -> ([Evidence], AskIndexStore, URL) {
+        let (store, _, directory) = try await AskFixture.preparedStore()
+        let boundary = try AskFixture.endOf(spine: spine)
+        let known = try await store.topNames(before: boundary, limit: 200)
+        let retriever = AskRetriever(store: store, boundary: boundary)
+        let terms = QueryTerms.extract(from: question, knownNames: known)
+        return (try await retriever.evidence(for: terms), store, directory)
+    }
+
+    @Test("who the White Rabbit is comes back as the sentences that say so")
+    func findsTheWhiteRabbit() async throws {
+        let (evidence, _, directory) = try await Self.evidence(
+            for: "Who is the White Rabbit?", spine: AskFixture.Spine.chapterI,
+        )
+        defer { AskFixture.remove(directory) }
+        try #require(!evidence.isEmpty)
+        let text = evidence.map(\.excerpt.text).joined(separator: " ").lowercased()
+        // The two things Chapter I actually says about him.
+        #expect(text.contains("waistcoat"))
+        #expect(text.contains("watch"))
+        #expect(text.contains("pink eyes"))
+    }
+
+    @Test("an evidence excerpt is still a place in the book")
+    func excerptsKeepRealOffsets() async throws {
+        let (evidence, _, directory) = try await Self.evidence(
+            for: "Who is the Duchess?", spine: AskFixture.Spine.chapterVI,
+        )
+        defer { AskFixture.remove(directory) }
+        try #require(!evidence.isEmpty)
+
+        for piece in evidence {
+            // Compared against a *fresh* parse, not against the index's memory
+            // of one: the whole spoiler defence is that these offsets and the
+            // reader's are measured against the same string.
+            let fresh = try AskFixture.text(spine: piece.excerpt.spineIndex) as NSString
+            #expect(piece.excerpt.end <= fresh.length)
+            #expect(fresh.substring(with: piece.excerpt.range) == piece.excerpt.text)
+        }
+    }
+
+    @Test("the evidence is bounded, ordered and capped")
+    func evidenceIsBoundedAndCapped() async throws {
+        let boundary = try AskFixture.endOf(spine: AskFixture.Spine.chapterVI)
+        let (evidence, _, directory) = try await Self.evidence(
+            for: "Who is Alice?", spine: AskFixture.Spine.chapterVI,
+        )
+        defer { AskFixture.remove(directory) }
+        try #require(!evidence.isEmpty)
+
+        #expect(evidence.count <= EvidenceFinder.Limits.identityExcerpts)
+        #expect(evidence.allSatisfy { $0.excerpt.spineIndex <= boundary.spineIndex })
+        #expect(evidence.allSatisfy {
+            $0.excerpt.spineIndex < boundary.spineIndex || $0.excerpt.end <= boundary.charOffset
+        })
+        let order = evidence.map { ($0.excerpt.spineIndex, $0.excerpt.start) }
+        #expect(order.elementsEqual(order.sorted { $0 < $1 }, by: ==))
+    }
+
+    @Test("an unnamed relative comes back as the sentence that mentions her")
+    func findsTheUnnamedSister() async throws {
+        let (evidence, _, directory) = try await Self.evidence(
+            for: "Who is Alice's sister?", spine: AskFixture.Spine.chapterI,
+        )
+        defer { AskFixture.remove(directory) }
+        try #require(!evidence.isEmpty)
+        let text = evidence.map(\.excerpt.text).joined(separator: " ").lowercased()
+        #expect(text.contains("sister"))
+        // The book never names her, so nothing here may look like a name for
+        // her — this is the case the deterministic extractor must decline.
+        #expect(KinshipExtractor.names(
+            subject: Self.subject("Alice", tokens: ["alice"]),
+            relation: KinRelation.matching("sister"),
+            in: evidence,
+        ).isEmpty)
+    }
+
+    @Test("the whole scan of a chapter is quick enough to run per question")
+    func scanIsFastEnough() async throws {
+        let (store, _, directory) = try await AskFixture.preparedStore()
+        defer { AskFixture.remove(directory) }
+        let boundary = try AskFixture.endOf(spine: AskFixture.Spine.chapterVI)
+        let retriever = AskRetriever(store: store, boundary: boundary)
+        let terms = QueryTerms.extract(from: "Who is Alice?", knownNames: ["Alice"])
+
+        let start = ContinuousClock.now
+        for _ in 0 ..< 5 { _ = try await retriever.evidence(for: terms) }
+        let each = (ContinuousClock.now - start) / 5
+        // Four indexed queries and a bounded scan. Generous by a wide margin:
+        // it is here to catch a regex compiled per sentence, not to police
+        // milliseconds.
+        #expect(each < .milliseconds(250), "\(each)")
+    }
 }

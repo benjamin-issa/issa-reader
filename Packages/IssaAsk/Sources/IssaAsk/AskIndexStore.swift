@@ -227,7 +227,7 @@ public actor AskIndexStore {
         }
     }
 
-    private static func insert(_ chapter: ParsedChapter, into db: Database) throws {
+    static func insert(_ chapter: ParsedChapter, into db: Database) throws {
         try db.execute(
             sql: "INSERT OR REPLACE INTO chapter(spineIndex, href, length) VALUES (?, ?, ?)",
             arguments: [chapter.spineIndex, chapter.href, chapter.length],
