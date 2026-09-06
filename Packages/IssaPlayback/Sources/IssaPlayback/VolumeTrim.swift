@@ -10,19 +10,27 @@ import Foundation
 /// `PlaybackRate` exists to close for speed.
 ///
 /// Percentages rather than decibels: the control is a slider a reader nudges by
-/// ear, and ±30% is a change they can hear without being a change that ruins the
-/// recording. The gain that carries it is ±0.3 around unity, so 0 costs nothing
-/// at all — the tap short-circuits at exactly 1.
+/// ear. The gain that carries it is ±0.5 around unity, so 0 costs nothing at all
+/// — the tap short-circuits at exactly 1.
+///
+/// ±50%, not the ±30% this shipped at. Thirty percent is roughly two and a half
+/// decibels, which is plenty to even out two commercial audiobooks and nowhere
+/// near enough for the quietest files in a self-hosted library: a reader who ran
+/// the slider to its end and still had to reach for the hardware volume was
+/// being offered a control that could not do the job it exists for. Upwards it
+/// costs headroom — a book already mastered near full scale hard-clips, which
+/// `GainTap` limits rather than wraps — and that is a trade the reader makes
+/// deliberately, one detent at a time, hearing each one.
 public enum VolumeTrim {
     /// The legal percentages, either side of the recorded level.
-    public static let range: ClosedRange<Int> = -30 ... 30
+    public static let range: ClosedRange<Int> = -50 ... 50
     /// The detent spacing. Five percent is about the smallest step that is
     /// audible on speech, so a finer slider would only offer values that feel
     /// like nothing happened.
     public static let step = 5
     /// The multipliers `range` maps onto, named so a caller clamping a raw
     /// float does not have to rederive them.
-    public static let gainRange: ClosedRange<Float> = 0.7 ... 1.3
+    public static let gainRange: ClosedRange<Float> = 0.5 ... 1.5
 
     /// The nearest legal percentage.
     ///
@@ -35,7 +43,7 @@ public enum VolumeTrim {
         return Swift.min(Swift.max(snapped, range.lowerBound), range.upperBound)
     }
 
-    /// The multiplier a percentage stands for: 0 → 1, +30 → 1.3, −30 → 0.7.
+    /// The multiplier a percentage stands for: 0 → 1, +50 → 1.5, −50 → 0.5.
     public static func gain(_ percent: Int) -> Float {
         1 + Float(clamped(percent)) / 100
     }

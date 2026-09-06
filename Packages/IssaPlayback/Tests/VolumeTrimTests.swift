@@ -11,15 +11,14 @@ import Testing
 @Suite("Trimming a book's volume")
 struct VolumeTrimTests {
     /// Snapped first, then clamped — and the order is only visible just outside
-    /// the range, where the two disagree. 33 snaps up to 35, which is not a
+    /// the range, where the two disagree. 53 snaps up to 55, which is not a
     /// level this app offers, so it lands on the end of the range rather than
-    /// three percent past it. (The plan's table wanted 35 there, which cannot
-    /// hold alongside its own 100 → 30 and −45 → −30: a range with a ceiling has
-    /// one for every value.)
+    /// five percent past it. 33 → 35 is the same arithmetic with nothing to
+    /// clamp: since the range grew to ±50 it is an ordinary detent.
     @Test("a percentage is snapped to the nearest step and then clamped", arguments: [
         (23, 25), (22, 20), (21, 20), (-23, -25),
-        (33, 30), (-33, -30), (-45, -30), (100, 30), (0, 0),
-        (30, 30), (-30, -30), (5, 5), (-2, 0),
+        (33, 35), (-33, -35), (-45, -45), (100, 50), (0, 0),
+        (53, 50), (-53, -50), (50, 50), (-50, -50), (5, 5), (-2, 0),
     ])
     func stepping(input: Int, expected: Int) {
         #expect(VolumeTrim.clamped(input) == expected)
@@ -28,13 +27,13 @@ struct VolumeTrimTests {
     @Test("the ends of the range are the ends of the gain range")
     func gains() {
         #expect(VolumeTrim.gain(0) == 1)
-        #expect(VolumeTrim.gain(30) == 1.3)
-        #expect(VolumeTrim.gain(-30) == 0.7)
-        #expect(VolumeTrim.gain(30) == VolumeTrim.gainRange.upperBound)
-        #expect(VolumeTrim.gain(-30) == VolumeTrim.gainRange.lowerBound)
+        #expect(VolumeTrim.gain(50) == 1.5)
+        #expect(VolumeTrim.gain(-50) == 0.5)
+        #expect(VolumeTrim.gain(50) == VolumeTrim.gainRange.upperBound)
+        #expect(VolumeTrim.gain(-50) == VolumeTrim.gainRange.lowerBound)
         // Out of range on the way in, in range on the way out: a nudge past the
         // end must not be allowed to leak a gain past the end.
-        #expect(VolumeTrim.gain(500) == 1.3)
+        #expect(VolumeTrim.gain(500) == 1.5)
     }
 
     /// A NaN reaching the tap would multiply every sample into nothing, with
@@ -44,8 +43,8 @@ struct VolumeTrimTests {
         #expect(VolumeTrim.clampedGain(.nan) == 1)
         #expect(VolumeTrim.clampedGain(.infinity) == 1)
         #expect(VolumeTrim.clampedGain(-.infinity) == 1)
-        #expect(VolumeTrim.clampedGain(9) == 1.3)
-        #expect(VolumeTrim.clampedGain(0) == 0.7)
+        #expect(VolumeTrim.clampedGain(9) == 1.5)
+        #expect(VolumeTrim.clampedGain(0) == 0.5)
         #expect(VolumeTrim.clampedGain(1.1) == 1.1)
     }
 
@@ -57,8 +56,8 @@ struct VolumeTrimTests {
         // monospaced-digit face. A hyphen would be shorter and lower.
         #expect(VolumeTrim.label(-15) == "\u{2212}15%")
         #expect(VolumeTrim.label(-15).contains("-") == false)
-        #expect(VolumeTrim.label(-30) == "\u{2212}30%")
-        #expect(VolumeTrim.label(30) == "+30%")
+        #expect(VolumeTrim.label(-50) == "\u{2212}50%")
+        #expect(VolumeTrim.label(50) == "+50%")
     }
 
     @Test("the spoken form says which way the sound moves")
@@ -66,6 +65,7 @@ struct VolumeTrimTests {
         #expect(VolumeTrim.spoken(0) == "as recorded")
         #expect(VolumeTrim.spoken(15) == "15 percent louder")
         #expect(VolumeTrim.spoken(-10) == "10 percent quieter")
-        #expect(VolumeTrim.spoken(-30) == "30 percent quieter")
+        #expect(VolumeTrim.spoken(-50) == "50 percent quieter")
+        #expect(VolumeTrim.spoken(50) == "50 percent louder")
     }
 }

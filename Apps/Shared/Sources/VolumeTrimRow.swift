@@ -106,12 +106,15 @@ struct VolumeTrimRow: View {
             // about which way the sound moves.
             .accessibilityValue(VolumeTrim.spoken(trim))
 
+            // Both ends read off the range rather than typed out, so widening
+            // it cannot leave the slider going one place and its own ticks
+            // still promising another.
             HStack {
-                Text("\u{2212}30%")
+                Text(VolumeTrim.label(VolumeTrim.range.lowerBound))
                 Spacer()
                 Text("as recorded")
                 Spacer()
-                Text("+30%")
+                Text(VolumeTrim.label(VolumeTrim.range.upperBound))
             }
             .font(Typography.caption)
             .foregroundStyle(Palette.inkTertiary)

@@ -35,11 +35,14 @@ struct VolumeTrimPersistenceTests {
         let suite = "test.\(UUID().uuidString)"
         defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
         let settings = PlaybackSettings(suiteName: suite)
-        // 33 snaps up to 35, which is past the +30 end of the range, so it
-        // lands on the end. (The plan's table wanted 35 stored here, which
-        // cannot hold alongside a range that has a ceiling at all.)
+        // 53 snaps up to 55, which is past the +50 end of the range, so it
+        // lands on the end rather than five percent past it.
+        settings.setVolumeTrim(53, for: "book")
+        #expect(settings.volumeTrim(for: "book") == 50)
+        // 33 → 35 is the same snap with nothing to clamp: an ordinary detent
+        // since the range grew.
         settings.setVolumeTrim(33, for: "book")
-        #expect(settings.volumeTrim(for: "book") == 30)
+        #expect(settings.volumeTrim(for: "book") == 35)
         settings.setVolumeTrim(23, for: "book")
         #expect(settings.volumeTrim(for: "book") == 25)
         #expect(PlaybackSettings(suiteName: suite).volumeTrim(for: "book") == 25,

@@ -10,21 +10,21 @@ struct GainKernelTests {
     @Test("above unity a sample near full scale is clipped, not wrapped")
     func clipsRatherThanWrapping() {
         var samples: [Float] = [0.9, -0.9, 0.5, -0.5, 0]
-        samples.withUnsafeMutableBufferPointer { GainTap.apply(gain: 1.3, to: $0) }
-        #expect(samples[0] == 1.0, "0.9 × 1.3 is 1.17, which has to land on the ceiling")
+        samples.withUnsafeMutableBufferPointer { GainTap.apply(gain: 1.5, to: $0) }
+        #expect(samples[0] == 1.0, "0.9 × 1.5 is 1.35, which has to land on the ceiling")
         #expect(samples[1] == -1.0)
-        #expect(abs(samples[2] - 0.65) < 1e-6)
-        #expect(abs(samples[3] + 0.65) < 1e-6)
+        #expect(abs(samples[2] - 0.75) < 1e-6)
+        #expect(abs(samples[3] + 0.75) < 1e-6)
         #expect(samples[4] == 0)
     }
 
     @Test("below unity every sample scales and nothing meets the ceiling")
     func scalesDown() {
         var samples: [Float] = [1.0, -1.0, 0.5, 0]
-        samples.withUnsafeMutableBufferPointer { GainTap.apply(gain: 0.7, to: $0) }
-        #expect(abs(samples[0] - 0.7) < 1e-6)
-        #expect(abs(samples[1] + 0.7) < 1e-6)
-        #expect(abs(samples[2] - 0.35) < 1e-6)
+        samples.withUnsafeMutableBufferPointer { GainTap.apply(gain: 0.5, to: $0) }
+        #expect(abs(samples[0] - 0.5) < 1e-6)
+        #expect(abs(samples[1] + 0.5) < 1e-6)
+        #expect(abs(samples[2] - 0.25) < 1e-6)
         #expect(samples[3] == 0)
     }
 
@@ -43,11 +43,11 @@ struct GainKernelTests {
     @Test("an empty buffer, and a null one, are both no-ops")
     func emptyBuffer() {
         var samples: [Float] = []
-        samples.withUnsafeMutableBufferPointer { GainTap.apply(gain: 1.3, to: $0) }
+        samples.withUnsafeMutableBufferPointer { GainTap.apply(gain: 1.5, to: $0) }
         #expect(samples.isEmpty)
         // What an `AudioBufferList` can genuinely hold: a buffer with no data
         // pointer at all.
-        GainTap.apply(gain: 1.3, to: UnsafeMutableBufferPointer<Float>(start: nil, count: 0))
+        GainTap.apply(gain: 1.5, to: UnsafeMutableBufferPointer<Float>(start: nil, count: 0))
     }
 }
 
@@ -65,12 +65,12 @@ struct GainTapDecodeTests {
         let url = try Fixture.sine(amplitude: 0.5, in: directory)
 
         let tap = GainTap()
-        tap.gain.store(1.3, ordering: .relaxed)
+        tap.gain.store(1.5, ordering: .relaxed)
         let peak = try await Fixture.peak(of: url, through: tap)
 
         #expect(tap.processedFrames.load(ordering: .relaxed) > 0,
                 "the mix was never consulted, so the peak below means nothing")
-        #expect(abs(peak - 0.65) < 0.02, "0.5 × 1.3 should be 0.65, got \(peak)")
+        #expect(abs(peak - 0.75) < 0.02, "0.5 × 1.5 should be 0.75, got \(peak)")
     }
 
     @Test("and quieter the other way")
@@ -80,11 +80,11 @@ struct GainTapDecodeTests {
         let url = try Fixture.sine(amplitude: 0.5, in: directory)
 
         let tap = GainTap()
-        tap.gain.store(0.7, ordering: .relaxed)
+        tap.gain.store(0.5, ordering: .relaxed)
         let peak = try await Fixture.peak(of: url, through: tap)
 
         #expect(tap.processedFrames.load(ordering: .relaxed) > 0)
-        #expect(abs(peak - 0.35) < 0.02, "0.5 × 0.7 should be 0.35, got \(peak)")
+        #expect(abs(peak - 0.25) < 0.02, "0.5 × 0.5 should be 0.25, got \(peak)")
     }
 
     /// A book already mastered close to full scale is the one that most tempts
@@ -97,11 +97,11 @@ struct GainTapDecodeTests {
         let url = try Fixture.sine(amplitude: 0.9, in: directory)
 
         let tap = GainTap()
-        tap.gain.store(1.3, ordering: .relaxed)
+        tap.gain.store(1.5, ordering: .relaxed)
         let peak = try await Fixture.peak(of: url, through: tap)
 
         #expect(tap.processedFrames.load(ordering: .relaxed) > 0)
-        #expect(peak <= 1.0, "0.9 × 1.3 is 1.17 and must be limited, got \(peak)")
+        #expect(peak <= 1.0, "0.9 × 1.5 is 1.35 and must be limited, got \(peak)")
         #expect(peak > 0.99, "and it should be reaching the ceiling, not sitting under it")
     }
 
@@ -121,9 +121,9 @@ struct AudioPlayerGainTests {
     func clampsGain() {
         let player = AudioPlayer()
         player.gain = 2
-        #expect(player.gain == 1.3)
+        #expect(player.gain == 1.5)
         player.gain = 0.1
-        #expect(player.gain == 0.7)
+        #expect(player.gain == 0.5)
         player.gain = .nan
         #expect(player.gain == 1)
     }
@@ -140,7 +140,7 @@ struct AudioPlayerGainTests {
 
         // The gain is in the samples, so the player's own volume is left to the
         // sleep timer alone — at 1 until it fades.
-        player.gain = 1.3
+        player.gain = 1.5
         #expect(player.underlyingVolume == 1)
         player.volume = 0.5
         #expect(player.underlyingVolume == 0.5, "the fade must not be multiplied by the trim twice")
@@ -157,9 +157,9 @@ struct AudioPlayerGainTests {
         _ = await player.load(url: missing, href: "missing.wav")
         #expect(player.tapCarriesGain == false)
 
-        player.gain = 0.7
-        #expect(player.underlyingVolume == 0.7, "quieter is expressible without a tap")
-        player.gain = 1.3
+        player.gain = 0.5
+        #expect(player.underlyingVolume == 0.5, "quieter is expressible without a tap")
+        player.gain = 1.5
         #expect(player.underlyingVolume == 1, "louder is not, and must not be faked by clipping")
     }
 }
