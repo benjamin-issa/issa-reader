@@ -163,6 +163,31 @@ public extension Book {
         let names = authors.isEmpty ? narrators.map(\.name) : authors.map(\.name)
         return names.joined(separator: ", ")
     }
+
+    /// The subtitle worth putting on a screen, or nil when there is none.
+    ///
+    /// The server has always sent this and the app has always kept it —
+    /// `LibraryStore` flattens it into the search index, which is why typing
+    /// "afternoon" finds *Alice's Adventures in Wonderland* — but no screen has
+    /// ever drawn it. In the captured `web-v2.14.21` response one of the five
+    /// books carries one ("A Tale for a Summer Afternoon") and the other four
+    /// send `null`, so both cases are ordinary.
+    ///
+    /// Trimmed to nil here rather than checked with `!isEmpty` at the call
+    /// site, because the two differ on the case that shows: a subtitle of
+    /// `"   "` passes `!isEmpty`, and `Text("   ")` draws an invisible line
+    /// that still takes a row of height and its stack's 8pt gap with it — a
+    /// hole under the title with nothing in it. Metadata lifted out of an EPUB
+    /// carries whatever whitespace the packager left around it.
+    ///
+    /// Deliberately not compared against `title`. A catalogue that repeats the
+    /// title as the subtitle would show it twice, but this server does not, and
+    /// a rule with no bug behind it is a rule nobody can check.
+    var displaySubtitle: String? {
+        guard let subtitle else { return nil }
+        let trimmed = subtitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
 }
 
 public enum BookFormat: String, Codable, Hashable, Sendable, CaseIterable {
