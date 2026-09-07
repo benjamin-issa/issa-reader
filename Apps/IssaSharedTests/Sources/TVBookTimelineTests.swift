@@ -360,14 +360,51 @@ struct TVBookTimelineTests {
     }
 
     @Test("a duration reads the way a person says it")
-    func durationText() {
-        #expect(TVBookTimeline.durationText(0) == "0m")
-        #expect(TVBookTimeline.durationText(59) == "1m")
-        #expect(TVBookTimeline.durationText(11 * 60) == "11m")
-        #expect(TVBookTimeline.durationText(3600) == "1h 0m")
-        #expect(TVBookTimeline.durationText(4271) == "1h 11m")
+    func remainingText() {
+        #expect(TVBookTimeline.remainingText(0) == "0m")
+        // Rounded, not floored: fifty-nine seconds of a book left is a minute
+        // of it, and this is the one number on the screen that says how much
+        // book there is.
+        #expect(TVBookTimeline.remainingText(59) == "1m")
+        #expect(TVBookTimeline.remainingText(90) == "2m")
+        #expect(TVBookTimeline.remainingText(11 * 60) == "11m")
+        #expect(TVBookTimeline.remainingText(3600) == "1h 0m")
+        #expect(TVBookTimeline.remainingText(4271) == "1h 11m")
         // Not a crash and not "nan m".
-        #expect(TVBookTimeline.durationText(.nan) == "0m")
-        #expect(TVBookTimeline.durationText(-5) == "0m")
+        #expect(TVBookTimeline.remainingText(.nan) == "0m")
+        #expect(TVBookTimeline.remainingText(-5) == "0m")
+        #expect(TVBookTimeline.remainingText(.infinity) == "0m")
+        // The one the copy of this helper got wrong, and the reason it is gone:
+        // `totalDuration` comes off the wire, `1e300` is finite, and
+        // `Int((1e300 / 60).rounded())` traps rather than returning a number.
+        #expect(TVBookTimeline.remainingText(1e300) == "0m")
+    }
+
+    // MARK: - Drawing the marks
+
+    /// The ticks were clamped by their extent and the marker was not: `place`
+    /// was held to 0…1 and then used as a *centre*, so at progress 0 — where
+    /// every newly opened book starts — half of a twenty point disc was drawn
+    /// off the left of the strip, inside the television's overscan band.
+    @Test("a mark is drawn wholly inside the strip, wherever it belongs")
+    func marksAreClampedIntoTheStrip() {
+        let strip: CGFloat = 1_000
+        let disc: CGFloat = 20
+        // The newly opened book. Not -10.
+        #expect(TVBookTimeline.markOrigin(centredOn: 0, width: disc, in: strip) == 0)
+        // The finished one. The unclamped arithmetic put the disc at 990…1010,
+        // with its right half off the end of the strip.
+        #expect(TVBookTimeline.markOrigin(centredOn: strip, width: disc, in: strip) == 980)
+        // Anywhere the clamp is not needed, it does nothing.
+        #expect(TVBookTimeline.markOrigin(centredOn: 500, width: disc, in: strip) == 490)
+        #expect(TVBookTimeline.markOrigin(centredOn: 10, width: disc, in: strip) == 0)
+        // A hairline tick is clamped by the same arithmetic, which is where it
+        // came from.
+        #expect(TVBookTimeline.markOrigin(centredOn: 0, width: 1.5, in: strip) == 0)
+        #expect(TVBookTimeline.markOrigin(centredOn: strip, width: 1.5, in: strip) == 998.5)
+        // A strip narrower than the mark cannot happen on a television, but
+        // `strip - width` alone answers it with a negative origin — further
+        // outside than no clamp at all.
+        #expect(TVBookTimeline.markOrigin(centredOn: 5, width: disc, in: 10) == 0)
     }
 }

@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import IssaCore
 import IssaEPUB
@@ -302,6 +303,25 @@ enum TVBookTimeline {
         return found
     }
 
+    // MARK: - Drawing the marks
+
+    /// Where a mark of a given width starts, so that it is centred where it
+    /// belongs and still drawn wholly inside the strip.
+    ///
+    /// The chapter ticks were clamped like this and the marker was not: its
+    /// *place* was held to 0…1 and then used as a centre, so at progress 0 —
+    /// which is where every newly opened book starts — ten points of a twenty
+    /// point disc were drawn to the left of the strip, inside the television's
+    /// overscan band, where a good many sets simply do not show them.
+    ///
+    /// The strip being narrower than the mark is not a case the television can
+    /// reach, but answering it with a negative origin — which is what
+    /// `size.width - width` alone gives — would put the mark further outside
+    /// than leaving it unclamped, so the floor is stated rather than assumed.
+    static func markOrigin(centredOn centre: CGFloat, width: CGFloat, in strip: CGFloat) -> CGFloat {
+        min(max(centre - width / 2, 0), max(strip - width, 0))
+    }
+
     // MARK: - Saying it in words
 
     /// The footer's one line: "Chapter 12 of 17 · 34% · 1h 11m left".
@@ -320,22 +340,31 @@ enum TVBookTimeline {
         }
         parts.append(ReadingProgress.percentText(progress))
         if let remaining, remaining.isFinite, remaining > 0 {
-            parts.append("\(durationText(remaining)) left")
+            parts.append("\(remainingText(remaining)) left")
         }
         return parts.joined(separator: " · ")
     }
 
-    /// A rough length, the way a person says it: "1h 11m", or "11m" under
-    /// the hour. Never seconds — nobody across a room cares, and a number that
-    /// ticks every second draws the eye off the page.
+    /// What is left, the way a person says it: "1h 11m", or "11m" under the
+    /// hour. Never seconds — nobody across a room cares, and a number that ticks
+    /// every second draws the eye off the page.
     ///
-    /// Rounded to the nearest minute rather than truncated, which is what the
-    /// old readout did: fifty-nine seconds of a book left is "1m", not "0m".
-    static func durationText(_ seconds: TimeInterval) -> String {
-        guard seconds.isFinite, seconds > 0 else { return "0m" }
-        let whole = Int((seconds / 60).rounded())
-        let hours = whole / 60
-        let minutes = whole % 60
-        return hours > 0 ? "\(hours)h \(minutes)m" : "\(minutes)m"
+    /// The rounding is the television's own and the wording is not. This was a
+    /// fourth copy of an "\(hours)h \(minutes)m" that `IssaCore.DurationText`
+    /// already owns, and it copied the guard in the form that comment names as
+    /// insufficient: `isFinite` plus `Int(_:)`, when `1e300` is finite and
+    /// converting it traps. `coordinator.totalDuration` is server-supplied, so
+    /// that is a reachable crash and not a hypothetical one.
+    ///
+    /// What the copy did add is the rounding, and that is worth keeping:
+    /// `DurationText` floors, so fifty-nine seconds of a book left read as "0m"
+    /// — and this is the one number on the screen that says how much book there
+    /// is. Rounded here in whole seconds, deliberately, because
+    /// `(seconds / 60).rounded()` and then `Int(_:)` is the same trap under
+    /// another name.
+    static func remainingText(_ seconds: TimeInterval) -> String {
+        guard seconds > 0, let whole = seconds.wholeSeconds else { return "0m" }
+        let minutes = whole / 60 + (whole % 60 >= 30 ? 1 : 0)
+        return DurationText.text(Double(minutes) * 60)
     }
 }
