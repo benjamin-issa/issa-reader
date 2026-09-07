@@ -213,10 +213,9 @@ public actor AskEngine {
     /// the answer is held to the same test the question is: every name in it
     /// must be a name the book has already used.
     ///
-    /// Words that begin a sentence are exempt, because every sentence starts
-    /// with a capital and there is no way to tell "Alice went home" from "Rome
-    /// fell" without asking the tagger — and words already in the question are
-    /// exempt because the question-side guard has ruled on those.
+    /// Words already in the question are exempt, because the question-side
+    /// guard has ruled on those. A word that merely begins a sentence is exempt
+    /// only when it is a function word — see `unvettedNames`.
     private func vetted(
         _ answer: AskAnswer, question: String, bookUUID: String, boundary: ReadingBoundary,
     ) async throws -> AskAnswer {
@@ -234,14 +233,34 @@ public actor AskEngine {
         )
     }
 
-    /// Capitalised words in an answer that neither open a sentence nor appear in
-    /// the question.
+    /// Capitalised words in an answer that the question did not already ask
+    /// about and that a sentence did not have to capitalise.
     ///
     /// Deliberately the same crude test as `QueryTerms.nameCandidates`, and for
     /// the same reason: the names readers get spoiled by are invented ones no
     /// general-purpose tagger knows. Over-catching costs a "the story hasn't
     /// revealed that yet" for an answer that was fine; under-catching costs the
     /// one promise the feature makes.
+    ///
+    /// This once exempted **every** word that opened a sentence, on the true
+    /// premise that "Alice went home" and "Rome fell" cannot be told apart
+    /// without a tagger. The conclusion drawn from it was wrong. Every sentence
+    /// starts with a capital, so exempting them all exempted the spoiler:
+    /// `unvettedNames(in: "Kelsier dies. Vin escapes.", question: "What happens
+    /// next?")` returned `[]`, and both names went to the reader. So did
+    /// "Bilbo found the ring in the dark." — a headline spoiler is very often
+    /// the first word.
+    ///
+    /// The extractor does not need to be right, it needs to be generous, and
+    /// `AskIndexStore.unmetWords` arbitrates per book: over-catching is only
+    /// expensive when the over-caught word is absent from the part the reader
+    /// has read, and that is exactly the question the index answers.
+    ///
+    /// **Not `NLTagger`.** The only safe use of it here is as a positive
+    /// exemption — "the tagger says this is a place" — which opens a hole
+    /// precisely where place names are the spoiler: "Mordor lies to the east."
+    /// Using its silence to exempt is worse still, because invented names are
+    /// what it misses and invented names are what readers get spoiled by.
     static func unvettedNames(in answer: String, question: String) -> [String] {
         // Possessive-stripped on both sides, so "Reen's" in the answer is
         // checked against the index as `reen` — the word the book actually
@@ -256,14 +275,19 @@ public actor AskEngine {
             // Closing marks first: `said "Hello."` ends a sentence, and its
             // last character is a quotation mark.
             let closed = String(word).trimmingCharacters(in: Self.closingMarks)
-            let endsSentence = closed.last.map { Self.sentenceEnders.contains($0) } ?? false
+            let bare = String(word).trimmingCharacters(in: CharacterSet.letters.inverted)
+            let endsSentence = Self.endsSentence(closed, bare: bare)
             defer { opensSentence = endsSentence }
 
-            guard !opensSentence else { continue }
-            let bare = String(word).trimmingCharacters(in: CharacterSet.letters.inverted)
             guard let initial = bare.first, initial.isUppercase, bare.count > 2,
                   !QueryTerms.capitalisedNonNames.contains(bare.lowercased())
             else { continue }
+            // The exemption is conditional. A word that opens a sentence is
+            // exempt only when it is a closed-class function word, because
+            // those are the words a sentence capitalises for grammar rather
+            // than for a person. No special case for the first word of the
+            // answer: "Kelsier dies." puts the spoiler there.
+            if opensSentence, QueryTerms.sentenceOpeners.contains(bare.lowercased()) { continue }
             for token in QueryTerms.tokens(in: bare).map(QueryTerms.strippingPossessive)
                 where token.count > 2 && !asked.contains(token) {
                 candidates.insert(token)
@@ -272,7 +296,24 @@ public actor AskEngine {
         return candidates.sorted()
     }
 
-    static let sentenceEnders: Set<Character> = [".", "!", "?", ":", ";"]
+    /// Whether this word closes a sentence, so the next one opens one.
+    ///
+    /// An honorific does not, even though it ends in a full stop. "She met Mr.
+    /// Darcy at the ball." exempted Darcy outright: `Mr.` looked like the end
+    /// of a sentence, so every name after an honorific opened one. Reusing
+    /// `NameFinder.honorifics` keeps one list — the same one that stops "Mr.
+    /// Rabbit" and "Rabbit" being counted as two people. A sentence that
+    /// genuinely ends on an honorific loses the exemption for the word after
+    /// it, which is the conservative direction.
+    static func endsSentence(_ closed: String, bare: String) -> Bool {
+        guard let last = closed.last, sentenceEnders.contains(last) else { return false }
+        return !NameFinder.honorifics.contains(bare.lowercased())
+    }
+
+    /// No colon and no semicolon: both introduce a continuation rather than
+    /// close a sentence, and while they were here `The note said: Kelsier is
+    /// alive.` exempted the name the note was about.
+    static let sentenceEnders: Set<Character> = [".", "!", "?"]
     /// Quotation marks and brackets, which sit outside the full stop.
     static let closingMarks = CharacterSet(charactersIn: "\"'”’)]}»›")
 

@@ -442,17 +442,22 @@ public actor AskIndexStore {
         _ words: [String], before boundary: ReadingBoundary, in queue: DatabaseQueue,
     ) throws -> [String] {
         try queue.read { db in
-            try words.filter { word in
+            // One preparation, N probes. Prepared inside the filter, SQLite
+            // parsed and planned the same statement once per candidate — and
+            // the answer-side guard now offers it more candidates than it used
+            // to, because the sentence-opener exemption became conditional.
+            let statement = try db.cachedStatement(sql: """
+                SELECT 1
+                FROM passage
+                JOIN passage_fts ON passage_fts.rowid = passage.rowid
+                WHERE passage_fts MATCH :pattern
+                  AND (passage.spineIndex < :spine
+                       OR (passage.spineIndex = :spine AND passage.start < :offset))
+                LIMIT 1
+                """)
+            return try words.filter { word in
                 guard let pattern = FTS5Pattern(matchingAnyTokenIn: word) else { return false }
-                let found = try Int.fetchOne(db, sql: """
-                    SELECT 1
-                    FROM passage
-                    JOIN passage_fts ON passage_fts.rowid = passage.rowid
-                    WHERE passage_fts MATCH :pattern
-                      AND (passage.spineIndex < :spine
-                           OR (passage.spineIndex = :spine AND passage.start < :offset))
-                    LIMIT 1
-                    """, arguments: [
+                let found = try Int.fetchOne(statement, arguments: [
                     "pattern": pattern, "spine": boundary.spineIndex,
                     "offset": boundary.charOffset,
                 ])

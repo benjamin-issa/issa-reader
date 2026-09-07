@@ -192,6 +192,73 @@ public struct QueryTerms: Sendable, Hashable {
         return candidates.filter { $0.count > 2 }.sorted()
     }
 
+    /// Words a sentence capitalises for grammar rather than for a person.
+    ///
+    /// The contrast with `capitalisedNonNames` below is the whole design. That
+    /// list is exempt *everywhere* in an answer, so every word on it is a word
+    /// the book can never be caught spoiling, and it stays short. This one is
+    /// exempt only where a sentence had to capitalise the word anyway — the
+    /// first position — so it can afford to be long: a word here is still
+    /// checked in every other position it appears in.
+    ///
+    /// Closed-class only. Determiners, pronouns, auxiliaries, connectives and
+    /// the adverbs that open sentences; nothing that names or describes. That
+    /// is the test for admitting a word, and it is why these are **deliberately
+    /// absent**: `will`, `may`, `mark`, `grace`, `rose`, `hope`, `faith`,
+    /// `bill`, `frank`, `jack`, `art`, `dawn`, `june`, `pat`, `sue`, `victor`.
+    /// Every one is a name somebody has, and membership is an exemption for
+    /// ever — the cost of leaving them off is one wrong refusal that the reader
+    /// can rephrase past. (`march` and `june` are exempt everywhere through
+    /// `capitalisedNonNames`, which is a judgement made there, not here.)
+    ///
+    /// A word not on this list that opens a sentence is a candidate, and
+    /// `AskIndexStore.unmetWords` then decides it per book: over-catching only
+    /// costs anything when the over-caught word is absent from the part the
+    /// reader has read. "Rome" is in *Alice* Chapter II — "London is the capital
+    /// of Paris, and Paris is the capital of Rome" — so it is cleared from
+    /// there onwards and refused before it, which is exactly right.
+    static let sentenceOpeners: Set<String> = [
+        // Determiners and quantifiers.
+        "a", "an", "the", "this", "that", "these", "those", "each", "every",
+        "some", "any", "no", "all", "both", "either", "neither", "another",
+        "such", "much", "many", "few", "fewer", "several", "most", "more",
+        "less", "least", "enough", "other", "half",
+        // Pronouns.
+        "i", "you", "he", "she", "it", "we", "they", "me", "him", "us", "them",
+        "my", "your", "his", "her", "its", "our", "their", "mine", "yours",
+        "hers", "ours", "theirs", "myself", "yourself", "himself", "herself",
+        "itself", "ourselves", "themselves", "who", "whom", "whose", "which",
+        "what", "whatever", "whoever", "whichever", "someone", "somebody",
+        "something", "anyone", "anybody", "anything", "everyone", "everybody",
+        "everything", "nobody", "nothing", "none", "one", "ones",
+        // Auxiliaries and copulas.
+        "am", "is", "are", "was", "were", "being", "been", "be", "do", "does",
+        "did", "doing", "done", "have", "has", "had", "having", "can", "could",
+        "shall", "should", "would", "must", "might", "ought", "cannot",
+        // Connectives.
+        "and", "but", "or", "nor", "for", "yet", "so", "because", "since",
+        "although", "though", "while", "whilst", "whereas", "unless", "until",
+        "till", "if", "then", "than", "as", "when", "whenever", "where",
+        "wherever", "after", "before", "once", "whether", "however",
+        "therefore", "thus", "hence", "moreover", "furthermore",
+        "nevertheless", "nonetheless", "besides", "meanwhile", "otherwise",
+        "instead", "also",
+        // Prepositions and particles that open a clause.
+        "at", "by", "in", "on", "to", "of", "with", "without", "within",
+        "from", "into", "onto", "upon", "over", "under", "above", "below",
+        "through", "across", "along", "around", "behind", "beyond", "during",
+        "against", "between", "among", "beside", "toward", "towards", "off",
+        "out", "up", "down", "back", "away",
+        // Adverbs that open sentences.
+        "not", "never", "always", "often", "sometimes", "soon", "now", "later",
+        "again", "already", "almost", "nearly", "just", "only", "even",
+        "quite", "rather", "very", "really", "perhaps", "maybe", "probably",
+        "possibly", "certainly", "surely", "indeed", "actually", "finally",
+        "eventually", "suddenly", "immediately", "still", "here", "there",
+        "everywhere", "somewhere", "anywhere", "nowhere", "together", "yes",
+        "well", "why", "how", "let", "there's", "it's", "that's", "here's",
+    ]
+
     /// Words that are capitalised in ordinary prose without naming anybody.
     /// Short on purpose: a long list here is a long list of things a book can
     /// spoil.

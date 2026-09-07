@@ -173,4 +173,29 @@ struct QueryTermsTests {
         #expect(Set(terms.searchTokens).count == terms.searchTokens.count)
         #expect(terms.searchTokens.prefix(terms.terms.count) == ArraySlice(terms.terms))
     }
+
+    // MARK: - The sentence-opener list
+
+    /// Ordinary English words that are also names somebody has. Named in
+    /// `sentenceOpeners`' own doc comment as deliberately absent, and repeated
+    /// here so the two cannot drift: membership of that list is an exemption
+    /// for ever, granted every time the word starts a sentence.
+    static let namesPeopleAreCalled: Set<String> = [
+        "will", "may", "mark", "grace", "rose", "hope", "faith", "bill",
+        "frank", "jack", "art", "dawn", "june", "pat", "sue", "victor",
+    ]
+
+    @Test("no word on the sentence-opener list is a name anybody is called")
+    func openersAreNotNames() {
+        let overlap = QueryTerms.sentenceOpeners.intersection(Self.namesPeopleAreCalled)
+        #expect(overlap.isEmpty, "\(overlap.sorted()) would be exempt sentence-initially for ever")
+    }
+
+    @Test("every sentence opener is lower case, so the guard's lookup can find it")
+    func openersAreFolded() {
+        // The guard looks up `bare.lowercased()`. An entry with a capital in it
+        // would silently never match, which is an exemption that reads as
+        // present and is not.
+        #expect(QueryTerms.sentenceOpeners.allSatisfy { $0 == $0.lowercased() })
+    }
 }

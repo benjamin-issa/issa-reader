@@ -71,8 +71,16 @@ struct RegressionQuestionsTests {
             if !fixture.allowsNewNames, !found.notYetRevealed {
                 // A name the question did not ask about and the book has not
                 // introduced is the one thing this feature promised not to do.
-                let introduced = AskEngine.unvettedNames(
+                //
+                // Asserted through the index, which is the guard the engine
+                // actually applies. `unvettedNames` alone is deliberately
+                // generous — it catches "Rome" and "Cooks" so the probe can
+                // clear them — so asserting it empty asserts the wrong half.
+                let candidates = AskEngine.unvettedNames(
                     in: found.text, question: fixture.question,
+                )
+                let introduced = try await store.unmetWords(
+                    candidates, in: AskFixture.bookUUID, before: boundary,
                 )
                 #expect(introduced.isEmpty, "\(fixture.name): \(introduced)")
             }
