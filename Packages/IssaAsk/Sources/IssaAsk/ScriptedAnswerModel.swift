@@ -62,6 +62,16 @@ public actor ScriptedAnswerModel: AnswerModel {
     public private(set) var received: [Received] = []
     public private(set) var prewarmCount = 0
 
+    /// The most generations that were ever in flight at once.
+    ///
+    /// So a turnstile test can assert the thing it means. `received.count`
+    /// after a sleep only says how many *started*, which two questions
+    /// answering one after the other and two answering at once can both
+    /// satisfy depending on where the sleep lands; this cannot be one when the
+    /// serialising is broken.
+    public private(set) var peakConcurrency = 0
+    private var inFlight = 0
+
     /// The window the engine budgets against. 4,096 is the real one; a test
     /// that wants to force trimming passes something small.
     public nonisolated let contextSize: Int
@@ -130,6 +140,10 @@ public actor ScriptedAnswerModel: AnswerModel {
     private func play(
         _ call: Received, into continuation: AsyncThrowingStream<String, any Error>.Continuation,
     ) async {
+        inFlight += 1
+        peakConcurrency = max(peakConcurrency, inFlight)
+        defer { inFlight -= 1 }
+
         received.append(call)
         let turn = turns.isEmpty
             ? Turn.answer("The story hasn't revealed that yet.")

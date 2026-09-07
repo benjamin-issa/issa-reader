@@ -534,6 +534,87 @@ struct AskEngineTests {
         #expect(Self.answer(firstEvents) != nil)
         #expect(Self.answer(secondEvents) != nil)
         #expect(await model.received.count == 2)
+        #expect(await model.peakConcurrency == 1)
+    }
+
+    @Test("two engines sharing a turnstile answer one after the other")
+    func twoEnginesShareOneTurn() async throws {
+        let (store, source, directory) = try await AskFixture.preparedStore()
+        defer { AskFixture.remove(directory) }
+        let model = ScriptedAnswerModel(turns: [
+            Turn(partials: ["first"], holdsAfterPartials: 1),
+            Turn.answer("Second answer.\nSources: 1"),
+        ])
+        // Two engines is what the app has: `AskCoordinator` builds a fresh one
+        // per question, so the turnstile that used to live on the engine
+        // serialised nothing at all and two books gave two concurrent
+        // generations. There is one model on the device; the turn is the
+        // process's, not the engine's.
+        let turnstile = AskTurnstile()
+        let first = AskEngine(model: model, store: store, turnstile: turnstile)
+        let second = AskEngine(model: model, store: store, turnstile: turnstile)
+        let boundary = try AskFixture.endOf(spine: AskFixture.Spine.chapterI)
+
+        let firstTask = Task {
+            await Self.drain(first.ask(
+                question: "What did Alice follow down the hole?",
+                source: source, boundary: boundary,
+            ))
+        }
+        await model.waitUntilHolding()
+
+        let secondTask = Task {
+            await Self.drain(second.ask(
+                question: "Where did Alice land at the bottom?",
+                source: source, boundary: boundary,
+            ))
+        }
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(await model.received.count == 1)
+
+        await model.release()
+        _ = await firstTask.value
+        _ = await secondTask.value
+        #expect(await model.received.count == 2)
+        // The assertion that says the thing rather than inferring it from when
+        // the sleep happened to land.
+        #expect(await model.peakConcurrency == 1)
+    }
+
+    @Test("an answer that never reaches the model does not wait for one that has")
+    func theShortCircuitDoesNotQueue() async throws {
+        let (store, source, directory) = try await AskFixture.preparedStore()
+        defer { AskFixture.remove(directory) }
+        let model = ScriptedAnswerModel(turns: [
+            Turn(partials: ["first"], holdsAfterPartials: 1),
+        ])
+        let turnstile = AskTurnstile()
+        let asking = AskEngine(model: model, store: store, turnstile: turnstile)
+        let refusing = AskEngine(model: model, store: store, turnstile: turnstile)
+        let boundary = try AskFixture.endOf(spine: AskFixture.Spine.chapterI)
+
+        let held = Task {
+            await Self.drain(asking.ask(
+                question: "What did Alice follow down the hole?",
+                source: source, boundary: boundary,
+            ))
+        }
+        await model.waitUntilHolding()
+
+        // The Cheshire Cat is ten chapters ahead, so this is answered in SQL
+        // and never calls the model. With the turn taken around the whole
+        // question it waited behind the held generation anyway — a question
+        // answered in two milliseconds, sitting out somebody else's twenty
+        // seconds.
+        let (events, failure) = await Self.drain(refusing.ask(
+            question: "Who is the Cheshire Cat?", source: source, boundary: boundary,
+        ))
+        #expect(failure == nil)
+        #expect(Self.answer(events)?.notYetRevealed == true)
+        #expect(await model.received.count == 1)
+
+        await model.release()
+        _ = await held.value
     }
 
     // MARK: - Suggestions

@@ -46,6 +46,14 @@ final class AskCoordinator {
     /// the app also deletes indexes through it when a download goes.
     let store: AskIndexStore
     private let model: any AnswerModel
+    /// One turn at the on-device model, for the whole app.
+    ///
+    /// Held here because this is the only object that outlives a question. The
+    /// engines do not: one is built per question, so a turnstile living on an
+    /// engine serialised that engine against itself and nothing else, and two
+    /// books meant two concurrent generations and a "busy" the reader had done
+    /// nothing to deserve. It is passed to **both** construction sites below.
+    private let turnstile = AskTurnstile()
     /// For index building, prewarming and chips — everything that has no
     /// boundary of its own, so it needs no tool.
     private let preparer: AskEngine
@@ -90,7 +98,7 @@ final class AskCoordinator {
         #endif
         self.notifier = notifier
         self.defaults = defaults
-        preparer = AskEngine(model: self.model, store: store)
+        preparer = AskEngine(model: self.model, store: store, turnstile: turnstile)
 
         // The indexes are per book and the books are per account, so an account
         // leaving takes its indexes with it. Through the same notification
@@ -189,7 +197,7 @@ final class AskCoordinator {
             tools = [SearchBookTool(store: store, bookUUID: uuid, boundary: boundary)]
         }
         #endif
-        let engine = AskEngine(model: model, store: store, tools: tools)
+        let engine = AskEngine(model: model, store: store, tools: tools, turnstile: turnstile)
 
         job.task = Task { [weak self] in
             var answered = false

@@ -9,10 +9,20 @@ import IssaCore
 /// a SQL clause in `AskIndexStore` that cannot be persuaded to return a passage
 /// from later in the book, and this actor's job is to never route around it.
 ///
-/// An `actor` for two reasons. Questions are serialised — the on-device model
-/// answers one at a time anyway, and a second `LanguageModelSession` running
-/// concurrently fails with `concurrentRequests` — and the index handle, the
-/// tools' per-generation state and the queue all need one owner.
+/// An `actor` because the index handle and the tools' per-generation state need
+/// one owner. Serialising the model is *not* one of its jobs and never could
+/// be: `AskCoordinator` builds a fresh engine per question, so the turnstile
+/// that used to live here served an audience of one, and two books meant two
+/// concurrent generations. It is `AskTurnstile` now — one per process, passed
+/// in.
+///
+/// Those two generations do not fail with `concurrentRequests`, whatever this
+/// comment used to say. That error is per session — "a second prompt while it's
+/// still responding to the first one" — and `SystemAnswerModel.answer` builds a
+/// fresh `LanguageModelSession` for every generation, so two questions have two
+/// sessions. What they run into is `rateLimited`, the process-wide one. Both
+/// become `.busy`, so the reader's symptom and the fix are unchanged; the
+/// reason is not.
 public actor AskEngine {
     private let model: any AnswerModel
     /// Held publicly because the app also deletes indexes from it when a
@@ -20,6 +30,7 @@ public actor AskEngine {
     /// two would open the same SQLite file twice.
     public nonisolated let store: AskIndexStore
     private let tools: [any AskTool]
+    private let turnstile: AskTurnstile
 
     /// - Parameter tools: the `searchBook` tool, or nothing.
     ///
@@ -29,10 +40,21 @@ public actor AskEngine {
     ///   seconds on a phone. If the measurement goes against it, this is the
     ///   line that changes — and the engine is otherwise identical with and
     ///   without it, which is what makes the comparison worth anything.
-    public init(model: any AnswerModel, store: AskIndexStore, tools: [any AskTool] = []) {
+    /// - Parameter turnstile: the process's one turn at the on-device model.
+    ///   Defaulted so a test that only cares about one question writes nothing,
+    ///   and so an engine on its own behaves exactly as it did; the app passes
+    ///   the same one to every engine it builds, which is the whole point of
+    ///   the type.
+    public init(
+        model: any AnswerModel,
+        store: AskIndexStore,
+        tools: [any AskTool] = [],
+        turnstile: AskTurnstile = AskTurnstile(),
+    ) {
         self.model = model
         self.store = store
         self.tools = tools
+        self.turnstile = turnstile
     }
 
     // MARK: - Index
@@ -60,7 +82,12 @@ public actor AskEngine {
     }
 
     /// Warms the model while the reader looks at the chips.
-    public func prewarm() async { await model.prewarm() }
+    ///
+    /// Skipped rather than queued when a question already holds the turn: what
+    /// a prewarm would load, that question has loaded already.
+    public func prewarm() async {
+        await turnstile.ifFree { await self.model.prewarm() }
+    }
 
     /// The two chips under the question field.
     ///
@@ -109,8 +136,6 @@ public actor AskEngine {
         boundary: ReadingBoundary,
         into continuation: AsyncThrowingStream<AskEvent, any Error>.Continuation,
     ) async {
-        await acquire()
-        defer { releaseTurn() }
         do {
             try await answer(
                 question: question, source: source, boundary: boundary, into: continuation,
@@ -326,34 +351,47 @@ public actor AskEngine {
     /// overflow at all, but `tokenCount` is not free on a phone and the builder
     /// estimates first — so the overflow that does happen is the estimate being
     /// wrong, and halving is the cheapest way to be certainly right.
+    ///
+    /// The turn is taken here rather than around the whole question, and it
+    /// covers all three attempts. Around the question it queued work that never
+    /// reaches the model at all: `.notYet` and the kinship fast path answer
+    /// from SQL in milliseconds and still waited behind another book's
+    /// twenty-second generation. Re-acquiring per attempt would be worse than
+    /// either — another question could take the turn in the middle of a retry.
     private func generate(
         question: String,
         ranked: [PassageRanker.Ranked],
         into continuation: AsyncThrowingStream<AskEvent, any Error>.Continuation,
     ) async throws -> AskAnswer {
-        var lastFailure = AskFailure.tooMuchContext
-        for attempt in Self.attempts(for: ranked) {
-            try Task.checkCancellation()
-            let built = await AskPromptBuilder.build(
-                question: question,
-                ranked: attempt,
-                contextSize: model.contextSize,
-                hasTool: !tools.isEmpty,
-                tokenCount: { [model] text in try await model.tokenCount(for: text) },
-            )
-            for tool in tools {
-                await tool.beginGeneration(numberingFrom: built.passages.count + 1)
-            }
+        try await turnstile.withTurn { () async throws -> AskAnswer in
+            var lastFailure = AskFailure.tooMuchContext
+            for attempt in Self.attempts(for: ranked) {
+                try Task.checkCancellation()
+                let built = await AskPromptBuilder.build(
+                    question: question,
+                    ranked: attempt,
+                    contextSize: self.model.contextSize,
+                    hasTool: !self.tools.isEmpty,
+                    tokenCount: { [model = self.model] text in
+                        try await model.tokenCount(for: text)
+                    },
+                )
+                for tool in self.tools {
+                    await tool.beginGeneration(numberingFrom: built.passages.count + 1)
+                }
 
-            do {
-                return try await stream(built, into: continuation)
-            } catch let failure as AskFailure where failure == .tooMuchContext {
-                lastFailure = failure
-                IssaLog.info("ask prompt too large", ["passages": String(built.passages.count)])
-                continue
+                do {
+                    return try await self.stream(built, into: continuation)
+                } catch let failure as AskFailure where failure == .tooMuchContext {
+                    lastFailure = failure
+                    IssaLog.info("ask prompt too large", [
+                        "passages": String(built.passages.count),
+                    ])
+                    continue
+                }
             }
+            throw lastFailure
         }
-        throw lastFailure
     }
 
     /// All of them, then half, then two — strictly decreasing.
@@ -417,27 +455,4 @@ public actor AskEngine {
         return .other("Something went wrong answering that. Try again.")
     }
 
-    // MARK: - One at a time
-
-    /// A plain actor turnstile.
-    ///
-    /// The on-device model rejects a second concurrent session outright, and a
-    /// reader who asks again before the first answer lands should get the second
-    /// answer rather than an error — so the second question waits rather than
-    /// racing. It waits *before* checking its own cancellation, which means a
-    /// cancelled second question still holds its place in the queue for as long
-    /// as the first one runs; that is the queue working, not a leak, and it
-    /// releases the moment its turn comes.
-    private var isAnswering = false
-    private var queue: [CheckedContinuation<Void, Never>] = []
-
-    private func acquire() async {
-        guard isAnswering else { isAnswering = true; return }
-        await withCheckedContinuation { queue.append($0) }
-    }
-
-    private func releaseTurn() {
-        guard !queue.isEmpty else { isAnswering = false; return }
-        queue.removeFirst().resume()
-    }
 }
