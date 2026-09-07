@@ -301,9 +301,29 @@ private struct TVReadalongContent: View {
                 // the timeline runs on the text — so this says what is missing
                 // rather than refusing to open the book, which is what the
                 // screen used to do.
+                //
+                // Focusable, and claiming `.transport`, even though there is
+                // nothing on it to press. As a plain `Text` it claimed no focus
+                // value at all, so on a plain ebook this screen had exactly one
+                // focus target — and `TVPageView` assigned `.transport` on Down
+                // regardless, to a value nothing answered to. Focus left the
+                // page and landed nowhere; `onMoveCommand` is attached to the
+                // page, so it stopped receiving anything at all; Left and Right
+                // stopped turning pages; and Menu, which leaves the book, was
+                // the only way out. `.defaultFocus` had already run by then and
+                // does not fire again.
+                //
+                // `TVFocusMoves` now refuses that move, so this row is the
+                // second half rather than the first: the focus engine moves
+                // focus on a swipe on its own, and a swipe with nowhere to go is
+                // how the reader got stranded. The old screen mounted the
+                // transport row unconditionally and merely disabled it, which is
+                // why it never had this fault.
                 Text("No narration for this book")
                     .font(Typography.sans(22))
                     .foregroundStyle(Palette.inkTertiary)
+                    .focusable()
+                    .focused($focus, equals: .transport)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
