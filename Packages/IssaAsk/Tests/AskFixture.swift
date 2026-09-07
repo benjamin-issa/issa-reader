@@ -13,8 +13,28 @@ import Testing
 /// headings and all — and a synthetic fixture would test the assertion rather
 /// than the book.
 enum AskFixture {
+    /// *Alice's Adventures in Wonderland*, Gutenberg #11 — the book almost
+    /// every suite in here is written against.
+    static let alice = AskBook(
+        resource: "Fixtures/alice", bookUUID: "0f0f0f0f-1111-4222-8333-444444444444",
+    )
+
+    /// *Autobiography of Benjamin Franklin*, Gutenberg #20203 — non-fiction,
+    /// with an editor's introduction and a letter from the author to his son.
+    ///
+    /// A second book because *Alice* cannot express the shape the reported bug
+    /// arrived in. "What happened to the author's son?" needs a book that has
+    /// an author *in* it — a first person who is also the subject, a preface
+    /// written by somebody else, and a Gutenberg header printing "Author:
+    /// Benjamin Franklin" for the word `author` to match on. Every one of those
+    /// is absent from a children's novel, and the retrieval bug in
+    /// `QueryTerms.bookRoles` is invisible without them.
+    static let franklin = AskBook(
+        resource: "Fixtures/franklin", bookUUID: "2b2b2b2b-3333-4444-8555-666666666666",
+    )
+
     /// A bare uuid, so the store names the index file rather than hashing it.
-    static let bookUUID = "0f0f0f0f-1111-4222-8333-444444444444"
+    static let bookUUID = alice.bookUUID
 
     /// A second book on the same shelf. One store serves every book the reader
     /// owns, so "which book is this query about" is a thing tests have to be
@@ -34,17 +54,11 @@ enum AskFixture {
         static let chapterVI = 7
     }
 
-    static func url() throws -> URL {
-        try #require(Bundle.module.url(forResource: "Fixtures/alice", withExtension: "epub"))
-    }
+    static func url() throws -> URL { try alice.url() }
 
-    static func package() throws -> EPUBPackage {
-        try EPUBPackage.open(url: url())
-    }
+    static func package() throws -> EPUBPackage { try alice.package() }
 
-    static func source() throws -> BookSource {
-        try BookSource(bookUUID: bookUUID, fileURL: url())
-    }
+    static func source() throws -> BookSource { try alice.source() }
 
     /// A source whose fingerprint is taken from a file the test can change,
     /// while the book itself stays the pristine fixture.
@@ -56,21 +70,11 @@ enum AskFixture {
 
     /// One chapter's rendered string, parsed exactly as the reader parses it.
     static func text(spine: Int, style: ReaderStyle = ReaderStyle()) throws -> String {
-        let package = try package()
-        let href = package.spine[spine].href
-        let images = ArchiveImageSource(archive: package.archive)
-        let data = try package.archive.read(href)
-        let parsed = try HTMLContentParser(style: style, loadImage: { images.image(for: $0) })
-            .parse(xhtml: data, baseHref: href)
-        return parsed.text.string
+        try alice.text(spine: spine, style: style)
     }
 
     /// The reader has finished this chapter and nothing after it.
-    static func endOf(spine: Int) throws -> ReadingBoundary {
-        ReadingBoundary(
-            spineIndex: spine, charOffset: try (text(spine: spine) as NSString).length,
-        )
-    }
+    static func endOf(spine: Int) throws -> ReadingBoundary { try alice.endOf(spine: spine) }
 
     // MARK: - Temporary directories
 
@@ -92,11 +96,7 @@ enum AskFixture {
 
     /// A store with a freshly built index, and the directory to delete after.
     static func preparedStore() async throws -> (AskIndexStore, BookSource, URL) {
-        let directory = try temporaryDirectory()
-        let store = AskIndexStore(directory: directory)
-        let source = try source()
-        try await store.prepare(source: source)
-        return (store, source, directory)
+        try await alice.preparedStore()
     }
 
     // MARK: - An index the test wrote
@@ -192,5 +192,61 @@ enum AskFixture {
                     )
                 }
         }
+    }
+}
+
+// MARK: -
+
+/// One bundled EPUB a suite can ask questions about.
+///
+/// A value rather than a second `enum` of statics, because there are now two
+/// books and every helper below differs between them in exactly one thing: the
+/// resource it opens. Copying the file for *Franklin* would have been six more
+/// functions that could drift from *Alice*'s in ways no test would notice —
+/// which is the same argument `AskFixture` makes for using a real Gutenberg
+/// book at all.
+struct AskBook: Sendable {
+    /// The bundled resource, without its extension.
+    var resource: String
+    /// A bare uuid, so the store names the index file rather than hashing it.
+    var bookUUID: String
+
+    func url() throws -> URL {
+        try #require(Bundle.module.url(forResource: resource, withExtension: "epub"))
+    }
+
+    func package() throws -> EPUBPackage {
+        try EPUBPackage.open(url: url())
+    }
+
+    func source() throws -> BookSource {
+        try BookSource(bookUUID: bookUUID, fileURL: url())
+    }
+
+    /// One chapter's rendered string, parsed exactly as the reader parses it.
+    func text(spine: Int, style: ReaderStyle = ReaderStyle()) throws -> String {
+        let package = try package()
+        let href = package.spine[spine].href
+        let images = ArchiveImageSource(archive: package.archive)
+        let data = try package.archive.read(href)
+        let parsed = try HTMLContentParser(style: style, loadImage: { images.image(for: $0) })
+            .parse(xhtml: data, baseHref: href)
+        return parsed.text.string
+    }
+
+    /// The reader has finished this chapter and nothing after it.
+    func endOf(spine: Int) throws -> ReadingBoundary {
+        ReadingBoundary(
+            spineIndex: spine, charOffset: try (text(spine: spine) as NSString).length,
+        )
+    }
+
+    /// A store with a freshly built index, and the directory to delete after.
+    func preparedStore() async throws -> (AskIndexStore, BookSource, URL) {
+        let directory = try AskFixture.temporaryDirectory()
+        let store = AskIndexStore(directory: directory)
+        let source = try source()
+        try await store.prepare(source: source)
+        return (store, source, directory)
     }
 }
