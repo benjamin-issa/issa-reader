@@ -1,5 +1,6 @@
 #if ISSA_UITEST_FIXTURE
 import Foundation
+import IssaCore
 
 /// The catalogue the layout sweep lays out.
 ///
@@ -98,6 +99,51 @@ enum FixtureLibrary {
             createdAt: "2026-08-20T09:00:00.000Z",
             series: (name: "Gothic Horror", position: 2)),
     ]
+
+    /// Plants a file per book so the Reading tab's Downloaded section has
+    /// something to lay out.
+    ///
+    /// The sweep's whole job is to measure real rows at real widths, and this
+    /// fixture writes nothing to disk — so without this the only state ever
+    /// measured was the empty one, and a cover, a title, a byline and a
+    /// right-aligned size were never checked against the margin at any width.
+    ///
+    /// Deliberately more than the section's four-row cap, so the "Show all"
+    /// link is on screen too.
+    ///
+    /// These are placeholders, not books: a sparse file of a plausible size, so
+    /// the row draws "40 MB" rather than "Zero KB". Opening one in the reader
+    /// fails — as it already did before this existed, because the stub answers
+    /// every file request with a 404.
+    ///
+    /// Never the read-along book: the sweep script plants that one's real EPUB
+    /// so the reader screen opens without a download, and a placeholder written
+    /// over it would break the screen this is meant to help measure. Existing
+    /// files are left alone for the same reason.
+    static func plantDownloads() {
+        var planted = 0
+        let directory = BookContentService.defaultDirectory()
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        for row in rows where row.uuid != readalongUUID {
+            guard let name = row.formats.first,
+                  let format = BookContentService.Format(rawValue: name) else { continue }
+            let url = BookContentService.localURL(
+                in: directory, bookUUID: row.uuid, format: format)
+            guard !FileManager.default.fileExists(atPath: url.path) else { continue }
+            // A plausible size, so the row's byte count is a real string rather
+            // than "Zero KB" — sparse, so the simulator writes no megabytes.
+            do {
+                try Data().write(to: url)
+                let handle = try FileHandle(forWritingTo: url)
+                try handle.truncate(atOffset: 40_000_000)
+                try handle.close()
+                planted += 1
+            } catch {
+                IssaLog.failure("plant fixture download", error, ["book": row.title])
+            }
+        }
+        IssaLog.info("planted fixture downloads", ["count": String(planted)])
+    }
 
     static var booksJSON: Data {
         let objects = rows.map { row -> [String: Any] in

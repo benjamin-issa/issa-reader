@@ -26,6 +26,15 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
     ) {
         self.interfaceController = interfaceController
         CarPlayBridge.shared.surfaceDidConnect()
+        // Re-read the disk before the shelves are built. The Downloaded shelf
+        // filters on `downloadedUUIDs` and nothing else, and that set was only
+        // refreshed when the *phone* app went active — which this scene does
+        // not make happen. A car connecting to a process that has been in the
+        // background since breakfast was offered whatever was downloaded then;
+        // a book whose file had since gone still had a row, tapping it fell
+        // back to streaming, and in a tunnel that is silence. The same call
+        // reconciles anything that left without being removed.
+        AppServices.shared.app.refreshDownloadedSet()
         // Written and *flushed* before the root template is built, because
         // building it is the thing that used to abort the process. Five crash
         // reports arrived with a log that said nothing about CarPlay at all;

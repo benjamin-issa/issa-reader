@@ -109,6 +109,23 @@ public struct BookContentService: Sendable {
         case ebook
         case audiobook
         case readaloud
+
+        /// The reader-facing name for an edition. "Read-along", never the
+        /// server's "Readaloud" (item 03); the other two already read plainly.
+        ///
+        /// Here rather than on a screen because four now say it — the book
+        /// detail's editions card, the Downloads screen's rows, its transfer
+        /// status line and the Reading tab's section — and the two on the
+        /// Downloads screen were still printing `rawValue.capitalized`, so the
+        /// app called the same edition "Read-along" in one place and
+        /// "Readaloud" in another.
+        public var displayName: String {
+            switch self {
+            case .ebook: "Ebook"
+            case .audiobook: "Audiobook"
+            case .readaloud: "Read-along"
+            }
+        }
     }
 
     public func localURL(for book: Book, format: Format) -> URL {
@@ -184,11 +201,22 @@ public struct BookContentService: Sendable {
 
     /// The uuid a download's filename encodes, or nil if it is not one of ours.
     static func bookUUID(fromFilename name: String) -> String? {
+        decodeFilename(name)?.bookUUID
+    }
+
+    /// The book *and* the edition a download's filename encodes.
+    ///
+    /// The inverse of `localURL(in:bookUUID:format:)`, and the only other place
+    /// allowed to know the shape. The storage screen needs the format as well
+    /// as the uuid — a book with two editions on disk is two rows and two
+    /// sizes — and reading a directory once to get both beats one `stat` per
+    /// book per format.
+    static func decodeFilename(_ name: String) -> (bookUUID: String, format: Format)? {
         guard name.hasSuffix(".epub") else { return nil }
         let stem = String(name.dropLast(".epub".count))
         for format in Format.allCases where stem.hasSuffix("-\(format.rawValue)") {
             let uuid = String(stem.dropLast(format.rawValue.count + 1))
-            return uuid.isEmpty ? nil : uuid
+            return uuid.isEmpty ? nil : (uuid, format)
         }
         return nil
     }
@@ -211,17 +239,21 @@ public struct BookContentService: Sendable {
     }
 
     public func removeDownload(_ book: Book, format: Format) {
-        try? FileManager.default.removeItem(at: localURL(for: book, format: format))
+        Self.removeDownload(bookUUID: book.uuid, format: format, in: cacheDirectory)
     }
 
-    /// Total bytes cached, for the Downloads screen.
-    public func cacheSize() -> Int64 {
-        guard let contents = try? FileManager.default.contentsOfDirectory(
-            at: cacheDirectory, includingPropertiesForKeys: [.fileSizeKey],
-        ) else { return 0 }
-        return contents.reduce(into: Int64(0)) { total, url in
-            let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-            total += Int64(size)
-        }
+    /// Deletes one edition's file without needing a client.
+    ///
+    /// Removal is a filesystem operation and never was anything else, but the
+    /// only spelling of it was an instance method — so `AppModel.removeDownload`
+    /// had to build a whole `BookContentService`, and therefore had to be
+    /// behind `guard let session`, and therefore did nothing at all once the
+    /// reader had signed out keeping their downloads. It also takes a uuid
+    /// rather than a `Book`, which is what lets a file whose book has left the
+    /// catalogue be deleted at all.
+    public static func removeDownload(bookUUID: String, format: Format, in directory: URL? = nil) {
+        let directory = directory ?? defaultDirectory()
+        try? FileManager.default.removeItem(
+            at: localURL(in: directory, bookUUID: bookUUID, format: format))
     }
 }
