@@ -1041,6 +1041,65 @@ public final class AppModel {
         } else if visibleReaderUUID == uuid {
             visibleReaderUUID = nil
         }
+        // Both directions: a reader appearing over running narration is what
+        // takes the hold, and one being dismissed is what gives it back.
+        updateScreenAwake()
+    }
+
+    /// Whether the app is frontmost, pushed in by each target's scene-phase
+    /// handler.
+    ///
+    /// Not derivable here: `AppModel` is not a view and has no `scenePhase`,
+    /// and this is the one input to `ScreenAwake` it cannot see for itself. It
+    /// starts true because the model is built while a scene is coming up, and a
+    /// launch that never reported would otherwise be treated as backgrounded
+    /// for the life of the process.
+    private var isForeground = true
+
+    /// The single holder of the display assertion. See `ScreenAwakeAssertion`
+    /// for why there is exactly one, and `ScreenAwake` for the decision it
+    /// applies.
+    private let screenAwake = ScreenAwakeAssertion()
+
+    /// Whether the display is being held awake for a read-along right now.
+    ///
+    /// Internal rather than private so `IssaSharedTests` can assert the release
+    /// paths — a keep-awake nothing releases is a flat battery, which is the
+    /// worse of the two bugs on offer here.
+    var keepsScreenAwake: Bool { screenAwake.isHeld }
+
+    /// Told when the app goes to and comes back from the background.
+    ///
+    /// The reader is a full-screen cover on iOS and being backgrounded does not
+    /// dismiss it — the same fact `flushOpenReaders()` exists for — so without
+    /// this a phone pocketed mid-read-along would go on holding its own display
+    /// awake until the book ended.
+    public func setForeground(_ foreground: Bool) {
+        guard isForeground != foreground else { return }
+        isForeground = foreground
+        updateScreenAwake()
+    }
+
+    /// Recomputes whether the display should be held awake, and holds or
+    /// releases it.
+    ///
+    /// Called from every place any of the four inputs can move:
+    /// `setReaderVisible`, `setForeground`, `stopNarration`,
+    /// `narrationDidStart`, and the rate observer installed in
+    /// `reader(for:session:)` — which is the one that catches a pause,
+    /// whichever surface asked for it, the sleep timer included.
+    private func updateScreenAwake() {
+        // `listening` is checked rather than assumed away: an audiobook and a
+        // read-along cannot both be audible (`startListening` stops narration
+        // first), but the decision must not rest on that invariant holding
+        // somewhere else in the file.
+        let narrated = listening == nil ? narratingBookUUID : nil
+        screenAwake.apply(ScreenAwake.shouldKeepAwake(
+            isPlaying: playback?.player.isPlaying ?? false,
+            isReaderVisible: visibleReaderUUID != nil,
+            followsText: narrated != nil && narrated == visibleReaderUUID,
+            isForeground: isForeground,
+        ))
     }
 
     /// Which open book, if any, owns the active narration and Now Playing.
@@ -1162,8 +1221,17 @@ public final class AppModel {
         // necessarily the one whose rate actually changed.
         model.onNarrationReady = { [weak self] coordinator in
             coordinator.player.setRateObserver(for: coordinator) { [weak self] rate in
-                guard rate > 0 else { return }
-                self?.narrationDidStart(for: bookUUID)
+                guard let self else { return }
+                if rate > 0 { narrationDidStart(for: bookUUID) }
+                // Not inside the `rate > 0` branch, which is what this observer
+                // used to be entirely: a rate of zero is the *release* signal,
+                // and it is the only one that reaches every way a read-along
+                // stops — the reader's own button, the player sheet, a headphone
+                // click, a phone call, a lost route, and the sleep timer's
+                // `pause()`, which is the case a reader who set one most cares
+                // about. `AudioPlayer.pause()` writes `isPlaying` before it
+                // notifies, so the value read here is already the new one.
+                updateScreenAwake()
             }
         }
         readers[bookUUID] = model
@@ -1235,6 +1303,10 @@ public final class AppModel {
         readers[uuid]?.readalong?.player.pause()
         nowPlayingController?.attach(coordinator: nil, book: nil)
         releaseIfScreenClosed(uuid)
+        // The pause above already fired the rate observer, but this runs after
+        // `narratingBookUUID` was cleared, and that is the field the decision
+        // reads. Idempotent, so the second call costs nothing.
+        updateScreenAwake()
     }
 
     /// Lets go of a model whose screen already closed, now that the narration
@@ -1278,6 +1350,10 @@ public final class AppModel {
             // had let go of it.
             chapterTitle: { [weak model] in model?.chapterTitle },
         )
+        // `narratingBookUUID` has just moved, and it is half of `followsText`.
+        // The other half — a reader on screen for this same book — is normally
+        // already true, because this is reached by a reader pressing play.
+        updateScreenAwake()
     }
 
     /// Re-entrancy guard for `startListening`, which suspends at the manifest

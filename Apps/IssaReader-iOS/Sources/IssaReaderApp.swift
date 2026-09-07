@@ -48,6 +48,7 @@ struct IssaReaderApp: App {
 
 struct RootView: View {
     @Environment(AppModel.self) private var app
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         content
@@ -76,6 +77,16 @@ struct RootView: View {
         // The session is restored by `AppServices.start()`, so that a car
         // connecting to a never-foregrounded app finds one.
         .task { await app.watchForExpiry() }
+        // Here rather than in `LibraryTabs`, which has a scene-phase handler of
+        // its own: that view exists only once the reader is signed in, and the
+        // display assertion must be released on the way to the background from
+        // any state the app can be in. `!= .background` rather than `== .active`
+        // because `.inactive` is still the foreground — an app switcher glance
+        // or a Control Centre pull is not the phone going into a pocket, and
+        // the reader is looking at the screen throughout.
+        .onChange(of: scenePhase, initial: true) { _, phase in
+            app.setForeground(phase != .background)
+        }
     }
 }
 

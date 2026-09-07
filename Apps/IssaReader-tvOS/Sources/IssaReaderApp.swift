@@ -42,7 +42,17 @@ struct IssaReaderTVApp: App {
                 // `.background`, as iOS has it — not `!= .active`, which is
                 // also `.inactive` and so fired twice per exit and on every
                 // Siri, overlay and Control Centre interruption.
+                // No `initial:` here, unlike the phone's. This handler also
+                // owns the flush, and arming it on the first evaluation would
+                // give a launch a save it has nothing to save.
                 .onChange(of: scenePhase) { _, phase in
+                    // The screen saver is held off while a read-along runs with
+                    // the page on screen, and the hold has to go when the app
+                    // does — a television left holding one would never show its
+                    // screen saver again. `.inactive` stays foreground for the
+                    // same reason it does on the phone: a Siri or Control Centre
+                    // overlay is not the viewer leaving.
+                    app.setForeground(phase != .background)
                     if phase == .background {
                         Task { await app.flushOpenReaders() }
                     }
