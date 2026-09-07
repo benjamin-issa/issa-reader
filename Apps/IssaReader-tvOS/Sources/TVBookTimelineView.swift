@@ -62,7 +62,9 @@ struct TVBookTimelineView: View {
             for (index, tick) in ticks.enumerated() {
                 let x = (size.width * (tick.fraction.clampedToUnitInterval())).rounded()
                 let rect = CGRect(
-                    x: min(max(x - Self.tickWidth / 2, 0), size.width - Self.tickWidth),
+                    x: TVBookTimeline.markOrigin(
+                        centredOn: x, width: Self.tickWidth, in: size.width,
+                    ),
                     y: midY - Self.tickHeight / 2,
                     width: Self.tickWidth, height: Self.tickHeight,
                 )
@@ -74,8 +76,21 @@ struct TVBookTimelineView: View {
 
             // Where the reader is. Ringed in the paper colour: without it the
             // disc vanishes into a chapter mark every time it crosses one.
-            let centre = CGPoint(x: (size.width * place).rounded(), y: midY)
+            //
+            // Clamped by its *extent*, like the ticks above, and not merely by
+            // its place: `place` was already held to 0…1 and then used as a
+            // centre, so at progress 0 — where every newly opened book starts —
+            // half of the ringed disc was drawn off the left of the strip and
+            // into the television's overscan band. The ring is the outer of the
+            // two, so clamping it and taking the centre back from it keeps both
+            // circles concentric and both inside.
             let outer = Self.markerDiameter + Self.markerRing * 2
+            let centre = CGPoint(
+                x: TVBookTimeline.markOrigin(
+                    centredOn: (size.width * place).rounded(), width: outer, in: size.width,
+                ) + outer / 2,
+                y: midY,
+            )
             context.fill(
                 Path(ellipseIn: CGRect(
                     x: centre.x - outer / 2, y: centre.y - outer / 2,

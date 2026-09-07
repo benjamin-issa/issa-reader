@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import IssaCore
 import IssaEPUB
@@ -119,7 +120,19 @@ enum TVBookTimeline {
         guard let timeline else {
             // No narration: the reader's clock is byte weight, so a chapter's
             // place inside its file is its anchor's place in the markup.
-            let place = fragment.flatMap { within($0, of: document(href)) } ?? 0
+            //
+            // A nav entry naming no fragment is the whole file, and the file's
+            // own start is a real answer for it.
+            guard let fragment else {
+                return package.bookProgress(spineIndex: index, within: 0)
+            }
+            // A named anchor the markup has not got is not a chapter at the top
+            // of the file; it is a chapter nobody can place. `?? 0` said the top
+            // of the file anyway, which reads as a real position — and since
+            // every unplaceable chapter in a file said the same thing, `dedupe`
+            // then stacked them all onto one tick. Dropped instead, the way the
+            // audio branch below already drops a document with no narration.
+            guard let place = within(fragment, of: document(href)) else { return nil }
             return package.bookProgress(spineIndex: index, within: place)
         }
 
@@ -189,30 +202,59 @@ enum TVBookTimeline {
     /// question one pass answers.
     ///
     /// The space in front of `id` is what keeps `data-id` and the like out.
+    ///
+    /// **Either quote, terminating on whichever opened.** One byte used to do
+    /// both jobs, so `<h2 id='chapter-3'>` — which is what Sigil and Calibre
+    /// write — matched nothing at all: `within` then failed for every chapter in
+    /// the file, they all fell back to the file's own start, and `dedupe`
+    /// collapsed them into a single tick. That is exactly the "seventeen marks
+    /// in three places" defect this whole path exists to prevent. Terminating on
+    /// the opener rather than on either quote is what keeps an apostrophe inside
+    /// a double-quoted id — `id="it's-here"` — from cutting the id in half.
+    ///
+    /// Read in place. `[UInt8](data)` copied every spine file whole, which
+    /// `navigationTicks` above notes are megabytes on a long novel, and
+    /// comparing `Array(bytes[i ..< i + 4]) == pattern` allocated a four-byte
+    /// array on every candidate byte in them.
     static func anchors(in data: Data) -> [Anchor] {
-        let quote = UInt8(ascii: "\"")
-        let pattern: [UInt8] = [UInt8(ascii: "i"), UInt8(ascii: "d"), UInt8(ascii: "="), quote]
-        let bytes = [UInt8](data)
-        var found: [Anchor] = []
-        var index = 1
-        while index + pattern.count <= bytes.count {
-            guard bytes[index] == pattern[0], isSpace(bytes[index - 1]),
-                  Array(bytes[index ..< index + pattern.count]) == pattern
-            else {
-                index += 1
-                continue
+        let i = UInt8(ascii: "i")
+        let d = UInt8(ascii: "d")
+        let equals = UInt8(ascii: "=")
+        let double = UInt8(ascii: "\"")
+        let single = UInt8(ascii: "'")
+        return data.withUnsafeBytes { bytes -> [Anchor] in
+            let count = bytes.count
+            var found: [Anchor] = []
+            var index = 1
+            // `id=` and its opening quote are four bytes starting at `index`,
+            // with the space that qualifies them at `index - 1`, so the last
+            // position worth testing is `count - 4`.
+            while index + 4 <= count {
+                guard bytes[index] == i, isSpace(bytes[index - 1]),
+                      bytes[index + 1] == d, bytes[index + 2] == equals
+                else {
+                    index += 1
+                    continue
+                }
+                let opener = bytes[index + 3]
+                guard opener == double || opener == single else {
+                    index += 1
+                    continue
+                }
+                let valueStart = index + 4
+                var end = valueStart
+                while end < count, bytes[end] != opener { end += 1 }
+                // An unterminated attribute is markup nobody can read. Stopping
+                // is what keeps the scan inside the buffer.
+                guard end < count else { break }
+                if end > valueStart,
+                   let id = String(bytes: bytes[valueStart ..< end], encoding: .utf8) {
+                    found.append(Anchor(id: id, offset: index))
+                }
+                index = end + 1
             }
-            let valueStart = index + pattern.count
-            var end = valueStart
-            while end < bytes.count, bytes[end] != quote { end += 1 }
-            guard end < bytes.count else { break }
-            if end > valueStart,
-               let id = String(bytes: bytes[valueStart ..< end], encoding: .utf8) {
-                found.append(Anchor(id: id, offset: index))
-            }
-            index = end + 1
+            return found
         }
-        return found
     }
 
     private static func isSpace(_ byte: UInt8) -> Bool {
@@ -261,6 +303,25 @@ enum TVBookTimeline {
         return found
     }
 
+    // MARK: - Drawing the marks
+
+    /// Where a mark of a given width starts, so that it is centred where it
+    /// belongs and still drawn wholly inside the strip.
+    ///
+    /// The chapter ticks were clamped like this and the marker was not: its
+    /// *place* was held to 0…1 and then used as a centre, so at progress 0 —
+    /// which is where every newly opened book starts — ten points of a twenty
+    /// point disc were drawn to the left of the strip, inside the television's
+    /// overscan band, where a good many sets simply do not show them.
+    ///
+    /// The strip being narrower than the mark is not a case the television can
+    /// reach, but answering it with a negative origin — which is what
+    /// `size.width - width` alone gives — would put the mark further outside
+    /// than leaving it unclamped, so the floor is stated rather than assumed.
+    static func markOrigin(centredOn centre: CGFloat, width: CGFloat, in strip: CGFloat) -> CGFloat {
+        min(max(centre - width / 2, 0), max(strip - width, 0))
+    }
+
     // MARK: - Saying it in words
 
     /// The footer's one line: "Chapter 12 of 17 · 34% · 1h 11m left".
@@ -279,22 +340,31 @@ enum TVBookTimeline {
         }
         parts.append(ReadingProgress.percentText(progress))
         if let remaining, remaining.isFinite, remaining > 0 {
-            parts.append("\(durationText(remaining)) left")
+            parts.append("\(remainingText(remaining)) left")
         }
         return parts.joined(separator: " · ")
     }
 
-    /// A rough length, the way a person says it: "1h 11m", or "11m" under
-    /// the hour. Never seconds — nobody across a room cares, and a number that
-    /// ticks every second draws the eye off the page.
+    /// What is left, the way a person says it: "1h 11m", or "11m" under the
+    /// hour. Never seconds — nobody across a room cares, and a number that ticks
+    /// every second draws the eye off the page.
     ///
-    /// Rounded to the nearest minute rather than truncated, which is what the
-    /// old readout did: fifty-nine seconds of a book left is "1m", not "0m".
-    static func durationText(_ seconds: TimeInterval) -> String {
-        guard seconds.isFinite, seconds > 0 else { return "0m" }
-        let whole = Int((seconds / 60).rounded())
-        let hours = whole / 60
-        let minutes = whole % 60
-        return hours > 0 ? "\(hours)h \(minutes)m" : "\(minutes)m"
+    /// The rounding is the television's own and the wording is not. This was a
+    /// fourth copy of an "\(hours)h \(minutes)m" that `IssaCore.DurationText`
+    /// already owns, and it copied the guard in the form that comment names as
+    /// insufficient: `isFinite` plus `Int(_:)`, when `1e300` is finite and
+    /// converting it traps. `coordinator.totalDuration` is server-supplied, so
+    /// that is a reachable crash and not a hypothetical one.
+    ///
+    /// What the copy did add is the rounding, and that is worth keeping:
+    /// `DurationText` floors, so fifty-nine seconds of a book left read as "0m"
+    /// — and this is the one number on the screen that says how much book there
+    /// is. Rounded here in whole seconds, deliberately, because
+    /// `(seconds / 60).rounded()` and then `Int(_:)` is the same trap under
+    /// another name.
+    static func remainingText(_ seconds: TimeInterval) -> String {
+        guard seconds > 0, let whole = seconds.wholeSeconds else { return "0m" }
+        let minutes = whole / 60 + (whole % 60 >= 30 ? 1 : 0)
+        return DurationText.text(Double(minutes) * 60)
     }
 }

@@ -2,12 +2,6 @@ import IssaRender
 import IssaUI
 import SwiftUI
 
-/// What the remote is pointing at.
-enum TVFocus: Hashable {
-    case page
-    case transport
-}
-
 /// One page of the book on a television, and the remote that turns it.
 ///
 /// The page is drawn by `PageSurface` — the same view the phone and the Mac
@@ -100,8 +94,18 @@ struct TVPageView: View {
             switch direction {
             case .left: turn(forward: false)
             case .right: turn(forward: true)
-            case .down: focus = .transport
-            default: break
+            default:
+                // Through `TVFocusMoves`, never `focus = .transport` outright.
+                // Down used to move focus off the page whether or not there was
+                // a transport row to move it to, and on a plain ebook there was
+                // not: `onMoveCommand` is attached to the page, so once focus
+                // left it Left and Right stopped turning pages and Menu — which
+                // leaves the book — was the only way out.
+                if let next = TVFocusMoves.destination(
+                    for: direction, from: .page, hasNarration: model.hasNarration,
+                ) {
+                    focus = next
+                }
             }
         }
         .modifier(PageAccessibility(model: model))

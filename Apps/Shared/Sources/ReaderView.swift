@@ -1,3 +1,9 @@
+#if os(tvOS)
+// For `AccessibilityNotification.PageScrolled`: UIKit's own page-scrolled
+// notification is declared for iOS and watchOS only, so the television has no
+// other way to say that a page turned.
+import Accessibility
+#endif
 import IssaCore
 import IssaPlayback
 import IssaRender
@@ -1380,45 +1386,34 @@ struct PageAccessibility: ViewModifier {
             .accessibilityTextContentType(.narrative)
             // A three-finger swipe is what people try in every other paged app.
             .accessibilityScrollAction { edge in
-                Task {
-                    switch edge {
-                    case .top, .leading: await model.previousPage()
-                    default: await model.nextPage()
-                    }
-                    Self.announcePage(model)
+                switch edge {
+                case .top, .leading: turn(forward: false)
+                default: turn(forward: true)
                 }
             }
             // The canvas still carries a tap gesture for sighted readers, and
             // SwiftUI would otherwise synthesise activation from it — a
             // double-tap would start narration at the page's centre. Claiming
             // the default action makes activation mean something sensible.
-            .accessibilityAction {
-                Task {
-                    await model.nextPage()
-                    Self.announcePage(model)
-                }
-            }
-            .accessibilityAction(named: "Next page") {
-                Task {
-                    await model.nextPage()
-                    Self.announcePage(model)
-                }
-            }
-            .accessibilityAction(named: "Previous page") {
-                Task {
-                    await model.previousPage()
-                    Self.announcePage(model)
-                }
-            }
+            .accessibilityAction { turn(forward: true) }
+            .accessibilityAction(named: "Next page") { turn(forward: true) }
+            .accessibilityAction(named: "Previous page") { turn(forward: false) }
             // Named for what it will actually do, since it is a toggle: an
             // action offered as "Bookmark this page" that silently deletes the
             // bookmark already there is the worst kind of surprise.
             .accessibilityAction(named: model.isPageBookmarked ? "Remove bookmark" : "Bookmark this page") {
                 model.toggleBookmark()
             }
+            // Not on the television, which has no pasteboard at all — see the
+            // header of `Clipboard`, where `copy` compiles to nothing. The
+            // action was offered there and silently did nothing, and a rotor
+            // entry that answers a deliberate double-tap with silence is worse
+            // than one that was never listed.
+            #if !os(tvOS)
             .accessibilityAction(named: "Copy page") {
                 Clipboard.copy(model.spokenPageText)
             }
+            #endif
             .accessibilityActions {
                 // Selection is made with a long press and a drag, which
                 // VoiceOver consumes — so highlighting, and playing a sentence,
@@ -1434,6 +1429,28 @@ struct PageAccessibility: ViewModifier {
             }
     }
 
+    /// Every page turn VoiceOver can make, spelled once.
+    ///
+    /// `turnPage(forward:)`, not `nextPage()`/`previousPage()`. On the
+    /// television `TVReaderStyle` forces `followNarration` on, because there
+    /// the page *is* the scrubber — so a turn that moves the page without
+    /// seeking the voice is snapped straight back at the next sentence
+    /// boundary, and a reader using VoiceOver could not move forward at all.
+    ///
+    /// It changes the phone and the Mac in exactly one case, and deliberately: a
+    /// page turned from the rotor while narration is playing now takes the voice
+    /// with it. `turnPage`'s own doc justifies leaving the voice behind by the
+    /// phone having a scrubber and a sentence to tap, and a reader using
+    /// VoiceOver has neither — selection is a long press and a drag, which
+    /// VoiceOver consumes, and that is the very reason these actions exist. A
+    /// paused book still turns silently, here as everywhere.
+    private func turn(forward: Bool) {
+        Task {
+            await model.turnPage(forward: forward)
+            Self.announcePage(model)
+        }
+    }
+
     /// Says where the reader has landed.
     ///
     /// A label that changes under an already-focused element is not spoken —
@@ -1441,7 +1458,14 @@ struct PageAccessibility: ViewModifier {
     /// the rotor would otherwise be met with silence.
     @MainActor
     static func announcePage(_ model: ReaderModel) {
-        #if canImport(UIKit) && !os(tvOS)
+        #if os(tvOS)
+        // `UIAccessibilityPageScrolledNotification` is declared for iOS and
+        // watchOS only, so the branch below is genuinely unavailable here and
+        // every turn on the television was silent. The Accessibility
+        // framework's own spelling of the same notification is on tvOS from 17,
+        // and this app's floor is 26.
+        AccessibilityNotification.PageScrolled(model.spokenPagePosition).post()
+        #elseif canImport(UIKit)
         UIAccessibility.post(notification: .pageScrolled, argument: model.spokenPagePosition)
         #endif
     }

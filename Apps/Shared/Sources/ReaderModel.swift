@@ -859,8 +859,17 @@ public final class ReaderModel {
 
         // 1. What the reader can see, or the next narrated sentence after it in
         //    this chapter: a page often opens on a heading or a plate carrying
-        //    no overlay of its own while the prose beneath it is narrated.
-        if let fragment = firstNarratedFragment(continuingPastPage: true),
+        //    no overlay of its own while the prose beneath it is narrated. The
+        //    rest of the chapter, not two pages of it: the proximity check
+        //    below is this rung's bound, and it is the better one here because
+        //    it is measured in the book's own progress rather than in
+        //    characters.
+        if let layout, let page = currentPage,
+           let rest = NarrationReach.restOfChapter(
+               fromPageTop: page.characterRange.location,
+               inTextOfLength: layout.attributedText.length,
+           ),
+           let fragment = firstNarratedFragment(in: rest, carriedOver: true),
            let entry = timeline.entry(forFragment: fragment) {
             return (entry, "page")
         }
@@ -981,42 +990,48 @@ public final class ReaderModel {
         ])
     }
 
-    /// The first narrated fragment at or after the top of the current page.
+    /// The first narrated fragment inside a stretch of the chapter's text.
     ///
-    /// `continuingPastPage: false` is the page-scoped question;`true` carries on
-    /// to the end of the chapter, which is what "start reading aloud from here"
-    /// wants when the page itself is a heading, a plate or a chapter opening.
-    func firstNarratedFragment(continuingPastPage carryOn: Bool) -> String? {
-        guard let layout, let page = currentPage, let timeline else { return nil }
-        let length = (layout.attributedText.string as NSString).length
-        let start = page.characterRange.location
-        guard start < length else { return nil }
-        let range = carryOn
-            ? NSRange(location: start, length: length - start)
-            : page.characterRange
+    /// One scanner. There were three, alike but for the range they walked and
+    /// whether a sentence carried over from before it counted — and the range
+    /// was what was wrong with one of them, so it is now the caller's to name
+    /// out loud at each site rather than a flag buried in here.
+    ///
+    /// The range is checked against the text it is walked over. `page`
+    /// character ranges reach this from several directions, `enumerateAttribute`
+    /// raises `NSRangeException` — an Objective-C exception Swift cannot catch,
+    /// so the process goes down — and `computePages` can emit a synthetic
+    /// trailing page at `{totalLength, 0}`. `playSelection` guards the same way,
+    /// for the same reason.
+    ///
+    /// - Parameter carriedOver: whether a fragment that *began* before `range`
+    ///   counts. `false` is what a page turn wants: the sentence a page opens
+    ///   with is usually one carried over from the page before, and seeking to
+    ///   it would turn the page straight back. A fragment whose own extent
+    ///   cannot be resolved is skipped rather than assumed to begin here.
+    private func firstNarratedFragment(in range: NSRange, carriedOver: Bool) -> String? {
+        guard let layout, let timeline else { return nil }
+        let text = layout.attributedText
+        guard range.location >= 0, range.length > 0, NSMaxRange(range) <= text.length
+        else { return nil }
         var found: String?
-        layout.attributedText.enumerateAttribute(.issaFragmentID, in: range) { value, _, stop in
-            if let id = value as? String, timeline.entry(forFragment: id) != nil {
-                found = id
-                stop.pointee = true
+        text.enumerateAttribute(.issaFragmentID, in: range) { value, _, stop in
+            guard let id = value as? String, timeline.entry(forFragment: id) != nil
+            else { return }
+            if !carriedOver {
+                guard let whole = layout.fragmentRange(for: id), whole.location >= range.location
+                else { return }
             }
+            found = id
+            stop.pointee = true
         }
         return found
     }
 
     /// The first media-overlay fragment appearing on the current page.
     func firstFragmentOnCurrentPage() -> String? {
-        guard let layout, let page = currentPage, let timeline else { return nil }
-        var found: String?
-        layout.attributedText.enumerateAttribute(
-            .issaFragmentID, in: page.characterRange,
-        ) { value, _, stop in
-            if let id = value as? String, timeline.entry(forFragment: id) != nil {
-                found = id
-                stop.pointee = true
-            }
-        }
-        return found
+        guard let page = currentPage else { return nil }
+        return firstNarratedFragment(in: page.characterRange, carriedOver: true)
     }
 
     /// The first narrated sentence that *begins* on a page.
@@ -1028,28 +1043,21 @@ public final class ReaderModel {
     ///
     /// Falls back to the next narrated sentence starting anywhere *after* the
     /// page's top when nothing begins on the page itself — one long sentence
-    /// covering the whole page, or a page of heading and plate.
+    /// covering the whole page, or a page of heading and plate — and stops at
+    /// `NarrationReach`, which is where the fallback's honesty runs out. It used
+    /// to run to the end of the chapter.
     func firstNarratedFragment(beginningOn page: RenderedPage) -> String? {
         guard let layout, let timeline else { return nil }
         if let id = layout.firstFragment(
             beginningOn: page, matching: { timeline.entry(forFragment: $0) != nil },
         ) { return id }
 
-        let text = layout.attributedText
-        let length = (text.string as NSString).length
-        let start = page.characterRange.location
-        guard start < length else { return nil }
-        var found: String?
-        text.enumerateAttribute(
-            .issaFragmentID, in: NSRange(location: start, length: length - start),
-        ) { value, _, stop in
-            guard let id = value as? String, timeline.entry(forFragment: id) != nil,
-                  let whole = layout.fragmentRange(for: id), whole.location >= start
-            else { return }
-            found = id
-            stop.pointee = true
-        }
-        return found
+        guard let reach = NarrationReach.range(
+            fromPageTop: page.characterRange.location,
+            pageLength: page.characterRange.length,
+            inTextOfLength: layout.attributedText.length,
+        ) else { return nil }
+        return firstNarratedFragment(in: reach, carriedOver: false)
     }
 
     /// Whether the voice is speaking a sentence on the page being shown.
