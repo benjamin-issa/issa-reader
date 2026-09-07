@@ -12,7 +12,8 @@ struct SearchBookToolTests {
         let (store, _, directory) = try await AskFixture.preparedStore()
         defer { AskFixture.remove(directory) }
         let tool = SearchBookTool(
-            store: store, boundary: try AskFixture.endOf(spine: AskFixture.Spine.chapterVI),
+            store: store, bookUUID: AskFixture.bookUUID,
+            boundary: try AskFixture.endOf(spine: AskFixture.Spine.chapterVI),
         )
         await tool.beginGeneration(numberingFrom: 7)
 
@@ -35,7 +36,8 @@ struct SearchBookToolTests {
         let (store, _, directory) = try await AskFixture.preparedStore()
         defer { AskFixture.remove(directory) }
         let tool = SearchBookTool(
-            store: store, boundary: try AskFixture.endOf(spine: AskFixture.Spine.chapterVI),
+            store: store, bookUUID: AskFixture.bookUUID,
+            boundary: try AskFixture.endOf(spine: AskFixture.Spine.chapterVI),
         )
         await tool.beginGeneration(numberingFrom: 7)
         _ = try await tool.call(arguments: .init(query: "rabbit"))
@@ -56,7 +58,8 @@ struct SearchBookToolTests {
         // retrieval used; there is no path through this type that can reach a
         // passage the reader has not read, whatever the model asks for.
         let tool = SearchBookTool(
-            store: store, boundary: try AskFixture.endOf(spine: AskFixture.Spine.chapterI),
+            store: store, bookUUID: AskFixture.bookUUID,
+            boundary: try AskFixture.endOf(spine: AskFixture.Spine.chapterI),
         )
         await tool.beginGeneration(numberingFrom: 7)
         let result = try await tool.call(arguments: .init(query: "Cheshire Cat grin"))
@@ -68,7 +71,8 @@ struct SearchBookToolTests {
         let (store, _, directory) = try await AskFixture.preparedStore()
         defer { AskFixture.remove(directory) }
         let tool = SearchBookTool(
-            store: store, boundary: try AskFixture.endOf(spine: AskFixture.Spine.chapterVI),
+            store: store, bookUUID: AskFixture.bookUUID,
+            boundary: try AskFixture.endOf(spine: AskFixture.Spine.chapterVI),
         )
         await tool.beginGeneration(numberingFrom: 7)
         let result = try await tool.call(arguments: .init(query: "duchess baby pepper"))
@@ -83,7 +87,8 @@ struct SearchBookToolTests {
         let (store, _, directory) = try await AskFixture.preparedStore()
         defer { AskFixture.remove(directory) }
         let tool = SearchBookTool(
-            store: store, boundary: try AskFixture.endOf(spine: AskFixture.Spine.chapterI),
+            store: store, bookUUID: AskFixture.bookUUID,
+            boundary: try AskFixture.endOf(spine: AskFixture.Spine.chapterI),
         )
         await tool.beginGeneration(numberingFrom: 3)
         #expect(try await tool.call(arguments: .init(query: "zxqwv")) == SearchBookTool.noMatches)
@@ -94,7 +99,8 @@ struct SearchBookToolTests {
         let (store, _, directory) = try await AskFixture.preparedStore()
         defer { AskFixture.remove(directory) }
         let tool = SearchBookTool(
-            store: store, boundary: try AskFixture.endOf(spine: AskFixture.Spine.chapterVI),
+            store: store, bookUUID: AskFixture.bookUUID,
+            boundary: try AskFixture.endOf(spine: AskFixture.Spine.chapterVI),
         )
         await tool.beginGeneration(numberingFrom: 7)
 
@@ -115,7 +121,8 @@ struct SearchBookToolTests {
         let (store, _, directory) = try await AskFixture.preparedStore()
         defer { AskFixture.remove(directory) }
         let tool = SearchBookTool(
-            store: store, boundary: try AskFixture.endOf(spine: AskFixture.Spine.chapterI),
+            store: store, bookUUID: AskFixture.bookUUID,
+            boundary: try AskFixture.endOf(spine: AskFixture.Spine.chapterI),
         )
         await tool.beginGeneration(numberingFrom: 7)
 

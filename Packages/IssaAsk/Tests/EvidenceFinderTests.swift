@@ -132,8 +132,8 @@ struct EvidenceFinderTests {
     ) async throws -> ([Evidence], AskIndexStore, URL) {
         let (store, _, directory) = try await AskFixture.preparedStore()
         let boundary = try AskFixture.endOf(spine: spine)
-        let known = try await store.topNames(before: boundary, limit: 200)
-        let retriever = AskRetriever(store: store, boundary: boundary)
+        let known = try await store.topNames(in: AskFixture.bookUUID, before: boundary, limit: 200)
+        let retriever = AskRetriever(store: store, bookUUID: AskFixture.bookUUID, boundary: boundary)
         let terms = QueryTerms.extract(from: question, knownNames: known)
         return (try await retriever.evidence(for: terms), store, directory)
     }
@@ -213,11 +213,11 @@ struct EvidenceFinderTests {
 
         for fixture in try AskQuestionFixture.all() {
             let boundary = try fixture.boundary
-            let known = try await store.topNames(before: boundary, limit: 200)
+            let known = try await store.topNames(in: AskFixture.bookUUID, before: boundary, limit: 200)
             let terms = QueryTerms.extract(from: fixture.question, knownNames: known)
             #expect(terms.kind.label == fixture.kind, "\(fixture.question) @ \(fixture.spine)")
 
-            let retriever = AskRetriever(store: store, boundary: boundary)
+            let retriever = AskRetriever(store: store, bookUUID: AskFixture.bookUUID, boundary: boundary)
             let evidence = try await retriever.evidence(for: terms)
             let text = evidence.map(\.excerpt.text).joined(separator: "\n").lowercased()
             for needle in fixture.evidenceContains {
@@ -248,7 +248,7 @@ struct EvidenceFinderTests {
         let (store, _, directory) = try await AskFixture.preparedStore()
         defer { AskFixture.remove(directory) }
         let boundary = try AskFixture.endOf(spine: AskFixture.Spine.chapterVI)
-        let retriever = AskRetriever(store: store, boundary: boundary)
+        let retriever = AskRetriever(store: store, bookUUID: AskFixture.bookUUID, boundary: boundary)
         let terms = QueryTerms.extract(from: "Who is Alice?", knownNames: ["Alice"])
 
         let start = ContinuousClock.now

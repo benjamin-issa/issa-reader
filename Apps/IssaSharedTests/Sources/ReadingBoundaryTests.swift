@@ -113,7 +113,9 @@ struct ReadingBoundaryTests {
         let end = ReadingBoundary(
             spineIndex: Self.chapterI, charOffset: (onScreen as NSString).length,
         )
-        let passages = try await store.recapPassages(before: end, limit: 200)
+        let passages = try await store.recapPassages(
+            in: "alice-uuid", before: end, limit: 200,
+        )
             .map(\.passage)
             .filter { $0.spineIndex == Self.chapterI }
         #expect(!passages.isEmpty, "the chapter has to have been indexed for this to test anything")

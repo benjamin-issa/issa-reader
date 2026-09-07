@@ -21,7 +21,8 @@ struct BoundaryTests {
         // into "The story hasn't revealed that yet." without calling the model.
         let terms = QueryTerms.extract(from: "Who is the Cheshire Cat?")
         let hits = try await store.retrieve(
-            terms: terms, before: AskFixture.endOf(spine: AskFixture.Spine.chapterI),
+            terms: terms, in: AskFixture.bookUUID,
+            before: AskFixture.endOf(spine: AskFixture.Spine.chapterI),
         )
         #expect(hits.allSatisfy { !$0.passage.text.lowercased().contains("cheshire") })
     }
@@ -33,7 +34,8 @@ struct BoundaryTests {
 
         let terms = QueryTerms.extract(from: "Who is the Cheshire Cat?")
         let hits = try await store.retrieve(
-            terms: terms, before: AskFixture.endOf(spine: AskFixture.Spine.chapterVI),
+            terms: terms, in: AskFixture.bookUUID,
+            before: AskFixture.endOf(spine: AskFixture.Spine.chapterVI),
         )
         // The control for the test above: if this were empty too, that one
         // would be passing for the wrong reason.
@@ -51,7 +53,9 @@ struct BoundaryTests {
         // A deliberately greedy query: common words that appear on every page
         // of the book, so anything the clause admits will be returned.
         let terms = QueryTerms.extract(from: "Alice said the queen was very little and rather curious")
-        let hits = try await store.retrieve(terms: terms, before: boundary, limit: 200)
+        let hits = try await store.retrieve(
+            terms: terms, in: AskFixture.bookUUID, before: boundary, limit: 200,
+        )
         try #require(!hits.isEmpty)
         #expect(hits.allSatisfy { $0.passage.spineIndex <= boundary.spineIndex })
         #expect(hits.allSatisfy {
@@ -80,7 +84,7 @@ struct BoundaryTests {
 
         let boundary = ReadingBoundary(spineIndex: spine, charOffset: straddled.start + cut)
         let hits = try await store.retrieve(
-            terms: QueryTerms.extract(from: word), before: boundary, limit: 200,
+            terms: QueryTerms.extract(from: word), in: AskFixture.bookUUID, before: boundary, limit: 200,
         )
         let found = try #require(hits.first { $0.passage.ordinal == straddled.ordinal })
         #expect(found.isTruncated)
@@ -104,7 +108,7 @@ struct BoundaryTests {
         let boundary = ReadingBoundary(spineIndex: spine, charOffset: target.start)
         let word = try #require(QueryTerms.tokens(in: target.text).first { $0.count >= 6 })
         let hits = try await store.retrieve(
-            terms: QueryTerms.extract(from: word), before: boundary, limit: 200,
+            terms: QueryTerms.extract(from: word), in: AskFixture.bookUUID, before: boundary, limit: 200,
         )
         #expect(!hits.contains { $0.passage.ordinal == target.ordinal })
     }
@@ -117,7 +121,7 @@ struct BoundaryTests {
         defer { AskFixture.remove(directory) }
 
         let boundary = try AskFixture.endOf(spine: AskFixture.Spine.chapterII)
-        let recap = try await store.recapPassages(before: boundary, limit: 6)
+        let recap = try await store.recapPassages(in: AskFixture.bookUUID, before: boundary, limit: 6)
         try #require(!recap.isEmpty)
         #expect(recap.allSatisfy { $0.passage.spineIndex <= boundary.spineIndex })
         // In reading order: a recap read backwards is a worse recap, and a model
@@ -136,12 +140,14 @@ struct BoundaryTests {
         // whole would retrieve plenty; it is "Cheshire" that gives it away.
         let candidates = QueryTerms.extract(from: "Who is the Cheshire Cat?").nameCandidates
         let early = try await store.unmetWords(
-            candidates, before: AskFixture.endOf(spine: AskFixture.Spine.chapterI),
+            candidates, in: AskFixture.bookUUID,
+            before: AskFixture.endOf(spine: AskFixture.Spine.chapterI),
         )
         #expect(early == ["cheshire"])
 
         let later = try await store.unmetWords(
-            candidates, before: AskFixture.endOf(spine: AskFixture.Spine.chapterVI),
+            candidates, in: AskFixture.bookUUID,
+            before: AskFixture.endOf(spine: AskFixture.Spine.chapterVI),
         )
         #expect(later.isEmpty)
     }
@@ -152,10 +158,99 @@ struct BoundaryTests {
         defer { AskFixture.remove(directory) }
 
         let early = try await store.topNames(
+            in: AskFixture.bookUUID,
             before: AskFixture.endOf(spine: AskFixture.Spine.chapterI), limit: 50,
         )
         // The suggestion chip offers "Who is <name>?"; naming someone forty
         // pages ahead would be a spoiler printed on the sheet itself.
         #expect(!early.contains { $0.lowercased().contains("cheshire") })
+    }
+
+    // MARK: - Which book
+
+    /// Two paragraphs from another novel entirely, so a passage that arrives
+    /// from the wrong book is unmistakable rather than a plausible near miss.
+    static let otherBook = [
+        "Vin had grown up on the streets of Luthadel, in the ash and the mist, and she had "
+            + "learned very early that a girl who trusted anybody at all did not last long there.",
+        "Her brother, Reen, had trained her to trust nobody, and then he had left her alone in "
+            + "that city without so much as a word of warning about what was coming for them.",
+    ]
+
+    /// One store, both books, and a handle for each.
+    static func twoBooks() throws -> (AskIndexStore, BookSource, BookSource, URL) {
+        let directory = try AskFixture.temporaryDirectory()
+        let alice = try AskFixture.source()
+        let (other, _) = try AskFixture.writeSyntheticIndex(
+            chapters: [otherBook], bookUUID: AskFixture.otherBookUUID, in: directory,
+        )
+        return (AskIndexStore(directory: directory), alice, other, directory)
+    }
+
+    @Test("a book prepared second cannot answer for the book prepared first")
+    func aSecondBookDoesNotAnswerForTheFirst() async throws {
+        let (store, alice, other, directory) = try Self.twoBooks()
+        defer { AskFixture.remove(directory) }
+
+        try await store.prepare(source: alice)
+        // Opening a second book's Ask sheet does exactly this and no more.
+        try await store.prepare(source: other)
+
+        let boundary = try AskFixture.endOf(spine: AskFixture.Spine.chapterI)
+        let alices = try await store.retrieve(
+            terms: QueryTerms.extract(from: "What did Alice follow down the hole?"),
+            in: AskFixture.bookUUID, before: boundary,
+        )
+        #expect(alices.contains { $0.passage.text.lowercased().contains("rabbit") })
+
+        // The leak the uuid closes: with the book remembered rather than named,
+        // this same call came back with "Vin had grown up on the streets of
+        // Luthadel" — the *other* book's text, cut at a page number from this
+        // one, in front of a reader of *Alice*.
+        let elsewhere = try await store.retrieve(
+            terms: QueryTerms.extract(from: "Who is Reen?"),
+            in: AskFixture.bookUUID, before: boundary,
+        )
+        #expect(!elsewhere.contains { $0.passage.text.lowercased().contains("reen") })
+
+        // The mirror, so this cannot pass by answering everything from Alice.
+        let theirs = try await store.retrieve(
+            terms: QueryTerms.extract(from: "Who is Reen?"),
+            in: AskFixture.otherBookUUID,
+            before: ReadingBoundary(spineIndex: 0, charOffset: .max),
+        )
+        #expect(theirs.contains { $0.passage.text.lowercased().contains("reen") })
+    }
+
+    @Test("a read-only availability check does not repoint the store")
+    func availabilityCheckIsReadOnly() async throws {
+        let (store, alice, other, directory) = try Self.twoBooks()
+        defer { AskFixture.remove(directory) }
+
+        try await store.prepare(source: alice)
+        try await store.prepare(source: other)
+
+        // Drawing a sheet's chips asks this and nothing else. It used to open
+        // the file through a helper that also recorded which book the store was
+        // answering about, so a question already in flight about the other book
+        // silently changed which book it was about.
+        #expect(await store.isPrepared(source: alice))
+
+        let theirs = try await store.retrieve(
+            terms: QueryTerms.extract(from: "Who is Reen?"),
+            in: AskFixture.otherBookUUID,
+            before: ReadingBoundary(spineIndex: 0, charOffset: .max),
+        )
+        #expect(theirs.contains { $0.passage.text.lowercased().contains("reen") })
+
+        // And in the other direction, so neither book is being answered from
+        // whichever one was asked about last.
+        #expect(await store.isPrepared(source: other))
+        let alices = try await store.retrieve(
+            terms: QueryTerms.extract(from: "What did Alice follow down the hole?"),
+            in: AskFixture.bookUUID,
+            before: try AskFixture.endOf(spine: AskFixture.Spine.chapterI),
+        )
+        #expect(alices.contains { $0.passage.text.lowercased().contains("rabbit") })
     }
 }

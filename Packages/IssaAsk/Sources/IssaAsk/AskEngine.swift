@@ -69,7 +69,9 @@ public actor AskEngine {
     /// that fill in eight seconds later.
     public func suggestions(source: BookSource, boundary: ReadingBoundary) async -> [String] {
         guard await store.isPrepared(source: source),
-              let names = try? await store.topNames(before: boundary, limit: 1)
+              let names = try? await store.topNames(
+                  in: source.bookUUID, before: boundary, limit: 1,
+              )
         else { return AskSuggestions.chips(topNames: []) }
         return AskSuggestions.chips(topNames: names)
     }
@@ -140,7 +142,8 @@ public actor AskEngine {
         try Task.checkCancellation()
         continuation.yield(.phase(.retrieving))
         let retriever = AskRetriever(
-            store: store, boundary: boundary, allowsFastPath: Self.usesKinshipFastPath,
+            store: store, bookUUID: source.bookUUID, boundary: boundary,
+            allowsFastPath: Self.usesKinshipFastPath,
         )
         let retrieval = try await retriever.retrieve(question: question)
         let sanitised = QueryTerms.sanitise(question)
@@ -166,7 +169,10 @@ public actor AskEngine {
         // an unvetted path is a path somebody will later route around.
         case let .answered(answer, _):
             continuation.yield(.answered(
-                try await vetted(answer, question: sanitised, boundary: boundary),
+                try await vetted(
+                    answer, question: sanitised,
+                    bookUUID: source.bookUUID, boundary: boundary,
+                ),
             ))
 
         case let .evidence(ranked, _):
@@ -177,7 +183,10 @@ public actor AskEngine {
             )
             try Task.checkCancellation()
             continuation.yield(.answered(
-                try await vetted(generated, question: sanitised, boundary: boundary),
+                try await vetted(
+                    generated, question: sanitised,
+                    bookUUID: source.bookUUID, boundary: boundary,
+                ),
             ))
         }
     }
@@ -209,12 +218,12 @@ public actor AskEngine {
     /// fell" without asking the tagger — and words already in the question are
     /// exempt because the question-side guard has ruled on those.
     private func vetted(
-        _ answer: AskAnswer, question: String, boundary: ReadingBoundary,
+        _ answer: AskAnswer, question: String, bookUUID: String, boundary: ReadingBoundary,
     ) async throws -> AskAnswer {
         guard !answer.notYetRevealed else { return answer }
         let candidates = Self.unvettedNames(in: answer.text, question: question)
         guard !candidates.isEmpty else { return answer }
-        let unmet = try await store.unmetWords(candidates, before: boundary)
+        let unmet = try await store.unmetWords(candidates, in: bookUUID, before: boundary)
         guard !unmet.isEmpty else { return answer }
 
         // Never the words themselves: an unmet name is a spoiler, and the log

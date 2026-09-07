@@ -186,7 +186,7 @@ final class AskCoordinator {
         var tools: [any AskTool] = []
         #if canImport(FoundationModels)
         if Self.usesSearchTool {
-            tools = [SearchBookTool(store: store, boundary: boundary)]
+            tools = [SearchBookTool(store: store, bookUUID: uuid, boundary: boundary)]
         }
         #endif
         let engine = AskEngine(model: model, store: store, tools: tools)

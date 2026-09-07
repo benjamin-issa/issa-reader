@@ -75,10 +75,11 @@ struct FTSQueryTests {
             FTSQuery.all(["duchess"], andAnyOf: ["baby", "cook", "pepper"]),
         )
         let loose = try await store.passages(
-            matching: anyWord, before: boundary, order: .relevance, limit: 300,
+            matching: anyWord, in: AskFixture.bookUUID, before: boundary, order: .relevance, limit: 300,
         )
         let tight = try await store.passages(
-            matching: subjectRequired, before: boundary, order: .relevance, limit: 300,
+            matching: subjectRequired, in: AskFixture.bookUUID, before: boundary,
+            order: .relevance, limit: 300,
         )
         try #require(!tight.isEmpty)
         #expect(tight.count < loose.count)
@@ -95,7 +96,7 @@ struct FTSQueryTests {
         let pattern = try #require(FTSQuery.all(["alice"]))
 
         let ordered = try await store.passages(
-            matching: pattern, before: boundary, order: .bookOrder, limit: 8,
+            matching: pattern, in: AskFixture.bookUUID, before: boundary, order: .bookOrder, limit: 8,
         )
         try #require(ordered.count == 8)
         let positions = ordered.map { ($0.passage.spineIndex, $0.passage.ordinal) }
@@ -117,6 +118,7 @@ struct FTSQueryTests {
         let pattern = try #require(FTSQuery.any(["cheshire", "grin"]))
         let hits = try await store.passages(
             matching: pattern,
+            in: AskFixture.bookUUID,
             before: AskFixture.endOf(spine: AskFixture.Spine.chapterI),
             order: .bookOrder, limit: 300,
         )

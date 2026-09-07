@@ -80,26 +80,29 @@ public actor AskIndexStore {
         let url = indexURL(for: source.bookUUID)
         let key = source.indexKey
 
-        if let queue = try? existingQueue(at: url, bookUUID: source.bookUUID),
+        if let queue = try? queue(for: source.bookUUID),
            try Self.storedKey(in: queue) == key {
             return false
         }
 
         // Stale, corrupt or absent — all three are the same repair.
         open[source.bookUUID] = nil
-        preparedBookUUID = nil
         try await build(source: source, key: key, destination: url, progress: progress)
         // Opened here so a question asked immediately afterwards finds a handle
         // rather than silently retrieving nothing.
-        _ = try existingQueue(at: url, bookUUID: source.bookUUID)
+        _ = try queue(for: source.bookUUID)
         return true
     }
 
     /// Whether a usable, current index already exists — the question the sheet
     /// asks before deciding to show a progress bar at all.
+    ///
+    /// Read-only, which it once was not: it opened the file through a helper
+    /// that also recorded the book as the one the store was answering about, so
+    /// merely drawing a second book's suggestion chips redirected the first
+    /// book's question. See `queue(for:)`.
     public func isPrepared(source: BookSource) -> Bool {
-        let url = indexURL(for: source.bookUUID)
-        guard let queue = try? existingQueue(at: url, bookUUID: source.bookUUID) else { return false }
+        guard let queue = try? queue(for: source.bookUUID) else { return false }
         return (try? Self.storedKey(in: queue)) == source.indexKey
     }
 
@@ -272,23 +275,14 @@ public actor AskIndexStore {
     /// Two parts: every passage that ends at or before the position, and the one
     /// passage the position falls inside, truncated to the characters actually
     /// read. Nothing later in the book can match, whatever the query says.
-    public func retrieve(
-        terms: QueryTerms, before boundary: ReadingBoundary, limit: Int = 40,
-    ) throws -> [RetrievedPassage] {
-        guard let queue = currentQueue() else { return [] }
-        return try Self.retrieve(terms: terms, before: boundary, limit: limit, in: queue)
-    }
-
-    /// The book the store is currently answering about.
     ///
-    /// Set by `prepare` and by any successful open; retrieval is always about
-    /// one book at a time, because the reader has one book open. Keeping it
-    /// here rather than passing a uuid to every query is what stops a stale
-    /// handle from a previously-read book answering a question about this one.
-    private var preparedBookUUID: String?
-
-    private func currentQueue() -> DatabaseQueue? {
-        preparedBookUUID.flatMap { open[$0] }
+    /// - Parameter bookUUID: which book to answer for. Named at every call
+    ///   rather than remembered, for the reason `queue(for:)` gives.
+    public func retrieve(
+        terms: QueryTerms, in bookUUID: String, before boundary: ReadingBoundary, limit: Int = 40,
+    ) throws -> [RetrievedPassage] {
+        guard let queue = try queue(for: bookUUID) else { return [] }
+        return try Self.retrieve(terms: terms, before: boundary, limit: limit, in: queue)
     }
 
     static func retrieve(
@@ -314,11 +308,12 @@ public actor AskIndexStore {
     /// reader a page they have not read.
     public func passages(
         matching pattern: FTS5Pattern,
+        in bookUUID: String,
         before boundary: ReadingBoundary,
         order: PassageOrder = .relevance,
         limit: Int,
     ) throws -> [RetrievedPassage] {
-        guard let queue = currentQueue() else { return [] }
+        guard let queue = try queue(for: bookUUID) else { return [] }
         return try Self.passages(
             matching: pattern, before: boundary, order: order, limit: limit, in: queue,
         )
@@ -391,9 +386,10 @@ public actor AskIndexStore {
 
     /// The last passages before the boundary, for a "what has happened so far"
     /// question, which has no search terms to match on.
-    public func recapPassages(before boundary: ReadingBoundary, limit: Int = 6) throws
-        -> [RetrievedPassage] {
-        guard let queue = currentQueue() else { return [] }
+    public func recapPassages(
+        in bookUUID: String, before boundary: ReadingBoundary, limit: Int = 6,
+    ) throws -> [RetrievedPassage] {
+        guard let queue = try queue(for: bookUUID) else { return [] }
         return try Self.recapPassages(before: boundary, limit: limit, in: queue)
     }
 
@@ -432,8 +428,13 @@ public actor AskIndexStore {
     /// the straddling passage is vanishingly rare, and counting it as met is the
     /// conservative direction — it lets the question through to retrieval, which
     /// is itself bounded.
-    public func unmetWords(_ words: [String], before boundary: ReadingBoundary) throws -> [String] {
-        guard let queue = currentQueue() else { return words }
+    /// - Parameter bookUUID: which book to probe. No index for it means every
+    ///   word is unmet — the conservative direction, and the opposite of the
+    ///   one the other retrieval methods take: unknown means unmet means refuse.
+    public func unmetWords(
+        _ words: [String], in bookUUID: String, before boundary: ReadingBoundary,
+    ) throws -> [String] {
+        guard let queue = try queue(for: bookUUID) else { return words }
         return try Self.unmetWords(words, before: boundary, in: queue)
     }
 
@@ -462,8 +463,10 @@ public actor AskIndexStore {
 
     /// The people this book has introduced before the boundary, most mentioned
     /// first — the suggestion chip's whole input.
-    public func topNames(before boundary: ReadingBoundary, limit: Int = 5) throws -> [String] {
-        guard let queue = currentQueue() else { return [] }
+    public func topNames(
+        in bookUUID: String, before boundary: ReadingBoundary, limit: Int = 5,
+    ) throws -> [String] {
+        guard let queue = try queue(for: bookUUID) else { return [] }
         return try Self.topNames(before: boundary, limit: limit, in: queue)
     }
 
@@ -499,7 +502,6 @@ public actor AskIndexStore {
     /// leave the text of a deleted book on disk.
     public func remove(bookUUID: String) {
         open[bookUUID] = nil
-        if preparedBookUUID == bookUUID { preparedBookUUID = nil }
         let url = indexURL(for: bookUUID)
         for candidate in [url, Self.buildingURL(for: url)] {
             try? FileManager.default.removeItem(at: candidate)
@@ -511,21 +513,31 @@ public actor AskIndexStore {
     /// Everything. Called on sign-out when the reader asks for downloads to go.
     public func removeAll() {
         open.removeAll()
-        preparedBookUUID = nil
         try? FileManager.default.removeItem(at: directory)
     }
 
     // MARK: - Opening
 
-    private func existingQueue(at url: URL, bookUUID: String) throws -> DatabaseQueue? {
-        if let queue = open[bookUUID] {
-            preparedBookUUID = bookUUID
-            return queue
-        }
+    /// This book's handle, opening the file if it exists and is not open yet.
+    ///
+    /// Caching a handle is all this does. It used to *also* record the book as
+    /// the one the store was answering about, and five retrieval methods took
+    /// no uuid at all and read whichever book was recorded last — so on one
+    /// phone, with one question in flight: ask about *Alice*, dismiss the sheet
+    /// (the job deliberately outlives it), open another book, and its sheet
+    /// calls `prepare` and `isPrepared`. *Alice*'s next hop then resolved to the
+    /// other book's queue while still carrying *Alice*'s spine index and
+    /// character offset — the other book's unread text, cut at a page number
+    /// from a different book, shown to a reader of *Alice*.
+    ///
+    /// The uuid is now a parameter of every query, matching `remove(bookUUID:)`
+    /// and `indexURL(for:)`, which already key on it.
+    private func queue(for bookUUID: String) throws -> DatabaseQueue? {
+        if let queue = open[bookUUID] { return queue }
+        let url = indexURL(for: bookUUID)
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         let queue = try Self.openQueue(at: url)
         open[bookUUID] = queue
-        preparedBookUUID = bookUUID
         return queue
     }
 

@@ -8,10 +8,11 @@ import IssaCore
 /// The reader chose this: the app searches first, and the model may refine.
 /// Everything about the shape of it is a bound rather than a capability.
 ///
-/// - **The boundary is captured at `init`**, from the same value the first-pass
-///   retrieval used, and every call goes through the same `AskIndexStore.retrieve`
-///   with the same SQL clause. There is no path through this type that can
-///   reach a passage the reader has not read, whatever the model asks for.
+/// - **The book and the boundary are captured at `init`**, from the same values
+///   the first-pass retrieval used, and every call goes through the same
+///   `AskIndexStore.retrieve` with the same SQL clause. There is no path through
+///   this type that can reach a passage the reader has not read, or a passage
+///   from a book they are not reading, whatever the model asks for.
 /// - **Two calls**, after which it says so in words the model can act on. Each
 ///   round trip is another three to six seconds on a phone, and a 3B model that
 ///   is told nothing will search five times for rephrasings of one question.
@@ -59,11 +60,16 @@ public final class SearchBookTool: AskTool, Tool {
     static let passageLimit = 2
 
     private let store: AskIndexStore
+    /// Captured at `init` alongside the boundary and for the same reason: one
+    /// store holds every book on the shelf, and a search that named its book
+    /// later than this could be answered from whichever book was opened since.
+    private let bookUUID: String
     private let boundary: ReadingBoundary
     private let budget = Budget()
 
-    public init(store: AskIndexStore, boundary: ReadingBoundary) {
+    public init(store: AskIndexStore, bookUUID: String, boundary: ReadingBoundary) {
         self.store = store
+        self.bookUUID = bookUUID
         self.boundary = boundary
     }
 
@@ -87,7 +93,9 @@ public final class SearchBookTool: AskTool, Tool {
         // `allowsFastPath: false`: the model has already been called, and
         // handing it a finished sentence in place of excerpts is not a search
         // result.
-        let retriever = AskRetriever(store: store, boundary: boundary, allowsFastPath: false)
+        let retriever = AskRetriever(
+            store: store, bookUUID: bookUUID, boundary: boundary, allowsFastPath: false,
+        )
         let retrieval = try? await retriever.retrieve(
             question: arguments.query, limit: Self.passageLimit,
         )

@@ -16,6 +16,11 @@ enum AskFixture {
     /// A bare uuid, so the store names the index file rather than hashing it.
     static let bookUUID = "0f0f0f0f-1111-4222-8333-444444444444"
 
+    /// A second book on the same shelf. One store serves every book the reader
+    /// owns, so "which book is this query about" is a thing tests have to be
+    /// able to get wrong.
+    static let otherBookUUID = "1a1a1a1a-2222-4333-8444-555555555555"
+
     /// Spine indices, read off the fixture's own manifest and spine order.
     ///
     /// The two wrappers in front (the SVG cover and Gutenberg's header page)
@@ -43,7 +48,9 @@ enum AskFixture {
 
     /// A source whose fingerprint is taken from a file the test can change,
     /// while the book itself stays the pristine fixture.
-    static func source(fingerprintedAt fileURL: URL) throws -> BookSource {
+    static func source(
+        fingerprintedAt fileURL: URL, bookUUID: String = AskFixture.bookUUID,
+    ) throws -> BookSource {
         try BookSource(bookUUID: bookUUID, fileURL: fileURL, package: package())
     }
 
@@ -109,9 +116,27 @@ enum AskFixture {
         chapters: [[String]],
     ) throws -> (AskIndexStore, BookSource, ReadingBoundary, URL) {
         let directory = try temporaryDirectory()
-        let fingerprint = directory.appending(path: "book.epub")
+        let (source, boundary) = try writeSyntheticIndex(chapters: chapters, in: directory)
+        return (AskIndexStore(directory: directory), source, boundary, directory)
+    }
+
+    /// The same index, written into a directory the caller already has.
+    ///
+    /// Split out of `syntheticStore` so a test can put *two* books in one
+    /// store, which is all that opening a second book's Ask sheet does — and
+    /// the case the store's per-book routing has to survive. `syntheticStore`'s
+    /// own signature is untouched, so the suites that use it do not move.
+    ///
+    /// - Returns: a source that reports the index as current, and the boundary
+    ///   at the end of the last chapter.
+    static func writeSyntheticIndex(
+        chapters: [[String]],
+        bookUUID: String = AskFixture.bookUUID,
+        in directory: URL,
+    ) throws -> (BookSource, ReadingBoundary) {
+        let fingerprint = directory.appending(path: "book-\(bookUUID).epub")
         try Data("synthetic".utf8).write(to: fingerprint)
-        let source = try source(fingerprintedAt: fingerprint)
+        let source = try source(fingerprintedAt: fingerprint, bookUUID: bookUUID)
 
         let url = AskIndexStore.indexURL(in: directory, bookUUID: bookUUID)
         let queue = try AskIndexStore.openQueue(at: url)
@@ -140,10 +165,8 @@ enum AskFixture {
         try queue.close()
 
         return (
-            AskIndexStore(directory: directory),
             source,
-            ReadingBoundary(spineIndex: max(0, chapters.count - 1), charOffset: lastLength),
-            directory
+            ReadingBoundary(spineIndex: max(0, chapters.count - 1), charOffset: lastLength)
         )
     }
 

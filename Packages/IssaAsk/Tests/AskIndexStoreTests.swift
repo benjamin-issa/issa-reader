@@ -78,6 +78,7 @@ struct AskIndexStoreTests {
         // whose name the reader typed in lower case.
         let unmet = try await store.unmetWords(
             ["alice", "ALICE", "Alice", "dinah"],
+            in: AskFixture.bookUUID,
             before: AskFixture.endOf(spine: AskFixture.Spine.chapterI),
         )
         #expect(unmet.isEmpty)
@@ -117,6 +118,7 @@ struct AskIndexStoreTests {
         defer { AskFixture.remove(directory) }
 
         let names = try await store.topNames(
+            in: AskFixture.bookUUID,
             before: AskFixture.endOf(spine: AskFixture.Spine.chapterVI), limit: 5,
         )
         // The whole suggestion chip rests on this. A capital-letter heuristic
