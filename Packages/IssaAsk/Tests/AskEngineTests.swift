@@ -733,7 +733,7 @@ struct AskEngineTests {
 
     // MARK: - Suggestions
 
-    @Test("the chips name the book's own most-mentioned character, bounded")
+    @Test("the chips name the book's own most-mentioned characters, bounded")
     func suggestionsComeFromTheIndex() async throws {
         let (store, source, directory) = try await AskFixture.preparedStore()
         defer { AskFixture.remove(directory) }
@@ -742,12 +742,36 @@ struct AskEngineTests {
         let chips = await engine.suggestions(
             source: source, boundary: try AskFixture.endOf(spine: AskFixture.Spine.chapterI),
         )
-        #expect(chips.count == 2)
+        #expect(chips.count == 6)
+        // The two that shipped, in the order they shipped in.
         #expect(chips[0] == "Who is Alice?")
+        #expect(chips[1] == AskSuggestions.recap)
+        // Alice's own index also holds "Alice soon began" and "David Widger" as
+        // people — the first an `NLTagger` misfire, the second the Gutenberg
+        // credits — and neither may reach a chip. The second name is the cat.
+        #expect(chips.contains("Who is Dinah?"))
+        #expect(chips.allSatisfy { !$0.contains("Widger") && !$0.contains("soon began") })
+    }
+
+    /// Non-fiction, for the same reason `AskFixture.franklin` exists at all: the
+    /// index's top names on a memoir are the people the author writes about,
+    /// and a chip that offered "Who is Benjamin Franklin?" to a reader of
+    /// Franklin's own autobiography would be the wrong two names.
+    @Test("the chips work on a memoir as well as on a novel")
+    func suggestionsOnNonFiction() async throws {
+        let (store, source, directory) = try await AskFixture.franklin.preparedStore()
+        defer { AskFixture.remove(directory) }
+        let engine = AskEngine(model: ScriptedAnswerModel(), store: store)
+
+        let chips = await engine.suggestions(
+            source: source, boundary: try AskFixture.franklin.endOf(spine: 6),
+        )
+        #expect(chips.count == 6)
+        #expect(chips[0] == "Who is Keimer?")
         #expect(chips[1] == AskSuggestions.recap)
     }
 
-    @Test("an unbuilt index still gives the sheet two chips to draw")
+    @Test("an unbuilt index still gives the sheet chips to draw")
     func suggestionsFallBack() async throws {
         let directory = try AskFixture.temporaryDirectory()
         defer { AskFixture.remove(directory) }

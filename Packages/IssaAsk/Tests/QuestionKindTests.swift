@@ -267,4 +267,54 @@ struct QuestionKindTests {
         #expect(QueryTerms.extract(from: "Summarise the story so far").isRecap)
         #expect(!QueryTerms.extract(from: "Who is Vin?").isRecap)
     }
+
+    // MARK: - "The author" is not a name
+
+    /// The classification half of the Franklin bug.
+    ///
+    /// Every retrieval path except the recap requires its subject of every
+    /// passage it will consider, so a subject of `author` is a search for the
+    /// word "author" dressed up as a name lookup — and in a Gutenberg
+    /// non-fiction book that word is in the boilerplate, in the editor's
+    /// introduction, and in every "author of *X*".
+    @Test("no question can make a word for the book's maker its subject")
+    func rolesAreNeverASubject() {
+        for question in [
+            "What happened to the author's son?",
+            "Who is the author's father?",
+            "Who is the author?",
+            "Tell me about the narrator",
+            "How are the author and the editor related?",
+            "What does the Poet think?",
+        ] {
+            let tokens = Self.subject(question)?.tokens ?? []
+            #expect(
+                tokens.allSatisfy { !QueryTerms.isBookRole($0) },
+                "\(question) → subject \(tokens)",
+            )
+        }
+    }
+
+    /// The book's own name table is the trap. Gutenberg prints "Author:
+    /// Benjamin Franklin" on its header page, so `author` is a name that index
+    /// knows — and the promotion that exists to catch invented names ("Vin",
+    /// "Cheshire") would otherwise catch this one.
+    @Test("a role word the index knows as a name is still not a name")
+    func aKnownRoleIsStillNotASubject() {
+        let kind = Self.kind("Who is the author?", known: ["author", "josiah"])
+        #expect(kind.label == "general")
+        #expect(kind.subject == nil)
+    }
+
+    /// Degrading, not refusing. The question keeps every other word it had, so
+    /// a book that really is about an author is still asked about that author.
+    @Test("a role word beside a real name leaves the real name as the subject")
+    func theRestOfTheQuestionSurvives() {
+        let kind = Self.kind("Who is the author of Frankenstein?", known: ["frankenstein"])
+        #expect(kind.subject?.tokens == ["frankenstein"])
+        // And the kinship reading survives when the owner really is a person.
+        let kinship = Self.kind("Who is Josiah's father?", known: ["josiah"])
+        #expect(kinship.label == "kinship")
+        #expect(kinship.subject?.tokens == ["josiah"])
+    }
 }

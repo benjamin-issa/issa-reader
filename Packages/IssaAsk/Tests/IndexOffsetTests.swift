@@ -61,12 +61,51 @@ struct IndexOffsetTests {
         defer { AskFixture.remove(directory) }
 
         let indexURL = store.indexURL(for: AskFixture.bookUUID)
-        let spine = AskFixture.Spine.chapterI
-        let fresh = PassageChunker.chunk(text: try AskFixture.text(spine: spine), spineIndex: spine)
-        let stored = try AskFixture.storedPassages(spine: spine, indexURL: indexURL)
-        // Rebuilding from the same book must give the same offsets, or an index
-        // built on one launch and used on the next answers about a different
-        // part of the chapter.
-        #expect(fresh == stored)
+        let titles = try AskFixture.package().navigation.map(\.title)
+        // Every chapter, and through `indexable` rather than `chunk`: dropping
+        // the contents table is what the store now does, and comparing against
+        // the unfiltered chunking would only prove the two disagree.
+        for spine in [AskFixture.Spine.chapterI, 1, AskFixture.Spine.chapterVI] {
+            let fresh = PassageChunker.indexable(
+                text: try AskFixture.text(spine: spine), spineIndex: spine,
+                navigationTitles: titles,
+            )
+            let stored = try AskFixture.storedPassages(spine: spine, indexURL: indexURL)
+            // Rebuilding from the same book must give the same offsets, or an
+            // index built on one launch and used on the next answers about a
+            // different part of the chapter.
+            #expect(fresh == stored, "spine \(spine)")
+        }
+    }
+
+    /// The passage that was cited as evidence for "Who is Alice?".
+    ///
+    /// Asserted against the rows the store actually wrote rather than against
+    /// the chunker, because the filter is only worth anything if the *index*
+    /// applies it — a tested function nothing calls is not a fix.
+    @Test("nothing outside the book itself is stored, and the story all is")
+    func theContentsTableIsNotStored() async throws {
+        let (store, source, directory) = try await AskFixture.preparedStore()
+        defer { AskFixture.remove(directory) }
+
+        let indexURL = store.indexURL(for: AskFixture.bookUUID)
+        // Gutenberg's header page: a legal notice, a credits block and a
+        // contents table, and not one sentence of *Alice*.
+        #expect(try AskFixture.storedPassages(spine: 1, indexURL: indexURL).isEmpty)
+        // …and its footer, which is three pages of licence.
+        #expect(try AskFixture
+            .storedPassages(spine: source.package.spine.count - 1, indexURL: indexURL).isEmpty)
+        // Every chapter of the story is untouched.
+        for spine in 2 ... 13 {
+            #expect(try !AskFixture.storedPassages(spine: spine, indexURL: indexURL).isEmpty,
+                    "spine \(spine)")
+        }
+        // And the transcribers are no longer people the reader has met.
+        let names = try await store.topNames(
+            in: AskFixture.bookUUID,
+            before: AskFixture.endOf(spine: AskFixture.Spine.chapterVI), limit: 20,
+        )
+        #expect(!names.contains { $0.contains("Widger") || $0.contains("Carroll") })
+        #expect(names.first == "Alice")
     }
 }

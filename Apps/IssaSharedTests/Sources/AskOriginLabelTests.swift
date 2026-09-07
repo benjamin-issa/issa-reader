@@ -16,7 +16,7 @@ import Testing
 struct AskOriginLabelTests {
     @Test("a model's answer says a model wrote it, on this machine")
     func modelDiscloses() throws {
-        let label = try #require(AskOriginLabel.forOrigin(.model))
+        let label = try #require(AskOriginLabel.forState(.answered(.model)))
         #expect(label.phrase == "Generated on device · Apple Intelligence")
         #expect(label.glyph == "sparkles")
     }
@@ -25,7 +25,7 @@ struct AskOriginLabelTests {
     /// disclosure under it is a claim about text no machine composed.
     @Test("a withheld answer discloses nothing, because nothing was written")
     func withheldDisclosesNothing() {
-        #expect(AskOriginLabel.forOrigin(.withheld) == nil)
+        #expect(AskOriginLabel.forState(.answered(.withheld)) == nil)
     }
 
     /// Quieter, not absent: it is the strongest answer the feature gives — the
@@ -33,17 +33,42 @@ struct AskOriginLabelTests {
     /// saying so is worth more to a reader than an AI disclosure.
     @Test("the book's own sentence says it came from the book")
     func bookGetsItsOwnLabel() throws {
-        let label = try #require(AskOriginLabel.forOrigin(.book))
+        let label = try #require(AskOriginLabel.forState(.answered(.book)))
         #expect(label.phrase == "From the book")
         #expect(!label.phrase.contains("Apple Intelligence"))
         #expect(label.glyph != "sparkles")
     }
 
+    /// The pill used to appear only once an answer existed, so nothing said
+    /// "on device" while the reader was deciding whether to type at all —
+    /// which is the moment the fact could still change their mind.
+    @Test("a blank field still says where the answer will come from")
+    func composingDiscloses() throws {
+        let label = try #require(AskOriginLabel.forState(.unanswered))
+        #expect(label.phrase.contains("Apple Intelligence"))
+        #expect(label.glyph == "sparkles")
+    }
+
+    /// The wording has to differ, because the claim does. "Generated" is a
+    /// statement about words on screen, and before a question is asked there
+    /// are none — a pill claiming a model had written the empty space above it
+    /// is the same defect as the one over the refusal.
+    @Test("nothing is claimed to have been written until something has been")
+    func composingClaimsNothingWasWritten() throws {
+        let composing = try #require(AskOriginLabel.forState(.unanswered))
+        let answered = try #require(AskOriginLabel.forState(.answered(.model)))
+        #expect(composing.phrase != answered.phrase)
+        #expect(!composing.phrase.lowercased().contains("generated"))
+        #expect(!composing.spoken.lowercased().contains("generated"))
+        // …and it still says the thing the reader is being told: on device.
+        #expect(composing.phrase.lowercased().contains("on device"))
+    }
+
     @Test("every label a reader can see is also one VoiceOver can read")
     func everyLabelIsSpoken() {
-        for origin in [AskAnswer.Origin.model, .book] {
-            guard let label = AskOriginLabel.forOrigin(origin) else {
-                Issue.record("\(origin) should be disclosed")
+        for state in [AskOriginState.unanswered, .answered(.model), .answered(.book)] {
+            guard let label = AskOriginLabel.forState(state) else {
+                Issue.record("\(state) should be disclosed")
                 continue
             }
             // Not the phrase itself: the middle dot is punctuation VoiceOver has

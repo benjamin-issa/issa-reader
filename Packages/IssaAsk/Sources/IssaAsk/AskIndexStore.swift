@@ -131,6 +131,10 @@ public actor AskIndexStore {
         try? FileManager.default.removeItem(at: building)
 
         let total = source.package.spine.count
+        // Read once, off the package the caller already opened: the manifest
+        // and the contents are parsed when the EPUB is opened, and asking per
+        // chapter would build the same two sets fifteen times.
+        let navigation = Navigation(package: source.package)
         do {
             let queue = try Self.openQueue(at: building)
             try Self.migrator.migrate(queue)
@@ -143,6 +147,7 @@ public actor AskIndexStore {
 
                 let parsed = await Self.parsedChapter(
                     archive: source.package.archive, href: item.href, spineIndex: index,
+                    navigation: navigation,
                 )
                 guard let parsed else { continue }
                 try Self.insert(parsed, into: queue)
@@ -167,6 +172,36 @@ public actor AskIndexStore {
     }
 
     // MARK: - Chapter parsing
+
+    /// What the book says about its own table of contents, so the index can
+    /// leave it out.
+    ///
+    /// Both signals come out of the OPF `EPUBPackage` has already parsed, so
+    /// nothing here reads the archive. They are needed together because neither
+    /// alone covers a real book: Gutenberg declares a nav document and an NCX
+    /// and puts *neither* in the spine, printing its contents table inside the
+    /// header page instead — so the exact signal fires on nothing at all in
+    /// either fixture, while the header page it misses is the one that was
+    /// caught citing "CHAPTER XII. Alice's Evidence" as evidence.
+    struct Navigation: Sendable {
+        /// Archive paths the manifest declares as navigation. Exact, and
+        /// skipped whole: a document that *is* the table of contents has no
+        /// evidence anywhere in it.
+        var documents: Set<String> = []
+        /// The contents' own entry titles, which is what tells a list of
+        /// chapter headings from a poem of equally short lines.
+        var titles: [String] = []
+
+        init(package: EPUBPackage) {
+            documents = package.navigationDocuments
+            titles = package.navigation.map(\.title)
+        }
+
+        init(documents: Set<String> = [], titles: [String] = []) {
+            self.documents = documents
+            self.titles = titles
+        }
+    }
 
     /// One chapter's passages and names.
     struct ParsedChapter: Sendable {
@@ -209,12 +244,16 @@ public actor AskIndexStore {
     /// half-written index, because nothing is published until the rename.
     nonisolated static func parsedChapter(
         archive: EPUBArchive, href: String, spineIndex: Int,
+        navigation: Navigation = Navigation(),
     ) async -> ParsedChapter? {
-        parseChapter(archive: archive, href: href, spineIndex: spineIndex)
+        parseChapter(
+            archive: archive, href: href, spineIndex: spineIndex, navigation: navigation,
+        )
     }
 
     nonisolated static func parseChapter(
         archive: EPUBArchive, href: String, spineIndex: Int,
+        navigation: Navigation = Navigation(),
     ) -> ParsedChapter? {
         let images = ArchiveImageSource(archive: archive)
         guard let data = try? archive.read(href),
@@ -224,14 +263,36 @@ public actor AskIndexStore {
         else { return nil }
 
         let text = parsed.text.string
-        let passages = PassageChunker.chunk(text: text, spineIndex: spineIndex)
-        let names = NameFinder.names(in: text, spineIndex: spineIndex)
+        // The row is still written, with its real length and no passages: the
+        // chapter exists, the reader can be standing in it, and it simply has
+        // nothing to retrieve. A missing row would say the spine item does not
+        // exist, which is a different and untrue thing.
+        let isNavigation = navigation.documents.contains(href)
+        let passages = isNavigation ? [] : PassageChunker.indexable(
+            text: text, spineIndex: spineIndex, navigationTitles: navigation.titles,
+        )
         return ParsedChapter(
             spineIndex: spineIndex,
             href: href,
             length: (text as NSString).length,
             passages: passages,
-            names: names,
+            // Only the people in the text that survived. A table of contents
+            // introduces nobody — its names are chapter titles, and one of them
+            // ("Alice's Evidence") would tell the boundary the reader had met
+            // Alice on the contents page — and Gutenberg's credits block
+            // introduces its transcribers, which is how "Who is David Widger?"
+            // came to sit beside "Who is Alice?" under the question field.
+            //
+            // Filtered by where the *first* mention falls, not re-tagged over
+            // each passage: `NLTagger` costs far more per call than per
+            // character, and running it two dozen times a chapter to save one
+            // row is the wrong trade on a 250,000-word book. The cost is that a
+            // name introduced in the boilerplate loses this chapter's row
+            // entirely — which for the author's name on a Gutenberg header page
+            // is the outcome wanted anyway.
+            names: NameFinder.names(in: text, spineIndex: spineIndex).filter { name in
+                passages.contains { $0.start <= name.firstOffset && name.firstOffset < $0.end }
+            },
         )
     }
 

@@ -37,16 +37,29 @@ struct AskSheet: View {
 
     private var job: AskJob? { coordinator.job(for: model.book.uuid) }
 
-    /// Who wrote the prose on screen, when there is prose on screen at all.
+    /// What the pill at the foot of the sheet has to say, when it has anything.
     ///
-    /// Nil for a composer or an "Apple Intelligence is off" sentence, which have
-    /// generated nothing to disclose — and nil for `.withheld`, which is an
+    /// Nil for an "Apple Intelligence is off" sentence and for a failure, which
+    /// have nothing to disclose either way, and nil for `.withheld` — an
     /// answered state with nothing behind it: the "not yet" sentinel is a
     /// constant in this repo, and the pill under it used to say a machine had
     /// written it.
-    private var answerOrigin: AskAnswer.Origin? {
-        guard availability.isReady, case let .answered(answer) = job?.state else { return nil }
-        return answer.origin == .withheld ? nil : answer.origin
+    ///
+    /// Not nil for the composer, which is the change. The reader deciding
+    /// whether to type is the one who most needs to know the answer will be
+    /// worked out here, and the pill said nothing at all until an answer
+    /// existed. The working state gets the same wording rather than none, so a
+    /// pill does not blink out for the twenty seconds a generation takes.
+    private var originState: AskOriginState? {
+        guard availability.isReady else { return nil }
+        switch job?.state {
+        case .none, .working:
+            return .unanswered
+        case let .answered(answer):
+            return answer.origin == .withheld ? nil : .answered(answer.origin)
+        case .failed:
+            return nil
+        }
     }
 
     var body: some View {
@@ -57,9 +70,9 @@ struct AskSheet: View {
             // `VStack`: that one is measured to decide between the medium and
             // large detents, and a pill that grew the measurement would open
             // sheets full-height to make room for a caption.
-            if let answerOrigin {
+            if let originState {
                 Spacer(minLength: 0)
-                AskOriginPill(origin: answerOrigin)
+                AskOriginPill(state: originState)
             }
         }
         .padding(Metrics.spacing24)
@@ -129,10 +142,17 @@ struct AskSheet: View {
                 }
                 .accessibilityIdentifier("ask.field")
 
-            // Two, never more: a wall of suggestions is a menu, and the field
-            // above it is what the feature actually is.
-            HStack(spacing: Metrics.spacing8) {
-                ForEach(chips.prefix(2), id: \.self) { chip in
+            // Six, wrapped. Two of them were two spellings of the same idea —
+            // "Who is X?" and the recap — and a reader who wanted to know what
+            // the feature could do learned that it did those two things.
+            //
+            // `FlowRow` rather than an `HStack` that clips or a scroller: the
+            // chips are different lengths, a fixed row leaves the last one half
+            // off the screen, and `AskSourcesRow` explains why a horizontal
+            // scroller inside a sheet detent is a gesture fight. It is the same
+            // layout the book details screen wraps its tags with.
+            FlowRow(spacing: Metrics.spacing8) {
+                ForEach(chips, id: \.self) { chip in
                     Button {
                         question = chip
                         send()

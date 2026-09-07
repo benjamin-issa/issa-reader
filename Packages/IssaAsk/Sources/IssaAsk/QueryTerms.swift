@@ -103,6 +103,11 @@ public struct QueryTerms: Sendable, Hashable {
             // `vin OR s` — which is how "What is the name of Vin's brother?"
             // came back with a pool that never contained "Her brother, Reen".
             let token = strippingPossessive(raw)
+            // Before the promotion below, not after it. Gutenberg's own header
+            // page prints "**Author**: Benjamin Franklin", so `author` is in
+            // the book's name table — and the promotion would make it a name
+            // the FTS pattern requires. See `bookRoles`.
+            guard !isBookRole(token) else { continue }
             if known.contains(token) || known.contains(where: { $0.hasPrefix(token + " ") }) {
                 if !names.contains(where: { $0.lowercased() == token }) { names.append(token) }
                 terms.append(token)
@@ -172,7 +177,11 @@ public struct QueryTerms: Sendable, Hashable {
             // guard tests something that is not the name.
             candidates.formUnion(tokens(in: bare).map(strippingPossessive))
         }
-        return candidates.filter { $0.count > 2 }.sorted()
+        // `bookRoles` filtered last rather than in the loop, because the seed
+        // set above comes from `NLTagger` as well as from the loop, and a
+        // question that capitalises "the Narrator" must not be refused as
+        // naming somebody the book has not introduced.
+        return candidates.filter { $0.count > 2 && !isBookRole($0) }.sorted()
     }
 
     /// Words a sentence capitalises for grammar rather than for a person.
@@ -251,6 +260,58 @@ public struct QueryTerms: Sendable, Hashable {
         "january", "february", "march", "april", "june", "july",
         "august", "september", "october", "november", "december",
     ]
+
+    /// Words that name whoever *made* the book rather than anybody in it.
+    ///
+    /// **Its own list, and not a few more entries in either of the two above**,
+    /// because those two answer different questions. `stopWords` asks "does
+    /// this word carry retrieval signal?" and is deliberately short — `author`
+    /// carries a great deal of signal, which is precisely the problem, and
+    /// `stopWords` is consulted when building `terms` but not when building
+    /// `nameCandidates`, which is the other half of the fix.
+    /// `capitalisedNonNames` asks "did the sentence capitalise this for
+    /// grammar?"; its members are exempt *everywhere in an answer*, so every
+    /// word on it is a word the book can never be caught spoiling, and these
+    /// words are lowercase in prose and would buy nothing there. This list
+    /// answers a third question — "could the book have introduced this as a
+    /// person?" — and the answer has to be no in three places at once: the
+    /// `Subject` every retrieval path requires of every passage, the tokens the
+    /// FTS pattern is built from, and the spoiler probe.
+    ///
+    /// **The bug**, measured on *Autobiography of Benjamin Franklin* (Gutenberg
+    /// #20203). "What happened to the author's son?" made `author` the
+    /// possessive owner, so `Subject.tokens` was `["author"]` and every passage
+    /// had to contain the word — which in a Gutenberg non-fiction book means
+    /// the boilerplate ("**Author**: Benjamin Franklin"), the editor's
+    /// introduction and every "author of *X*". One excerpt came back, about Dr
+    /// Mandeville and Isaac Newton, and the model answered "The author's son
+    /// died." Dropping the word leaves `["happened", "son"]` and the kinship
+    /// group, and the answer became "The author's son died of the small-pox." —
+    /// right, and *longer*, with no prompt change at all. "Who is the author's
+    /// father?" went from "Benjamin Franklin" to "Josiah Franklin" the same way.
+    ///
+    /// `editor` and `translator` are here for the same reason and not for a
+    /// measured one: Gutenberg prints "Editor: Frank Woodworth Pine" in the
+    /// header of the very book above, and a question about the editor fails
+    /// identically. `narrator` is the fiction spelling of the same mistake.
+    ///
+    /// The cost is a book that is genuinely *about* an author: "Who is the
+    /// author of *Frankenstein*?" loses one token from its query and keeps
+    /// every other word. The alternative is the failure above on every memoir.
+    static let bookRoles: Set<String> = [
+        "author", "authors", "writer", "writers", "narrator", "narrators",
+        "poet", "poets", "essayist", "essayists",
+        "editor", "editors", "translator", "translators",
+    ]
+
+    /// Whether this token names the book's maker rather than a person in it.
+    ///
+    /// Possessive-stripped, because the reported question was "What happened to
+    /// the author's son?" and the word arrives as `author's` from a reader who
+    /// wrote it that way.
+    static func isBookRole(_ token: String) -> Bool {
+        bookRoles.contains(strippingPossessive(token.lowercased()))
+    }
 
     /// Collapses whitespace and clamps the length. Nothing is escaped here —
     /// the FTS pattern is built by `FTS5Pattern`, which is the only thing that

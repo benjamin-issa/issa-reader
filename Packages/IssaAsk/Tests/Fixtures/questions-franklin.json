@@ -1,0 +1,77 @@
+{
+  "comment": "Six questions about the franklin.epub fixture (Gutenberg #20203), each with the spine index the reader has finished. Spine 1 is the front matter, the editor's introduction and the letter that opens 'DEAR SON'; spine 2 is 'Josiah, my father'; spine 6 is 'In 1736 I lost one of my sons, a fine boy of four years old, by the small-pox'. The book is here because Alice cannot express the shape the bug was reported in: a memoir has an author in it, a preface by somebody else, and a Gutenberg header printing 'Author: Benjamin Franklin' for the word to match on. Every expectation was read off the fixture's own text.",
+  "questions": [
+    {
+      "name": "the reported case: the author is not a name",
+      "question": "What happened to the author's son?",
+      "spine": 6,
+      "kind": "general",
+      "evidenceContains": ["small-pox"],
+      "evidenceExcludes": [],
+      "answerContainsAny": ["small-pox", "smallpox", "died", "lost"],
+      "answerExcludes": [],
+      "modelCalled": true,
+      "allowsNewNames": true
+    },
+    {
+      "name": "the second reported case, which used to answer Benjamin Franklin",
+      "question": "Who is the author's father?",
+      "spine": 2,
+      "kind": "general",
+      "evidenceContains": ["josiah"],
+      "evidenceExcludes": [],
+      "answerContainsAny": ["josiah"],
+      "answerExcludes": [],
+      "modelCalled": true,
+      "allowsNewNames": true
+    },
+    {
+      "name": "a yes-or-no question about the author",
+      "question": "Does the author have a child?",
+      "spine": 6,
+      "kind": "general",
+      "evidenceContains": ["son"],
+      "evidenceExcludes": [],
+      "answerContainsAny": ["son", "child", "yes"],
+      "answerExcludes": [],
+      "modelCalled": true,
+      "allowsNewNames": true
+    },
+    {
+      "name": "an ordinary identity question in non-fiction",
+      "question": "Who is Josiah?",
+      "spine": 2,
+      "kind": "identity",
+      "evidenceContains": ["josiah"],
+      "evidenceExcludes": [],
+      "answerContainsAny": ["father", "franklin", "boston", "tallow", "chandler", "soap"],
+      "answerExcludes": [],
+      "modelCalled": true,
+      "allowsNewNames": true
+    },
+    {
+      "name": "a plain fact, with nothing left to search on but one word",
+      "question": "Where was the author born?",
+      "spine": 2,
+      "kind": "general",
+      "evidenceContains": ["born"],
+      "evidenceExcludes": [],
+      "answerContainsAny": ["boston", "england"],
+      "answerExcludes": [],
+      "modelCalled": true,
+      "allowsNewNames": true
+    },
+    {
+      "name": "the degradation: a question that is only a role word and filler",
+      "question": "Who is the author of this book?",
+      "spine": 2,
+      "kind": "general",
+      "evidenceContains": [],
+      "evidenceExcludes": [],
+      "answerContainsAny": [],
+      "answerExcludes": [],
+      "modelCalled": true,
+      "allowsNewNames": true
+    }
+  ]
+}

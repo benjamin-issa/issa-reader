@@ -64,7 +64,14 @@ public struct IndexKey: Sendable, Hashable, Codable {
 
     /// Chunking, parsing and the image rule together. Anything that moves a
     /// character in the rendered string belongs here.
-    public static let currentParserVersion = 1
+    ///
+    /// 2 since the index stopped storing navigation: a table of contents is no
+    /// longer a passage, so an index built before this still holds one and
+    /// still cites "CHAPTER XII. Alice's Evidence" as the evidence for "Who is
+    /// Alice?". It changes *what* is stored rather than where it sits, which is
+    /// the other half of what this number is for — an index that is not a
+    /// faithful picture of the book has to be rebuilt whichever way it is wrong.
+    public static let currentParserVersion = 2
     /// 2 since the `name` table grew `nameKey`: an index built before it pools
     /// two spellings of one character as two people.
     public static let currentSchemaVersion = 2

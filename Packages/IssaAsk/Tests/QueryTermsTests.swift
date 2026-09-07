@@ -198,4 +198,66 @@ struct QueryTermsTests {
         // present and is not.
         #expect(QueryTerms.sentenceOpeners.allSatisfy { $0 == $0.lowercased() })
     }
+
+    // MARK: - Words that name the book's maker
+
+    /// The retrieval bug behind "make the AI answers richer".
+    ///
+    /// Measured on *Autobiography of Benjamin Franklin*: "What happened to the
+    /// author's son?" made `author` the possessive owner, so every retrieved
+    /// passage had to contain the word — which in a Gutenberg book means the
+    /// boilerplate, the editor's introduction and every "author of *X*". One
+    /// excerpt came back, about Dr Mandeville and Isaac Newton, and the model
+    /// answered "The author's son died." With the word dropped the same
+    /// question, prompt and cap answer "The author's son died of the
+    /// small-pox." — right, and longer.
+    @Test("a word that names the book's maker is never a search token")
+    func dropsBookRoles() {
+        for question in [
+            "What happened to the author's son?",
+            "Who is the narrator's father?",
+            "What does the editor say about the poet?",
+            "Is the translator reliable?",
+        ] {
+            let terms = QueryTerms.extract(from: question)
+            let dropped = Set(terms.searchTokens).intersection(QueryTerms.bookRoles)
+            #expect(dropped.isEmpty, "\(question) kept \(dropped.sorted())")
+        }
+        // What is left is what the question was actually about.
+        let terms = QueryTerms.extract(from: "What happened to the author's son?")
+        #expect(terms.searchTokens.contains("son"))
+        #expect(terms.searchTokens.contains("happened"))
+    }
+
+    @Test("a book that prints the word in its own header cannot promote it")
+    func aKnownNameCannotBeARole() {
+        // Gutenberg's header page reads "**Author**: Benjamin Franklin", so
+        // `author` really is in that book's name table. The promotion runs
+        // before the stop list, which is why the guard has to run before both.
+        let terms = QueryTerms.extract(
+            from: "Who is the author's father?", knownNames: ["Author", "Josiah"],
+        )
+        #expect(!terms.names.contains { $0.lowercased() == "author" })
+        #expect(!terms.searchTokens.contains("author"))
+    }
+
+    @Test("a capitalised role word is not a name the book has to have introduced")
+    func rolesAreNotSpoilerCandidates() {
+        // `nameCandidates` is the spoiler probe: a word on it that the book has
+        // not used before the reader's position refuses the question outright.
+        // A novel that never prints "Narrator" would refuse to answer anything
+        // about one.
+        let terms = QueryTerms.extract(from: "What does the Narrator think of Alice?")
+        #expect(!terms.nameCandidates.contains("narrator"))
+        #expect(terms.nameCandidates.contains("alice"))
+    }
+
+    @Test("the role list is folded and singular-and-plural, or the lookup misses")
+    func rolesAreFolded() {
+        #expect(QueryTerms.bookRoles.allSatisfy { $0 == $0.lowercased() })
+        // The reported question wrote it as a possessive.
+        #expect(QueryTerms.isBookRole("author's"))
+        #expect(QueryTerms.isBookRole("Authors"))
+        #expect(!QueryTerms.isBookRole("authority"))
+    }
 }

@@ -21,11 +21,19 @@ import SwiftUI
 /// caption that must never move the detent, so it sits outside the `VStack`
 /// `AskSheet` measures. Sources are part of the answer: when a reader opens one,
 /// the height it adds is height the sheet should grow to fit, and the existing
-/// `onContentHeight` → `askDetent` path does exactly that for nothing. Closed,
-/// the row costs roughly fifty points — an 11pt overline, one `spacing8`, and a
-/// 12pt chip inside two `spacing8` paddings — which keeps a short answer under
-/// the 300pt threshold and so on the medium detent, where the page the question
-/// is about stays visible behind it.
+/// `onContentHeight` → `askDetent` path does exactly that for nothing.
+///
+/// **An answer with sources now opens the large detent, and that is right.**
+/// Measured on an iPhone 17 Pro with the first card open by default: the
+/// shortest answer the fixture book gives — "Alice has a sister.", one line —
+/// makes the stack 360 points, and the longest 450. Both are over the 300-point
+/// threshold, but the number that decides it is the medium detent itself: half
+/// of 874 is 437, and the sheet has to fit 24 points of padding, a 22-point
+/// header, the stack, the pill and 24 more points below it. 360 + 94 is 454, so
+/// there is no arrangement in which a card this size fits a half sheet — going
+/// large is not the threshold being too low, it is the content being taller
+/// than the detent. The compose state, which is where a reader decides whether
+/// to type at all, is 300 points with six chips and stays on medium.
 struct AskSourcesRow: View {
     let sources: [AskSource]
     /// The chapter each excerpt is in, resolved by the caller: only
@@ -35,6 +43,14 @@ struct AskSourcesRow: View {
 
     /// Which chip is open, by ordinal. One at a time: two cards stacked under an
     /// answer is the answer scrolled off the top of a half sheet.
+    ///
+    /// Opened on the first source rather than starting closed, and that is the
+    /// answer to "make the answers say more". A prompt arm that asked the model
+    /// for four to eight sentences was measured over 157 real generations: it
+    /// wrote 34% more words and 83% more unsupported claims, and every *true*
+    /// fact it added was already sitting in an excerpt one tap away. So the
+    /// extra sentence comes from the book instead, at zero risk of invention —
+    /// which is what the sources row was built for and what nobody was tapping.
     @State private var opened: Int?
 
     /// Three. A fourth chip wraps to a second row on a phone, and by the fourth
@@ -60,6 +76,10 @@ struct AskSourcesRow: View {
                 }
             }
             .accessibilityIdentifier("ask.sources")
+            // Only when nothing is open, so a reader who closed the card and
+            // came back to the sheet is not overruled by it springing open
+            // again.
+            .onAppear { if opened == nil { opened = shown.first?.ordinal } }
         }
     }
 

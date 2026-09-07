@@ -69,6 +69,34 @@ public struct EPUBPackage: Sendable {
         return ((before + weights[spineIndex] * place) / total).asProgression ?? 0
     }
 
+    /// What an EPUB 2 table of contents is declared as in the manifest.
+    ///
+    /// Written down once, because `parseNavigation` looks for it and so does
+    /// `navigationDocuments`, and the two disagreeing would mean a book whose
+    /// contents is read as navigation in one place and as a chapter in the
+    /// other.
+    public static let ncxMediaType = "application/x-dtbncx+xml"
+
+    /// The archive paths of the documents that *are* the navigation.
+    ///
+    /// The EPUB 3 navigation document (`properties="nav"`) and the EPUB 2 NCX,
+    /// both read straight out of the manifest, which is exact: those two
+    /// declarations are what a producer writes to say "this file is the table
+    /// of contents", and nothing inferred from the text can be as reliable.
+    ///
+    /// Most books keep them out of the spine — both Gutenberg fixtures do — but
+    /// plenty of EPUB 3 books put the nav document in it so the reader can page
+    /// to the contents like any other section. Those are the ones anything
+    /// reading the spine has to be able to tell from a chapter: a list of
+    /// chapter titles is not prose, and the Ask index cites it as evidence.
+    public var navigationDocuments: Set<String> {
+        Set(
+            manifest.values
+                .filter { $0.properties.contains("nav") || $0.mediaType == Self.ncxMediaType }
+                .map(\.href),
+        )
+    }
+
     public struct NavPoint: Sendable, Hashable {
         public let title: String
         /// Archive path of the document, with any fragment removed.
@@ -272,7 +300,7 @@ public extension EPUBPackage {
                 }
             }
         }
-        if let ncx = manifest.values.first(where: { $0.mediaType == "application/x-dtbncx+xml" }) {
+        if let ncx = manifest.values.first(where: { $0.mediaType == ncxMediaType }) {
             let document = try EPUBXML.parse(archive.read(ncx.href))
             return document.descendants("navPoint").compactMap { point in
                 guard let label = point.descendants("text").first?.trimmedText,

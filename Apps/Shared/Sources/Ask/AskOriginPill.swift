@@ -3,7 +3,7 @@ import IssaAsk
 import IssaUI
 import SwiftUI
 
-/// The standing disclosure under an answer: who wrote the words above it.
+/// The standing disclosure in the Ask sheet: where the words come from.
 ///
 /// Apple's guidance for generative features is a small, permanent label rather
 /// than a one-off alert — a reader who dismissed a warning three chapters ago is
@@ -13,23 +13,30 @@ import SwiftUI
 /// sentence above was composed by a model on this hardware, and the question
 /// that produced it never left the building.
 ///
+/// **Shown before the question as well as after the answer.** It used to appear
+/// only once an answer existed, so nothing said "on device" while the reader
+/// was deciding whether to type at all — which is the moment the fact matters
+/// most, and the only moment at which it could change their mind. The wording
+/// differs there because the claim has to: nothing has been generated yet, so
+/// the pill states what the feature *is* rather than what it did.
+///
 /// Neutral rather than tinted, in `BetaPill`'s proportions: it is a caption
 /// about the answer, not a control, and it must never compete with the answer it
 /// sits beneath.
 struct AskOriginPill: View {
-    let origin: AskAnswer.Origin
+    let state: AskOriginState
 
     var body: some View {
-        if let label = AskOriginLabel.forOrigin(origin) {
+        if let label = AskOriginLabel.forState(state) {
             HStack(spacing: Metrics.spacing4) {
                 Image(systemName: label.glyph)
                 Text(label.phrase)
             }
             .font(Typography.caption)
             .foregroundStyle(Palette.inkTertiary)
-            .padding(.horizontal, Metrics.spacing8)
-            .padding(.vertical, Metrics.spacing4 / 2)
-            .background(Palette.surface, in: Capsule())
+            // The shared recipe, not a second copy of the same two numbers —
+            // see `askPill`, which is where the two pills stopped agreeing.
+            .askPill(Palette.surface)
             .overlay(Capsule().strokeBorder(Palette.border, lineWidth: 1))
             // One phrase, not a glyph and a sentence read separately — and the
             // middle dot is punctuation VoiceOver has no good reading of.
@@ -40,6 +47,21 @@ struct AskOriginPill: View {
 }
 
 // MARK: -
+
+/// Where the sheet is when the pill is drawn.
+///
+/// Two cases rather than the four the sheet has, because the pill only ever
+/// answers one question — "who wrote what is on screen?" — and three of the
+/// four states have written nothing. A failure gets no pill at all: a
+/// provenance badge under "Something went wrong" is a claim about text that
+/// does not exist.
+enum AskOriginState: Equatable {
+    /// Nothing has been answered yet: a blank field, or a question still being
+    /// worked out. The pill still appears, saying what the feature will do.
+    case unanswered
+    /// An answer is on screen, and this is where it came from.
+    case answered(AskAnswer.Origin)
+}
 
 /// What the disclosure says, and whether there is one at all.
 ///
@@ -67,15 +89,26 @@ struct AskOriginLabel: Equatable {
     var spoken: String
 
     /// Nil where nothing should be said at all.
-    static func forOrigin(_ origin: AskAnswer.Origin) -> AskOriginLabel? {
-        switch origin {
-        case .model:
+    static func forState(_ state: AskOriginState) -> AskOriginLabel? {
+        switch state {
+        case .unanswered:
+            // No verb in the past tense anywhere in it. The answered label says
+            // "Generated", which is a claim about words on screen; before there
+            // are any, the only honest thing to say is where the work will
+            // happen — and that is what a reader deciding whether to type
+            // wants to know.
+            AskOriginLabel(
+                glyph: "sparkles",
+                phrase: "On device · Apple Intelligence",
+                spoken: "Answers are worked out on this device by Apple Intelligence",
+            )
+        case .answered(.model):
             AskOriginLabel(
                 glyph: "sparkles",
                 phrase: "Generated on device · Apple Intelligence",
                 spoken: "Generated on device by Apple Intelligence",
             )
-        case .book:
+        case .answered(.book):
             // Quotation marks, not a book: what is above it is the book's own
             // sentence, and the mark for that is the one prose uses.
             AskOriginLabel(
@@ -83,7 +116,7 @@ struct AskOriginLabel: Equatable {
                 phrase: "From the book",
                 spoken: "Taken from the book's own words",
             )
-        case .withheld:
+        case .answered(.withheld):
             nil
         }
     }

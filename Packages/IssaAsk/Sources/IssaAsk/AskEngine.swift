@@ -89,15 +89,16 @@ public actor AskEngine {
         await turnstile.ifFree { await self.model.prewarm() }
     }
 
-    /// The two chips under the question field.
+    /// The chips under the question field.
     ///
     /// Falls back to the generic pair when the index is not built yet, so the
-    /// sheet has something to draw immediately rather than two empty capsules
-    /// that fill in eight seconds later.
+    /// sheet has something to draw immediately rather than empty capsules that
+    /// fill in eight seconds later.
     public func suggestions(source: BookSource, boundary: ReadingBoundary) async -> [String] {
         guard await store.isPrepared(source: source),
               let names = try? await store.topNames(
-                  in: source.bookUUID, before: boundary, limit: 1,
+                  in: source.bookUUID, before: boundary,
+                  limit: AskSuggestions.namesWanted,
               )
         else { return AskSuggestions.chips(topNames: []) }
         return AskSuggestions.chips(topNames: names)

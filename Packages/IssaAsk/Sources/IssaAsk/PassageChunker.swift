@@ -72,6 +72,26 @@ public enum PassageChunker {
         /// merged into the one before it — a line of dialogue on its own tells
         /// the model nothing about who said it.
         public static let minimumWords = 40
+
+        /// How many lines a passage needs before its shape is allowed to say
+        /// anything. Three lines is a heading and a paragraph.
+        static let navigationLines = 4
+        /// A line this long is prose, whatever else is around it. Generous,
+        /// because a chapter title runs to nine words in *Alice* ("CHAPTER IV.
+        /// The Rabbit Sends in a Little Bill").
+        static let navigationLineWords = 12
+        /// What share of a passage's lines must be short before it can be a
+        /// contents list. Near-total: the contents tables in both fixtures are
+        /// 100% short lines, and the paragraph that follows a chapter heading
+        /// drops it to two thirds.
+        static let navigationShortShare = 0.9
+        /// What share of a passage's non-numbered lines must be the book's own
+        /// section titles.
+        static let navigationTitleShare = 0.6
+        /// …and how many of them there must be at all, so a chapter opening
+        /// "CHAPTER I. / Down the Rabbit-Hole" — two lines that both look like
+        /// halves of one navigation entry — cannot reach the threshold.
+        static let navigationTitles = 3
     }
 
     /// Splits one chapter's rendered string.
@@ -155,6 +175,157 @@ public enum PassageChunker {
             ))
         }
         return passages
+    }
+
+    // MARK: - What is worth indexing
+
+    /// `chunk`, minus the passages that are a table of contents rather than the
+    /// book.
+    ///
+    /// A second function rather than a filter inside `chunk`, because the
+    /// tiling `chunk` promises is load-bearing: every character of the chapter
+    /// belongs to some passage, which is what lets the straddling passage be
+    /// cut to exactly the characters the reader has read. This is the
+    /// *indexing* decision on top of it. Dropping a passage here only ever
+    /// removes something from retrieval — it cannot move an offset, and the
+    /// passages that remain still carry the offsets `chunk` gave them.
+    ///
+    /// The bug, verified on the simulator: "Who is Alice?" asked at 4% cited
+    /// "CHAPTER XII. Alice's Evidence". Not a boundary leak — the passage is
+    /// Gutenberg's own contents table, which sits on the header page at the
+    /// front of the spine and is legitimately behind the reader — but a list of
+    /// chapter titles is not evidence, and citing one makes the whole feature
+    /// look broken.
+    ///
+    /// - Parameter navigationTitles: the book's own table of contents entries,
+    ///   `EPUBPackage.navigation`. With none of them nothing is dropped, which
+    ///   is the right default: the test is "these lines are the book's section
+    ///   titles", and without the titles there is nothing to be sure about.
+    public static func indexable(
+        text: String, spineIndex: Int, navigationTitles: [String] = [],
+    ) -> [Passage] {
+        var passages = chunk(text: text, spineIndex: spineIndex)
+        let titles = navigationTitles.map { QueryTerms.tokens(in: $0) }.filter { !$0.isEmpty }
+        if !titles.isEmpty {
+            passages = passages.filter { !isNavigationList($0.text, titles: titles) }
+        }
+        let book = bookRange(in: text)
+        return passages.filter { $0.start >= book.location && $0.end <= book.upperBound }
+    }
+
+    /// What of a chapter is the book, when the transcriber says so.
+    ///
+    /// Project Gutenberg wraps every one of its books in a legal notice and a
+    /// credits block, and marks the join itself:
+    ///
+    ///     *** START OF THE PROJECT GUTENBERG EBOOK ALICE'S ADVENTURES … ***
+    ///     *** END OF THE PROJECT GUTENBERG EBOOK ALICE'S ADVENTURES … ***
+    ///
+    /// Those lines exist so that tools can strip what is outside them, and this
+    /// is that. Outside them is a licence, a release date, and a *Credits* line
+    /// — and the credits are people: "Arthur DiBianca and David Widger" are
+    /// tagged as characters, counted in the name table, and offered as
+    /// suggestion chips. On *Alice* at 4%, before Dinah is mentioned, the
+    /// second most-mentioned person the reader had "met" was **David Widger**,
+    /// and the sheet offered "Who is David Widger?" beside "Who is Alice?".
+    ///
+    /// Exact rather than heuristic, which is why it is worth doing at all: the
+    /// marker is a literal string the producer writes, not a shape inferred
+    /// from the prose. A book without one keeps every character it has — the
+    /// range is the whole chapter — so this can only ever remove text that
+    /// announced itself as not being the book.
+    ///
+    /// Both spellings, because Gutenberg has used *THE* and *THIS* over the
+    /// years and the older files are the ones most likely to be on a shelf.
+    static func bookRange(in text: String) -> NSRange {
+        let string = text as NSString
+        var start = 0
+        var end = string.length
+        for opener in boilerplateOpeners {
+            let found = string.range(of: opener)
+            guard found.location != NSNotFound else { continue }
+            start = max(start, found.location + found.length)
+        }
+        for closer in boilerplateClosers {
+            let found = string.range(of: closer)
+            guard found.location != NSNotFound else { continue }
+            end = min(end, found.location)
+        }
+        guard start <= end else { return NSRange(location: 0, length: string.length) }
+        return NSRange(location: start, length: end - start)
+    }
+
+    static let boilerplateOpeners = [
+        "*** START OF THE PROJECT GUTENBERG EBOOK",
+        "*** START OF THIS PROJECT GUTENBERG EBOOK",
+    ]
+    static let boilerplateClosers = [
+        "*** END OF THE PROJECT GUTENBERG EBOOK",
+        "*** END OF THIS PROJECT GUTENBERG EBOOK",
+    ]
+
+    /// Whether this passage is a list of the book's own section titles.
+    ///
+    /// **Three gates, and all three are needed.** *Alice*'s contents table and
+    /// the Mouse's Tale have the same shape — 13 lines averaging 4.5 words
+    /// against 46 lines averaging 3.0 — so no measure of line length can tell a
+    /// table of contents from a shaped poem, and a rule that dropped the first
+    /// would drop the second. The same is true of the bare numbers: half the
+    /// lines of Franklin's contents are page numbers, and so are two thirds of
+    /// the lines of his hour-by-hour daily plan, which is genuine book content.
+    ///
+    /// What actually separates them is that a contents list's lines *are* the
+    /// book's navigation entries and a poem's lines are not. So the titles
+    /// decide, the line shape only qualifies, and the numbered lines are left
+    /// out of the denominator rather than counted for or against — a page
+    /// number is not a title, and requiring it to be one would put Franklin's
+    /// contents below the threshold at 23 matches in 48 lines.
+    ///
+    /// Matching is deliberately loose. Gutenberg's NCX calls the chapter "I
+    /// ANCESTRY AND EARLY YOUTH IN BOSTON" while its own contents page prints
+    /// "I. Ancestry and Early Life in Boston" — *Youth* against *Life* — so an
+    /// equality test finds nothing on the very book this was measured against.
+    static func isNavigationList(_ text: String, titles: [[String]]) -> Bool {
+        let lines = text.split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        guard lines.count >= Limits.navigationLines else { return false }
+
+        let short = lines.filter { wordCount($0) <= Limits.navigationLineWords }
+        guard Double(short.count) >= Double(lines.count) * Limits.navigationShortShare
+        else { return false }
+
+        // A line of nothing but digits and punctuation is a page number.
+        let candidates = lines.filter { line in
+            line.contains { $0.isLetter }
+        }
+        guard !candidates.isEmpty else { return false }
+        let matched = candidates.filter { line in
+            let tokens = QueryTerms.tokens(in: line)
+            return titles.contains { matches(tokens, $0) }
+        }
+        return matched.count >= Limits.navigationTitles
+            && Double(matched.count) >= Double(candidates.count) * Limits.navigationTitleShare
+    }
+
+    /// Whether a line and a navigation entry are the same entry.
+    ///
+    /// Equal, or one the beginning of the other, or sharing most of their
+    /// words. The prefix arm needs the shorter side to be four characters
+    /// before it counts, or a bare "I." on its own line is the beginning of
+    /// every Roman-numbered chapter title in the book.
+    static func matches(_ line: [String], _ title: [String]) -> Bool {
+        guard !line.isEmpty, !title.isEmpty else { return false }
+        let joinedLine = line.joined()
+        let joinedTitle = title.joined()
+        if joinedLine == joinedTitle { return true }
+        if min(joinedLine.count, joinedTitle.count) >= 4,
+           joinedLine.hasPrefix(joinedTitle) || joinedTitle.hasPrefix(joinedLine) {
+            return true
+        }
+        let shared = Set(line).intersection(title).count
+        return shared >= 3
+            && Double(shared) >= Double(min(line.count, title.count)) * Limits.navigationTitleShare
     }
 
     // MARK: - Pieces
