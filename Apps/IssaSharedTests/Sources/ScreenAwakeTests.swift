@@ -193,6 +193,48 @@ struct AppModelScreenAwakeTests {
         #expect(!app.keepsScreenAwake)
     }
 
+    /// One flag for the process, written by a handler that runs once per
+    /// **scene**.
+    ///
+    /// `Info.plist` sets `UIApplicationSupportsMultipleScenes` and `RootView`
+    /// lives inside a `WindowGroup`, so an iPad with two windows on this app
+    /// has two of these handlers. Each wrote `phase != .background` straight
+    /// into the one `AppModel.isForeground`, so sending one window to the
+    /// background — or closing it — released the display assertion the *other*
+    /// window's read-along was relying on, with the reader still looking at it,
+    /// and nothing put it back until that window's own phase happened to move.
+    ///
+    /// Derived from every scene now. The table below is the whole decision.
+    @Test("the flag follows any window being on screen, not the last one to move", arguments: [
+        ([UIScene.ActivationState.foregroundActive], true),
+        ([.foregroundInactive], true),
+        ([.background], false),
+        ([.unattached], false),
+        ([], false),
+        // The reported case: two windows, one of them going away.
+        ([.background, .foregroundActive], true),
+        ([.foregroundActive, .background], true),
+        ([.background, .foregroundInactive], true),
+        ([.background, .background], false),
+        // A window that has been disconnected must not hold the assertion open
+        // on its own — that is the flat battery, which is the worse bug.
+        ([.background, .unattached], false),
+        ([.unattached, .foregroundActive], true),
+    ])
+    func anyWindowOnScreen(states: [UIScene.ActivationState], expected: Bool) {
+        #expect(SceneForeground.isAnyForeground(states) == expected)
+    }
+
+    /// `.inactive` is still the foreground, and the old handler said so with
+    /// `!= .background`. An app switcher glance or a Control Centre pull is not
+    /// the iPad going into a bag, and the reader is looking at the screen
+    /// throughout — so the derivation has to keep that, and does.
+    @Test("an inactive window is still a window on screen")
+    func inactiveIsStillForeground() {
+        #expect(SceneForeground.isAnyForeground([.foregroundInactive]))
+        #expect(!SceneForeground.isAnyForeground([.background]))
+    }
+
     /// The signal each target's scene-phase handler pushes in. `AppModel` has
     /// no `scenePhase` of its own, so this is the one input it cannot see for
     /// itself — and the one whose absence would leave a pocketed phone holding
