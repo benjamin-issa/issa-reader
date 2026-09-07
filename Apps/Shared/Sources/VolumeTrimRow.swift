@@ -56,6 +56,9 @@ struct VolumeTrimRow: View {
     let coordinator: (any PlaybackDriving)?
 
     private var trim: Int { settings.volumeTrim(for: book.uuid) }
+    /// Nil when nothing is playing this book, which is the case the whole row
+    /// is disabled for. Otherwise the player's own answer.
+    private var carriesGain: Bool? { coordinator?.player.tapCarriesGain }
 
     var body: some View {
         VStack(spacing: Metrics.spacing8) {
@@ -103,8 +106,9 @@ struct VolumeTrimRow: View {
             .sensoryFeedback(.impact(weight: .light), trigger: trim) { _, new in new == 0 }
             .accessibilityLabel("Volume for this book")
             // "−6 dB" is read as "minus six D B", which says nothing about
-            // which way the sound moves.
-            .accessibilityValue(VolumeTrim.spoken(trim))
+            // which way the sound moves — and, where the louder half cannot be
+            // delivered, VoiceOver has no caption to fall back on.
+            .accessibilityValue(VolumeTrimReach.spoken(trim, carriesGain: carriesGain))
 
             // Both ends read off the range rather than typed out, so widening
             // it cannot leave the slider going one place and its own ticks
@@ -121,12 +125,81 @@ struct VolumeTrimRow: View {
             // The slider says all three already; VoiceOver would otherwise read
             // the ticks as three more values to land on.
             .accessibilityHidden(true)
+
+            // The adjacent case to the disable below, and the one that was
+            // silent. This book has no tap, so `applyPlayerVolume` can only go
+            // down and everything right of centre plays as recorded. Said
+            // rather than disabled: the quieter half still works, and the level
+            // is worth keeping for when the same book is played from a file.
+            if let caption = VolumeTrimReach.caption(carriesGain: carriesGain) {
+                Text(caption)
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.inkTertiary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    // VoiceOver hears it from the slider's own value instead,
+                    // where the reader is when it matters.
+                    .accessibilityHidden(true)
+            }
         }
         // Nothing to trim the level of. The preference could still be written,
         // but a control that changes something inaudible is a control that
         // looks broken.
         .disabled(coordinator == nil)
         .padding(.horizontal, Metrics.spacing8)
+    }
+}
+
+// MARK: -
+
+/// What the volume row says about a level it cannot deliver.
+///
+/// **The half of the slider that does nothing, and used to say nothing.**
+/// `AVPlayer.volume` is documented 0…1, so with no `MTAudioProcessingTap` on
+/// the item `AudioPlayer.applyPlayerVolume` computes `volume * min(gain, 1)`:
+/// the quieter half arrives, and everything right of "as recorded" plays at the
+/// recorded level. The arithmetic is correct — there is nowhere else for the
+/// level to come from — but it was silent. A reader dragging to +8 dB heard no
+/// change and had no way to tell that from a control that was broken. On the
+/// percentage scale this replaced the silent loss was 3.5 dB; with the +8 dB
+/// top rung it is 8 dB, which is most of the slider.
+///
+/// `VolumeTrimRow` already disables itself outright when nothing is playing the
+/// book. This is the adjacent case: something *is* playing it, and only half
+/// the control can be honoured.
+///
+/// A plain type beside the view for the reason `AskSourceLabel` and
+/// `ScreenAwake` are: `IssaSharedTests` cannot reach a SwiftUI `View`, and the
+/// decision — which of the three states says what — is the part worth pinning.
+enum VolumeTrimReach {
+    /// Whether the louder half of the slider can actually be heard.
+    ///
+    /// - Parameter carriesGain: `AudioPlayer.tapCarriesGain`, or nil where
+    ///   nothing is playing this book. Nil is "not yet known", not "no": before
+    ///   the first item loads there is no tap to ask about, and treating that
+    ///   as a refusal would caption every book for the moment before its tracks
+    ///   resolve.
+    static func canBeLouder(carriesGain: Bool?) -> Bool { carriesGain != false }
+
+    /// The line under the slider, or nil when there is nothing to explain.
+    static func caption(carriesGain: Bool?) -> String? {
+        guard !canBeLouder(carriesGain: carriesGain) else { return nil }
+        return "This book can only be made quieter. It is being streamed, and only a downloaded file can be played louder than it was recorded."
+    }
+
+    /// What VoiceOver reads as the slider's value.
+    ///
+    /// The caption above is hidden from VoiceOver and folded in here instead:
+    /// a reader moving the slider is on the slider, and a caption below it is
+    /// somewhere they have to go looking. Only where the level actually asks
+    /// for more than can be delivered — at or below "as recorded" nothing is
+    /// being lost and the warning would be noise.
+    static func spoken(_ decibels: Int, carriesGain: Bool?) -> String {
+        let level = VolumeTrim.spoken(decibels)
+        guard !canBeLouder(carriesGain: carriesGain), VolumeTrim.clamped(decibels) > 0 else {
+            return level
+        }
+        return "\(level), but this book can only be made quieter"
     }
 }
 #endif

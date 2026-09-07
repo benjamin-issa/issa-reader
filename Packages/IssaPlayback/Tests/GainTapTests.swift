@@ -611,6 +611,25 @@ struct AudioPlayerGainTests {
         #expect(player.gain == 1)
     }
 
+    /// "Not loaded yet" and "cannot be made louder" are different answers, and
+    /// the screen that captions the second must not caption the first: a row
+    /// that read a bare `false` would tell every reader their book can only be
+    /// made quieter for the moment between the sheet opening and the first
+    /// track resolving.
+    ///
+    /// The fallback arithmetic is the same either way, because there is no tap
+    /// either way.
+    @Test("a player with nothing loaded has no answer yet, and still trims downwards")
+    func nothingLoadedYet() {
+        let player = AudioPlayer()
+        #expect(player.tapCarriesGain == nil)
+        player.gain = VolumeTrim.gain(-6)
+        #expect(abs(player.underlyingVolume - VolumeTrim.gain(-6)) < 1e-6,
+                "the quieter half has to arrive through the player's own volume")
+        player.gain = VolumeTrim.gain(8)
+        #expect(player.underlyingVolume == 1, "and the louder half has nowhere to go")
+    }
+
     @Test("a file with real tracks gets the tap, and the fade keeps the player's volume")
     func localFileCarriesTheTap() async throws {
         let directory = try Fixture.directory()
@@ -619,7 +638,7 @@ struct AudioPlayerGainTests {
 
         let player = AudioPlayer()
         #expect(await player.load(url: url, href: "sine.wav"))
-        #expect(player.tapCarriesGain, "a local float WAV has a track to attach to")
+        #expect(player.tapCarriesGain == true, "a local float WAV has a track to attach to")
 
         // The gain is in the samples, so the player's own volume is left to the
         // sleep timer alone — at 1 until it fades.
