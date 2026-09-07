@@ -331,22 +331,40 @@ public struct PlayerView: View {
     /// Rounded to the nearest minute rather than truncated, so a book with four
     /// hours, twelve minutes and fifty seconds left does not claim 4h 12m for
     /// most of a minute.
+    ///
+    /// The rounding is this screen's own and the wording is not. `isFinite`
+    /// plus `Int(_:)` is the guard `DurationText` names as insufficient —
+    /// `1e300` is finite, and converting it traps — and `bookRemaining` is
+    /// arithmetic over a duration the server supplied, so that is a reachable
+    /// crash. Rounded here in whole seconds, because `(seconds / 60).rounded()`
+    /// and then `Int(_:)` is the same trap under another name.
     static func durationText(_ seconds: TimeInterval) -> String {
-        guard seconds.isFinite, seconds > 0 else { return "0m" }
-        let minutes = Int((seconds / 60).rounded())
-        return minutes >= 60 ? "\(minutes / 60)h \(minutes % 60)m" : "\(minutes)m"
+        guard seconds > 0, let whole = seconds.wholeSeconds else { return "0m" }
+        return DurationText.text(Double(minutesRounding(whole)) * 60)
     }
 
     /// The same length for VoiceOver, which must not be handed `4h 12m`.
+    ///
+    /// Guarded like `durationText` above, and for the same reason: the two are
+    /// handed the same number, so a magnitude that traps one traps the other.
     static func spokenDuration(_ seconds: TimeInterval) -> String {
-        guard seconds.isFinite, seconds > 0 else { return "no time" }
-        let minutes = Int((seconds / 60).rounded())
+        guard seconds > 0, let whole = seconds.wholeSeconds else { return "no time" }
+        let minutes = minutesRounding(whole)
         let hours = minutes / 60
         let mins = minutes % 60
         let hourPart = hours == 1 ? "1 hour" : "\(hours) hours"
         let minutePart = mins == 1 ? "1 minute" : "\(mins) minutes"
         if hours == 0 { return minutePart }
         return mins == 0 ? hourPart : "\(hourPart) \(minutePart)"
+    }
+
+    /// Whole seconds as whole minutes, rounded rather than floored.
+    ///
+    /// `DurationText` floors, which is right for a book's length and wrong for
+    /// what is left of one: fifty seconds remaining should not read as "0m"
+    /// beside a scrubber that is visibly not at the end.
+    private static func minutesRounding(_ whole: Int) -> Int {
+        whole / 60 + (whole % 60 >= 30 ? 1 : 0)
     }
 
     static func timeText(_ seconds: TimeInterval) -> String {

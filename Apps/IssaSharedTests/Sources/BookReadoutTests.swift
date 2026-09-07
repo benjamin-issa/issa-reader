@@ -38,11 +38,21 @@ struct BookReadoutTests {
 
     /// Nothing may reach `Int()` that would trap it, and a negative or
     /// non-finite duration must not print a minus sign at a listener.
+    ///
+    /// `1e300` is the case this suite claimed to cover and did not: it is
+    /// finite, so it walked past an `isFinite` guard and trapped in
+    /// `Int((seconds / 60).rounded())`. Both readouts are handed the same
+    /// number, so both are asked.
     @Test("nothing sensible comes back from a nonsense duration, and nothing crashes")
     func nonsense() {
         #expect(PlayerView.durationText(-60) == "0m")
         #expect(PlayerView.durationText(.nan) == "0m")
         #expect(PlayerView.durationText(.infinity) == "0m")
+        #expect(PlayerView.durationText(1e300) == "0m")
+        #expect(PlayerView.spokenDuration(-60) == "no time")
+        #expect(PlayerView.spokenDuration(.nan) == "no time")
+        #expect(PlayerView.spokenDuration(.infinity) == "no time")
+        #expect(PlayerView.spokenDuration(1e300) == "no time")
     }
 
     /// VoiceOver gets words. Handing it `4h 12m` makes it say "four aitch
