@@ -236,11 +236,32 @@ final class AskCoordinator {
                 return
             }
             guard let self else { return }
-            // A stream that ends without an answer is a cancellation — the
-            // reader tapped Cancel, or asked something else. There is nothing
-            // to show and nothing to tell them, so the job goes.
+            // A stream that ends without an answer is a cancellation. *Whose*
+            // it was decides what happens next, and for a while this did not
+            // ask.
+            //
+            // The reader's — Cancel, or a second question — leaves nothing to
+            // show and nothing to tell them, so the job goes.
+            //
+            // The system's does not. `backgroundTimeExpired` cancels the task
+            // and writes `.failed(.backgroundExpired)`, and this tail then
+            // deleted the job three lines later. Not a race: both run on the
+            // main actor, in that order, every time. So the one message written
+            // for that case — "iOS paused the app before the answer finished.
+            // Ask again." — could never be shown, and the reader came back to a
+            // blank compose field with no sign anything had happened.
             guard answered else {
-                if jobs[uuid] === job { jobs.removeValue(forKey: uuid) }
+                guard job.wasExpired else {
+                    if jobs[uuid] === job { jobs.removeValue(forKey: uuid) }
+                    releaseAssertionIfIdle()
+                    return
+                }
+                // Written again here, and not only in `backgroundTimeExpired`:
+                // a snapshot the engine yielded before the cancel can still be
+                // delivered after it, and one `.phase` event would put the job
+                // back into `.working` — pulsing "Asking…" until the next
+                // launch, which is the exact thing that method exists to stop.
+                job.state = .failed(.backgroundExpired)
                 releaseAssertionIfIdle()
                 return
             }
@@ -272,7 +293,7 @@ final class AskCoordinator {
             discard(bookUUID: bookUUID)
             return
         }
-        job.wasDismissedWhileWorking = true
+        job.owesNotification = true
         requestNotificationsOnce()
     }
 
@@ -292,13 +313,13 @@ final class AskCoordinator {
     /// A job that has stopped: post the notification if one is owed, then let
     /// the background assertion go if nothing else is running.
     private func finished(_ job: AskJob) {
-        if job.wasDismissedWhileWorking, job.state.isAnswered, let notifier {
+        if job.owesNotification, job.state.isAnswered, let notifier {
             Task { await notifier.postAnswerReady(job: job) }
         } else if notifier != nil {
             // The other half of the notifier's own log line, so the two
             // together say why nothing arrived. Never the question.
             IssaLog.info("ask job finished quietly", [
-                "dismissed": String(job.wasDismissedWhileWorking),
+                "owed": String(job.owesNotification),
                 "answered": String(job.state.isAnswered),
             ])
         }
@@ -315,10 +336,31 @@ final class AskCoordinator {
     var hasWorkingJob: Bool { jobs.values.contains { $0.state.isWorking } }
 
     /// Holds the app awake long enough to finish an answer the reader has been
-    /// promised a notification about.
+    /// promised a notification about — and makes the promise, which is the part
+    /// that was missing.
+    ///
+    /// The assertion was taken on a path that could never notify. It guards on
+    /// `hasWorkingJob` alone, while `finished()` posts only when the job owes a
+    /// notification — and that was set solely by `sheetDismissed`. So a reader
+    /// who backgrounded the app with the sheet still open held the process
+    /// awake for up to thirty seconds of inference, and the run ended by
+    /// logging "ask job finished quietly". Leaving the app mid-question is
+    /// exactly who the notification is for; the flag is set here too.
     func appDidEnterBackground() {
         #if os(iOS)
-        guard hasWorkingJob, assertion == nil else { return }
+        guard hasWorkingJob else { return }
+        // Before the assertion guard, so a second backgrounding while one is
+        // already held still makes the promise.
+        //
+        // The flag only; `requestNotificationsOnce` deliberately stays on the
+        // sheet-dismissal path. A permission alert cannot be put in front of
+        // somebody who has just left the app, and one that surfaced on their
+        // return, attached to nothing they were doing, is the prompt everybody
+        // denies — which is the whole reason it is contextual.
+        for job in jobs.values where job.state.isWorking {
+            job.owesNotification = true
+        }
+        guard assertion == nil else { return }
         let held = BackgroundAssertion()
         held.begin(name: "issa.askAnswer") { [weak self] in
             // Assumed rather than hopped: UIKit documents the expiration
@@ -344,8 +386,16 @@ final class AskCoordinator {
     /// The job is cancelled and said so, rather than left in `.working` for
     /// ever: a pill that pulses "Asking…" until the app is relaunched is a lie,
     /// and the reader can ask again in a second.
-    private func backgroundTimeExpired() {
+    ///
+    /// Not private, so a test can drive it. Nothing else calls it — the only
+    /// caller in the app is the expiration handler installed above, which is
+    /// UIKit's to run and cannot be provoked from a test at all.
+    func backgroundTimeExpired() {
         for job in jobs.values where job.state.isWorking {
+            // Set *before* the cancel. The flag is what tells the stream's own
+            // tail that this cancellation was the system's and not the
+            // reader's, and the tail is the thing the cancel sets off.
+            job.wasExpired = true
             job.task?.cancel()
             job.state = .failed(.backgroundExpired)
         }

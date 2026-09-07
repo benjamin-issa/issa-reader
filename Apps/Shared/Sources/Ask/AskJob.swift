@@ -49,10 +49,22 @@ final class AskJob {
     var state: State = .working(.thinking)
     /// The answer so far, already stripped of a half-typed `Sources:` line.
     var partial = ""
-    /// Whether the sheet was closed while this was still running, which is the
-    /// only case a notification is posted for: a reader watching the sheet does
-    /// not need to be told what is on their screen.
-    var wasDismissedWhileWorking = false
+    /// Whether the reader has been promised a notification about this answer.
+    ///
+    /// Named for what it means rather than for the one thing that used to set
+    /// it. Closing the sheet on a running question is one way to stop watching
+    /// it; leaving the app altogether is the other, and while this was called
+    /// `wasDismissedWhileWorking` only the first set it — so backgrounding with
+    /// the sheet open held the process awake for up to thirty seconds of
+    /// inference and then logged "ask job finished quietly".
+    var owesNotification = false
+    /// Whether iOS ended this rather than the reader.
+    ///
+    /// The difference decides whether the job survives its own cancellation. A
+    /// reader who tapped Cancel wants it gone. A reader whose app was suspended
+    /// mid-answer has to be told that is what happened, and the sentence is
+    /// already written — `AskFailure.backgroundExpired`.
+    var wasExpired = false
 
     /// The pipeline, so `cancel` has something to cancel.
     var task: Task<Void, Never>?
