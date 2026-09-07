@@ -68,15 +68,15 @@ public final class PlaybackSettings {
         didSet { persist(bookStyles, as: Self.bookStylesKey) }
     }
 
-    /// How far each book departs from the level it was recorded at, keyed by
-    /// book uuid.
+    /// How far each book departs from the level it was recorded at, in
+    /// decibels, keyed by book uuid.
     ///
     /// Beside `bookStyles` and for the same reason: this corrects one library's
     /// mastering on one device's speakers, and syncing it would push a phone's
     /// correction onto a Mac that does not need it. Only departures are stored,
     /// so a book returned to "as recorded" leaves nothing behind.
     public private(set) var bookVolumeTrims: [String: Int] {
-        didSet { persist(bookVolumeTrims, as: Self.bookVolumesKey) }
+        didSet { persist(bookVolumeTrims, as: Self.bookVolumeDecibelsKey) }
     }
 
     /// Posted when an account signs out, so per-book state keyed by a book
@@ -91,7 +91,15 @@ public final class PlaybackSettings {
     private static let commandMapKey = "issa.commandMap"
     private static let readerStyleKey = "issa.readerStyle"
     private static let bookStylesKey = "issa.bookStyles"
+    /// Percentages, written by builds up to 1.1.0 (32) and read once by this
+    /// one. Never written again, and deliberately left where it is: a reader who
+    /// goes back to a shipped build should find their levels still there.
     private static let bookVolumesKey = "issa.bookVolumes"
+    /// Decibels, which is what the slider offers now. A key of its own rather
+    /// than the old one reused, so the two builds cannot read each other's
+    /// numbers as their own units — a "−6" that means percent on one side and
+    /// decibels on the other is a book that plays at half the level it should.
+    private static let bookVolumeDecibelsKey = "issa.bookVolumeDecibels"
     private static let rateKey = "issa.playbackRate"
     private static let progressScopeKey = "issa.progressScope"
     private static let askEnabledKey = "issa.askAboutBook"
@@ -145,18 +153,8 @@ public final class PlaybackSettings {
         readerStyle = Self.load(ReaderStyle.self, from: store, key: Self.readerStyleKey) ?? ReaderStyle()
         bookStyles = Self.load(
             [String: ReaderStyleOverride].self, from: store, key: Self.bookStylesKey) ?? [:]
-        // Sanitised on the way out of defaults, not merely on the way in: the
-        // blob is a file on disk that an older build — or a hand edit — may
-        // have written, and a level nothing on screen can show or undo is the
-        // same defect `playbackRate` already carries a clamp for. Entries that
-        // sanitise to zero are dropped rather than kept at zero, so the
-        // dictionary means "books that depart from the recording" for every
-        // reader of it.
-        bookVolumeTrims = (Self.load([String: Int].self, from: store, key: Self.bookVolumesKey) ?? [:])
-            .compactMapValues { stored in
-                let legal = VolumeTrim.clamped(stored)
-                return legal == 0 ? nil : legal
-            }
+        let volumes = Self.volumeTrims(in: store)
+        bookVolumeTrims = volumes.trims
         let storedRate = store.double(forKey: Self.rateKey)
         playbackRate = storedRate > 0 ? PlaybackRate.clamped(storedRate) : 1.0
         // No migration needed, and this is the part to get right: a stored
@@ -170,6 +168,11 @@ public final class PlaybackSettings {
         // wants: a reader who has never seen the switch has not turned it on.
         askEnabled = store.bool(forKey: Self.askEnabledKey)
         moveOffTheOldDefaultFace()
+        // Assignments in `init` do not fire `didSet`, so the levels this build
+        // just converted are written back by hand — once, and only when they
+        // came from the old key. `moveOffTheOldDefaultFace` does the same for
+        // the reading face, for the same reason.
+        if volumes.migrated { persist(bookVolumeTrims, as: Self.bookVolumeDecibelsKey) }
         // After every stored property: `self` is not usable in a closure until
         // the initialiser has finished.
         signOutObserver.token = NotificationCenter.default.addObserver(
@@ -178,8 +181,45 @@ public final class PlaybackSettings {
             MainActor.assumeIsolated {
                 self?.bookStyles = [:]
                 self?.bookVolumeTrims = [:]
+                // The old key as well. It is per-book state keyed by a book
+                // uuid, which is the whole reason this hook exists, and leaving
+                // the previous account's levels in a key a shipped build still
+                // reads is the same leak one downgrade away.
+                self?.defaults.removeObject(forKey: Self.bookVolumesKey)
             }
         }
+    }
+
+    /// This build's levels, and whether they had to be converted to get here.
+    ///
+    /// Decibels are read from their own key. Where that key is absent the
+    /// percentages a build up to 1.1.0 (32) wrote are converted through the
+    /// multiplier they always stood for, which moves nobody's book by more than
+    /// half a just-noticeable difference — see `VolumeTrim.decibels(forLegacyPercent:)`.
+    /// The old key is read and left exactly as it was, so going back to a
+    /// shipped build still finds it.
+    ///
+    /// Sanitised on the way out of defaults, not merely on the way in: the blob
+    /// is a file on disk that an older build — or a hand edit — may have
+    /// written, and a level nothing on screen can show or undo is the same
+    /// defect `playbackRate` already carries a clamp for. Entries that sanitise
+    /// to zero are dropped rather than kept at zero, so the dictionary means
+    /// "books that depart from the recording" for every reader of it.
+    private static func volumeTrims(in store: UserDefaults) -> (trims: [String: Int], migrated: Bool) {
+        if let stored = load([String: Int].self, from: store, key: bookVolumeDecibelsKey) {
+            return (stored.compactMapValues(legalTrim), false)
+        }
+        guard let legacy = load([String: Int].self, from: store, key: bookVolumesKey) else {
+            return ([:], false)
+        }
+        return (legacy.compactMapValues { legalTrim(VolumeTrim.decibels(forLegacyPercent: $0)) }, true)
+    }
+
+    /// A stored level, snapped onto the ladder, or nil for a book that is at the
+    /// recorded level after all.
+    private static func legalTrim(_ stored: Int) -> Int? {
+        let legal = VolumeTrim.clamped(stored)
+        return legal == 0 ? nil : legal
     }
 
     /// Moves anyone still on the previous default reading face onto the new one,
@@ -229,23 +269,22 @@ public final class PlaybackSettings {
         }
     }
 
-    /// How far this book departs from the recorded level, in percent. Zero for
+    /// How far this book departs from the recorded level, in decibels. Zero for
     /// every book nobody has trimmed, which is nearly all of them.
     public func volumeTrim(for bookUUID: String) -> Int {
         bookVolumeTrims[bookUUID] ?? 0
     }
 
-    /// Records this book's level.
+    /// Records this book's level, in decibels.
     ///
     /// Zero removes the entry rather than storing it, on the same rule as
     /// `setOverride`: a book back at the recorded level has no preference, and
     /// keeping one would be a row that means nothing and never expires.
-    public func setVolumeTrim(_ percent: Int, for bookUUID: String) {
-        let legal = VolumeTrim.clamped(percent)
-        if legal == 0 {
-            bookVolumeTrims.removeValue(forKey: bookUUID)
-        } else {
+    public func setVolumeTrim(_ decibels: Int, for bookUUID: String) {
+        if let legal = Self.legalTrim(decibels) {
             bookVolumeTrims[bookUUID] = legal
+        } else {
+            bookVolumeTrims.removeValue(forKey: bookUUID)
         }
     }
 
