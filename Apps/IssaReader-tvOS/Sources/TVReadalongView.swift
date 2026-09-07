@@ -302,28 +302,29 @@ private struct TVReadalongContent: View {
                 // rather than refusing to open the book, which is what the
                 // screen used to do.
                 //
-                // Focusable, and claiming `.transport`, even though there is
-                // nothing on it to press. As a plain `Text` it claimed no focus
-                // value at all, so on a plain ebook this screen had exactly one
-                // focus target — and `TVPageView` assigned `.transport` on Down
-                // regardless, to a value nothing answered to. Focus left the
-                // page and landed nowhere; `onMoveCommand` is attached to the
-                // page, so it stopped receiving anything at all; Left and Right
-                // stopped turning pages; and Menu, which leaves the book, was
-                // the only way out. `.defaultFocus` had already run by then and
-                // does not fire again.
+                // Deliberately NOT focusable, which is the whole fix.
                 //
-                // `TVFocusMoves` now refuses that move, so this row is the
-                // second half rather than the first: the focus engine moves
-                // focus on a swipe on its own, and a swipe with nowhere to go is
-                // how the reader got stranded. The old screen mounted the
-                // transport row unconditionally and merely disabled it, which is
-                // why it never had this fault.
+                // Making it focusable was tried first and made the fault worse,
+                // measured on the television: tvOS's own focus engine moves
+                // focus on a directional swipe before `onMoveCommand` is
+                // consulted at all, so a focusable row here *is* the thing that
+                // takes focus off the page. `onMoveCommand` is attached to the
+                // page, so it then stops receiving anything, Left and Right
+                // stop turning pages, and Menu — which leaves the book — is the
+                // only way out. Verified: Right turned the page, Down, then
+                // Right and Right did nothing, three identical screenshots.
+                //
+                // With nothing focusable below it the engine has nowhere to go,
+                // focus stays on the page, and the page keeps its move
+                // commands. That is exactly why the old screen never had this
+                // fault: it mounted the transport row unconditionally and
+                // merely `.disabled` it, and a disabled view takes no focus.
+                //
+                // `TVFocusMoves` refusing the move is the belt to this braces:
+                // it stops the assignment, and this stops the engine.
                 Text("No narration for this book")
                     .font(Typography.sans(22))
                     .foregroundStyle(Palette.inkTertiary)
-                    .focusable()
-                    .focused($focus, equals: .transport)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
