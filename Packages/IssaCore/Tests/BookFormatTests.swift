@@ -203,7 +203,47 @@ struct DownloadFilenameTests {
                      "\(two)-audiobook.epub", "notes.txt"] {
             try Data().write(to: directory.appending(path: name))
         }
-        #expect(BookContentService.downloadedBookUUIDs(in: directory) == [one, two])
+        #expect(try BookContentService.downloadedBookUUIDs(in: directory) == [one, two])
+    }
+
+    /// The distinction the reconciliation sweep is built on.
+    ///
+    /// This read was a `try?` coalesced to `[]`, and downstream of it every
+    /// caller took an empty set as a fact: the shelf emptied, and the sweep read
+    /// "no books on disk" as "every book departed" and deleted each one's
+    /// question index, extracted narration and publisher font. None of those
+    /// comes back. A directory that cannot be read says nothing at all about
+    /// what the reader downloaded, so it has to be distinguishable from one that
+    /// really is empty — and this is the only place that can tell them apart.
+    @Test("a directory that cannot be read is an error, not an empty library")
+    func unreadableDirectoryThrows() throws {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appending(path: "issa-unreadable-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o755], ofItemAtPath: directory.path)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        try Data().write(to: directory.appending(path: "\(Self.uuid)-ebook.epub"))
+        // Unreadable, but emphatically not empty.
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o000], ofItemAtPath: directory.path)
+
+        #expect(throws: (any Error).self) {
+            try BookContentService.downloadedBookUUIDs(in: directory)
+        }
+    }
+
+    /// The one failure that really does mean "no books": a fresh install, and
+    /// "sign out and delete my downloads", both leave no directory at all. If
+    /// this threw, a sign-out would strand the shelf showing books that had just
+    /// been deleted.
+    @Test("a directory that is not there is genuinely empty")
+    func absentDirectoryIsEmpty() throws {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appending(path: "issa-absent-\(UUID().uuidString)", directoryHint: .isDirectory)
+        #expect(try BookContentService.downloadedBookUUIDs(in: directory).isEmpty)
     }
 }
 

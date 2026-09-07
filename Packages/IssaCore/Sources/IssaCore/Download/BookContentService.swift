@@ -126,6 +126,14 @@ public struct BookContentService: Sendable {
             case .readaloud: "Read-along"
             }
         }
+
+        /// Whether this edition is a source of the book's text.
+        ///
+        /// The publisher's face and the question index are derived from text,
+        /// and both the ebook and the read-along carry it. An audiobook does
+        /// not — so a book left with only an audiobook has no text on the
+        /// device, and neither of those derived files has anything behind it.
+        public var carriesText: Bool { self != .audiobook }
     }
 
     public func localURL(for book: Book, format: Format) -> URL {
@@ -159,6 +167,28 @@ public struct BookContentService: Sendable {
         FileManager.default.fileExists(atPath: localURL(for: book, format: format).path)
     }
 
+    /// Whether any edition of this book that carries text is still on the device.
+    ///
+    /// The question a removal has to ask before it releases what a download left
+    /// behind. The publisher's face and the question index belong to the *book*,
+    /// not to the edition just deleted — either the ebook or the read-along
+    /// produces them — so removing one of a book's two editions used to destroy
+    /// derived data belonging to the edition still sitting on disk. The reader
+    /// found out the next time they opened it: the book set in the fallback
+    /// face, and the questions it had already been indexed for starting again.
+    ///
+    /// Two `stat`s at most, and only on the removal path, which is why it asks
+    /// the disk rather than a set held in memory: the set is refreshed *after*
+    /// the file goes, and answering from it here would answer about the world
+    /// one step ago.
+    public static func hasDownloadedText(bookUUID: String, in directory: URL? = nil) -> Bool {
+        let directory = directory ?? defaultDirectory()
+        return Format.allCases.filter(\.carriesText).contains {
+            FileManager.default.fileExists(
+                atPath: localURL(in: directory, bookUUID: bookUUID, format: $0).path)
+        }
+    }
+
     /// The best format available for reading: the aligned edition when the
     /// server has one, otherwise the plain ebook.
     ///
@@ -188,9 +218,27 @@ public struct BookContentService: Sendable {
     /// `isDownloaded` is one `stat` per book per format; asking it for a whole
     /// library — which the download shelf and its count both do — is thousands
     /// of syscalls per render.
-    public static func downloadedBookUUIDs(in directory: URL? = nil) -> Set<String> {
+    ///
+    /// **Throws rather than reporting an empty library.** The read was a `try?`
+    /// coalesced to `[]`, and the reconciliation sweep downstream of it reads
+    /// "no books on disk" as "every book departed" and irreversibly deletes each
+    /// one's question index, extracted narration and publisher font. A directory
+    /// this cannot read is not a directory with nothing in it, and the one
+    /// moment they are most likely to be confused is the moment the damage is
+    /// largest: a permissions fault, a detached volume or a device still
+    /// unlocking says nothing about what the reader downloaded.
+    ///
+    /// A directory that is *absent* is the one failure that really does mean an
+    /// empty set — that is what a fresh install and a "sign out and delete my
+    /// downloads" both leave behind — so it is answered rather than thrown.
+    public static func downloadedBookUUIDs(in directory: URL? = nil) throws -> Set<String> {
         let directory = directory ?? preparedDefaultDirectory
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+        let names: [String]
+        do {
+            names = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+            return []
+        }
         return Set(names.compactMap(bookUUID(fromFilename:)))
     }
 

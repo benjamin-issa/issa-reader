@@ -234,6 +234,155 @@ struct DownloadRemovalTests {
         #expect(!app.downloadedUUIDs.contains(uuid))
     }
 
+    /// The half of a two-edition removal that had no owner.
+    ///
+    /// The publisher face and the question index are derived from the book's
+    /// *text*, and either edition carries it — so releasing them because one of
+    /// the two went destroyed data belonging to the copy still on the device.
+    /// `DownloadsInventory.departed` had already written the rule down — "a book
+    /// that lost one of two editions has not departed" — and the deletion path
+    /// was the one place not honouring it.
+    ///
+    /// Nothing on screen changes when this is wrong, which is why it needs a
+    /// test: the reader finds out on the next open, when the book is set in the
+    /// fallback face and every question it had been indexed for has to be
+    /// indexed again.
+    @Test("removing one of two editions keeps the face and index of the other")
+    func removingOneEditionKeepsTheBooksDerivedFiles() async throws {
+        let app = AppModel(keychain: InMemoryTokens())
+        let uuid = Self.freshUUID()
+        // A real book for the ebook, because the index below is built by parsing
+        // it — and the point of the test is that the index outlives it.
+        let bundle = Bundle(for: BundleMarker.self)
+        let fixture = try #require(bundle.url(forResource: "alice", withExtension: "epub"))
+        let ebook = BookContentService.localURL(
+            in: try Self.booksDirectory(), bookUUID: uuid, format: .ebook)
+        try? FileManager.default.removeItem(at: ebook)
+        try FileManager.default.copyItem(at: fixture, to: ebook)
+        let readaloud = try Self.plant(uuid, format: .readaloud, bytes: 64)
+        defer { for url in [ebook, readaloud] { try? FileManager.default.removeItem(at: url) } }
+
+        let extracted = CustomFonts.extractedDirectory(bookUUID: uuid)
+        try FileManager.default.createDirectory(at: extracted, withIntermediateDirectories: true)
+        let face = extracted.appending(path: "body.otf")
+        try Data("face".utf8).write(to: face)
+        defer { try? FileManager.default.removeItem(at: extracted) }
+
+        let indexes = URL.temporaryDirectory.appending(path: "issa-editions-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: indexes, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: indexes) }
+        let (defaults, suite) = SharedFixtures.scratchDefaults()
+        defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
+        let store = AskIndexStore(directory: indexes)
+        // Held strongly: `AppModel.ask` is weak, and a coordinator nobody owns
+        // is a removal that quietly does nothing and a test that proves nothing.
+        let coordinator = AskCoordinator(
+            store: store, model: ScriptedAnswerModel(), notifier: nil, defaults: defaults)
+        app.ask = coordinator
+        let source = try BookSource(bookUUID: uuid, fileURL: ebook)
+        _ = try await store.prepare(source: source)
+        // The index *file*, not `isPrepared`: that re-reads the fingerprint of
+        // the EPUB it was built from, so once the ebook has gone it answers
+        // false whether or not the index survived — which is precisely the
+        // distinction this test exists to draw.
+        let index = store.indexURL(for: uuid)
+        #expect(Self.exists(index), "the index has to exist to be kept")
+
+        app.refreshDownloadedSet()
+        app.removeDownload(bookUUID: uuid, format: .ebook)
+
+        #expect(!Self.exists(ebook), "the edition asked for is the one that goes")
+        #expect(Self.exists(readaloud))
+        #expect(app.downloadedUUIDs.contains(uuid), "the book has not departed")
+        #expect(Self.exists(face), "the face belongs to the read-along still on disk")
+        // Given a moment to be wrong: the removal hands the index to the store's
+        // actor, so asserting straight away would pass whether or not it went.
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(Self.exists(index),
+                "the index was built from text that is still on the device")
+
+        // And when the last edition carrying text goes, both do go.
+        app.removeDownload(bookUUID: uuid, format: .readaloud)
+        #expect(!Self.exists(face))
+        let indexPath = index.path
+        let dropped = await Self.eventually {
+            !FileManager.default.fileExists(atPath: indexPath)
+        }
+        #expect(dropped)
+    }
+
+    /// An audiobook carries no text, so it cannot be what a face or an index was
+    /// derived from — a book left with only one has nothing behind either.
+    @Test("an audiobook left on the device does not keep a face alive")
+    func anAudiobookIsNotTextOnTheDevice() throws {
+        let app = AppModel(keychain: InMemoryTokens())
+        let uuid = Self.freshUUID()
+        let ebook = try Self.plant(uuid, format: .ebook)
+        let audiobook = try Self.plant(uuid, format: .audiobook, bytes: 64)
+        defer { for url in [ebook, audiobook] { try? FileManager.default.removeItem(at: url) } }
+
+        let extracted = CustomFonts.extractedDirectory(bookUUID: uuid)
+        try FileManager.default.createDirectory(at: extracted, withIntermediateDirectories: true)
+        let face = extracted.appending(path: "body.otf")
+        try Data("face".utf8).write(to: face)
+        defer { try? FileManager.default.removeItem(at: extracted) }
+
+        app.refreshDownloadedSet()
+        app.removeDownload(bookUUID: uuid, format: .ebook)
+
+        #expect(Self.exists(audiobook), "the edition not asked for stays")
+        #expect(!Self.exists(face), "nothing left on the device has any text in it")
+    }
+
+    /// The sweep's worst case, and the one it is least equipped to notice.
+    ///
+    /// `downloadedBookUUIDs` coalesced a failed directory read to an empty set,
+    /// and every book the app knew about was then in `previous` and in no
+    /// `current` — so the sweep concluded that the reader had deleted their
+    /// entire library and deleted every book's question index, extracted
+    /// narration and publisher font to match. None of that is re-downloadable:
+    /// the index is minutes of on-device work, and the narration is hundreds of
+    /// megabytes. The files themselves were untouched, which is what made it
+    /// invisible until the next time a book was opened.
+    ///
+    /// An unreadable directory is a fact about this moment — a permissions
+    /// fault, a detached volume, a device still unlocking after a restart — and
+    /// says nothing about what is on the disk. So: keep the last set, run no
+    /// sweep, and try again on the next refresh.
+    @Test("a downloads directory that cannot be read is not an empty library")
+    func anUnreadableDirectoryIsNotADeparture() throws {
+        let app = AppModel(keychain: InMemoryTokens())
+        let uuid = Self.freshUUID()
+        let file = try Self.plant(uuid, format: .ebook)
+        defer { try? FileManager.default.removeItem(at: file) }
+
+        let extracted = CustomFonts.extractedDirectory(bookUUID: uuid)
+        try FileManager.default.createDirectory(at: extracted, withIntermediateDirectories: true)
+        let face = extracted.appending(path: "body.otf")
+        try Data("face".utf8).write(to: face)
+        defer { try? FileManager.default.removeItem(at: extracted) }
+
+        app.refreshDownloadedSet()
+        #expect(app.downloadedUUIDs.contains(uuid))
+
+        // Unreadable, and emphatically not empty. Restored unconditionally: this
+        // is the app's real downloads directory, and leaving it at 0o000 would
+        // break every test after it rather than only this one.
+        let directory = try Self.booksDirectory()
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o000], ofItemAtPath: directory.path)
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o755], ofItemAtPath: directory.path)
+        }
+
+        app.refreshDownloadedSet()
+
+        #expect(app.downloadedUUIDs.contains(uuid),
+                "the last set it could read is a better answer than a wrong one")
+        #expect(Self.exists(face), "the sweep deleted a face for a book that never left")
+    }
+
     // MARK: - The undo window
 
     /// The mockup asks for an undo toast and says nothing in the section may

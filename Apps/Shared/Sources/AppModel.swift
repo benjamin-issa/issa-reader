@@ -911,6 +911,9 @@ public final class AppModel {
     /// Idempotent — every step is "remove it if it is there" — because it runs
     /// from `removeDownload` and again from the reconciliation sweep below,
     /// and on the ordinary path it runs from both.
+    ///
+    /// Called *after* the file has been deleted, which is what lets the check
+    /// below be a question about the disk rather than about intent.
     private func releaseDerivedFiles(for bookUUID: String, format: BookContentService.Format?) {
         // Narration extracted from the read-along for playback. Keyed on the
         // format when one is named, because it is derived from that file
@@ -919,6 +922,22 @@ public final class AppModel {
         if format == nil || format == .readaloud {
             AudioExtraction.removeExtractedAudio(for: bookUUID)
         }
+
+        // The remaining two belong to the book, not to the edition that just
+        // went, and this method deleted them unconditionally. A book with a
+        // read-along *and* an ebook on the device therefore lost its publisher
+        // face and its whole question index when either one was removed — data
+        // derived from the copy still sitting on disk, and discovered only on
+        // the next open, when the book was set in the fallback face and the
+        // questions it had been indexed for started again from nothing.
+        //
+        // `DownloadsInventory.departed` states the rule this has to honour: "a
+        // book that lost one of two editions has not departed". So the disk is
+        // asked, and these go only when the last edition carrying the book's
+        // text has gone. The sweep reaches here for books with no file left at
+        // all, so it is unaffected.
+        guard !BookContentService.hasDownloadedText(bookUUID: bookUUID) else { return }
+
         // The publisher's own face, extracted on every open of a book that
         // ships one. Nothing removed these: `Fonts/<uuid>/` accumulated one
         // directory per book for the life of the install, uncounted by the
@@ -940,9 +959,22 @@ public final class AppModel {
     /// Called when a download finishes, when one is deleted, on sign-out, when
     /// the app comes forward — a transfer can complete while backgrounded — and
     /// when a car connects.
+    /// A directory this cannot read leaves both the set and the sweep alone.
+    /// The read used to be coalesced to an empty set, and every caller below
+    /// then agreed that the reader had deleted their entire library: the shelf
+    /// emptied, and `reconcileDownloads` deleted every book's question index,
+    /// extracted narration and publisher font, none of which comes back. An
+    /// unreadable directory is a fact about this moment, not about the disk —
+    /// the last set it did read is a better answer than a wrong one, and the
+    /// next refresh is a few seconds away.
     public func refreshDownloadedSet() {
         let previous = downloadedUUIDs
-        downloadedUUIDs = BookContentService.downloadedBookUUIDs()
+        guard let current = try? BookContentService.downloadedBookUUIDs() else {
+            IssaLog.warning("could not read the downloads directory; keeping the last set",
+                            ["kept": String(previous.count)])
+            return
+        }
+        downloadedUUIDs = current
         reconcileDownloads(previouslyDownloaded: previous)
     }
 

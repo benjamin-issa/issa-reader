@@ -296,7 +296,7 @@ struct DownloadsInventoryTests {
         try Data(repeating: 0, count: 8).write(to: directory.appending(path: "\(real)-ebook.epub"))
         try Data(repeating: 0, count: 8).write(to: directory.appending(path: "..-ebook.epub"))
 
-        #expect(BookContentService.downloadedBookUUIDs(in: directory) == [real])
+        #expect(try BookContentService.downloadedBookUUIDs(in: directory) == [real])
 
         let inventory = await DownloadsInventory.scan(
             books: [], downloaded: [], scope: .booksOnly, booksDirectory: directory)
