@@ -137,6 +137,50 @@ struct AskEngineTests {
         #expect(answer.sources.map(\.ordinal) == [1])
     }
 
+    /// A tool that shows a fixed excerpt and never has to be called.
+    ///
+    /// `ScriptedAnswerModel` records the tools it was handed and never invokes
+    /// one — nothing deterministic could — so this is how the other half of the
+    /// merge gets asserted: that the engine asks each tool what it showed, and
+    /// that the answer goes through the protocol rather than through
+    /// `SearchBookTool`'s concrete type.
+    struct ShowingTool: AskTool {
+        let name = "searchBook"
+        let toolDescription = "Search the part of the book the reader has already read."
+        let callLimit = 2
+        let shown: [Int: Passage]
+
+        func passagesShown() async -> [Int: Passage] { shown }
+    }
+
+    @Test("an excerpt the search tool showed is resolvable too, not only the prompt's")
+    func toolExcerptsResolveAsWell() async throws {
+        let (store, source, directory) = try await AskFixture.preparedStore()
+        defer { AskFixture.remove(directory) }
+        // Seven, which is past anything the prompt itself numbers: the tool's
+        // excerpts continue the prompt's numbering, and before the tool retained
+        // anything *no* citation in its range could be resolved at all.
+        let found = Passage(
+            spineIndex: 3, ordinal: 0, start: 100, end: 146, words: 9,
+            text: "a White Rabbit with pink eyes ran close by her",
+        )
+        let model = ScriptedAnswerModel(turns: [
+            .answer("Alice followed a white rabbit.\nSources: 7"),
+        ])
+        let engine = AskEngine(
+            model: model, store: store, tools: [ShowingTool(shown: [7: found])],
+        )
+
+        let (events, failure) = await Self.drain(engine.ask(
+            question: "What did Alice follow down the hole?", source: source,
+            boundary: try AskFixture.endOf(spine: AskFixture.Spine.chapterI),
+        ))
+        #expect(failure == nil)
+        let answer = try #require(Self.answer(events))
+        #expect(answer.sources.map(\.ordinal) == [7])
+        #expect(answer.sources.first?.passage == found)
+    }
+
     // MARK: - Retrying a prompt that did not fit
 
     @Test("a context-window failure retries with a shorter prompt")

@@ -22,9 +22,10 @@ import SwiftUI
 /// `AskSheet` measures. Sources are part of the answer: when a reader opens one,
 /// the height it adds is height the sheet should grow to fit, and the existing
 /// `onContentHeight` → `askDetent` path does exactly that for nothing. Closed,
-/// the row costs about 44pt, which keeps a short answer under the 300pt
-/// threshold and the medium detent — so the page the question is about stays
-/// visible, which is the whole reason the sheet opens at medium.
+/// the row costs roughly fifty points — an 11pt overline, one `spacing8`, and a
+/// 12pt chip inside two `spacing8` paddings — which keeps a short answer under
+/// the 300pt threshold and so on the medium detent, where the page the question
+/// is about stays visible behind it.
 struct AskSourcesRow: View {
     let sources: [AskSource]
     /// The chapter each excerpt is in, resolved by the caller: only
