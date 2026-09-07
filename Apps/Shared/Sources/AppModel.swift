@@ -103,6 +103,9 @@ public final class AppModel {
     public private(set) var readingHome: ReadingHome = .empty
 
     private let keychain: any TokenPersisting
+    /// Where sign-out's broadcast goes. `.default` in the app; a test's own, so
+    /// one suite's sign-out cannot clear another suite's state.
+    private let notificationCentre: NotificationCenter
     /// The on-device catalogue. Present as soon as a server is chosen, so the
     /// shelf is populated before any request is made.
     public private(set) var store: LibraryStore?
@@ -116,8 +119,23 @@ public final class AppModel {
     /// Queued writes still waiting for a connection, for the sync row.
     public private(set) var pendingWrites = 0
 
-    public init(keychain: any TokenPersisting = KeychainStorage()) {
+    /// `notificationCentre` is injectable for one reason: sign-out broadcasts a
+    /// process-wide notification, and `PlaybackSettings` and `AskCoordinator`
+    /// both observe it on the default centre with `object: nil` — neither is
+    /// owned by an `AppModel`, which is why the message is a notification at
+    /// all. swift-testing runs suites in parallel, so a test that signs out
+    /// reached into unrelated suites and cleared their per-book styles, their
+    /// volume trims and their whole question index mid-run. That is a plausible
+    /// cause of `swift test` failing once with a single issue and passing on an
+    /// identical re-run. A test hands over a centre of its own, and the message
+    /// is then scoped to the instance under test without being weakened: it is
+    /// still posted, and still assertable.
+    public init(
+        keychain: any TokenPersisting = KeychainStorage(),
+        notificationCentre: NotificationCenter = .default,
+    ) {
         self.keychain = keychain
+        self.notificationCentre = notificationCentre
         serverAddress = UserDefaults.standard.string(forKey: Self.lastServerKey) ?? ""
         reachability.onBecameOnline = { [weak self] in
             Task { await self?.drainPendingWrites() }
@@ -547,7 +565,7 @@ public final class AppModel {
         readerRequest = nil
         visibleReaderUUID = nil
         listeningError = nil
-        NotificationCenter.default.post(name: PlaybackSettings.signOutNotification, object: nil)
+        notificationCentre.post(name: PlaybackSettings.signOutNotification, object: nil)
 
         // The account's transfers go with it. The manager itself stays: its
         // background session owns its identifier for the life of the process,

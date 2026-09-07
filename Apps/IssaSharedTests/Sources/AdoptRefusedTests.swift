@@ -47,7 +47,7 @@ struct AdoptRefusedTests {
     private static func model(answering status: Int) -> AppModel {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [RefusingStub.self]
-        let app = AppModel(keychain: InMemoryTokens())
+        let app = AppModel(keychain: InMemoryTokens(), notificationCentre: NotificationCenter())
         app.session = Session(
             serverURL: URL(string: "https://library.example:\(status)")!,
             keychain: InMemoryTokens(),
@@ -83,7 +83,7 @@ struct AdoptRefusedTests {
     /// arrived before a server was resolved went nowhere silently.
     @Test("a token adopted with no session says so")
     func noSession() async throws {
-        let app = AppModel(keychain: InMemoryTokens())
+        let app = AppModel(keychain: InMemoryTokens(), notificationCentre: NotificationCenter())
         app.session = nil
         await app.adopt(token: "orphan")
 

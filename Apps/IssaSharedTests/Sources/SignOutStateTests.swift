@@ -20,7 +20,7 @@ struct SignOutStateTests {
     /// unconsumed opened in the *next* account's library.
     @Test("a pending deep link does not survive into the next account")
     func pendingBookIsCleared() async {
-        let app = AppModel(keychain: InMemoryTokens())
+        let app = AppModel(keychain: InMemoryTokens(), notificationCentre: NotificationCenter())
         app.requestBook("11111111-1111-4111-8111-111111111111", .read)
         #expect(app.pendingBook != nil, "the link has to be armed for the test to mean anything")
 
@@ -33,7 +33,7 @@ struct SignOutStateTests {
     /// now survive a relaunch rather than merely a session.
     @Test("the catalogue and everything derived from it is dropped")
     func catalogueStateIsCleared() async {
-        let app = AppModel(keychain: InMemoryTokens())
+        let app = AppModel(keychain: InMemoryTokens(), notificationCentre: NotificationCenter())
         app.ratings["11111111-1111-4111-8111-111111111111"] = 4
 
         await app.signOut()
@@ -47,14 +47,21 @@ struct SignOutStateTests {
     /// Per-book reader styles live on `PlaybackSettings`, which `AppModel` does
     /// not own — hence the notification. A test that only checked `AppModel`
     /// would have missed whether the message is actually sent.
+    ///
+    /// On a centre of this test's own rather than the default one. The message
+    /// is process-wide and both its real observers register with `object: nil`,
+    /// so posting it here cleared the per-book styles, volume trims and question
+    /// indexes of every suite running in parallel. Scoping it costs this test
+    /// nothing — the assertion is still that the message is sent.
     @Test("per-book reader styles are told to go too")
     func perBookStylesAreNotified() async {
-        let app = AppModel(keychain: InMemoryTokens())
+        let centre = NotificationCenter()
+        let app = AppModel(keychain: InMemoryTokens(), notificationCentre: centre)
         var received = false
-        let token = NotificationCenter.default.addObserver(
+        let token = centre.addObserver(
             forName: PlaybackSettings.signOutNotification, object: nil, queue: .main,
         ) { _ in received = true }
-        defer { NotificationCenter.default.removeObserver(token) }
+        defer { centre.removeObserver(token) }
 
         await app.signOut()
         // The observer is delivered on the main queue; we are on it.

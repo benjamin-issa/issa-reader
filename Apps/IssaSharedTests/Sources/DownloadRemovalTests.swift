@@ -77,7 +77,7 @@ struct DownloadRemovalTests {
     /// with it" is a question the shape of the state cannot answer on its own.
     @Test("removing one edition leaves the other on the device")
     func removingOneEditionLeavesTheOther() throws {
-        let app = AppModel(keychain: InMemoryTokens())
+        let app = AppModel(keychain: InMemoryTokens(), notificationCentre: NotificationCenter())
         let uuid = Self.freshUUID()
         let ebook = try Self.plant(uuid, format: .ebook)
         let readaloud = try Self.plant(uuid, format: .readaloud, bytes: 64)
@@ -99,7 +99,7 @@ struct DownloadRemovalTests {
     /// a reader would notice first.
     @Test("a removal leaves the rating, the position and the annotations alone")
     func removalLeavesTheReadersOwnDataAlone() async throws {
-        let app = AppModel(keychain: InMemoryTokens())
+        let app = AppModel(keychain: InMemoryTokens(), notificationCentre: NotificationCenter())
         let uuid = Self.freshUUID()
         let file = try Self.plant(uuid, format: .ebook)
         defer { try? FileManager.default.removeItem(at: file) }
@@ -144,7 +144,7 @@ struct DownloadRemovalTests {
     /// the download or sign out".
     @Test("a file that went behind the model's back takes its question index with it")
     func reconcileDropsTheIndexOfADepartedDownload() async throws {
-        let app = AppModel(keychain: InMemoryTokens())
+        let app = AppModel(keychain: InMemoryTokens(), notificationCentre: NotificationCenter())
         let uuid = Self.freshUUID()
 
         // The download is a real book, copied into the real download directory,
@@ -193,7 +193,7 @@ struct DownloadRemovalTests {
     /// more the download's than an annotation is.
     @Test("reconciling removes a book's extracted face and leaves the reader's own")
     func reconcileRemovesExtractedFontsOnly() throws {
-        let app = AppModel(keychain: InMemoryTokens())
+        let app = AppModel(keychain: InMemoryTokens(), notificationCentre: NotificationCenter())
         let uuid = Self.freshUUID()
         let file = try Self.plant(uuid, format: .readaloud)
         defer { try? FileManager.default.removeItem(at: file) }
@@ -224,7 +224,7 @@ struct DownloadRemovalTests {
     /// safe to run twice.
     @Test("removing the last edition and reconciling it are the same removal, run twice")
     func removalIsIdempotentWithTheSweep() throws {
-        let app = AppModel(keychain: InMemoryTokens())
+        let app = AppModel(keychain: InMemoryTokens(), notificationCentre: NotificationCenter())
         let uuid = Self.freshUUID()
         let file = try Self.plant(uuid, format: .ebook)
         defer { try? FileManager.default.removeItem(at: file) }
@@ -257,7 +257,7 @@ struct DownloadRemovalTests {
     /// indexed again.
     @Test("removing one of two editions keeps the face and index of the other")
     func removingOneEditionKeepsTheBooksDerivedFiles() async throws {
-        let app = AppModel(keychain: InMemoryTokens())
+        let app = AppModel(keychain: InMemoryTokens(), notificationCentre: NotificationCenter())
         let uuid = Self.freshUUID()
         // A real book for the ebook, because the index below is built by parsing
         // it — and the point of the test is that the index outlives it.
@@ -323,7 +323,7 @@ struct DownloadRemovalTests {
     /// derived from — a book left with only one has nothing behind either.
     @Test("an audiobook left on the device does not keep a face alive")
     func anAudiobookIsNotTextOnTheDevice() throws {
-        let app = AppModel(keychain: InMemoryTokens())
+        let app = AppModel(keychain: InMemoryTokens(), notificationCentre: NotificationCenter())
         let uuid = Self.freshUUID()
         let ebook = try Self.plant(uuid, format: .ebook)
         let audiobook = try Self.plant(uuid, format: .audiobook, bytes: 64)
@@ -359,7 +359,7 @@ struct DownloadRemovalTests {
     /// sweep, and try again on the next refresh.
     @Test("a downloads directory that cannot be read is not an empty library")
     func anUnreadableDirectoryIsNotADeparture() throws {
-        let app = AppModel(keychain: InMemoryTokens())
+        let app = AppModel(keychain: InMemoryTokens(), notificationCentre: NotificationCenter())
         let uuid = Self.freshUUID()
         let file = try Self.plant(uuid, format: .ebook)
         defer { try? FileManager.default.removeItem(at: file) }
@@ -399,7 +399,7 @@ struct DownloadRemovalTests {
     /// the window closes.
     @Test("a removal inside its undo window has not touched the disk yet")
     func undoWindowDefersTheDeletion() throws {
-        let app = AppModel(keychain: InMemoryTokens())
+        let app = AppModel(keychain: InMemoryTokens(), notificationCentre: NotificationCenter())
         let uuid = Self.freshUUID()
         let file = try Self.plant(uuid, format: .ebook)
         defer { try? FileManager.default.removeItem(at: file) }
@@ -418,7 +418,7 @@ struct DownloadRemovalTests {
 
     @Test("the window closing deletes what it was holding")
     func theWindowCommits() throws {
-        let app = AppModel(keychain: InMemoryTokens())
+        let app = AppModel(keychain: InMemoryTokens(), notificationCentre: NotificationCenter())
         let uuid = Self.freshUUID()
         let file = try Self.plant(uuid, format: .ebook)
         defer { try? FileManager.default.removeItem(at: file) }
@@ -436,7 +436,7 @@ struct DownloadRemovalTests {
     /// three rows is not an undo, so a second removal commits the first.
     @Test("a second removal commits the first rather than losing it")
     func aSecondRemovalCommitsTheFirst() throws {
-        let app = AppModel(keychain: InMemoryTokens())
+        let app = AppModel(keychain: InMemoryTokens(), notificationCentre: NotificationCenter())
         let first = Self.freshUUID()
         let second = Self.freshUUID()
         let firstFile = try Self.plant(first, format: .ebook)
@@ -467,7 +467,7 @@ struct DownloadRemovalTests {
     /// silence, and `CarPlaySceneDelegate` says so in as many words.
     @Test("an edition inside its undo window is off the device everywhere")
     func theUndoWindowIsVisibleToEverySurface() throws {
-        let app = AppModel(keychain: InMemoryTokens())
+        let app = AppModel(keychain: InMemoryTokens(), notificationCentre: NotificationCenter())
         let uuid = Self.freshUUID()
         let file = try Self.plant(uuid, format: .ebook)
         defer { try? FileManager.default.removeItem(at: file) }
@@ -494,7 +494,7 @@ struct DownloadRemovalTests {
     /// while the read-along it still has sat on disk.
     @Test("a book with a second edition stays on the device during the window")
     func aSecondEditionKeepsTheBookOnTheShelf() throws {
-        let app = AppModel(keychain: InMemoryTokens())
+        let app = AppModel(keychain: InMemoryTokens(), notificationCentre: NotificationCenter())
         let uuid = Self.freshUUID()
         let ebook = try Self.plant(uuid, format: .ebook)
         let readaloud = try Self.plant(uuid, format: .readaloud, bytes: 64)
@@ -518,7 +518,7 @@ struct DownloadRemovalTests {
     /// reader already has.
     @Test("cancelling a transfer leaves the book's other edition untouched")
     func cancellingATransferIsNotABookRemoval() throws {
-        let app = AppModel(keychain: InMemoryTokens())
+        let app = AppModel(keychain: InMemoryTokens(), notificationCentre: NotificationCenter())
         let uuid = Self.freshUUID()
         let ebook = try Self.plant(uuid, format: .ebook)
         defer { try? FileManager.default.removeItem(at: ebook) }
@@ -551,7 +551,7 @@ struct DownloadRemovalTests {
     /// view nothing had failed.
     @Test("starting a download takes back a removal still inside its window")
     func startingADownloadCancelsAPendingRemoval() async throws {
-        let app = AppModel(keychain: InMemoryTokens())
+        let app = AppModel(keychain: InMemoryTokens(), notificationCentre: NotificationCenter())
         let uuid = Self.freshUUID()
         let file = try Self.plant(uuid, format: .ebook)
         defer { try? FileManager.default.removeItem(at: file) }
@@ -576,7 +576,7 @@ struct DownloadRemovalTests {
     /// would make the toast lie about what it is holding.
     @Test("starting a different download leaves the window alone")
     func adifferentDownloadLeavesTheWindowAlone() async throws {
-        let app = AppModel(keychain: InMemoryTokens())
+        let app = AppModel(keychain: InMemoryTokens(), notificationCentre: NotificationCenter())
         let removed = Self.freshUUID()
         let other = Self.freshUUID()
         let file = try Self.plant(removed, format: .ebook)
@@ -600,7 +600,7 @@ struct DownloadRemovalTests {
     /// belonging to whoever signed in next.
     @Test("signing out closes an open undo window first")
     func signingOutCommitsAPendingRemoval() async throws {
-        let app = AppModel(keychain: InMemoryTokens())
+        let app = AppModel(keychain: InMemoryTokens(), notificationCentre: NotificationCenter())
         let uuid = Self.freshUUID()
         let file = try Self.plant(uuid, format: .ebook)
         defer { try? FileManager.default.removeItem(at: file) }
