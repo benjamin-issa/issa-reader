@@ -580,13 +580,16 @@ public struct BookDetailView: View {
     private var formatBadges: some View {
         let formats = book.servableFormats
         if formats.contains(.readaloud) {
-            // "Read-along", never the server's "Readaloud" (item 03).
-            badge("Read-along", duration: book.readaloud?.duration)
+            // "Read-along", never the server's "Readaloud" (item 03) — from
+            // `Format.displayName`, which is the one place that says so.
+            badge(BookContentService.Format.readaloud.displayName,
+                  duration: book.readaloud?.duration)
         } else if formats.contains(.audiobook) {
-            badge("Audiobook", duration: book.audiobook?.duration)
+            badge(BookContentService.Format.audiobook.displayName,
+                  duration: book.audiobook?.duration)
         }
         if formats.contains(.ebook) {
-            badge("Ebook", pages: book.ebook?.pageCount)
+            badge(BookContentService.Format.ebook.displayName, pages: book.ebook?.pageCount)
         }
     }
 
@@ -668,18 +671,18 @@ public struct BookDetailView: View {
                 editionNote("Every edition is missing on the server.")
             }
             if let ebook = book.ebook {
-                editionRow(Self.editionName(.ebook), format: .ebook,
+                editionRow(BookContentService.Format.ebook.displayName, format: .ebook,
                            detail: ebook.isEpub2 == true ? "EPUB 2" : "EPUB 3",
                            size: ebook.fileSize, missing: ebook.missing == true)
             }
             if let audiobook = book.audiobook {
-                editionRow(Self.editionName(.audiobook), format: .audiobook,
+                editionRow(BookContentService.Format.audiobook.displayName, format: .audiobook,
                            detail: DurationText.text(audiobook.duration ?? 0),
                            size: audiobook.fileSize, missing: audiobook.missing == true)
             }
             if let readaloud = book.readaloud {
                 editionRow(
-                    Self.editionName(.readaloud), format: .readaloud,
+                    BookContentService.Format.readaloud.displayName, format: .readaloud,
                     detail: readaloud.isAligned
                         ? DurationText.text(readaloud.duration ?? 0)
                         : (readaloud.status ?? "processing").capitalized,
@@ -688,16 +691,6 @@ public struct BookDetailView: View {
             }
         }
         .background(Palette.surface, in: RoundedRectangle(cornerRadius: Metrics.radiusMedium))
-    }
-
-    /// The reader-facing name for an edition. "Read-along", never the server's
-    /// "Readaloud" (item 03); the other two already read plainly.
-    static func editionName(_ format: BookContentService.Format) -> String {
-        switch format {
-        case .ebook: "Ebook"
-        case .audiobook: "Audiobook"
-        case .readaloud: "Read-along"
-        }
     }
 
     private func editionRow(
@@ -793,7 +786,7 @@ public struct BookDetailView: View {
                 .frame(width: 44, height: 44)
                 .contentShape(Rectangle())
         }
-        .accessibilityLabel("\(Self.editionName(format)) options")
+        .accessibilityLabel("\(format.displayName) options")
         #endif
     }
 
