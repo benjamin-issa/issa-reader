@@ -218,6 +218,31 @@ struct DownloadInterruptionTests {
         await subject.shutDown()
     }
 
+    /// The bug behind "I deleted it and it came back".
+    ///
+    /// `clear` forgets the state row and nothing else — the row leaves the
+    /// screen, the transfer carries on, and when it lands
+    /// `didFinishDownloadingTo` moves the file into place over the deletion.
+    /// `AppModel.removeDownload` called `clear`, so removing a download that
+    /// was still arriving deleted a file that had not finished being written
+    /// and got it back a minute later. Cancel, then clear.
+    @Test("clearing a transfer forgets its row; only cancelling stops it")
+    func clearIsNotCancel() async {
+        let subject = manager()
+        let job = DownloadManager.Job(bookUUID: "b", format: .readaloud)
+        await subject.start(job)
+        #expect(subject.hasTask(for: job))
+
+        subject.clear(job)
+        #expect(subject.state(for: job) == nil, "the row has left the screen")
+        #expect(subject.hasTask(for: job), "and the transfer behind it has not")
+
+        subject.cancel(job)
+        #expect(!subject.hasTask(for: job), "this is the call that stops a download")
+        #expect(subject.state(for: job) == nil)
+        await subject.shutDown()
+    }
+
     @Test("a stamped task description still decodes to its job")
     func stampedDescriptionsDecode() {
         let job = DownloadManager.Job(bookUUID: "b", format: .readaloud)

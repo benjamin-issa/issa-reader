@@ -1,6 +1,9 @@
 import Foundation
 import IssaCore
 import IssaPlayback
+// For `CustomFonts`: a removal has to take the publisher face the reader model
+// extracted with it, and that directory is IssaUI's to name.
+import IssaUI
 import Observation
 import SwiftUI
 #if canImport(WidgetKit)
@@ -423,6 +426,11 @@ public final class AppModel {
     /// - Parameter keepDownloads: books already on the device are expensive to
     ///   fetch again, so the choice is offered rather than assumed.
     public func signOut(keepDownloads: Bool = false, nowPlaying: NowPlayingController? = nil) async {
+        // Before anything else, and before the state it acts on is torn down.
+        // A removal still inside its undo window is a decision the reader has
+        // already made; leaving it to a timer that fires after the account has
+        // gone would delete a file belonging to whoever signs in next.
+        commitPendingRemoval()
         await session?.signOut()
         await clearAccountScopedState(nowPlaying: nowPlaying)
 
@@ -438,6 +446,11 @@ public final class AppModel {
             for folder in ["Books", "Audio"] {
                 try? FileManager.default.removeItem(at: StorageRoot.directory(folder))
             }
+            // The publisher faces those downloads left behind. Not `Fonts/`
+            // itself: a face the reader imported lives at its root, this is
+            // the only copy of it, and it belongs to them the way their
+            // annotations do rather than to the account that is leaving.
+            CustomFonts.removeAllExtracted()
         }
         phase = .chooseServer
     }
@@ -863,25 +876,173 @@ public final class AppModel {
     /// forgetting it silently orphans hundreds of megabytes — a second copy of
     /// this in another screen is a second chance to forget.
     public func removeDownload(_ book: Book, format: BookContentService.Format) {
-        guard let session else { return }
-        BookContentService(client: session.client).removeDownload(book, format: format)
-        if format == .readaloud { AudioExtraction.removeExtractedAudio(for: book.uuid) }
-        downloads?.clear(.init(bookUUID: book.uuid, format: format))
+        removeDownload(bookUUID: book.uuid, format: format)
+    }
+
+    /// The same, named by uuid, for a file whose book is no longer in the
+    /// catalogue.
+    ///
+    /// Those files are precisely the ones with no row on any screen: the
+    /// storage headline counts the whole Books directory while every band sums
+    /// books still in the library, so a download whose book has left was in the
+    /// total, absent from the bar, and impossible to delete from the interface
+    /// at all. Nothing in a removal ever needed the `Book`.
+    public func removeDownload(bookUUID: String, format: BookContentService.Format) {
+        let job = DownloadManager.Job(bookUUID: bookUUID, format: format)
+        // Cancel, then clear — and both before the file is touched.
+        //
+        // `clear` only forgets the state row; the transfer carries on, and when
+        // it lands `didFinishDownloadingTo` moves the file into place. So
+        // removing a download that was still arriving deleted nothing and the
+        // book reappeared a minute later. The Downloads section lists in-flight
+        // and on-disk items together, which puts that one tap away.
+        downloads?.cancel(job)
+        downloads?.clear(job)
+        // No session needed: this is a file being deleted, and requiring an
+        // `APIClient` for it is why a reader who had signed out keeping their
+        // downloads could not remove one.
+        BookContentService.removeDownload(bookUUID: bookUUID, format: format)
+        releaseDerivedFiles(for: bookUUID, format: format)
+        refreshDownloadedSet()
+    }
+
+    /// Everything a download leaves behind on disk once its file has gone.
+    ///
+    /// Idempotent — every step is "remove it if it is there" — because it runs
+    /// from `removeDownload` and again from the reconciliation sweep below,
+    /// and on the ordinary path it runs from both.
+    private func releaseDerivedFiles(for bookUUID: String, format: BookContentService.Format?) {
+        // Narration extracted from the read-along for playback. Keyed on the
+        // format when one is named, because it is derived from that file
+        // specifically; the sweep names none, because by then it cannot tell
+        // which file went.
+        if format == nil || format == .readaloud {
+            AudioExtraction.removeExtractedAudio(for: bookUUID)
+        }
+        // The publisher's own face, extracted on every open of a book that
+        // ships one. Nothing removed these: `Fonts/<uuid>/` accumulated one
+        // directory per book for the life of the install, uncounted by the
+        // storage screen and unreachable from the interface. Only the
+        // subdirectory — faces at the root of `Fonts/` were imported by the
+        // reader and are theirs.
+        CustomFonts.removeExtracted(bookUUID: bookUUID)
         #if !os(tvOS)
         // The question index is derived from the file that has just gone, so it
         // is orphaned the moment this returns — and it is text out of the
         // reader's book sitting in a database nothing will ever open again.
-        ask?.remove(bookUUID: book.uuid)
+        ask?.remove(bookUUID: bookUUID)
         #endif
-        refreshDownloadedSet()
     }
 
-    /// Re-reads which books have files on disk.
+    /// Re-reads which books have files on disk, and cleans up after any that
+    /// went without being removed.
     ///
-    /// Called when a download finishes, when one is deleted, on sign-out, and
-    /// when the app comes forward — a transfer can complete while backgrounded.
+    /// Called when a download finishes, when one is deleted, on sign-out, when
+    /// the app comes forward — a transfer can complete while backgrounded — and
+    /// when a car connects.
     public func refreshDownloadedSet() {
+        let previous = downloadedUUIDs
         downloadedUUIDs = BookContentService.downloadedBookUUIDs()
+        reconcileDownloads(previouslyDownloaded: previous)
+    }
+
+    /// Runs the rest of a removal for every book whose files went behind the
+    /// app's back.
+    ///
+    /// `downloadedUUIDs` is read from the disk rather than maintained, because
+    /// a download can leave without this app deleting it. On an Apple TV every
+    /// download lives in Caches, which the system may reclaim under storage
+    /// pressure — that is the platform's contract, not a choice (see
+    /// `StorageRoot`). A restore, a failed move, a file removed underneath us:
+    /// same shape. In each case the extracted narration, the publisher's font
+    /// and the question index stay behind, and the index in particular is the
+    /// text of the reader's book — which PRIVACY.md promises is "deleted when
+    /// you delete the download or sign out".
+    ///
+    /// It is also what keeps a car honest. CarPlay is its own scene and can be
+    /// alive while the phone app never goes active, and the offline shelf
+    /// filters on nothing but this set: the car offered a book whose file had
+    /// gone, playback fell back to streaming, and in a tunnel that is silence.
+    ///
+    /// Takes the previous set rather than keeping one of its own, so there is
+    /// exactly one definition of "what is downloaded" and it is the disk.
+    func reconcileDownloads(previouslyDownloaded previous: Set<String>) {
+        let departed = DownloadsInventory.departed(from: previous, to: downloadedUUIDs)
+        guard !departed.isEmpty else { return }
+        for bookUUID in departed { releaseDerivedFiles(for: bookUUID, format: nil) }
+        IssaLog.info("reconciled downloads", ["gone": String(departed.count)])
+    }
+
+    // MARK: - Removing a download the reader can take back
+
+    /// A removal waiting out its undo window.
+    public struct PendingRemoval: Identifiable, Sendable, Equatable {
+        public let bookUUID: String
+        public let format: BookContentService.Format
+        /// For the toast — "Removed Dracula" — because the row it came from is
+        /// off the screen by the time the toast is drawn.
+        public let title: String
+        public var id: String { "\(bookUUID)-\(format.rawValue)" }
+    }
+
+    /// The one removal that can still be taken back, if any.
+    ///
+    /// One at a time, like Mail's undo send: a second removal commits the first
+    /// rather than queueing, because a toast that could mean any of three rows
+    /// is not an undo.
+    public private(set) var pendingRemoval: PendingRemoval?
+    private var pendingRemovalTask: Task<Void, Never>?
+
+    /// How long the toast stands.
+    public static let removalUndoWindow: Duration = .seconds(6)
+
+    /// Hides an edition now and deletes it when the undo window closes.
+    ///
+    /// Deferred rather than undone, and that is the whole point. The section
+    /// this serves must offer an undo *and* must never start a download —
+    /// re-fetching 612 MB of read-along over cellular because a thumb brushed a
+    /// row is not an undo — so the only honest way to have both is for the
+    /// bytes to still be there while the toast is up.
+    ///
+    /// The timer lives here rather than in the view because the view is a row
+    /// in a `LazyVStack`: scroll it off screen, or leave the tab, and a task
+    /// owned by it is cancelled with it — leaving the file on disk and the
+    /// reader believing it gone.
+    ///
+    /// If the app is killed inside the window the removal simply does not
+    /// happen and the row is back next launch. That is the safe direction: a
+    /// book still there costs storage, a book deleted by a crash costs a
+    /// download.
+    public func removeDownload(
+        bookUUID: String, format: BookContentService.Format, title: String,
+        undoWindow: Duration = AppModel.removalUndoWindow,
+    ) {
+        commitPendingRemoval()
+        pendingRemoval = PendingRemoval(bookUUID: bookUUID, format: format, title: title)
+        pendingRemovalTask = Task { [weak self] in
+            try? await Task.sleep(for: undoWindow)
+            guard !Task.isCancelled else { return }
+            self?.commitPendingRemoval()
+        }
+    }
+
+    /// Puts the row back. Nothing was deleted, so there is nothing to fetch.
+    public func undoPendingRemoval() {
+        pendingRemovalTask?.cancel()
+        pendingRemovalTask = nil
+        pendingRemoval = nil
+    }
+
+    /// Deletes what the window was holding, now.
+    ///
+    /// Called when the window closes, when a second removal displaces this one,
+    /// and by anything that must not leave a half-done removal behind.
+    public func commitPendingRemoval() {
+        pendingRemovalTask?.cancel()
+        pendingRemovalTask = nil
+        guard let pending = pendingRemoval else { return }
+        pendingRemoval = nil
+        removeDownload(bookUUID: pending.bookUUID, format: pending.format)
     }
 
     // MARK: - Deep links
