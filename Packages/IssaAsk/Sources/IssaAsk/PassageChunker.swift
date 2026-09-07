@@ -161,10 +161,7 @@ public enum PassageChunker {
                 ? string.length
                 : merged[ordinal + 1].location
             let body = string.substring(with: NSRange(location: start, length: end - start))
-            // Trailing only: dropping the tiling's newlines costs nothing, and
-            // dropping anything from the front would break the offset identity
-            // `Passage.text` documents.
-            let stored = String(body.reversed().drop { $0.isWhitespace || $0.isNewline }.reversed())
+            let stored = trimmingTail(body)
             passages.append(Passage(
                 spineIndex: spineIndex,
                 ordinal: ordinal,
@@ -179,16 +176,16 @@ public enum PassageChunker {
 
     // MARK: - What is worth indexing
 
-    /// `chunk`, minus the passages that are a table of contents rather than the
-    /// book.
+    /// `chunk`, cut to the book and minus the passages that are a table of
+    /// contents rather than the book.
     ///
     /// A second function rather than a filter inside `chunk`, because the
     /// tiling `chunk` promises is load-bearing: every character of the chapter
     /// belongs to some passage, which is what lets the straddling passage be
     /// cut to exactly the characters the reader has read. This is the
-    /// *indexing* decision on top of it. Dropping a passage here only ever
-    /// removes something from retrieval — it cannot move an offset, and the
-    /// passages that remain still carry the offsets `chunk` gave them.
+    /// *indexing* decision on top of it. Dropping a navigation passage only
+    /// ever removes something from retrieval — it cannot move an offset, and
+    /// every passage that remains still carries the offsets `chunk` gave it.
     ///
     /// The bug, verified on the simulator: "Who is Alice?" asked at 4% cited
     /// "CHAPTER XII. Alice's Evidence". Not a boundary leak — the passage is
@@ -197,6 +194,26 @@ public enum PassageChunker {
     /// chapter titles is not evidence, and citing one makes the whole feature
     /// look broken.
     ///
+    /// **The boilerplate is clipped, not filtered, and that is a bug fix.**
+    /// This used to drop any passage not wholly inside `bookRange`, while
+    /// `chunk` tiles the chapter with no gaps — so the one passage that
+    /// *straddles* a Gutenberg START or END marker was discarded entire,
+    /// taking whatever real book text sat in its tail with it. Measured on the
+    /// two fixtures: 133 characters of *Alice*'s title page and 125 of
+    /// *Franklin*'s plate captions, which are no loss — but **639 characters,
+    /// 93 words, of real book text in *Franklin*'s spine 10**: the tail of his
+    /// chronology, from "The Story of the Whistle" in 1779 to "The Art of
+    /// Procuring Pleasant Dreams" in 1806. That book has no separate footer
+    /// item, so its END marker sits mid-chapter and the passage carrying it
+    /// carries the chronology with it. Clipping keeps that text, and
+    /// restores the tiling invariant `chunk` documents: what comes back covers
+    /// `bookRange` with no gaps, which is what the boundary truncation relies
+    /// on.
+    ///
+    /// Clipped *before* the navigation test, so a straddling passage is judged
+    /// on the book text it actually contributes rather than on the licence
+    /// block in front of it.
+    ///
     /// - Parameter navigationTitles: the book's own table of contents entries,
     ///   `EPUBPackage.navigation`. With none of them nothing is dropped, which
     ///   is the right default: the test is "these lines are the book's section
@@ -204,13 +221,51 @@ public enum PassageChunker {
     public static func indexable(
         text: String, spineIndex: Int, navigationTitles: [String] = [],
     ) -> [Passage] {
+        let string = text as NSString
+        let book = bookRange(in: text)
         var passages = chunk(text: text, spineIndex: spineIndex)
+            .compactMap { clipped($0, to: book, in: string) }
         let titles = navigationTitles.map { QueryTerms.tokens(in: $0) }.filter { !$0.isEmpty }
         if !titles.isEmpty {
             passages = passages.filter { !isNavigationList($0.text, titles: titles) }
         }
-        let book = bookRange(in: text)
-        return passages.filter { $0.start >= book.location && $0.end <= book.upperBound }
+        return passages
+    }
+
+    /// One passage, cut to the part of it that is the book, or nil where none
+    /// of it is.
+    ///
+    /// The offsets move with the text, which is the whole point: `Passage.text`
+    /// promises that character *i* of it is chapter offset `start + i`, and the
+    /// boundary truncation is `boundary.charOffset - start` UTF-16 units into
+    /// that string. A clipped passage that kept the old `start` would cut the
+    /// reader's position a title page early.
+    private static func clipped(
+        _ passage: Passage, to book: NSRange, in string: NSString,
+    ) -> Passage? {
+        let start = max(passage.start, book.location)
+        let end = min(passage.end, book.upperBound)
+        guard start < end else { return nil }
+        // Wholly inside, which is every passage of every book that has no
+        // markers at all: nothing to recompute, and no substring to take.
+        guard start != passage.start || end != passage.end else { return passage }
+        let stored = trimmingTail(
+            string.substring(with: NSRange(location: start, length: end - start)))
+        return Passage(
+            spineIndex: passage.spineIndex, ordinal: passage.ordinal,
+            start: start, end: end, words: wordCount(stored), text: stored,
+        )
+    }
+
+    /// Trailing whitespace only: dropping the tiling's newlines costs nothing,
+    /// and dropping anything from the front would break the offset identity
+    /// `Passage.text` documents.
+    ///
+    /// Shared by `chunk` and `clipped` so a clipped passage is stored exactly
+    /// as a whole one is — a difference between the two would show up as an
+    /// offset that is right for most passages and wrong for one per chapter.
+    private static func trimmingTail(_ body: String) -> String {
+        String(body.reversed().drop { $0.isWhitespace || $0.isNewline }.reversed())
     }
 
     /// What of a chapter is the book, when the transcriber says so.

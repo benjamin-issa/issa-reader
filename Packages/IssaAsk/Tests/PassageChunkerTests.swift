@@ -22,6 +22,99 @@ struct PassageChunkerTests {
         }
     }
 
+    /// The tiling assertion above was made against `chunk` and never against
+    /// `indexable`, **which is why the straddle went unnoticed**: `indexable`
+    /// dropped any passage not wholly inside `bookRange` while `chunk` tiles
+    /// with no gaps, so the one passage carrying a Gutenberg marker was
+    /// discarded whole, and with it every character of book text in its tail.
+    ///
+    /// What comes back now tiles `bookRange` itself — the range the boundary
+    /// truncation is measured inside. Every spine item of both fixtures,
+    /// because the markers are on different items in each and a test pinned to
+    /// one chapter is a test that cannot see this.
+    @Test("indexable passages tile the book's own range, markers and all", arguments: [
+        AskFixture.alice, AskFixture.franklin,
+    ])
+    func indexableTilesTheBookRange(book: AskBook) throws {
+        let package = try book.package()
+        var straddles = 0
+        for spine in 0 ..< package.spine.count {
+            guard let text = try? book.text(spine: spine) else { continue }
+            let range = PassageChunker.bookRange(in: text)
+            // No navigation titles: dropping a contents list is a deliberate
+            // hole, and it is the tiling either side of the *markers* that this
+            // is about.
+            let passages = PassageChunker.indexable(text: text, spineIndex: spine)
+            guard let first = passages.first, let last = passages.last else { continue }
+
+            #expect(first.start == range.location, "spine \(spine) starts inside the book range")
+            #expect(last.end == range.upperBound, "spine \(spine) stops short of the book range")
+            for (earlier, later) in zip(passages, passages.dropFirst()) {
+                #expect(earlier.end == later.start,
+                        "spine \(spine) has a hole at \(earlier.end)…\(later.start)")
+            }
+            if range.location != 0 || range.length != (text as NSString).length { straddles += 1 }
+        }
+        #expect(straddles > 0, "no chapter of \(book.resource) carries a marker, so nothing was tested")
+    }
+
+    /// A clipped passage still says where its own characters are. This is the
+    /// invariant the boundary truncation stands on — `boundary.charOffset -
+    /// start` UTF-16 units into `text` — and a passage whose text was cut while
+    /// its `start` stayed put would cut the reader's position a title page
+    /// early.
+    @Test("a clipped passage's characters are still the chapter's characters from its start",
+          arguments: [AskFixture.alice, AskFixture.franklin])
+    func clippedTextMatchesItsOffsets(book: AskBook) throws {
+        let package = try book.package()
+        for spine in 0 ..< package.spine.count {
+            guard let text = try? book.text(spine: spine) else { continue }
+            let string = text as NSString
+            for passage in PassageChunker.indexable(text: text, spineIndex: spine) {
+                #expect(passage.start >= 0)
+                #expect(passage.end <= string.length)
+                #expect(passage.text.utf16.count <= passage.end - passage.start,
+                        "only the trailing whitespace may be dropped")
+                let expected = string.substring(
+                    with: NSRange(location: passage.start, length: passage.text.utf16.count))
+                #expect(expected == passage.text, "spine \(spine) passage \(passage.ordinal)")
+            }
+        }
+    }
+
+    /// The text that was being thrown away, named.
+    ///
+    /// *Franklin* has no separate footer spine item, so its END marker sits in
+    /// the middle of spine 10 and the passage carrying it carries the tail of
+    /// his chronology too: 639 characters, 93 words, from "The Story of the
+    /// Whistle" to "The Art of Procuring Pleasant Dreams". Filtering the
+    /// passage out took all of it; clipping keeps it and drops only the notice.
+    @Test("the book text on the far side of an END marker survives")
+    func realTextBesideTheMarkerSurvives() throws {
+        let text = try AskFixture.franklin.text(spine: 10)
+        let passages = PassageChunker.indexable(text: text, spineIndex: 10)
+        let tail = try #require(passages.last)
+        #expect(tail.text.contains("The Story of the Whistle"))
+        #expect(tail.text.contains("Procuring Pleasant Dreams"))
+        // And the notice itself is gone, which is what `bookRange` is for.
+        #expect(!passages.contains { $0.text.contains("END OF THE PROJECT GUTENBERG") })
+        #expect(!passages.contains { $0.text.contains("Updated editions will replace") })
+    }
+
+    /// The same thing at the other end, where the kept half is boilerplate and
+    /// nothing of value is lost either way — but the passage must still be cut
+    /// rather than dropped, or the tiling has a hole in it.
+    @Test("a passage straddling a START marker keeps only what follows it")
+    func straddlingTheStartMarker() throws {
+        let text = try AskFixture.alice.text(spine: 1)
+        let range = PassageChunker.bookRange(in: text)
+        let passages = PassageChunker.indexable(text: text, spineIndex: 1)
+        let first = try #require(passages.first)
+        #expect(first.start == range.location)
+        #expect(!first.text.contains("START OF THE PROJECT GUTENBERG"))
+        #expect(!passages.contains { $0.text.contains("Project Gutenberg eBook of") })
+    }
+
     @Test("ordinals are the passage's own position, in order")
     func ordinalsAreSequential() throws {
         let text = try AskFixture.text(spine: AskFixture.Spine.chapterII)
