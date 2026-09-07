@@ -15,21 +15,21 @@ import SwiftUI
 enum VolumeTrimControl {
     @MainActor
     static func set(
-        _ percent: Int, for book: Book,
+        _ decibels: Int, for book: Book,
         coordinator: (any PlaybackDriving)?, settings: PlaybackSettings,
     ) {
-        let legal = VolumeTrim.clamped(percent)
+        let legal = VolumeTrim.clamped(decibels)
         settings.setVolumeTrim(legal, for: book.uuid)
         // Whatever is playing this book right now. Nil when nothing is, which
         // is a perfectly ordinary way to set a level in advance.
         coordinator?.player.gain = VolumeTrim.gain(legal)
     }
 
-    /// Moves the level by one step, from wherever it is.
+    /// Moves the level by one decibel, from wherever it is.
     ///
     /// Read from the preference rather than from the player: the player holds a
-    /// gain, and going back and forth through the multiplier to recover a
-    /// percentage would accumulate the error the detents exist to prevent.
+    /// gain, and going back and forth through the multiplier to recover a rung
+    /// would accumulate the error the detents exist to prevent.
     @MainActor
     static func nudge(
         by delta: Int, for book: Book,
@@ -79,7 +79,7 @@ struct VolumeTrimRow: View {
                 }
                 Text(VolumeTrim.label(trim))
                     // Monospaced digits so the value does not shuffle the row
-                    // sideways as it steps through 5, 10, 15.
+                    // sideways as it steps through the rungs.
                     .font(Typography.subhead.monospacedDigit())
                     .foregroundStyle(Palette.inkSecondary)
             }
@@ -102,8 +102,8 @@ struct VolumeTrimRow: View {
             // gives no other sign of passing it.
             .sensoryFeedback(.impact(weight: .light), trigger: trim) { _, new in new == 0 }
             .accessibilityLabel("Volume for this book")
-            // "−15%" is read as "minus fifteen percent", which says nothing
-            // about which way the sound moves.
+            // "−6 dB" is read as "minus six D B", which says nothing about
+            // which way the sound moves.
             .accessibilityValue(VolumeTrim.spoken(trim))
 
             // Both ends read off the range rather than typed out, so widening

@@ -140,8 +140,8 @@ public final class ReaderModel {
     /// Playback rate to start narration at, supplied by the app's preferences.
     public var preferredRate: Double = 1.0
 
-    /// This book's level, as a percentage either side of the recording,
-    /// supplied by the app's preferences.
+    /// This book's level, in decibels either side of the recording, supplied by
+    /// the app's preferences.
     ///
     /// Applied live rather than only at open: the slider in the player sheet
     /// writes it while the voice is running, and the whole point of the control
