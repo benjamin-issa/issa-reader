@@ -119,7 +119,19 @@ enum TVBookTimeline {
         guard let timeline else {
             // No narration: the reader's clock is byte weight, so a chapter's
             // place inside its file is its anchor's place in the markup.
-            let place = fragment.flatMap { within($0, of: document(href)) } ?? 0
+            //
+            // A nav entry naming no fragment is the whole file, and the file's
+            // own start is a real answer for it.
+            guard let fragment else {
+                return package.bookProgress(spineIndex: index, within: 0)
+            }
+            // A named anchor the markup has not got is not a chapter at the top
+            // of the file; it is a chapter nobody can place. `?? 0` said the top
+            // of the file anyway, which reads as a real position — and since
+            // every unplaceable chapter in a file said the same thing, `dedupe`
+            // then stacked them all onto one tick. Dropped instead, the way the
+            // audio branch below already drops a document with no narration.
+            guard let place = within(fragment, of: document(href)) else { return nil }
             return package.bookProgress(spineIndex: index, within: place)
         }
 
@@ -189,30 +201,59 @@ enum TVBookTimeline {
     /// question one pass answers.
     ///
     /// The space in front of `id` is what keeps `data-id` and the like out.
+    ///
+    /// **Either quote, terminating on whichever opened.** One byte used to do
+    /// both jobs, so `<h2 id='chapter-3'>` — which is what Sigil and Calibre
+    /// write — matched nothing at all: `within` then failed for every chapter in
+    /// the file, they all fell back to the file's own start, and `dedupe`
+    /// collapsed them into a single tick. That is exactly the "seventeen marks
+    /// in three places" defect this whole path exists to prevent. Terminating on
+    /// the opener rather than on either quote is what keeps an apostrophe inside
+    /// a double-quoted id — `id="it's-here"` — from cutting the id in half.
+    ///
+    /// Read in place. `[UInt8](data)` copied every spine file whole, which
+    /// `navigationTicks` above notes are megabytes on a long novel, and
+    /// comparing `Array(bytes[i ..< i + 4]) == pattern` allocated a four-byte
+    /// array on every candidate byte in them.
     static func anchors(in data: Data) -> [Anchor] {
-        let quote = UInt8(ascii: "\"")
-        let pattern: [UInt8] = [UInt8(ascii: "i"), UInt8(ascii: "d"), UInt8(ascii: "="), quote]
-        let bytes = [UInt8](data)
-        var found: [Anchor] = []
-        var index = 1
-        while index + pattern.count <= bytes.count {
-            guard bytes[index] == pattern[0], isSpace(bytes[index - 1]),
-                  Array(bytes[index ..< index + pattern.count]) == pattern
-            else {
-                index += 1
-                continue
+        let i = UInt8(ascii: "i")
+        let d = UInt8(ascii: "d")
+        let equals = UInt8(ascii: "=")
+        let double = UInt8(ascii: "\"")
+        let single = UInt8(ascii: "'")
+        return data.withUnsafeBytes { bytes -> [Anchor] in
+            let count = bytes.count
+            var found: [Anchor] = []
+            var index = 1
+            // `id=` and its opening quote are four bytes starting at `index`,
+            // with the space that qualifies them at `index - 1`, so the last
+            // position worth testing is `count - 4`.
+            while index + 4 <= count {
+                guard bytes[index] == i, isSpace(bytes[index - 1]),
+                      bytes[index + 1] == d, bytes[index + 2] == equals
+                else {
+                    index += 1
+                    continue
+                }
+                let opener = bytes[index + 3]
+                guard opener == double || opener == single else {
+                    index += 1
+                    continue
+                }
+                let valueStart = index + 4
+                var end = valueStart
+                while end < count, bytes[end] != opener { end += 1 }
+                // An unterminated attribute is markup nobody can read. Stopping
+                // is what keeps the scan inside the buffer.
+                guard end < count else { break }
+                if end > valueStart,
+                   let id = String(bytes: bytes[valueStart ..< end], encoding: .utf8) {
+                    found.append(Anchor(id: id, offset: index))
+                }
+                index = end + 1
             }
-            let valueStart = index + pattern.count
-            var end = valueStart
-            while end < bytes.count, bytes[end] != quote { end += 1 }
-            guard end < bytes.count else { break }
-            if end > valueStart,
-               let id = String(bytes: bytes[valueStart ..< end], encoding: .utf8) {
-                found.append(Anchor(id: id, offset: index))
-            }
-            index = end + 1
+            return found
         }
-        return found
     }
 
     private static func isSpace(_ byte: UInt8) -> Bool {
