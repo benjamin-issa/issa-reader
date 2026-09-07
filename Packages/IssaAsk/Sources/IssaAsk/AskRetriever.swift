@@ -59,14 +59,25 @@ public struct AskRetriever: Sendable {
     }
 
     private let store: AskIndexStore
+    /// Which book, captured at `init` beside the boundary and for the same
+    /// reason: one store serves every book on the shelf, so a retriever that
+    /// left the book to be settled per query could have its second query
+    /// answered from a different one than its first.
+    private let bookUUID: String
     private let boundary: ReadingBoundary
     /// Whether the deterministic kinship table may answer without the model.
     /// False for the tool: the model has already been called, and handing it a
     /// finished sentence in place of excerpts is not a search result.
     private let allowsFastPath: Bool
 
-    public init(store: AskIndexStore, boundary: ReadingBoundary, allowsFastPath: Bool = true) {
+    public init(
+        store: AskIndexStore,
+        bookUUID: String,
+        boundary: ReadingBoundary,
+        allowsFastPath: Bool = true,
+    ) {
         self.store = store
+        self.bookUUID = bookUUID
         self.boundary = boundary
         self.allowsFastPath = allowsFastPath
     }
@@ -77,18 +88,24 @@ public struct AskRetriever: Sendable {
         // The book's own names, bounded by the position, so an invented one the
         // general-purpose tagger misses ("Cheshire", "Vin") is still recognised
         // as a name — and a character not yet met is still not.
-        let known = (try? await store.topNames(before: boundary, limit: Limits.knownNames)) ?? []
+        let known = (try? await store.topNames(
+            in: bookUUID, before: boundary, limit: Limits.knownNames,
+        )) ?? []
         let terms = QueryTerms.extract(from: question, knownNames: known)
 
         // A recap names nobody in particular, so it has nothing to be unmet.
         guard !terms.isRecap else {
-            let recap = try await store.recapPassages(before: boundary, limit: Limits.recap)
+            let recap = try await store.recapPassages(
+                in: bookUUID, before: boundary, limit: Limits.recap,
+            )
             return .evidence(
                 recap.map { PassageRanker.Ranked(retrieved: $0, score: 0) }, kind: .recap,
             )
         }
 
-        let unmet = try await store.unmetWords(terms.nameCandidates, before: boundary)
+        let unmet = try await store.unmetWords(
+            terms.nameCandidates, in: bookUUID, before: boundary,
+        )
         // Retrieval is skipped when the answer is already known to be "not
         // yet": it would only cost a query whose results are thrown away.
         guard unmet.isEmpty else { return .notYet(unmet: unmet) }
@@ -119,7 +136,9 @@ public struct AskRetriever: Sendable {
     ) async throws -> [Evidence] {
         switch terms.kind {
         case .recap:
-            let recap = try await store.recapPassages(before: boundary, limit: Limits.recap)
+            let recap = try await store.recapPassages(
+                in: bookUUID, before: boundary, limit: Limits.recap,
+            )
             return EvidenceFinder.passages(recap.map {
                 PassageRanker.Ranked(retrieved: $0, score: 0)
             })
@@ -150,13 +169,15 @@ public struct AskRetriever: Sendable {
     private func identity(_ subject: Subject) async throws -> [Evidence] {
         guard let strict = FTSQuery.all(subject.tokens) else { return [] }
         var passages = try await store.passages(
-            matching: strict, before: boundary, order: .bookOrder, limit: Limits.evidencePool,
+            matching: strict, in: bookUUID, before: boundary, order: .bookOrder,
+            limit: Limits.evidencePool,
         )
         if subject.tokens.count > 1, let introduction = passages.first,
            let short = FTSQuery.all([subject.head]) {
             let anchor = (introduction.passage.spineIndex, introduction.passage.start)
             let shortForm = try await store.passages(
-                matching: short, before: boundary, order: .bookOrder, limit: Limits.evidencePool,
+                matching: short, in: bookUUID, before: boundary, order: .bookOrder,
+                limit: Limits.evidencePool,
             ).filter { ($0.passage.spineIndex, $0.passage.start) >= anchor }
             passages = Self.merged(passages, shortForm)
         }
@@ -199,7 +220,7 @@ public struct AskRetriever: Sendable {
         guard let pattern else { return [] }
 
         let passages = try await store.passages(
-            matching: pattern, before: boundary, order: .bookOrder,
+            matching: pattern, in: bookUUID, before: boundary, order: .bookOrder,
             limit: Limits.evidencePool,
         )
         logIfCapped(passages.count, kind: "kinship")
@@ -232,14 +253,14 @@ public struct AskRetriever: Sendable {
             let others = terms.searchTokens.filter { !subject.tokens.contains($0) }
             if let pattern = FTSQuery.all(subject.tokens, andAnyOf: others) {
                 candidates = try await store.passages(
-                    matching: pattern, before: boundary, order: .relevance,
+                    matching: pattern, in: bookUUID, before: boundary, order: .relevance,
                     limit: Limits.generalPool,
                 )
             }
         }
         if candidates.isEmpty {
             candidates = try await store.retrieve(
-                terms: terms, before: boundary, limit: Limits.generalPool,
+                terms: terms, in: bookUUID, before: boundary, limit: Limits.generalPool,
             )
         }
         guard !candidates.isEmpty else { return [] }

@@ -9,10 +9,20 @@ import IssaCore
 /// a SQL clause in `AskIndexStore` that cannot be persuaded to return a passage
 /// from later in the book, and this actor's job is to never route around it.
 ///
-/// An `actor` for two reasons. Questions are serialised — the on-device model
-/// answers one at a time anyway, and a second `LanguageModelSession` running
-/// concurrently fails with `concurrentRequests` — and the index handle, the
-/// tools' per-generation state and the queue all need one owner.
+/// An `actor` because the index handle and the tools' per-generation state need
+/// one owner. Serialising the model is *not* one of its jobs and never could
+/// be: `AskCoordinator` builds a fresh engine per question, so the turnstile
+/// that used to live here served an audience of one, and two books meant two
+/// concurrent generations. It is `AskTurnstile` now — one per process, passed
+/// in.
+///
+/// Those two generations do not fail with `concurrentRequests`, whatever this
+/// comment used to say. That error is per session — "a second prompt while it's
+/// still responding to the first one" — and `SystemAnswerModel.answer` builds a
+/// fresh `LanguageModelSession` for every generation, so two questions have two
+/// sessions. What they run into is `rateLimited`, the process-wide one. Both
+/// become `.busy`, so the reader's symptom and the fix are unchanged; the
+/// reason is not.
 public actor AskEngine {
     private let model: any AnswerModel
     /// Held publicly because the app also deletes indexes from it when a
@@ -20,6 +30,7 @@ public actor AskEngine {
     /// two would open the same SQLite file twice.
     public nonisolated let store: AskIndexStore
     private let tools: [any AskTool]
+    private let turnstile: AskTurnstile
 
     /// - Parameter tools: the `searchBook` tool, or nothing.
     ///
@@ -29,10 +40,21 @@ public actor AskEngine {
     ///   seconds on a phone. If the measurement goes against it, this is the
     ///   line that changes — and the engine is otherwise identical with and
     ///   without it, which is what makes the comparison worth anything.
-    public init(model: any AnswerModel, store: AskIndexStore, tools: [any AskTool] = []) {
+    /// - Parameter turnstile: the process's one turn at the on-device model.
+    ///   Defaulted so a test that only cares about one question writes nothing,
+    ///   and so an engine on its own behaves exactly as it did; the app passes
+    ///   the same one to every engine it builds, which is the whole point of
+    ///   the type.
+    public init(
+        model: any AnswerModel,
+        store: AskIndexStore,
+        tools: [any AskTool] = [],
+        turnstile: AskTurnstile = AskTurnstile(),
+    ) {
         self.model = model
         self.store = store
         self.tools = tools
+        self.turnstile = turnstile
     }
 
     // MARK: - Index
@@ -60,7 +82,12 @@ public actor AskEngine {
     }
 
     /// Warms the model while the reader looks at the chips.
-    public func prewarm() async { await model.prewarm() }
+    ///
+    /// Skipped rather than queued when a question already holds the turn: what
+    /// a prewarm would load, that question has loaded already.
+    public func prewarm() async {
+        await turnstile.ifFree { await self.model.prewarm() }
+    }
 
     /// The two chips under the question field.
     ///
@@ -69,7 +96,9 @@ public actor AskEngine {
     /// that fill in eight seconds later.
     public func suggestions(source: BookSource, boundary: ReadingBoundary) async -> [String] {
         guard await store.isPrepared(source: source),
-              let names = try? await store.topNames(before: boundary, limit: 1)
+              let names = try? await store.topNames(
+                  in: source.bookUUID, before: boundary, limit: 1,
+              )
         else { return AskSuggestions.chips(topNames: []) }
         return AskSuggestions.chips(topNames: names)
     }
@@ -107,8 +136,6 @@ public actor AskEngine {
         boundary: ReadingBoundary,
         into continuation: AsyncThrowingStream<AskEvent, any Error>.Continuation,
     ) async {
-        await acquire()
-        defer { releaseTurn() }
         do {
             try await answer(
                 question: question, source: source, boundary: boundary, into: continuation,
@@ -140,7 +167,8 @@ public actor AskEngine {
         try Task.checkCancellation()
         continuation.yield(.phase(.retrieving))
         let retriever = AskRetriever(
-            store: store, boundary: boundary, allowsFastPath: Self.usesKinshipFastPath,
+            store: store, bookUUID: source.bookUUID, boundary: boundary,
+            allowsFastPath: Self.usesKinshipFastPath,
         )
         let retrieval = try await retriever.retrieve(question: question)
         let sanitised = QueryTerms.sanitise(question)
@@ -166,7 +194,10 @@ public actor AskEngine {
         // an unvetted path is a path somebody will later route around.
         case let .answered(answer, _):
             continuation.yield(.answered(
-                try await vetted(answer, question: sanitised, boundary: boundary),
+                try await vetted(
+                    answer, question: sanitised,
+                    bookUUID: source.bookUUID, boundary: boundary,
+                ),
             ))
 
         case let .evidence(ranked, _):
@@ -177,7 +208,10 @@ public actor AskEngine {
             )
             try Task.checkCancellation()
             continuation.yield(.answered(
-                try await vetted(generated, question: sanitised, boundary: boundary),
+                try await vetted(
+                    generated, question: sanitised,
+                    bookUUID: source.bookUUID, boundary: boundary,
+                ),
             ))
         }
     }
@@ -204,17 +238,16 @@ public actor AskEngine {
     /// the answer is held to the same test the question is: every name in it
     /// must be a name the book has already used.
     ///
-    /// Words that begin a sentence are exempt, because every sentence starts
-    /// with a capital and there is no way to tell "Alice went home" from "Rome
-    /// fell" without asking the tagger — and words already in the question are
-    /// exempt because the question-side guard has ruled on those.
+    /// Words already in the question are exempt, because the question-side
+    /// guard has ruled on those. A word that merely begins a sentence is exempt
+    /// only when it is a function word — see `unvettedNames`.
     private func vetted(
-        _ answer: AskAnswer, question: String, boundary: ReadingBoundary,
+        _ answer: AskAnswer, question: String, bookUUID: String, boundary: ReadingBoundary,
     ) async throws -> AskAnswer {
         guard !answer.notYetRevealed else { return answer }
         let candidates = Self.unvettedNames(in: answer.text, question: question)
         guard !candidates.isEmpty else { return answer }
-        let unmet = try await store.unmetWords(candidates, before: boundary)
+        let unmet = try await store.unmetWords(candidates, in: bookUUID, before: boundary)
         guard !unmet.isEmpty else { return answer }
 
         // Never the words themselves: an unmet name is a spoiler, and the log
@@ -225,14 +258,34 @@ public actor AskEngine {
         )
     }
 
-    /// Capitalised words in an answer that neither open a sentence nor appear in
-    /// the question.
+    /// Capitalised words in an answer that the question did not already ask
+    /// about and that a sentence did not have to capitalise.
     ///
     /// Deliberately the same crude test as `QueryTerms.nameCandidates`, and for
     /// the same reason: the names readers get spoiled by are invented ones no
     /// general-purpose tagger knows. Over-catching costs a "the story hasn't
     /// revealed that yet" for an answer that was fine; under-catching costs the
     /// one promise the feature makes.
+    ///
+    /// This once exempted **every** word that opened a sentence, on the true
+    /// premise that "Alice went home" and "Rome fell" cannot be told apart
+    /// without a tagger. The conclusion drawn from it was wrong. Every sentence
+    /// starts with a capital, so exempting them all exempted the spoiler:
+    /// `unvettedNames(in: "Kelsier dies. Vin escapes.", question: "What happens
+    /// next?")` returned `[]`, and both names went to the reader. So did
+    /// "Bilbo found the ring in the dark." — a headline spoiler is very often
+    /// the first word.
+    ///
+    /// The extractor does not need to be right, it needs to be generous, and
+    /// `AskIndexStore.unmetWords` arbitrates per book: over-catching is only
+    /// expensive when the over-caught word is absent from the part the reader
+    /// has read, and that is exactly the question the index answers.
+    ///
+    /// **Not `NLTagger`.** The only safe use of it here is as a positive
+    /// exemption — "the tagger says this is a place" — which opens a hole
+    /// precisely where place names are the spoiler: "Mordor lies to the east."
+    /// Using its silence to exempt is worse still, because invented names are
+    /// what it misses and invented names are what readers get spoiled by.
     static func unvettedNames(in answer: String, question: String) -> [String] {
         // Possessive-stripped on both sides, so "Reen's" in the answer is
         // checked against the index as `reen` — the word the book actually
@@ -247,14 +300,19 @@ public actor AskEngine {
             // Closing marks first: `said "Hello."` ends a sentence, and its
             // last character is a quotation mark.
             let closed = String(word).trimmingCharacters(in: Self.closingMarks)
-            let endsSentence = closed.last.map { Self.sentenceEnders.contains($0) } ?? false
+            let bare = String(word).trimmingCharacters(in: CharacterSet.letters.inverted)
+            let endsSentence = Self.endsSentence(closed, bare: bare)
             defer { opensSentence = endsSentence }
 
-            guard !opensSentence else { continue }
-            let bare = String(word).trimmingCharacters(in: CharacterSet.letters.inverted)
             guard let initial = bare.first, initial.isUppercase, bare.count > 2,
                   !QueryTerms.capitalisedNonNames.contains(bare.lowercased())
             else { continue }
+            // The exemption is conditional. A word that opens a sentence is
+            // exempt only when it is a closed-class function word, because
+            // those are the words a sentence capitalises for grammar rather
+            // than for a person. No special case for the first word of the
+            // answer: "Kelsier dies." puts the spoiler there.
+            if opensSentence, QueryTerms.sentenceOpeners.contains(bare.lowercased()) { continue }
             for token in QueryTerms.tokens(in: bare).map(QueryTerms.strippingPossessive)
                 where token.count > 2 && !asked.contains(token) {
                 candidates.insert(token)
@@ -263,7 +321,24 @@ public actor AskEngine {
         return candidates.sorted()
     }
 
-    static let sentenceEnders: Set<Character> = [".", "!", "?", ":", ";"]
+    /// Whether this word closes a sentence, so the next one opens one.
+    ///
+    /// An honorific does not, even though it ends in a full stop. "She met Mr.
+    /// Darcy at the ball." exempted Darcy outright: `Mr.` looked like the end
+    /// of a sentence, so every name after an honorific opened one. Reusing
+    /// `NameFinder.honorifics` keeps one list — the same one that stops "Mr.
+    /// Rabbit" and "Rabbit" being counted as two people. A sentence that
+    /// genuinely ends on an honorific loses the exemption for the word after
+    /// it, which is the conservative direction.
+    static func endsSentence(_ closed: String, bare: String) -> Bool {
+        guard let last = closed.last, sentenceEnders.contains(last) else { return false }
+        return !NameFinder.honorifics.contains(bare.lowercased())
+    }
+
+    /// No colon and no semicolon: both introduce a continuation rather than
+    /// close a sentence, and while they were here `The note said: Kelsier is
+    /// alive.` exempted the name the note was about.
+    static let sentenceEnders: Set<Character> = [".", "!", "?"]
     /// Quotation marks and brackets, which sit outside the full stop.
     static let closingMarks = CharacterSet(charactersIn: "\"'”’)]}»›")
 
@@ -276,34 +351,47 @@ public actor AskEngine {
     /// overflow at all, but `tokenCount` is not free on a phone and the builder
     /// estimates first — so the overflow that does happen is the estimate being
     /// wrong, and halving is the cheapest way to be certainly right.
+    ///
+    /// The turn is taken here rather than around the whole question, and it
+    /// covers all three attempts. Around the question it queued work that never
+    /// reaches the model at all: `.notYet` and the kinship fast path answer
+    /// from SQL in milliseconds and still waited behind another book's
+    /// twenty-second generation. Re-acquiring per attempt would be worse than
+    /// either — another question could take the turn in the middle of a retry.
     private func generate(
         question: String,
         ranked: [PassageRanker.Ranked],
         into continuation: AsyncThrowingStream<AskEvent, any Error>.Continuation,
     ) async throws -> AskAnswer {
-        var lastFailure = AskFailure.tooMuchContext
-        for attempt in Self.attempts(for: ranked) {
-            try Task.checkCancellation()
-            let built = await AskPromptBuilder.build(
-                question: question,
-                ranked: attempt,
-                contextSize: model.contextSize,
-                hasTool: !tools.isEmpty,
-                tokenCount: { [model] text in try await model.tokenCount(for: text) },
-            )
-            for tool in tools {
-                await tool.beginGeneration(numberingFrom: built.passages.count + 1)
-            }
+        try await turnstile.withTurn { () async throws -> AskAnswer in
+            var lastFailure = AskFailure.tooMuchContext
+            for attempt in Self.attempts(for: ranked) {
+                try Task.checkCancellation()
+                let built = await AskPromptBuilder.build(
+                    question: question,
+                    ranked: attempt,
+                    contextSize: self.model.contextSize,
+                    hasTool: !self.tools.isEmpty,
+                    tokenCount: { [model = self.model] text in
+                        try await model.tokenCount(for: text)
+                    },
+                )
+                for tool in self.tools {
+                    await tool.beginGeneration(numberingFrom: built.passages.count + 1)
+                }
 
-            do {
-                return try await stream(built, into: continuation)
-            } catch let failure as AskFailure where failure == .tooMuchContext {
-                lastFailure = failure
-                IssaLog.info("ask prompt too large", ["passages": String(built.passages.count)])
-                continue
+                do {
+                    return try await self.stream(built, into: continuation)
+                } catch let failure as AskFailure where failure == .tooMuchContext {
+                    lastFailure = failure
+                    IssaLog.info("ask prompt too large", [
+                        "passages": String(built.passages.count),
+                    ])
+                    continue
+                }
             }
+            throw lastFailure
         }
-        throw lastFailure
     }
 
     /// All of them, then half, then two — strictly decreasing.
@@ -367,27 +455,4 @@ public actor AskEngine {
         return .other("Something went wrong answering that. Try again.")
     }
 
-    // MARK: - One at a time
-
-    /// A plain actor turnstile.
-    ///
-    /// The on-device model rejects a second concurrent session outright, and a
-    /// reader who asks again before the first answer lands should get the second
-    /// answer rather than an error — so the second question waits rather than
-    /// racing. It waits *before* checking its own cancellation, which means a
-    /// cancelled second question still holds its place in the queue for as long
-    /// as the first one runs; that is the queue working, not a leak, and it
-    /// releases the moment its turn comes.
-    private var isAnswering = false
-    private var queue: [CheckedContinuation<Void, Never>] = []
-
-    private func acquire() async {
-        guard isAnswering else { isAnswering = true; return }
-        await withCheckedContinuation { queue.append($0) }
-    }
-
-    private func releaseTurn() {
-        guard !queue.isEmpty else { isAnswering = false; return }
-        queue.removeFirst().resume()
-    }
 }

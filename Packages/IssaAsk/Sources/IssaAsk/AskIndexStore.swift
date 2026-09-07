@@ -80,26 +80,35 @@ public actor AskIndexStore {
         let url = indexURL(for: source.bookUUID)
         let key = source.indexKey
 
-        if let queue = try? existingQueue(at: url, bookUUID: source.bookUUID),
-           try Self.storedKey(in: queue) == key {
+        // `try?`, matching `isPrepared` twelve lines down. A bare `try` threw
+        // straight past the repair three lines below — and `queue(for:)` had
+        // already cached the handle to the broken file, so the next attempt read
+        // the same broken index and failed identically, for ever. A zero-length
+        // `.sqlite` is the case: SQLite opens it happily as an empty database
+        // and `storedKey` then throws "no such table: meta".
+        if let queue = try? queue(for: source.bookUUID),
+           (try? Self.storedKey(in: queue)) == key {
             return false
         }
 
         // Stale, corrupt or absent — all three are the same repair.
         open[source.bookUUID] = nil
-        preparedBookUUID = nil
         try await build(source: source, key: key, destination: url, progress: progress)
         // Opened here so a question asked immediately afterwards finds a handle
         // rather than silently retrieving nothing.
-        _ = try existingQueue(at: url, bookUUID: source.bookUUID)
+        _ = try queue(for: source.bookUUID)
         return true
     }
 
     /// Whether a usable, current index already exists — the question the sheet
     /// asks before deciding to show a progress bar at all.
+    ///
+    /// Read-only, which it once was not: it opened the file through a helper
+    /// that also recorded the book as the one the store was answering about, so
+    /// merely drawing a second book's suggestion chips redirected the first
+    /// book's question. See `queue(for:)`.
     public func isPrepared(source: BookSource) -> Bool {
-        let url = indexURL(for: source.bookUUID)
-        guard let queue = try? existingQueue(at: url, bookUUID: source.bookUUID) else { return false }
+        guard let queue = try? queue(for: source.bookUUID) else { return false }
         return (try? Self.storedKey(in: queue)) == source.indexKey
     }
 
@@ -132,7 +141,7 @@ public actor AskIndexStore {
                 try Task.checkCancellation()
                 progress?(.preparingIndex(done: index, total: total))
 
-                let parsed = Self.parseChapter(
+                let parsed = await Self.parsedChapter(
                     archive: source.package.archive, href: item.href, spineIndex: index,
                 )
                 guard let parsed else { continue }
@@ -181,6 +190,29 @@ public actor AskIndexStore {
     /// boundary is a comparison of exactly those offsets. The style, by
     /// contrast, changes nothing in `.string`: typeface, size and spacing are
     /// attributes, so any `ReaderStyle` yields the same characters.
+    /// The same parse, off this actor for real.
+    ///
+    /// `parseChapter` is `nonisolated`, but `build` called it *synchronously*
+    /// from an isolated function, and a synchronous call does not hop anywhere
+    /// — so every chapter of a 250,000-word book inflated, parsed and chunked
+    /// inline on the store's own executor, which is the opposite of what both
+    /// that function's doc and this type's header claim. The actor also has to
+    /// answer `remove(bookUUID:)` when a download goes, and that call sat
+    /// behind the whole build.
+    ///
+    /// `nonisolated async` runs on the global executor, so awaiting it is the
+    /// hop. The suspension it adds is *between* chapters, where the loop
+    /// already checks for cancellation: a `remove` arriving there deletes the
+    /// `.building.sqlite` file, the rename that publishes the index then fails,
+    /// and `prepare` reports a failed build — which is the same outcome as the
+    /// cancellation the reader could have caused a line earlier, and not a
+    /// half-written index, because nothing is published until the rename.
+    nonisolated static func parsedChapter(
+        archive: EPUBArchive, href: String, spineIndex: Int,
+    ) async -> ParsedChapter? {
+        parseChapter(archive: archive, href: href, spineIndex: spineIndex)
+    }
+
     nonisolated static func parseChapter(
         archive: EPUBArchive, href: String, spineIndex: Int,
     ) -> ParsedChapter? {
@@ -207,11 +239,16 @@ public actor AskIndexStore {
     ///
     /// Synchronous on purpose. GRDB gives `read` and `write` both a synchronous
     /// and an asynchronous overload, and inside an `async` function Swift picks
-    /// the asynchronous one — which puts a suspension point in the middle of the
-    /// build loop, where an actor is reentrant: a `remove(bookUUID:)` arriving
-    /// there would delete the file the next chapter is about to be written to.
-    /// A synchronous helper selects the synchronous overload, which is also what
+    /// the asynchronous one — which suspends in the middle of writing one
+    /// chapter, where an actor is reentrant: a `remove(bookUUID:)` arriving
+    /// there would delete the file this write is halfway through. A synchronous
+    /// helper selects the synchronous overload, which is also what
     /// `LibraryStore` uses throughout.
+    ///
+    /// The loop around this does suspend, once per chapter, to parse the next
+    /// one off the actor — but *between* chapters, next to the cancellation
+    /// check, where a `remove` costs a failed rename and a build that reports
+    /// itself failed rather than a half-written row. `parsedChapter` says so.
     private static func insert(_ chapter: ParsedChapter, into queue: DatabaseQueue) throws {
         try queue.write { db in try insert(chapter, into: db) }
     }
@@ -272,33 +309,25 @@ public actor AskIndexStore {
     /// Two parts: every passage that ends at or before the position, and the one
     /// passage the position falls inside, truncated to the characters actually
     /// read. Nothing later in the book can match, whatever the query says.
-    public func retrieve(
-        terms: QueryTerms, before boundary: ReadingBoundary, limit: Int = 40,
-    ) throws -> [RetrievedPassage] {
-        guard let queue = currentQueue() else { return [] }
-        return try Self.retrieve(terms: terms, before: boundary, limit: limit, in: queue)
-    }
-
-    /// The book the store is currently answering about.
     ///
-    /// Set by `prepare` and by any successful open; retrieval is always about
-    /// one book at a time, because the reader has one book open. Keeping it
-    /// here rather than passing a uuid to every query is what stops a stale
-    /// handle from a previously-read book answering a question about this one.
-    private var preparedBookUUID: String?
-
-    private func currentQueue() -> DatabaseQueue? {
-        preparedBookUUID.flatMap { open[$0] }
+    /// - Parameter bookUUID: which book to answer for. Named at every call
+    ///   rather than remembered, for the reason `queue(for:)` gives.
+    public func retrieve(
+        terms: QueryTerms, in bookUUID: String, before boundary: ReadingBoundary, limit: Int = 40,
+    ) throws -> [RetrievedPassage] {
+        guard let queue = try queue(for: bookUUID) else { return [] }
+        return try Self.retrieve(terms: terms, before: boundary, limit: limit, in: queue)
     }
 
     static func retrieve(
         terms: QueryTerms, before boundary: ReadingBoundary, limit: Int, in queue: DatabaseQueue,
     ) throws -> [RetrievedPassage] {
-        let tokens = terms.searchTokens
-        guard !tokens.isEmpty else { return [] }
-        guard let pattern = FTS5Pattern(matchingAnyTokenIn: tokens.joined(separator: " ")) else {
-            return []
-        }
+        // `FTSQuery.any`, not `FTS5Pattern(matchingAnyTokenIn:)`, which runs the
+        // ASCII tokeniser over what it is handed: "jean'luc" went in as one
+        // token and came out as `jean OR luc`, matching every paragraph with
+        // either half in it. `FTSQuery` quotes each token, so a token carrying
+        // an apostrophe or a hyphen is a phrase rather than an accident.
+        guard let pattern = FTSQuery.any(terms.searchTokens) else { return [] }
         return try passages(
             matching: pattern, before: boundary, order: .relevance, limit: limit, in: queue,
         )
@@ -314,11 +343,12 @@ public actor AskIndexStore {
     /// reader a page they have not read.
     public func passages(
         matching pattern: FTS5Pattern,
+        in bookUUID: String,
         before boundary: ReadingBoundary,
         order: PassageOrder = .relevance,
         limit: Int,
     ) throws -> [RetrievedPassage] {
-        guard let queue = currentQueue() else { return [] }
+        guard let queue = try queue(for: bookUUID) else { return [] }
         return try Self.passages(
             matching: pattern, before: boundary, order: order, limit: limit, in: queue,
         )
@@ -391,9 +421,10 @@ public actor AskIndexStore {
 
     /// The last passages before the boundary, for a "what has happened so far"
     /// question, which has no search terms to match on.
-    public func recapPassages(before boundary: ReadingBoundary, limit: Int = 6) throws
-        -> [RetrievedPassage] {
-        guard let queue = currentQueue() else { return [] }
+    public func recapPassages(
+        in bookUUID: String, before boundary: ReadingBoundary, limit: Int = 6,
+    ) throws -> [RetrievedPassage] {
+        guard let queue = try queue(for: bookUUID) else { return [] }
         return try Self.recapPassages(before: boundary, limit: limit, in: queue)
     }
 
@@ -432,8 +463,13 @@ public actor AskIndexStore {
     /// the straddling passage is vanishingly rare, and counting it as met is the
     /// conservative direction — it lets the question through to retrieval, which
     /// is itself bounded.
-    public func unmetWords(_ words: [String], before boundary: ReadingBoundary) throws -> [String] {
-        guard let queue = currentQueue() else { return words }
+    /// - Parameter bookUUID: which book to probe. No index for it means every
+    ///   word is unmet — the conservative direction, and the opposite of the
+    ///   one the other retrieval methods take: unknown means unmet means refuse.
+    public func unmetWords(
+        _ words: [String], in bookUUID: String, before boundary: ReadingBoundary,
+    ) throws -> [String] {
+        guard let queue = try queue(for: bookUUID) else { return words }
         return try Self.unmetWords(words, before: boundary, in: queue)
     }
 
@@ -441,17 +477,27 @@ public actor AskIndexStore {
         _ words: [String], before boundary: ReadingBoundary, in queue: DatabaseQueue,
     ) throws -> [String] {
         try queue.read { db in
-            try words.filter { word in
-                guard let pattern = FTS5Pattern(matchingAnyTokenIn: word) else { return false }
-                let found = try Int.fetchOne(db, sql: """
-                    SELECT 1
-                    FROM passage
-                    JOIN passage_fts ON passage_fts.rowid = passage.rowid
-                    WHERE passage_fts MATCH :pattern
-                      AND (passage.spineIndex < :spine
-                           OR (passage.spineIndex = :spine AND passage.start < :offset))
-                    LIMIT 1
-                    """, arguments: [
+            // One preparation, N probes. Prepared inside the filter, SQLite
+            // parsed and planned the same statement once per candidate — and
+            // the answer-side guard now offers it more candidates than it used
+            // to, because the sentence-opener exemption became conditional.
+            let statement = try db.cachedStatement(sql: """
+                SELECT 1
+                FROM passage
+                JOIN passage_fts ON passage_fts.rowid = passage.rowid
+                WHERE passage_fts MATCH :pattern
+                  AND (passage.spineIndex < :spine
+                       OR (passage.spineIndex = :spine AND passage.start < :offset))
+                LIMIT 1
+                """)
+            return try words.filter { word in
+                // `FTSQuery.all`, not `FTS5Pattern(matchingAnyTokenIn:)`, which
+                // probed "jean'luc" as `jean OR luc` and called the name met
+                // when only one half of it had appeared — an unmet name walking
+                // straight past the spoiler guard. Quoted, it is a phrase, and
+                // only the whole name counts as met.
+                guard let pattern = FTSQuery.all([word]) else { return false }
+                let found = try Int.fetchOne(statement, arguments: [
                     "pattern": pattern, "spine": boundary.spineIndex,
                     "offset": boundary.charOffset,
                 ])
@@ -462,8 +508,10 @@ public actor AskIndexStore {
 
     /// The people this book has introduced before the boundary, most mentioned
     /// first — the suggestion chip's whole input.
-    public func topNames(before boundary: ReadingBoundary, limit: Int = 5) throws -> [String] {
-        guard let queue = currentQueue() else { return [] }
+    public func topNames(
+        in bookUUID: String, before boundary: ReadingBoundary, limit: Int = 5,
+    ) throws -> [String] {
+        guard let queue = try queue(for: bookUUID) else { return [] }
         return try Self.topNames(before: boundary, limit: limit, in: queue)
     }
 
@@ -499,7 +547,6 @@ public actor AskIndexStore {
     /// leave the text of a deleted book on disk.
     public func remove(bookUUID: String) {
         open[bookUUID] = nil
-        if preparedBookUUID == bookUUID { preparedBookUUID = nil }
         let url = indexURL(for: bookUUID)
         for candidate in [url, Self.buildingURL(for: url)] {
             try? FileManager.default.removeItem(at: candidate)
@@ -511,21 +558,31 @@ public actor AskIndexStore {
     /// Everything. Called on sign-out when the reader asks for downloads to go.
     public func removeAll() {
         open.removeAll()
-        preparedBookUUID = nil
         try? FileManager.default.removeItem(at: directory)
     }
 
     // MARK: - Opening
 
-    private func existingQueue(at url: URL, bookUUID: String) throws -> DatabaseQueue? {
-        if let queue = open[bookUUID] {
-            preparedBookUUID = bookUUID
-            return queue
-        }
+    /// This book's handle, opening the file if it exists and is not open yet.
+    ///
+    /// Caching a handle is all this does. It used to *also* record the book as
+    /// the one the store was answering about, and five retrieval methods took
+    /// no uuid at all and read whichever book was recorded last — so on one
+    /// phone, with one question in flight: ask about *Alice*, dismiss the sheet
+    /// (the job deliberately outlives it), open another book, and its sheet
+    /// calls `prepare` and `isPrepared`. *Alice*'s next hop then resolved to the
+    /// other book's queue while still carrying *Alice*'s spine index and
+    /// character offset — the other book's unread text, cut at a page number
+    /// from a different book, shown to a reader of *Alice*.
+    ///
+    /// The uuid is now a parameter of every query, matching `remove(bookUUID:)`
+    /// and `indexURL(for:)`, which already key on it.
+    private func queue(for bookUUID: String) throws -> DatabaseQueue? {
+        if let queue = open[bookUUID] { return queue }
+        let url = indexURL(for: bookUUID)
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         let queue = try Self.openQueue(at: url)
         open[bookUUID] = queue
-        preparedBookUUID = bookUUID
         return queue
     }
 

@@ -114,11 +114,6 @@ public enum AskPhase: Sendable, Hashable {
     case thinking
     /// Text is arriving.
     case answering
-
-    public var isPreparing: Bool {
-        if case .preparingIndex = self { return true }
-        return false
-    }
 }
 
 /// One thing that happened while answering.

@@ -46,6 +46,47 @@ struct NameFinderTests {
         #expect(NameFinder.merge(rows.reversed()).first?.name == "Vin")
     }
 
+    /// Two spellings could not show this: the comparison only becomes a
+    /// comparison against a *running total* from the third one onwards.
+    ///
+    /// Which is what made it non-deterministic across launches — the pooling
+    /// walked an unordered `Dictionary.values`, and Swift seeds its hasher per
+    /// process. Run eight times before the fix, five runs picked "BRONTE" for
+    /// some orderings and three picked "Bronte" for all of them: a chapter
+    /// heading offered as the name of a character, on some launches of the same
+    /// build reading the same book.
+    @Test("a third spelling cannot change which of the other two is shown")
+    func spellingSurvivesAThirdVariant() {
+        let rows = [
+            NameFinder.Name(name: "BRONTE", spineIndex: 0, firstOffset: 0, mentions: 9),
+            NameFinder.Name(name: "Bronte", spineIndex: 1, firstOffset: 0, mentions: 10),
+            NameFinder.Name(name: "Brontë", spineIndex: 2, firstOffset: 0, mentions: 5),
+        ]
+        for order in Self.permutations(rows) {
+            let merged = NameFinder.merge(order)
+            // Ten beats nine beats five, whatever order they arrive in — and
+            // "Brontë" folds in with them, because the index's own tokeniser
+            // removes diacritics and a question about "Bronte" has to reach a
+            // book that writes "Brontë".
+            #expect(merged.count == 1, "\(order.map(\.name))")
+            #expect(merged.first?.name == "Bronte", "\(order.map(\.name))")
+            #expect(merged.first?.mentions == 24, "\(order.map(\.name))")
+            // The earliest sighting is still the earliest of all three.
+            #expect(merged.first?.spineIndex == 0, "\(order.map(\.name))")
+        }
+    }
+
+    static func permutations(_ names: [NameFinder.Name]) -> [[NameFinder.Name]] {
+        guard names.count > 1 else { return [names] }
+        var out: [[NameFinder.Name]] = []
+        for (index, name) in names.enumerated() {
+            var rest = names
+            rest.remove(at: index)
+            for tail in permutations(rest) { out.append([name] + tail) }
+        }
+        return out
+    }
+
     @Test("a tie goes to the spelling that is not shouting")
     func prefersTheQuietSpelling() {
         #expect(NameFinder.prefers("Vin", over: "VIN", mentions: 10, against: 10))

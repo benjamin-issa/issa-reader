@@ -68,23 +68,6 @@ public struct QueryTerms: Sendable, Hashable {
         self.kind = kind
     }
 
-    /// The older shape, kept so a caller that only knows about recaps still
-    /// compiles.
-    public init(
-        question: String,
-        names: [String],
-        terms: [String],
-        kinshipGroups: [[String]],
-        nameCandidates: [String] = [],
-        isRecap: Bool,
-    ) {
-        self.init(
-            question: question, names: names, terms: terms,
-            kinshipGroups: kinshipGroups, nameCandidates: nameCandidates,
-            kind: isRecap ? .recap : .general(nil),
-        )
-    }
-
     /// Longest first, so the FTS pattern leads with the most selective token.
     public var searchTokens: [String] {
         var seen = Set<String>()
@@ -192,6 +175,73 @@ public struct QueryTerms: Sendable, Hashable {
         return candidates.filter { $0.count > 2 }.sorted()
     }
 
+    /// Words a sentence capitalises for grammar rather than for a person.
+    ///
+    /// The contrast with `capitalisedNonNames` below is the whole design. That
+    /// list is exempt *everywhere* in an answer, so every word on it is a word
+    /// the book can never be caught spoiling, and it stays short. This one is
+    /// exempt only where a sentence had to capitalise the word anyway — the
+    /// first position — so it can afford to be long: a word here is still
+    /// checked in every other position it appears in.
+    ///
+    /// Closed-class only. Determiners, pronouns, auxiliaries, connectives and
+    /// the adverbs that open sentences; nothing that names or describes. That
+    /// is the test for admitting a word, and it is why these are **deliberately
+    /// absent**: `will`, `may`, `mark`, `grace`, `rose`, `hope`, `faith`,
+    /// `bill`, `frank`, `jack`, `art`, `dawn`, `june`, `pat`, `sue`, `victor`.
+    /// Every one is a name somebody has, and membership is an exemption for
+    /// ever — the cost of leaving them off is one wrong refusal that the reader
+    /// can rephrase past. (`march` and `june` are exempt everywhere through
+    /// `capitalisedNonNames`, which is a judgement made there, not here.)
+    ///
+    /// A word not on this list that opens a sentence is a candidate, and
+    /// `AskIndexStore.unmetWords` then decides it per book: over-catching only
+    /// costs anything when the over-caught word is absent from the part the
+    /// reader has read. "Rome" is in *Alice* Chapter II — "London is the capital
+    /// of Paris, and Paris is the capital of Rome" — so it is cleared from
+    /// there onwards and refused before it, which is exactly right.
+    static let sentenceOpeners: Set<String> = [
+        // Determiners and quantifiers.
+        "a", "an", "the", "this", "that", "these", "those", "each", "every",
+        "some", "any", "no", "all", "both", "either", "neither", "another",
+        "such", "much", "many", "few", "fewer", "several", "most", "more",
+        "less", "least", "enough", "other", "half",
+        // Pronouns.
+        "i", "you", "he", "she", "it", "we", "they", "me", "him", "us", "them",
+        "my", "your", "his", "her", "its", "our", "their", "mine", "yours",
+        "hers", "ours", "theirs", "myself", "yourself", "himself", "herself",
+        "itself", "ourselves", "themselves", "who", "whom", "whose", "which",
+        "what", "whatever", "whoever", "whichever", "someone", "somebody",
+        "something", "anyone", "anybody", "anything", "everyone", "everybody",
+        "everything", "nobody", "nothing", "none", "one", "ones",
+        // Auxiliaries and copulas.
+        "am", "is", "are", "was", "were", "being", "been", "be", "do", "does",
+        "did", "doing", "done", "have", "has", "had", "having", "can", "could",
+        "shall", "should", "would", "must", "might", "ought", "cannot",
+        // Connectives.
+        "and", "but", "or", "nor", "for", "yet", "so", "because", "since",
+        "although", "though", "while", "whilst", "whereas", "unless", "until",
+        "till", "if", "then", "than", "as", "when", "whenever", "where",
+        "wherever", "after", "before", "once", "whether", "however",
+        "therefore", "thus", "hence", "moreover", "furthermore",
+        "nevertheless", "nonetheless", "besides", "meanwhile", "otherwise",
+        "instead", "also",
+        // Prepositions and particles that open a clause.
+        "at", "by", "in", "on", "to", "of", "with", "without", "within",
+        "from", "into", "onto", "upon", "over", "under", "above", "below",
+        "through", "across", "along", "around", "behind", "beyond", "during",
+        "against", "between", "among", "beside", "toward", "towards", "off",
+        "out", "up", "down", "back", "away",
+        // Adverbs that open sentences.
+        "not", "never", "always", "often", "sometimes", "soon", "now", "later",
+        "again", "already", "almost", "nearly", "just", "only", "even",
+        "quite", "rather", "very", "really", "perhaps", "maybe", "probably",
+        "possibly", "certainly", "surely", "indeed", "actually", "finally",
+        "eventually", "suddenly", "immediately", "still", "here", "there",
+        "everywhere", "somewhere", "anywhere", "nowhere", "together", "yes",
+        "well", "why", "how", "let", "there's", "it's", "that's", "here's",
+    ]
+
     /// Words that are capitalised in ordinary prose without naming anybody.
     /// Short on purpose: a long list here is a long list of things a book can
     /// spoil.
@@ -296,27 +346,35 @@ public struct QueryTerms: Sendable, Hashable {
 public enum Kinship {
     /// One group per relationship a reader asks about. A term in any group
     /// pulls in the whole group.
+    ///
+    /// **The only place a family word is written down.** `KinRelation.all`
+    /// reads its relations out of these groups rather than keeping a second
+    /// list, because there were two lists and they disagreed in both
+    /// directions. This one had "relative", "family", "grandparent" and
+    /// "companion" and `KinRelation` had none of them, so "Who is X's
+    /// relative?" never reached the kinship path at all and was answered by
+    /// BM25 over the whole question; `KinRelation` had "grandmothers",
+    /// "widows" and "wives" and this one had none of them, so a question using
+    /// one of those expanded to nothing.
     public static let all: [[String]] = [
-        ["cousin", "cousins", "relative", "relatives", "family", "kin", "relation"],
+        ["cousin", "cousins", "relative", "relatives", "relation", "relations",
+         "family", "families", "kin"],
         ["brother", "brothers", "sister", "sisters", "sibling", "siblings"],
-        ["mother", "mothers", "father", "fathers", "parent", "parents",
-         "mama", "mamma", "papa", "mum", "mother's", "dad"],
+        ["mother", "mothers", "mum", "mama", "mamma",
+         "father", "fathers", "papa", "dad", "parent", "parents"],
         ["aunt", "aunts", "uncle", "uncles", "niece", "nieces", "nephew", "nephews"],
-        ["husband", "wife", "spouse", "widow", "widower", "married", "marriage"],
+        ["husband", "husbands", "wife", "wives", "spouse", "spouses",
+         "widow", "widows", "widower", "widowers", "married", "marriage"],
         ["son", "sons", "daughter", "daughters", "child", "children", "baby", "babies"],
-        ["grandmother", "grandfather", "grandparents", "grandma", "grandpa",
-         "grandson", "granddaughter", "grandchild", "grandchildren"],
-        ["friend", "friends", "companion", "companions", "friendship"],
+        ["grandmother", "grandmothers", "grandma", "grandfather", "grandfathers", "grandpa",
+         "grandparent", "grandparents", "grandson", "grandsons",
+         "granddaughter", "granddaughters", "grandchild", "grandchildren"],
+        ["friend", "friends", "friendship", "companion", "companions"],
     ]
 
     /// Every group at least one of these terms belongs to.
     public static func groups(matching terms: [String]) -> [[String]] {
         let lowered = Set(terms.map { $0.lowercased() })
         return all.filter { group in group.contains { lowered.contains($0) } }
-    }
-
-    /// Flattened expansion, for a caller that just wants more tokens.
-    public static func expansion(for terms: [String]) -> [String] {
-        Array(Set(groups(matching: terms).flatMap { $0 })).sorted()
     }
 }

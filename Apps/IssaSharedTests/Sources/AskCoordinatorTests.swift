@@ -33,22 +33,28 @@ struct AskCoordinatorTests {
 
     /// A coordinator with a scripted model, its own index directory and its own
     /// defaults — nothing it does can reach the simulator's real app.
+    /// - Returns: the coordinator, the scripted model it was built with, its
+    ///   index directory, its defaults, and the defaults suite name to purge.
+    ///   The model comes back because the turnstile is only observable through
+    ///   it — what the coordinator did with it is a fact about what the model
+    ///   was asked to do, and when.
     static func coordinator(
         turns: [ScriptedAnswerModel.Turn] = [.answer("Alice followed a white rabbit.\nSources: 1")],
-    ) throws -> (AskCoordinator, URL, UserDefaults, String) {
+    ) throws -> (AskCoordinator, ScriptedAnswerModel, URL, UserDefaults, String) {
         let directory = URL.temporaryDirectory
             .appending(path: "issa-ask-coordinator-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let (defaults, name) = SharedFixtures.scratchDefaults()
+        let model = ScriptedAnswerModel(turns: turns)
         let coordinator = AskCoordinator(
             store: AskIndexStore(directory: directory),
-            model: ScriptedAnswerModel(turns: turns),
+            model: model,
             // No notifier: a permission prompt is a real system alert in front
             // of a real runner.
             notifier: nil,
             defaults: defaults,
         )
-        return (coordinator, directory, defaults, name)
+        return (coordinator, model, directory, defaults, name)
     }
 
     static func cleanUp(_ directory: URL, _ suite: String) {
@@ -65,7 +71,7 @@ struct AskCoordinatorTests {
 
     @Test("closing the sheet does not stop the answer")
     func jobOutlivesTheSheet() async throws {
-        let (coordinator, directory, _, suite) = try Self.coordinator()
+        let (coordinator, _, directory, _, suite) = try Self.coordinator()
         defer { Self.cleanUp(directory, suite) }
         let source = try Self.source()
 
@@ -86,7 +92,7 @@ struct AskCoordinatorTests {
     /// last week's answer instead of a blank field would be a small betrayal.
     @Test("closing the sheet on a finished answer clears it")
     func finishedAnswerIsNotKept() async throws {
-        let (coordinator, directory, _, suite) = try Self.coordinator()
+        let (coordinator, _, directory, _, suite) = try Self.coordinator()
         defer { Self.cleanUp(directory, suite) }
         let source = try Self.source()
 
@@ -101,7 +107,7 @@ struct AskCoordinatorTests {
 
     @Test("discard empties the coordinator")
     func discardEmpties() async throws {
-        let (coordinator, directory, _, suite) = try Self.coordinator()
+        let (coordinator, _, directory, _, suite) = try Self.coordinator()
         defer { Self.cleanUp(directory, suite) }
         let source = try Self.source()
 
@@ -120,7 +126,7 @@ struct AskCoordinatorTests {
 
     @Test("a second question about the same book replaces the first")
     func oneJobPerBook() async throws {
-        let (coordinator, directory, _, suite) = try Self.coordinator()
+        let (coordinator, _, directory, _, suite) = try Self.coordinator()
         defer { Self.cleanUp(directory, suite) }
         let source = try Self.source()
 
@@ -138,7 +144,7 @@ struct AskCoordinatorTests {
     /// not overwrite each other.
     @Test("two books each keep their own job")
     func oneJobPerBookNotPerApp() async throws {
-        let (coordinator, directory, _, suite) = try Self.coordinator()
+        let (coordinator, _, directory, _, suite) = try Self.coordinator()
         defer { Self.cleanUp(directory, suite) }
         let alice = try Self.source(uuid: "alice-uuid")
         let other = try Self.source(uuid: "other-uuid")
@@ -152,13 +158,46 @@ struct AskCoordinatorTests {
         await Self.settle(second)
     }
 
+    /// The only test that catches the coordinator forgetting to share its
+    /// turnstile.
+    ///
+    /// The engine cannot serialise this by itself, and for a while nothing did:
+    /// a fresh `AskEngine` is built per question, so two books were two engines,
+    /// two turnstiles and two concurrent generations — and the reader asking
+    /// about the second book was told Apple Intelligence was busy for a question
+    /// that should have queued behind the first.
+    @Test("two books asked at once are answered one after the other")
+    func twoBooksShareOneTurnAtTheModel() async throws {
+        let (coordinator, model, directory, _, suite) = try Self.coordinator(turns: [
+            .init(partials: ["first"], holdsAfterPartials: 1),
+            .answer("The other book's answer.\nSources: 1"),
+        ])
+        defer { Self.cleanUp(directory, suite) }
+        let alice = try Self.source(uuid: "alice-uuid")
+        let other = try Self.source(uuid: "other-uuid")
+
+        let first = try #require(coordinator.ask("What did Alice follow?", source: alice,
+                                                 boundary: Self.boundary()))
+        await model.waitUntilHolding()
+        let second = try #require(coordinator.ask("Who is Alice?", source: other,
+                                                  boundary: Self.boundary()))
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(await model.received.count == 1, "the second book's question must be waiting")
+
+        await model.release()
+        await Self.settle(first)
+        await Self.settle(second)
+        #expect(await model.received.count == 2)
+        #expect(await model.peakConcurrency == 1)
+    }
+
     // MARK: - Being asked about notifications
 
     /// Once, ever. A reader who has said no should not be asked again every
     /// time they close a sheet.
     @Test("the notification prompt is offered once and remembered")
     func notificationPromptIsAskedOnce() async throws {
-        let (coordinator, directory, defaults, suite) = try Self.coordinator()
+        let (coordinator, _, directory, defaults, suite) = try Self.coordinator()
         defer { Self.cleanUp(directory, suite) }
         let source = try Self.source()
         #expect(!defaults.bool(forKey: AskCoordinator.askedForNotificationsKey))

@@ -132,8 +132,8 @@ struct EvidenceFinderTests {
     ) async throws -> ([Evidence], AskIndexStore, URL) {
         let (store, _, directory) = try await AskFixture.preparedStore()
         let boundary = try AskFixture.endOf(spine: spine)
-        let known = try await store.topNames(before: boundary, limit: 200)
-        let retriever = AskRetriever(store: store, boundary: boundary)
+        let known = try await store.topNames(in: AskFixture.bookUUID, before: boundary, limit: 200)
+        let retriever = AskRetriever(store: store, bookUUID: AskFixture.bookUUID, boundary: boundary)
         let terms = QueryTerms.extract(from: question, knownNames: known)
         return (try await retriever.evidence(for: terms), store, directory)
     }
@@ -213,11 +213,11 @@ struct EvidenceFinderTests {
 
         for fixture in try AskQuestionFixture.all() {
             let boundary = try fixture.boundary
-            let known = try await store.topNames(before: boundary, limit: 200)
+            let known = try await store.topNames(in: AskFixture.bookUUID, before: boundary, limit: 200)
             let terms = QueryTerms.extract(from: fixture.question, knownNames: known)
             #expect(terms.kind.label == fixture.kind, "\(fixture.question) @ \(fixture.spine)")
 
-            let retriever = AskRetriever(store: store, boundary: boundary)
+            let retriever = AskRetriever(store: store, bookUUID: AskFixture.bookUUID, boundary: boundary)
             let evidence = try await retriever.evidence(for: terms)
             let text = evidence.map(\.excerpt.text).joined(separator: "\n").lowercased()
             for needle in fixture.evidenceContains {
@@ -243,12 +243,54 @@ struct EvidenceFinderTests {
         }
     }
 
+    // MARK: - Ordering and de-duplication
+
+    @Test("two chapters opening the same length apart keep both their sentences")
+    func openingSentencesInDifferentChaptersAreNotOneSentence() {
+        // A sentence's range is chapter-relative, so a chapter opening at
+        // location 0 with a length of 40 looks identical to the next chapter's
+        // opening 40 characters — and the set dropped one of them, which on a
+        // kinship question could be the only evidence there was.
+        func evidence(spine: Int, text: String) -> Evidence {
+            Evidence(
+                excerpt: Passage(
+                    spineIndex: spine, ordinal: 0, start: 0, end: 40, words: 8, text: text,
+                ),
+                sentence: NSRange(location: 0, length: 40),
+                role: .kinship,
+                sentenceText: text,
+            )
+        }
+        let kept = EvidenceFinder.inBookOrder([
+            evidence(spine: 2, text: "Her brother, Reen, had taught her that."),
+            evidence(spine: 5, text: "Her sister, Elend, had taught her too."),
+        ])
+        #expect(kept.count == 2)
+        #expect(kept.map(\.excerpt.spineIndex) == [2, 5])
+    }
+
+    @Test("the same sentence in the same chapter is still kept once")
+    func oneSentenceIsOneExcerpt() {
+        let passage = Passage(
+            spineIndex: 2, ordinal: 0, start: 0, end: 40, words: 8,
+            text: "Her brother, Reen, had taught her that.",
+        )
+        let piece = Evidence(
+            excerpt: passage, sentence: NSRange(location: 0, length: 40),
+            role: .kinship, sentenceText: passage.text,
+        )
+        // Two overlapping windows are the same text twice, numbered as two
+        // excerpts — which spends the budget twice and invites the model to
+        // cite one fact as two sources.
+        #expect(EvidenceFinder.inBookOrder([piece, piece]).count == 1)
+    }
+
     @Test("the whole scan of a chapter is quick enough to run per question")
     func scanIsFastEnough() async throws {
         let (store, _, directory) = try await AskFixture.preparedStore()
         defer { AskFixture.remove(directory) }
         let boundary = try AskFixture.endOf(spine: AskFixture.Spine.chapterVI)
-        let retriever = AskRetriever(store: store, boundary: boundary)
+        let retriever = AskRetriever(store: store, bookUUID: AskFixture.bookUUID, boundary: boundary)
         let terms = QueryTerms.extract(from: "Who is Alice?", knownNames: ["Alice"])
 
         let start = ContinuousClock.now
