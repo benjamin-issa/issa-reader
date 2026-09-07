@@ -254,6 +254,72 @@ struct AskIndexStoreTests {
         #expect(rebuilt)
     }
 
+    /// A handle that outlived the file it was opened for.
+    ///
+    /// `prepare` clears the cached handle and then awaits `build` — which
+    /// suspends once per spine item at `parsedChapter`, and an actor is
+    /// reentrant at every one of those. Any isolated read landing in one of
+    /// those windows found the *old* `<uuid>.sqlite` still on disk, because
+    /// `build` writes to `<uuid>.building.sqlite`, opened it and cached it.
+    /// `build` then renamed over it, unlinking the inode that handle holds, and
+    /// **every** later read for that book threw `SQLite error 10: disk I/O
+    /// error` until the next `prepare` — one mistimed suggestion chip and the
+    /// book could not be asked about again.
+    ///
+    /// Armed for every existing reader by `IndexKey.currentParserVersion = 2`,
+    /// which makes the first launch on this branch rebuild every book that has
+    /// already been indexed.
+    ///
+    /// The read is fired from the progress callback, which runs inside `build`,
+    /// so the task it starts is enqueued behind the actor and runs at the next
+    /// chapter's suspension — the window itself, rather than a sleep that hopes
+    /// to land in one. Whether those reads succeed is not the assertion; they
+    /// are reading an index that is on its way out. The assertion is that the
+    /// reads *after* the rename do.
+    @Test("a read landing in the middle of a build does not strand the handle")
+    func aReadDuringABuildDoesNotStrandTheHandle() async throws {
+        let directory = try AskFixture.temporaryDirectory()
+        defer { AskFixture.remove(directory) }
+        let store = AskIndexStore(directory: directory)
+
+        // A stale index, which is what every already-indexed book is on this
+        // branch's first launch.
+        let copy = directory.appending(path: "book.epub")
+        try FileManager.default.copyItem(at: try AskFixture.url(), to: copy)
+        #expect(try await store.prepare(source: AskFixture.source(fingerprintedAt: copy)))
+        let handle = try FileHandle(forWritingTo: copy)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data(repeating: 0, count: 64))
+        try handle.close()
+        let stale = try AskFixture.source(fingerprintedAt: copy)
+        #expect(!(await store.isPrepared(source: stale)))
+
+        let boundary = try AskFixture.endOf(spine: AskFixture.Spine.chapterVI)
+        let probes = MidBuildProbes(store: store, boundary: boundary)
+        let rebuilt = try await store.prepare(source: stale) { phase in
+            guard case .preparingIndex = phase else { return }
+            probes.probe()
+        }
+        #expect(rebuilt)
+        await probes.finish()
+        #expect(probes.count > 0, "no read was fired into the build, so nothing was tested")
+
+        // The reads that matter: the ones after the rename, through the
+        // cache-first accessor the mid-build reads went through.
+        #expect(await store.isPrepared(source: stale))
+        let names = try await store.topNames(
+            in: AskFixture.bookUUID, before: boundary, limit: 5)
+        #expect(names.contains("Alice"), "the rebuilt index answered with \(names)")
+        let hits = try await store.retrieve(
+            terms: QueryTerms.extract(from: "What did Alice follow down the hole?"),
+            in: AskFixture.bookUUID, before: boundary,
+        )
+        #expect(hits.contains { $0.passage.text.lowercased().contains("rabbit") })
+        #expect(try await store.recapPassages(in: AskFixture.bookUUID, before: boundary).count > 0)
+        #expect(try await store.unmetWords(
+            ["zzzunlikelyword"], in: AskFixture.bookUUID, before: boundary) == ["zzzunlikelyword"])
+    }
+
     @Test("the fingerprint round-trips through its stored form")
     func fingerprintRoundTrips() {
         let key = IndexKey(fileSize: 12_345, modified: 1_700_000_000, spineCount: 15)
@@ -358,5 +424,57 @@ private final class Recorder: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return phases
+    }
+}
+
+/// Reads fired from inside a build, which is what a sheet drawing its
+/// suggestion chips does while the progress bar is still moving.
+///
+/// Started from the progress callback, which runs on the store's own executor
+/// inside `build`: the task is therefore enqueued behind the actor and runs at
+/// the next chapter's suspension point, which is the reentrancy window the
+/// stranded-handle bug lives in. A sleep would only hope to land there.
+///
+/// Whether these reads succeed is not asserted — they are reading an index that
+/// is being replaced underneath them, and either answer is honest. What they
+/// are here to do is populate the handle cache while the old file is still on
+/// disk, so that the reads *after* the rename have something to get wrong.
+private final class MidBuildProbes: @unchecked Sendable {
+    private let lock = NSLock()
+    private var tasks: [Task<Void, Never>] = []
+    private let store: AskIndexStore
+    private let boundary: ReadingBoundary
+
+    init(store: AskIndexStore, boundary: ReadingBoundary) {
+        self.store = store
+        self.boundary = boundary
+    }
+
+    func probe() {
+        let task = Task { [store, boundary] in
+            _ = try? await store.topNames(in: AskFixture.bookUUID, before: boundary, limit: 5)
+            _ = try? await store.recapPassages(in: AskFixture.bookUUID, before: boundary, limit: 3)
+        }
+        lock.lock()
+        defer { lock.unlock() }
+        tasks.append(task)
+    }
+
+    var count: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return tasks.count
+    }
+
+    /// Synchronous, because `NSLock.lock()` is unavailable from an async
+    /// context — the await below has to happen outside the lock anyway.
+    private func pending() -> [Task<Void, Never>] {
+        lock.lock()
+        defer { lock.unlock() }
+        return tasks
+    }
+
+    func finish() async {
+        for task in pending() { await task.value }
     }
 }

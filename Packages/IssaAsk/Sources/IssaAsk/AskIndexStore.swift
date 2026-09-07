@@ -23,9 +23,45 @@ public actor AskIndexStore {
     public static func defaultDirectory() -> URL { StorageRoot.directory("Ask") }
 
     private let directory: URL
-    /// Open handles, keyed by book. A reader asks several questions in a row
-    /// about one book; re-opening the file each time is pure cost.
-    private var open: [String: DatabaseQueue] = [:]
+    /// Open handles, keyed by book, each remembering the file it was opened
+    /// for. A reader asks several questions in a row about one book;
+    /// re-opening the file each time is pure cost.
+    private var open: [String: OpenIndex] = [:]
+
+    /// One cached handle, and which file on disk it is a handle *to*.
+    ///
+    /// The pair is the whole point. A `DatabaseQueue` holds a descriptor, and a
+    /// descriptor outlives the name it was opened under: `build` publishes by
+    /// renaming `<uuid>.building.sqlite` over `<uuid>.sqlite`, which unlinks
+    /// the inode any handle opened beforehand is still pointing at. Keeping the
+    /// identity beside the handle is what lets `queue(for:)` notice, and
+    /// noticing is the difference between one stale read and every read for
+    /// that book throwing `SQLite error 10: disk I/O error` until the next
+    /// `prepare`.
+    private struct OpenIndex {
+        let queue: DatabaseQueue
+        let identity: FileIdentity
+    }
+
+    /// Which file, as the file system means it — not which path.
+    ///
+    /// Device and inode together, because an inode number is only unique
+    /// within a volume and the Ask directory is not promised to stay on one.
+    struct FileIdentity: Equatable {
+        let device: Int
+        let inode: UInt64
+
+        /// The file at this URL, or nil where there is none. One `stat`, which
+        /// also answers the "does it exist" question `queue(for:)` used to ask
+        /// separately.
+        static func of(_ url: URL) -> FileIdentity? {
+            guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+                  let inode = (attributes[.systemFileNumber] as? NSNumber)?.uint64Value,
+                  let device = (attributes[.systemNumber] as? NSNumber)?.intValue
+            else { return nil }
+            return FileIdentity(device: device, inode: inode)
+        }
+    }
 
     public init(directory: URL? = nil) {
         self.directory = directory ?? Self.defaultDirectory()
@@ -638,12 +674,36 @@ public actor AskIndexStore {
     ///
     /// The uuid is now a parameter of every query, matching `remove(bookUUID:)`
     /// and `indexURL(for:)`, which already key on it.
+    ///
+    /// **The cached handle is checked against the file it was opened for, every
+    /// time.** Without that, a handle outlived its file. `prepare` clears the
+    /// entry, then awaits `build` — which suspends once per spine item at
+    /// `parsedChapter`, and an actor is reentrant at every one of those. Any
+    /// isolated read landing in one of those windows (`isPrepared`, `topNames`,
+    /// `retrieve`, `recapPassages`, `unmetWords`) found the *old*
+    /// `<uuid>.sqlite` still on disk — `build` writes to
+    /// `<uuid>.building.sqlite` — opened it, and cached it. `build` then
+    /// renamed over it, unlinking the inode that handle holds, and every
+    /// subsequent read for that book threw `SQLite error 10: disk I/O error`
+    /// until the next `prepare`. Reproduced on the *Alice* fixture with a stale
+    /// index seeded; `IndexKey.currentParserVersion = 2` arms it for every
+    /// already-indexed book on first launch, because that forces a rebuild of
+    /// all of them.
+    ///
+    /// Comparing paths would not have caught it — the path is identical either
+    /// side of the rename. It is the same file *name* and a different file, so
+    /// the identity is device and inode.
     private func queue(for bookUUID: String) throws -> DatabaseQueue? {
-        if let queue = open[bookUUID] { return queue }
         let url = indexURL(for: bookUUID)
-        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        guard let identity = FileIdentity.of(url) else {
+            // No file, so nothing a handle could still be valid for. Dropping
+            // it here is what makes `remove(bookUUID:)` safe to race with, too.
+            open[bookUUID] = nil
+            return nil
+        }
+        if let cached = open[bookUUID], cached.identity == identity { return cached.queue }
         let queue = try Self.openQueue(at: url)
-        open[bookUUID] = queue
+        open[bookUUID] = OpenIndex(queue: queue, identity: identity)
         return queue
     }
 

@@ -202,7 +202,22 @@ final class AskCoordinator {
             bookTitle: source.package.metadata.title,
         )
         jobs[uuid] = job
-        prepared.insert(uuid)
+
+        // The build the sheet started when it opened, if it is still running.
+        // Awaited below rather than raced, and *not* claimed as finished here.
+        //
+        // This line used to be `prepared.insert(uuid)`, which asserted a fact
+        // that was not yet true: the index build this question needs had not
+        // run. The damage was to `suggestions(for:)`, which waits on
+        // `preparing[uuid]` — with the book already in `prepared`, the guard in
+        // `prepare(source:)` returned early, no task was ever put in
+        // `preparing`, and the chips then awaited nothing and probed the store
+        // in the middle of a build. `AskIndexStore.queue(for:)` no longer
+        // caches a handle across the rename that ends one, but a question that
+        // waits for the build it is about is also the cheaper order: two builds
+        // for one book would otherwise be in flight over the same
+        // `<uuid>.building.sqlite`.
+        let preparation = preparing[uuid]
 
         // Built per question because the tool captures the boundary, which is
         // what makes it unable to reach past it whatever the model asks for.
@@ -215,6 +230,10 @@ final class AskCoordinator {
         let engine = AskEngine(model: model, store: store, tools: tools, turnstile: turnstile)
 
         job.task = Task { [weak self] in
+            // Costs nothing when the sheet's build has already finished, and
+            // when it has not this is the build this question was going to do
+            // anyway — `AskEngine.perform` calls `prepareIndex` first thing.
+            await preparation?.value
             var answered = false
             do {
                 for try await event in engine.ask(
