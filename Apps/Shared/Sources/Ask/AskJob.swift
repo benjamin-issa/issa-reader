@@ -34,6 +34,13 @@ final class AskJob {
 
     let bookUUID: String
     let question: String
+    /// What the notification calls the book, when the answer finishes with
+    /// nobody looking at it.
+    ///
+    /// Carried by value beside the boundary and for the same reason: the job
+    /// outlives the reader screen, and `AppModel.readerDidClose` evicts the
+    /// `ReaderModel` this came from the moment the screen goes away.
+    let bookTitle: String?
     /// The boundary the answer was actually bounded by, captured when the
     /// question was asked. The footer names this and not wherever the reader
     /// has turned to since.
@@ -50,10 +57,16 @@ final class AskJob {
     /// The pipeline, so `cancel` has something to cancel.
     var task: Task<Void, Never>?
 
-    init(bookUUID: String, question: String, boundary: ReadingBoundary) {
+    init(
+        bookUUID: String,
+        question: String,
+        boundary: ReadingBoundary,
+        bookTitle: String? = nil,
+    ) {
         self.bookUUID = bookUUID
         self.question = question
         self.boundary = boundary
+        self.bookTitle = bookTitle
     }
 
     /// What the status line says while the answer is being worked out.

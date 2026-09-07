@@ -143,6 +143,18 @@ final class AskCoordinator {
         }
     }
 
+    /// The reader is looking at this book's answer again, so the banner that
+    /// was standing in for it has done its job.
+    ///
+    /// Called when the sheet opens rather than when a notification is tapped,
+    /// because a tap is only one of the ways here: the reader who sees the
+    /// banner, ignores it, opens the app themselves and then opens the sheet
+    /// left a delivered notification on disk with nothing to remove it.
+    func reopened(bookUUID: String) {
+        guard let notifier else { return }
+        Task { await notifier.removeDelivered(bookUUID: bookUUID) }
+    }
+
     /// The two chips under the field.
     ///
     /// Waits for the index build it just started, because otherwise it never
@@ -185,7 +197,10 @@ final class AskCoordinator {
         // A second question replaces the first, and the first is cancelled
         // rather than left to finish into a job nothing is showing.
         jobs[uuid]?.task?.cancel()
-        let job = AskJob(bookUUID: uuid, question: question, boundary: boundary)
+        let job = AskJob(
+            bookUUID: uuid, question: question, boundary: boundary,
+            bookTitle: source.package.metadata.title,
+        )
         jobs[uuid] = job
         prepared.insert(uuid)
 
@@ -369,6 +384,9 @@ final class AskCoordinator {
         preparing.removeAll()
         reopenRequest = nil
         releaseAssertion()
+        // Including anything already on the lock screen: the account's data is
+        // going, and a banner about one of its answers is that data.
+        if let notifier { Task { await notifier.removeAllDelivered() } }
         Task { [store] in await store.removeAll() }
     }
 }

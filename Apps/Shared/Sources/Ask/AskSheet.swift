@@ -59,6 +59,10 @@ struct AskSheet: View {
             // may have been to Settings and turned Apple Intelligence on — and
             // this is the moment the copy has to be right.
             availability = AskAvailability.current()
+            // Before the availability guard: a notification was delivered while
+            // Apple Intelligence was on, and turning it off afterwards must not
+            // leave the banner about it sitting on the lock screen for ever.
+            coordinator.reopened(bookUUID: model.book.uuid)
             guard availability.isReady else { return }
             coordinator.prepare(for: model)
             chips = await coordinator.suggestions(for: model)

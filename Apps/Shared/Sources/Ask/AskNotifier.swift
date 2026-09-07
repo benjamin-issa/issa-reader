@@ -10,11 +10,25 @@ import AppKit
 
 /// Telling a reader their answer is ready, when they are not looking at it.
 ///
-/// The body is the **question**, never the answer. A notification lands on a
-/// lock screen that gets handed round, glanced at across a table, or mirrored
-/// onto a watch — and this feature's whole promise is that nothing from further
-/// into the book reaches the reader before they do. The question is theirs
-/// already; the answer might not be.
+/// The body is the **book**, and neither the question nor the answer. A
+/// notification lands on a lock screen that gets handed round, glanced at
+/// across a table, or mirrored onto a watch, so the answer was never a
+/// candidate: this feature's whole promise is that nothing from further into
+/// the book reaches the reader before they do.
+///
+/// The question used to be the body, on the argument that it is theirs already.
+/// That argument was right about who owns it and wrong about where it goes.
+/// PRIVACY.md promises "your questions and the answers are never written down:
+/// they exist while the sheet is open and are gone when you close it" — and
+/// `UNUserNotificationCenter` persists delivered content to disk, where it
+/// outlives the sheet, the answer, and the app being killed. Nothing removed
+/// it. So the question is out of the body, and `removeDelivered` takes back
+/// what has already been delivered when the reader reopens the answer and when
+/// the account's data is purged.
+///
+/// `threadIdentifier` still separates books, so two answers waiting at once
+/// still read as two conversations rather than one pile — which is most of what
+/// the question was doing there.
 struct AskNotifier: Sendable {
     private let centre: @Sendable () -> UNUserNotificationCenter
 
@@ -53,15 +67,15 @@ struct AskNotifier: Sendable {
         }
         let content = UNMutableNotificationContent()
         content.title = "Your answer is ready"
-        content.body = job.question
+        content.body = Self.body(bookTitle: job.bookTitle)
         content.sound = .default
         content.userInfo = [Self.bookUUIDKey: job.bookUUID]
         // Per book, so two books answered while the app was away read as two
         // conversations rather than one pile.
-        content.threadIdentifier = "issa.ask.\(job.bookUUID)"
+        content.threadIdentifier = Self.thread(for: job.bookUUID)
 
         let request = UNNotificationRequest(
-            identifier: "issa.ask.\(job.bookUUID).\(UUID().uuidString)",
+            identifier: "\(Self.thread(for: job.bookUUID)).\(UUID().uuidString)",
             content: content,
             // nil, not a one-second trigger: the answer is ready now, and a
             // trigger would only give the app a second in which to be killed.
@@ -74,6 +88,54 @@ struct AskNotifier: Sendable {
             // Never the question, never the answer.
             IssaLog.error("ask notification failed", ["kind": String(describing: type(of: error))])
         }
+    }
+
+    /// Which book the answer is about, and nothing else.
+    ///
+    /// The book on its own rather than a sentence around it: the title above
+    /// has already said what happened, and a lock screen showing "Your answer is
+    /// ready / Your answer about Peter and Wendy is ready" says it twice. The
+    /// fallback is for an EPUB whose metadata carries no title at all, which is
+    /// rare and is not worth an empty second line.
+    static func body(bookTitle: String?) -> String {
+        let trimmed = bookTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? "Open the book to read it." : trimmed
+    }
+
+    /// Everything this feature posts is under this, so what it takes back is
+    /// its own and never somebody else's.
+    static func thread(for bookUUID: String) -> String { "issa.ask.\(bookUUID)" }
+
+    /// Takes back what has already been delivered for one book.
+    ///
+    /// Delivered content sits on disk — and on a paired Watch — until something
+    /// removes it, and nothing did: a banner about an answer outlived the
+    /// answer, the sheet and the app being killed. Tapping the banner clears
+    /// that one banner; this clears the ones the reader walked past on their way
+    /// to opening the app themselves.
+    func removeDelivered(bookUUID: String) async {
+        let centre = centre()
+        let thread = Self.thread(for: bookUUID)
+        let identifiers = await centre.deliveredNotifications()
+            .filter { $0.request.content.threadIdentifier == thread }
+            .map(\.request.identifier)
+        guard !identifiers.isEmpty else { return }
+        centre.removeDeliveredNotifications(withIdentifiers: identifiers)
+    }
+
+    /// Every book's, for sign-out and for deleting the downloads with the
+    /// account.
+    ///
+    /// By identifier rather than `removeAllDeliveredNotifications()`: this app
+    /// posts nothing else today, and a later notification that has nothing to do
+    /// with asking should not be swept away by a purge of the Ask indexes.
+    func removeAllDelivered() async {
+        let centre = centre()
+        let identifiers = await centre.deliveredNotifications()
+            .filter { $0.request.content.threadIdentifier.hasPrefix("issa.ask.") }
+            .map(\.request.identifier)
+        guard !identifiers.isEmpty else { return }
+        centre.removeDeliveredNotifications(withIdentifiers: identifiers)
     }
 
     static let bookUUIDKey = "bookUUID"
