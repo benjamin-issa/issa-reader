@@ -539,10 +539,14 @@ struct AudioPlayerGainTests {
     @Test("a gain outside the range is clamped on the way in")
     func clampsGain() {
         let player = AudioPlayer()
-        player.gain = 2
-        #expect(player.gain == 1.5)
+        player.gain = 4
+        #expect(player.gain == VolumeTrim.gainRange.upperBound)
         player.gain = 0.1
-        #expect(player.gain == 0.5)
+        #expect(player.gain == VolumeTrim.gainRange.lowerBound)
+        // In range, and it has to stay: 2× is +6 dB, two rungs below the top,
+        // and the old ±50% bound would have taken it back to 1.5.
+        player.gain = 2
+        #expect(player.gain == 2)
         player.gain = .nan
         #expect(player.gain == 1)
     }
@@ -583,8 +587,9 @@ struct AudioPlayerGainTests {
 
         player.gain = 0.5
         #expect(player.underlyingVolume == 0.5, "quieter is expressible without a tap")
-        player.gain = 1.5
-        #expect(player.underlyingVolume == 1, "louder is not, and must not be faked by clipping")
+        player.gain = VolumeTrim.gainRange.upperBound
+        #expect(player.underlyingVolume == 1,
+                "+8 dB is not expressible without a tap, and must not be faked by clipping")
     }
 
     /// The no-audio-tracks branch, which is what the test above claimed to
@@ -611,7 +616,7 @@ struct AudioPlayerGainTests {
 
         player.gain = 0.5
         #expect(player.underlyingVolume == 0.5)
-        player.gain = 1.5
+        player.gain = VolumeTrim.gainRange.upperBound
         #expect(player.underlyingVolume == 1)
     }
 }
