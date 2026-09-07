@@ -54,41 +54,55 @@ public struct KinRelation: Sendable, Hashable {
         self.group = group
     }
 
-    /// The relations a question can name, longest form first so "grandmother"
-    /// is never read as "mother".
+    /// The relations a question can name, read out of `Kinship`.
+    ///
+    /// The spellings are here because a group cannot supply them — a brother
+    /// and a sister are one group and two relations — but the *group* is not,
+    /// and neither is the vocabulary. Walking `Kinship.all` is what makes the
+    /// two agree: a relation exists exactly where a group has a word for it,
+    /// so there is no `?? forms` fallback for a relation in no group, because
+    /// there can no longer be one. The previous shape had that fallback and it
+    /// never fired, while the two lists disagreed in both directions anyway.
+    ///
+    /// Order follows the groups, which is safe because `matching` compares
+    /// whole spellings rather than prefixes — "grandmother" is not a form of
+    /// "mother" — and `QuestionKindTests` asserts no spelling names two
+    /// relations, so there is nothing for an order to decide.
     public static let all: [KinRelation] = {
-        let table: [(String, [String])] = [
-            ("grandmother", ["grandmother", "grandmothers", "grandma"]),
-            ("grandfather", ["grandfather", "grandfathers", "grandpa"]),
-            ("granddaughter", ["granddaughter", "granddaughters"]),
-            ("grandson", ["grandson", "grandsons"]),
-            ("grandchild", ["grandchild", "grandchildren"]),
-            ("brother", ["brother", "brothers"]),
-            ("sister", ["sister", "sisters"]),
-            ("sibling", ["sibling", "siblings"]),
-            ("mother", ["mother", "mothers", "mum", "mama", "mamma"]),
-            ("father", ["father", "fathers", "papa", "dad"]),
-            ("parent", ["parent", "parents"]),
-            ("son", ["son", "sons"]),
-            ("daughter", ["daughter", "daughters"]),
-            ("child", ["child", "children"]),
-            ("husband", ["husband", "husbands"]),
-            ("wife", ["wife", "wives"]),
-            ("spouse", ["spouse", "spouses"]),
-            ("widow", ["widow", "widows", "widower"]),
-            ("aunt", ["aunt", "aunts"]),
-            ("uncle", ["uncle", "uncles"]),
-            ("niece", ["niece", "nieces"]),
-            ("nephew", ["nephew", "nephews"]),
-            ("cousin", ["cousin", "cousins"]),
-            ("friend", ["friend", "friends"]),
+        let spellings: [String: [String]] = [
+            "grandmother": ["grandmother", "grandmothers", "grandma"],
+            "grandfather": ["grandfather", "grandfathers", "grandpa"],
+            "grandparent": ["grandparent", "grandparents"],
+            "granddaughter": ["granddaughter", "granddaughters"],
+            "grandson": ["grandson", "grandsons"],
+            "grandchild": ["grandchild", "grandchildren"],
+            "brother": ["brother", "brothers"],
+            "sister": ["sister", "sisters"],
+            "sibling": ["sibling", "siblings"],
+            "mother": ["mother", "mothers", "mum", "mama", "mamma"],
+            "father": ["father", "fathers", "papa", "dad"],
+            "parent": ["parent", "parents"],
+            "son": ["son", "sons"],
+            "daughter": ["daughter", "daughters"],
+            "child": ["child", "children", "baby", "babies"],
+            "husband": ["husband", "husbands"],
+            "wife": ["wife", "wives"],
+            "spouse": ["spouse", "spouses"],
+            "widow": ["widow", "widows", "widower", "widowers"],
+            "aunt": ["aunt", "aunts"],
+            "uncle": ["uncle", "uncles"],
+            "niece": ["niece", "nieces"],
+            "nephew": ["nephew", "nephews"],
+            "cousin": ["cousin", "cousins"],
+            "relative": ["relative", "relatives", "relation", "relations", "kin"],
+            "family": ["family", "families"],
+            "friend": ["friend", "friends", "friendship"],
+            "companion": ["companion", "companions"],
         ]
-        return table.map { word, forms in
-            KinRelation(
-                word: word,
-                forms: forms,
-                group: Kinship.groups(matching: [word]).first ?? forms,
-            )
+        return Kinship.all.flatMap { group in
+            group.compactMap { word in
+                spellings[word].map { KinRelation(word: word, forms: $0, group: group) }
+            }
         }
     }()
 
@@ -171,23 +185,6 @@ public enum QuestionKind: Sendable, Hashable {
 
 // MARK: - Reading the question
 
-/// One word of the question, kept in both the reader's spelling and the
-/// index's.
-///
-/// Both are needed: the possessive is a *display* fact ("Vin's" has an
-/// apostrophe) while the search is a *token* fact (`vin`), and the classifier
-/// has to see the apostrophe to know who owns the brother.
-struct QuestionWord: Sendable, Hashable {
-    /// As written, edge punctuation removed: "Vin's".
-    var display: String
-    /// The display spelling without the possessive: "Vin".
-    var bare: String
-    /// Folded, lowercased, possessive-stripped: "vin".
-    var token: String
-    var isPossessive: Bool
-    var isCapitalised: Bool
-}
-
 /// What this book calls people, as far as the reader has got.
 ///
 /// Two lists rather than one, because they fail in opposite directions.
@@ -229,45 +226,31 @@ enum QuestionReader {
 
     /// Splits the sanitised question into words the classifier can reason
     /// about.
-    static func words(in question: String) -> [QuestionWord] {
-        var out: [QuestionWord] = []
+    ///
+    /// Through `Words`, which is also what splits the book's own sentences.
+    /// The two used to be separate functions differing in one character, and
+    /// `KinshipExtractor` compares their output against each other — see the
+    /// header of `Words`.
+    static func words(in question: String) -> [Words.Word] {
+        var out: [Words.Word] = []
         for chunk in question.split(whereSeparator: \.isWhitespace) {
-            let display = String(chunk).trimmingCharacters(in: Self.edgePunctuation)
-            guard !display.isEmpty else { continue }
+            let display = String(chunk).trimmingCharacters(in: Words.edgePunctuation)
+            // "Who's Vin?" is two words, and only the split form reaches the
+            // "who is" lead-in the identity path matches on.
             if let expanded = expansions[display.lowercased()] {
                 for part in expanded {
-                    out.append(QuestionWord(
-                        display: part, bare: part, token: part,
-                        isPossessive: false, isCapitalised: false,
+                    out.append(Words.Word(
+                        display: part, token: part, isPossessive: false,
+                        isCapitalised: false, followedByComma: false,
                     ))
                 }
                 continue
             }
-            let possessive = Self.possessiveSuffixes.contains { display.hasSuffix($0) }
-            var bare = display
-            if possessive {
-                // "Vin's" loses two characters, "James'" loses one — and both
-                // have to end up as the name the book actually prints.
-                bare = display.hasSuffix("'s") || display.hasSuffix("\u{2019}s")
-                    ? String(display.dropLast(2))
-                    : String(display.dropLast())
-            }
-            let token = QueryTerms.strippingPossessive(QueryTerms.tokens(in: bare).joined())
-            guard !token.isEmpty, !bare.isEmpty else { continue }
-            out.append(QuestionWord(
-                display: bare,
-                bare: bare,
-                token: token,
-                isPossessive: possessive,
-                isCapitalised: display.first?.isUppercase ?? false,
-            ))
+            guard let word = Words.word(from: String(chunk)) else { continue }
+            out.append(word)
         }
         return out
     }
-
-    /// Trailing apostrophes are kept: they are what says "Vins'" is possessive.
-    static let edgePunctuation = CharacterSet(charactersIn: ".,;:!?\"“”()[]{}—–-…")
-    static let possessiveSuffixes = ["'s", "\u{2019}s", "s'", "s\u{2019}"]
 
     // MARK: - Classifying
 
@@ -297,7 +280,7 @@ enum QuestionReader {
         "only", "dear", "beloved", "poor", "eldest", "youngest", "step",
     ]
 
-    static func kinship(in words: [QuestionWord], vocabulary: Vocabulary) -> QuestionKind? {
+    static func kinship(in words: [Words.Word], vocabulary: Vocabulary) -> QuestionKind? {
         guard let kinIndex = words.firstIndex(where: { KinRelation.matching($0.token) != nil })
         else { return howRelated(in: words, vocabulary: vocabulary) }
         let relation = KinRelation.matching(words[kinIndex].token)
@@ -323,7 +306,15 @@ enum QuestionReader {
         let owner = subject(from: [words[ownerIndex]], vocabulary: vocabulary)
         // "Is Reen Vin's brother?" — a yes/no question, which the extractor
         // must not answer with a name.
-        if let lead = words.first?.token, ["is", "was", "are", "were", "does", "did"].contains(lead) {
+        //
+        // `ownerIndex > 1`, because the owner can be the very first word: a
+        // question that *opens* with a possessive gives `ownerIndex == 0`, and
+        // `words[1 ..< 0]` is a trap, not an empty slice. `Was' brother Reen?`
+        // reached it — `edgePunctuation` deliberately keeps a trailing
+        // apostrophe, because that is what says "Vins'" is possessive, and
+        // `possessiveSuffixes` includes `s'`. A typed question crashed the app.
+        if ownerIndex > 1, let lead = words.first?.token,
+           ["is", "was", "are", "were", "does", "did"].contains(lead) {
             let between = words[1 ..< ownerIndex].enumerated().first {
                 isNameLike($0.element, at: $0.offset + 1, vocabulary: vocabulary)
             }
@@ -341,7 +332,7 @@ enum QuestionReader {
     /// "How are X and Y related?" — no possessive and no relation noun, but
     /// unmistakably a kinship question, and the two names are what to search
     /// for together.
-    static func howRelated(in words: [QuestionWord], vocabulary: Vocabulary) -> QuestionKind? {
+    static func howRelated(in words: [Words.Word], vocabulary: Vocabulary) -> QuestionKind? {
         let tokens = words.map(\.token)
         guard tokens.first == "how", tokens.contains("related") || tokens.contains("relation")
         else { return nil }
@@ -378,7 +369,7 @@ enum QuestionReader {
     /// question about a person and starts being a question about a situation.
     static let maximumSubjectTokens = 4
 
-    static func identity(in words: [QuestionWord], vocabulary: Vocabulary) -> QuestionKind? {
+    static func identity(in words: [Words.Word], vocabulary: Vocabulary) -> QuestionKind? {
         let tokens = words.map(\.token)
         guard let leadIn = identityLeadIns.first(where: { tokens.starts(with: $0) })
         else { return nil }
@@ -414,7 +405,7 @@ enum QuestionReader {
     ///
     /// Never bare capitalisation. "Is Alice British?" would otherwise search
     /// for `british` as a required token and find nothing.
-    static func generalSubject(in words: [QuestionWord], vocabulary: Vocabulary) -> Subject? {
+    static func generalSubject(in words: [Words.Word], vocabulary: Vocabulary) -> Subject? {
         if let owner = words.first(where: \.isPossessive) {
             return subject(from: [owner], vocabulary: vocabulary)
         }
@@ -430,8 +421,8 @@ enum QuestionReader {
     /// The longest run of words from `first` that the name table knows as one
     /// name.
     static func knownPhrase(
-        startingAt first: QuestionWord, in words: [QuestionWord], vocabulary: Vocabulary,
-    ) -> [QuestionWord] {
+        startingAt first: Words.Word, in words: [Words.Word], vocabulary: Vocabulary,
+    ) -> [Words.Word] {
         guard let start = words.firstIndex(of: first) else { return [first] }
         var best = [first]
         var phrase = [first]
@@ -448,7 +439,7 @@ enum QuestionReader {
 
     // MARK: Building a subject
 
-    static func subject(from words: [QuestionWord], vocabulary: Vocabulary) -> Subject {
+    static func subject(from words: [Words.Word], vocabulary: Vocabulary) -> Subject {
         let tokens = words.map(\.token).filter { !$0.isEmpty }
         let phrase = tokens.joined(separator: " ")
         return Subject(
@@ -461,7 +452,7 @@ enum QuestionReader {
     /// Whether this word could be naming somebody: the book knows it, the
     /// tagger tagged it, or it is capitalised somewhere other than the start of
     /// the question.
-    static func isNameLike(_ word: QuestionWord, at index: Int, vocabulary: Vocabulary) -> Bool {
+    static func isNameLike(_ word: Words.Word, at index: Int, vocabulary: Vocabulary) -> Bool {
         guard !QueryTerms.stopWords.contains(word.token), word.token.count > 1 else { return false }
         guard !QueryTerms.capitalisedNonNames.contains(word.token) else { return false }
         if vocabulary.isName(word.token) { return true }

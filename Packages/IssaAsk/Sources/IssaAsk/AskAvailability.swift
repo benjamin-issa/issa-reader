@@ -26,16 +26,6 @@ public enum AskAvailability: Sendable, Hashable {
     /// have it work later, but a question asked now fails.
     public var isReady: Bool { self == .available }
 
-    /// Whether the settings section should offer the toggle at all. An
-    /// ineligible device gets a sentence instead — a switch that can never do
-    /// anything is worse than no switch.
-    public var allowsEnabling: Bool {
-        switch self {
-        case .available, .modelDownloading: true
-        case .appleIntelligenceOff, .unsupportedDevice, .unsupportedOnThisPlatform: false
-        }
-    }
-
     #if canImport(FoundationModels)
     /// Read fresh every time rather than cached: the reader may have gone to
     /// Settings and turned Apple Intelligence on since the app launched, which

@@ -3,6 +3,45 @@ import Testing
 
 @testable import IssaAsk
 
+/// The one tokeniser, which is the reason the extractor's comparisons mean
+/// anything.
+///
+/// `KinshipExtractor` asks whether a word of the book's sentence is one of the
+/// question's subject tokens. That was two splitting functions differing in one
+/// character, so a name written the same way on both sides could tokenise
+/// differently and the comparison answered no.
+@Suite("Splitting words")
+struct WordsTests {
+    @Test(
+        "a question and a sentence tokenise a name the same way",
+        arguments: ["Jean'Luc", "Jean-Luc", "O'Brien", "St.John", "Vin"],
+    )
+    func bothSidesAgree(name: String) {
+        let asked = QuestionReader.words(in: "Who is \(name)?")
+        let printed = Words.split("She met \(name) at the gate.")
+        let questionToken = asked.last?.token
+        let sentenceToken = printed.dropFirst(2).first?.token
+        #expect(
+            questionToken == sentenceToken,
+            "\(name): \(questionToken ?? "-") against \(sentenceToken ?? "-")",
+        )
+    }
+
+    @Test("a possessive is stripped the same way on both sides")
+    func possessivesAgree() {
+        let asked = QuestionReader.words(in: "Who is Vin's brother?").dropFirst(2).first
+        let printed = Words.split("Her brother, Vin's, arrived.").dropFirst(2).first
+        #expect(asked?.isPossessive == true)
+        #expect(asked?.token == "vin")
+        #expect(printed?.token == "vin")
+    }
+
+    @Test("who's still becomes two words, so the identity lead-in matches")
+    func contractionsStillExpand() {
+        #expect(QuestionReader.words(in: "Who's Vin?").map(\.token) == ["who", "is", "vin"])
+    }
+}
+
 /// The one place the app answers without asking the model.
 ///
 /// Every test here is about the extractor declining. Over-reach is a confident

@@ -124,4 +124,45 @@ struct FTSQueryTests {
         )
         #expect(hits.allSatisfy { !$0.passage.text.lowercased().contains("cheshire") })
     }
+
+    // MARK: - The two paths that were still on the old API
+
+    @Test("half a hyphenated name is not the name")
+    func aHalfMetNameIsNotMet() async throws {
+        let (store, _, directory) = try await AskFixture.preparedStore()
+        defer { AskFixture.remove(directory) }
+        let boundary = try AskFixture.endOf(spine: AskFixture.Spine.chapterVI)
+
+        // *Alice* has "waistcoat-pocket" and no "waistcoat" alone. The probe
+        // ran `FTS5Pattern(matchingAnyTokenIn:)`, whose ASCII tokeniser turned
+        // one word into `waistcoat OR pocket` — so a name the book had written
+        // only one half of counted as met, and an unmet name walked past the
+        // spoiler guard on the strength of half of itself.
+        let unmet = try await store.unmetWords(
+            ["waistcoat-lemonade"], in: AskFixture.bookUUID, before: boundary,
+        )
+        #expect(unmet == ["waistcoat-lemonade"])
+        // The control: the whole thing, which the book really does contain.
+        #expect(try await store.unmetWords(
+            ["waistcoat-pocket"], in: AskFixture.bookUUID, before: boundary,
+        ).isEmpty)
+    }
+
+    @Test("the term search asks for the tokens it was given, not their pieces")
+    func retrievalQuotesItsTokens() async throws {
+        let (store, _, directory) = try await AskFixture.preparedStore()
+        defer { AskFixture.remove(directory) }
+        let terms = QueryTerms(
+            question: "waistcoat-lemonade",
+            names: [], terms: ["waistcoat-lemonade"], kinshipGroups: [],
+            kind: .general(nil),
+        )
+        let hits = try await store.retrieve(
+            terms: terms, in: AskFixture.bookUUID,
+            before: try AskFixture.endOf(spine: AskFixture.Spine.chapterVI),
+        )
+        // Under the old API this was `waistcoat OR lemonade` and came back with
+        // every paragraph mentioning either.
+        #expect(hits.isEmpty)
+    }
 }

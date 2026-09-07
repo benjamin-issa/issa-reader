@@ -137,9 +137,9 @@ struct QuestionKindTests {
         let cousin = try? #require(KinRelation.matching("cousins"))
         #expect(cousin?.word == "cousin")
         #expect(cousin?.group.contains("family") == true)
+        // Whole spellings, not prefixes: "grandmother" is not a form of
+        // "mother", so no ordering has to protect it.
         #expect(KinRelation.matching("grandmother")?.word == "grandmother")
-        // Longest first, or "grandmother" is read as "mother" and the answer
-        // is about the wrong generation.
         #expect(KinRelation.matching("rabbit") == nil)
         #expect(KinRelation.allForms.contains("brothers"))
     }
@@ -173,6 +173,90 @@ struct QuestionKindTests {
         // "Is Alice British?" would otherwise require `british` of every
         // passage and retrieve nothing at all.
         #expect(Self.subject("Why did she cry so much?") == nil)
+    }
+
+    // MARK: - One kinship vocabulary
+
+    @Test(
+        "every relation a reader names reaches the kinship path",
+        arguments: [
+            "relative", "relatives", "relation", "kin", "family",
+            "grandparent", "grandparents", "companion", "grandmothers", "wives",
+            "widows", "baby", "brother", "cousin", "friend",
+        ],
+    )
+    func everyRelationIsMatched(word: String) {
+        // These are the words the two lists disagreed about. "Who is X's
+        // relative?" reached BM25 over the whole question instead of the
+        // kinship path, and never found the paragraph that says so.
+        #expect(KinRelation.matching(word) != nil, "\(word)")
+    }
+
+    @Test("a relation's spellings all belong to its own group")
+    func spellingsBelongToTheirGroup() {
+        for relation in KinRelation.all {
+            let outside = relation.forms.filter { !relation.group.contains($0) }
+            #expect(outside.isEmpty, "\(relation.word) has \(outside) outside its group")
+            #expect(relation.group.contains(relation.word), "\(relation.word)")
+        }
+    }
+
+    @Test("no spelling names two relations, so the order of the table decides nothing")
+    func spellingsNameOneRelation() {
+        var owner: [String: String] = [:]
+        for relation in KinRelation.all {
+            for form in relation.forms {
+                if let existing = owner[form] {
+                    Issue.record("\(form) is both \(existing) and \(relation.word)")
+                }
+                owner[form] = relation.word
+            }
+        }
+        // And the whole set is what the query asks for when the reader named no
+        // relation at all.
+        #expect(Set(KinRelation.allForms) == Set(owner.keys))
+    }
+
+    @Test("asking about a relative is a kinship question")
+    func relativeIsAKinshipQuestion() {
+        for question in [
+            "Who is Vin's relative?", "Who is Vin's family?",
+            "Who is Vin's grandparent?", "Who is Vin's companion?",
+        ] {
+            #expect(Self.kind(question, known: ["vin"]).label == "kinship", "\(question)")
+        }
+    }
+
+    // MARK: - Questions that are not questions
+
+    /// A typed question crashed the app.
+    ///
+    /// `edgePunctuation` deliberately keeps a trailing apostrophe — it is what
+    /// says "Vins'" is possessive — and `possessiveSuffixes` includes `s'`. So
+    /// a copula ending in *s* followed by an apostrophe is a possessive at word
+    /// zero, and the yes/no scan then took `words[1 ..< 0]`, which is a trap
+    /// rather than an empty slice.
+    @Test(
+        "a question that opens with a possessive is classified, not trapped",
+        arguments: ["Was' brother Reen?", "Is' brother Reen?", "Does' sister Alice?"],
+    )
+    func aLeadingPossessiveDoesNotTrap(question: String) {
+        // The classification itself is nonsense, because the question is; what
+        // matters is that it is a classification and not a crash.
+        #expect(Self.kind(question).label == "kinship")
+    }
+
+    @Test("a real yes/no question still finds the person being asked about")
+    func theYesNoScanStillWorks() {
+        let kind = Self.kind("Is Reen Vin's brother?", known: ["vin", "reen"])
+        guard case let .kinship(subject, relation, other, form) = kind else {
+            Issue.record("classified as \(kind.label)")
+            return
+        }
+        #expect(subject.tokens == ["vin"])
+        #expect(relation?.word == "brother")
+        #expect(other?.tokens == ["reen"])
+        #expect(form == .yesNo)
     }
 
     // MARK: - Recap

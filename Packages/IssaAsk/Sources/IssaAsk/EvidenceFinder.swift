@@ -272,8 +272,17 @@ public enum EvidenceFinder {
     /// excerpts — which spends the budget twice and invites the model to cite
     /// one fact as two sources.
     static func inBookOrder(_ evidence: [Evidence]) -> [Evidence] {
-        var seen = Set<NSRange>()
-        let unique = evidence.filter { seen.insert($0.sentence).inserted }
+        // Keyed on the spine index as well as the range, because `sentence` is
+        // an offset *within its chapter*. Two chapters that open with sentences
+        // of the same length start at the same location with the same length,
+        // so the set called them the same sentence and threw one away — and the
+        // one it threw away could be the only evidence there was. The loop
+        // below already checks the spine index; only the set did not.
+        var seen = Set<[Int]>()
+        let unique = evidence.filter {
+            seen.insert([$0.excerpt.spineIndex, $0.sentence.location, $0.sentence.length])
+                .inserted
+        }
         let ordered = unique.sorted {
             ($0.excerpt.spineIndex, $0.excerpt.start) < ($1.excerpt.spineIndex, $1.excerpt.start)
         }
@@ -300,14 +309,12 @@ public enum EvidenceFinder {
 /// not name the subject at all, and a substring search settles that in
 /// nanoseconds.
 struct Patterns: Sendable {
-    let phrase: String
     let head: String
     let mention: NSRegularExpression?
     let predicates: [NSRegularExpression]
 
     init(subject: Subject) {
         let tokens = subject.tokens.filter { !$0.isEmpty }
-        phrase = tokens.joined(separator: " ")
         head = tokens.last ?? ""
         // A multi-word name is used in full once and by its head thereafter:
         // "a White Rabbit with pink eyes" becomes "the Rabbit" three lines

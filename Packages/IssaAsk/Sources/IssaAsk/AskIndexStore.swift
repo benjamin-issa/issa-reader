@@ -80,8 +80,14 @@ public actor AskIndexStore {
         let url = indexURL(for: source.bookUUID)
         let key = source.indexKey
 
+        // `try?`, matching `isPrepared` twelve lines down. A bare `try` threw
+        // straight past the repair three lines below — and `queue(for:)` had
+        // already cached the handle to the broken file, so the next attempt read
+        // the same broken index and failed identically, for ever. A zero-length
+        // `.sqlite` is the case: SQLite opens it happily as an empty database
+        // and `storedKey` then throws "no such table: meta".
         if let queue = try? queue(for: source.bookUUID),
-           try Self.storedKey(in: queue) == key {
+           (try? Self.storedKey(in: queue)) == key {
             return false
         }
 
@@ -135,7 +141,7 @@ public actor AskIndexStore {
                 try Task.checkCancellation()
                 progress?(.preparingIndex(done: index, total: total))
 
-                let parsed = Self.parseChapter(
+                let parsed = await Self.parsedChapter(
                     archive: source.package.archive, href: item.href, spineIndex: index,
                 )
                 guard let parsed else { continue }
@@ -184,6 +190,29 @@ public actor AskIndexStore {
     /// boundary is a comparison of exactly those offsets. The style, by
     /// contrast, changes nothing in `.string`: typeface, size and spacing are
     /// attributes, so any `ReaderStyle` yields the same characters.
+    /// The same parse, off this actor for real.
+    ///
+    /// `parseChapter` is `nonisolated`, but `build` called it *synchronously*
+    /// from an isolated function, and a synchronous call does not hop anywhere
+    /// — so every chapter of a 250,000-word book inflated, parsed and chunked
+    /// inline on the store's own executor, which is the opposite of what both
+    /// that function's doc and this type's header claim. The actor also has to
+    /// answer `remove(bookUUID:)` when a download goes, and that call sat
+    /// behind the whole build.
+    ///
+    /// `nonisolated async` runs on the global executor, so awaiting it is the
+    /// hop. The suspension it adds is *between* chapters, where the loop
+    /// already checks for cancellation: a `remove` arriving there deletes the
+    /// `.building.sqlite` file, the rename that publishes the index then fails,
+    /// and `prepare` reports a failed build — which is the same outcome as the
+    /// cancellation the reader could have caused a line earlier, and not a
+    /// half-written index, because nothing is published until the rename.
+    nonisolated static func parsedChapter(
+        archive: EPUBArchive, href: String, spineIndex: Int,
+    ) async -> ParsedChapter? {
+        parseChapter(archive: archive, href: href, spineIndex: spineIndex)
+    }
+
     nonisolated static func parseChapter(
         archive: EPUBArchive, href: String, spineIndex: Int,
     ) -> ParsedChapter? {
@@ -210,11 +239,16 @@ public actor AskIndexStore {
     ///
     /// Synchronous on purpose. GRDB gives `read` and `write` both a synchronous
     /// and an asynchronous overload, and inside an `async` function Swift picks
-    /// the asynchronous one — which puts a suspension point in the middle of the
-    /// build loop, where an actor is reentrant: a `remove(bookUUID:)` arriving
-    /// there would delete the file the next chapter is about to be written to.
-    /// A synchronous helper selects the synchronous overload, which is also what
+    /// the asynchronous one — which suspends in the middle of writing one
+    /// chapter, where an actor is reentrant: a `remove(bookUUID:)` arriving
+    /// there would delete the file this write is halfway through. A synchronous
+    /// helper selects the synchronous overload, which is also what
     /// `LibraryStore` uses throughout.
+    ///
+    /// The loop around this does suspend, once per chapter, to parse the next
+    /// one off the actor — but *between* chapters, next to the cancellation
+    /// check, where a `remove` costs a failed rename and a build that reports
+    /// itself failed rather than a half-written row. `parsedChapter` says so.
     private static func insert(_ chapter: ParsedChapter, into queue: DatabaseQueue) throws {
         try queue.write { db in try insert(chapter, into: db) }
     }
@@ -288,11 +322,12 @@ public actor AskIndexStore {
     static func retrieve(
         terms: QueryTerms, before boundary: ReadingBoundary, limit: Int, in queue: DatabaseQueue,
     ) throws -> [RetrievedPassage] {
-        let tokens = terms.searchTokens
-        guard !tokens.isEmpty else { return [] }
-        guard let pattern = FTS5Pattern(matchingAnyTokenIn: tokens.joined(separator: " ")) else {
-            return []
-        }
+        // `FTSQuery.any`, not `FTS5Pattern(matchingAnyTokenIn:)`, which runs the
+        // ASCII tokeniser over what it is handed: "jean'luc" went in as one
+        // token and came out as `jean OR luc`, matching every paragraph with
+        // either half in it. `FTSQuery` quotes each token, so a token carrying
+        // an apostrophe or a hyphen is a phrase rather than an accident.
+        guard let pattern = FTSQuery.any(terms.searchTokens) else { return [] }
         return try passages(
             matching: pattern, before: boundary, order: .relevance, limit: limit, in: queue,
         )
@@ -456,7 +491,12 @@ public actor AskIndexStore {
                 LIMIT 1
                 """)
             return try words.filter { word in
-                guard let pattern = FTS5Pattern(matchingAnyTokenIn: word) else { return false }
+                // `FTSQuery.all`, not `FTS5Pattern(matchingAnyTokenIn:)`, which
+                // probed "jean'luc" as `jean OR luc` and called the name met
+                // when only one half of it had appeared — an unmet name walking
+                // straight past the spoiler guard. Quoted, it is a phrase, and
+                // only the whole name counts as met.
+                guard let pattern = FTSQuery.all([word]) else { return false }
                 let found = try Int.fetchOne(statement, arguments: [
                     "pattern": pattern, "spine": boundary.spineIndex,
                     "offset": boundary.charOffset,

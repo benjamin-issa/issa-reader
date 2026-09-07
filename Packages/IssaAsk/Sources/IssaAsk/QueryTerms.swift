@@ -68,23 +68,6 @@ public struct QueryTerms: Sendable, Hashable {
         self.kind = kind
     }
 
-    /// The older shape, kept so a caller that only knows about recaps still
-    /// compiles.
-    public init(
-        question: String,
-        names: [String],
-        terms: [String],
-        kinshipGroups: [[String]],
-        nameCandidates: [String] = [],
-        isRecap: Bool,
-    ) {
-        self.init(
-            question: question, names: names, terms: terms,
-            kinshipGroups: kinshipGroups, nameCandidates: nameCandidates,
-            kind: isRecap ? .recap : .general(nil),
-        )
-    }
-
     /// Longest first, so the FTS pattern leads with the most selective token.
     public var searchTokens: [String] {
         var seen = Set<String>()
@@ -363,27 +346,35 @@ public struct QueryTerms: Sendable, Hashable {
 public enum Kinship {
     /// One group per relationship a reader asks about. A term in any group
     /// pulls in the whole group.
+    ///
+    /// **The only place a family word is written down.** `KinRelation.all`
+    /// reads its relations out of these groups rather than keeping a second
+    /// list, because there were two lists and they disagreed in both
+    /// directions. This one had "relative", "family", "grandparent" and
+    /// "companion" and `KinRelation` had none of them, so "Who is X's
+    /// relative?" never reached the kinship path at all and was answered by
+    /// BM25 over the whole question; `KinRelation` had "grandmothers",
+    /// "widows" and "wives" and this one had none of them, so a question using
+    /// one of those expanded to nothing.
     public static let all: [[String]] = [
-        ["cousin", "cousins", "relative", "relatives", "family", "kin", "relation"],
+        ["cousin", "cousins", "relative", "relatives", "relation", "relations",
+         "family", "families", "kin"],
         ["brother", "brothers", "sister", "sisters", "sibling", "siblings"],
-        ["mother", "mothers", "father", "fathers", "parent", "parents",
-         "mama", "mamma", "papa", "mum", "mother's", "dad"],
+        ["mother", "mothers", "mum", "mama", "mamma",
+         "father", "fathers", "papa", "dad", "parent", "parents"],
         ["aunt", "aunts", "uncle", "uncles", "niece", "nieces", "nephew", "nephews"],
-        ["husband", "wife", "spouse", "widow", "widower", "married", "marriage"],
+        ["husband", "husbands", "wife", "wives", "spouse", "spouses",
+         "widow", "widows", "widower", "widowers", "married", "marriage"],
         ["son", "sons", "daughter", "daughters", "child", "children", "baby", "babies"],
-        ["grandmother", "grandfather", "grandparents", "grandma", "grandpa",
-         "grandson", "granddaughter", "grandchild", "grandchildren"],
-        ["friend", "friends", "companion", "companions", "friendship"],
+        ["grandmother", "grandmothers", "grandma", "grandfather", "grandfathers", "grandpa",
+         "grandparent", "grandparents", "grandson", "grandsons",
+         "granddaughter", "granddaughters", "grandchild", "grandchildren"],
+        ["friend", "friends", "friendship", "companion", "companions"],
     ]
 
     /// Every group at least one of these terms belongs to.
     public static func groups(matching terms: [String]) -> [[String]] {
         let lowered = Set(terms.map { $0.lowercased() })
         return all.filter { group in group.contains { lowered.contains($0) } }
-    }
-
-    /// Flattened expansion, for a caller that just wants more tokens.
-    public static func expansion(for terms: [String]) -> [String] {
-        Array(Set(groups(matching: terms).flatMap { $0 })).sorted()
     }
 }

@@ -147,28 +147,42 @@ public enum NameFinder {
             bySpelling[identity] = existing
         }
 
-        var pooled: [String: Name] = [:]
-        for spelling in bySpelling.values {
-            guard var existing = pooled[spelling.key] else {
-                pooled[spelling.key] = spelling
-                continue
-            }
+        // The spelling is chosen from complete per-spelling counts, before
+        // anything is added up.
+        //
+        // The second pass used to compare each challenger against the
+        // incumbent's *running total*, walking an unordered
+        // `Dictionary.values`. From the third spelling onwards "which does the
+        // book print more often?" was therefore asked of a number that was
+        // already two spellings added together — and the answer depended on the
+        // order the values happened to come out in. Swift seeds its hasher per
+        // process, so BRONTE(9), Bronte(10), Brontë(5) pooled to "Bronte" on
+        // some launches and "BRONTE" on others: a chapter heading became the
+        // name a suggestion chip offered, on the same book, for no reason the
+        // reader could see.
+        var byKey: [String: [Name]] = [:]
+        for spelling in bySpelling.values { byKey[spelling.key, default: []].append(spelling) }
+
+        var pooled: [Name] = []
+        // Sorted keys, so nothing downstream can inherit the dictionary's
+        // order either.
+        for key in byKey.keys.sorted() {
+            guard let spellings = byKey[key], !spellings.isEmpty else { continue }
             // Whichever spelling the book prints more often wins the row, so
             // "VIN" in a heading does not become the name a chip offers.
-            if prefers(
-                spelling.name, over: existing.name,
-                mentions: spelling.mentions, against: existing.mentions,
-            ) {
-                existing.name = spelling.name
+            // `prefers` is a total order — count, then not-shouting, then
+            // alphabetical — so this picks one answer and always the same one.
+            var winner = spellings.sorted {
+                prefers($0.name, over: $1.name, mentions: $0.mentions, against: $1.mentions)
+            }[0]
+            winner.mentions = spellings.reduce(0) { $0 + $1.mentions }
+            for spelling in spellings where earlier(spelling, than: winner) {
+                winner.spineIndex = spelling.spineIndex
+                winner.firstOffset = spelling.firstOffset
             }
-            existing.mentions += spelling.mentions
-            if earlier(spelling, than: existing) {
-                existing.spineIndex = spelling.spineIndex
-                existing.firstOffset = spelling.firstOffset
-            }
-            pooled[spelling.key] = existing
+            pooled.append(winner)
         }
-        return pooled.values.sorted {
+        return pooled.sorted {
             $0.mentions == $1.mentions ? $0.name < $1.name : $0.mentions > $1.mentions
         }
     }

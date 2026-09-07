@@ -140,11 +140,47 @@ struct AskIndexStoreTests {
         let seen = phases.value
         // A long illustrated book takes fifteen seconds to index; an indefinite
         // spinner for that long reads as a hang.
-        #expect(seen.allSatisfy { $0.isPreparing })
+        #expect(seen.allSatisfy { if case .preparingIndex = $0 { true } else { false } })
         #expect(seen.count == source.package.spine.count + 1)
         #expect(seen.last == .preparingIndex(
             done: source.package.spine.count, total: source.package.spine.count,
         ))
+    }
+
+    // MARK: - Repairing a broken index
+
+    /// A file that exists, opens, and is not an index.
+    ///
+    /// Zero-length rather than garbage: garbage is the easy case, because
+    /// SQLite refuses to open it and `prepare` falls through to the repair on
+    /// its own. A zero-length file *is* a valid empty database, so it opens,
+    /// and it is `storedKey` that fails — three lines past the repair.
+    @Test(
+        "an index that opens but holds nothing is rebuilt, not failed for ever",
+        arguments: [Data(), Data("not a database at all, just bytes".utf8)],
+    )
+    func aBrokenIndexIsRepaired(contents: Data) async throws {
+        let directory = try AskFixture.temporaryDirectory()
+        defer { AskFixture.remove(directory) }
+        let store = AskIndexStore(directory: directory)
+        let source = try AskFixture.source()
+        try contents.write(
+            to: AskIndexStore.indexURL(in: directory, bookUUID: AskFixture.bookUUID),
+        )
+
+        #expect(!(await store.isPrepared(source: source)))
+        #expect(try await store.prepare(source: source), "a broken index has to be rebuilt")
+        #expect(await store.isPrepared(source: source))
+
+        // And the rebuilt one answers, rather than being a handle to the file
+        // that was there before: the broken handle was cached by the open that
+        // failed, so every later attempt read it again and failed identically.
+        let hits = try await store.retrieve(
+            terms: QueryTerms.extract(from: "What did Alice follow down the hole?"),
+            in: AskFixture.bookUUID,
+            before: try AskFixture.endOf(spine: AskFixture.Spine.chapterI),
+        )
+        #expect(hits.contains { $0.passage.text.lowercased().contains("rabbit") })
     }
 
     // MARK: - Invalidation
