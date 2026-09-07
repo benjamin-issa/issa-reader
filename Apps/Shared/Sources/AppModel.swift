@@ -39,12 +39,43 @@ public final class AppModel {
     /// every two seconds while narrating. `recordPosition` recomputes only
     /// what a position can move.
     public var books: [Book] = []
-    /// Books with at least one file on disk, from a single directory read.
+    /// Books with at least one file on disk *and* not on their way off it.
     ///
     /// The download shelf and its count both need this for the whole library,
     /// and asking `isDownloaded` per book per format is a `stat` per format per
     /// book — thousands of syscalls in a scrolled frame.
+    ///
+    /// A removal waiting out its undo window is subtracted, because for those
+    /// six seconds this set was the app's only answer to "is this on the
+    /// device" and it was the wrong one. `DownloadsSection` filtered its own
+    /// rows and nothing else did — so the shelf, the offline filter, CarPlay's
+    /// catalogue and the reader all went on offering a file that was about to
+    /// be deleted underneath them. In a car, in a tunnel, that is silence.
+    ///
+    /// Only when the pending removal is the book's *last* edition: it is keyed
+    /// by book, and a book that has lost one of two has not left the device.
     public private(set) var downloadedUUIDs: Set<String> = [] { didSet { rebuildDerived() } }
+    /// What the last directory read actually found, before the undo window is
+    /// applied. The disk's own answer, kept so the window can be taken back
+    /// without another read.
+    private var downloadedOnDisk: Set<String> = []
+    /// Bumped every time the app has reason to think the Books directory has
+    /// changed, for the screens that walk it themselves.
+    ///
+    /// Those screens keyed their scans on collection *counts*, and a count
+    /// cannot see the change that matters most here: removing one edition of a
+    /// two-edition book leaves `downloadedUUIDs` — which is keyed by book —
+    /// exactly equal, and the transfer list never held it. So the row kept its
+    /// old size, the header kept its old total, and nothing re-ran until some
+    /// unrelated number happened to move. On the Apple TV, which has no undo
+    /// window either, nothing ever did.
+    ///
+    /// A counter rather than a richer key because the question is "has the disk
+    /// changed", and the only honest answer to that is from the code that
+    /// changed it. `refreshDownloadedSet` is called on exactly those occasions
+    /// — a finish, a removal, a cancel, a sign-in, the app coming forward, a car
+    /// connecting — and on no render path, so bumping it there is bounded.
+    public private(set) var downloadsRevision = 0
     /// The shelves this server defines. Fetched once per sign-in; an admin can
     /// add their own beyond the default To read / Reading / Read.
     public var statuses: [Status] = []
@@ -500,6 +531,9 @@ public final class AppModel {
         positionGuards = [:]
         books = []
         rebuildDerived()
+        // Both, or the next refresh would derive the visible set from the
+        // departing account's disk reading.
+        downloadedOnDisk = []
         downloadedUUIDs = []
         statuses = []
         ratings = [:]
@@ -992,14 +1026,59 @@ public final class AppModel {
     /// the last set it did read is a better answer than a wrong one, and the
     /// next refresh is a few seconds away.
     public func refreshDownloadedSet() {
-        let previous = downloadedUUIDs
+        let previous = downloadedOnDisk
         guard let current = try? BookContentService.downloadedBookUUIDs() else {
             IssaLog.warning("could not read the downloads directory; keeping the last set",
                             ["kept": String(previous.count)])
             return
         }
-        downloadedUUIDs = current
+        downloadedOnDisk = current
+        applyPendingRemovalToDownloadedSet()
+        // After a successful read, so a screen does not re-scan a directory
+        // this call could not read either.
+        downloadsRevision &+= 1
+        // Against the disk's own reading, both times. The sweep asks which
+        // books lost their last *file*, and a removal inside its undo window has
+        // deliberately lost none yet — reconciling against the set the window
+        // has already been subtracted from would delete the very derived files
+        // the deferral exists to keep recoverable.
         reconcileDownloads(previouslyDownloaded: previous)
+    }
+
+    /// Recomputes `downloadedUUIDs` from the disk's answer and the open window.
+    ///
+    /// Called whenever either changes. The pending removal costs at most three
+    /// `stat`s and only while a toast is up, which is the price of the shelf and
+    /// the car agreeing with the screen the reader is looking at.
+    private func applyPendingRemovalToDownloadedSet() {
+        guard let pending = pendingRemoval else {
+            downloadedUUIDs = downloadedOnDisk
+            return
+        }
+        let remaining = BookContentService
+            .downloadedFormats(bookUUID: pending.bookUUID)
+            .subtracting([pending.format])
+        downloadedUUIDs = remaining.isEmpty
+            ? downloadedOnDisk.subtracting([pending.bookUUID])
+            : downloadedOnDisk
+    }
+
+    /// Whether this edition is on the device and staying there.
+    ///
+    /// The per-edition question, which `downloadedUUIDs` cannot answer: it is
+    /// keyed by book, and a book with a read-along and an ebook on the device is
+    /// one entry. Everything in the app that asks about a *format* should ask
+    /// here rather than `BookContentService.isDownloaded`, which knows only
+    /// about the filesystem and so cannot see a removal that has been decided
+    /// but not yet carried out.
+    public func isDownloaded(_ book: Book, format: BookContentService.Format) -> Bool {
+        isDownloaded(bookUUID: book.uuid, format: format)
+    }
+
+    public func isDownloaded(bookUUID: String, format: BookContentService.Format) -> Bool {
+        guard pendingRemoval?.bookUUID != bookUUID || pendingRemoval?.format != format
+        else { return false }
+        return BookContentService.downloadedFormats(bookUUID: bookUUID).contains(format)
     }
 
     /// Runs the rest of a removal for every book whose files went behind the
@@ -1046,7 +1125,15 @@ public final class AppModel {
     /// One at a time, like Mail's undo send: a second removal commits the first
     /// rather than queueing, because a toast that could mean any of three rows
     /// is not an undo.
-    public private(set) var pendingRemoval: PendingRemoval?
+    ///
+    /// The `didSet` rather than a call at each of the four sites that assign
+    /// this. Missing one is precisely the bug being fixed here: `pendingRemoval`
+    /// was honoured by the rows of one section and by nothing else, so every
+    /// other surface in the app spent the window offering a file that was about
+    /// to be deleted.
+    public private(set) var pendingRemoval: PendingRemoval? {
+        didSet { applyPendingRemovalToDownloadedSet() }
+    }
     private var pendingRemovalTask: Task<Void, Never>?
 
     /// How long the toast stands.
@@ -1673,8 +1760,10 @@ public final class AppModel {
             // offset to that same file — a resume at 50% seeked minutes in
             // instead of hours, and then persisted the double-counted clock.
             let content = BookContentService(client: session.client)
+            // Through the model, so an audiobook inside its undo window is
+            // streamed rather than played from a file about to be deleted.
             let playableAsOneFile = manifest.playableTracks.count == 1
-                && content.isDownloaded(book, format: .audiobook)
+                && isDownloaded(book, format: .audiobook)
             let source: AudiobookCoordinator.Source = playableAsOneFile
                 ? .local(content.localURL(for: book, format: .audiobook))
                 : .streaming(
@@ -1910,7 +1999,11 @@ public final class AppModel {
         guard let session, let downloads else { throw StorytellerError.notAuthenticated }
         let content = BookContentService(client: session.client)
         let destination = content.localURL(for: book, format: format)
-        if content.isDownloaded(book, format: format) { return destination }
+        // Through the model: the bytes of an edition inside its undo window are
+        // still on disk, and returning them here would hand the reader a book
+        // that is deleted from under them six seconds later. Falling through
+        // takes the download path, which cancels that removal first.
+        if isDownloaded(book, format: format) { return destination }
 
         let job = DownloadManager.Job(bookUUID: book.uuid, format: format)
         // `download` can refuse to start at all — the Wi-Fi-only guard, most

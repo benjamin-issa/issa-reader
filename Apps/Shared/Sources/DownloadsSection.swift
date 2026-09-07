@@ -70,21 +70,52 @@ struct DownloadsSection: View {
         placement == .reading ? Array(items.prefix(Self.readingRowLimit)) : items
     }
 
+    /// What the scan below depends on, spelled so that any change to it is a
+    /// change to the key.
+    ///
+    /// Counts, and only counts, until now — and a count is exactly the wrong
+    /// shape for this. Removing one edition of a two-edition book changes no
+    /// count at all: `downloadedUUIDs` is keyed by book and still contains it,
+    /// and the transfer list never held it. So the row stayed on screen with
+    /// its old size and the header's total stayed wrong, until something else
+    /// happened to move a number. On the Apple TV, which has no undo window and
+    /// so no `removing` to change either, there was nothing else.
+    ///
+    /// `downloadsRevision` is the fix: the model bumps it whenever it has
+    /// reason to think the directory changed, which is the only thing that can
+    /// see a removal a count cannot. The transfer list is keyed on its jobs
+    /// rather than its length for the same reason — one transfer finishing as
+    /// another starts is a change of no length at all.
     private struct RefreshKey: Equatable {
+        let revision: Int
         let downloaded: Int
         let books: Int
-        let pending: Int
+        let jobs: [DownloadManager.Job]
         let removing: String?
+    }
+
+    /// Whether any transfer is on screen above the rows. Both the heading and
+    /// the empty state below depend on it, and they must agree.
+    private var showsTransfers: Bool {
+        placement == .manage && !app.downloadsPending.isEmpty
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Metrics.spacing8) {
-            header
-            if placement == .manage, !app.downloadsPending.isEmpty {
+            if showsTransfers {
+                // The heading the rewire onto this shared component dropped.
+                // Without it the transfer rows sat directly under "Downloaded",
+                // labelled as the thing they are on their way to becoming.
+                Text("Downloading").overlineStyle()
                 transfers
             }
+            header
             if items.isEmpty {
-                emptyState
+                // Not while transfers are listed above. "Nothing on this
+                // device" under three moving progress bars is the screen
+                // contradicting itself, and it is the state a reader is most
+                // likely to be looking at — they have just started a download.
+                if !showsTransfers { emptyState }
             } else {
                 hint
                 rows
@@ -104,9 +135,10 @@ struct DownloadsSection: View {
 
     private var refreshKey: RefreshKey {
         RefreshKey(
+            revision: app.downloadsRevision,
             downloaded: app.downloadedUUIDs.count,
             books: app.books.count,
-            pending: app.downloadsPending.count,
+            jobs: app.downloadsPending.map(\.job),
             removing: app.pendingRemoval?.id,
         )
     }
@@ -662,10 +694,32 @@ private struct DownloadRemovalToast: ViewModifier {
                 .safeAreaPadding(.bottom)
                 .transition(.move(edge: .bottom).combined(with: .opacity))
                 .accessibilityElement(children: .contain)
-                .accessibilityAddTraits(.isModal)
+                // Emphatically **not** `.isModal`. That trait tells VoiceOver
+                // that nothing outside this element exists, and it was on a
+                // toast that stands for six seconds and then disappears — so a
+                // VoiceOver reader could not read or reach anything else on the
+                // screen for the whole window, including the list the toast is
+                // reporting on. A transient overlay is an addition to a screen,
+                // not a replacement for one.
+                //
+                // `.accessibilitySortPriority` instead: the toast is announced
+                // and reachable first, which is what the trait was reaching for,
+                // without any of it becoming unreachable.
+                .accessibilitySortPriority(1)
+                .accessibilityLabel("Removed \(pending.title)")
+                .accessibilityHint("Undo is available for a few seconds")
             }
             #endif
         }
         .animation(.snappy, value: app.pendingRemoval)
+        // Said out loud, because the row simply vanished and nothing announced
+        // why. `.isModal` moved the cursor onto the toast, which was the only
+        // thing making it noticeable at all — so removing the trait without
+        // this would have made the removal silent.
+        .onChange(of: app.pendingRemoval) { _, pending in
+            guard let pending else { return }
+            AccessibilityNotification.Announcement("Removed \(pending.title). Undo is available.")
+                .post()
+        }
     }
 }

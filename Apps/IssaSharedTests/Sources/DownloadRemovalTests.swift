@@ -32,6 +32,14 @@ struct DownloadRemovalTests {
     private static func booksDirectory() throws -> URL {
         let directory = BookContentService.defaultDirectory()
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        // One test below makes this directory unreadable on purpose, and
+        // restores it in a `defer`. A run killed between those two — a stopped
+        // test, a crashed process — would otherwise leave the simulator's
+        // container locked and every later run failing at launch, on a fault
+        // with nothing to do with the code being tested. Repaired here, where
+        // every test in the suite passes through.
+        try? FileManager.default.setAttributes(
+            [.posixPermissions: 0o755], ofItemAtPath: directory.path)
         return directory
     }
 
@@ -446,6 +454,59 @@ struct DownloadRemovalTests {
         #expect(!Self.exists(firstFile), "the first window closed when the second opened")
         #expect(Self.exists(secondFile))
         #expect(app.pendingRemoval?.bookUUID == second)
+        app.commitPendingRemoval()
+    }
+
+    /// The window was visible to the rows of one section and to nothing else.
+    ///
+    /// `downloadedUUIDs` is what the offline shelf filters on, what CarPlay's
+    /// catalogue is built from and what the library's arrangement sorts by, and
+    /// for the whole six seconds it went on reporting the edition as present.
+    /// So every surface but the one the reader was looking at offered a book
+    /// whose file was about to be deleted; in a car, in a tunnel, that is
+    /// silence, and `CarPlaySceneDelegate` says so in as many words.
+    @Test("an edition inside its undo window is off the device everywhere")
+    func theUndoWindowIsVisibleToEverySurface() throws {
+        let app = AppModel(keychain: InMemoryTokens())
+        let uuid = Self.freshUUID()
+        let file = try Self.plant(uuid, format: .ebook)
+        defer { try? FileManager.default.removeItem(at: file) }
+        app.refreshDownloadedSet()
+        #expect(app.downloadedUUIDs.contains(uuid))
+        #expect(app.isDownloaded(bookUUID: uuid, format: .ebook))
+
+        app.removeDownload(bookUUID: uuid, format: .ebook, title: "Dracula",
+                           undoWindow: .seconds(600))
+
+        #expect(!app.downloadedUUIDs.contains(uuid),
+                "the car was still being offered a book about to be deleted")
+        #expect(!app.isDownloaded(bookUUID: uuid, format: .ebook))
+        #expect(Self.exists(file), "and the bytes are still there, which is the point")
+
+        app.undoPendingRemoval()
+        #expect(app.downloadedUUIDs.contains(uuid), "undo puts it back with no fetch")
+        #expect(app.isDownloaded(bookUUID: uuid, format: .ebook))
+    }
+
+    /// Keyed by book, so a book that has lost one of two editions is still on
+    /// the device — the same rule `DownloadsInventory.departed` states. Taking
+    /// the whole book out of the set here would empty its row from the shelf
+    /// while the read-along it still has sat on disk.
+    @Test("a book with a second edition stays on the device during the window")
+    func aSecondEditionKeepsTheBookOnTheShelf() throws {
+        let app = AppModel(keychain: InMemoryTokens())
+        let uuid = Self.freshUUID()
+        let ebook = try Self.plant(uuid, format: .ebook)
+        let readaloud = try Self.plant(uuid, format: .readaloud, bytes: 64)
+        defer { for url in [ebook, readaloud] { try? FileManager.default.removeItem(at: url) } }
+        app.refreshDownloadedSet()
+
+        app.removeDownload(bookUUID: uuid, format: .ebook, title: "Dracula",
+                           undoWindow: .seconds(600))
+
+        #expect(app.downloadedUUIDs.contains(uuid), "the read-along is still on the device")
+        #expect(!app.isDownloaded(bookUUID: uuid, format: .ebook), "but this edition is going")
+        #expect(app.isDownloaded(bookUUID: uuid, format: .readaloud))
         app.commitPendingRemoval()
     }
 

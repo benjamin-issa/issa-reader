@@ -182,11 +182,23 @@ public struct BookContentService: Sendable {
     /// the file goes, and answering from it here would answer about the world
     /// one step ago.
     public static func hasDownloadedText(bookUUID: String, in directory: URL? = nil) -> Bool {
+        downloadedFormats(bookUUID: bookUUID, in: directory).contains(where: \.carriesText)
+    }
+
+    /// Which of this book's editions have a file on disk. Three `stat`s at most.
+    ///
+    /// Never for a whole library — that is what `downloadedBookUUIDs` and its
+    /// single directory read are for. This is for the two questions that are
+    /// about one book and need the format: what a removal leaves behind, and
+    /// whether the edition a screen is offering is still going to be there.
+    public static func downloadedFormats(
+        bookUUID: String, in directory: URL? = nil,
+    ) -> Set<Format> {
         let directory = directory ?? defaultDirectory()
-        return Format.allCases.filter(\.carriesText).contains {
+        return Set(Format.allCases.filter {
             FileManager.default.fileExists(
                 atPath: localURL(in: directory, bookUUID: bookUUID, format: $0).path)
-        }
+        })
     }
 
     /// The best format available for reading: the aligned edition when the
