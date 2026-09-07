@@ -50,12 +50,36 @@ public enum VolumeTrim {
 
     /// The nearest legal level.
     ///
-    /// Snapped before it is clamped, because both ends have to hold: a slider
-    /// with a `step` still hands back the odd unsnapped value while a drag is in
-    /// flight, and a nudge or a restored preference can arrive from outside the
-    /// range entirely.
+    /// Both ends have to hold: a slider with a `step` still hands back the odd
+    /// unsnapped value while a drag is in flight, and a nudge or a restored
+    /// preference can arrive from outside the range entirely.
+    ///
+    /// **Clamped first, and snapped in `Int`.** This read
+    /// `Int((Double(decibels) / Double(step)).rounded()) * step` before the
+    /// clamp, which trapped instead of clamping at the magnitudes it exists to
+    /// sanitise: `Double(Int.max)` rounds *up* to 9223372036854775808, one past
+    /// `Int.max`, and `Int(_:)` on that is an uncatchable crash — the same
+    /// defect `Double.wholeSeconds` documents, on the launch path this time.
+    /// `PlaybackSettings.volumeTrims(in:)` runs every stored level through here
+    /// while the app is starting, off a `[String: Int]` decoded from App Group
+    /// defaults, so `Int.max` is a file on disk away and the crash is before
+    /// the first frame.
+    ///
+    /// The clamp cannot be moved *after* the snap either, because that is the
+    /// order that trapped. Clamping first bounds every operand below to ±8, so
+    /// nothing here can overflow, and the second clamp is what keeps the answer
+    /// legal if `range`'s ends ever stop being multiples of `step`.
     public static func clamped(_ decibels: Int) -> Int {
-        let snapped = Int((Double(decibels) / Double(step)).rounded()) * step
+        let bounded = Swift.min(Swift.max(decibels, range.lowerBound), range.upperBound)
+        // A step of one snaps nothing — every `Int` is already on the ladder —
+        // and returning here is also what keeps the remainder below from being
+        // a division by zero.
+        guard step > 1 else { return bounded }
+        let remainder = bounded % step
+        guard remainder != 0 else { return bounded }
+        // Away from zero on a tie, which is what `Double.rounded()` did.
+        let carry = abs(remainder) * 2 >= step ? (bounded < 0 ? -step : step) : 0
+        let snapped = bounded - remainder + carry
         return Swift.min(Swift.max(snapped, range.lowerBound), range.upperBound)
     }
 

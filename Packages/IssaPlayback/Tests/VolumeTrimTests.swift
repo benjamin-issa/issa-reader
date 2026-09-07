@@ -115,6 +115,54 @@ struct VolumeTrimTests {
         #expect(VolumeTrim.range.contains(VolumeTrim.decibels(forLegacyPercent: percent)))
     }
 
+    /// The magnitudes `clamped` exists to sanitise, which it used to crash on.
+    ///
+    /// It converted through `Double` before clamping, and `Double(Int.max)`
+    /// rounds up to 9223372036854775808 — one past `Int.max` — so `Int(_:)`
+    /// trapped. Not hypothetical: `PlaybackSettings.volumeTrims(in:)` runs
+    /// every stored level through here while the app is starting, off a
+    /// `[String: Int]` decoded from App Group defaults, so the crash is on the
+    /// launch path and a hand-edited or truncated blob is all it takes.
+    ///
+    /// A trap cannot be caught, so these assertions are the test: the process
+    /// reaching the `#expect` at all is the thing being asserted.
+    @Test("a level no control could produce is clamped, not crashed on", arguments: [
+        Int.max, Int.min, Int.max - 1, Int.min + 1,
+        Int(Int32.max), Int(Int32.min), 9_007_199_254_740_993, -9_007_199_254_740_993,
+        1_000_000, -1_000_000, 9, -9,
+    ])
+    func clampsRatherThanTrapping(stored: Int) {
+        let legal = VolumeTrim.clamped(stored)
+        #expect(VolumeTrim.range.contains(legal))
+        #expect(VolumeTrim.ladder.contains(legal), "\(stored) landed off the ladder at \(legal)")
+        #expect(legal == (stored > 0 ? VolumeTrim.range.upperBound : VolumeTrim.range.lowerBound)
+            || VolumeTrim.range.contains(stored))
+    }
+
+    /// The two ends specifically, because they are the values a corrupted blob
+    /// is most likely to hold and the exact pair the old arithmetic died on.
+    @Test("the extremes land on the ends of the slider")
+    func extremesLandOnTheEnds() {
+        #expect(VolumeTrim.clamped(Int.max) == 8)
+        #expect(VolumeTrim.clamped(Int.min) == -8)
+        // And through the two callers that hand a stored number straight on.
+        #expect(VolumeTrim.gain(Int.max) == VolumeTrim.gainRange.upperBound)
+        #expect(VolumeTrim.gain(Int.min) == VolumeTrim.gainRange.lowerBound)
+        #expect(VolumeTrim.label(Int.max) == "+8 dB")
+        #expect(VolumeTrim.spoken(Int.min) == "8 decibels quieter")
+    }
+
+    /// The legacy key holds an `Int` too, and it is read on the same launch.
+    /// `1 + Double(Int.max) / 100` is finite, so the conversion below it has to
+    /// hold as well.
+    @Test("a stored percentage no control could produce converts without trapping", arguments: [
+        Int.max, Int.min, Int.max - 1, Int.min + 1, 1_000_000, -1_000_000,
+    ])
+    func legacyPercentDoesNotTrap(percent: Int) {
+        let legal = VolumeTrim.decibels(forLegacyPercent: percent)
+        #expect(VolumeTrim.range.contains(legal))
+    }
+
     @Test("the label reads as recorded at zero and signs itself either side")
     func labels() {
         #expect(VolumeTrim.label(0) == "As recorded")
