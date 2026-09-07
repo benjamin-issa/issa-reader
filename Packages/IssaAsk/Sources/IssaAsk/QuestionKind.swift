@@ -201,7 +201,14 @@ struct Vocabulary: Sendable {
     var tagged: Set<String> = []
 
     func isName(_ token: String) -> Bool {
-        tagged.contains(token) || known.contains(token)
+        // The one choke point both lists funnel through, so `QueryTerms.bookRoles`
+        // is enforced here rather than at each of the three call sites. Gutenberg
+        // prints "**Author**: Benjamin Franklin" on its own header page, so
+        // `author` really is in a Franklin index's name table — and without this
+        // the book's own boilerplate teaches the classifier that "the author" is
+        // somebody it has met.
+        guard !QueryTerms.isBookRole(token) else { return false }
+        return tagged.contains(token) || known.contains(token)
             || known.contains { $0.hasPrefix(token + " ") || $0.hasSuffix(" " + token) }
     }
 
@@ -289,7 +296,14 @@ enum QuestionReader {
         var ownerIndex: Int?
         var scan = kinIndex - 1
         while scan >= 0, kinshipAdjectives.contains(words[scan].token) { scan -= 1 }
-        if scan >= 0, words[scan].isPossessive { ownerIndex = scan }
+        // The possessive alone is not enough. "Who is the author's father?"
+        // made `author` the owner, so every passage had to contain the word,
+        // and a Gutenberg memoir answered from its own boilerplate — see
+        // `QueryTerms.bookRoles`. Rejecting the owner drops through to the
+        // general path, which ranks the kinship group and finds Josiah.
+        if scan >= 0, words[scan].isPossessive, !QueryTerms.isBookRole(words[scan].token) {
+            ownerIndex = scan
+        }
 
         // "the brother of Vin".
         if ownerIndex == nil, kinIndex + 2 < words.count, words[kinIndex + 1].token == "of" {
@@ -382,7 +396,15 @@ enum QuestionReader {
         // ("What is Alice's cat called?"), not about who somebody is.
         guard !rest.contains(where: \.isPossessive) else { return nil }
 
-        let content = rest.filter { !QueryTerms.stopWords.contains($0.token) && $0.token.count > 1 }
+        // `bookRoles` dropped here rather than rejected outright, so "Who is
+        // the author of Frankenstein?" still asks about Frankenstein while
+        // "Who is the author?" is left with nothing and falls through to the
+        // general path — which is the sensible degradation, rather than a name
+        // lookup for a word that names nobody the book introduced.
+        let content = rest.filter {
+            !QueryTerms.stopWords.contains($0.token) && $0.token.count > 1
+                && !QueryTerms.isBookRole($0.token)
+        }
         guard !content.isEmpty, content.count <= maximumSubjectTokens else { return nil }
         // "Who is the brother?" names nobody: requiring `brother` of every
         // passage would be a search dressed up as a name lookup, and BM25 with
@@ -406,7 +428,12 @@ enum QuestionReader {
     /// Never bare capitalisation. "Is Alice British?" would otherwise search
     /// for `british` as a required token and find nothing.
     static func generalSubject(in words: [Words.Word], vocabulary: Vocabulary) -> Subject? {
-        if let owner = words.first(where: \.isPossessive) {
+        // Never a `bookRoles` owner: "What happened to the author's son?" is
+        // the reported bug, and the possessive is what made `author` the
+        // subject every passage had to contain.
+        if let owner = words.first(where: {
+            $0.isPossessive && !QueryTerms.isBookRole($0.token)
+        }) {
             return subject(from: [owner], vocabulary: vocabulary)
         }
         if let found = words.first(where: { vocabulary.isName($0.token) }) {
@@ -455,6 +482,10 @@ enum QuestionReader {
     static func isNameLike(_ word: Words.Word, at index: Int, vocabulary: Vocabulary) -> Bool {
         guard !QueryTerms.stopWords.contains(word.token), word.token.count > 1 else { return false }
         guard !QueryTerms.capitalisedNonNames.contains(word.token) else { return false }
+        // "the Author" is capitalised in plenty of prefaces, and the
+        // capitalisation clause below would take it for a name on that alone.
+        // See `QueryTerms.bookRoles`.
+        guard !QueryTerms.isBookRole(word.token) else { return false }
         if vocabulary.isName(word.token) { return true }
         return word.isCapitalised && index > 0
     }
