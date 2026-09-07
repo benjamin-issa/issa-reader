@@ -142,8 +142,11 @@ struct DownloadInterruptionTests {
         #expect(subject.hasTask(for: job))
 
         // The daemon reclaims the transfer: a cancellation nobody asked for.
+        // Stamped as the manager would stamp the task it just started, or the
+        // fence below would discard it as a straggler from before the cancel
+        // and this test would pass without touching the marker at all.
         let task = URLSession.shared.downloadTask(with: URL(string: "http://example.test/file")!)
-        task.taskDescription = DownloadManager.encode(job)
+        task.taskDescription = subject.liveTaskDescription(for: job)
         subject.urlSession(
             URLSession.shared, task: task,
             didCompleteWithError: NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled))
@@ -243,14 +246,135 @@ struct DownloadInterruptionTests {
         await subject.shutDown()
     }
 
+    /// The residual half of "stop a deleted download coming back".
+    ///
+    /// `stop()` advances the fence and `cancel(_:)` did not, so a completion
+    /// callback already in flight when a single cancel landed still passed it:
+    /// `didFinishDownloadingTo` moves the file into place *before* it hops to
+    /// the actor — it has to, the temporary file is deleted the moment it
+    /// returns — so the file arrived in the directory the removal had just
+    /// emptied, and `onFinished` put the book back on the shelf. The reader
+    /// deleted a download and watched it reappear.
+    ///
+    /// Asserted on the file and on `onFinished`, because those are the two
+    /// things that actually reached the reader; the state row was already
+    /// cleared by `cancel` and would have looked right either way.
+    @Test("a completion already in flight cannot land after its job was cancelled")
+    func cancelFencesTheCompletionInFlight() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "issa-cancel-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let books = root.appending(path: "Books", directoryHint: .isDirectory)
+        let subject = DownloadManager(
+            baseURL: URL(string: "http://example.test")!,
+            tokens: StubTokens(),
+            identifier: "test.\(UUID().uuidString)",
+            destinationFor: { job in books.appending(path: "\(job.bookUUID).epub") },
+        )
+        let job = DownloadManager.Job(bookUUID: "b", format: .readaloud)
+        await subject.start(job)
+        // The stamp the real task carries — taken before the cancel, which is
+        // exactly the position a callback already in flight is in.
+        let inFlight = subject.liveTaskDescription(for: job)
+
+        var finished: [DownloadManager.Job] = []
+        subject.onFinished = { finished.append($0) }
+
+        subject.cancel(job)
+
+        let arrived = root.appending(path: "arrived.tmp")
+        try Data("book".utf8).write(to: arrived)
+        let task = URLSession.shared.downloadTask(with: URL(string: "http://example.test/file")!)
+        task.taskDescription = inFlight
+        subject.urlSession(URLSession.shared, downloadTask: task, didFinishDownloadingTo: arrived)
+        for _ in 0 ..< 5 { await Task.yield() }
+
+        #expect(!FileManager.default.fileExists(atPath: books.path),
+                "the cancelled transfer moved its file into place anyway")
+        #expect(finished.isEmpty, "onFinished would have put the book back on the shelf")
+        #expect(subject.state(for: job) == nil, "no row for a transfer the reader stopped")
+        await subject.shutDown()
+    }
+
+    /// One cancel must not strand every other transfer. The fence is per job
+    /// precisely because the global number is what all the live tasks carry —
+    /// advancing that here would leave each of them unable to finish, with its
+    /// row stuck at "downloading" and its file never moved into place.
+    @Test("cancelling one download leaves the others' callbacks live")
+    func cancelDoesNotFenceOtherJobs() async {
+        let subject = manager()
+        let cancelled = DownloadManager.Job(bookUUID: "b", format: .ebook)
+        let other = DownloadManager.Job(bookUUID: "c", format: .readaloud)
+        await subject.start(cancelled)
+        await subject.start(other)
+        let othersStamp = subject.liveTaskDescription(for: other)
+
+        subject.cancel(cancelled)
+
+        let task = URLSession.shared.downloadTask(with: URL(string: "http://example.test/file")!)
+        task.taskDescription = othersStamp
+        subject.urlSession(
+            URLSession.shared, downloadTask: task,
+            didWriteData: 512, totalBytesWritten: 512, totalBytesExpectedToWrite: 1_024)
+        for _ in 0 ..< 5 { await Task.yield() }
+
+        #expect(subject.state(for: other)?.isActive == true,
+                "the other transfer was fenced out by a cancel that was not its own")
+        await subject.shutDown()
+    }
+
+    /// A restart of the same job takes the new number, so the transfer the
+    /// reader asked for is live while the one they cancelled is not. This is
+    /// why the fence is a counter rather than a set of cancelled jobs.
+    @Test("restarting a cancelled job makes its own callbacks live again")
+    func restartingAfterCancelIsLive() async {
+        let subject = manager()
+        let job = DownloadManager.Job(bookUUID: "b", format: .ebook)
+        await subject.start(job)
+        let stale = subject.liveTaskDescription(for: job)
+
+        subject.cancel(job)
+        await subject.start(job)
+        let fresh = subject.liveTaskDescription(for: job)
+        #expect(stale != fresh, "the two transfers have to be tellable apart")
+
+        let old = URLSession.shared.downloadTask(with: URL(string: "http://example.test/file")!)
+        old.taskDescription = stale
+        subject.urlSession(
+            URLSession.shared, downloadTask: old,
+            didWriteData: 512, totalBytesWritten: 512, totalBytesExpectedToWrite: 1_024)
+        for _ in 0 ..< 5 { await Task.yield() }
+        #expect(subject.state(for: job) == .queued, "the cancelled transfer still reported progress")
+
+        let new = URLSession.shared.downloadTask(with: URL(string: "http://example.test/file")!)
+        new.taskDescription = fresh
+        subject.urlSession(
+            URLSession.shared, downloadTask: new,
+            didWriteData: 512, totalBytesWritten: 512, totalBytesExpectedToWrite: 1_024)
+        for _ in 0 ..< 5 { await Task.yield() }
+        #expect(subject.state(for: job)?.isActive == true)
+        await subject.shutDown()
+    }
+
     @Test("a stamped task description still decodes to its job")
     func stampedDescriptionsDecode() {
         let job = DownloadManager.Job(bookUUID: "b", format: .readaloud)
         let stamped = DownloadManager.encode(job, generation: 7)
         #expect(DownloadManager.decode(stamped) == job)
         #expect(DownloadManager.decodeStamped(stamped)?.generation == 7)
+        #expect(DownloadManager.decodeStamped(stamped)?.epoch == 0)
         #expect(DownloadManager.decodeStamped(DownloadManager.encode(job))?.generation == 0)
         #expect(DownloadManager.decode("b|readaloud|x") == nil)
+
+        // Both numbers, and a description from a build that knew of neither.
+        let fenced = DownloadManager.encode(job, generation: 7, epoch: 3)
+        #expect(DownloadManager.decode(fenced) == job)
+        #expect(DownloadManager.decodeStamped(fenced)?.generation == 7)
+        #expect(DownloadManager.decodeStamped(fenced)?.epoch == 3)
+        #expect(DownloadManager.decodeStamped("b|readaloud")?.epoch == 0,
+                "a task started by an older build still has to be reattachable")
+        #expect(DownloadManager.decode("b|readaloud|1|x") == nil)
     }
 }
 

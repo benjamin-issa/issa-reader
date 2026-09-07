@@ -449,6 +449,92 @@ struct DownloadRemovalTests {
         app.commitPendingRemoval()
     }
 
+    /// The X on a transfer row says "Cancel" and is drawn on a progress bar,
+    /// and it ran a whole book's removal — so cancelling a download started by
+    /// mistake released the publisher face and question index of a *different*
+    /// edition of that book already on the device. A tap on a cross belonging
+    /// to a bar that has not finished is not a decision about anything the
+    /// reader already has.
+    @Test("cancelling a transfer leaves the book's other edition untouched")
+    func cancellingATransferIsNotABookRemoval() throws {
+        let app = AppModel(keychain: InMemoryTokens())
+        let uuid = Self.freshUUID()
+        let ebook = try Self.plant(uuid, format: .ebook)
+        defer { try? FileManager.default.removeItem(at: ebook) }
+
+        let extracted = CustomFonts.extractedDirectory(bookUUID: uuid)
+        try FileManager.default.createDirectory(at: extracted, withIntermediateDirectories: true)
+        let face = extracted.appending(path: "body.otf")
+        try Data("face".utf8).write(to: face)
+        defer { try? FileManager.default.removeItem(at: extracted) }
+
+        app.refreshDownloadedSet()
+        #expect(app.downloadedUUIDs.contains(uuid))
+
+        // The read-along the reader started by accident. No file for it, which
+        // is what a transfer still running looks like on disk.
+        app.cancelDownload(DownloadManager.Job(bookUUID: uuid, format: .readaloud))
+
+        #expect(Self.exists(ebook), "the edition already on the device is not what was cancelled")
+        #expect(Self.exists(face), "the face belongs to the ebook, which nobody asked to remove")
+        #expect(app.downloadedUUIDs.contains(uuid))
+    }
+
+    /// Restarting a download inside the undo window is the reader changing
+    /// their mind, and nothing was telling the window that.
+    ///
+    /// The timer was armed by the removal and never disarmed, so the file the
+    /// new transfer was arriving into was deleted six seconds later by a
+    /// decision the reader had already reversed. On screen it looked like a
+    /// download that simply stopped: no error, because from the app's point of
+    /// view nothing had failed.
+    @Test("starting a download takes back a removal still inside its window")
+    func startingADownloadCancelsAPendingRemoval() async throws {
+        let app = AppModel(keychain: InMemoryTokens())
+        let uuid = Self.freshUUID()
+        let file = try Self.plant(uuid, format: .ebook)
+        defer { try? FileManager.default.removeItem(at: file) }
+        app.refreshDownloadedSet()
+
+        app.removeDownload(bookUUID: uuid, format: .ebook, title: "Dracula",
+                           undoWindow: .seconds(600))
+        #expect(app.pendingRemoval?.bookUUID == uuid)
+
+        // No session, so no transfer actually starts — `download` returns false
+        // at the `downloads` guard. The pending removal has to be taken back
+        // before that point is even reached, because the tap is the statement.
+        await app.resumeDownload(DownloadManager.Job(bookUUID: uuid, format: .ebook))
+
+        #expect(app.pendingRemoval == nil, "the window is still armed over a book being fetched")
+        app.commitPendingRemoval()
+        #expect(Self.exists(file), "the window closed on a removal the reader had reversed")
+    }
+
+    /// Only the same edition. A removal of one book says nothing about a
+    /// download of another, and clearing the window on any download at all
+    /// would make the toast lie about what it is holding.
+    @Test("starting a different download leaves the window alone")
+    func adifferentDownloadLeavesTheWindowAlone() async throws {
+        let app = AppModel(keychain: InMemoryTokens())
+        let removed = Self.freshUUID()
+        let other = Self.freshUUID()
+        let file = try Self.plant(removed, format: .ebook)
+        defer { try? FileManager.default.removeItem(at: file) }
+        app.refreshDownloadedSet()
+
+        app.removeDownload(bookUUID: removed, format: .ebook, title: "Dracula",
+                           undoWindow: .seconds(600))
+        await app.resumeDownload(DownloadManager.Job(bookUUID: other, format: .ebook))
+        #expect(app.pendingRemoval?.bookUUID == removed)
+
+        // And the same book in a different edition is a different job too.
+        await app.resumeDownload(DownloadManager.Job(bookUUID: removed, format: .readaloud))
+        #expect(app.pendingRemoval?.bookUUID == removed)
+
+        app.commitPendingRemoval()
+        #expect(!Self.exists(file))
+    }
+
     /// A timer that fired after the account had gone would delete a file
     /// belonging to whoever signed in next.
     @Test("signing out closes an open undo window first")

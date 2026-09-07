@@ -906,6 +906,30 @@ public final class AppModel {
         refreshDownloadedSet()
     }
 
+    /// Stops a transfer that has not finished, and takes nothing else with it.
+    ///
+    /// The X on a transfer row called `removeDownload`, which is a *book*
+    /// removal: it released the publisher face and the question index as well.
+    /// So cancelling a download started by mistake destroyed derived data
+    /// belonging to a different edition of that book already on the device —
+    /// the reader tapped a cross on a progress bar and lost the index of the
+    /// copy they were reading.
+    ///
+    /// What a cancel legitimately touches is this job: the transfer, its row,
+    /// and its own file if one somehow landed. `DownloadManager.cancel` fences
+    /// the job's in-flight completion, so a file that arrives immediately after
+    /// this is discarded rather than moved into place.
+    ///
+    /// The file is removed rather than assumed absent because a transfer can
+    /// complete between the tap and this line, and a download the reader
+    /// stopped must not be left on the device unmentioned.
+    public func cancelDownload(_ job: DownloadManager.Job) {
+        downloads?.cancel(job)
+        downloads?.clear(job)
+        BookContentService.removeDownload(bookUUID: job.bookUUID, format: job.format)
+        refreshDownloadedSet()
+    }
+
     /// Everything a download leaves behind on disk once its file has gone.
     ///
     /// Idempotent — every step is "remove it if it is there" — because it runs
@@ -1056,6 +1080,26 @@ public final class AppModel {
             guard !Task.isCancelled else { return }
             self?.commitPendingRemoval()
         }
+    }
+
+    /// Takes back a pending removal when the very edition it is holding starts
+    /// downloading again.
+    ///
+    /// Nothing cleared `pendingRemoval` when a transfer began, so a download
+    /// restarted inside the six-second window was cancelled and deleted the
+    /// moment the window closed — by a timer armed before the reader changed
+    /// their mind. On screen it looked like a download that simply stopped:
+    /// the row appeared, the bar moved, and then both were gone with no error
+    /// anywhere, because from the app's point of view nothing had failed.
+    ///
+    /// Starting a download of an edition is the clearest possible statement
+    /// that it should be on the device, so it wins over a removal that has not
+    /// happened yet. Only for the same job: a removal of one book has nothing
+    /// to say about a download of another.
+    private func cancelPendingRemoval(matching job: DownloadManager.Job) {
+        guard pendingRemoval?.bookUUID == job.bookUUID,
+              pendingRemoval?.format == job.format else { return }
+        undoPendingRemoval()
     }
 
     /// Puts the row back. Nothing was deleted, so there is nothing to fetch.
@@ -1926,6 +1970,7 @@ public final class AppModel {
     /// free-space check still has an expected size to work with.
     public func resumeDownload(_ job: DownloadManager.Job) async {
         guard let book = books.first(where: { $0.uuid == job.bookUUID }) else {
+            cancelPendingRemoval(matching: job)
             await downloads?.start(job)
             return
         }
@@ -1959,7 +2004,12 @@ public final class AppModel {
             loadError = "Waiting for Wi-Fi to download this."
             return false
         }
-        await downloads.start(.init(bookUUID: book.uuid, format: format), expectedBytes: expected)
+        let job = DownloadManager.Job(bookUUID: book.uuid, format: format)
+        // After the guard above, so a download the Wi-Fi rule refused does not
+        // quietly take back a removal it is not going to replace — but before
+        // the transfer starts, so the timer cannot fire between the two.
+        cancelPendingRemoval(matching: job)
+        await downloads.start(job, expectedBytes: expected)
         return true
     }
 

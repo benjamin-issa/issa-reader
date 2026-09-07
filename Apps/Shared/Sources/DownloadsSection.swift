@@ -411,10 +411,13 @@ struct DownloadsSection: View {
                 .accessibilityLabel("Resume")
             }
             Button {
-                // Through the model, not `downloads?.cancel`: a transfer that
-                // is part-way to disk has left a file, and everything that
-                // knows what else to remove lives in one method.
-                app.removeDownload(bookUUID: job.bookUUID, format: job.format)
+                // `cancelDownload`, not `removeDownload`: this button is
+                // labelled Cancel and drawn on a progress bar, and it was
+                // running a whole book's removal — releasing the publisher face
+                // and the question index of a *different* edition of the same
+                // book already on the device. Cancelling a download started by
+                // mistake is not a decision about anything the reader has.
+                app.cancelDownload(job)
             } label: {
                 Image(systemName: "xmark.circle").font(.system(size: 20))
             }
