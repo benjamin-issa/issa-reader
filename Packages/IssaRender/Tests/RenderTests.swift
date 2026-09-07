@@ -495,6 +495,136 @@ struct PageBoundaryTests {
     }
 }
 
+/// `highlightLines` and `lines(forRange:)` group text segments by the line they
+/// sit on, using `baselinePosition` — which is undocumented as to what it is
+/// measured from, so it is pinned here against real chapters rather than
+/// trusted. Get the grouping wrong the merging way and a mark spreads over a
+/// line the sentence does not cover; get it wrong the splitting way and one
+/// line is drawn as two padded rows, which is the doubly-composited seam this
+/// whole apparatus exists to remove.
+@Suite("Segments grouped into the lines they sit on")
+@MainActor
+struct SegmentLineTests {
+    /// Every group must be one band of type: its pieces overlap each other
+    /// almost entirely. And no two groups may be the same band, or one line has
+    /// been reported as two.
+    static func expectOneBandPerGroup(
+        _ lines: [[CGRect]], what: String,
+        sourceLocation: SourceLocation = #_sourceLocation,
+    ) {
+        for line in lines {
+            guard let first = line.first else {
+                Issue.record("\(what): an empty group", sourceLocation: sourceLocation)
+                continue
+            }
+            for rect in line.dropFirst() {
+                let overlap = min(first.maxY, rect.maxY) - max(first.minY, rect.minY)
+                #expect(overlap > min(first.height, rect.height) / 2,
+                        "\(what): \(rect) is not on the same line as \(first)",
+                        sourceLocation: sourceLocation)
+            }
+        }
+        let bands = lines.compactMap(\.first)
+        for outer in bands.indices {
+            for inner in bands.indices where inner > outer {
+                #expect(abs(bands[outer].midY - bands[inner].midY) > 1,
+                        "\(what): \(bands[outer]) and \(bands[inner]) are the same line in two groups",
+                        sourceLocation: sourceLocation)
+            }
+        }
+    }
+
+    /// Hundreds of real selections out of *Alice*, justified — which is where
+    /// TextKit actually splits a line, reporting the flush-right remainder of a
+    /// justified line as a second, near-zero-width segment on the same
+    /// baseline. 14 of 436 lines arrived split in the sweep this test was
+    /// written from; the count below keeps it from going quietly to zero.
+    @Test("every segment of one line of a real chapter comes back in one group")
+    func realChapterGroupsByLine() throws {
+        let url = try #require(Bundle.module.url(forResource: "Fixtures/alice", withExtension: "epub"))
+        let package = try EPUBPackage.open(url: url)
+        var found: HTMLContentParser.Result?
+        for item in package.spine {
+            let parsed = try HTMLContentParser(style: ReaderStyle(justified: true))
+                .parse(xhtml: try package.archive.read(item.href), baseHref: item.href)
+            if parsed.text.length > 4000 { found = parsed; break }
+        }
+        let content = try #require(found, "no long chapter found")
+        let layout = ChapterLayout(text: content.text, fragmentRanges: content.fragmentRanges)
+        layout.layout(pageSize: CGSize(width: 300, height: 480))
+
+        var split = 0
+        var groups = 0
+        for page in layout.pages.prefix(6) {
+            let end = page.characterRange.location + page.characterRange.length
+            for location in stride(from: page.characterRange.location, to: end, by: 37) {
+                let range = NSRange(location: location, length: min(140, end - location))
+                let lines = layout.lines(forRange: range, on: page)
+                guard !lines.isEmpty else { continue }
+                Self.expectOneBandPerGroup(lines, what: "selection at \(location)")
+                groups += lines.count
+                split += lines.count { $0.count > 1 }
+                // The flat wrapper is exactly the groups flattened, so no
+                // caller wanting geometry lost a rectangle to the grouping.
+                #expect(lines.flatMap { $0 } == layout.rects(forRange: range, on: page))
+            }
+        }
+        #expect(groups > 300, "the sweep should have covered plenty of lines (was \(groups))")
+        #expect(split >= 5, "no line arrived in more than one segment, so nothing was grouped")
+    }
+
+    /// The direct test of the assumption: one line, genuinely two segments,
+    /// with the split forced by a run TextKit cannot lay out in one piece.
+    ///
+    /// A run at a *different size* does not split a line — TextKit widens the
+    /// whole line's segment to 40 pt and reports one rectangle, which is why
+    /// the mixed-size case is not the fixture here. A direction change does
+    /// split it, and the two halves keep the same frame and the same baseline.
+    @Test("a line split by a run of the other direction is still one group")
+    func bidirectionalLineIsOneGroup() throws {
+        let font = PlatformFont.systemFont(ofSize: 18)
+        let text = NSMutableAttributedString(string: "He wrote ", attributes: [.font: font])
+        text.append(NSAttributedString(
+            string: "\u{05D0}\u{05D1}\u{05D2} \u{05D3}\u{05D4}", attributes: [.font: font]))
+        text.append(NSAttributedString(
+            string: " on the page and then went out for a very long walk indeed.",
+            attributes: [.font: font],
+        ))
+        let whole = NSRange(location: 0, length: text.length)
+        let layout = ChapterLayout(text: text, fragmentRanges: ["s0": whole])
+        layout.layout(pageSize: CGSize(width: 240, height: 560))
+        let page = try #require(layout.page(containingFragment: "s0"))
+
+        let lines = layout.highlightLines(forFragment: "s0", on: page)
+        #expect(lines.count == 3, "the fixture wraps onto three lines, was \(lines.count)")
+        Self.expectOneBandPerGroup(lines, what: "bidirectional line")
+        let first = try #require(lines.first)
+        #expect(first.count == 2, "the line either side of the direction change is two segments")
+        #expect(first[0].minY == first[1].minY, "and both sit on the same line")
+        #expect(lines.flatMap { $0 } == layout.highlightRects(forFragment: "s0", on: page))
+    }
+
+    /// The page-boundary guards run before the grouping, so a fragment that
+    /// leaves this page and comes back cannot file its first segment back on
+    /// the page under a line that was dropped.
+    @Test("a fragment crossing a page boundary groups only what the page keeps")
+    func groupsOnlyKeptSegments() throws {
+        let layout = try PageBoundaryTests.spannedParagraphLayout()
+        #expect(layout.pages.count > 3, "the fixture should span several pages")
+        for page in layout.pages {
+            let localBottom = page.contentBottom.isFinite
+                ? page.contentBottom - page.yOffset : CGFloat.greatestFiniteMagnitude
+            for id in layout.fragmentRanges.keys.sorted() {
+                let lines = layout.highlightLines(forFragment: id, on: page)
+                Self.expectOneBandPerGroup(lines, what: "page \(page.index), \(id)")
+                for rect in lines.flatMap({ $0 }) {
+                    #expect(rect.minY < localBottom)
+                }
+            }
+        }
+    }
+}
+
 // Not `.serialized`. This carried the trait with a note that it was what
 // stopped a CoreText deadlock at 0% CPU; the trait serialises cases within one
 // suite, not suites against each other, and the second review watched the

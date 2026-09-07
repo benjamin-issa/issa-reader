@@ -178,29 +178,6 @@ public final class AudioPlayer {
         #endif
     }
 
-    /// Gives the route back, and tells whoever we interrupted that they may
-    /// resume.
-    ///
-    /// `setActive(false)` appeared nowhere in this app, so the `.playback`
-    /// session stayed active for the life of the process: the Music or podcast
-    /// playback this app interrupted never received the `.ended` interruption
-    /// with `.shouldResume` — that notification is only generated when the
-    /// interrupting app deactivates with this option — and stayed silent until
-    /// the listener restarted it by hand.
-    ///
-    /// Deliberately not called from `pause()`. There are several `AudioPlayer`
-    /// instances alive at once — one per open reader plus the audiobook — and
-    /// exclusivity between them is enforced by pausing, not by tearing down. So
-    /// "this player stopped" is not "the app has stopped making sound", and only
-    /// `AppModel`, which owns all of them, can tell the difference. It calls
-    /// this; individual players must not.
-    static func deactivateAudioSession() {
-        #if os(iOS) || os(tvOS)
-        try? AVAudioSession.sharedInstance().setActive(
-            false, options: [.notifyOthersOnDeactivation])
-        #endif
-    }
-
     /// Handles the two things that stop audio without the app asking.
     ///
     /// A phone call interrupts; the system says when it is over and whether it
@@ -354,21 +331,34 @@ public final class AudioPlayer {
 
         player.removeAllItems()
         player.insert(item, after: nil)
-        // Both in one await: the tracks are wanted for the gain tap, and asking
-        // for them separately would be a second network round trip on every
-        // streamed track — and a second window in which a later `load` could
-        // overtake this one.
-        let loaded = try? await asset.load(.duration, .tracks)
+        // Both asked for at once: the tracks are wanted for the gain tap, and
+        // asking for them one after the other would be a second network round
+        // trip on every streamed track — and a second window in which a later
+        // `load` could overtake this one. Both requests are in flight before
+        // either is awaited, so this stays one round trip and one window, and
+        // the generation is re-checked exactly once below.
+        //
+        // Two of them rather than `load(.duration, .tracks)`, though, because
+        // that form is all-or-nothing: a track list that will not load — an
+        // HLS playlist, which `makeAudioMix`'s own doc anticipates — nilled the
+        // *duration* along with it, so the scrubber lost its length, "…m left"
+        // disappeared, and the end-of-track arithmetic ran against zero for an
+        // asset whose duration had resolved perfectly well. Caught one at a
+        // time, a `.tracks` failure costs the gain tap and nothing else.
+        async let loadingDuration = asset.load(.duration)
+        async let loadingTracks = asset.load(.tracks)
+        let loadedDuration = try? await loadingDuration
+        let loadedTracks = try? await loadingTracks
         guard generation == loadGeneration else { return false }
         // `?? 0` cannot catch NaN, and a streamed asset with an indefinite
         // duration reports exactly that.
-        let seconds = loaded?.0.seconds ?? 0
+        let seconds = loadedDuration?.seconds ?? 0
         duration = seconds.isFinite ? seconds : 0
         // Before the seek and the rate restore, so the first sample this item
         // plays is already at the book's level. Every read-along file and every
         // audiobook track passes through here, which is why a chapter change
         // needs no separate hook.
-        let audioTracks = (loaded?.1 ?? []).filter { $0.mediaType == .audio }
+        let audioTracks = (loadedTracks ?? []).filter { $0.mediaType == .audio }
         item.audioMix = gainTap.makeAudioMix(for: audioTracks)
         tapCarriesGain = item.audioMix != nil
         applyPlayerVolume()

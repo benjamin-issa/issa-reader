@@ -82,13 +82,22 @@ private struct HighlightBlockRenderer: TextRenderer {
         // Underneath the glyphs, in one fill, for the reason recorded on
         // `HighlightBlock`: two translucent fills that share an edge composite
         // to a darker band along it.
-        let marked = layout.flatMap { line in
-            line.filter { $0[HighlightMark.self] != nil }
-                .map(\.typographicBounds.rect)
-        }
+        //
+        // One array per `Text.Layout.Line`, not one flat list. This is the
+        // caller that has the line identity most plainly of all — the renderer
+        // is handed the lines — and flattening it threw the answer away: a run
+        // at a different size has its own `typographicBounds`, so a marked
+        // sentence carrying one arrived as a tall rectangle beside a short one,
+        // and the guess behind the flat call merged the line below in with them.
+        let marked = layout
+            .map { line in
+                line.filter { $0[HighlightMark.self] != nil }
+                    .map(\.typographicBounds.rect)
+            }
+            .filter { !$0.isEmpty }
         if !marked.isEmpty {
             context.fill(
-                Path(HighlightBlock.path(lineRects: marked, style: style)),
+                Path(HighlightBlock.path(lines: marked, style: style)),
                 with: .color(highlight),
             )
         }

@@ -174,6 +174,46 @@ struct HighlighterTests {
         #expect(try JSONDecoder().decode(HighlightTint.self, from: data) == tint)
     }
 
+    /// The clamp's own doc promises it covers "a NaN from a decoded blob", and
+    /// for as long as `Codable` was synthesised it did not: the decoder
+    /// assigned the stored `let`s straight from the container and the
+    /// initialiser never ran. A NaN component reaches a `Canvas` fill, which on
+    /// the page reads as the whole marked sentence disappearing — the reader's
+    /// own highlighter gone, with the settings swatch still showing it.
+    @Test("a blob carrying nonsense decodes to a colour that can be drawn")
+    func decodedTintIsClamped() throws {
+        let blob = Data(#"{"red":"nan","green":-3,"blue":1.5,"alpha":0.4}"#.utf8)
+        let decoder = JSONDecoder()
+        decoder.nonConformingFloatDecodingStrategy = .convertFromString(
+            positiveInfinity: "inf", negativeInfinity: "-inf", nan: "nan")
+        let tint = try decoder.decode(HighlightTint.self, from: blob)
+
+        #expect(tint.red == 0, "a NaN has no honest place on the range")
+        #expect(tint.green == 0)
+        #expect(tint.blue == 1)
+        #expect(tint.alpha == 0.4, "and the component that was fine is left alone")
+        for component in [tint.red, tint.green, tint.blue, tint.alpha] {
+            #expect(component.isFinite && component >= 0 && component <= 1)
+        }
+    }
+
+    /// The same blob one level up, since that is how it is actually stored: a
+    /// custom highlighter lives inside a `HighlighterChoice` inside
+    /// `readerStyle`.
+    @Test("and so does one nested in the choice that carries it")
+    func decodedChoiceIsClamped() throws {
+        let blob = Data(#"{"custom":{"red":2,"green":0.5,"blue":-1,"alpha":9}}"#.utf8)
+        let choice = try JSONDecoder().decode(HighlighterChoice.self, from: blob)
+        guard case let .custom(tint) = choice else {
+            Issue.record("expected a custom tint, got \(choice)")
+            return
+        }
+        #expect(tint.red == 1)
+        #expect(tint.green == 0.5)
+        #expect(tint.blue == 0)
+        #expect(tint.alpha == 1)
+    }
+
     @Test("a tint from the picker keeps the colour that was picked")
     func tintFromResolved() {
         let resolved = Color(.sRGB, red: 0.2, green: 0.4, blue: 0.6, opacity: 0.8)

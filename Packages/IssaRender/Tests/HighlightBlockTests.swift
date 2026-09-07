@@ -31,7 +31,33 @@ struct HighlightBlockTests {
     static let first = CGRect(x: 120, y: 0, width: 200, height: 26)
     static let middle = CGRect(x: 0, y: 26, width: 320, height: 26)
     static let last = CGRect(x: 0, y: 52, width: 90, height: 26)
-    static let staircase = [first, middle, last]
+    /// One rectangle per line, which is what every fixture in this file is:
+    /// `path(lines:)` takes the grouping, so a fixture that means three lines
+    /// says so rather than leaving it to be guessed.
+    static let staircase = [[first], [middle], [last]]
+
+    /// A line carrying a tall inline run — a larger word, a footnote marker —
+    /// with the next genuine line close under it. A(y 0–10) and B(y 0–20) are
+    /// one line; C(y 12–22) is the next.
+    static let inlineRun = [
+        [
+            CGRect(x: 0, y: 0, width: 100, height: 10),
+            CGRect(x: 100, y: 0, width: 60, height: 20),
+        ],
+        [CGRect(x: 0, y: 12, width: 200, height: 10)],
+    ]
+
+    /// A 60 pt initial beside the first of three 20 pt lines. Told apart, it is
+    /// three lines; guessed at, it is indistinguishable from one 60 pt line —
+    /// the case that makes the grouping a parameter rather than a heuristic.
+    static let dropCapital = [
+        [
+            CGRect(x: 0, y: 0, width: 40, height: 60),
+            CGRect(x: 44, y: 0, width: 200, height: 20),
+        ],
+        [CGRect(x: 0, y: 20, width: 240, height: 20)],
+        [CGRect(x: 0, y: 40, width: 120, height: 20)],
+    ]
 
     /// 18 pt reading size: 3 pt of padding at each end, 1 pt above and below,
     /// a 4 pt corner.
@@ -54,8 +80,8 @@ struct HighlightBlockTests {
     /// The bounding box the block is obliged to have: the rows as padded at
     /// their ends, with the block's vertical padding above the first and below
     /// the last, and nowhere in between.
-    static func expectedBounds(_ rects: [CGRect], style: HighlightBlock.Style) -> CGRect {
-        var box = union(HighlightBlock.rows(from: rects, horizontalPadding: style.horizontal))
+    static func expectedBounds(_ lines: [[CGRect]], style: HighlightBlock.Style) -> CGRect {
+        var box = union(HighlightBlock.rows(fromLines: lines, horizontalPadding: style.horizontal))
         box.origin.y -= style.vertical
         box.size.height += style.vertical * 2
         return box
@@ -96,7 +122,7 @@ struct HighlightBlockTests {
     @Test("a single line is exactly the rounded rectangle it used to be")
     func singleRectIsARoundedRect() {
         let rect = CGRect(x: 40, y: 10, width: 200, height: 26)
-        let block = HighlightBlock.path(lineRects: [rect], style: Self.style)
+        let block = HighlightBlock.path(lines: [[rect]], style: Self.style)
         let padded = rect.insetBy(dx: -Self.style.horizontal, dy: -Self.style.vertical)
         let rounded = CGPath(
             roundedRect: padded,
@@ -136,7 +162,7 @@ struct HighlightBlockTests {
 
     @Test("a wrapped sentence is one subpath covering exactly the padded rows")
     func staircaseBounds() {
-        let block = HighlightBlock.path(lineRects: Self.staircase, style: Self.style)
+        let block = HighlightBlock.path(lines: Self.staircase, style: Self.style)
         #expect(Self.subpathCount(block) == 1, "a wrapped sentence is one shape, not three")
         // 3 pt at each end of every row, 1 pt above the first and below the
         // last, and nothing added at the two seams.
@@ -146,7 +172,7 @@ struct HighlightBlockTests {
 
     @Test("the seam and its neighbours are inside; the notches beside them are not")
     func seamsAndNotches() {
-        let block = HighlightBlock.path(lineRects: Self.staircase, style: Self.style)
+        let block = HighlightBlock.path(lines: Self.staircase, style: Self.style)
 
         // x = 200 lies inside every one of the first two rows, so the seam
         // between them and the half point either side of it are all covered.
@@ -172,7 +198,7 @@ struct HighlightBlockTests {
     /// composite of two fills and no amount of rectangle comparison can see it.
     @Test("the seam is exactly as dark as the middle of a line")
     func uniformAlphaAtTheSeam() throws {
-        let block = HighlightBlock.path(lineRects: Self.staircase, style: Self.style)
+        let block = HighlightBlock.path(lines: Self.staircase, style: Self.style)
         let alpha: CGFloat = 0.22 // ReaderTheme.highlight on light paper.
 
         let painted = try Self.raster { context in
@@ -194,7 +220,7 @@ struct HighlightBlockTests {
         // pads share 2 pt at the seam and the colour is composited twice.
         let control = try Self.raster { context in
             context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: alpha))
-            for rect in Self.staircase {
+            for rect in Self.staircase.flatMap({ $0 }) {
                 context.addPath(CGPath(
                     roundedRect: rect.insetBy(dx: -2, dy: -1),
                     cornerWidth: 3, cornerHeight: 3, transform: nil,
@@ -210,7 +236,7 @@ struct HighlightBlockTests {
 
     @Test("the whole block rasterises to one flat tone")
     func rasterisesEvenly() throws {
-        let block = HighlightBlock.path(lineRects: Self.staircase, style: Self.style)
+        let block = HighlightBlock.path(lines: Self.staircase, style: Self.style)
         let painted = try Self.raster { context in
             context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 0.22))
             context.addPath(block)
@@ -220,7 +246,7 @@ struct HighlightBlockTests {
         // Every pixel a good way inside the shape, seams included, must carry
         // the same alpha; anything else is a second fill overlapping a first.
         var interior = 0
-        for row in HighlightBlock.rows(from: Self.staircase, horizontalPadding: Self.style.horizontal) {
+        for row in HighlightBlock.rows(fromLines: Self.staircase, horizontalPadding: Self.style.horizontal) {
             for x in stride(from: row.minX + 6, to: row.maxX - 6, by: 1) {
                 for y in stride(from: row.minY + 2, to: row.maxY - 2, by: 1) {
                     guard x >= 0, y >= 0, x < 340, y < 80 else { continue }
@@ -247,63 +273,213 @@ struct HighlightBlockTests {
     func separateSubpaths() {
         // Flush, but a short centred line under a short centred line: nothing
         // to join them with but a sliver crossing blank paper.
-        let apart = [CGRect(x: 0, y: 0, width: 40, height: 26), CGRect(x: 280, y: 26, width: 40, height: 26)]
-        #expect(Self.subpathCount(HighlightBlock.path(lineRects: apart, style: Self.style)) == 2)
+        let apart = [[CGRect(x: 0, y: 0, width: 40, height: 26)], [CGRect(x: 280, y: 26, width: 40, height: 26)]]
+        #expect(Self.subpathCount(HighlightBlock.path(lines: apart, style: Self.style)) == 2)
 
         // A gap far too wide to be a line break — a mark that skips a heading.
-        let distant = [CGRect(x: 0, y: 0, width: 200, height: 26), CGRect(x: 0, y: 100, width: 200, height: 26)]
-        #expect(Self.subpathCount(HighlightBlock.path(lineRects: distant, style: Self.style)) == 2)
+        let distant = [[CGRect(x: 0, y: 0, width: 200, height: 26)], [CGRect(x: 0, y: 100, width: 200, height: 26)]]
+        #expect(Self.subpathCount(HighlightBlock.path(lines: distant, style: Self.style)) == 2)
 
         // Both halves of a split run get their own vertical padding, since
         // neither edge is a seam any more.
-        let block = HighlightBlock.path(lineRects: distant, style: Self.style)
+        let block = HighlightBlock.path(lines: distant, style: Self.style)
         Self.expectClose(block.boundingBoxOfPath, CGRect(x: -3, y: -1, width: 206, height: 128), "split run")
 
         // Flush and overlapping, but by less than the two corner radii the join
         // would need: 1 pt of shared text, 7 pt once both rows are padded,
         // against the 8 pt a 4 pt corner asks for on each side.
-        let barely = [CGRect(x: 0, y: 0, width: 100, height: 26), CGRect(x: 99, y: 26, width: 100, height: 26)]
-        #expect(Self.subpathCount(HighlightBlock.path(lineRects: barely, style: Self.style)) == 2)
+        let barely = [[CGRect(x: 0, y: 0, width: 100, height: 26)], [CGRect(x: 99, y: 26, width: 100, height: 26)]]
+        #expect(Self.subpathCount(HighlightBlock.path(lines: barely, style: Self.style)) == 2)
         #expect(HighlightBlock.runs(
-            HighlightBlock.rows(from: barely, horizontalPadding: 3), minimumOverlap: 8).count == 2)
+            HighlightBlock.rows(fromLines: barely, horizontalPadding: 3), minimumOverlap: 8).count == 2)
 
         // Three points of shared text is nine once padded, and joins.
-        let enough = [CGRect(x: 0, y: 0, width: 100, height: 26), CGRect(x: 97, y: 26, width: 100, height: 26)]
-        #expect(Self.subpathCount(HighlightBlock.path(lineRects: enough, style: Self.style)) == 1)
+        let enough = [[CGRect(x: 0, y: 0, width: 100, height: 26)], [CGRect(x: 97, y: 26, width: 100, height: 26)]]
+        #expect(Self.subpathCount(HighlightBlock.path(lines: enough, style: Self.style)) == 1)
     }
 
     @Test("a hairline gap between lines is closed, so the seam is exactly shared")
     func closesHairlineGaps() {
-        let rows = HighlightBlock.rows(
-            from: [CGRect(x: 0, y: 0, width: 200, height: 26), CGRect(x: 0, y: 26.4, width: 200, height: 26)],
+        let gapped = HighlightBlock.rows(
+            fromLines: [
+                [CGRect(x: 0, y: 0, width: 200, height: 26)],
+                [CGRect(x: 0, y: 26.4, width: 200, height: 26)],
+            ],
             horizontalPadding: 0,
         )
-        #expect(rows.count == 2)
-        #expect(rows[0].maxY == rows[1].minY)
+        #expect(gapped.count == 2)
+        #expect(gapped[0].maxY == gapped[1].minY)
         // Closed downwards: the row above grows to meet the one below, so no
         // glyph loses its cover.
-        #expect(rows[0].maxY == 26.4)
+        #expect(gapped[0].maxY == 26.4)
+
+        // And the other direction, which is the one a real page hands over:
+        // Alice's justified column reports consecutive lines overlapping by a
+        // hairline as often as it leaves a gap. The row above is trimmed onto
+        // the row below rather than swallowing it, so two lines stay two.
+        let lapped = HighlightBlock.rows(
+            fromLines: [
+                [CGRect(x: 0, y: 0, width: 200, height: 26)],
+                [CGRect(x: 0, y: 25.6, width: 200, height: 26)],
+            ],
+            horizontalPadding: 0,
+        )
+        #expect(lapped.count == 2)
+        #expect(lapped[0].maxY == lapped[1].minY)
+        #expect(lapped[0].maxY == 25.6)
     }
 
     @Test("the pieces TextKit splits one line into come back as one row")
     func mergesSplitLines() {
-        // A line broken at an attribute run: same band, two rectangles.
+        // A line broken at an attribute run: same band, two rectangles, and the
+        // caller says so.
         let pieces = [
-            CGRect(x: 0, y: 26, width: 100, height: 26),
-            CGRect(x: 100, y: 26, width: 120, height: 26),
-            CGRect(x: 0, y: 0, width: 200, height: 26),
+            [
+                CGRect(x: 0, y: 26, width: 100, height: 26),
+                CGRect(x: 100, y: 26, width: 120, height: 26),
+            ],
+            [CGRect(x: 0, y: 0, width: 200, height: 26)],
         ]
-        let rows = HighlightBlock.rows(from: pieces, horizontalPadding: 0)
-        #expect(rows.count == 2, "two lines, however many segments they arrived in")
+        let grouped = HighlightBlock.rows(fromLines: pieces, horizontalPadding: 0)
+        #expect(grouped.count == 2, "two lines, however many segments they arrived in")
+        #expect(grouped[0].minY == 0)
+        #expect(grouped[1].width == 220)
+
+        // The same rectangles with the grouping thrown away. The guess gets
+        // this one right — the two pieces share a band and the line above
+        // touches neither — which is why it survived as long as it did.
+        let guessed = HighlightBlock.rows(
+            fromLines: HighlightBlock.inferredLines(from: pieces.flatMap { $0 }),
+            horizontalPadding: 0,
+        )
+        #expect(guessed.count == 2)
+        #expect(guessed[1].width == 220)
+    }
+
+    // MARK: - The grouping, and the guess behind it
+
+    /// A footnote marker or a word at a larger size makes one line arrive as a
+    /// short rectangle beside a tall one. The old merge compared each incoming
+    /// rectangle against the *grown union*, so the tall piece raised the
+    /// accumulator's `maxY` and the next genuine line then cleared the
+    /// `min(height) / 2` threshold and was unioned in: A, B and C came back as
+    /// one row spanning y 0–22, and the mark was painted over a line the
+    /// sentence never reached.
+    @Test("a tall run on one line does not swallow the line beneath it")
+    func tallRunDoesNotSwallowTheNextLine() {
+        let rows = HighlightBlock.rows(fromLines: Self.inlineRun, horizontalPadding: 0)
+        #expect(rows.count == 2, "a tall run and the line under it are two lines")
         #expect(rows[0].minY == 0)
-        #expect(rows[1].width == 220)
+        #expect(rows[0].maxY == 12, "trimmed onto the line below, not merged with it")
+        #expect(rows[1].maxY == 22)
+    }
+
+    /// The same three rectangles with the grouping thrown away — the shape a
+    /// caller that has no line identity is left with, and the exact input the
+    /// review executed. Two, now, because `inferredLines` measures each
+    /// rectangle against the one that *opened* its line rather than the union
+    /// the line has grown into: C overlaps A by −2, not by 8.
+    @Test("the guess measures against the rectangle that opened the line")
+    func inferredLinesDoNotGrow() {
+        let guessed = HighlightBlock.inferredLines(from: Self.inlineRun.flatMap { $0 })
+        #expect(guessed.count == 2, "the tall run swallowed the line below it again")
+        #expect(guessed[0].count == 2, "the short piece and the tall one are one line")
+        #expect(guessed[1].count == 1)
+        #expect(HighlightBlock.rows(fromLines: guessed, horizontalPadding: 0).count == 2)
+    }
+
+    /// The case no rule over rectangles alone can decide, which is why the
+    /// grouping is a parameter. Told which line each rectangle is on, the block
+    /// is three rows and the short last line stays short.
+    @Test("a drop capital told apart from the lines it spans is three rows")
+    func dropCapitalGrouped() {
+        let rows = HighlightBlock.rows(fromLines: Self.dropCapital, horizontalPadding: 0)
+        #expect(rows.count == 3)
+        #expect(rows[0].maxY == 20, "the initial is trimmed onto line two, not left 60 pt tall")
+        #expect(rows[2].maxX == 120, "the last line ends where the sentence ends")
+
+        let block = HighlightBlock.path(lines: Self.dropCapital, style: Self.style)
+        #expect(!block.contains(CGPoint(x: 220, y: 50)),
+                "the mark reaches past the end of the last line")
+    }
+
+    /// Deliberately the wrong answer. `cap(y 0–60)` overlaps all three 20 pt
+    /// lines by their whole height, so every one of them is "the same line" as
+    /// the initial — and "a 60 pt run on line one" and "three lines" are the
+    /// same geometry, so nothing here could tell them apart. This is what the
+    /// grouping is passed in for; the assertion is pinned so the guess cannot
+    /// quietly start claiming to be able to do it.
+    @Test("guessed, a drop capital is one line — which is why the grouping is passed in")
+    func dropCapitalGuessedWrong() {
+        let guessed = HighlightBlock.inferredLines(from: Self.dropCapital.flatMap { $0 })
+        #expect(guessed.count == 1,
+                "the guess answered \(guessed.count); if it can do this, the grouping is not needed")
+
+        let block = HighlightBlock.path(lines: guessed, style: Self.style)
+        #expect(block.contains(CGPoint(x: 220, y: 50)),
+                "the guess stopped over-reaching here, so the grouped case above pins nothing")
+    }
+
+    /// `LineSpacing.tight` is 1.05, and a line's typographic bounds carry the
+    /// face's own leading on top of that, so two genuine lines can genuinely
+    /// overlap. The caller has said these are two lines, so they stay two, with
+    /// the seam where the second one starts.
+    @Test("two lines whose bounds overlap at tight leading stay two lines")
+    func tightLeadingOverlap() {
+        let tight = [
+            [CGRect(x: 0, y: 0, width: 200, height: 22)],
+            [CGRect(x: 0, y: 18, width: 140, height: 22)],
+        ]
+        let rows = HighlightBlock.rows(fromLines: tight, horizontalPadding: 0)
+        #expect(rows.count == 2)
+        #expect(rows[0].maxY == 18, "the seam is where the second line starts")
+        #expect(rows[1].minY == 18)
+        #expect(rows[1].maxY == 40)
+    }
+
+    /// Segments arrive in layout order, which is not reading order once a mark
+    /// runs over a bidirectional line — and a whole line can arrive after the
+    /// line below it. Sorted here so the seam-closing walk sees page order.
+    @Test("rectangles that arrive out of order are put back into page order")
+    func outOfOrder() {
+        let jumbled = [
+            [
+                CGRect(x: 120, y: 26, width: 100, height: 26),
+                CGRect(x: 0, y: 26, width: 120, height: 26),
+            ],
+            [CGRect(x: 0, y: 0, width: 200, height: 26)],
+        ]
+        let rows = HighlightBlock.rows(fromLines: jumbled, horizontalPadding: 0)
+        #expect(rows.count == 2)
+        #expect(rows[0].minY == 0, "the line above comes first however it arrived")
+        #expect(rows[1].minX == 0)
+        #expect(rows[1].maxX == 220, "and the two pieces of one line are one row")
+    }
+
+    /// The deprecated flat entry point is kept rather than deleted, so a caller
+    /// that genuinely holds no line identity still has a named, documented
+    /// answer instead of an inlined guess. It is exactly the guess followed by
+    /// the grouped call, and this is what holds it to that.
+    @available(*, deprecated, message: "calls the deprecated flat entry point on purpose")
+    @Test("the deprecated flat call is the guess followed by the grouped one")
+    func deprecatedFlatShim() {
+        let flat = Self.inlineRun.flatMap { $0 }
+        let shim = HighlightBlock.path(lineRects: flat, style: Self.style)
+        let explicit = HighlightBlock.path(
+            lines: HighlightBlock.inferredLines(from: flat), style: Self.style)
+        Self.expectClose(shim.boundingBoxOfPath, explicit.boundingBoxOfPath, "flat shim")
+        #expect(Self.subpathCount(shim) == Self.subpathCount(explicit))
+        #expect(!shim.isEmpty)
     }
 
     @Test("lines of different heights still make one block")
     func differentHeights() {
         // A line with a larger face on it — a drop capital, an inline heading.
-        let mixed = [CGRect(x: 0, y: 0, width: 200, height: 34), CGRect(x: 0, y: 34, width: 200, height: 20)]
-        let block = HighlightBlock.path(lineRects: mixed, style: Self.style)
+        let mixed = [
+            [CGRect(x: 0, y: 0, width: 200, height: 34)],
+            [CGRect(x: 0, y: 34, width: 200, height: 20)],
+        ]
+        let block = HighlightBlock.path(lines: mixed, style: Self.style)
         #expect(Self.subpathCount(block) == 1)
         Self.expectClose(block.boundingBoxOfPath, CGRect(x: -3, y: -1, width: 206, height: 56), "mixed heights")
         #expect(block.contains(CGPoint(x: 100, y: 34)), "the seam between them is covered")
@@ -314,28 +490,36 @@ struct HighlightBlockTests {
     @Test("a step too small to round is flattened outwards, never inwards")
     func straightensTinySteps() {
         // A justified right margin leaves steps of a point or two.
-        let ragged = [CGRect(x: 0, y: 0, width: 200, height: 26), CGRect(x: 0, y: 26, width: 198, height: 26)]
-        let rows = HighlightBlock.rows(from: ragged, horizontalPadding: 0)
+        let ragged = [
+            [CGRect(x: 0, y: 0, width: 200, height: 26)],
+            [CGRect(x: 0, y: 26, width: 198, height: 26)],
+        ]
+        let rows = HighlightBlock.rows(fromLines: ragged, horizontalPadding: 0)
         let straight = HighlightBlock.straightened(rows, tolerance: 4)
         #expect(straight[0].maxX == 200)
         #expect(straight[1].maxX == 200, "the shorter row is extended, not the longer one shortened")
 
-        let block = HighlightBlock.path(lineRects: ragged, style: Self.style)
+        let block = HighlightBlock.path(lines: ragged, style: Self.style)
         Self.expectClose(block.boundingBoxOfPath, CGRect(x: -3, y: -1, width: 206, height: 54), "straightened")
         #expect(block.contains(CGPoint(x: 202, y: 39)), "the second row now reaches as far as the first")
 
         // A step worth rounding survives.
-        let stepped = [CGRect(x: 0, y: 0, width: 200, height: 26), CGRect(x: 0, y: 26, width: 160, height: 26)]
+        let stepped = [
+            [CGRect(x: 0, y: 0, width: 200, height: 26)],
+            [CGRect(x: 0, y: 26, width: 160, height: 26)],
+        ]
         let kept = HighlightBlock.straightened(
-            HighlightBlock.rows(from: stepped, horizontalPadding: 0), tolerance: 4)
+            HighlightBlock.rows(fromLines: stepped, horizontalPadding: 0), tolerance: 4)
         #expect(kept[1].maxX == 160)
     }
 
     @Test("a chain of tiny steps settles rather than leaving one behind")
     func straighteningSettles() {
-        let chain = (0 ..< 5).map { CGRect(x: 0, y: CGFloat($0) * 26, width: 200 + CGFloat($0) * 2, height: 26) }
+        let chain = (0 ..< 5).map {
+            [CGRect(x: 0, y: CGFloat($0) * 26, width: 200 + CGFloat($0) * 2, height: 26)]
+        }
         let straight = HighlightBlock.straightened(
-            HighlightBlock.rows(from: chain, horizontalPadding: 0), tolerance: 4)
+            HighlightBlock.rows(fromLines: chain, horizontalPadding: 0), tolerance: 4)
         #expect(straight.allSatisfy { $0.maxX == 208 })
     }
 
@@ -343,29 +527,40 @@ struct HighlightBlockTests {
 
     @Test("nothing, or nonsense, draws nothing at all")
     func emptyAndDegenerate() {
-        #expect(HighlightBlock.path(lineRects: [], style: Self.style).isEmpty)
-        #expect(HighlightBlock.path(lineRects: [.zero], style: Self.style).isEmpty)
-        #expect(HighlightBlock.path(lineRects: [.null], style: Self.style).isEmpty)
-        #expect(HighlightBlock.path(lineRects: [.infinite], style: Self.style).isEmpty)
+        #expect(HighlightBlock.path(lines: [], style: Self.style).isEmpty)
+        #expect(HighlightBlock.path(lines: [[]], style: Self.style).isEmpty)
+        #expect(HighlightBlock.path(lines: [[.zero]], style: Self.style).isEmpty)
+        #expect(HighlightBlock.path(lines: [[.null]], style: Self.style).isEmpty)
+        #expect(HighlightBlock.path(lines: [[.infinite]], style: Self.style).isEmpty)
         #expect(HighlightBlock.path(
-            lineRects: [CGRect(x: CGFloat.nan, y: 0, width: 10, height: 10)], style: Self.style).isEmpty)
+            lines: [[CGRect(x: CGFloat.nan, y: 0, width: 10, height: 10)]], style: Self.style).isEmpty)
         #expect(HighlightBlock.path(
-            lineRects: [CGRect(x: 0, y: 0, width: 100, height: 0)], style: Self.style).isEmpty)
-        #expect(HighlightBlock.rows(from: [], horizontalPadding: 3).isEmpty)
+            lines: [[CGRect(x: 0, y: 0, width: 100, height: 0)]], style: Self.style).isEmpty)
+        #expect(HighlightBlock.rows(fromLines: [], horizontalPadding: 3).isEmpty)
+        #expect(HighlightBlock.inferredLines(from: []).isEmpty)
         #expect(HighlightBlock.runs([], minimumOverlap: 8).isEmpty)
         #expect(HighlightBlock.outline(of: []).isEmpty)
 
-        // One good row among the rubbish still draws.
-        let mixed = [CGRect.null, CGRect(x: 0, y: 0, width: 100, height: 26), CGRect(x: 5, y: 5, width: 0, height: 0)]
-        #expect(!HighlightBlock.path(lineRects: mixed, style: Self.style).isEmpty)
+        // One good row among the rubbish still draws — and a line made
+        // entirely of rubbish is dropped rather than left as an empty row.
+        let mixed = [
+            [CGRect.null],
+            [CGRect(x: 0, y: 0, width: 100, height: 26)],
+            [CGRect(x: 5, y: 5, width: 0, height: 0)],
+        ]
+        #expect(!HighlightBlock.path(lines: mixed, style: Self.style).isEmpty)
+        #expect(HighlightBlock.rows(fromLines: mixed, horizontalPadding: 3).count == 1)
     }
 
     @Test("a right-to-left block is the same walk, mirrored")
     func rightToLeft() {
         // The last line of an RTL paragraph ends at the *left*, so the step is
         // on the other side. Nothing in the outline knows about direction.
-        let rtl = [CGRect(x: 0, y: 0, width: 320, height: 26), CGRect(x: 230, y: 26, width: 90, height: 26)]
-        let block = HighlightBlock.path(lineRects: rtl, style: Self.style)
+        let rtl = [
+            [CGRect(x: 0, y: 0, width: 320, height: 26)],
+            [CGRect(x: 230, y: 26, width: 90, height: 26)],
+        ]
+        let block = HighlightBlock.path(lines: rtl, style: Self.style)
         #expect(Self.subpathCount(block) == 1)
         Self.expectClose(block.boundingBoxOfPath, CGRect(x: -3, y: -1, width: 326, height: 54), "RTL")
         #expect(block.contains(CGPoint(x: 280, y: 26)), "the seam under the short line is covered")
@@ -423,13 +618,13 @@ struct HighlightBlockTests {
             // start and stop all over the measure rather than in a pattern.
             for location in stride(from: page.characterRange.location, to: end, by: 97) {
                 let range = NSRange(location: location, length: min(140, end - location))
-                let rects = layout.rects(forRange: range, on: page)
-                let rows = HighlightBlock.rows(from: rects, horizontalPadding: style.horizontal)
+                let lines = layout.lines(forRange: range, on: page)
+                let rows = HighlightBlock.rows(fromLines: lines, horizontalPadding: style.horizontal)
                 guard rows.count >= 2 else { continue }
                 wrapped += 1
 
-                let block = HighlightBlock.path(lineRects: rects, style: style)
-                Self.expectClose(block.boundingBoxOfPath, Self.expectedBounds(rects, style: style),
+                let block = HighlightBlock.path(lines: lines, style: style)
+                Self.expectClose(block.boundingBoxOfPath, Self.expectedBounds(lines, style: style),
                                  "selection at \(location)")
                 for row in rows {
                     #expect(block.contains(CGPoint(x: row.midX, y: row.midY)),
@@ -464,13 +659,13 @@ struct HighlightBlockTests {
         var wrapped = 0
         for id in ranges.keys.sorted() {
             guard let page = layout.page(containingFragment: id) else { continue }
-            let rects = layout.highlightRects(forFragment: id, on: page)
-            let rows = HighlightBlock.rows(from: rects, horizontalPadding: style.horizontal)
+            let lines = layout.highlightLines(forFragment: id, on: page)
+            let rows = HighlightBlock.rows(fromLines: lines, horizontalPadding: style.horizontal)
             guard rows.count >= 2 else { continue }
             wrapped += 1
 
-            let block = HighlightBlock.path(lineRects: rects, style: style)
-            expectClose(block.boundingBoxOfPath, expectedBounds(rects, style: style), "fragment \(id)")
+            let block = HighlightBlock.path(lines: lines, style: style)
+            expectClose(block.boundingBoxOfPath, expectedBounds(lines, style: style), "fragment \(id)")
             for row in rows {
                 #expect(block.contains(CGPoint(x: row.midX, y: row.midY)),
                         "the middle of a row of \(id) is outside its own highlight")

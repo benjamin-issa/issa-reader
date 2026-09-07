@@ -1250,14 +1250,16 @@ private struct ReadAloudDoubleTap: ViewModifier {
 /// Nothing platform-specific, either: the phone, the Mac and the television
 /// draw a page with this same view.
 struct PageSurface: View {
-    /// One stored highlight's rows on this page, kept together rather than
-    /// flattened in with every other mark's.
+    /// One stored highlight's rows on this page, grouped by line and kept
+    /// together rather than flattened in with every other mark's.
     ///
     /// A flat list of rectangles cannot say where one highlight ends and the
     /// next begins, and filling them one at a time is what put a doubly
-    /// composited band across every seam.
+    /// composited band across every seam. Nor can it say where one *line* ends:
+    /// flattened, a tall inline run merged with the line beneath it and the
+    /// mark was painted over words the highlight does not cover.
     struct AnnotationBlock: Equatable {
-        let rects: [CGRect]
+        let lines: [[CGRect]]
         let tint: Annotation.Tint
     }
 
@@ -1283,14 +1285,14 @@ struct PageSurface: View {
             // that used to run through every wrapped sentence.
             for block in annotations {
                 context.fill(
-                    Path(HighlightBlock.path(lineRects: block.rects, style: highlightStyle)),
+                    Path(HighlightBlock.path(lines: block.lines, style: highlightStyle)),
                     with: .color(ReaderPalette.color(for: block.tint).opacity(0.30)),
                 )
             }
             if let activeFragment {
                 context.fill(
                     Path(HighlightBlock.path(
-                        lineRects: layout.highlightRects(forFragment: activeFragment, on: page),
+                        lines: layout.highlightLines(forFragment: activeFragment, on: page),
                         style: highlightStyle,
                     )),
                     with: .color(highlight),
@@ -1299,7 +1301,7 @@ struct PageSurface: View {
             if let selection {
                 context.fill(
                     Path(HighlightBlock.path(
-                        lineRects: layout.rects(forRange: selection, on: page),
+                        lines: layout.lines(forRange: selection, on: page),
                         style: highlightStyle,
                     )),
                     with: .color(theme.selection),

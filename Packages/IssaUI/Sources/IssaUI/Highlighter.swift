@@ -53,6 +53,29 @@ public struct HighlightTint: Sendable, Hashable, Codable {
         )
     }
 
+    /// Written out by hand so a decoded blob goes through the clamp above.
+    ///
+    /// The synthesised decoder assigns the stored `let`s straight from the
+    /// container and never calls the initialiser, so the promise three doc
+    /// comments up — "or a NaN from a decoded blob" — was true of every path
+    /// into this type except the one it names. A NaN component reached a
+    /// `Canvas` fill, which on the page reads as the whole marked sentence
+    /// disappearing: the reader's own highlighter, gone, with the settings
+    /// swatch still showing it.
+    ///
+    /// The same shape as `HighlighterChoice` immediately below and
+    /// `ReaderStyle.init(from:)`, and for the same reason: a value this build
+    /// cannot make sense of costs that one setting, not all of them.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            red: try container.decode(Double.self, forKey: .red),
+            green: try container.decode(Double.self, forKey: .green),
+            blue: try container.decode(Double.self, forKey: .blue),
+            alpha: try container.decode(Double.self, forKey: .alpha),
+        )
+    }
+
     public var color: Color {
         Color(.sRGB, red: red, green: green, blue: blue, opacity: alpha)
     }

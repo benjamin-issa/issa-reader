@@ -166,31 +166,29 @@ public final class ChapterLayout {
 
     // MARK: - Highlighting
 
-    /// Rectangles covering a media-overlay fragment, in the coordinate space of
-    /// the page that contains it.
+    /// Rectangles covering a media-overlay fragment, grouped by the line of
+    /// type each one sits on, in the coordinate space of the page that
+    /// contains it.
     ///
     /// This is the whole point of owning the layout: highlighting the narrated
     /// sentence is a rectangle lookup against geometry that already exists, so
     /// it costs nothing per audio tick and cannot fall behind the audio.
-    public func highlightRects(forFragment fragmentID: String, on page: RenderedPage) -> [CGRect] {
+    ///
+    /// Grouped rather than flat because the grouping is knowable *here* and
+    /// nowhere downstream: `HighlightBlock` sees rectangles alone, and
+    /// rectangles alone cannot tell a tall run on one line from two lines.
+    public func highlightLines(forFragment fragmentID: String, on page: RenderedPage) -> [[CGRect]] {
         guard let range = fragmentRanges[fragmentID],
               let textRange = textRange(from: range)
         else { return [] }
+        return segmentLines(in: textRange, type: .highlight, on: page)
+    }
 
-        var rects: [CGRect] = []
-        layoutManager.enumerateTextSegments(in: textRange, type: .highlight, options: []) { _, frame, _, _ in
-            let translated = frame.offsetBy(dx: 0, dy: -page.yOffset)
-            // Segments from other pages are simply out of frame. Bounded by
-            // `contentBottom`, not `height`: the page's drawn content stops at
-            // the last whole line, and a fragment continuing onto the next page
-            // would otherwise paint a bar in the blank band below it — the same
-            // migration `draw` and `paintedCharacterRange` already made.
-            if translated.maxY > -1, frame.minY < page.contentBottom {
-                rects.append(translated)
-            }
-            return true
-        }
-        return rects
+    /// The same rectangles with the line grouping thrown away, for callers that
+    /// want geometry rather than a shape to fill — the tap-to-seek hit tests,
+    /// and the tests that measure where a sentence landed.
+    public func highlightRects(forFragment fragmentID: String, on page: RenderedPage) -> [CGRect] {
+        highlightLines(forFragment: fragmentID, on: page).flatMap { $0 }
     }
 
     /// What the reader just tapped: the character index under a point on a page.
@@ -313,21 +311,82 @@ public final class ChapterLayout {
         return best?.id
     }
 
-    /// Rectangles covering an arbitrary character range on a page, for drawing
-    /// a selection or a stored highlight.
-    public func rects(forRange range: NSRange, on page: RenderedPage) -> [CGRect] {
+    /// Rectangles covering an arbitrary character range on a page, grouped by
+    /// line, for drawing a selection or a stored highlight.
+    public func lines(forRange range: NSRange, on page: RenderedPage) -> [[CGRect]] {
         guard range.length > 0, let textRange = textRange(from: range) else { return [] }
-        var rects: [CGRect] = []
-        layoutManager.enumerateTextSegments(in: textRange, type: .selection, options: []) { _, frame, _, _ in
+        return segmentLines(in: textRange, type: .selection, on: page)
+    }
+
+    /// The same rectangles, flattened — see `highlightRects(forFragment:on:)`.
+    public func rects(forRange range: NSRange, on page: RenderedPage) -> [CGRect] {
+        lines(forRange: range, on: page).flatMap { $0 }
+    }
+
+    /// Text segments on one page, grouped into the lines of type they sit on.
+    ///
+    /// Two segments belong to the same line when their baselines land in the
+    /// same place on the page **and** their frames overlap vertically. Both
+    /// tests, because `baselinePosition` is undocumented as to what it is
+    /// measured from, and each covers the other's blind spot.
+    ///
+    /// Measured, not assumed: TextKit reports it *relative to the segment's own
+    /// frame* — 18.05 into a 22.05 pt frame at `LineSpacing.tight`, 21.2 into
+    /// 25.2 at `.normal`, the same number on every line of the page — so
+    /// `frame.minY + baselinePosition` is where the baseline actually falls,
+    /// and every piece of one line agrees on it however tall the piece is. Were
+    /// it ever handed back as a page position instead, that sum would still
+    /// differ by more than a line height between neighbours; what it would stop
+    /// doing is agreeing across a line split between two type sizes, and the
+    /// cost of that is one line drawn as two rows rather than a mark spread
+    /// over a line it does not cover.
+    ///
+    /// The overlap is required to clear `HighlightBlock.epsilon` rather than
+    /// zero: Alice's justified page reports consecutive lines 1e-14 apart, and
+    /// `> 0` calls that an overlap.
+    ///
+    /// The page-boundary guards run *before* the grouping, and only a kept
+    /// segment opens or extends a line. A fragment running onto the next page
+    /// would otherwise leave the line state pointing at a segment that is not
+    /// in the result, and the first segment back on this page would be filed
+    /// under it.
+    private func segmentLines(
+        in textRange: NSTextRange, type: NSTextLayoutManager.SegmentType, on page: RenderedPage,
+    ) -> [[CGRect]] {
+        var lines: [[CGRect]] = []
+        var opener: (frame: CGRect, baseline: CGFloat)?
+        layoutManager.enumerateTextSegments(in: textRange, type: type, options: []) {
+            _, frame, baseline, _ in
             let translated = frame.offsetBy(dx: 0, dy: -page.yOffset)
-            // `contentBottom`, not `height` — see `highlightRects(forFragment:on:)`.
-            if translated.maxY > -1, frame.minY < page.contentBottom {
-                rects.append(translated)
+            // Segments from other pages are simply out of frame. Bounded by
+            // `contentBottom`, not `height`: the page's drawn content stops at
+            // the last whole line, and a fragment continuing onto the next page
+            // would otherwise paint a bar in the blank band below it — the same
+            // migration `draw` and `paintedCharacterRange` already made.
+            guard translated.maxY > -1, frame.minY < page.contentBottom else { return true }
+
+            if let opener {
+                let overlap = min(opener.frame.maxY, translated.maxY)
+                    - max(opener.frame.minY, translated.minY)
+                let sameBaseline = abs((translated.minY + baseline)
+                    - (opener.frame.minY + opener.baseline)) <= Self.baselineTolerance
+                if sameBaseline, overlap > HighlightBlock.epsilon {
+                    lines[lines.count - 1].append(translated)
+                    return true
+                }
             }
+            lines.append([translated])
+            opener = (translated, baseline)
             return true
         }
-        return rects
+        return lines
     }
+
+    /// How far two baselines may be apart and still be one line. Half a point:
+    /// the gap between real neighbours is a whole line height — 22.05 pt at the
+    /// smallest reading size and the tightest leading — and pieces of one line
+    /// agree exactly, so anything between the two is noise.
+    private static let baselineTolerance: CGFloat = 0.5
 
     /// The word around a character index, for a long press that should select
     /// something meaningful rather than a single letter.
