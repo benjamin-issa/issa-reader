@@ -257,6 +257,54 @@ struct DownloadsInventoryTests {
         #expect(BookContentService.decodeFilename("something.txt") == nil)
         #expect(BookContentService.decodeFilename("-ebook.epub") == nil)
         #expect(BookContentService.decodeFilename("a-unknown.epub") == nil)
+        #expect(BookContentService.decodeFilename("not-a-uuid-ebook.epub") == nil)
+    }
+
+    /// The worst thing this decoder could do, named as its own test.
+    ///
+    /// A decoded id does not stay a string: the orphan sweep hands it to
+    /// `AppModel.removeDownload`, which builds `Fonts/<id>/` and `Audio/<id>/`
+    /// and deletes each of them whole. `..` made both of those the storage root,
+    /// so one file with this name in the Books directory turned "remove 1
+    /// orphaned file" into deleting every download, the catalogue, the logs and
+    /// the reader's own imported fonts.
+    ///
+    /// A filename is not a trust boundary anyone controls: an unzipped archive,
+    /// a sync client, a restored backup or a server naming a book can all put
+    /// one there. So the decoder refuses it rather than the deleters catching it
+    /// — they do too, but only one of the two can be the last line.
+    @Test("a filename that decodes to a path traversal is not one of ours",
+          arguments: ["..-ebook.epub", "..-readaloud.epub", "...-ebook.epub",
+                      "../..-ebook.epub", ".-audiobook.epub"])
+    func traversalFilenamesAreRefused(_ name: String) {
+        #expect(BookContentService.decodeFilename(name) == nil,
+                "\"\(name)\" must never become a book id")
+        #expect(BookContentService.bookUUID(fromFilename: name) == nil)
+    }
+
+    /// And the sweep that reads the directory must not offer it either — the
+    /// decoder is where it is refused, but this is the call that would have
+    /// carried it.
+    @Test("a traversal filename on disk is neither downloaded nor an orphan")
+    func traversalFilesAreNotSwept() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "issa-traversal-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let real = "11111111-1111-4111-8111-111111111111"
+        try Data(repeating: 0, count: 8).write(to: directory.appending(path: "\(real)-ebook.epub"))
+        try Data(repeating: 0, count: 8).write(to: directory.appending(path: "..-ebook.epub"))
+
+        #expect(BookContentService.downloadedBookUUIDs(in: directory) == [real])
+
+        let inventory = await DownloadsInventory.scan(
+            books: [], downloaded: [], scope: .booksOnly, booksDirectory: directory)
+        #expect(!inventory.orphans.contains { $0.bookUUID == ".." },
+                "the sweep would have deleted the storage root")
+        // Still counted in the directory total: the bytes are real and the
+        // reader should see them. Left alone is not the same as unseen.
+        #expect(inventory.bookFileBytes == 16)
     }
 
     // MARK: - The disk half

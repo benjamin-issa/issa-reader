@@ -81,6 +81,41 @@ struct BookIdentifierTests {
         #expect(name("../a") == name("../a"), "the same book must find its file again")
         #expect(name("../a") != name("../b"))
     }
+
+    // MARK: - The rule itself, where every path builder now gets it
+
+    /// `safePathComponent` is what the four path builders share. Asserting it
+    /// directly means a fifth one added later is one line from being safe, and
+    /// that its safety is not re-proved through whatever it happens to name.
+    @Test("a refused identifier becomes one component with nothing path-like in it",
+          arguments: [
+              "../../../Library/Preferences/com.benjaminissa.issareader",
+              "..",
+              ".",
+              "/etc/passwd",
+              "a/b",
+              "",
+              "11111111-1111-4111-8111-11111111111",
+          ])
+    func refusedIdentifiersBecomeOneInertComponent(_ uuid: String) {
+        let component = uuid.safePathComponent
+        #expect(component.hasPrefix("unsafe-"))
+        #expect(!component.contains("/"))
+        #expect(!component.contains(".."))
+        // The property that actually matters: appended to a directory, it names
+        // a child of that directory and not a sibling, a parent, or the root.
+        let root = URL(fileURLWithPath: "/tmp/app/Fonts", isDirectory: true)
+        let named = root.appending(path: component, directoryHint: .isDirectory)
+        #expect(named.standardizedFileURL.deletingLastPathComponent().path
+            == root.standardizedFileURL.path)
+    }
+
+    @Test("a real uuid is left exactly as it is")
+    func acceptedIdentifiersAreUnchanged() {
+        let uuid = "0198ab12-cd34-4e56-8f90-123456789abc"
+        #expect(uuid.safePathComponent == uuid,
+                "hashing the valid case would rename every file already on a device")
+    }
 }
 
 @Suite("The catalogue refuses entries it cannot safely name")

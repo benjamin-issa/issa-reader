@@ -230,4 +230,71 @@ struct CustomFontsTests {
         let named = CustomFonts.extractedDirectory(bookUUID: "book-uuid", in: root)
         #expect(!FileManager.default.fileExists(atPath: named.path))
     }
+
+    /// The one that deletes everything.
+    ///
+    /// `removeExtracted` removes whatever `extractedDirectory` names, whole, and
+    /// the id was interpolated raw — so `..` named `Fonts/../`, the storage root,
+    /// and removing one book's face deleted every download, the catalogue, the
+    /// logs and the reader's own imported fonts along with it. It needed no
+    /// hostile server: the orphan sweep decodes book ids out of filenames it
+    /// finds on disk, and `..-ebook.epub` is a filename anyone can leave there.
+    ///
+    /// Asserted on the *parent*, because that is what was being destroyed. A
+    /// test that only checked the named directory would have passed throughout:
+    /// deleting the parent does remove the child.
+    @Test("a book id that is a path traversal cannot reach outside the fonts folder",
+          arguments: ["..", "../..", "../Books", "/", "a/b"])
+    func traversalIdentifiersCannotEscape(_ hostile: String) throws {
+        let parent = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: parent) }
+        let root = parent.appending(path: "Fonts", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+
+        // A sibling of the fonts folder, standing in for Books, Store and Logs.
+        let bystander = parent.appending(path: "Books", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: bystander, withIntermediateDirectories: true)
+        let book = bystander.appending(path: "a-book.epub")
+        try Data(repeating: 0, count: 8).write(to: book)
+        // And a face the reader imported, at the root of Fonts.
+        let mine = try copyFont("SourceSerif4-Regular.ttf", into: root, as: "Mine.ttf")
+
+        let named = CustomFonts.extractedDirectory(bookUUID: hostile, in: root)
+        #expect(named.standardizedFileURL.deletingLastPathComponent().path
+            == root.standardizedFileURL.path,
+            "\"\(hostile)\" named something outside Fonts")
+
+        CustomFonts.removeExtracted(bookUUID: hostile, in: root)
+
+        #expect(FileManager.default.fileExists(atPath: book.path),
+                "\"\(hostile)\" deleted the storage root")
+        #expect(FileManager.default.fileExists(atPath: mine.path))
+        #expect(FileManager.default.fileExists(atPath: root.path))
+        #expect(FileManager.default.fileExists(atPath: parent.path))
+    }
+
+    /// The sweep enumerates real directories, so it must delete the ones it
+    /// found rather than re-deriving a name from them: a book whose id was
+    /// malformed lives in `Fonts/unsafe-<hash>/`, and putting that back through
+    /// `extractedDirectory` hashes it a second time and names a directory that
+    /// has never existed — so its face would have outlived the sign-out that
+    /// was meant to take it.
+    @Test("sign-out's sweep still removes a face filed under a hashed name")
+    func sweepRemovesHashedDirectories() throws {
+        CustomFonts.testRegistryLock.lock()
+        defer { CustomFonts.testRegistryLock.unlock() }
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        defer { unregisterFonts(under: root) }
+
+        let extracted = CustomFonts.extractedDirectory(bookUUID: "not-a-uuid", in: root)
+        #expect(extracted.lastPathComponent.hasPrefix("unsafe-"),
+                "the test only means something if the name was hashed")
+        try FileManager.default.createDirectory(at: extracted, withIntermediateDirectories: true)
+        _ = try copyFont("Literata-Regular.ttf", into: extracted, as: "body.ttf")
+
+        CustomFonts.removeAllExtracted(in: root)
+
+        #expect(!FileManager.default.fileExists(atPath: extracted.path))
+    }
 }

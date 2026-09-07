@@ -181,8 +181,15 @@ struct DownloadFilenameTests {
         #expect(BookContentService.bookUUID(fromFilename: "uuid.epub") == nil)
         #expect(BookContentService.bookUUID(fromFilename: "uuid-nonsense.epub") == nil)
         #expect(BookContentService.bookUUID(fromFilename: "-ebook.epub") == nil)
+        // A stem that is not a bare uuid is not one of ours either. It reads as
+        // a plausible name, which is the problem: a decoded id is handed
+        // straight to the deleters, and `..` names the storage root.
+        #expect(BookContentService.bookUUID(fromFilename: "one-ebook.epub") == nil)
+        #expect(BookContentService.bookUUID(fromFilename: "..-ebook.epub") == nil)
     }
 
+    /// Real uuids in the filenames, because that is the only shape this decodes
+    /// now — and the shape it has always written.
     @Test("one book with several formats on disk counts once")
     func oneEntryPerBookRegardlessOfFormats() throws {
         let directory = URL(fileURLWithPath: NSTemporaryDirectory())
@@ -190,10 +197,13 @@ struct DownloadFilenameTests {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
 
-        for name in ["one-ebook.epub", "one-readaloud.epub", "two-audiobook.epub", "notes.txt"] {
+        let one = "11111111-1111-4111-8111-111111111111"
+        let two = "22222222-2222-4222-8222-222222222222"
+        for name in ["\(one)-ebook.epub", "\(one)-readaloud.epub",
+                     "\(two)-audiobook.epub", "notes.txt"] {
             try Data().write(to: directory.appending(path: name))
         }
-        #expect(BookContentService.downloadedBookUUIDs(in: directory) == ["one", "two"])
+        #expect(BookContentService.downloadedBookUUIDs(in: directory) == [one, two])
     }
 }
 

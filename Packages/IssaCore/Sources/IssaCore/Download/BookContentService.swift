@@ -147,17 +147,12 @@ public struct BookContentService: Sendable {
     /// "hash it rather than trying to sanitise". Stripping invites the next
     /// encoding that means the same thing; a hash cannot escape a directory,
     /// and it stays stable so the file is still found again afterwards.
+    ///
+    /// The rule itself is `String.safePathComponent`, shared rather than spelled
+    /// here: three other places name a file or a directory after a book, and two
+    /// of them had no guard at all.
     public static func localURL(in directory: URL, bookUUID: String, format: Format) -> URL {
-        let component = bookUUID.isBareUUID ? bookUUID : "unsafe-\(Self.digest(bookUUID))"
-        return directory.appending(path: "\(component)-\(format.rawValue).epub")
-    }
-
-    private static func digest(_ value: String) -> String {
-        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
-        for byte in Data(value.utf8) {
-            hash = (hash ^ UInt64(byte)) &* 0x100_0000_01b3
-        }
-        return String(hash, radix: 16)
+        directory.appending(path: "\(bookUUID.safePathComponent)-\(format.rawValue).epub")
     }
 
     public func isDownloaded(_ book: Book, format: Format) -> Bool {
@@ -211,12 +206,27 @@ public struct BookContentService: Sendable {
     /// as the uuid — a book with two editions on disk is two rows and two
     /// sizes — and reading a directory once to get both beats one `stat` per
     /// book per format.
+    ///
+    /// **Bare uuids only.** This is the point where a name found on disk becomes
+    /// a book id, and everything downstream then treats that id as trustworthy:
+    /// the orphan sweep hands it to `AppModel.removeDownload`, which builds
+    /// `Fonts/<id>/` and `Audio/<id>/` and deletes them whole. `..-ebook.epub` is
+    /// a filename anybody can create — an unzipped archive, a sync client, a
+    /// hostile server naming a book — and it decoded to the id `..`, which made
+    /// both of those directories the storage root. `safePathComponent` stops the
+    /// escape a second time over; this stops it being asked for.
+    ///
+    /// It also means the inverse is honest. `localURL` writes `unsafe-<hash>`
+    /// for a malformed id, and reading that back as though it were the id would
+    /// have named a *third* file — so a name this cannot decode is deliberately
+    /// no longer one of ours, and the sweep leaves it alone rather than
+    /// deleting it under a name it invented.
     static func decodeFilename(_ name: String) -> (bookUUID: String, format: Format)? {
         guard name.hasSuffix(".epub") else { return nil }
         let stem = String(name.dropLast(".epub".count))
         for format in Format.allCases where stem.hasSuffix("-\(format.rawValue)") {
             let uuid = String(stem.dropLast(format.rawValue.count + 1))
-            return uuid.isEmpty ? nil : (uuid, format)
+            return uuid.isBareUUID ? (uuid, format) : nil
         }
         return nil
     }

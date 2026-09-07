@@ -73,8 +73,26 @@ public enum AudioExtraction {
     }
 
     /// Beside the books, under `StorageRoot`, for the same reason they are.
-    public static func defaultDirectory(for bookID: String) -> URL {
-        StorageRoot.directory("Audio/\(bookID)")
+    ///
+    /// Through `safePathComponent`, because this names a directory that
+    /// `removeExtractedAudio` then deletes whole. The id was interpolated raw,
+    /// so a book id of `..` made `Audio/../` — the storage root — and dropping
+    /// one book's narration took every download, the catalogue and the logs with
+    /// it. Reachable without a hostile server: the orphan sweep decodes book ids
+    /// out of filenames it finds on disk, and `..-ebook.epub` is a filename.
+    ///
+    /// The component is built and appended on its own rather than interpolated
+    /// into `"Audio/\(bookID)"`. A single string with a separator already in it
+    /// is a path, not a component, and that is the shape that made an unchecked
+    /// id look like it was only ever naming one folder.
+    ///
+    /// `root` is the `Audio` folder itself, and exists so the removal below can
+    /// be tested against a temporary directory. It has to be: on a Mac the
+    /// storage root is `~/Library/Application Support`, so a test that proved
+    /// the traversal by letting it happen would delete the developer's own.
+    public static func defaultDirectory(for bookID: String, in root: URL? = nil) -> URL {
+        (root ?? StorageRoot.directory("Audio"))
+            .appending(path: bookID.safePathComponent, directoryHint: .isDirectory)
     }
 
     /// A filesystem-safe name that keeps two same-named tracks apart.
@@ -94,7 +112,13 @@ public enum AudioExtraction {
         return flattened
     }
 
-    public static func removeExtractedAudio(for bookID: String) {
-        try? FileManager.default.removeItem(at: defaultDirectory(for: bookID))
+    /// Drops one book's extracted narration when its download goes.
+    ///
+    /// Named through `defaultDirectory(for:)` and nothing else, so the directory
+    /// this deletes is by construction the directory `extractAudio` wrote to.
+    /// Deriving the path a second time here is how a write path and a delete
+    /// path come to disagree, and one of the two then escapes the root.
+    public static func removeExtractedAudio(for bookID: String, in root: URL? = nil) {
+        try? FileManager.default.removeItem(at: defaultDirectory(for: bookID, in: root))
     }
 }
