@@ -134,13 +134,27 @@ public struct DownloadsInventory: Sendable, Equatable {
     }
 
     /// The rows' own total — "4 books · 1.4 GB" counts these, not the caches.
-    public var itemBytes: Int64 { items.reduce(0) { $0 + $1.bytes } }
+    public var itemBytes: Int64 { Self.bytes(of: items) }
 
     public var isEmpty: Bool { items.isEmpty }
 
     /// How many distinct books, which is what the reader counts. Two editions
     /// of one book are two rows but one book.
-    public var bookCount: Int { Set(items.map(\.book.uuid)).count }
+    public var bookCount: Int { Self.bookCount(of: items) }
+
+    /// The same two questions asked of a subset of the rows.
+    ///
+    /// A screen showing fewer rows than the scan found — one hiding a removal
+    /// that is still inside its undo window — has to report the subset, or the
+    /// header says five while four are listed. Statics rather than a second
+    /// `reduce` at the call site, so "what is a book" is defined once.
+    public static func bookCount(of items: [DownloadedItem]) -> Int {
+        Set(items.map(\.book.uuid)).count
+    }
+
+    public static func bytes(of items: [DownloadedItem]) -> Int64 {
+        items.reduce(0) { $0 + $1.bytes }
+    }
 
     // MARK: - The pure half
 

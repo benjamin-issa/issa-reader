@@ -37,6 +37,10 @@ public struct ReadingView: View {
                         showLibrary(.toRead)
                     }
                 }
+                // What is on this device, under the queue. "See all" goes to
+                // the `.downloaded` shelf the library already has rather than
+                // to a second list of the same books with its own rules.
+                DownloadsSection(placement: .reading, showAll: { showLibrary(.downloaded) })
             }
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("content.reading")
@@ -44,6 +48,9 @@ public struct ReadingView: View {
         }
         .accessibilityIdentifier("screen.reading")
         .background(Palette.paper)
+        // On the scroll view, not inside its content: a toast that scrolls
+        // away from the reader it is addressed to is not a toast.
+        .downloadRemovalToast()
         .refreshable { await app.refreshLibrary() }
         .overlay {
             if app.books.isEmpty, app.isLoadingLibrary {

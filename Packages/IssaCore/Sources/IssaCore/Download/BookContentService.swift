@@ -256,15 +256,4 @@ public struct BookContentService: Sendable {
         try? FileManager.default.removeItem(
             at: localURL(in: directory, bookUUID: bookUUID, format: format))
     }
-
-    /// Total bytes cached, for the Downloads screen.
-    public func cacheSize() -> Int64 {
-        guard let contents = try? FileManager.default.contentsOfDirectory(
-            at: cacheDirectory, includingPropertiesForKeys: [.fileSizeKey],
-        ) else { return 0 }
-        return contents.reduce(into: Int64(0)) { total, url in
-            let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-            total += Int64(size)
-        }
-    }
 }
