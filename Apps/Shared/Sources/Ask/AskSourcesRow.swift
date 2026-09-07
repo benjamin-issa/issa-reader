@@ -41,8 +41,8 @@ struct AskSourcesRow: View {
     let title: (AskSource) -> String?
     let onOpen: (AskSource) -> Void
 
-    /// Which chip is open, by ordinal. One at a time: two cards stacked under an
-    /// answer is the answer scrolled off the top of a half sheet.
+    /// What the reader has done about the cards, which is not the same question
+    /// as which card is open. See `AskSourcesOpening`.
     ///
     /// Opened on the first source rather than starting closed, and that is the
     /// answer to "make the answers say more". A prompt arm that asked the model
@@ -51,7 +51,7 @@ struct AskSourcesRow: View {
     /// fact it added was already sitting in an excerpt one tap away. So the
     /// extra sentence comes from the book instead, at zero risk of invention —
     /// which is what the sources row was built for and what nobody was tapping.
-    @State private var opened: Int?
+    @State private var opened = AskSourcesOpening.Opened.untouched
 
     /// Three. A fourth chip wraps to a second row on a phone, and by the fourth
     /// excerpt the model is citing everything it was handed rather than what it
@@ -59,6 +59,12 @@ struct AskSourcesRow: View {
     static let limit = 3
 
     private var shown: [AskSource] { Array(sources.prefix(Self.limit)) }
+
+    private var openOrdinal: Int? { AskSourcesOpening.ordinal(opened, in: shown) }
+
+    /// What makes one answer's sources different from another's. Ordinals
+    /// alone will not do: two answers about one book both cite `[1, 2, 3]`.
+    private var answerKey: [Passage] { shown.map(\.passage) }
 
     var body: some View {
         if !shown.isEmpty {
@@ -71,15 +77,17 @@ struct AskSourcesRow: View {
                     }
                 }
 
-                if let opened, let source = shown.first(where: { $0.ordinal == opened }) {
+                if let ordinal = openOrdinal,
+                   let source = shown.first(where: { $0.ordinal == ordinal }) {
                     card(source)
                 }
             }
             .accessibilityIdentifier("ask.sources")
-            // Only when nothing is open, so a reader who closed the card and
-            // came back to the sheet is not overruled by it springing open
-            // again.
-            .onAppear { if opened == nil { opened = shown.first?.ordinal } }
+            // Keyed to the answer, not to the view's lifetime. "Ask another"
+            // renders a new answer into this same row, and what the reader
+            // decided about the last one's excerpts says nothing about this
+            // one's.
+            .onChange(of: answerKey) { opened = .untouched }
         }
     }
 
@@ -88,9 +96,9 @@ struct AskSourcesRow: View {
     /// The suggestion chip's own recipe, so the two rows in this sheet are one
     /// idea rather than two capsule styles that drifted apart.
     private func chip(_ source: AskSource) -> some View {
-        let isOpen = opened == source.ordinal
+        let isOpen = openOrdinal == source.ordinal
         return Button {
-            opened = isOpen ? nil : source.ordinal
+            opened = AskSourcesOpening.tapping(source.ordinal, from: opened, in: shown)
         } label: {
             Text(AskSourceLabel.chip(source))
                 .font(Typography.footnote)
@@ -144,6 +152,67 @@ struct AskSourcesRow: View {
             RoundedRectangle(cornerRadius: Metrics.radiusMedium)
                 .strokeBorder(Palette.border, lineWidth: 1)
         }
+    }
+}
+
+// MARK: -
+
+/// Which excerpt the sources row draws open, and what a tap does to it.
+///
+/// **The sentinel was ambiguous, and the guard built on it could not work.**
+/// The state was an `Int?` where nil meant both "never opened" and "the reader
+/// closed it". So the `onAppear` that read
+/// `if opened == nil { opened = shown.first?.ordinal }` — commented "only when
+/// nothing is open, so a reader who closed the card and came back to the sheet
+/// is not overruled by it springing open again" — did exactly what it said it
+/// would not: a closed card is nil, and nil is what it reopens.
+///
+/// **And `onAppear` is once per view, not once per answer.** "Ask another"
+/// renders a second answer into the same row, so `onAppear` does not fire
+/// again and the ordinal from the *previous* answer stands — opening whichever
+/// of the new excerpts happens to carry that number, or, when none does,
+/// nothing at all under a row of chips that all look shut.
+///
+/// So: three states, the default derived rather than assigned, and the reset
+/// keyed to the answer. Lifted out of the view for the reason `AskSourceLabel`
+/// below is — `IssaSharedTests` cannot reach a SwiftUI `View`, and this is the
+/// part that was wrong.
+enum AskSourcesOpening {
+    /// What the reader has done about the cards, which is not the same question
+    /// as which card is open.
+    enum Opened: Equatable {
+        /// Nothing has been decided about *this answer* yet, so the first
+        /// source shows itself. Not a stored ordinal: derived, so a row handed
+        /// a new answer opens that answer's first source rather than keeping a
+        /// number belonging to the last one.
+        case untouched
+        /// The reader closed the card. Distinct from `untouched`, and the whole
+        /// reason this is not an `Int?`.
+        case closed
+        /// The reader opened this one.
+        case source(Int)
+    }
+
+    /// The ordinal actually drawn open, or nil for none.
+    ///
+    /// An ordinal the current answer does not have reads as nothing open,
+    /// which is what makes a stale value harmless rather than wrong.
+    static func ordinal(_ opened: Opened, in sources: [AskSource]) -> Int? {
+        switch opened {
+        case .untouched: sources.first?.ordinal
+        case .closed: nil
+        case let .source(ordinal):
+            sources.contains { $0.ordinal == ordinal } ? ordinal : nil
+        }
+    }
+
+    /// What tapping a chip leaves behind.
+    ///
+    /// Closing goes to `.closed` and never back to `.untouched`: closing the
+    /// card the row opened by itself has to stay closed, and `.untouched` is
+    /// the state that opens it again.
+    static func tapping(_ ordinal: Int, from opened: Opened, in sources: [AskSource]) -> Opened {
+        self.ordinal(opened, in: sources) == ordinal ? .closed : .source(ordinal)
     }
 }
 
