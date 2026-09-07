@@ -111,6 +111,50 @@ struct CommandMapTests {
         #expect(decoded.skipForwardInterval == 45)
     }
 
+    /// A blob is a file, and a file can say anything.
+    ///
+    /// Four screens draw these as `Int(seconds)` — the player's transport, the
+    /// reading page's jump buttons, and the television's two — and `Int(_:)`
+    /// traps on a magnitude outside `Int`'s range rather than printing
+    /// something silly. Nothing sat between App Group defaults and those
+    /// labels, so `1e300` in the blob was a crash while the transport drew, the
+    /// same defect `Double.wholeSeconds` exists for. The decoder is the one
+    /// choke point, which is why the clamp is there and this asks it directly.
+    @Test("an interval no stepper could produce is clamped, not printed", arguments: [
+        1e300, -1e300, .infinity, -.infinity, .nan, 0, 1, 4.9, 10_000, -45,
+        Double(Int.max), Double(Int.min), 121, 120, 5,
+    ] as [TimeInterval])
+    func absurdStoredIntervals(stored: TimeInterval) {
+        let legal = CommandMap.legalInterval(stored, default: 30)
+        #expect(CommandMap.intervalRange.contains(legal), "\(stored) came back as \(legal)")
+        // Which is the whole point: every screen prints this.
+        #expect(Int(legal) >= 5)
+        #expect(Int(legal) <= 120)
+    }
+
+    @Test("an interval the blob does not carry keeps the shipped default")
+    func missingIntervalKeepsTheDefault() throws {
+        let decoded = try JSONDecoder().decode(CommandMap.self, from: Data("{}".utf8))
+        #expect(decoded.skipForwardInterval == 30)
+        #expect(decoded.skipBackwardInterval == 15)
+        #expect(CommandMap.legalInterval(nil, default: 30) == 30)
+        #expect(CommandMap.legalInterval(.nan, default: 15) == 15,
+                "a NaN survives Swift.max, so the clamp alone would let it through")
+    }
+
+    /// The stepper's range and the decoder's are one value, so a setting cannot
+    /// be offered and then quietly moved by the next launch.
+    @Test("what the stepper offers is what the decoder keeps")
+    func stepperAndDecoderAgree() throws {
+        for seconds in stride(from: CommandMap.intervalRange.lowerBound,
+                              through: CommandMap.intervalRange.upperBound, by: 5) {
+            var map = CommandMap()
+            map.skipForwardInterval = seconds
+            let decoded = try JSONDecoder().decode(CommandMap.self, from: JSONEncoder().encode(map))
+            #expect(decoded.skipForwardInterval == seconds, "\(seconds)s did not survive a relaunch")
+        }
+    }
+
     // MARK: - Migration
     //
     // Anyone who has already opened the app has the old table sitting in the

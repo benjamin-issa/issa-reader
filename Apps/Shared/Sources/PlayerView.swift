@@ -367,9 +367,18 @@ public struct PlayerView: View {
         whole / 60 + (whole % 60 >= 30 ? 1 : 0)
     }
 
+    /// A position on the clock, under the scrubber: `4:12:00` or `47:31`.
+    ///
+    /// Guarded like `durationText` and `spokenDuration` above, and it is the
+    /// same guard for the same reason — this had `isFinite` and stopped there,
+    /// which is precisely what `DurationText`'s own comment names as
+    /// insufficient. `1e300` is finite and greater than zero, and
+    /// `Int(1e300.rounded())` is an uncatchable crash rather than a wrong
+    /// number. Both readings above the bar are `total * progress` over a
+    /// duration the server supplied or an audio file's metadata declared, so a
+    /// single malformed `media:duration` takes the player down as it draws.
     static func timeText(_ seconds: TimeInterval) -> String {
-        guard seconds.isFinite, seconds > 0 else { return "0:00" }
-        let total = Int(seconds.rounded())
+        guard seconds > 0, let total = seconds.wholeSeconds else { return "0:00" }
         let hours = total / 3600
         let minutes = (total % 3600) / 60
         let secs = total % 60

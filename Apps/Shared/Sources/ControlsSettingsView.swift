@@ -83,13 +83,17 @@ public struct ControlsSettingsView: View {
             .listRowBackground(Palette.surface)
 
             Section {
+                // The range is `CommandMap`'s own, not a pair of numbers typed
+                // here: the decoder clamps a stored interval to it, and a
+                // stepper offering a value the decoder would refuse is a
+                // setting that quietly moves after a relaunch.
                 ValueStepper(
                     "Forward", value: $settings.commandMap.skipForwardInterval,
-                    in: 5 ... 120, step: 5, format: { "\(Int($0))s" },
+                    in: CommandMap.intervalRange, step: 5, format: { "\(Int($0))s" },
                 )
                 ValueStepper(
                     "Back", value: $settings.commandMap.skipBackwardInterval,
-                    in: 5 ... 120, step: 5, format: { "\(Int($0))s" },
+                    in: CommandMap.intervalRange, step: 5, format: { "\(Int($0))s" },
                 )
             } header: {
                 Text("Skip amount")
