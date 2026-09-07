@@ -400,7 +400,16 @@ public struct ReaderView: View {
         }
         #endif
         // Reopened from a notification tap, whichever platform it arrived on.
-        .onChange(of: ask.reopenRequest) { _, requested in
+        //
+        // `initial: true`, and it is the whole fix. The delegate sets
+        // `reopenRequest` and *then* asks for the book, so on every tap that
+        // was not already on this book's reader screen — which is every tap the
+        // notification is posted for — this screen was constructed with the
+        // value already in place, and a change handler that only watches for
+        // changes never ran. Worse than doing nothing: the stale value then
+        // blocked every later tap for the same book, because assigning a String
+        // its own value is not a change either.
+        .onChange(of: ask.reopenRequest, initial: true) { _, requested in
             guard requested == model.book.uuid else { return }
             ask.reopenRequest = nil
             askDetent = .medium

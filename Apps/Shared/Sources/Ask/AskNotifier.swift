@@ -200,9 +200,13 @@ final class AskNotificationDelegate: NSObject, UNUserNotificationCenterDelegate 
             .userInfo[AskNotifier.bookUUIDKey] as? String
         Task { @MainActor in
             if let uuid {
-                // The sheet first, then the book: the reader is being sent back
-                // to an answer, and the reader screen reads this the moment it
-                // appears.
+                // The sheet first, then the book, and the order matters in the
+                // opposite direction to what it used to say. The reader screen
+                // does *not* read this the moment it appears: it is built after
+                // both of these lines have run, so the value is already in
+                // place and there is no change to observe. Its handler is
+                // `onChange(of:initial:)` for exactly that reason, which is
+                // what makes setting the request before the book safe.
                 coordinator.reopenRequest = uuid
                 app.requestBook(uuid, .read)
             }
