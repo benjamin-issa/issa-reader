@@ -129,10 +129,17 @@ struct AskSheet: View {
                 }
                 .accessibilityIdentifier("ask.field")
 
-            // Two, never more: a wall of suggestions is a menu, and the field
-            // above it is what the feature actually is.
-            HStack(spacing: Metrics.spacing8) {
-                ForEach(chips.prefix(2), id: \.self) { chip in
+            // Six, wrapped. Two of them were two spellings of the same idea —
+            // "Who is X?" and the recap — and a reader who wanted to know what
+            // the feature could do learned that it did those two things.
+            //
+            // `FlowRow` rather than an `HStack` that clips or a scroller: the
+            // chips are different lengths, a fixed row leaves the last one half
+            // off the screen, and `AskSourcesRow` explains why a horizontal
+            // scroller inside a sheet detent is a gesture fight. It is the same
+            // layout the book details screen wraps its tags with.
+            FlowRow(spacing: Metrics.spacing8) {
+                ForEach(chips, id: \.self) { chip in
                     Button {
                         question = chip
                         send()
