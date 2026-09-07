@@ -62,6 +62,24 @@ struct EPUBPackageTests {
         }
     }
 
+    /// Which files *are* the contents rather than the book.
+    ///
+    /// Both spellings, because a reading system meets both: EPUB 3 declares
+    /// `properties="nav"` and EPUB 2 declares the NCX media type, and Gutenberg
+    /// ships an EPUB 3 with both. Anything walking the spine has to be able to
+    /// tell a contents document from a chapter — the Ask index cited one as
+    /// evidence for "Who is Alice?".
+    @Test("the manifest says which documents are the navigation")
+    func namesItsNavigationDocuments() throws {
+        let package = try EPUBPackage.open(url: try Self.fixtureURL("alice"))
+        let documents = package.navigationDocuments
+        #expect(documents.contains { $0.hasSuffix("toc.xhtml") })
+        #expect(documents.contains { $0.hasSuffix("toc.ncx") })
+        // Every one is a real entry, and no chapter is on the list.
+        for href in documents { #expect(package.archive.contains(href)) }
+        #expect(!documents.contains { package.spine.map(\.href).contains($0) })
+    }
+
     @Test("opens a second, differently-structured book")
     func opensSecondBook() throws {
         let package = try EPUBPackage.open(url: try Self.fixtureURL("time-machine"))

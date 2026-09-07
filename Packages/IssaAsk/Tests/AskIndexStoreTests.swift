@@ -112,6 +112,43 @@ struct AskIndexStoreTests {
         #expect(!rebuilt)
     }
 
+    // MARK: - Navigation documents
+
+    /// The exact signal, which no fixture can exercise on its own.
+    ///
+    /// Both Gutenberg books declare a nav document and an NCX and put neither
+    /// in the spine — so the declaration fires on nothing at all in either
+    /// fixture, while the edition the bug was screenshotted on *does* page to
+    /// its own contents. Driving `parseChapter` with Chapter I declared as
+    /// navigation is the only way to assert that half without shipping a third
+    /// book.
+    @Test("a document the manifest calls navigation contributes nothing to the index")
+    func aDeclaredNavigationDocumentIsSkipped() throws {
+        let package = try AskFixture.package()
+        let href = package.spine[AskFixture.Spine.chapterI].href
+        let navigation = AskIndexStore.Navigation(documents: [href])
+
+        let skipped = try #require(AskIndexStore.parseChapter(
+            archive: package.archive, href: href,
+            spineIndex: AskFixture.Spine.chapterI, navigation: navigation,
+        ))
+        #expect(skipped.passages.isEmpty)
+        // A table of contents introduces nobody: its names are chapter titles,
+        // and "Alice's Evidence" would tell the boundary the reader had met
+        // Alice on the contents page.
+        #expect(skipped.names.isEmpty)
+        // The row itself is still written, with its real length. A missing one
+        // would say the spine item does not exist, which is a different and
+        // untrue thing — the reader can be standing in it.
+        #expect(skipped.length > 0)
+
+        let kept = try #require(AskIndexStore.parseChapter(
+            archive: package.archive, href: href, spineIndex: AskFixture.Spine.chapterI,
+        ))
+        #expect(!kept.passages.isEmpty)
+        #expect(kept.length == skipped.length)
+    }
+
     @Test("Alice is the book's most-mentioned person")
     func findsTheTopName() async throws {
         let (store, _, directory) = try await AskFixture.preparedStore()
