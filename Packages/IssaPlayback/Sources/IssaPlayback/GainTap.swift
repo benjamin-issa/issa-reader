@@ -13,20 +13,22 @@ import Synchronization
 /// leaves an `MTAudioProcessingTap`, which hands us the samples themselves.
 ///
 /// One instance lives for the life of an `AudioPlayer` and is attached to every
-/// item it loads, so a chapter change does not drop the level. The gain is read
-/// on the real-time audio thread, which may not block: no lock, no actor hop,
-/// no allocation and no ARC traffic beyond the one unretained reference to this
-/// object. `Atomic` rather than `OSAllocatedUnfairLock` for exactly that
-/// reason — a lock held by the main thread while the audio thread wants it is a
-/// priority inversion, and the symptom is a dropout, not a hang anyone can see.
+/// item it loads, so a chapter change does not drop the level. What it does
+/// *not* share across those items is the per-tap format flag — see `TapState`.
+/// The gain is read on the real-time audio thread, which may not block: no
+/// lock, no actor hop, no allocation and no ARC traffic beyond the unretained
+/// reference to the tap's own state, which holds this object. `Atomic` rather
+/// than `OSAllocatedUnfairLock` for exactly that reason — a lock held by the
+/// main thread while the audio thread wants it is a priority inversion, and the
+/// symptom is a dropout, not a hang anyone can see.
 final class GainTap: Sendable {
     /// The multiplier every sample is scaled by. 1 means "as recorded", and the
     /// process callback then does no work at all.
+    ///
+    /// Shared across every tap this object makes, deliberately: it is the
+    /// player-wide setting, and sharing it is exactly what stops a chapter
+    /// change dropping the book's level.
     let gain = Atomic<Float>(1)
-    /// Whether the format the tap was prepared with is the deinterleaved 32-bit
-    /// float PCM the kernel assumes. Set in `prepare`, cleared in `unprepare`;
-    /// anything else is passed through untouched rather than reinterpreted.
-    let isFloat32 = Atomic<Bool>(false)
     /// Frames the tap has actually seen. Nothing in the app reads this — it is
     /// how a test tells "the mix was attached and ran" from "the mix was
     /// attached and silently ignored", which is otherwise indistinguishable
@@ -42,8 +44,10 @@ final class GainTap: Sendable {
     /// the half of the range that can be expressed there.
     func makeAudioMix(for tracks: [AVAssetTrack]) -> AVAudioMix? {
         guard !tracks.isEmpty else { return nil }
-        // +1 for the tap to hold; `tapFinalize` balances it. Balanced by hand
-        // below if the tap is never created, because nothing else would.
+        // +1 for the tap to hold. `tapInit` takes it into the `TapState` it
+        // allocates, and `tapFinalize` releasing that box is what gives it
+        // back. Balanced by hand below if the tap is never created, because
+        // `tapInit` is then never called and nothing else would.
         let clientInfo = Unmanaged.passRetained(self).toOpaque()
         var callbacks = MTAudioProcessingTapCallbacks(
             version: kMTAudioProcessingTapCallbacksVersion_0,
@@ -98,26 +102,63 @@ final class GainTap: Sendable {
     }
 }
 
+// MARK: - Per-tap state
+
+/// What one `MTAudioProcessingTap` carries, as against what the `GainTap` that
+/// made it carries.
+///
+/// `isFloat32` lives here, and this type exists, because the two lifetimes are
+/// not the same. One `GainTap` lives for the life of an `AudioPlayer`, while
+/// `makeAudioMix` builds a **new tap per `load`** — one per chapter. Held on
+/// the shared owner, the flag was one variable for every tap alive at once,
+/// and on a chapter change
+/// `player.removeAllItems()` hands item 1's teardown to AVFoundation's own
+/// queues: `tapUnprepare(tap1)` could store `false` after `tapPrepare(tap2)`
+/// had stored `true`. `tapProcess` then bailed at the format guard and passed
+/// every sample through untouched — a book set to +50% played that chapter as
+/// recorded — while `tapCarriesGain` stayed true, so `applyPlayerVolume` did
+/// not compensate through `player.volume` either.
+///
+/// Allocated by `tapInit`, which is where the tap's own storage is for, and
+/// freed by `tapFinalize`. Holding `owner` strongly is what consumes the +1
+/// `makeAudioMix` took: this box's own release is the only balance needed.
+final class TapState: Sendable {
+    let owner: GainTap
+    /// Whether the format the tap was prepared with is the 32-bit float PCM
+    /// the kernel assumes. Set in `prepare`, cleared in `unprepare`; anything
+    /// else is passed through untouched rather than reinterpreted.
+    let isFloat32 = Atomic<Bool>(false)
+
+    init(owner: GainTap) { self.owner = owner }
+}
+
 // MARK: - Callbacks
 
 /// Free functions, not methods: `MTAudioProcessingTapCallbacks` holds C
 /// function pointers, and a Swift method — even a static one — cannot be one.
-/// The object they belong to arrives through the tap's storage instead.
-private func tapInit(
+/// The state they work on arrives through the tap's storage instead.
+///
+/// Internal rather than private so a test can prepare two taps made by one
+/// `GainTap` and watch the first one's teardown leave the second alone. No
+/// end-to-end decode can stage that: starting a read prepares the tap again,
+/// which sets the flag back and hides the bug.
+func tapInit(
     tap: MTAudioProcessingTap,
     clientInfo: UnsafeMutableRawPointer?,
     tapStorageOut: UnsafeMutablePointer<UnsafeMutableRawPointer?>,
 ) {
-    // The retain taken in `makeAudioMix` is what keeps this pointer good for
-    // the life of the tap.
-    tapStorageOut.pointee = clientInfo
+    guard let clientInfo else { return }
+    // `takeRetainedValue`, so the +1 `makeAudioMix` took becomes this box's
+    // strong reference rather than a second thing to balance by hand.
+    let state = TapState(owner: Unmanaged<GainTap>.fromOpaque(clientInfo).takeRetainedValue())
+    tapStorageOut.pointee = Unmanaged.passRetained(state).toOpaque()
 }
 
-private func tapFinalize(tap: MTAudioProcessingTap) {
-    Unmanaged<GainTap>.fromOpaque(MTAudioProcessingTapGetStorage(tap)).release()
+func tapFinalize(tap: MTAudioProcessingTap) {
+    Unmanaged<TapState>.fromOpaque(MTAudioProcessingTapGetStorage(tap)).release()
 }
 
-private func tapPrepare(
+func tapPrepare(
     tap: MTAudioProcessingTap,
     maxFrames: CMItemCount,
     processingFormat: UnsafePointer<AudioStreamBasicDescription>,
@@ -129,13 +170,14 @@ private func tapPrepare(
     let usable = format.mFormatID == kAudioFormatLinearPCM
         && (format.mFormatFlags & kAudioFormatFlagIsFloat) != 0
         && format.mBitsPerChannel == 32
-    owner(of: tap).isFloat32.store(usable, ordering: .relaxed)
+    state(of: tap).isFloat32.store(usable, ordering: .relaxed)
 }
 
-private func tapUnprepare(tap: MTAudioProcessingTap) {
+func tapUnprepare(tap: MTAudioProcessingTap) {
     // Prepare and unprepare are paired but may run several times over one
-    // tap's life, and the format is only promised inside a pair.
-    owner(of: tap).isFloat32.store(false, ordering: .relaxed)
+    // tap's life, and the format is only promised inside a pair. This tap's
+    // pair: another tap's is none of its business.
+    state(of: tap).isFloat32.store(false, ordering: .relaxed)
 }
 
 private func tapProcess(
@@ -153,11 +195,11 @@ private func tapProcess(
         tap, numberFrames, bufferListInOut, flagsOut, nil, numberFramesOut,
     )
     guard status == noErr else { return }
-    let tap = owner(of: tap)
-    guard tap.isFloat32.load(ordering: .relaxed) else { return }
-    tap.processedFrames.wrappingAdd(Int(numberFramesOut.pointee), ordering: .relaxed)
+    let state = state(of: tap)
+    guard state.isFloat32.load(ordering: .relaxed) else { return }
+    state.owner.processedFrames.wrappingAdd(Int(numberFramesOut.pointee), ordering: .relaxed)
 
-    let gain = tap.gain.load(ordering: .relaxed)
+    let gain = state.owner.gain.load(ordering: .relaxed)
     guard gain != 1 else { return }
     for buffer in UnsafeMutableAudioBufferListPointer(bufferListInOut) {
         guard let data = buffer.mData else { continue }
@@ -171,8 +213,10 @@ private func tapProcess(
     }
 }
 
-/// The tap's owner, unretained. `MTAudioProcessingTapGetStorage` hands back
-/// exactly what `tapInit` wrote, which is the pointer `makeAudioMix` retained.
-private func owner(of tap: MTAudioProcessingTap) -> GainTap {
-    Unmanaged<GainTap>.fromOpaque(MTAudioProcessingTapGetStorage(tap)).takeUnretainedValue()
+/// This tap's own state, unretained. `MTAudioProcessingTapGetStorage` hands
+/// back exactly what `tapInit` wrote, and `tapFinalize` is what releases it, so
+/// it is good for the life of the tap and reading it costs no ARC traffic on
+/// the audio thread.
+func state(of tap: MTAudioProcessingTap) -> TapState {
+    Unmanaged<TapState>.fromOpaque(MTAudioProcessingTapGetStorage(tap)).takeUnretainedValue()
 }

@@ -66,15 +66,27 @@ public enum HighlightBlock {
 
     // MARK: - Building the path
 
-    /// The outline of a marked passage, given the line rectangles covering it.
+    /// The outline of a marked passage, given its rectangles grouped by line.
+    ///
+    /// Grouped by the caller because only the caller can know. TextKit splits a
+    /// line wherever the attributes change, so one line arrives as several
+    /// rectangles — and two *genuine* lines at `LineSpacing.tight`, or a line
+    /// carrying a drop capital, produce exactly the same overlapping geometry.
+    /// Inferring it here merged a narrated sentence with the line under it and
+    /// painted the mark across words the sentence does not cover.
+    ///
+    /// The nested array *is* the identity, rather than a `LineRect(rect:line:)`
+    /// pair: a struct with a defaulted line number can be filled in wrongly and
+    /// still type-check, and the wrong answer it then gives is the very bug
+    /// this signature exists to make unrepresentable.
     ///
     /// Rows that cannot be joined without overlapping — a short centred line,
     /// an RTL opening line, a mark that jumps a paragraph — become separate
     /// closed subpaths. Disjoint subpaths never cover the same pixel, so one
     /// fill still gives one alpha.
-    public static func path(lineRects: [CGRect], style: Style) -> CGPath {
+    public static func path(lines: [[CGRect]], style: Style) -> CGPath {
         let path = CGMutablePath()
-        let rows = rows(from: lineRects, horizontalPadding: style.horizontal)
+        let rows = rows(fromLines: lines, horizontalPadding: style.horizontal)
         guard !rows.isEmpty else { return path }
 
         let runs = runs(rows, minimumOverlap: style.cornerRadius * 2)
@@ -102,6 +114,23 @@ public enum HighlightBlock {
         return path
     }
 
+    /// The outline of a marked passage from a flat list of rectangles, with the
+    /// grouping guessed by `inferredLines(from:)`.
+    ///
+    /// Kept, rather than erased, because the guess is what a caller holding no
+    /// line identity is left with, and a named wrong-but-documented path is
+    /// easier to reason about than an inlined one. It is deprecated because the
+    /// guess is provably unable to answer: a drop capital and three lines are
+    /// the same geometry.
+    @available(*, deprecated, message: """
+    Group the rectangles by line and call path(lines:style:). The flat guess \
+    merges a tall inline run with the line below it, and cannot tell a drop \
+    capital from the three lines it spans.
+    """)
+    public static func path(lineRects: [CGRect], style: Style) -> CGPath {
+        path(lines: inferredLines(from: lineRects), style: style)
+    }
+
     // MARK: - Rows
 
     /// Tolerance for "the same coordinate". Page geometry arrives from TextKit
@@ -111,34 +140,31 @@ public enum HighlightBlock {
     /// One rectangle per row of text, padded at the ends, with every seam
     /// between consecutive rows made exactly shared.
     ///
-    /// Three things happen that the raw segments do not do for us. TextKit
-    /// splits a line wherever the attributes change, so a single row can arrive
-    /// as several rectangles and has to be reassembled. The rows arrive in
-    /// layout order, which is not always reading order once a line is split.
-    /// And consecutive rows are usually flush but occasionally leave a hairline
-    /// gap or a hairline overlap, either of which would show through a
-    /// translucent fill; closing it by moving one row's bottom onto the next
-    /// row's top makes the seam an edge the outline can simply walk along.
-    static func rows(from rects: [CGRect], horizontalPadding: CGFloat) -> [CGRect] {
-        let standardised: [CGRect] = rects.map { $0.standardized }
-        var usable: [CGRect] = standardised.filter { isUsable($0) }
-        usable.sort { $0.minY == $1.minY ? $0.minX < $1.minX : $0.minY < $1.minY }
-        guard !usable.isEmpty else { return [] }
-
-        // Pieces of one line: they share a baseline, so they overlap
-        // vertically by far more than half the shorter one's height, while two
-        // genuine lines overlap by nothing at all.
+    /// Two things happen that the grouped segments do not do for us. The lines
+    /// arrive in layout order, which is not always page order once a mark runs
+    /// over a bidirectional line, so the rows are sorted here — the walk that
+    /// closes the seams below reads them top to bottom. And consecutive rows
+    /// are usually flush but occasionally leave a hairline gap or a hairline
+    /// overlap — Alice's justified page reports neighbours 1e-14 apart —
+    /// either of which would show through a translucent fill; closing it by
+    /// moving one row's bottom onto the next row's top makes the seam an edge
+    /// the outline can simply walk along.
+    ///
+    /// A line that overlaps the one below it by more than a hairline is
+    /// trimmed rather than merged: the caller has said these are two lines, and
+    /// the answer to overlapping bounds at `LineSpacing.tight` is a shared
+    /// seam, not one row swallowing the other.
+    static func rows(fromLines lines: [[CGRect]], horizontalPadding: CGFloat) -> [CGRect] {
+        // One row per line, so the pieces' own order inside a line cannot
+        // matter; a line with nothing usable on it is dropped rather than left
+        // as an empty row for the seam walk to trip over.
         var merged: [CGRect] = []
-        for rect in usable {
-            if let last = merged.last {
-                let overlap = min(last.maxY, rect.maxY) - max(last.minY, rect.minY)
-                if overlap > min(last.height, rect.height) / 2 {
-                    merged[merged.count - 1] = last.union(rect)
-                    continue
-                }
-            }
-            merged.append(rect)
+        for line in lines {
+            let usable = line.map { $0.standardized }.filter { isUsable($0) }
+            guard let first = usable.first else { continue }
+            merged.append(usable.dropFirst().reduce(first) { $0.union($1) })
         }
+        merged.sort { $0.minY == $1.minY ? $0.minX < $1.minX : $0.minY < $1.minY }
 
         var padded = merged.map {
             CGRect(
@@ -159,6 +185,44 @@ public enum HighlightBlock {
             padded[index].size.height = padded[index + 1].minY - padded[index].minY
         }
         return padded
+    }
+
+    /// The grouping a caller holding no line identity is reduced to guessing.
+    ///
+    /// Pieces of one line share a baseline, so they overlap vertically by more
+    /// than half the shorter one's height; two lines set flush do not overlap
+    /// at all. Each incoming rectangle is measured against **the rectangle that
+    /// opened its line**, never against the growing union: comparing against
+    /// the union let a tall inline run raise the accumulator's `maxY`, and the
+    /// next genuine line then cleared the threshold and was swallowed. Three
+    /// rectangles A(y 0–10), B(y 0–20), C(y 12–22) came back as one row
+    /// spanning y 0–22 — the mark painted over a line the sentence never
+    /// reached. Measured against A, C overlaps by −2 and opens a line of its
+    /// own.
+    ///
+    /// It is still a guess, and it is still wrong for a drop capital: a 60 pt
+    /// initial beside a 20 pt line, over three 20 pt lines, is the same
+    /// geometry as one tall line, and no rule over rectangles alone can tell
+    /// them apart. That is what `path(lines:style:)` takes the grouping for.
+    static func inferredLines(from rects: [CGRect]) -> [[CGRect]] {
+        var usable: [CGRect] = rects.map { $0.standardized }.filter { isUsable($0) }
+        usable.sort { $0.minY == $1.minY ? $0.minX < $1.minX : $0.minY < $1.minY }
+        guard !usable.isEmpty else { return [] }
+
+        var lines: [[CGRect]] = []
+        var opener: CGRect?
+        for rect in usable {
+            if let opener {
+                let overlap = min(opener.maxY, rect.maxY) - max(opener.minY, rect.minY)
+                if overlap > min(opener.height, rect.height) / 2 {
+                    lines[lines.count - 1].append(rect)
+                    continue
+                }
+            }
+            lines.append([rect])
+            opener = rect
+        }
+        return lines
     }
 
     /// A rectangle with four finite corners and some area to it. A NaN would

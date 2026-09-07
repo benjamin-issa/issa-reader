@@ -1685,9 +1685,9 @@ public final class ReaderModel {
             guard let offset = annotation.locator.locations?.charOffset else { continue }
             let length = (annotation.excerpt as NSString).length
             let range = NSRange(location: offset, length: length)
-            let rects = layout.rects(forRange: range, on: page)
-            guard !rects.isEmpty else { continue }
-            result.append(PageSurface.AnnotationBlock(rects: rects, tint: annotation.tint))
+            let lines = layout.lines(forRange: range, on: page)
+            guard !lines.isEmpty else { continue }
+            result.append(PageSurface.AnnotationBlock(lines: lines, tint: annotation.tint))
         }
         return result
     }
