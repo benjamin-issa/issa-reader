@@ -79,11 +79,24 @@ public protocol AskTool: Sendable {
     /// retry has genuinely not searched anything yet, and the prompt it is
     /// rebuilding has a different number of excerpts in it.
     func beginGeneration(numberingFrom firstOrdinal: Int) async
+
+    /// The excerpts this tool handed the model during the last generation, by
+    /// the ordinal it numbered them with. A tool that answers nothing here is a
+    /// tool whose excerpts can be cited and never shown.
+    func passagesShown() async -> [Int: Passage]
 }
 
 public extension AskTool {
     /// A stateless tool needs nothing per generation.
     func beginGeneration(numberingFrom _: Int) async {}
+
+    /// A tool that showed the model nothing has nothing to be cited for.
+    ///
+    /// Defaulted rather than required so a tool that only computes — and the
+    /// stand-ins in the tests — are untouched, and so this file still builds
+    /// where FoundationModels does not exist and `SearchBookTool` is not
+    /// compiled at all.
+    func passagesShown() async -> [Int: Passage] { [:] }
 }
 
 /// What the engine asks the model to do with its sampler.

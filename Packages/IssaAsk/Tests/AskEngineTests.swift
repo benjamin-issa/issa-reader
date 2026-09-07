@@ -85,6 +85,102 @@ struct AskEngineTests {
         #expect(sent.options.maximumResponseTokens == AskPromptBuilder.Budget.responseTokens)
     }
 
+    // MARK: - Citations
+
+    @Test("the cited excerpts arrive with the answer, and each is one the model was shown")
+    func citedExcerptsComeBackWithTheAnswer() async throws {
+        let (store, source, directory) = try await AskFixture.preparedStore()
+        defer { AskFixture.remove(directory) }
+        let model = ScriptedAnswerModel(turns: [
+            .answer("Alice follows a white rabbit down a hole.\nSources: 1, 2"),
+        ])
+        let engine = AskEngine(model: model, store: store)
+
+        let (events, failure) = await Self.drain(engine.ask(
+            question: "What did Alice follow down the hole?", source: source,
+            boundary: try AskFixture.endOf(spine: AskFixture.Spine.chapterI),
+        ))
+        #expect(failure == nil)
+        let answer = try #require(Self.answer(events))
+        // Nothing under `Apps/` read `citations` before this: the whole
+        // `Sources:` apparatus parsed a line and dropped it.
+        #expect(answer.sources.map(\.ordinal) == [1, 2])
+
+        // Not merely non-empty — the excerpt the sheet will show has to be the
+        // paragraph the model was actually reading when it cited that number.
+        let prompt = try #require(await model.received.first?.prompt)
+        for cited in answer.sources {
+            #expect(prompt.contains("[\(cited.ordinal)] (Section "))
+            #expect(prompt.contains(cited.passage.displayText))
+        }
+    }
+
+    @Test("an ordinal the prompt never numbered resolves to nothing")
+    func anInventedOrdinalResolvesToNothing() async throws {
+        let (store, source, directory) = try await AskFixture.preparedStore()
+        defer { AskFixture.remove(directory) }
+        // Six excerpts at most, and the model cites the ninth. A 3B model does
+        // this often enough that the raw claim is kept and the resolution is
+        // what the sheet reads.
+        let model = ScriptedAnswerModel(turns: [
+            .answer("Alice follows a white rabbit down a hole.\nSources: 1, 99"),
+        ])
+        let engine = AskEngine(model: model, store: store)
+
+        let (events, failure) = await Self.drain(engine.ask(
+            question: "What did Alice follow down the hole?", source: source,
+            boundary: try AskFixture.endOf(spine: AskFixture.Spine.chapterI),
+        ))
+        #expect(failure == nil)
+        let answer = try #require(Self.answer(events))
+        #expect(answer.citations == [1, 99])
+        #expect(answer.sources.map(\.ordinal) == [1])
+    }
+
+    /// A tool that shows a fixed excerpt and never has to be called.
+    ///
+    /// `ScriptedAnswerModel` records the tools it was handed and never invokes
+    /// one — nothing deterministic could — so this is how the other half of the
+    /// merge gets asserted: that the engine asks each tool what it showed, and
+    /// that the answer goes through the protocol rather than through
+    /// `SearchBookTool`'s concrete type.
+    struct ShowingTool: AskTool {
+        let name = "searchBook"
+        let toolDescription = "Search the part of the book the reader has already read."
+        let callLimit = 2
+        let shown: [Int: Passage]
+
+        func passagesShown() async -> [Int: Passage] { shown }
+    }
+
+    @Test("an excerpt the search tool showed is resolvable too, not only the prompt's")
+    func toolExcerptsResolveAsWell() async throws {
+        let (store, source, directory) = try await AskFixture.preparedStore()
+        defer { AskFixture.remove(directory) }
+        // Seven, which is past anything the prompt itself numbers: the tool's
+        // excerpts continue the prompt's numbering, and before the tool retained
+        // anything *no* citation in its range could be resolved at all.
+        let found = Passage(
+            spineIndex: 3, ordinal: 0, start: 100, end: 146, words: 9,
+            text: "a White Rabbit with pink eyes ran close by her",
+        )
+        let model = ScriptedAnswerModel(turns: [
+            .answer("Alice followed a white rabbit.\nSources: 7"),
+        ])
+        let engine = AskEngine(
+            model: model, store: store, tools: [ShowingTool(shown: [7: found])],
+        )
+
+        let (events, failure) = await Self.drain(engine.ask(
+            question: "What did Alice follow down the hole?", source: source,
+            boundary: try AskFixture.endOf(spine: AskFixture.Spine.chapterI),
+        ))
+        #expect(failure == nil)
+        let answer = try #require(Self.answer(events))
+        #expect(answer.sources.map(\.ordinal) == [7])
+        #expect(answer.sources.first?.passage == found)
+    }
+
     // MARK: - Retrying a prompt that did not fit
 
     @Test("a context-window failure retries with a shorter prompt")
@@ -272,6 +368,10 @@ struct AskEngineTests {
         let answer = try #require(Self.answer(events))
         #expect(answer.notYetRevealed)
         #expect(answer.text == AskAnswerParser.notYetSentinel)
+        // Nothing was cited, so nothing is offered: excerpts under "the story
+        // hasn't revealed that yet" would be proof of an absence.
+        #expect(answer.sources.isEmpty)
+        #expect(answer.origin == .withheld)
         #expect(await model.received.isEmpty)
     }
 
@@ -305,6 +405,12 @@ struct AskEngineTests {
         #expect(answer.notYetRevealed)
         #expect(answer.text == AskAnswerParser.notYetSentinel)
         #expect(answer.citations.isEmpty, "a refused answer cites nothing")
+        // The refusal builds a fresh answer, so the generated one's excerpts go
+        // with its prose. "Returns the sentinel but keeps the old sources" would
+        // put the evidence for an answer the reader is not being given directly
+        // under the sentence saying they are not being given it.
+        #expect(answer.sources.isEmpty, "and shows nothing it was going to rest on")
+        #expect(answer.origin == .withheld)
     }
 
     /// The same answer past the chapter that introduces the Cat is ordinary
@@ -431,6 +537,14 @@ struct AskEngineTests {
         #expect(answer.text == "Vin's brother is Reen.")
         #expect(!answer.notYetRevealed)
         #expect(!answer.citations.isEmpty)
+        // The best citation in the app, and it used to be thrown away: the
+        // extractor cites an index into the very array retrieval handed it, so
+        // the excerpt shown is provably the sentence the name was read out of.
+        let cited = try #require(answer.sources.first)
+        #expect(cited.ordinal == answer.citations.first)
+        #expect(cited.passage.displayText.contains("Reen"))
+        // And nothing generated it, so the sheet must not claim a model did.
+        #expect(answer.origin == .book)
         // Nothing to think about, so nothing to wait for: no model call, and no
         // `.thinking` phase promising one.
         #expect(await model.received.isEmpty)

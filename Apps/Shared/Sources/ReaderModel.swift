@@ -1445,6 +1445,35 @@ public final class ReaderModel {
         scheduleSave()
     }
 
+    /// The same jump for somewhere that is not a search hit: a chapter, an
+    /// offset into its rendered text, and how much of it to leave marked.
+    ///
+    /// Plain integers rather than a type, because the one caller is Ask and
+    /// `ReaderModel.swift` must not import IssaAsk — the whole feature is fenced
+    /// off the television, and this file is compiled there. `ReaderModel+Ask`
+    /// spells the Ask-shaped version over this one; everything the jump needs
+    /// (`loadChapter`, `positionOrigin`, `pageIndex`, `selection`,
+    /// `selectionChapter`, `scheduleSave`) is private to this file, which is why
+    /// it cannot live there.
+    ///
+    /// - Parameters:
+    ///   - index: a spine index — the same coordinate a search hit and a reading
+    ///     boundary both use.
+    ///   - charOffset: UTF-16 units into the *rendered* chapter string, which is
+    ///     the coordinate every offset in this app is in.
+    ///   - length: how much to select. Leaving the passage selected shows the
+    ///     selection menu over it, which is the same thing a search jump does
+    ///     and is a free "here is the sentence" for nothing.
+    public func go(toChapter index: Int, charOffset: Int, marking length: Int) async {
+        guard await loadChapter(index),
+              let layout, let page = layout.page(containingOffset: charOffset) else { return }
+        positionOrigin = .chosen
+        pageIndex = page.index
+        selection = NSRange(location: charOffset, length: length)
+        selectionChapter = chapterIndex
+        scheduleSave()
+    }
+
     // MARK: - Selection and annotations
 
     /// The characters the reader has selected on this page, if any.

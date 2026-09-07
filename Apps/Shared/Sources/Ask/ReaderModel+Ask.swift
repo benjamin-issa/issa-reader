@@ -78,6 +78,29 @@ extension ReaderModel {
         return BookSource(bookUUID: book.uuid, fileURL: url, package: package)
     }
 
+    /// Opens the book at a cited excerpt, with the excerpt left selected.
+    ///
+    /// No conversion: `Passage.spineIndex` is the same coordinate
+    /// `ReadingBoundary` and a search hit both use, and `start`/`end` are UTF-16
+    /// offsets into the same rendered chapter string the page is laid out from —
+    /// the index is built by parsing the EPUB with the reader's own parser
+    /// precisely so this is true.
+    ///
+    /// Two consequences worth knowing before tapping one. Setting the selection
+    /// puts the selection menu over the cited paragraph, exactly as a search-hit
+    /// jump already does, which is a free "here is the evidence" — the reader
+    /// sees the sentence marked rather than having to find it. And the sheet is
+    /// dismissed to get here, which discards the answer: tapping a source is a
+    /// **departure**, not a detour, and the question has to be asked again to
+    /// come back to it.
+    func go(to passage: Passage) async {
+        await go(
+            toChapter: passage.spineIndex,
+            charOffset: passage.start,
+            marking: max(passage.end - passage.start, 0),
+        )
+    }
+
     /// The href of the spine document currently laid out.
     ///
     /// Spelled here rather than reached for on the model: `ReaderModel` has its

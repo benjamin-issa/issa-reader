@@ -133,6 +133,18 @@ public struct ReaderView: View {
     /// Owned above the reader, because `AppModel.readerDidClose` evicts this
     /// screen's model the moment it goes away and an answer has to outlive that.
     @Environment(AskCoordinator.self) private var ask
+    @Environment(\.scenePhase) private var scenePhase
+    /// Whether this machine can answer questions, read once and kept.
+    ///
+    /// `showsAskPill` used to call `AskAvailability.current()`, and it is
+    /// reachable from three places in `body` — the toolbar, the top bar's
+    /// actions and the badge over the page. So
+    /// `SystemLanguageModel.default.availability` was consulted on every render
+    /// pass, including every tap that hides or shows the chrome. Seeded once and
+    /// refreshed when the app comes forward, which is `AskSettingsSection`'s
+    /// pattern and for the same reason: the reader may have just been to
+    /// Settings to turn Apple Intelligence on.
+    @State private var askAvailability = AskAvailability.current()
     #endif
     #if os(macOS)
     @Environment(\.controlActiveState) private var controlActiveState
@@ -400,11 +412,26 @@ public struct ReaderView: View {
         }
         #endif
         // Reopened from a notification tap, whichever platform it arrived on.
-        .onChange(of: ask.reopenRequest) { _, requested in
+        //
+        // `initial: true`, and it is the whole fix. The delegate sets
+        // `reopenRequest` and *then* asks for the book, so on every tap that
+        // was not already on this book's reader screen — which is every tap the
+        // notification is posted for — this screen was constructed with the
+        // value already in place, and a change handler that only watches for
+        // changes never ran. Worse than doing nothing: the stale value then
+        // blocked every later tap for the same book, because assigning a String
+        // its own value is not a change either.
+        .onChange(of: ask.reopenRequest, initial: true) { _, requested in
             guard requested == model.book.uuid else { return }
             ask.reopenRequest = nil
             askDetent = .medium
             showsAsk = true
+        }
+        // Re-read when the app comes forward, not on every pass: the reader may
+        // have just been to Settings to turn Apple Intelligence on, and this is
+        // the screen they came back to.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { askAvailability = AskAvailability.current() }
         }
         #if os(macOS)
         // The Mac keeps a real toolbar: its window chrome never moved the page.
@@ -553,7 +580,7 @@ public struct ReaderView: View {
     /// harder to find than one that explains itself when tapped.
     private var showsAskPill: Bool {
         guard settings.askEnabled else { return false }
-        switch AskAvailability.current() {
+        switch askAvailability {
         case .available, .appleIntelligenceOff, .modelDownloading: return true
         case .unsupportedDevice, .unsupportedOnThisPlatform: return false
         }

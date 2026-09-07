@@ -184,18 +184,29 @@ public actor AskEngine {
         // that forbade it twice did not stop it; this does.
         case let .notYet(unmet):
             IssaLog.info("ask answered as not yet revealed", ["unmet": String(unmet.count)])
+            // No sources, and never any: nothing was cited, and offering
+            // excerpts under "the story hasn't revealed that yet" would be
+            // showing the reader proof of an absence.
             continuation.yield(.answered(AskAnswer(
                 text: AskAnswerParser.notYetSentinel, citations: [], notYetRevealed: true,
+                origin: .withheld,
             )))
 
         // The book states the answer in so many words, so there is nothing to
         // think about and no `.thinking` phase to show. It is still vetted:
         // the sentence was assembled from the book, but the guard is cheap and
         // an unvetted path is a path somebody will later route around.
-        case let .answered(answer, _):
+        //
+        // The evidence is bound rather than dropped, and this is the best
+        // citation the feature has: `KinshipExtractor` cites `evidenceIndex + 1`
+        // into the very array `EvidenceFinder.ranked` preserved 1:1, so the
+        // excerpt shown is provably the sentence the answer was lifted from —
+        // which no generated answer can claim.
+        case let .answered(answer, evidence):
             continuation.yield(.answered(
                 try await vetted(
-                    answer, question: sanitised,
+                    AskAnswerParser.resolving(answer, among: Self.numbered(evidence.map(\.passage))),
+                    question: sanitised,
                     bookUUID: source.bookUUID, boundary: boundary,
                 ),
             ))
@@ -225,6 +236,16 @@ public actor AskEngine {
     /// goes back to the model with the same sentences in front of it.
     static let usesKinshipFastPath = true
 
+    /// Excerpts by the ordinal they were numbered with, one-based.
+    ///
+    /// The one place the numbering convention is written down: the prompt
+    /// builder numbers its passages from 1, `KinshipExtractor` cites into its
+    /// evidence array the same way, and a citation is only resolvable because
+    /// both count from the same place.
+    static func numbered(_ passages: [Passage]) -> [Int: Passage] {
+        Dictionary(uniqueKeysWithValues: passages.enumerated().map { ($0.offset + 1, $0.element) })
+    }
+
     // MARK: - Vetting the answer
 
     /// The output side of the question-side guard above.
@@ -241,6 +262,12 @@ public actor AskEngine {
     /// Words already in the question are exempt, because the question-side
     /// guard has ruled on those. A word that merely begins a sentence is exempt
     /// only when it is a function word — see `unvettedNames`.
+    ///
+    /// The sources are deliberately **not** filtered. Every one of them is book
+    /// text the reader has already passed: an excerpt exists only because
+    /// `AskIndexStore` returned it from a query bounded by `boundary`, so a
+    /// second check here would be a check on something true by construction —
+    /// and one that could only ever go wrong by dropping honest evidence.
     private func vetted(
         _ answer: AskAnswer, question: String, bookUUID: String, boundary: ReadingBoundary,
     ) async throws -> AskAnswer {
@@ -253,8 +280,13 @@ public actor AskEngine {
         // Never the words themselves: an unmet name is a spoiler, and the log
         // is exported by the reader and pasted into an email.
         IssaLog.info("ask answered as not yet revealed", ["unmetInAnswer": String(unmet.count)])
+        // A fresh answer, so the refused one's sources go with its prose. The
+        // reader is being told the story has not revealed this; excerpts under
+        // that sentence would be the evidence for an answer they are not being
+        // given.
         return AskAnswer(
             text: AskAnswerParser.notYetSentinel, citations: [], notYetRevealed: true,
+            origin: .withheld,
         )
     }
 
@@ -381,7 +413,20 @@ public actor AskEngine {
                 }
 
                 do {
-                    return try await self.stream(built, into: continuation)
+                    let answer = try await self.stream(built, into: continuation)
+                    // Resolved here, inside the attempt that survived: the retry
+                    // loop means the prompt whose numbering the citations refer
+                    // to is whichever one did not throw `.tooMuchContext`, and
+                    // the two before it were built from more passages.
+                    var shown = Self.numbered(built.passages)
+                    for tool in self.tools {
+                        // The tool's excerpts continue the prompt's numbering,
+                        // so they never collide; merged last regardless, because
+                        // a collision would mean the tool numbered over the
+                        // prompt and the tool's copy is what the model saw last.
+                        shown.merge(await tool.passagesShown()) { _, fromTool in fromTool }
+                    }
+                    return AskAnswerParser.resolving(answer, among: shown)
                 } catch let failure as AskFailure where failure == .tooMuchContext {
                     lastFailure = failure
                     IssaLog.info("ask prompt too large", [

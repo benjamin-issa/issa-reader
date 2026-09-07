@@ -34,6 +34,13 @@ final class AskJob {
 
     let bookUUID: String
     let question: String
+    /// What the notification calls the book, when the answer finishes with
+    /// nobody looking at it.
+    ///
+    /// Carried by value beside the boundary and for the same reason: the job
+    /// outlives the reader screen, and `AppModel.readerDidClose` evicts the
+    /// `ReaderModel` this came from the moment the screen goes away.
+    let bookTitle: String?
     /// The boundary the answer was actually bounded by, captured when the
     /// question was asked. The footer names this and not wherever the reader
     /// has turned to since.
@@ -42,18 +49,36 @@ final class AskJob {
     var state: State = .working(.thinking)
     /// The answer so far, already stripped of a half-typed `Sources:` line.
     var partial = ""
-    /// Whether the sheet was closed while this was still running, which is the
-    /// only case a notification is posted for: a reader watching the sheet does
-    /// not need to be told what is on their screen.
-    var wasDismissedWhileWorking = false
+    /// Whether the reader has been promised a notification about this answer.
+    ///
+    /// Named for what it means rather than for the one thing that used to set
+    /// it. Closing the sheet on a running question is one way to stop watching
+    /// it; leaving the app altogether is the other, and while this was called
+    /// `wasDismissedWhileWorking` only the first set it — so backgrounding with
+    /// the sheet open held the process awake for up to thirty seconds of
+    /// inference and then logged "ask job finished quietly".
+    var owesNotification = false
+    /// Whether iOS ended this rather than the reader.
+    ///
+    /// The difference decides whether the job survives its own cancellation. A
+    /// reader who tapped Cancel wants it gone. A reader whose app was suspended
+    /// mid-answer has to be told that is what happened, and the sentence is
+    /// already written — `AskFailure.backgroundExpired`.
+    var wasExpired = false
 
     /// The pipeline, so `cancel` has something to cancel.
     var task: Task<Void, Never>?
 
-    init(bookUUID: String, question: String, boundary: ReadingBoundary) {
+    init(
+        bookUUID: String,
+        question: String,
+        boundary: ReadingBoundary,
+        bookTitle: String? = nil,
+    ) {
         self.bookUUID = bookUUID
         self.question = question
         self.boundary = boundary
+        self.bookTitle = bookTitle
     }
 
     /// What the status line says while the answer is being worked out.

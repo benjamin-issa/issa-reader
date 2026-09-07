@@ -78,7 +78,7 @@ struct AskCoordinatorTests {
         let job = try #require(coordinator.ask("What did Alice follow?", source: source,
                                                boundary: Self.boundary()))
         coordinator.sheetDismissed(bookUUID: source.bookUUID)
-        #expect(job.wasDismissedWhileWorking, "the job has to know it was left running")
+        #expect(job.owesNotification, "the job has to know it was left running")
         #expect(coordinator.job(for: source.bookUUID) === job, "and it has to still be there")
 
         await Self.settle(job)
@@ -189,6 +189,123 @@ struct AskCoordinatorTests {
         await Self.settle(second)
         #expect(await model.received.count == 2)
         #expect(await model.peakConcurrency == 1)
+    }
+
+    // MARK: - Citations
+
+    /// The whole apparatus, end to end, in the place the sheet reads it from.
+    ///
+    /// Every piece of this existed and none of them were joined up: the prompt
+    /// numbered its excerpts, the model was instructed to cite them, the parser
+    /// stripped the `Sources:` line into `citations` — and nothing under `Apps/`
+    /// ever read it, so the sheet had no way to show a reader what an answer
+    /// rested on.
+    @Test("an answered job carries the excerpts it rests on, inside the captured boundary")
+    func answeredJobCarriesItsSources() async throws {
+        let (coordinator, _, directory, _, suite) = try Self.coordinator(turns: [
+            .answer("Alice followed a white rabbit down a hole.\nSources: 1, 2"),
+        ])
+        defer { Self.cleanUp(directory, suite) }
+        let source = try Self.source()
+        let boundary = Self.boundary()
+
+        let job = try #require(coordinator.ask("What did Alice follow?", source: source,
+                                               boundary: boundary))
+        await Self.settle(job)
+        guard case let .answered(answer) = job.state else {
+            Issue.record("expected an answer, got \(job.state)")
+            return
+        }
+        #expect(answer.sources.map(\.ordinal) == [1, 2])
+        for cited in answer.sources {
+            // Bounded by the reader's own position by construction — the excerpt
+            // only exists because a query bounded by this boundary returned it —
+            // which is why the vetting pass deliberately does not re-check them.
+            #expect(cited.passage.spineIndex <= boundary.spineIndex)
+            #expect(!cited.passage.displayText.isEmpty)
+        }
+    }
+
+    // MARK: - Leaving the app mid-question
+
+    /// The first test to reach this path at all, and it fails without the fix.
+    ///
+    /// `backgroundTimeExpired` cancels the task and writes
+    /// `.failed(.backgroundExpired)`; the stream's own tail then read "ended
+    /// without an answer" as a cancellation and deleted the job three lines
+    /// later. Both run on the main actor in that order every time, so the one
+    /// message written for this case could never be shown and the reader came
+    /// back to a blank compose field.
+    @Test("a question iOS cut short says so, rather than vanishing")
+    func expiredJobSurvivesItsOwnCancellation() async throws {
+        let (coordinator, model, directory, _, suite) = try Self.coordinator(turns: [
+            .init(partials: ["Alice"], holdsAfterPartials: 1),
+        ])
+        defer { Self.cleanUp(directory, suite) }
+        let source = try Self.source()
+
+        let job = try #require(coordinator.ask("What did Alice follow?", source: source,
+                                               boundary: Self.boundary()))
+        await model.waitUntilHolding()
+        coordinator.backgroundTimeExpired()
+        await Self.settle(job)
+
+        #expect(coordinator.job(for: source.bookUUID) === job,
+                "the reader has to be told what happened to their question")
+        guard case let .failed(failure) = job.state else {
+            Issue.record("expected a failure, got \(job.state)")
+            return
+        }
+        #expect(failure == .backgroundExpired)
+        #expect(job.wasExpired)
+    }
+
+    /// The reader's own Cancel is the other side of the same branch, and it must
+    /// still take the job with it.
+    @Test("a question the reader cancelled still goes")
+    func readerCancellationStillEmpties() async throws {
+        let (coordinator, model, directory, _, suite) = try Self.coordinator(turns: [
+            .init(partials: ["Alice"], holdsAfterPartials: 1),
+        ])
+        defer { Self.cleanUp(directory, suite) }
+        let source = try Self.source()
+
+        let job = try #require(coordinator.ask("What did Alice follow?", source: source,
+                                               boundary: Self.boundary()))
+        await model.waitUntilHolding()
+        coordinator.cancel(bookUUID: source.bookUUID)
+        await Self.settle(job)
+
+        #expect(coordinator.job(for: source.bookUUID) == nil)
+        #expect(!job.wasExpired)
+    }
+
+    /// The assertion used to be taken where it could never notify.
+    ///
+    /// `appDidEnterBackground` guards on `hasWorkingJob` alone, but `finished()`
+    /// posts only when the job owes a notification — and that was set solely by
+    /// `sheetDismissed`. So backgrounding with the sheet *open* held the process
+    /// awake for up to thirty seconds of inference and then logged "ask job
+    /// finished quietly".
+    @Test("leaving the app mid-question owes the reader a notification")
+    func backgroundingPromisesTheNotification() async throws {
+        let (coordinator, model, directory, _, suite) = try Self.coordinator(turns: [
+            .init(partials: ["Alice"], holdsAfterPartials: 1),
+        ])
+        defer { Self.cleanUp(directory, suite) }
+        let source = try Self.source()
+
+        let job = try #require(coordinator.ask("What did Alice follow?", source: source,
+                                               boundary: Self.boundary()))
+        await model.waitUntilHolding()
+        #expect(!job.owesNotification, "nothing has been promised yet")
+
+        coordinator.appDidEnterBackground()
+        #expect(job.owesNotification, "the reader who leaves mid-question is who it is for")
+
+        await model.release()
+        await Self.settle(job)
+        coordinator.appDidBecomeActive()
     }
 
     // MARK: - Being asked about notifications

@@ -79,6 +79,10 @@ public final class SearchBookTool: AskTool, Tool {
         await budget.begin(numberingFrom: firstOrdinal)
     }
 
+    public func passagesShown() async -> [Int: Passage] {
+        await budget.shown
+    }
+
     // MARK: - Tool
 
     public func call(arguments: Arguments) async throws -> String {
@@ -106,7 +110,9 @@ public final class SearchBookTool: AskTool, Tool {
         // a kill switch for, and there is no other way to see it from outside.
         IssaLog.debug("ask tool searched", ["found": String(ranked.count)])
         guard !ranked.isEmpty else { return Self.noMatches }
-        return Self.excerpts(ranked.map(\.passage), numberingFrom: firstOrdinal)
+        let (text, shown) = Self.excerpts(ranked.map(\.passage), numberingFrom: firstOrdinal)
+        await budget.record(shown)
+        return text
     }
 
     /// Numbered excerpts in the prompt's own format, continuing its numbering,
@@ -115,19 +121,28 @@ public final class SearchBookTool: AskTool, Tool {
     /// The last passage is truncated at a word boundary rather than dropped when
     /// it is the only one: the model asked for something, and a sentence of it
     /// is more use than being told there was nothing.
-    static func excerpts(_ passages: [Passage], numberingFrom firstOrdinal: Int) -> String {
+    ///
+    /// - Returns: the text, and the passages that made it into it by the ordinal
+    ///   they were given. Fewer than were offered whenever the token cap bit,
+    ///   which is exactly why the count is reported rather than assumed.
+    static func excerpts(
+        _ passages: [Passage], numberingFrom firstOrdinal: Int,
+    ) -> (text: String, shown: [Int: Passage]) {
         var lines: [String] = []
+        var shown: [Int: Passage] = [:]
         var spent = 0
         for (offset, passage) in passages.enumerated() {
-            let head = "[\(firstOrdinal + offset)] (Section \(passage.spineIndex + 1)) "
+            let ordinal = firstOrdinal + offset
+            let head = "[\(ordinal)] (Section \(passage.spineIndex + 1)) "
             let room = Self.tokenCap - spent - AskPromptBuilder.estimatedTokens(head)
             guard room > 20 || lines.isEmpty else { break }
             let body = truncated(passage.displayText, toTokens: max(room, 20))
             lines.append(head + body)
+            shown[ordinal] = passage
             spent += AskPromptBuilder.estimatedTokens(head + body)
             if spent >= Self.tokenCap { break }
         }
-        return lines.joined(separator: "\n\n")
+        return (lines.joined(separator: "\n\n"), shown)
     }
 
     static func truncated(_ text: String, toTokens tokens: Int) -> String {
@@ -143,13 +158,22 @@ public final class SearchBookTool: AskTool, Tool {
 
 /// The tool's per-generation state, off the tool's own storage so the tool can
 /// stay `Sendable` while the session calls it from wherever it likes.
+///
+/// The excerpt map lives here rather than on the tool for the same reason the
+/// counter does, and it is why `passagesShown()` costs the tool no new mutable
+/// state at all.
 private actor Budget {
     private var used = 0
-    private var firstOrdinal = 1
+    private var nextOrdinal = 1
+    /// Every excerpt this generation has handed the model, by its ordinal.
+    /// Cleared by `begin`, because a context-window retry is a fresh session
+    /// whose prompt has a different number of excerpts in it.
+    private(set) var shown: [Int: Passage] = [:]
 
     func begin(numberingFrom ordinal: Int) {
         used = 0
-        firstOrdinal = max(ordinal, 1)
+        nextOrdinal = max(ordinal, 1)
+        shown = [:]
     }
 
     /// The ordinal to number this call's excerpts from, or nil when the budget
@@ -157,9 +181,20 @@ private actor Budget {
     func spend(limit: Int) -> Int? {
         guard used < limit else { return nil }
         used += 1
-        // Two searches in one generation must not both number from the same
-        // place, or the model is handed two different `[7]`s.
-        return firstOrdinal + (used - 1) * SearchBookTool.passageLimit
+        return nextOrdinal
+    }
+
+    /// What a call actually emitted, so the next one numbers from where it
+    /// stopped.
+    ///
+    /// This used to advance by `passageLimit` whatever happened, while
+    /// `excerpts` numbered consecutively from what it really wrote — so one
+    /// match, a token cap that bit, or a search that found nothing left a hole:
+    /// the model was handed `[7]` and then `[9]`, and every citation past the
+    /// hole named an excerpt that did not exist.
+    func record(_ excerpts: [Int: Passage]) {
+        shown.merge(excerpts) { _, latest in latest }
+        nextOrdinal += excerpts.count
     }
 }
 #endif
