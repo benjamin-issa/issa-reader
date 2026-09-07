@@ -147,9 +147,19 @@ public enum CustomFonts {
     /// Path only, so the sweep below can name a directory without creating one:
     /// asking for it in order to delete it is how an empty `Fonts/<uuid>/` gets
     /// left behind for every book that never shipped a face.
+    ///
+    /// The id is put through `safePathComponent` before it names anything, and
+    /// this is the call that most needed it: `removeExtracted` deletes whatever
+    /// this returns, whole. The id was interpolated raw, so `..` produced
+    /// `Fonts/../` — the storage root — and removing that one book's face
+    /// deleted every download, the catalogue, the logs and the reader's own
+    /// imported fonts. The orphan sweep reaches here with ids it decoded from
+    /// filenames found on disk, so `..-ebook.epub` sitting in `Books/` was the
+    /// whole exploit; `BookContentService.decodeFilename` now refuses that name
+    /// as well, but the guard belongs here too, where the deletion is.
     public static func extractedDirectory(bookUUID: String, in root: URL? = nil) -> URL {
         (root ?? StorageRoot.directory("Fonts"))
-            .appending(path: bookUUID, directoryHint: .isDirectory)
+            .appending(path: bookUUID.safePathComponent, directoryHint: .isDirectory)
     }
 
     /// The same directory, created and excluded from backup, for the writer.
@@ -176,7 +186,18 @@ public enum CustomFonts {
     /// then hand a stale family name straight back if the book were downloaded
     /// again into the same path.
     public static func removeExtracted(bookUUID: String, in root: URL? = nil) {
-        let directory = extractedDirectory(bookUUID: bookUUID, in: root)
+        removeExtracted(at: extractedDirectory(bookUUID: bookUUID, in: root))
+    }
+
+    /// The removal itself, given the directory rather than the book.
+    ///
+    /// Split out for `removeAllExtracted`, which already holds a real directory
+    /// URL and must not re-derive one: a book whose id was malformed lives in
+    /// `Fonts/unsafe-<hash>/`, and putting *that* name back through
+    /// `extractedDirectory` hashes it a second time and names a directory that
+    /// has never existed — so "sign out and delete my downloads" would have
+    /// walked straight past the very faces the guard above was protecting.
+    private static func removeExtracted(at directory: URL) {
         lock.lock()
         for url in registered.keys where url.path.hasPrefix(directory.path + "/") {
             CTFontManagerUnregisterFontsForURL(url as CFURL, .process, nil)
@@ -201,7 +222,7 @@ public enum CustomFonts {
             at: root, includingPropertiesForKeys: [.isDirectoryKey])) ?? []
         for entry in entries
             where (try? entry.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
-            removeExtracted(bookUUID: entry.lastPathComponent, in: root)
+            removeExtracted(at: entry)
         }
     }
 }

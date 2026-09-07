@@ -69,6 +69,15 @@ public struct DownloadsInventory: Sendable, Equatable {
         /// reader imported sit at the root of `Fonts/` and are theirs, not the
         /// download's, so they are neither counted here nor deleted with one.
         public var publisherFontBytes: Int64
+        /// The question indexes, one SQLite file per book.
+        ///
+        /// Omitted entirely until now, which made the headline under-report by
+        /// the largest derived store this app has — an index is a full-text
+        /// copy of a book's prose, so a shelf of long novels is easily more
+        /// than the extracted narration and the covers together. The comment
+        /// beside the storage bar claimed every byte in the headline was in
+        /// exactly one band, and this was the counter-example.
+        public var askIndexBytes: Int64
         /// Room left on the volume, or 0 where the platform will not say.
         public var freeBytes: Int64
 
@@ -78,6 +87,7 @@ public struct DownloadsInventory: Sendable, Equatable {
             extractedAudioBytes: Int64 = 0,
             coverBytes: Int64 = 0,
             publisherFontBytes: Int64 = 0,
+            askIndexBytes: Int64 = 0,
             freeBytes: Int64 = 0,
         ) {
             self.files = files
@@ -85,6 +95,7 @@ public struct DownloadsInventory: Sendable, Equatable {
             self.extractedAudioBytes = extractedAudioBytes
             self.coverBytes = coverBytes
             self.publisherFontBytes = publisherFontBytes
+            self.askIndexBytes = askIndexBytes
             self.freeBytes = freeBytes
         }
     }
@@ -118,9 +129,20 @@ public struct DownloadsInventory: Sendable, Equatable {
     /// directory that is not one of our filenames counts towards
     /// `unaccountedBytes` and is deliberately left alone.
     public let orphans: [FileKey]
+    /// What `sweepOrphans` would actually reclaim: the sizes of the files in
+    /// `orphans`, and nothing else.
+    ///
+    /// Separate from `unaccountedBytes`, and strictly no larger. The sweep's
+    /// confirmation promised the unaccounted total while the sweep deleted only
+    /// the files this app can name — so a directory holding an unzipped folder,
+    /// a partial transfer or anything else the reader had put there offered to
+    /// free a number it had no intention of freeing. The promise and the action
+    /// are now the same figure.
+    public let orphanBytes: Int64
     public let extractedAudioBytes: Int64
     public let coverBytes: Int64
     public let publisherFontBytes: Int64
+    public let askIndexBytes: Int64
     public let freeBytes: Int64
     /// The Books directory as a whole — rows plus `unaccountedBytes`.
     public let bookFileBytes: Int64
@@ -130,7 +152,7 @@ public struct DownloadsInventory: Sendable, Equatable {
 
     /// Everything this app is using, which is what the headline reports.
     public var totalBytes: Int64 {
-        bookFileBytes + extractedAudioBytes + coverBytes + publisherFontBytes
+        bookFileBytes + extractedAudioBytes + coverBytes + publisherFontBytes + askIndexBytes
     }
 
     /// The rows' own total — "4 books · 1.4 GB" counts these, not the caches.
@@ -194,7 +216,9 @@ public struct DownloadsInventory: Sendable, Equatable {
         byFormat = totals
 
         let known = Set(books.map(\.uuid))
-        orphans = sizes.files.keys.filter { !known.contains($0.bookUUID) }.sorted()
+        let unclaimed = sizes.files.keys.filter { !known.contains($0.bookUUID) }.sorted()
+        orphans = unclaimed
+        orphanBytes = unclaimed.reduce(0) { $0 + (sizes.files[$1] ?? 0) }
         bookFileBytes = sizes.booksDirectoryBytes
         // Clamped: the directory total and the per-file sizes are two reads of
         // a directory a background transfer may have written to in between, and
@@ -203,6 +227,7 @@ public struct DownloadsInventory: Sendable, Equatable {
         extractedAudioBytes = sizes.extractedAudioBytes
         coverBytes = sizes.coverBytes
         publisherFontBytes = sizes.publisherFontBytes
+        askIndexBytes = sizes.askIndexBytes
         freeBytes = sizes.freeBytes
     }
 
@@ -268,6 +293,11 @@ public struct DownloadsInventory: Sendable, Equatable {
             let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             sizes.coverBytes = directorySize(caches.appending(path: "Covers", directoryHint: .isDirectory))
             sizes.publisherFontBytes = subdirectorySize(StorageRoot.directory("Fonts"))
+            // Must match `AskIndexStore.defaultDirectory`. Not linked on tvOS,
+            // where FoundationModels does not exist and this directory is
+            // therefore never written — sizing it there costs one failed
+            // directory read and reports the zero that is true.
+            sizes.askIndexBytes = directorySize(StorageRoot.directory("Ask"))
             sizes.freeBytes = DiskSpace.available(at: StorageRoot.url) ?? 0
         }
 

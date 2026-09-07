@@ -153,6 +153,11 @@ public struct BookDetailView: View {
         // per-edition download states do move — a finish writes `.finished`,
         // a removal clears the job — so they are watched as well.
         .onChange(of: editionDownloadStates) { refreshDownloaded() }
+        // And on the undo window opening or closing, for the same reason: a
+        // removal of one of this book's two editions leaves `downloadedUUIDs`
+        // equal, so without this the row for the edition being removed stays
+        // lit as "Downloaded" for the whole six seconds.
+        .onChange(of: app.pendingRemoval) { refreshDownloaded() }
         // And re-read on the way back from another screen: removing an edition
         // that was fetched in an earlier session from the downloads list moves
         // neither observed value, because its job has no state to clear.
@@ -307,11 +312,13 @@ public struct BookDetailView: View {
     /// is not observable, so a delete performed on the downloads screen would
     /// otherwise never reach an already-open book screen — and asking inside
     /// the body meant a syscall per edition per frame.
+    /// Through `app`, not `BookContentService`: an edition inside its undo
+    /// window is still on disk and this screen went on offering Read and Listen
+    /// on it for the whole six seconds, then failed when the file went.
     private func refreshDownloaded() {
-        guard let session = app.session else { downloaded = []; return }
-        let content = BookContentService(client: session.client)
+        guard app.session != nil else { downloaded = []; return }
         downloaded = Set(BookContentService.Format.allCases.filter {
-            content.isDownloaded(book, format: $0)
+            app.isDownloaded(book, format: $0)
         })
     }
 

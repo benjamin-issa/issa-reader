@@ -142,15 +142,39 @@ public final class DownloadManager: NSObject {
     /// A generation rather than a set of discarded jobs: the next account may
     /// start the very same job before the old transfer's cancellation has
     /// reported back, and a per-job marker cannot tell the two apart.
-    private nonisolated let generation = OSAllocatedUnfairLock(initialState: 0)
+    ///
+    /// `perJob` is the same idea at the scale of one download, and it is why
+    /// this is a counter per job rather than a set of cancelled ones. `cancel`
+    /// left the global generation alone — correctly, since every *other* live
+    /// transfer is stamped with it and bumping it would strand them all — so a
+    /// completion callback already in flight when a cancel landed still passed
+    /// the fence, moved its file into the place the removal had just emptied,
+    /// and fired `onFinished`, which put the book back on the shelf. This is
+    /// the residual half of that fix: cancelling one job invalidates that job's
+    /// stamp and nobody else's, and a restart of the same job takes the new
+    /// number, so the old transfer and the new one are still told apart.
+    private nonisolated let generation = OSAllocatedUnfairLock(initialState: Fence())
+
+    /// Which `stop()` and which `cancel(_:)` a task belongs after.
+    struct Fence: Sendable {
+        var global = 0
+        var perJob: [Job: Int] = [:]
+
+        func epoch(for job: Job) -> Int { perJob[job] ?? 0 }
+    }
+
+    /// The stamp a task started now should carry.
+    private nonisolated func currentStamp(for job: Job) -> (generation: Int, epoch: Int) {
+        generation.withLock { ($0.global, $0.epoch(for: job)) }
+    }
 
     /// The job a callback is for, or nil when the transfer was discarded.
     private nonisolated func liveJob(in task: URLSessionTask) -> Job? {
         guard let description = task.taskDescription,
-              let (job, stamped) = Self.decodeStamped(description),
-              stamped == generation.withLock({ $0 })
+              let (job, stamped, epoch) = Self.decodeStamped(description)
         else { return nil }
-        return job
+        let live = generation.withLock { $0.global == stamped && $0.epoch(for: job) == epoch }
+        return live ? job : nil
     }
     /// A job cancelled while `start(_:)` was still awaiting a token, before its
     /// task existed to be cancelled.
@@ -215,6 +239,16 @@ public final class DownloadManager: NSObject {
     /// reconfigures a manager and needs to see which server it now asks.
     func request(for job: Job) -> URLRequest? { tasks[job]?.originalRequest }
 
+    /// The description a task started right now would carry. Internal, for
+    /// tests that stand in for the session's own delegate callbacks: a stub
+    /// task stamped by hand is a stub whose staleness is decided by the test
+    /// rather than by the manager, which is how a fence can be proved by a test
+    /// that never exercises it.
+    func liveTaskDescription(for job: Job) -> String {
+        let stamp = currentStamp(for: job)
+        return Self.encode(job, generation: stamp.generation, epoch: stamp.epoch)
+    }
+
     /// Everything not yet finished, for the Downloads screen.
     public var pending: [(job: Job, state: State)] {
         states.filter { $0.value != .finished }
@@ -268,7 +302,8 @@ public final class DownloadManager: NSObject {
         } else {
             session.downloadTask(with: request)
         }
-        task.taskDescription = Self.encode(job, generation: generation.withLock { $0 })
+        let stamp = currentStamp(for: job)
+        task.taskDescription = Self.encode(job, generation: stamp.generation, epoch: stamp.epoch)
         tasks[job] = task
         task.resume()
     }
@@ -307,6 +342,19 @@ public final class DownloadManager: NSObject {
     }
 
     public func cancel(_ job: Job) {
+        // Advanced before the cancel, on the lock the delegate reads, so a
+        // completion callback already in flight finds itself stale however soon
+        // it comes. `didFinishDownloadingTo` moves the file *before* it hops to
+        // the actor — it has to, the temporary file is gone the moment it
+        // returns — so this synchronous fence is the only thing standing
+        // between a cancelled transfer and its file landing in the place a
+        // removal has just emptied, with `onFinished` putting the book straight
+        // back on the shelf. `stop()` does the same thing for every job at once.
+        //
+        // Per job, not global: every other live transfer carries the global
+        // number, and bumping that here would strand all of them — their files
+        // never moved into place and their rows never finished.
+        generation.withLock { $0.perJob[job, default: 0] += 1 }
         if let task = tasks[job] {
             // Marked only when a live task exists to produce the cancellation
             // callback that consumes the marker. Inserting unconditionally
@@ -359,7 +407,10 @@ public final class DownloadManager: NSObject {
         // Advanced before the cancel, on the lock the delegate reads, so the
         // callbacks the cancel provokes find themselves stale however soon
         // they come.
-        generation.withLock { $0 += 1 }
+        // The per-job epochs go with it: every stamp is stale now on the global
+        // number alone, and carrying them forward would leave the next account
+        // starting each job at whatever count the last one happened to reach.
+        generation.withLock { $0 = Fence(global: $0.global + 1, perJob: [:]) }
         for task in tasks.values { task.cancel() }
         tasks = [:]
         resumeData = [:]
@@ -393,12 +444,15 @@ public final class DownloadManager: NSObject {
     /// Reattaches to whatever the system carried on with while the app was away.
     public func reattach() async {
         let running = await session.tasks.2
-        let current = generation.withLock { $0 }
         for task in running {
             guard let description = task.taskDescription, let job = Self.decode(description) else { continue }
             // Re-stamped: the stamp it carries is from the process that started
-            // it, and means nothing to this one.
-            task.taskDescription = Self.encode(job, generation: current)
+            // it, and means nothing to this one. Both numbers, because a job
+            // this process has already cancelled must not be adopted back into
+            // life by a task the system carried on with while the app was away.
+            let stamp = currentStamp(for: job)
+            task.taskDescription = Self.encode(
+                job, generation: stamp.generation, epoch: stamp.epoch)
             tasks[job] = task
             states[job] = .downloading(fractionCompleted: task.progress.fractionCompleted,
                                        bytesWritten: task.countOfBytesReceived,
@@ -414,11 +468,15 @@ public final class DownloadManager: NSObject {
         return available > bytes + 200_000_000
     }
 
-    /// The task description, with the `stop()` generation it was started in.
-    /// A description with no stamp reads as generation zero, which is where
-    /// every process starts.
-    nonisolated static func encode(_ job: Job, generation: Int = 0) -> String {
+    /// The task description, with the `stop()` generation and the `cancel(_:)`
+    /// epoch it was started in.
+    ///
+    /// Both trailing fields are omitted when they are zero, which is where every
+    /// process starts — so a task stamped by a build that knew nothing of either
+    /// still decodes, which is what `reattach` depends on across an upgrade.
+    nonisolated static func encode(_ job: Job, generation: Int = 0, epoch: Int = 0) -> String {
         let base = "\(job.bookUUID)|\(job.format.rawValue)"
+        if epoch != 0 { return base + "|\(generation)|\(epoch)" }
         return generation == 0 ? base : base + "|\(generation)"
     }
 
@@ -428,17 +486,24 @@ public final class DownloadManager: NSObject {
         decodeStamped(description)?.job
     }
 
-    nonisolated static func decodeStamped(_ description: String) -> (job: Job, generation: Int)? {
+    nonisolated static func decodeStamped(
+        _ description: String,
+    ) -> (job: Job, generation: Int, epoch: Int)? {
         let parts = description.split(separator: "|")
-        guard (2 ... 3).contains(parts.count),
+        guard (2 ... 4).contains(parts.count),
               let format = BookContentService.Format(rawValue: String(parts[1]))
         else { return nil }
         var generation = 0
-        if parts.count == 3 {
+        var epoch = 0
+        if parts.count >= 3 {
             guard let stamped = Int(parts[2]) else { return nil }
             generation = stamped
         }
-        return (Job(bookUUID: String(parts[0]), format: format), generation)
+        if parts.count == 4 {
+            guard let stamped = Int(parts[3]) else { return nil }
+            epoch = stamped
+        }
+        return (Job(bookUUID: String(parts[0]), format: format), generation, epoch)
     }
 }
 

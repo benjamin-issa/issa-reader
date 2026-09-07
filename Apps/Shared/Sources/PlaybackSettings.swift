@@ -146,7 +146,17 @@ public final class PlaybackSettings {
         return UserDefaults(suiteName: name)
     }
 
-    public init(suiteName: String? = CurrentBookSnapshotStore.appGroup) {
+    /// `centre` is injectable so a test can post the sign-out message to a
+    /// centre only its own instance observes. The observer below registers with
+    /// `object: nil` on a process-wide centre, so a suite posting that
+    /// notification reached into every other suite running beside it — clearing
+    /// per-book styles and volume trims mid-test, and taking whole question
+    /// indexes with it. swift-testing runs suites in parallel; the scope of the
+    /// message has to be narrower than the process.
+    public init(
+        suiteName: String? = CurrentBookSnapshotStore.appGroup,
+        centre: NotificationCenter = .default,
+    ) {
         let store = suiteName.flatMap { Self.defaults(named: $0) } ?? .standard
         defaults = store
         commandMap = Self.load(CommandMap.self, from: store, key: Self.commandMapKey) ?? CommandMap()
@@ -175,7 +185,7 @@ public final class PlaybackSettings {
         if volumes.migrated { persist(bookVolumeTrims, as: Self.bookVolumeDecibelsKey) }
         // After every stored property: `self` is not usable in a closure until
         // the initialiser has finished.
-        signOutObserver.token = NotificationCenter.default.addObserver(
+        signOutObserver.token = centre.addObserver(
             forName: Self.signOutNotification, object: nil, queue: .main,
         ) { [weak self] _ in
             MainActor.assumeIsolated {

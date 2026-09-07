@@ -18,7 +18,7 @@ import Testing
 @MainActor
 struct DerivedCatalogueTests {
     static func model(_ books: [Book]) -> AppModel {
-        let app = AppModel()
+        let app = AppModel(notificationCentre: NotificationCenter())
         app.books = books
         app.rebuildDerived()
         return app

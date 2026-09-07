@@ -81,11 +81,16 @@ struct VolumeTrimPersistenceTests {
         let suite = "test.\(UUID().uuidString)"
         defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
         try Self.write(["book": -30], as: Self.legacyKey, in: suite)
-        let settings = PlaybackSettings(suiteName: suite)
+        // A centre of this test's own. The sign-out message is process-wide and
+        // every observer of it registers with `object: nil`, so posting it on
+        // the default centre reached into every suite running in parallel —
+        // clearing their styles and trims, and purging whole question indexes.
+        let centre = NotificationCenter()
+        let settings = PlaybackSettings(suiteName: suite, centre: centre)
         settings.setVolumeTrim(-2, for: "book")
         #expect(settings.bookVolumeTrims.isEmpty == false)
 
-        NotificationCenter.default.post(name: PlaybackSettings.signOutNotification, object: nil)
+        centre.post(name: PlaybackSettings.signOutNotification, object: nil)
         // The observer is delivered on the main queue; we are on it.
         await Task.yield()
 

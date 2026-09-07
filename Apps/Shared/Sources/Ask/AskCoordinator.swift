@@ -88,6 +88,11 @@ final class AskCoordinator {
         model: (any AnswerModel)? = nil,
         notifier: AskNotifier? = AskNotifier(),
         defaults: UserDefaults = .standard,
+        // Injectable for the same reason `PlaybackSettings`'s is: this observer
+        // registers with `object: nil`, so a sign-out posted by any suite in a
+        // parallel test run purged the index of every coordinator alive
+        // anywhere in the process.
+        centre: NotificationCenter = .default,
     ) {
         self.store = store
         // The real one unless a test hands over a scripted stand-in.
@@ -104,7 +109,7 @@ final class AskCoordinator {
         // leaving takes its indexes with it. Through the same notification
         // `PlaybackSettings` uses, because this object is not owned by
         // `AppModel` either and there is nothing to call it directly.
-        signOutObserver.token = NotificationCenter.default.addObserver(
+        signOutObserver.token = centre.addObserver(
             forName: PlaybackSettings.signOutNotification, object: nil, queue: .main,
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.purgeAll() }

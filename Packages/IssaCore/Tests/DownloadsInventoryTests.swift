@@ -170,6 +170,78 @@ struct DownloadsInventoryTests {
         #expect(inventory.orphans.isEmpty, "a sweep only touches files this app named")
     }
 
+    /// The sweep's confirmation promised `unaccountedBytes` — "Remove 1.2 GB of
+    /// downloads?" — while the sweep itself deleted only `orphans`, the strictly
+    /// smaller subset this app can name. Anything else in the directory is
+    /// counted as unaccounted and deliberately left alone, so the dialog offered
+    /// to free space the button had no intention of freeing.
+    @Test("what the sweep promises is what the sweep would delete")
+    func orphanBytesAreWhatTheSweepReclaims() {
+        let inventory = DownloadsInventory.make(
+            books: [book("kept", title: "Kept")], downloaded: ["kept", "gone"],
+            sizes: .init(
+                files: [key("kept", .ebook): 100, key("gone", .readaloud): 500],
+                // The two files above, plus 40 bytes of something this app
+                // never wrote and will never delete.
+                booksDirectoryBytes: 640),
+        )
+
+        #expect(inventory.unaccountedBytes == 540, "the bar still shows every byte with no row")
+        #expect(inventory.orphanBytes == 500, "but the sweep can only reclaim the file it names")
+        #expect(inventory.orphanBytes <= inventory.unaccountedBytes,
+                "the promise can never exceed the deletable set")
+    }
+
+    @Test("a sweep with nothing to sweep promises nothing")
+    func noOrphansIsNoBytes() {
+        let inventory = DownloadsInventory.make(
+            books: [book("kept", title: "Kept")], downloaded: ["kept"],
+            sizes: .init(files: [key("kept", .ebook): 100], booksDirectoryBytes: 140),
+        )
+        #expect(inventory.orphans.isEmpty)
+        #expect(inventory.orphanBytes == 0)
+        #expect(inventory.unaccountedBytes == 40, "which is not the same as nothing to see")
+    }
+
+    /// The question indexes were in no band and in no total, while the comment
+    /// beside the bar asserted that every byte in the headline was in exactly
+    /// one band. An index is a full-text copy of a book's prose, so this is the
+    /// largest derived store the app keeps — the headline under-reported by more
+    /// than the narration and the covers together on a shelf of long novels.
+    @Test("the headline counts the question indexes")
+    func askIndexesAreInTheHeadline() {
+        let inventory = DownloadsInventory.make(
+            books: [book("kept", title: "Kept")], downloaded: ["kept"],
+            sizes: .init(
+                files: [key("kept", .ebook): 100], booksDirectoryBytes: 100,
+                extractedAudioBytes: 10, coverBytes: 5, publisherFontBytes: 2,
+                askIndexBytes: 900),
+        )
+
+        #expect(inventory.askIndexBytes == 900)
+        #expect(inventory.totalBytes == 100 + 10 + 5 + 2 + 900)
+    }
+
+    /// The invariant the bar's comment claims, asserted rather than asserted in
+    /// prose: every byte the headline reports is in exactly one band.
+    @Test("the headline is the bands, with nothing over")
+    func theHeadlineIsTheSumOfTheBands() {
+        let inventory = DownloadsInventory.make(
+            books: [book("kept", title: "Kept")], downloaded: ["kept", "gone"],
+            sizes: .init(
+                files: [key("kept", .ebook): 100, key("gone", .readaloud): 500],
+                booksDirectoryBytes: 640,
+                extractedAudioBytes: 10, coverBytes: 5, publisherFontBytes: 2,
+                askIndexBytes: 900),
+        )
+
+        let bands = inventory.byFormat.values.reduce(0, +)
+            + inventory.extractedAudioBytes + inventory.coverBytes
+            + inventory.publisherFontBytes + inventory.askIndexBytes
+            + inventory.unaccountedBytes
+        #expect(bands == inventory.totalBytes)
+    }
+
     @Test("everything adds up: rows plus the unaccounted is the directory")
     func theBarAddsUpToTheHeadline() {
         let inventory = DownloadsInventory.make(
@@ -257,6 +329,54 @@ struct DownloadsInventoryTests {
         #expect(BookContentService.decodeFilename("something.txt") == nil)
         #expect(BookContentService.decodeFilename("-ebook.epub") == nil)
         #expect(BookContentService.decodeFilename("a-unknown.epub") == nil)
+        #expect(BookContentService.decodeFilename("not-a-uuid-ebook.epub") == nil)
+    }
+
+    /// The worst thing this decoder could do, named as its own test.
+    ///
+    /// A decoded id does not stay a string: the orphan sweep hands it to
+    /// `AppModel.removeDownload`, which builds `Fonts/<id>/` and `Audio/<id>/`
+    /// and deletes each of them whole. `..` made both of those the storage root,
+    /// so one file with this name in the Books directory turned "remove 1
+    /// orphaned file" into deleting every download, the catalogue, the logs and
+    /// the reader's own imported fonts.
+    ///
+    /// A filename is not a trust boundary anyone controls: an unzipped archive,
+    /// a sync client, a restored backup or a server naming a book can all put
+    /// one there. So the decoder refuses it rather than the deleters catching it
+    /// — they do too, but only one of the two can be the last line.
+    @Test("a filename that decodes to a path traversal is not one of ours",
+          arguments: ["..-ebook.epub", "..-readaloud.epub", "...-ebook.epub",
+                      "../..-ebook.epub", ".-audiobook.epub"])
+    func traversalFilenamesAreRefused(_ name: String) {
+        #expect(BookContentService.decodeFilename(name) == nil,
+                "\"\(name)\" must never become a book id")
+        #expect(BookContentService.bookUUID(fromFilename: name) == nil)
+    }
+
+    /// And the sweep that reads the directory must not offer it either — the
+    /// decoder is where it is refused, but this is the call that would have
+    /// carried it.
+    @Test("a traversal filename on disk is neither downloaded nor an orphan")
+    func traversalFilesAreNotSwept() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "issa-traversal-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let real = "11111111-1111-4111-8111-111111111111"
+        try Data(repeating: 0, count: 8).write(to: directory.appending(path: "\(real)-ebook.epub"))
+        try Data(repeating: 0, count: 8).write(to: directory.appending(path: "..-ebook.epub"))
+
+        #expect(try BookContentService.downloadedBookUUIDs(in: directory) == [real])
+
+        let inventory = await DownloadsInventory.scan(
+            books: [], downloaded: [], scope: .booksOnly, booksDirectory: directory)
+        #expect(!inventory.orphans.contains { $0.bookUUID == ".." },
+                "the sweep would have deleted the storage root")
+        // Still counted in the directory total: the bytes are real and the
+        // reader should see them. Left alone is not the same as unseen.
+        #expect(inventory.bookFileBytes == 16)
     }
 
     // MARK: - The disk half

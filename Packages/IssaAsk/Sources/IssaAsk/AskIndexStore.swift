@@ -76,22 +76,14 @@ public actor AskIndexStore {
     /// entry whose uuid is `../../Library/Preferences/x` would otherwise choose
     /// the path this writes to. A malformed one is hashed rather than stripped,
     /// so it still names the same file every time without being able to escape
-    /// the directory.
+    /// the directory. `String.safePathComponent` is that rule, shared with every
+    /// other place a book id names something on disk.
     public static func indexURL(in directory: URL, bookUUID: String) -> URL {
-        let component = bookUUID.isBareUUID ? bookUUID : "unsafe-\(digest(bookUUID))"
-        return directory.appending(path: "\(component).sqlite")
+        directory.appending(path: "\(bookUUID.safePathComponent).sqlite")
     }
 
     static func buildingURL(for url: URL) -> URL {
         url.deletingPathExtension().appendingPathExtension("building.sqlite")
-    }
-
-    private static func digest(_ value: String) -> String {
-        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
-        for byte in Data(value.utf8) {
-            hash = (hash ^ UInt64(byte)) &* 0x100_0000_01b3
-        }
-        return String(hash, radix: 16)
     }
 
     public nonisolated func indexURL(for bookUUID: String) -> URL {

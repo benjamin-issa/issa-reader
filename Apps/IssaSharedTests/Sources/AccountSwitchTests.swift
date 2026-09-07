@@ -64,7 +64,7 @@ struct AccountSwitchTests {
     /// recorded as last signed in by `previous`.
     static func model(on server: URL, lastSignedInAs previous: String) -> AppModel {
         UserDefaults.standard.set(previous, forKey: "issa.account.\(server.absoluteString)")
-        let app = AppModel(keychain: InMemoryTokens())
+        let app = AppModel(keychain: InMemoryTokens(), notificationCentre: NotificationCenter())
         app.session = session(for: server)
         // Seeded, so the assertions that these are cleared are about the
         // clearing. The first version asserted `books` and `statuses` empty
@@ -129,7 +129,7 @@ struct AccountSwitchTests {
     func noStoredAccountIsNotASwitch() async {
         let server = Self.server(identifying: 3)
         Self.forget(server)
-        let app = AppModel(keychain: InMemoryTokens())
+        let app = AppModel(keychain: InMemoryTokens(), notificationCentre: NotificationCenter())
         app.session = Self.session(for: server)
         app.requestBook("11111111-1111-4111-8111-111111111111", .read)
 

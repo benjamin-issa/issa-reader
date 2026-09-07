@@ -32,6 +32,14 @@ struct DownloadRemovalTests {
     private static func booksDirectory() throws -> URL {
         let directory = BookContentService.defaultDirectory()
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        // One test below makes this directory unreadable on purpose, and
+        // restores it in a `defer`. A run killed between those two — a stopped
+        // test, a crashed process — would otherwise leave the simulator's
+        // container locked and every later run failing at launch, on a fault
+        // with nothing to do with the code being tested. Repaired here, where
+        // every test in the suite passes through.
+        try? FileManager.default.setAttributes(
+            [.posixPermissions: 0o755], ofItemAtPath: directory.path)
         return directory
     }
 
@@ -69,7 +77,7 @@ struct DownloadRemovalTests {
     /// with it" is a question the shape of the state cannot answer on its own.
     @Test("removing one edition leaves the other on the device")
     func removingOneEditionLeavesTheOther() throws {
-        let app = AppModel(keychain: InMemoryTokens())
+        let app = AppModel(keychain: InMemoryTokens(), notificationCentre: NotificationCenter())
         let uuid = Self.freshUUID()
         let ebook = try Self.plant(uuid, format: .ebook)
         let readaloud = try Self.plant(uuid, format: .readaloud, bytes: 64)
@@ -91,7 +99,7 @@ struct DownloadRemovalTests {
     /// a reader would notice first.
     @Test("a removal leaves the rating, the position and the annotations alone")
     func removalLeavesTheReadersOwnDataAlone() async throws {
-        let app = AppModel(keychain: InMemoryTokens())
+        let app = AppModel(keychain: InMemoryTokens(), notificationCentre: NotificationCenter())
         let uuid = Self.freshUUID()
         let file = try Self.plant(uuid, format: .ebook)
         defer { try? FileManager.default.removeItem(at: file) }
@@ -136,7 +144,7 @@ struct DownloadRemovalTests {
     /// the download or sign out".
     @Test("a file that went behind the model's back takes its question index with it")
     func reconcileDropsTheIndexOfADepartedDownload() async throws {
-        let app = AppModel(keychain: InMemoryTokens())
+        let app = AppModel(keychain: InMemoryTokens(), notificationCentre: NotificationCenter())
         let uuid = Self.freshUUID()
 
         // The download is a real book, copied into the real download directory,
@@ -185,7 +193,7 @@ struct DownloadRemovalTests {
     /// more the download's than an annotation is.
     @Test("reconciling removes a book's extracted face and leaves the reader's own")
     func reconcileRemovesExtractedFontsOnly() throws {
-        let app = AppModel(keychain: InMemoryTokens())
+        let app = AppModel(keychain: InMemoryTokens(), notificationCentre: NotificationCenter())
         let uuid = Self.freshUUID()
         let file = try Self.plant(uuid, format: .readaloud)
         defer { try? FileManager.default.removeItem(at: file) }
@@ -216,7 +224,7 @@ struct DownloadRemovalTests {
     /// safe to run twice.
     @Test("removing the last edition and reconciling it are the same removal, run twice")
     func removalIsIdempotentWithTheSweep() throws {
-        let app = AppModel(keychain: InMemoryTokens())
+        let app = AppModel(keychain: InMemoryTokens(), notificationCentre: NotificationCenter())
         let uuid = Self.freshUUID()
         let file = try Self.plant(uuid, format: .ebook)
         defer { try? FileManager.default.removeItem(at: file) }
@@ -234,6 +242,155 @@ struct DownloadRemovalTests {
         #expect(!app.downloadedUUIDs.contains(uuid))
     }
 
+    /// The half of a two-edition removal that had no owner.
+    ///
+    /// The publisher face and the question index are derived from the book's
+    /// *text*, and either edition carries it — so releasing them because one of
+    /// the two went destroyed data belonging to the copy still on the device.
+    /// `DownloadsInventory.departed` had already written the rule down — "a book
+    /// that lost one of two editions has not departed" — and the deletion path
+    /// was the one place not honouring it.
+    ///
+    /// Nothing on screen changes when this is wrong, which is why it needs a
+    /// test: the reader finds out on the next open, when the book is set in the
+    /// fallback face and every question it had been indexed for has to be
+    /// indexed again.
+    @Test("removing one of two editions keeps the face and index of the other")
+    func removingOneEditionKeepsTheBooksDerivedFiles() async throws {
+        let app = AppModel(keychain: InMemoryTokens(), notificationCentre: NotificationCenter())
+        let uuid = Self.freshUUID()
+        // A real book for the ebook, because the index below is built by parsing
+        // it — and the point of the test is that the index outlives it.
+        let bundle = Bundle(for: BundleMarker.self)
+        let fixture = try #require(bundle.url(forResource: "alice", withExtension: "epub"))
+        let ebook = BookContentService.localURL(
+            in: try Self.booksDirectory(), bookUUID: uuid, format: .ebook)
+        try? FileManager.default.removeItem(at: ebook)
+        try FileManager.default.copyItem(at: fixture, to: ebook)
+        let readaloud = try Self.plant(uuid, format: .readaloud, bytes: 64)
+        defer { for url in [ebook, readaloud] { try? FileManager.default.removeItem(at: url) } }
+
+        let extracted = CustomFonts.extractedDirectory(bookUUID: uuid)
+        try FileManager.default.createDirectory(at: extracted, withIntermediateDirectories: true)
+        let face = extracted.appending(path: "body.otf")
+        try Data("face".utf8).write(to: face)
+        defer { try? FileManager.default.removeItem(at: extracted) }
+
+        let indexes = URL.temporaryDirectory.appending(path: "issa-editions-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: indexes, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: indexes) }
+        let (defaults, suite) = SharedFixtures.scratchDefaults()
+        defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
+        let store = AskIndexStore(directory: indexes)
+        // Held strongly: `AppModel.ask` is weak, and a coordinator nobody owns
+        // is a removal that quietly does nothing and a test that proves nothing.
+        let coordinator = AskCoordinator(
+            store: store, model: ScriptedAnswerModel(), notifier: nil, defaults: defaults)
+        app.ask = coordinator
+        let source = try BookSource(bookUUID: uuid, fileURL: ebook)
+        _ = try await store.prepare(source: source)
+        // The index *file*, not `isPrepared`: that re-reads the fingerprint of
+        // the EPUB it was built from, so once the ebook has gone it answers
+        // false whether or not the index survived — which is precisely the
+        // distinction this test exists to draw.
+        let index = store.indexURL(for: uuid)
+        #expect(Self.exists(index), "the index has to exist to be kept")
+
+        app.refreshDownloadedSet()
+        app.removeDownload(bookUUID: uuid, format: .ebook)
+
+        #expect(!Self.exists(ebook), "the edition asked for is the one that goes")
+        #expect(Self.exists(readaloud))
+        #expect(app.downloadedUUIDs.contains(uuid), "the book has not departed")
+        #expect(Self.exists(face), "the face belongs to the read-along still on disk")
+        // Given a moment to be wrong: the removal hands the index to the store's
+        // actor, so asserting straight away would pass whether or not it went.
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(Self.exists(index),
+                "the index was built from text that is still on the device")
+
+        // And when the last edition carrying text goes, both do go.
+        app.removeDownload(bookUUID: uuid, format: .readaloud)
+        #expect(!Self.exists(face))
+        let indexPath = index.path
+        let dropped = await Self.eventually {
+            !FileManager.default.fileExists(atPath: indexPath)
+        }
+        #expect(dropped)
+    }
+
+    /// An audiobook carries no text, so it cannot be what a face or an index was
+    /// derived from — a book left with only one has nothing behind either.
+    @Test("an audiobook left on the device does not keep a face alive")
+    func anAudiobookIsNotTextOnTheDevice() throws {
+        let app = AppModel(keychain: InMemoryTokens(), notificationCentre: NotificationCenter())
+        let uuid = Self.freshUUID()
+        let ebook = try Self.plant(uuid, format: .ebook)
+        let audiobook = try Self.plant(uuid, format: .audiobook, bytes: 64)
+        defer { for url in [ebook, audiobook] { try? FileManager.default.removeItem(at: url) } }
+
+        let extracted = CustomFonts.extractedDirectory(bookUUID: uuid)
+        try FileManager.default.createDirectory(at: extracted, withIntermediateDirectories: true)
+        let face = extracted.appending(path: "body.otf")
+        try Data("face".utf8).write(to: face)
+        defer { try? FileManager.default.removeItem(at: extracted) }
+
+        app.refreshDownloadedSet()
+        app.removeDownload(bookUUID: uuid, format: .ebook)
+
+        #expect(Self.exists(audiobook), "the edition not asked for stays")
+        #expect(!Self.exists(face), "nothing left on the device has any text in it")
+    }
+
+    /// The sweep's worst case, and the one it is least equipped to notice.
+    ///
+    /// `downloadedBookUUIDs` coalesced a failed directory read to an empty set,
+    /// and every book the app knew about was then in `previous` and in no
+    /// `current` — so the sweep concluded that the reader had deleted their
+    /// entire library and deleted every book's question index, extracted
+    /// narration and publisher font to match. None of that is re-downloadable:
+    /// the index is minutes of on-device work, and the narration is hundreds of
+    /// megabytes. The files themselves were untouched, which is what made it
+    /// invisible until the next time a book was opened.
+    ///
+    /// An unreadable directory is a fact about this moment — a permissions
+    /// fault, a detached volume, a device still unlocking after a restart — and
+    /// says nothing about what is on the disk. So: keep the last set, run no
+    /// sweep, and try again on the next refresh.
+    @Test("a downloads directory that cannot be read is not an empty library")
+    func anUnreadableDirectoryIsNotADeparture() throws {
+        let app = AppModel(keychain: InMemoryTokens(), notificationCentre: NotificationCenter())
+        let uuid = Self.freshUUID()
+        let file = try Self.plant(uuid, format: .ebook)
+        defer { try? FileManager.default.removeItem(at: file) }
+
+        let extracted = CustomFonts.extractedDirectory(bookUUID: uuid)
+        try FileManager.default.createDirectory(at: extracted, withIntermediateDirectories: true)
+        let face = extracted.appending(path: "body.otf")
+        try Data("face".utf8).write(to: face)
+        defer { try? FileManager.default.removeItem(at: extracted) }
+
+        app.refreshDownloadedSet()
+        #expect(app.downloadedUUIDs.contains(uuid))
+
+        // Unreadable, and emphatically not empty. Restored unconditionally: this
+        // is the app's real downloads directory, and leaving it at 0o000 would
+        // break every test after it rather than only this one.
+        let directory = try Self.booksDirectory()
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o000], ofItemAtPath: directory.path)
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o755], ofItemAtPath: directory.path)
+        }
+
+        app.refreshDownloadedSet()
+
+        #expect(app.downloadedUUIDs.contains(uuid),
+                "the last set it could read is a better answer than a wrong one")
+        #expect(Self.exists(face), "the sweep deleted a face for a book that never left")
+    }
+
     // MARK: - The undo window
 
     /// The mockup asks for an undo toast and says nothing in the section may
@@ -242,7 +399,7 @@ struct DownloadRemovalTests {
     /// the window closes.
     @Test("a removal inside its undo window has not touched the disk yet")
     func undoWindowDefersTheDeletion() throws {
-        let app = AppModel(keychain: InMemoryTokens())
+        let app = AppModel(keychain: InMemoryTokens(), notificationCentre: NotificationCenter())
         let uuid = Self.freshUUID()
         let file = try Self.plant(uuid, format: .ebook)
         defer { try? FileManager.default.removeItem(at: file) }
@@ -261,7 +418,7 @@ struct DownloadRemovalTests {
 
     @Test("the window closing deletes what it was holding")
     func theWindowCommits() throws {
-        let app = AppModel(keychain: InMemoryTokens())
+        let app = AppModel(keychain: InMemoryTokens(), notificationCentre: NotificationCenter())
         let uuid = Self.freshUUID()
         let file = try Self.plant(uuid, format: .ebook)
         defer { try? FileManager.default.removeItem(at: file) }
@@ -279,7 +436,7 @@ struct DownloadRemovalTests {
     /// three rows is not an undo, so a second removal commits the first.
     @Test("a second removal commits the first rather than losing it")
     func aSecondRemovalCommitsTheFirst() throws {
-        let app = AppModel(keychain: InMemoryTokens())
+        let app = AppModel(keychain: InMemoryTokens(), notificationCentre: NotificationCenter())
         let first = Self.freshUUID()
         let second = Self.freshUUID()
         let firstFile = try Self.plant(first, format: .ebook)
@@ -300,11 +457,150 @@ struct DownloadRemovalTests {
         app.commitPendingRemoval()
     }
 
+    /// The window was visible to the rows of one section and to nothing else.
+    ///
+    /// `downloadedUUIDs` is what the offline shelf filters on, what CarPlay's
+    /// catalogue is built from and what the library's arrangement sorts by, and
+    /// for the whole six seconds it went on reporting the edition as present.
+    /// So every surface but the one the reader was looking at offered a book
+    /// whose file was about to be deleted; in a car, in a tunnel, that is
+    /// silence, and `CarPlaySceneDelegate` says so in as many words.
+    @Test("an edition inside its undo window is off the device everywhere")
+    func theUndoWindowIsVisibleToEverySurface() throws {
+        let app = AppModel(keychain: InMemoryTokens(), notificationCentre: NotificationCenter())
+        let uuid = Self.freshUUID()
+        let file = try Self.plant(uuid, format: .ebook)
+        defer { try? FileManager.default.removeItem(at: file) }
+        app.refreshDownloadedSet()
+        #expect(app.downloadedUUIDs.contains(uuid))
+        #expect(app.isDownloaded(bookUUID: uuid, format: .ebook))
+
+        app.removeDownload(bookUUID: uuid, format: .ebook, title: "Dracula",
+                           undoWindow: .seconds(600))
+
+        #expect(!app.downloadedUUIDs.contains(uuid),
+                "the car was still being offered a book about to be deleted")
+        #expect(!app.isDownloaded(bookUUID: uuid, format: .ebook))
+        #expect(Self.exists(file), "and the bytes are still there, which is the point")
+
+        app.undoPendingRemoval()
+        #expect(app.downloadedUUIDs.contains(uuid), "undo puts it back with no fetch")
+        #expect(app.isDownloaded(bookUUID: uuid, format: .ebook))
+    }
+
+    /// Keyed by book, so a book that has lost one of two editions is still on
+    /// the device — the same rule `DownloadsInventory.departed` states. Taking
+    /// the whole book out of the set here would empty its row from the shelf
+    /// while the read-along it still has sat on disk.
+    @Test("a book with a second edition stays on the device during the window")
+    func aSecondEditionKeepsTheBookOnTheShelf() throws {
+        let app = AppModel(keychain: InMemoryTokens(), notificationCentre: NotificationCenter())
+        let uuid = Self.freshUUID()
+        let ebook = try Self.plant(uuid, format: .ebook)
+        let readaloud = try Self.plant(uuid, format: .readaloud, bytes: 64)
+        defer { for url in [ebook, readaloud] { try? FileManager.default.removeItem(at: url) } }
+        app.refreshDownloadedSet()
+
+        app.removeDownload(bookUUID: uuid, format: .ebook, title: "Dracula",
+                           undoWindow: .seconds(600))
+
+        #expect(app.downloadedUUIDs.contains(uuid), "the read-along is still on the device")
+        #expect(!app.isDownloaded(bookUUID: uuid, format: .ebook), "but this edition is going")
+        #expect(app.isDownloaded(bookUUID: uuid, format: .readaloud))
+        app.commitPendingRemoval()
+    }
+
+    /// The X on a transfer row says "Cancel" and is drawn on a progress bar,
+    /// and it ran a whole book's removal — so cancelling a download started by
+    /// mistake released the publisher face and question index of a *different*
+    /// edition of that book already on the device. A tap on a cross belonging
+    /// to a bar that has not finished is not a decision about anything the
+    /// reader already has.
+    @Test("cancelling a transfer leaves the book's other edition untouched")
+    func cancellingATransferIsNotABookRemoval() throws {
+        let app = AppModel(keychain: InMemoryTokens(), notificationCentre: NotificationCenter())
+        let uuid = Self.freshUUID()
+        let ebook = try Self.plant(uuid, format: .ebook)
+        defer { try? FileManager.default.removeItem(at: ebook) }
+
+        let extracted = CustomFonts.extractedDirectory(bookUUID: uuid)
+        try FileManager.default.createDirectory(at: extracted, withIntermediateDirectories: true)
+        let face = extracted.appending(path: "body.otf")
+        try Data("face".utf8).write(to: face)
+        defer { try? FileManager.default.removeItem(at: extracted) }
+
+        app.refreshDownloadedSet()
+        #expect(app.downloadedUUIDs.contains(uuid))
+
+        // The read-along the reader started by accident. No file for it, which
+        // is what a transfer still running looks like on disk.
+        app.cancelDownload(DownloadManager.Job(bookUUID: uuid, format: .readaloud))
+
+        #expect(Self.exists(ebook), "the edition already on the device is not what was cancelled")
+        #expect(Self.exists(face), "the face belongs to the ebook, which nobody asked to remove")
+        #expect(app.downloadedUUIDs.contains(uuid))
+    }
+
+    /// Restarting a download inside the undo window is the reader changing
+    /// their mind, and nothing was telling the window that.
+    ///
+    /// The timer was armed by the removal and never disarmed, so the file the
+    /// new transfer was arriving into was deleted six seconds later by a
+    /// decision the reader had already reversed. On screen it looked like a
+    /// download that simply stopped: no error, because from the app's point of
+    /// view nothing had failed.
+    @Test("starting a download takes back a removal still inside its window")
+    func startingADownloadCancelsAPendingRemoval() async throws {
+        let app = AppModel(keychain: InMemoryTokens(), notificationCentre: NotificationCenter())
+        let uuid = Self.freshUUID()
+        let file = try Self.plant(uuid, format: .ebook)
+        defer { try? FileManager.default.removeItem(at: file) }
+        app.refreshDownloadedSet()
+
+        app.removeDownload(bookUUID: uuid, format: .ebook, title: "Dracula",
+                           undoWindow: .seconds(600))
+        #expect(app.pendingRemoval?.bookUUID == uuid)
+
+        // No session, so no transfer actually starts — `download` returns false
+        // at the `downloads` guard. The pending removal has to be taken back
+        // before that point is even reached, because the tap is the statement.
+        await app.resumeDownload(DownloadManager.Job(bookUUID: uuid, format: .ebook))
+
+        #expect(app.pendingRemoval == nil, "the window is still armed over a book being fetched")
+        app.commitPendingRemoval()
+        #expect(Self.exists(file), "the window closed on a removal the reader had reversed")
+    }
+
+    /// Only the same edition. A removal of one book says nothing about a
+    /// download of another, and clearing the window on any download at all
+    /// would make the toast lie about what it is holding.
+    @Test("starting a different download leaves the window alone")
+    func adifferentDownloadLeavesTheWindowAlone() async throws {
+        let app = AppModel(keychain: InMemoryTokens(), notificationCentre: NotificationCenter())
+        let removed = Self.freshUUID()
+        let other = Self.freshUUID()
+        let file = try Self.plant(removed, format: .ebook)
+        defer { try? FileManager.default.removeItem(at: file) }
+        app.refreshDownloadedSet()
+
+        app.removeDownload(bookUUID: removed, format: .ebook, title: "Dracula",
+                           undoWindow: .seconds(600))
+        await app.resumeDownload(DownloadManager.Job(bookUUID: other, format: .ebook))
+        #expect(app.pendingRemoval?.bookUUID == removed)
+
+        // And the same book in a different edition is a different job too.
+        await app.resumeDownload(DownloadManager.Job(bookUUID: removed, format: .readaloud))
+        #expect(app.pendingRemoval?.bookUUID == removed)
+
+        app.commitPendingRemoval()
+        #expect(!Self.exists(file))
+    }
+
     /// A timer that fired after the account had gone would delete a file
     /// belonging to whoever signed in next.
     @Test("signing out closes an open undo window first")
     func signingOutCommitsAPendingRemoval() async throws {
-        let app = AppModel(keychain: InMemoryTokens())
+        let app = AppModel(keychain: InMemoryTokens(), notificationCentre: NotificationCenter())
         let uuid = Self.freshUUID()
         let file = try Self.plant(uuid, format: .ebook)
         defer { try? FileManager.default.removeItem(at: file) }

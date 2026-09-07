@@ -330,7 +330,11 @@ public final class ReaderModel {
             return
         }
 
-        let alreadyOnDisk = content.isDownloaded(book, format: format)
+        // Through the model where there is one, so opening a book whose
+        // edition is inside its undo window goes down the download path — which
+        // takes the removal back — rather than reading a file about to go.
+        let alreadyOnDisk = downloadHost?.isDownloaded(book, format: format)
+            ?? content.isDownloaded(book, format: format)
         phase = alreadyOnDisk ? .loading("Opening…") : .downloading(received: 0, total: 0)
         do {
             let url: URL

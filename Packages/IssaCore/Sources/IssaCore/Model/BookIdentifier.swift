@@ -34,6 +34,43 @@ public extension String {
         }
         return true
     }
+
+    /// This identifier as one path component that cannot escape its directory.
+    ///
+    /// The whitelist above says which identifiers are safe; this says what to do
+    /// with the rest, and it is the half that had been copied rather than
+    /// shared. `BookContentService.localURL` and `AskIndexStore.indexURL` each
+    /// carried their own spelling of it, while `CustomFonts.extractedDirectory`
+    /// and `AudioExtraction.defaultDirectory(for:)` carried none at all — and
+    /// those two are the ones that name a *directory* and then delete it whole.
+    /// A book id of `..` made `Fonts/../` and `Audio/../` both resolve to the
+    /// storage root, so removing that book's derived files deleted every book,
+    /// the catalogue, the logs and the reader's own imported fonts. The orphan
+    /// sweep made it reachable without a hostile server: it decodes ids out of
+    /// filenames it finds on disk, so a file named `..-ebook.epub` was enough.
+    ///
+    /// Hashed rather than stripped, for the reason the whitelist gives, and
+    /// hashed rather than refused so that the path that writes a file and the
+    /// path that deletes it cannot disagree about where it lives — a disagreement
+    /// this app has already paid for once, when a validated read path and an
+    /// unvalidated write path chose different names for the same download.
+    ///
+    /// FNV-1a, and byte-for-byte the spelling both call sites already shipped:
+    /// files named `unsafe-<hash>` exist on devices, and must still be found.
+    var safePathComponent: String {
+        isBareUUID ? self : "unsafe-\(fnv1a64)"
+    }
+
+    /// 64-bit FNV-1a in hexadecimal. Not a security property — it is only here
+    /// to be stable and to contain no separator — so a non-cryptographic hash
+    /// with no dependency is the right size of tool.
+    private var fnv1a64: String {
+        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+        for byte in Data(utf8) {
+            hash = (hash ^ UInt64(byte)) &* 0x100_0000_01b3
+        }
+        return String(hash, radix: 16)
+    }
 }
 
 public extension Book {

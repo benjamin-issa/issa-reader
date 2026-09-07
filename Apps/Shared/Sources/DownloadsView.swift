@@ -22,8 +22,12 @@ public struct DownloadsView: View {
     @State private var removals = 0
     @State private var isConfirmingSweep = false
 
+    /// `revision` for the same reason `DownloadsSection`'s carries one: removing
+    /// one edition of a two-edition book moves no count on this screen either,
+    /// so the storage bar and its headline kept the sizes they had before.
     private struct RefreshKey: Equatable {
-        let pending: Int
+        let revision: Int
+        let jobs: [DownloadManager.Job]
         let removals: Int
         let downloaded: Int
         let books: Int
@@ -62,7 +66,8 @@ public struct DownloadsView: View {
 
     private var refreshKey: RefreshKey {
         RefreshKey(
-            pending: app.downloadsPending.count,
+            revision: app.downloadsRevision,
+            jobs: app.downloadsPending.map(\.job),
             removals: removals,
             downloaded: app.downloadedUUIDs.count,
             books: app.books.count,
@@ -117,12 +122,15 @@ public struct DownloadsView: View {
 
     /// The bands, in the order they are drawn.
     ///
-    /// Every byte in the headline is in exactly one of these now. It was not:
-    /// the headline was the whole Books directory while the bands only summed
-    /// books still in the catalogue, so a download whose book had left the
-    /// library was counted at the top, missing from the bar, and — having no
-    /// row anywhere — impossible to delete. `unaccountedBytes` is that
-    /// difference, made visible.
+    /// Every byte in the headline is in exactly one of these — a claim this
+    /// comment made while the question indexes were in neither, which is the
+    /// largest derived store the app keeps. They have a band now.
+    ///
+    /// The one deliberate exception is the last band: until the catalogue has
+    /// arrived there is no honest way to say a download is "no longer in your
+    /// library", so those bytes are in the headline and in no band for as long
+    /// as that is true. The alternative was worse — drawing the reader's entire
+    /// shelf in alert red on every cold launch.
     private var segments: [Segment] {
         [
             Segment(
@@ -144,9 +152,27 @@ public struct DownloadsView: View {
             Segment(label: "Book fonts", bytes: inventory.publisherFontBytes,
                     color: Palette.inkTertiary),
             Segment(label: "Covers", bytes: inventory.coverBytes, color: Palette.inkQuaternary),
-            Segment(label: "No longer in your library", bytes: inventory.unaccountedBytes,
-                    color: Palette.alert),
-        ].filter { $0.bytes > 0 }
+            // The question indexes. The largest derived store this app keeps —
+            // an index is a full-text copy of a book's prose — and it was
+            // missing from both the bar and the headline, under a comment
+            // asserting that every byte was in exactly one band.
+            Segment(label: "Question indexes", bytes: inventory.askIndexBytes,
+                    color: Palette.moss.opacity(0.55)),
+            // Only once the catalogue has actually arrived, for the same reason
+            // the sweep button below is: "absent from `app.books`" is not the
+            // claim "the reader no longer owns it". On a cold launch, or after
+            // a refresh that failed, every download in the library is
+            // unaccounted — and the bar drew the reader's whole shelf as an
+            // alert-red band telling them it was no longer theirs.
+            unaccountedSegment,
+        ].compactMap { $0 }.filter { $0.bytes > 0 }
+    }
+
+    /// Drawn only when "not in your library" is a claim this app can make.
+    private var unaccountedSegment: Segment? {
+        guard !app.books.isEmpty, app.loadError == nil else { return nil }
+        return Segment(label: "No longer in your library", bytes: inventory.unaccountedBytes,
+                       color: Palette.alert)
     }
 
     private var storageBar: some View {
@@ -229,11 +255,17 @@ public struct DownloadsView: View {
             } header: {
                 Text("No longer in your library")
             } footer: {
-                Text("\(ByteCountText.text(inventory.unaccountedBytes)) of downloads whose books are not in your library any more. They have no row above, so this is the only way to reclaim the space.")
+                // `orphanBytes`, not `unaccountedBytes`. The sweep deletes the
+                // files this app can name, and those are a subset: anything
+                // else in the directory — an unzipped folder, a partial
+                // transfer, a file the reader put there — is counted as
+                // unaccounted and deliberately left alone. Promising the larger
+                // number offered to free space the button would not free.
+                Text("\(ByteCountText.text(inventory.orphanBytes)) of downloads whose books are not in your library any more. They have no row above, so this is the only way to reclaim the space.")
             }
             .listRowBackground(Palette.surface)
             .confirmationDialog(
-                "Remove \(ByteCountText.text(inventory.unaccountedBytes)) of downloads?",
+                "Remove \(ByteCountText.text(inventory.orphanBytes)) of downloads?",
                 isPresented: $isConfirmingSweep, titleVisibility: .visible,
             ) {
                 Button("Remove", role: .destructive) { sweepOrphans() }
