@@ -36,6 +36,74 @@ struct AskAnswerParserTests {
         #expect(parsed.citations.isEmpty)
     }
 
+    @Test("a section number in the citation line is not a citation")
+    func ignoresASectionNumber() {
+        // The excerpts the model is shown are literally `[1] (Section 3) …`, and
+        // a 3B model copies the shape into its footer. With six excerpts sent,
+        // the 4 here was in range, resolved, and put a paragraph from a
+        // different part of the book under the answer.
+        let parsed = AskAnswerParser.parse("""
+        Alice met a rabbit.
+        Sources: 1 and 2 (Section 4)
+        """)
+        #expect(parsed.citations == [1, 2])
+    }
+
+    // MARK: - Resolving citations
+
+    /// Six excerpts, numbered the way the prompt numbers them.
+    static func shown(_ count: Int) -> [Int: Passage] {
+        Dictionary(uniqueKeysWithValues: (1 ... count).map { ordinal in
+            (ordinal, Passage(
+                spineIndex: ordinal, ordinal: 0, start: 0, end: 10, words: 2,
+                text: "excerpt \(ordinal)",
+            ))
+        })
+    }
+
+    @Test("an ordinal naming no excerpt resolves to nothing")
+    func dropsAnOrdinalNobodyNumbered() {
+        // A 3B model handed six excerpts cites `[9]` often enough that this
+        // cannot be an assertion. The raw claim is kept so the drop is visible.
+        let answer = AskAnswerParser.resolving(
+            AskAnswer(text: "She fell.", citations: [2, 9], notYetRevealed: false),
+            among: Self.shown(6),
+        )
+        #expect(answer.citations == [2, 9])
+        #expect(answer.sources.map(\.ordinal) == [2])
+        #expect(answer.sources.first?.passage.text == "excerpt 2")
+    }
+
+    @Test("the same excerpt cited twice is one source")
+    func deduplicates() {
+        let answer = AskAnswerParser.resolving(
+            AskAnswer(text: "She fell.", citations: [3, 1, 3], notYetRevealed: false),
+            among: Self.shown(6),
+        )
+        // In the order the model cited them, so the first thing under the answer
+        // is the excerpt it leaned on first.
+        #expect(answer.sources.map(\.ordinal) == [3, 1])
+    }
+
+    @Test("an answer that cited nothing shows nothing")
+    func citesNothing() {
+        let answer = AskAnswerParser.resolving(
+            AskAnswer(text: "She fell.", citations: [], notYetRevealed: false),
+            among: Self.shown(6),
+        )
+        #expect(answer.sources.isEmpty)
+    }
+
+    // MARK: - Where the answer came from
+
+    @Test("the sentinel discloses nothing, because nothing was generated")
+    func sentinelIsWithheld() {
+        // The pill under it said "Generated on device · Apple Intelligence" for
+        // a sentence that is a constant in this file.
+        #expect(AskAnswerParser.parse("The story hasn't revealed that yet.").origin == .withheld)
+        #expect(AskAnswerParser.parse("Alice met a rabbit.").origin == .model)
+    }
+
     // MARK: - The sentinel
 
     @Test("the not-yet sentence is recognised however the model punctuates it")

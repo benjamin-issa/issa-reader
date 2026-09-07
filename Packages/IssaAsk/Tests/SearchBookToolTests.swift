@@ -66,7 +66,7 @@ struct SearchBookToolTests {
         #expect(!result.lowercased().contains("cheshire"))
     }
 
-    @Test("its excerpts continue the prompt's numbering")
+    @Test("its excerpts continue the prompt's numbering without a gap")
     func numbersAfterThePrompt() async throws {
         let (store, _, directory) = try await AskFixture.preparedStore()
         defer { AskFixture.remove(directory) }
@@ -79,7 +79,84 @@ struct SearchBookToolTests {
         // A second `[1]` is a citation the sheet cannot tell from the first.
         #expect(result.hasPrefix("[7] (Section "))
         let second = try await tool.call(arguments: .init(query: "cat grin"))
-        #expect(second.hasPrefix("[9] (Section "))
+
+        // Consecutive, not `[7]` then `[9]`. The budget used to advance by a
+        // fixed two whatever the search emitted, so one match — or a token cap
+        // that bit — left a hole in the numbering, and every citation past the
+        // hole named an excerpt that did not exist.
+        let first = Self.ordinals(in: result)
+        let rest = Self.ordinals(in: second)
+        try #require(!first.isEmpty)
+        try #require(!rest.isEmpty)
+        #expect(first + rest == Array(7 ..< (7 + first.count + rest.count)))
+        #expect(await tool.passagesShown().keys.sorted() == first + rest)
+    }
+
+    /// The ordinals a stretch of excerpt text actually numbers itself with.
+    static func ordinals(in excerpts: String) -> [Int] {
+        excerpts.components(separatedBy: "\n\n").compactMap { block in
+            guard let close = block.firstIndex(of: "]"), block.hasPrefix("[") else { return nil }
+            return Int(block[block.index(after: block.startIndex) ..< close])
+        }
+    }
+
+    @Test("a search that matches nothing spends no ordinals")
+    func noMatchesCostsNoNumbers() async throws {
+        let (store, _, directory) = try await AskFixture.preparedStore()
+        defer { AskFixture.remove(directory) }
+        let tool = SearchBookTool(
+            store: store, bookUUID: AskFixture.bookUUID,
+            boundary: try AskFixture.endOf(spine: AskFixture.Spine.chapterVI),
+        )
+        await tool.beginGeneration(numberingFrom: 7)
+        #expect(try await tool.call(arguments: .init(query: "zxqwv")) == SearchBookTool.noMatches)
+        // The second search is still `[7]`: nothing was shown, so nothing was
+        // numbered, and skipping to `[9]` would be a hole in the middle of the
+        // prompt the model is reading.
+        let second = try await tool.call(arguments: .init(query: "duchess baby pepper"))
+        #expect(second.hasPrefix("[7] (Section "))
+    }
+
+    @Test("the tool reports every excerpt it showed, by its ordinal")
+    func reportsWhatItShowed() async throws {
+        let (store, _, directory) = try await AskFixture.preparedStore()
+        defer { AskFixture.remove(directory) }
+        let tool = SearchBookTool(
+            store: store, bookUUID: AskFixture.bookUUID,
+            boundary: try AskFixture.endOf(spine: AskFixture.Spine.chapterVI),
+        )
+        // A tool that retains nothing is a tool whose excerpts can be cited and
+        // never shown: `call` returns a String, and before this every citation
+        // in the tool's own range resolved to nothing whatever the numbering.
+        await tool.beginGeneration(numberingFrom: 7)
+        let result = try await tool.call(arguments: .init(query: "duchess baby pepper"))
+        try #require(result != SearchBookTool.noMatches)
+
+        let shown = await tool.passagesShown()
+        #expect(shown.count == Self.ordinals(in: result).count)
+        for ordinal in Self.ordinals(in: result) {
+            let passage = try #require(shown[ordinal])
+            #expect(result.contains("[\(ordinal)] (Section \(passage.spineIndex + 1)) "))
+        }
+    }
+
+    @Test("a new generation forgets what the last one showed")
+    func forgetsBetweenGenerations() async throws {
+        let (store, _, directory) = try await AskFixture.preparedStore()
+        defer { AskFixture.remove(directory) }
+        let tool = SearchBookTool(
+            store: store, bookUUID: AskFixture.bookUUID,
+            boundary: try AskFixture.endOf(spine: AskFixture.Spine.chapterVI),
+        )
+        await tool.beginGeneration(numberingFrom: 7)
+        _ = try await tool.call(arguments: .init(query: "duchess baby pepper"))
+        #expect(!(await tool.passagesShown().isEmpty))
+
+        // A context-window retry is a fresh session with an empty transcript and
+        // a prompt with a different number of excerpts in it. Keeping the last
+        // one's map would resolve `[7]` to a paragraph the model never saw.
+        await tool.beginGeneration(numberingFrom: 4)
+        #expect(await tool.passagesShown().isEmpty)
     }
 
     @Test("a search that matches nothing says so rather than returning empty")
@@ -141,9 +218,13 @@ struct SearchBookToolTests {
             spineIndex: 4, ordinal: 0, start: 0, end: 8_000, words: 1_400,
             text: String(repeating: "the duchess sneezed again and again. ", count: 200),
         )
-        let text = SearchBookTool.excerpts([long, long], numberingFrom: 7)
+        let (text, shown) = SearchBookTool.excerpts([long, long], numberingFrom: 7)
         #expect(AskPromptBuilder.estimatedTokens(text) <= SearchBookTool.tokenCap + 20)
         #expect(text.hasSuffix("…"))
+        // What is reported is what was written, not what was offered: the cap
+        // bit, and the ordinal the second passage would have had must not be
+        // resolvable.
+        #expect(shown.keys.sorted() == Self.ordinals(in: text))
     }
 }
 #endif

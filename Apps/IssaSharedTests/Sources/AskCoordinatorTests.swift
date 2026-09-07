@@ -191,6 +191,41 @@ struct AskCoordinatorTests {
         #expect(await model.peakConcurrency == 1)
     }
 
+    // MARK: - Citations
+
+    /// The whole apparatus, end to end, in the place the sheet reads it from.
+    ///
+    /// Every piece of this existed and none of them were joined up: the prompt
+    /// numbered its excerpts, the model was instructed to cite them, the parser
+    /// stripped the `Sources:` line into `citations` — and nothing under `Apps/`
+    /// ever read it, so the sheet had no way to show a reader what an answer
+    /// rested on.
+    @Test("an answered job carries the excerpts it rests on, inside the captured boundary")
+    func answeredJobCarriesItsSources() async throws {
+        let (coordinator, _, directory, _, suite) = try Self.coordinator(turns: [
+            .answer("Alice followed a white rabbit down a hole.\nSources: 1, 2"),
+        ])
+        defer { Self.cleanUp(directory, suite) }
+        let source = try Self.source()
+        let boundary = Self.boundary()
+
+        let job = try #require(coordinator.ask("What did Alice follow?", source: source,
+                                               boundary: boundary))
+        await Self.settle(job)
+        guard case let .answered(answer) = job.state else {
+            Issue.record("expected an answer, got \(job.state)")
+            return
+        }
+        #expect(answer.sources.map(\.ordinal) == [1, 2])
+        for cited in answer.sources {
+            // Bounded by the reader's own position by construction — the excerpt
+            // only exists because a query bounded by this boundary returned it —
+            // which is why the vetting pass deliberately does not re-check them.
+            #expect(cited.passage.spineIndex <= boundary.spineIndex)
+            #expect(!cited.passage.displayText.isEmpty)
+        }
+    }
+
     // MARK: - Being asked about notifications
 
     /// Once, ever. A reader who has said no should not be asked again every

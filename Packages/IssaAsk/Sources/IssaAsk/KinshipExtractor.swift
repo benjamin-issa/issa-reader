@@ -74,9 +74,16 @@ public enum KinshipExtractor {
         guard matches.count == 1, let match = matches.first else { return nil }
         return AskAnswer(
             text: "\(subject.display)'s \(relation.word) is \(match.name).",
-            // One-based, the way the prompt numbers its excerpts.
+            // One-based, the way the prompt numbers its excerpts — and an index
+            // into the very array handed in, which is why this is the one
+            // citation in the app that is provably the sentence it came from.
             citations: [match.evidenceIndex + 1],
             notYetRevealed: false,
+            // No model composed this: the name was read out of a paragraph the
+            // reader has already passed, and the frame around it is a format
+            // string. Saying "Generated on device · Apple Intelligence" under it
+            // would be claiming credit for the book.
+            origin: .book,
         )
     }
 

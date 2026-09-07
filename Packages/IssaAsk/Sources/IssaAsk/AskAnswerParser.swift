@@ -1,21 +1,82 @@
 import Foundation
 
+/// One excerpt an answer rests on, as the sheet shows it.
+public struct AskSource: Sendable, Hashable, Identifiable {
+    /// The ordinal the model cited, one-based, as it appeared in the prompt.
+    public var ordinal: Int
+    /// Real chapter offsets, so tapping it can open the book there.
+    public var passage: Passage
+    public var id: Int { ordinal }
+
+    public init(ordinal: Int, passage: Passage) {
+        self.ordinal = ordinal
+        self.passage = passage
+    }
+}
+
+// MARK: -
+
 /// A finished answer, split into the parts the UI actually shows.
 public struct AskAnswer: Sendable, Hashable {
+    /// Who composed the sentence, so the sheet can say so without guessing.
+    ///
+    /// Three answers reach the reader and only one of them was written by a
+    /// model. The sheet showed "Generated on device · Apple Intelligence" under
+    /// all three, which put an AI disclosure under a sentence lifted verbatim
+    /// out of the book and under a hardcoded refusal no model was ever asked
+    /// for.
+    public enum Origin: Sendable, Hashable {
+        /// A language model composed this.
+        case model
+        /// The book's own words: `KinshipExtractor` assembles the sentence from
+        /// a paragraph the reader has already read, and no model is called at
+        /// all.
+        case book
+        /// Nothing was answered — the "not yet" sentinel, whether it came from
+        /// the model or was substituted over a generated answer by the vetting
+        /// pass.
+        case withheld
+    }
+
     /// The prose, with the `Sources:` line removed.
     public var text: String
     /// The ordinals the model cited, one-based, as they appeared in the prompt.
-    /// The sheet turns these back into excerpts.
+    ///
+    /// Kept beside `sources` rather than replaced by it: this is the model's raw
+    /// claim and `sources` is what survived validation, so "cited 9, was handed
+    /// six" is a state a test can assert on rather than a silent drop.
     public var citations: [Int]
     /// Whether the model said the story has not revealed this yet. A state, not
     /// an error: it is the correct answer to a question about a spoiler, and it
     /// is what the whole boundary exists to make possible.
     public var notYetRevealed: Bool
+    public var origin: Origin
+    /// The excerpts the citations actually name, in the order they were cited.
+    ///
+    /// Resolved once, where the numbering is still in scope: the prompt's own
+    /// excerpts and whatever the `searchBook` tool added to them. An answer
+    /// nothing composed — the sentinel, and the vetting pass's refusal — carries
+    /// none, because there is nothing to show proof of.
+    public var sources: [AskSource]
 
-    public init(text: String, citations: [Int], notYetRevealed: Bool) {
+    /// - Parameters:
+    ///   - origin: defaults to `.model`, which is what every path that does not
+    ///     say otherwise is: the parser reads a model's own output.
+    ///   - sources: last, and defaulted, so the four sites that construct an
+    ///     answer before resolution — and every test that builds one — are
+    ///     untouched.
+    public init(
+        text: String,
+        citations: [Int],
+        notYetRevealed: Bool,
+        origin: Origin = .model,
+        sources: [AskSource] = [],
+    ) {
         self.text = text
         self.citations = citations
         self.notYetRevealed = notYetRevealed
+        self.origin = origin
+        self.sources = sources
     }
 }
 
@@ -38,11 +99,45 @@ public enum AskAnswerParser {
     public static func parse(_ raw: String) -> AskAnswer {
         let (body, citations) = splitSources(raw)
         let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        let notYet = isNotYet(trimmed)
         return AskAnswer(
             text: trimmed,
             citations: citations,
-            notYetRevealed: isNotYet(trimmed),
+            notYetRevealed: notYet,
+            // The sentinel is a refusal even when a model typed it: there is no
+            // generated prose under it to disclose.
+            origin: notYet ? .withheld : .model,
         )
+    }
+
+    // MARK: - Resolving citations
+
+    /// The excerpts an answer's citations actually name.
+    ///
+    /// In the order the model cited them, deduplicated, and with any ordinal
+    /// naming nothing dropped. A 3B model handed six excerpts cites `[9]` often
+    /// enough that this cannot be an assertion: before the check, the sheet's
+    /// only defences were the ordinal being in range — and `4` from
+    /// "Sources: 1 and 2 (Section 4)" is in range while naming the wrong
+    /// paragraph entirely.
+    public static func sources(for citations: [Int], among shown: [Int: Passage]) -> [AskSource] {
+        var seen: Set<Int> = []
+        return citations.compactMap { ordinal in
+            guard seen.insert(ordinal).inserted, let passage = shown[ordinal] else { return nil }
+            return AskSource(ordinal: ordinal, passage: passage)
+        }
+    }
+
+    /// The same answer with its citations turned into excerpts the sheet can
+    /// show.
+    ///
+    /// Separate from `parse` because the numbering is not known there: the
+    /// excerpts are numbered by the prompt builder, continued by the
+    /// `searchBook` tool, and only the engine holds both halves.
+    public static func resolving(_ answer: AskAnswer, among shown: [Int: Passage]) -> AskAnswer {
+        var resolved = answer
+        resolved.sources = sources(for: answer.citations, among: shown)
+        return resolved
     }
 
     /// What may safely be shown while the answer is still arriving.
@@ -105,12 +200,52 @@ public enum AskAnswerParser {
             searchRange = NSRange(location: 0, length: found.location)
         }
         guard let best else { return (raw, []) }
+        return (string.substring(to: best.location), ordinals(inCitationLine: string.substring(with: best)))
+    }
 
-        let tail = string.substring(with: best)
-        let digits = tail
-            .components(separatedBy: CharacterSet.decimalDigits.inverted)
-            .compactMap(Int.init)
-        return (string.substring(to: best.location), digits)
+    /// The ordinals in a citation line, and only the ordinals.
+    ///
+    /// This used to take every run of digits in the tail. The excerpts the model
+    /// is shown are literally `[1] (Section 3) …`, and a 3B model copies that
+    /// shape into its footer — so "Sources: 1 and 2 (Section 4)" yielded
+    /// `[1, 2, 4]`, and with six excerpts sent the 4 was in range, resolved, and
+    /// put a confidently wrong paragraph under the answer. A number introduced
+    /// by the word "section" is the chapter an excerpt came from, never a
+    /// citation.
+    ///
+    /// Narrow on purpose: everything else in the line is still read as an
+    /// ordinal, because the range check downstream is what catches the rest, and
+    /// a stricter grammar here would drop citations a model wrote in a shape
+    /// nobody anticipated.
+    static func ordinals(inCitationLine tail: String) -> [Int] {
+        var ordinals: [Int] = []
+        var lastWord = ""
+        var current = ""
+        var isDigits = false
+
+        func finish() {
+            defer { current = "" }
+            guard !current.isEmpty else { return }
+            guard isDigits else { lastWord = current; return }
+            guard lastWord != "section", let value = Int(current) else { return }
+            ordinals.append(value)
+        }
+
+        for character in tail {
+            if character.isNumber {
+                if !isDigits { finish() }
+                isDigits = true
+                current.append(character)
+            } else if character.isLetter {
+                if isDigits { finish() }
+                isDigits = false
+                current.append(contentsOf: character.lowercased())
+            } else {
+                finish()
+            }
+        }
+        finish()
+        return ordinals
     }
 
     /// Whether the answer is the "not yet" sentinel.

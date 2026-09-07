@@ -195,6 +195,17 @@ struct AskSheet: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier("ask.answer")
 
+            // Inside this stack on purpose — see `AskSourcesRow`. It is part of
+            // the answer, so the height an opened excerpt adds is height the
+            // sheet should grow to fit, and the measurement below already does
+            // that.
+            AskSourcesRow(
+                sources: answer.sources,
+                title: { model.title(inSpineItem: $0.passage.spineIndex,
+                                     atOffset: $0.passage.start) },
+                onOpen: openInTheBook,
+            )
+
             // Kept on the boundary rather than written here, so the popover and
             // the sheet cannot come to word the same claim differently.
             Text(job.boundary.footer)
@@ -220,6 +231,20 @@ struct AskSheet: View {
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
             onContentHeight?(height)
         }
+    }
+
+    /// Leaves for the cited paragraph.
+    ///
+    /// A departure rather than a detour, and deliberately so: closing the sheet
+    /// discards the answer — that is what `sheetDismissed` does with an answered
+    /// job, and what keeps "nothing is written down" true — so the reader who
+    /// taps a source has chosen the book over the answer. The excerpt is read
+    /// out of the source before the sheet goes, because the job it belongs to
+    /// goes with it.
+    private func openInTheBook(_ source: AskSource) {
+        let passage = source.passage
+        dismiss()
+        Task { await model.go(to: passage) }
     }
 
     // MARK: - Failure and unavailability
