@@ -1909,7 +1909,7 @@ extension ReaderModel {
             }
             return
         }
-        guard let directory = CustomFonts.directory(named: "Fonts/\(book.uuid)"),
+        guard let directory = CustomFonts.prepareExtractedDirectory(bookUUID: book.uuid),
               let data = try? package.archive.read(face.path)
         else { style.publisherFamily = nil; return }
 

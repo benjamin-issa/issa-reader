@@ -157,4 +157,77 @@ struct CustomFontsTests {
         #expect(CustomFonts.register(junk, imported: true) == nil)
         #expect(CustomFonts.register(woff, imported: true) == nil)
     }
+
+    // MARK: - What goes when a download goes
+
+    /// The leak: `resolvePublisherFont` writes a book's embedded face to
+    /// `Fonts/<book-uuid>/` on every open, and nothing ever removed it —
+    /// uncounted by the storage screen and unreachable from the interface, one
+    /// directory per book for the life of the install.
+    @Test("removing a download takes the face extracted from it")
+    func extractedFaceGoesWithItsDownload() throws {
+        CustomFonts.testRegistryLock.lock()
+        defer { CustomFonts.testRegistryLock.unlock() }
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        defer { unregisterFonts(under: root) }
+
+        let extracted = CustomFonts.extractedDirectory(bookUUID: "book-uuid", in: root)
+        try FileManager.default.createDirectory(at: extracted, withIntermediateDirectories: true)
+        let face = try copyFont("Literata-Regular.ttf", into: extracted, as: "body.ttf")
+        #expect(CustomFonts.register(face) != nil)
+
+        CustomFonts.removeExtracted(bookUUID: "book-uuid", in: root)
+
+        #expect(!FileManager.default.fileExists(atPath: extracted.path))
+    }
+
+    /// The half that must **not** happen. A face the reader imported sits at
+    /// the root of `Fonts/`, this is its only copy, and it belongs to them the
+    /// way an annotation does — a sweep of the whole folder would delete files
+    /// the app never downloaded and cannot fetch again.
+    @Test("the reader's own imported faces survive, and so does the folder")
+    func importedFacesSurviveASweep() throws {
+        CustomFonts.testRegistryLock.lock()
+        defer { CustomFonts.testRegistryLock.unlock() }
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        defer { unregisterFonts(under: root) }
+
+        let mine = try copyFont("SourceSerif4-Regular.ttf", into: root, as: "Mine.ttf")
+        let extracted = CustomFonts.extractedDirectory(bookUUID: "book-uuid", in: root)
+        try FileManager.default.createDirectory(at: extracted, withIntermediateDirectories: true)
+        _ = try copyFont("Literata-Regular.ttf", into: extracted, as: "body.ttf")
+
+        CustomFonts.removeAllExtracted(in: root)
+
+        #expect(!FileManager.default.fileExists(atPath: extracted.path))
+        #expect(FileManager.default.fileExists(atPath: mine.path), "that file is the reader's")
+        #expect(FileManager.default.fileExists(atPath: root.path), "and so is the folder")
+    }
+
+    /// Called from a removal *and* from the reconciliation sweep, and on the
+    /// ordinary path from both.
+    @Test("removing a face that is not there is not an error")
+    func removingNothingIsHarmless() throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        CustomFonts.removeExtracted(bookUUID: "never-downloaded", in: root)
+        CustomFonts.removeAllExtracted(in: root)
+
+        #expect(FileManager.default.fileExists(atPath: root.path))
+    }
+
+    /// Asking for the directory in order to delete it is how an empty
+    /// `Fonts/<uuid>/` gets left behind for every book that never shipped a
+    /// face.
+    @Test("naming a book's font directory does not create one")
+    func namingTheDirectoryDoesNotCreateIt() throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let named = CustomFonts.extractedDirectory(bookUUID: "book-uuid", in: root)
+        #expect(!FileManager.default.fileExists(atPath: named.path))
+    }
 }
