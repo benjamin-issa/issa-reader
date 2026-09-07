@@ -1,6 +1,10 @@
 #if os(iOS) || os(tvOS)
 import UIKit
 #endif
+#if os(iOS)
+// For `ScenePhase`, which is what asks the question `SceneForeground` answers.
+import SwiftUI
+#endif
 
 /// Whether the display may be held awake while a book reads itself aloud.
 ///
@@ -51,6 +55,51 @@ enum ScreenAwake {
         isPlaying && isReaderVisible && followsText && isForeground
     }
 }
+
+#if os(iOS)
+/// Whether *any* window of this app is on screen.
+///
+/// `AppModel.isForeground` is one flag for the whole process, and it was being
+/// written by a **per-scene** handler: `RootView` lives inside a `WindowGroup`,
+/// `Info.plist` sets `UIApplicationSupportsMultipleScenes`, and every scene
+/// therefore has its own `RootView` with its own `scenePhase`. On an iPad with
+/// two windows open, sending one of them to the background wrote
+/// `setForeground(false)` — releasing the display assertion the *other*
+/// window's read-along was relying on, with the reader still looking at it, and
+/// nothing to put it back until that other window's phase happened to move.
+/// One window closing did the same thing.
+///
+/// So the flag is derived from every scene rather than assigned by whichever
+/// one moved last. `scenePhase` is still what asks the question; it is no
+/// longer what answers it.
+///
+/// `.unattached` is deliberately not foreground. A scene that has been
+/// disconnected can linger in the connected set, and counting it would hold the
+/// assertion open for ever — the flat battery `ScreenAwake` above is scoped to
+/// avoid, which is a worse bug than the one being fixed here.
+///
+/// `.foregroundInactive` *is* foreground, matching the `!= .background` this
+/// replaces: an app switcher glance or a Control Centre pull is not the iPad
+/// going into a bag, and the reader is looking at the screen throughout.
+enum SceneForeground {
+    static func isAnyForeground(_ states: some Sequence<UIScene.ActivationState>) -> Bool {
+        states.contains { $0 == .foregroundActive || $0 == .foregroundInactive }
+    }
+
+    /// The same question of the live scene list, plus the asking scene's own
+    /// phase.
+    ///
+    /// The phase is OR-ed in because it is the one answer that cannot be stale:
+    /// it is the transition that triggered this call. `connectedScenes` is what
+    /// sees the *other* windows, which is the half `scenePhase` alone could
+    /// never answer.
+    @MainActor
+    static func isAnyForeground(asking phase: ScenePhase) -> Bool {
+        phase != .background
+            || isAnyForeground(UIApplication.shared.connectedScenes.map(\.activationState))
+    }
+}
+#endif
 
 /// The single holder of the "keep the display awake" assertion.
 ///

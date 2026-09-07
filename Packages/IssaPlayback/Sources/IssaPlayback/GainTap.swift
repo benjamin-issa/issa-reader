@@ -43,12 +43,44 @@ final class GainTap: Sendable {
     /// cannot be loaded — an HLS playlist — has no `AVAssetTrack` to hang input
     /// parameters on, and the caller falls back to the player's own volume for
     /// the half of the range that can be expressed there.
+    ///
+    /// **One tap per track, and the shape below is what enforces it.** A single
+    /// tap hung on every track's parameters looks like a saving and is a
+    /// use-after-free on the audio thread: one tap is one `TapState` is one
+    /// scratch buffer, AVFoundation prepares and processes each attachment
+    /// separately, and `tapPrepare` for track 2 calls `allocateScratch`, which
+    /// frees track 1's buffer — 1024 floats for a mono 1024-frame block, 2048
+    /// for an interleaved stereo one — while track 1's `tapProcess` is still
+    /// writing the limiter's working set through it. That is the bug `TapState`
+    /// exists to close, one level up: state that looks per-tap but is shared.
+    ///
+    /// Today no book reaches it — the audiobooks here are single-track — which
+    /// is exactly why it has to be structural rather than a comment saying so.
+    /// The tap is created by `inputParameters(for:)`, which holds one track and
+    /// hands back the parameters it is already attached to; it never returns a
+    /// tap, so there is no value here that a second track could be given.
     func makeAudioMix(for tracks: [AVAssetTrack]) -> AVAudioMix? {
-        guard !tracks.isEmpty else { return nil }
-        // +1 for the tap to hold. `tapInit` takes it into the `TapState` it
+        let parameters = tracks.compactMap(inputParameters(for:))
+        guard !parameters.isEmpty else { return nil }
+        let mix = AVMutableAudioMix()
+        mix.inputParameters = parameters
+        return mix
+    }
+
+    /// One track's input parameters, carrying a tap made for that track alone.
+    ///
+    /// Nil when the tap could not be created, which drops that track from the
+    /// mix rather than the whole mix: the remaining tracks are still gained
+    /// correctly, and a mix with no parameters at all is answered as no mix by
+    /// the caller above.
+    private func inputParameters(for track: AVAssetTrack) -> AVMutableAudioMixInputParameters? {
+        // +1 for this tap to hold. `tapInit` takes it into the `TapState` it
         // allocates, and `tapFinalize` releasing that box is what gives it
-        // back. Balanced by hand below if the tap is never created, because
-        // `tapInit` is then never called and nothing else would.
+        // back. One per tap, because one `takeRetainedValue` per `tapInit`
+        // consumes exactly one — taking a single retain for several taps would
+        // release this object out from under the taps still using it.
+        // Balanced by hand below if the tap is never created, because `tapInit`
+        // is then never called and nothing else would.
         let clientInfo = Unmanaged.passRetained(self).toOpaque()
         var callbacks = MTAudioProcessingTapCallbacks(
             version: kMTAudioProcessingTapCallbacksVersion_0,
@@ -73,14 +105,9 @@ final class GainTap: Sendable {
             Unmanaged<GainTap>.fromOpaque(clientInfo).release()
             return nil
         }
-
-        let mix = AVMutableAudioMix()
-        mix.inputParameters = tracks.map { track in
-            let parameters = AVMutableAudioMixInputParameters(track: track)
-            parameters.audioTapProcessor = tap
-            return parameters
-        }
-        return mix
+        let parameters = AVMutableAudioMixInputParameters(track: track)
+        parameters.audioTapProcessor = tap
+        return parameters
     }
 
     // MARK: - The kernel

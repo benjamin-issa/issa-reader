@@ -80,12 +80,16 @@ struct RootView: View {
         // Here rather than in `LibraryTabs`, which has a scene-phase handler of
         // its own: that view exists only once the reader is signed in, and the
         // display assertion must be released on the way to the background from
-        // any state the app can be in. `!= .background` rather than `== .active`
-        // because `.inactive` is still the foreground — an app switcher glance
-        // or a Control Centre pull is not the phone going into a pocket, and
-        // the reader is looking at the screen throughout.
+        // any state the app can be in.
+        //
+        // The phase *asks*; it does not answer. `AppModel.isForeground` is one
+        // flag for the process and this body runs once per scene — an iPad can
+        // have two windows on this app — so writing `phase != .background`
+        // straight into it let one window going away release the hold the other
+        // window's read-along was still relying on. See `SceneForeground`,
+        // which also explains why `.inactive` counts as foreground.
         .onChange(of: scenePhase, initial: true) { _, phase in
-            app.setForeground(phase != .background)
+            app.setForeground(SceneForeground.isAnyForeground(asking: phase))
         }
     }
 }

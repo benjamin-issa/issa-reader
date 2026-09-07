@@ -137,6 +137,31 @@ public struct CommandMap: Codable, Sendable, Hashable {
     /// Seconds for the skip actions, shown on the buttons themselves.
     public var skipForwardInterval: TimeInterval
     public var skipBackwardInterval: TimeInterval
+
+    /// What a skip interval may be, stated once so the stepper that offers them
+    /// and the decoder that reads them back cannot disagree.
+    ///
+    /// The bound matters because four screens draw these as `Int(seconds)` —
+    /// the player's transport, the reading page's jump buttons and the
+    /// television's two — and `Int(_:)` traps on a magnitude outside `Int`'s
+    /// range. That was reachable: these are decoded straight out of App Group
+    /// defaults with nothing between the blob and the label, so `1e300` in the
+    /// file is a crash while the transport draws, the same defect
+    /// `Double.wholeSeconds` exists for. Clamping here rather than at each
+    /// label keeps the four in step and leaves them printing a number.
+    public static let intervalRange: ClosedRange<TimeInterval> = 5 ... 120
+
+    /// A stored interval, or the shipped default where the blob has none or
+    /// holds something that is not a length.
+    ///
+    /// Non-finite goes to the default rather than to a bound: `Swift.max` with
+    /// a NaN hands the NaN straight back, so the clamp alone would let one
+    /// through, and neither end of the range is a more honest reading of "not
+    /// a number" than the value the app ships with.
+    static func legalInterval(_ stored: TimeInterval?, default fallback: TimeInterval) -> TimeInterval {
+        guard let stored, stored.isFinite else { return fallback }
+        return Swift.min(Swift.max(stored, intervalRange.lowerBound), intervalRange.upperBound)
+    }
     /// Which generation of `defaultBindings` a stored map was seeded from.
     ///
     /// Without it a change to the shipped defaults is invisible to everyone who
@@ -301,10 +326,17 @@ public struct CommandMap: Codable, Sendable, Hashable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let stored = try container.decodeIfPresent(Bindings.self, forKey: .bindings)
             ?? Self.defaultBindings
-        skipForwardInterval = try container.decodeIfPresent(
-            TimeInterval.self, forKey: .skipForwardInterval) ?? 30
-        skipBackwardInterval = try container.decodeIfPresent(
-            TimeInterval.self, forKey: .skipBackwardInterval) ?? 15
+        // Clamped on the way in, not merely defaulted. This is the only place
+        // a stored interval enters the app, and every screen that draws one
+        // draws it as `Int(seconds)`.
+        skipForwardInterval = Self.legalInterval(
+            try container.decodeIfPresent(TimeInterval.self, forKey: .skipForwardInterval),
+            default: 30,
+        )
+        skipBackwardInterval = Self.legalInterval(
+            try container.decodeIfPresent(TimeInterval.self, forKey: .skipBackwardInterval),
+            default: 15,
+        )
         let version = try container.decodeIfPresent(Int.self, forKey: .bindingsVersion) ?? 0
         bindings = version < Self.currentBindingsVersion ? Self.migrated(stored) : stored
         bindingsVersion = Self.currentBindingsVersion

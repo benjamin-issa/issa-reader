@@ -497,6 +497,66 @@ struct GainTapPerTapStateTests {
         #expect(state(of: first).scratch?.baseAddress == nil, "the unusable format left a buffer behind")
     }
 
+    /// Two tracks in **one** mix, which is the same defect one level up.
+    ///
+    /// `makeAudioMix` used to create a single tap and hang it on every track's
+    /// `AVMutableAudioMixInputParameters`. One tap is one `TapState` is one
+    /// scratch buffer, so the second track's `tapPrepare` called
+    /// `allocateScratch`, which frees what it replaces — 1024 floats here —
+    /// while the first track's `tapProcess` was still writing the limiter's
+    /// working set through it. A use-after-free on the real-time audio thread,
+    /// where the symptom is somebody else's audio in the block rather than a
+    /// crash anybody can read.
+    ///
+    /// Unreachable from any book on the shelf today, because the audiobooks
+    /// here are single-track — which is precisely why the invariant has to be
+    /// in the shape of the code and this test has to build the multi-track case
+    /// by hand. An `AVMutableComposition` with the fixture's audio inserted
+    /// twice is two real `AVAssetTrack`s and needs no second file.
+    ///
+    /// Two prepares, two addresses. Nothing short of comparing them says so.
+    @Test("two tracks of one mix cannot be handed the same working room")
+    func scratchIsPerTrackOfOneMix() async throws {
+        let directory = try Fixture.directory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = try Fixture.sine(amplitude: 0.5, in: directory)
+        let asset = AVURLAsset(url: url)
+        let source = try #require(try await asset.loadTracks(withMediaType: .audio).first)
+        let span = try await CMTimeRange(start: .zero, duration: asset.load(.duration))
+
+        let composition = AVMutableComposition()
+        for _ in 0 ..< 2 {
+            let track = try #require(composition.addMutableTrack(
+                withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid))
+            try track.insertTimeRange(span, of: source, at: .zero)
+        }
+        let tracks = composition.tracks(withMediaType: .audio)
+        #expect(tracks.count == 2, "the fixture did not produce two tracks to share a buffer")
+
+        let owner = GainTap()
+        let mix = try #require(owner.makeAudioMix(for: tracks))
+        #expect(mix.inputParameters.count == 2, "a track was dropped from the mix")
+        let taps = try mix.inputParameters.map { try #require($0.audioTapProcessor) }
+        #expect(taps[0] !== taps[1], "both tracks are driving one tap, and one scratch buffer")
+
+        var format = Self.float32
+        withUnsafePointer(to: &format) { tapPrepare(tap: taps[0], maxFrames: 1024, processingFormat: $0) }
+        withUnsafePointer(to: &format) { tapPrepare(tap: taps[1], maxFrames: 1024, processingFormat: $0) }
+
+        let first = try #require(state(of: taps[0]).scratch)
+        let second = try #require(state(of: taps[1]).scratch)
+        #expect(first.count == 1024)
+        #expect(second.count == 1024)
+        #expect(first.baseAddress != second.baseAddress,
+                "the second track's prepare freed the buffer the first is processing through")
+
+        // And the level itself is still shared, which is the whole reason one
+        // `GainTap` makes all of them.
+        owner.gain.store(1.5, ordering: .relaxed)
+        #expect(state(of: taps[0]).owner === owner)
+        #expect(state(of: taps[1]).owner === owner)
+    }
+
     /// The flag is per tap; the owner is not, and the manual retain that keeps
     /// it alive is now taken once per tap and given back once per tap. Three
     /// mixes is enough to catch it in either direction: a `TapState` that
@@ -551,6 +611,25 @@ struct AudioPlayerGainTests {
         #expect(player.gain == 1)
     }
 
+    /// "Not loaded yet" and "cannot be made louder" are different answers, and
+    /// the screen that captions the second must not caption the first: a row
+    /// that read a bare `false` would tell every reader their book can only be
+    /// made quieter for the moment between the sheet opening and the first
+    /// track resolving.
+    ///
+    /// The fallback arithmetic is the same either way, because there is no tap
+    /// either way.
+    @Test("a player with nothing loaded has no answer yet, and still trims downwards")
+    func nothingLoadedYet() {
+        let player = AudioPlayer()
+        #expect(player.tapCarriesGain == nil)
+        player.gain = VolumeTrim.gain(-6)
+        #expect(abs(player.underlyingVolume - VolumeTrim.gain(-6)) < 1e-6,
+                "the quieter half has to arrive through the player's own volume")
+        player.gain = VolumeTrim.gain(8)
+        #expect(player.underlyingVolume == 1, "and the louder half has nowhere to go")
+    }
+
     @Test("a file with real tracks gets the tap, and the fade keeps the player's volume")
     func localFileCarriesTheTap() async throws {
         let directory = try Fixture.directory()
@@ -559,7 +638,7 @@ struct AudioPlayerGainTests {
 
         let player = AudioPlayer()
         #expect(await player.load(url: url, href: "sine.wav"))
-        #expect(player.tapCarriesGain, "a local float WAV has a track to attach to")
+        #expect(player.tapCarriesGain == true, "a local float WAV has a track to attach to")
 
         // The gain is in the samples, so the player's own volume is left to the
         // sleep timer alone — at 1 until it fades.

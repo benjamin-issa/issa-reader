@@ -57,8 +57,19 @@ public final class AudioPlayer {
     /// Whether the loaded item's audio genuinely runs through the tap.
     ///
     /// False for anything whose tracks could not be loaded, and the fallback
-    /// below depends on it.
-    private(set) var tapCarriesGain = false
+    /// below depends on it. **Nil until something has been loaded to ask
+    /// about**, which is a different answer from "no": a player that has not
+    /// reached `load` yet is not a book that cannot be made louder, and a
+    /// screen that read the two as one would caption every book for the moment
+    /// before its first track resolves.
+    ///
+    /// Public because it is the only signal a reader has. Without the tap
+    /// `applyPlayerVolume` below can only go *down* — `AVPlayer.volume` is
+    /// documented 0…1 — so a book set louder plays at "as recorded" with
+    /// nothing on screen to say why. That was a 3.5 dB silent loss on the
+    /// percentage scale this replaced; with the +8 dB top rung it is an 8 dB
+    /// one. `VolumeTrimRow` reads it and says so.
+    public private(set) var tapCarriesGain: Bool?
 
     /// The two levels, resolved into the one number `AVPlayer` accepts.
     ///
@@ -66,9 +77,10 @@ public final class AudioPlayer {
     /// multiplies it rather than replacing it. Without the tap the player's own
     /// volume is all there is: `min(gain, 1)` still delivers "quieter", and
     /// "louder" degrades to as-recorded rather than to a value the API would
-    /// clip anyway.
+    /// clip anyway. Nothing loaded yet takes the same branch as no tap, because
+    /// there is no tap either way.
     private func applyPlayerVolume() {
-        player.volume = tapCarriesGain ? volume : volume * Swift.min(gain, 1)
+        player.volume = tapCarriesGain == true ? volume : volume * Swift.min(gain, 1)
     }
 
     public var rate: Float = 1.0 {
