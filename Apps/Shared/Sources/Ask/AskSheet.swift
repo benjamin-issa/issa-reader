@@ -20,6 +20,13 @@ struct AskSheet: View {
     @State private var question = ""
     @State private var chips: [String] = AskSuggestions.chips(topNames: [])
     @State private var availability = AskAvailability.current()
+    /// Whether the last Send arrived before the book had finished laying out.
+    ///
+    /// A flag rather than a computed check on the reader, because the two things
+    /// it would have to ask — `askSource()` and `readingBoundary()` — build a
+    /// `BookSource` and read the layout, and doing that on every render pass is
+    /// the mistake `showsAskPill` was making a few files away.
+    @State private var isStillOpening = false
     @FocusState private var fieldFocused: Bool
 
     /// Reported upwards so the presenting sheet can grow from medium to large
@@ -30,12 +37,16 @@ struct AskSheet: View {
 
     private var job: AskJob? { coordinator.job(for: model.book.uuid) }
 
-    /// Whether there is prose on screen that a machine wrote — the only state
-    /// the disclosure belongs under. A composer or an "Apple Intelligence is
-    /// off" sentence has generated nothing to disclose.
-    private var isAnswered: Bool {
-        guard availability.isReady else { return false }
-        return job?.state.isAnswered ?? false
+    /// Who wrote the prose on screen, when there is prose on screen at all.
+    ///
+    /// Nil for a composer or an "Apple Intelligence is off" sentence, which have
+    /// generated nothing to disclose — and nil for `.withheld`, which is an
+    /// answered state with nothing behind it: the "not yet" sentinel is a
+    /// constant in this repo, and the pill under it used to say a machine had
+    /// written it.
+    private var answerOrigin: AskAnswer.Origin? {
+        guard availability.isReady, case let .answered(answer) = job?.state else { return nil }
+        return answer.origin == .withheld ? nil : answer.origin
     }
 
     var body: some View {
@@ -46,9 +57,9 @@ struct AskSheet: View {
             // `VStack`: that one is measured to decide between the medium and
             // large detents, and a pill that grew the measurement would open
             // sheets full-height to make room for a caption.
-            if isAnswered {
+            if let answerOrigin {
                 Spacer(minLength: 0)
-                AskOriginPill()
+                AskOriginPill(origin: answerOrigin)
             }
         }
         .padding(Metrics.spacing24)
@@ -139,16 +150,40 @@ struct AskSheet: View {
                     .buttonStyle(.plain)
                 }
             }
+
+            // The chips take the same path as the field, so they need the same
+            // answer: tapping one before the book is laid out used to do
+            // nothing at all.
+            if isStillOpening {
+                Text("Still opening this book. Try again in a moment.")
+                    .font(Typography.footnote)
+                    .foregroundStyle(Palette.inkTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("ask.stillOpening")
+            }
         }
         // Focused on appear, not on the sheet's: the reader opened this to type.
         .onAppear { fieldFocused = true }
     }
 
+    /// Sends the question, or says why it could not be sent.
+    ///
+    /// `ask` returns nil whenever the reader's position or the book's file is
+    /// not available yet, and both are missing for the second or two a book
+    /// takes to lay out — which is exactly when a reader who tapped the sparkle
+    /// on the way in is typing. The `@discardableResult` was discarded: the
+    /// field was wiped, the keyboard went down, and nothing whatever happened,
+    /// with no message. The question is kept and the keyboard with it, because
+    /// the fix for this is to tap Send again a moment later.
     private func send() {
         let asked = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !asked.isEmpty else { return }
+        guard coordinator.ask(asked, in: model) != nil else {
+            isStillOpening = true
+            return
+        }
+        isStillOpening = false
         fieldFocused = false
-        coordinator.ask(asked, in: model)
         question = ""
     }
 
