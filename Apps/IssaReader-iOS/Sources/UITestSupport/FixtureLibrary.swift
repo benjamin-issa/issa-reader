@@ -37,6 +37,12 @@ enum FixtureLibrary {
         /// `rail.series` identifier, and the one rail with a differently shaped
         /// header — is actually on screen to be measured.
         var series: (name: String, position: Double)? = nil
+        /// One book carries one, so the book screen's subtitle line is on
+        /// screen to be measured at all. Every other row leaves it nil, which
+        /// is the ordinary case — four of the five books in the captured
+        /// server response send `null` — and the case where the line has to
+        /// vanish without leaving a gap under the title.
+        var subtitle: String? = nil
     }
 
     private static let rows: [Row] = [
@@ -46,7 +52,11 @@ enum FixtureLibrary {
             progress: 0.51,
             formats: ["readaloud", "ebook"],
             status: "Reading",
-            createdAt: "2026-08-30T09:00:00.000Z"),
+            createdAt: "2026-08-30T09:00:00.000Z",
+            // Barrie's own subtitle, and long enough to wrap: the hero column
+            // beside a 130pt cover is about 212pt on a 402pt phone, so this
+            // takes two lines there and one on an iPad.
+            subtitle: "The Boy Who Wouldn't Grow Up"),
         Row(uuid: "22222222-2222-4222-8222-222222222222",
             // Long enough to wrap, which is the case that broke the shelf.
             title: "Frankenstein; or, the Modern Prometheus",
@@ -121,6 +131,10 @@ enum FixtureLibrary {
             if let status = row.status {
                 book["status"] = ["uuid": "status-\(status)", "name": status]
             }
+            // Absent rather than empty for the five that have none, which is
+            // how the server sends it and the only way the book screen's
+            // "no subtitle" case is the one the sweep actually measures.
+            if let subtitle = row.subtitle { book["subtitle"] = subtitle }
             if let createdAt = row.createdAt { book["createdAt"] = createdAt }
             if let series = row.series {
                 book["series"] = [[

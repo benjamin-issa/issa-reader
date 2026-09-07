@@ -188,9 +188,47 @@ public struct BookDetailView: View {
 
     private var heroText: some View {
         VStack(alignment: .leading, spacing: Metrics.spacing8) {
-                Text(book.title)
-                    .font(Typography.title)
-                    .foregroundStyle(Palette.ink)
+                // The title and its subtitle as one block, set tighter than the
+                // 8pt the rest of the column uses, so the subtitle reads as
+                // part of the title rather than as the first of the facts under
+                // it. Safe when there is no subtitle: a stack with one child
+                // has no gap to add, so a book without one lays out exactly as
+                // it did before.
+                VStack(alignment: .leading, spacing: Metrics.spacing4) {
+                    Text(book.title)
+                        .font(Typography.title)
+                        .foregroundStyle(Palette.ink)
+                    // The server has sent this all along and no screen drew it.
+                    // Under the title and above the author, which is where a
+                    // subtitle sits on a jacket.
+                    //
+                    // The title's own face one step down the ramp — serif 17
+                    // against the title's serif 22 — rather than the sans the
+                    // byline is set in: a subtitle is part of the title, and
+                    // `inkSecondary` is what makes it the quieter half rather
+                    // than a second heading. That also keeps it distinct from
+                    // the description further down, which is body text in the
+                    // system face.
+                    //
+                    // No line limit. Subtitles are sentences, and the hero
+                    // column beside a 130pt cover on a 402pt phone is about
+                    // 212pt wide, so anything truncated here would lose most of
+                    // itself; it wraps instead, as the title above it does.
+                    //
+                    // Nothing is done to the accessibility tree on purpose. The
+                    // screen's container is `children: .contain`, so each `Text`
+                    // stays its own element and VoiceOver reads title, subtitle,
+                    // author in that order. Welding the subtitle onto the title
+                    // as one label — the pattern used where a row is a single
+                    // control — would make a sentence-long subtitle impossible
+                    // to swipe past, and `navigationTitle` already announces the
+                    // title on its own.
+                    if let subtitle = book.displaySubtitle {
+                        Text(subtitle)
+                            .font(Typography.bookTitle)
+                            .foregroundStyle(Palette.inkSecondary)
+                    }
+                }
                 Text(book.byline)
                     .font(Typography.callout)
                     .foregroundStyle(Palette.inkSecondary)
