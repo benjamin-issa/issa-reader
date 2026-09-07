@@ -7,24 +7,39 @@ import Testing
 /// The arithmetic, on its own, with no audio machinery in the way.
 @Suite("The gain kernel")
 struct GainKernelTests {
-    @Test("above unity a sample near full scale is clipped, not wrapped")
+    /// Runs the kernel over a copy, with scratch of the given size — the
+    /// default being room for the whole block, which is what a prepared tap
+    /// hands it.
+    static func applied(gain: Float, to input: [Float], scratch size: Int? = nil) -> [Float] {
+        var samples = input
+        var scratch = [Float](repeating: .nan, count: size ?? max(input.count, 1))
+        samples.withUnsafeMutableBufferPointer { block in
+            scratch.withUnsafeMutableBufferPointer { room in
+                GainTap.apply(gain: gain, to: block, scratch: room)
+            }
+        }
+        return samples
+    }
+
+    static let threshold = GainTap.threshold
+    static let ceiling = GainTap.ceiling
+
+    @Test("above unity a sample far past the knee lands exactly on the ceiling")
     func clipsRatherThanWrapping() {
-        var samples: [Float] = [0.9, -0.9, 0.5, -0.5, 0]
-        samples.withUnsafeMutableBufferPointer { GainTap.apply(gain: 1.5, to: $0) }
-        #expect(samples[0] == 1.0, "0.9 × 1.5 is 1.35, which has to land on the ceiling")
+        let samples = Self.applied(gain: 1.5, to: [0.9, -0.9, 0.5, -0.5, 0])
+        #expect(samples[0] == 1.0, "0.9 × 1.5 is 1.35, past 2 − T, so it is exactly 1")
         #expect(samples[1] == -1.0)
-        #expect(abs(samples[2] - 0.75) < 1e-6)
-        #expect(abs(samples[3] + 0.75) < 1e-6)
+        #expect(samples[2] == 0.75, "0.75 is under the knee and must not be touched at all")
+        #expect(samples[3] == -0.75)
         #expect(samples[4] == 0)
     }
 
     @Test("below unity every sample scales and nothing meets the ceiling")
     func scalesDown() {
-        var samples: [Float] = [1.0, -1.0, 0.5, 0]
-        samples.withUnsafeMutableBufferPointer { GainTap.apply(gain: 0.5, to: $0) }
-        #expect(abs(samples[0] - 0.5) < 1e-6)
-        #expect(abs(samples[1] + 0.5) < 1e-6)
-        #expect(abs(samples[2] - 0.25) < 1e-6)
+        let samples = Self.applied(gain: 0.5, to: [1.0, -1.0, 0.5, 0])
+        #expect(samples[0] == 0.5)
+        #expect(samples[1] == -0.5)
+        #expect(samples[2] == 0.25)
         #expect(samples[3] == 0)
     }
 
@@ -35,19 +50,185 @@ struct GainKernelTests {
     @Test("at unity not a byte moves")
     func unityIsFree() {
         let original: [Float] = [0.9, -0.9, 0.123_456, 2.0, -2.0]
-        var samples = original
-        samples.withUnsafeMutableBufferPointer { GainTap.apply(gain: 1, to: $0) }
-        #expect(samples == original)
+        #expect(Self.applied(gain: 1, to: original) == original)
+    }
+
+    /// The promise `tanh` and a cubic both broke, and the reason neither was
+    /// chosen. They shape every sample, so they colour a book at gains that
+    /// cannot possibly clip: `tanh` costs 0.16 dB and 1.59% THD+N at gain 1.0.
+    /// Under unity this kernel multiplies and stops.
+    ///
+    /// The gains are unity and every rung of the quiet half of the slider,
+    /// 0 dB down to −8 dB.
+    @Test("at and below unity every sample is exactly the multiply", arguments: [
+        Float(1.0), 0.891_251, 0.794_328, 0.707_946, 0.630_957, 0.562_341, 0.501_187,
+        0.446_684, 0.398_107,
+    ])
+    func exactBelowUnity(gain: Float) {
+        // Loud samples included, and they are the point: at 0.99 × 0.891 the
+        // product is 0.882, well past the knee, and the knee must not see it.
+        var input: [Float] = [0, 0.5, -0.5, 0.99, -0.99, 1.0, -1.0, 0.123_456_7]
+        for index in 0 ..< 2000 { input.append(-1 + 2 * Float(index) / 1999) }
+        let expected = input.map { $0 * gain }
+        #expect(Self.applied(gain: gain, to: input) == expected)
+    }
+
+    /// The other half of the same promise, and the harder half: at a gain that
+    /// *does* engage the knee, a sample under the threshold still comes out of
+    /// the multiply untouched — even sitting next to one that is being limited,
+    /// which is the case a whole-block early-out would flatter.
+    @Test("under the knee the answer is the multiply, bit for bit")
+    func transparentBelowTheKnee() {
+        let gain: Float = 2.512
+        var input: [Float] = []
+        // Everything here scales to at most 0.8 × 0.999.
+        for index in 0 ..< 4000 {
+            input.append(-0.318 + 0.636 * Float(index) / 3999)
+        }
+        let quiet = Self.applied(gain: gain, to: input)
+        #expect(quiet == input.map { $0 * gain })
+
+        // And again with one sample loud enough to force the long path.
+        let mixed = Self.applied(gain: gain, to: input + [0.9])
+        #expect(Array(mixed.dropLast()) == input.map { $0 * gain },
+                "the early-out was doing the work, not the arithmetic")
+        #expect(mixed.last == 1.0)
+    }
+
+    /// The three pieces of the curve, checked where they join. `f(2 − T)` has to
+    /// be exactly 1 or the limiter has a step in it at the loudest moment of the
+    /// loudest passage.
+    @Test("the curve is odd, monotone, and meets the ceiling exactly")
+    func shape() {
+        let gain: Float = 2.0
+        // Straight onto the join, and either side of it. A hair either side
+        // will not do: the curve arrives at the ceiling with a slope of zero,
+        // which is the whole point of it, so a step of 1e-4 lands 1.25e-8 under
+        // 1 — closer than a `Float` can hold at that magnitude, and the
+        // assertion would fail for being right.
+        let joins: [Float] = [Self.ceiling / gain, (Self.ceiling - 0.05) / gain,
+                              (Self.ceiling + 0.05) / gain]
+        let landed = Self.applied(gain: gain, to: joins)
+        #expect(landed[0] == 1.0, "f(2 − T) is not exactly 1, got \(landed[0])")
+        #expect(landed[1] < 1.0, "the curve is on the ceiling before it reaches it, \(landed[1])")
+        #expect(landed[2] == 1.0)
+
+        var rising: [Float] = []
+        for index in 0 ... 4000 { rising.append(Float(index) / 4000) }
+        let positive = Self.applied(gain: gain, to: rising)
+        let negative = Self.applied(gain: gain, to: rising.map { -$0 })
+        #expect(zip(positive, negative).allSatisfy { $0 == -$1 }, "f(−x) ≠ −f(x)")
+        #expect(zip(positive, positive.dropFirst()).allSatisfy { $0 <= $1 }, "the curve goes back on itself")
+        #expect(positive.allSatisfy { $0 <= 1.0 })
+        #expect(positive.last == 1.0)
+    }
+
+    /// What makes it a knee rather than a corner. A hard clip's slope falls from
+    /// 1 to 0 in one sample and that discontinuity is the crackle; here it
+    /// arrives at the threshold still at 1 and leaves the ceiling at 0.
+    @Test("the curve leaves the knee at the slope it arrived with")
+    func unitySlopeAtTheKnee() {
+        let gain: Float = 2.0
+        let step: Float = 1e-4
+        let around = Self.applied(gain: gain, to: [
+            (Self.threshold - step) / gain, (Self.threshold + step) / gain,
+        ])
+        let slope = (around[1] - around[0]) / (2 * step)
+        #expect(abs(slope - 1) < 0.01, "the knee has a corner in it, slope \(slope)")
+    }
+
+    /// A decoder can hand back anything. The rule is that poison is passed on
+    /// rather than turned into full-scale noise: a NaN stays a NaN — which is
+    /// what it did before the limiter arrived — and an infinity, which *is*
+    /// representable as a level, lands on the ceiling like any other loud
+    /// sample.
+    @Test("non-finite samples survive the limiter")
+    func nonFinite() {
+        let poisoned = Self.applied(gain: 2.0, to: [.nan, .infinity, -.infinity, 0.25])
+        #expect(poisoned[0].isNaN, "a NaN was read as a level")
+        #expect(poisoned[1] == 1.0)
+        #expect(poisoned[2] == -1.0)
+        #expect(poisoned[3] == 0.5)
+
+        // Alone, so the block's peak is the NaN itself. `vDSP_maxv` hands back
+        // NaN, `NaN <= threshold` is false, and the block therefore does *not*
+        // take the quiet early-out — which is the ordering this depends on.
+        #expect(Self.applied(gain: 2.0, to: [.nan])[0].isNaN)
+    }
+
+    /// The test that catches a scratch buffer leaking state across calls, or an
+    /// early-out that depends on where the block boundaries happen to fall.
+    /// AVFoundation picks the block size and it changes with the route, the
+    /// sample rate and whatever else the system is doing.
+    @Test("the answer does not depend on how the samples were split up")
+    func blockSizeInvariance() {
+        var ramp: [Float] = []
+        for index in 0 ..< 4096 { ramp.append(-1 + 2 * Float(index) / 4095) }
+        let whole = Self.applied(gain: 2.512, to: ramp)
+
+        for size in [1024, 37, 1, 4095, 4096] {
+            var chunked = ramp
+            var scratch = [Float](repeating: .nan, count: size)
+            chunked.withUnsafeMutableBufferPointer { block in
+                scratch.withUnsafeMutableBufferPointer { room in
+                    var offset = 0
+                    while offset < block.count {
+                        let frames = min(size, block.count - offset)
+                        GainTap.apply(
+                            gain: 2.512,
+                            to: UnsafeMutableBufferPointer(
+                                start: block.baseAddress! + offset, count: frames),
+                            scratch: room,
+                        )
+                        offset += frames
+                    }
+                }
+            }
+            #expect(chunked == whole, "blocks of \(size) do not agree with one block")
+        }
+    }
+
+    /// A tap prepared for 512 frames handed 4096. It should not happen, and the
+    /// kernel walks the block in chunks of whatever room it has rather than
+    /// running off the end of the scratch if it does.
+    @Test("a block larger than the scratch is walked, not overrun", arguments: [1, 7, 512, 4095])
+    func scratchSmallerThanTheBlock(size: Int) {
+        var ramp: [Float] = []
+        for index in 0 ..< 4096 { ramp.append(-1 + 2 * Float(index) / 4095) }
+        #expect(Self.applied(gain: 2.512, to: ramp, scratch: size)
+            == Self.applied(gain: 2.512, to: ramp))
     }
 
     @Test("an empty buffer, and a null one, are both no-ops")
     func emptyBuffer() {
         var samples: [Float] = []
-        samples.withUnsafeMutableBufferPointer { GainTap.apply(gain: 1.5, to: $0) }
+        var scratch: [Float] = []
+        samples.withUnsafeMutableBufferPointer { block in
+            scratch.withUnsafeMutableBufferPointer { room in
+                GainTap.apply(gain: 1.5, to: block, scratch: room)
+            }
+        }
         #expect(samples.isEmpty)
         // What an `AudioBufferList` can genuinely hold: a buffer with no data
         // pointer at all.
-        GainTap.apply(gain: 1.5, to: UnsafeMutableBufferPointer<Float>(start: nil, count: 0))
+        GainTap.apply(
+            gain: 1.5,
+            to: UnsafeMutableBufferPointer<Float>(start: nil, count: 0),
+            scratch: UnsafeMutableBufferPointer<Float>(start: nil, count: 0),
+        )
+    }
+
+    /// The only path that can reach the kernel without working room is a tap
+    /// that reported no frames to prepare, which `tapPrepare` already refuses.
+    /// If it ever happens anyway, the reader gets the level they asked for,
+    /// hard-limited — never a chapter that silently plays flat, which is the
+    /// failure this file's `TapState` was built to end.
+    @Test("with no scratch at all the gain still arrives, hard-limited")
+    func noScratch() {
+        let samples = Self.applied(gain: 2.0, to: [0.1, 0.9, -0.9], scratch: 0)
+        #expect(samples[0] == 0.2)
+        #expect(samples[1] == 1.0)
+        #expect(samples[2] == -1.0)
     }
 }
 
@@ -56,7 +237,15 @@ struct GainKernelTests {
 /// The tap wired into a real decode, because the kernel being right says
 /// nothing about whether the mix was ever consulted. A mix that is silently
 /// ignored looks exactly like a mix that is applied and happens to do nothing.
-@Suite("A book decoded through the gain tap")
+///
+/// Serialised, and it has to be. Every test here stands up an `AVAssetReader`
+/// with an audio mix on it, and those share one `AQProcessingTapManager` for
+/// the whole process. Three at once is fine; the eight this suite grew to
+/// wedged the lot of them — every reader parked in `copyNextSampleBuffer`
+/// waiting on a CoreMedia semaphore, with nothing of ours on any stack and no
+/// timeout to end it. One decode at a time costs about a fifth of a second each
+/// and cannot do that.
+@Suite("A book decoded through the gain tap", .serialized)
 struct GainTapDecodeTests {
     @Test("a recording read through the mix comes out louder, and clipped at the top")
     func louder() async throws {
@@ -66,11 +255,11 @@ struct GainTapDecodeTests {
 
         let tap = GainTap()
         tap.gain.store(1.5, ordering: .relaxed)
-        let peak = try await Fixture.peak(of: url, through: tap)
+        let measured = try await Fixture.measure(of: url, through: tap)
 
         #expect(tap.processedFrames.load(ordering: .relaxed) > 0,
                 "the mix was never consulted, so the peak below means nothing")
-        #expect(abs(peak - 0.75) < 0.02, "0.5 × 1.5 should be 0.75, got \(peak)")
+        #expect(abs(measured.peak - 0.75) < 0.02, "0.5 × 1.5 should be 0.75, got \(measured.peak)")
     }
 
     @Test("and quieter the other way")
@@ -81,14 +270,14 @@ struct GainTapDecodeTests {
 
         let tap = GainTap()
         tap.gain.store(0.5, ordering: .relaxed)
-        let peak = try await Fixture.peak(of: url, through: tap)
+        let measured = try await Fixture.measure(of: url, through: tap)
 
         #expect(tap.processedFrames.load(ordering: .relaxed) > 0)
-        #expect(abs(peak - 0.25) < 0.02, "0.5 × 0.5 should be 0.25, got \(peak)")
+        #expect(abs(measured.peak - 0.25) < 0.02, "0.5 × 0.5 should be 0.25, got \(measured.peak)")
     }
 
     /// A book already mastered close to full scale is the one that most tempts
-    /// a listener to turn it up, and it is the one where an unclipped multiply
+    /// a listener to turn it up, and it is the one where an unlimited multiply
     /// would wrap into a buzz.
     @Test("a recording already near full scale never leaves the range")
     func loudRecordingStaysInRange() async throws {
@@ -98,11 +287,77 @@ struct GainTapDecodeTests {
 
         let tap = GainTap()
         tap.gain.store(1.5, ordering: .relaxed)
-        let peak = try await Fixture.peak(of: url, through: tap)
+        let measured = try await Fixture.measure(of: url, through: tap)
 
         #expect(tap.processedFrames.load(ordering: .relaxed) > 0)
-        #expect(peak <= 1.0, "0.9 × 1.5 is 1.35 and must be limited, got \(peak)")
-        #expect(peak > 0.99, "and it should be reaching the ceiling, not sitting under it")
+        #expect(measured.peak <= 1.0, "0.9 × 1.5 is 1.35 and must be limited, got \(measured.peak)")
+        #expect(measured.peak > 0.99, "and it should be reaching the ceiling, not sitting under it")
+    }
+
+    /// The assertion the reader's complaint actually turns on.
+    ///
+    /// "I can hear a difference from −50% to +50%, and that's pretty much it"
+    /// is a statement about *loudness*, and a peak cannot answer it — a limiter
+    /// pinned to the ceiling and a gain stage doing its job both report 1.0. So
+    /// this measures the RMS through a real `MTAudioProcessingTap` and asks for
+    /// the level the slider promises, to a tenth of a decibel. The fixture is
+    /// quiet enough that the knee never engages, which is what makes the
+    /// arithmetic checkable at all.
+    @Test("the level delivered is the level the rung promises", arguments: [
+        (Float(0.398_107_2), Float(-8)), (1.0, 0), (2.511_886_4, 8),
+    ])
+    func deliveredLevel(gain: Float, decibels: Float) async throws {
+        let directory = try Fixture.directory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = try Fixture.sine(amplitude: 0.2, in: directory)
+
+        let reference = try await Fixture.measure(of: url, through: GainTap())
+        let tap = GainTap()
+        tap.gain.store(gain, ordering: .relaxed)
+        let measured = try await Fixture.measure(of: url, through: tap)
+
+        #expect(tap.processedFrames.load(ordering: .relaxed) > 0)
+        let delivered = 20 * log10(measured.rms / reference.rms)
+        #expect(abs(delivered - decibels) < 0.1,
+                "\(decibels) dB was asked for and \(delivered) dB arrived")
+    }
+
+    /// The top of the new slider on a book that is quiet enough to want it —
+    /// which is the book the control exists for. Nothing may touch the ceiling:
+    /// if the limiter is reaching for a quietly mastered file at +8 dB, the
+    /// threshold is in the wrong place.
+    @Test("a quiet book at the top of the slider is loud and never limited")
+    func quietBookAtTheTop() async throws {
+        let directory = try Fixture.directory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = try Fixture.sine(amplitude: 0.2, in: directory)
+
+        let tap = GainTap()
+        tap.gain.store(2.511_886_4, ordering: .relaxed)
+        let measured = try await Fixture.measure(of: url, through: tap)
+
+        #expect(tap.processedFrames.load(ordering: .relaxed) > 0)
+        #expect(abs(measured.peak - 0.502) < 0.02,
+                "0.2 × 2.512 should be 0.502, got \(measured.peak)")
+        #expect(measured.clipped == 0, "a quiet book was limited at +8 dB")
+    }
+
+    /// And the same rung on a book that was mastered hot, which is where +8 dB
+    /// is 2.26 times more than there is room for. The knee is what stops that
+    /// being a crackle.
+    @Test("a hot book at the top of the slider sits exactly on the ceiling")
+    func hotBookAtTheTop() async throws {
+        let directory = try Fixture.directory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = try Fixture.sine(amplitude: 0.9, in: directory)
+
+        let tap = GainTap()
+        tap.gain.store(2.511_886_4, ordering: .relaxed)
+        let measured = try await Fixture.measure(of: url, through: tap)
+
+        #expect(tap.processedFrames.load(ordering: .relaxed) > 0)
+        #expect(measured.peak <= 1.0, "0.9 × 2.512 is 2.26 and must be limited, got \(measured.peak)")
+        #expect(measured.peak > 0.99, "and it should be reaching the ceiling, not sitting under it")
     }
 
     @Test("no audio tracks, no mix — the caller has to be able to tell")
@@ -193,6 +448,53 @@ struct GainTapPerTapStateTests {
     /// expression apart around one.
     static func carriesGain(_ tap: MTAudioProcessingTap) -> Bool {
         state(of: tap).isFloat32.load(ordering: .relaxed)
+    }
+
+    /// The limiter needs working room, and the obvious place to hang it is the
+    /// shared `GainTap` — which is exactly the bug this whole file was
+    /// rearranged to close. Two chapters are alive at once across a change, one
+    /// buffer between them means one writing over the other's samples mid-block,
+    /// and the audible result would be a burst of somebody else's audio.
+    ///
+    /// Two prepared taps, two addresses. Nothing short of comparing them says
+    /// so: a shared buffer produces perfectly plausible output right up until
+    /// two chapters overlap.
+    @Test("each tap gets its own working room, and gives it back")
+    func scratchIsPerTap() async throws {
+        let directory = try Fixture.directory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = try Fixture.sine(amplitude: 0.5, in: directory)
+        let tracks = try await AVURLAsset(url: url).loadTracks(withMediaType: .audio)
+
+        let owner = GainTap()
+        let (first, second) = try Self.taps(from: owner, tracks: tracks)
+        var format = Self.float32
+        withUnsafePointer(to: &format) { tapPrepare(tap: first, maxFrames: 1024, processingFormat: $0) }
+        withUnsafePointer(to: &format) { tapPrepare(tap: second, maxFrames: 1024, processingFormat: $0) }
+
+        let firstRoom = try #require(state(of: first).scratch)
+        let secondRoom = try #require(state(of: second).scratch)
+        #expect(firstRoom.count == 1024, "one mono buffer of maxFrames, got \(firstRoom.count)")
+        #expect(secondRoom.count == 1024)
+        #expect(firstRoom.baseAddress != secondRoom.baseAddress,
+                "the two chapters are sharing one scratch buffer")
+
+        // Preparing again is what a route change does, and it must not leak the
+        // buffer it replaces or keep a stale size.
+        var stereo = Self.float32
+        stereo.mChannelsPerFrame = 2
+        withUnsafePointer(to: &stereo) { tapPrepare(tap: first, maxFrames: 512, processingFormat: $0) }
+        #expect(state(of: first).scratch?.count == 1024, "512 frames of 2 channels is 1024 floats")
+        #expect(state(of: second).scratch?.baseAddress == secondRoom.baseAddress,
+                "re-preparing one tap moved the other one's room")
+
+        // And a format the kernel cannot read leaves no room behind at all.
+        var integer = Self.float32
+        integer.mFormatFlags = kAudioFormatFlagIsSignedInteger
+        integer.mBitsPerChannel = 16
+        withUnsafePointer(to: &integer) { tapPrepare(tap: first, maxFrames: 1024, processingFormat: $0) }
+        #expect(Self.carriesGain(first) == false)
+        #expect(state(of: first).scratch?.baseAddress == nil, "the unusable format left a buffer behind")
     }
 
     /// The flag is per tap; the owner is not, and the manual retain that keeps
@@ -388,8 +690,18 @@ private enum Fixture {
         return url
     }
 
-    /// The loudest sample in the file, decoded through the tap's mix.
-    static func peak(of url: URL, through tap: GainTap) async throws -> Float {
+    /// What came out of the tap's mix, measured three ways.
+    ///
+    /// The peak alone cannot tell "the level moved" from "the level was
+    /// clamped": a hard clip and a working gain stage both report 1.0. The RMS
+    /// is what says how loud the book actually got, and the clipped fraction is
+    /// what says at what cost — which is the whole argument between a soft knee
+    /// and the `vDSP_vclip` it replaced.
+    ///
+    /// `clipped` counts samples at or past full scale, not blocks: the loop
+    /// below visits every sample anyway, and per-sample is the stricter reading.
+    static func measure(of url: URL, through tap: GainTap) async throws
+        -> (peak: Float, rms: Float, clipped: Double) {
         let asset = AVURLAsset(url: url)
         let tracks = try await asset.loadTracks(withMediaType: .audio)
         let mix = try #require(tap.makeAudioMix(for: tracks))
@@ -406,6 +718,9 @@ private enum Fixture {
         reader.startReading()
 
         var peak: Float = 0
+        var sumOfSquares = 0.0
+        var clipped = 0
+        var total = 0
         while let sample = output.copyNextSampleBuffer() {
             var list = AudioBufferList()
             var block: CMBlockBuffer?
@@ -425,9 +740,19 @@ private enum Fixture {
                 let count = Int(buffer.mDataByteSize) / MemoryLayout<Float>.size
                 let floats = UnsafeBufferPointer(
                     start: data.assumingMemoryBound(to: Float.self), count: count)
-                for value in floats { peak = max(peak, abs(value)) }
+                for value in floats {
+                    let magnitude = abs(value)
+                    peak = max(peak, magnitude)
+                    sumOfSquares += Double(value) * Double(value)
+                    if magnitude >= 1 { clipped += 1 }
+                    total += 1
+                }
             }
         }
-        return peak
+        return (
+            peak,
+            total > 0 ? Float((sumOfSquares / Double(total)).squareRoot()) : 0,
+            total > 0 ? Double(clipped) / Double(total) : 0
+        )
     }
 }
