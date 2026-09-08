@@ -13,7 +13,8 @@ import Foundation
 /// A sentence that predicates something of the subject is a different object
 /// from a paragraph that mentions it, and the difference is the whole feature.
 public struct Evidence: Sendable, Hashable {
-    /// Why this sentence was kept, which is also the order it is kept in.
+    /// Why this sentence was kept. Not the order it is kept in — that is
+    /// `priority`, and evidence comes back in reading order whatever its role.
     public enum Role: Sendable, Hashable {
         /// The first sentence in an early passage that names the subject.
         /// Novels introduce people where they first appear.
@@ -39,6 +40,14 @@ public struct Evidence: Sendable, Hashable {
     /// kinship extractor is allowed, and deliberately one sentence: over-reach
     /// is a confident wrong answer with a citation on it.
     public var precedingText: String?
+    /// How badly the question wants this piece, zero best — carried through to
+    /// `PassageRanker.Ranked` so the trimming and the retry ladder drop the
+    /// weakest evidence rather than the last thing the reader read.
+    ///
+    /// Defaulted, unlike `Ranked.priority`, because a piece of evidence is
+    /// minted in a dozen places that have no opinion about rank yet;
+    /// `prioritised` stamps a whole run of them once the order is decided.
+    public var priority: Int
 
     public init(
         excerpt: Passage,
@@ -46,12 +55,14 @@ public struct Evidence: Sendable, Hashable {
         role: Role,
         sentenceText: String,
         precedingText: String? = nil,
+        priority: Int = 0,
     ) {
         self.excerpt = excerpt
         self.sentence = sentence
         self.role = role
         self.sentenceText = sentenceText
         self.precedingText = precedingText
+        self.priority = priority
     }
 }
 
@@ -122,11 +133,15 @@ public enum EvidenceFinder {
                 ))
             }
         }
-        // First mentions first when there is not room for everything, then back
-        // into book order — the instructions tell the model the excerpts are in
+        // First mentions first when there is not room for everything, and that
+        // preference is written down as a priority before book order is
+        // restored — the instructions tell the model the excerpts are in
         // reading order, and a model handed events out of sequence invents a
-        // chronology to explain them.
-        return inBookOrder(Array((firstMentions + predicates).prefix(Limits.identityExcerpts)))
+        // chronology to explain them, but a prompt trimmed on book order alone
+        // sacrifices the introduction and keeps the passing mention.
+        return inBookOrder(
+            prioritised(Array((firstMentions + predicates).prefix(Limits.identityExcerpts))),
+        )
     }
 
     // MARK: - Kinship
@@ -157,16 +172,34 @@ public enum EvidenceFinder {
                     sentences, from: namesHere ? index : index - 1, key: index, through: index,
                     in: passage, role: .kinship,
                 ))
-                if found.count == limit { return inBookOrder(found) }
+                if found.count == limit { return inBookOrder(prioritised(found)) }
             }
         }
-        return inBookOrder(found)
+        return inBookOrder(prioritised(found))
+    }
+
+    // MARK: - Priority
+
+    /// Stamps a run of evidence with the order it is already in, before
+    /// anything sorts that order away.
+    ///
+    /// Every finder assembles its evidence best-first and then hands it to
+    /// `inBookOrder`, which is the right thing for the model to read and the
+    /// wrong thing for the prompt builder to trim. This is the one line that
+    /// preserves what the finder decided.
+    static func prioritised(_ evidence: [Evidence]) -> [Evidence] {
+        evidence.enumerated().map { index, piece in
+            var stamped = piece
+            stamped.priority = index
+            return stamped
+        }
     }
 
     // MARK: - Whole passages
 
     /// Passages as they come, for the general path and for topping up a
-    /// kinship question that found too little.
+    /// kinship question that found too little. The ranker's priority comes
+    /// with them, one for one and in the order it was given.
     public static func passages(_ ranked: [PassageRanker.Ranked]) -> [Evidence] {
         ranked.map {
             Evidence(
@@ -174,16 +207,22 @@ public enum EvidenceFinder {
                 sentence: $0.passage.range,
                 role: .passage,
                 sentenceText: $0.passage.displayText,
+                priority: $0.priority,
             )
         }
     }
 
     /// Back into the shape the prompt builder and the sheet already speak.
+    ///
+    /// One for one and in the same order, which the citations depend on:
+    /// `KinshipExtractor` cites `evidenceIndex + 1` into the array this was
+    /// built from, so an excerpt dropped or moved here is an answer pointing at
+    /// a sentence it was not lifted from.
     public static func ranked(_ evidence: [Evidence]) -> [PassageRanker.Ranked] {
         evidence.map {
             PassageRanker.Ranked(
                 retrieved: RetrievedPassage(passage: $0.excerpt, bm25: 0, isTruncated: false),
-                score: 0,
+                priority: $0.priority,
             )
         }
     }

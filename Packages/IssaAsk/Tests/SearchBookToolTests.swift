@@ -193,6 +193,47 @@ struct SearchBookToolTests {
         }
     }
 
+    @Test("the tool hands back the best of what it found, not the earliest")
+    func returnsTheBestOfWhatItFound() async throws {
+        let (store, _, directory) = try await AskFixture.preparedStore()
+        defer { AskFixture.remove(directory) }
+        let boundary = try AskFixture.endOf(spine: AskFixture.Spine.chapterVI)
+        // A recap is the case where book order and rank order are exactly
+        // opposed: the store hands its passages back in reading order, and the
+        // question is about the end of what has happened.
+        let question = AskSuggestions.recap
+
+        // What retrieval offers the tool, so the test can name the two it
+        // should have picked without hard-coding a row of the fixture.
+        let retriever = AskRetriever(
+            store: store, bookUUID: AskFixture.bookUUID, boundary: boundary,
+            allowsFastPath: false,
+        )
+        let retrieval = try await retriever.retrieve(
+            question: question, limit: SearchBookTool.passageLimit,
+        )
+        guard case let .evidence(found, _) = retrieval else {
+            Issue.record("retrieval offered the tool no excerpts")
+            return
+        }
+        try #require(found.count > SearchBookTool.passageLimit)
+        let best = PassageRanker.best(found, count: SearchBookTool.passageLimit)
+        // Book order and rank order have to disagree here, or this proves
+        // nothing at all.
+        try #require(best.map(\.passage) != found.prefix(best.count).map(\.passage))
+
+        let tool = SearchBookTool(store: store, bookUUID: AskFixture.bookUUID, boundary: boundary)
+        await tool.beginGeneration(numberingFrom: 7)
+        _ = try await tool.call(arguments: .init(query: question))
+
+        // Compared against what was shown rather than the text, because the
+        // token cap trims from the end and may show only the first of them.
+        let shown = await tool.passagesShown()
+        try #require(!shown.isEmpty)
+        #expect(shown[7] == best.first?.passage)
+        #expect(Set(shown.values).isSubset(of: Set(best.map(\.passage))))
+    }
+
     @Test("the tool may not answer the question itself")
     func neverAnswersOutright() async throws {
         let (store, _, directory) = try await AskFixture.preparedStore()

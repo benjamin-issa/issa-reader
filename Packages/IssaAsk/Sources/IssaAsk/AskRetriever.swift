@@ -98,9 +98,7 @@ public struct AskRetriever: Sendable {
             let recap = try await store.recapPassages(
                 in: bookUUID, before: boundary, limit: Limits.recap,
             )
-            return .evidence(
-                recap.map { PassageRanker.Ranked(retrieved: $0, score: 0) }, kind: .recap,
-            )
+            return .evidence(Self.recapRanked(recap), kind: .recap)
         }
 
         let unmet = try await store.unmetWords(
@@ -139,15 +137,26 @@ public struct AskRetriever: Sendable {
             let recap = try await store.recapPassages(
                 in: bookUUID, before: boundary, limit: Limits.recap,
             )
-            return EvidenceFinder.passages(recap.map {
-                PassageRanker.Ranked(retrieved: $0, score: 0)
-            })
+            return EvidenceFinder.passages(Self.recapRanked(recap))
         case let .identity(subject):
             return try await identity(subject)
         case let .kinship(subject, relation, other, _):
             return try await kinship(terms, subject: subject, relation: relation, other: other)
         case let .general(subject):
             return try await general(terms, subject: subject, limit: limit)
+        }
+    }
+
+    /// A recap, read in order but priced by recency.
+    ///
+    /// The store hands these back in reading order, which is what the model
+    /// must see — a recap read backwards is a worse recap. But "what has
+    /// happened so far" is a question about the end of what has happened, so
+    /// when the prompt will not fit it is the opening that should go, not the
+    /// chapter the reader has just closed.
+    static func recapRanked(_ recap: [RetrievedPassage]) -> [PassageRanker.Ranked] {
+        recap.enumerated().map { index, passage in
+            PassageRanker.Ranked(retrieved: passage, priority: recap.count - 1 - index)
         }
     }
 
@@ -233,7 +242,20 @@ public struct AskRetriever: Sendable {
         let extra = try await general(
             terms, subject: subject, limit: Limits.kinshipExcerpts - found.count,
         )
-        found.append(contentsOf: extra)
+        // The top-up is context for the kin sentences, never a rival to them,
+        // so its priorities continue after theirs instead of starting again at
+        // zero — which is what would let a paragraph that merely says the name
+        // outrank the one sentence that answers the question.
+        //
+        // Bound before the append: an inline `found.count` inside
+        // `found.append(contentsOf:)` is overlapping access to `found`, and
+        // Swift 6 exclusivity rejects it.
+        let offset = found.count
+        found.append(contentsOf: extra.map {
+            var piece = $0
+            piece.priority += offset
+            return piece
+        })
         return EvidenceFinder.inBookOrder(found)
     }
 

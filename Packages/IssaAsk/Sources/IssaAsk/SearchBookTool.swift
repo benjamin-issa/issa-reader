@@ -104,7 +104,12 @@ public final class SearchBookTool: AskTool, Tool {
             question: arguments.query, limit: Self.passageLimit,
         )
         var ranked: [PassageRanker.Ranked] = []
-        if case let .evidence(found, _) = retrieval { ranked = Array(found.prefix(Self.passageLimit)) }
+        // The best two, not the first two. Retrieval hands these back in book
+        // order, so a `prefix` here spent the model's search on whichever two
+        // excerpts happened to come earliest in the book.
+        if case let .evidence(found, _) = retrieval {
+            ranked = PassageRanker.best(found, count: Self.passageLimit)
+        }
         // Counts only, never the query: whether the model searches at all — and
         // what that costs in seconds — is the measurement the tool ships behind
         // a kill switch for, and there is no other way to see it from outside.

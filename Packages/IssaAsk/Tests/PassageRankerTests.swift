@@ -109,4 +109,63 @@ struct PassageRankerTests {
     func handlesEmpty() {
         #expect(PassageRanker.rank([], terms: QueryTerms.extract(from: "x"), limit: 6).isEmpty)
     }
+
+    // MARK: - Priority
+
+    @Test("the place a passage came in the score sort survives the book-order sort")
+    func rankRecordsItsPriority() {
+        let terms = QueryTerms.extract(from: "What did the rabbit say?")
+        let candidates = [
+            // Best bm25 last in the book, worst first, so book order and rank
+            // order disagree about everything.
+            Self.candidate(spine: 2, ordinal: 0, text: "rabbit", bm25: -1),
+            Self.candidate(spine: 2, ordinal: 1, text: "rabbit", bm25: -3),
+            Self.candidate(spine: 5, ordinal: 0, text: "rabbit", bm25: -9),
+        ]
+        let ranked = PassageRanker.rank(candidates, terms: terms, limit: 3)
+        // Reading order for the model…
+        #expect(ranked.map { ($0.passage.spineIndex, $0.passage.ordinal) }
+            .elementsEqual([(2, 0), (2, 1), (5, 0)], by: ==))
+        // …and the ranking written down beside it, which the second sort used
+        // to throw away. `score` was identically zero everywhere downstream
+        // because of it, and sorting on it was a provable no-op.
+        #expect(ranked.map(\.priority) == [2, 1, 0])
+    }
+
+    @Test("best keeps the order it was given, sentence windows and all")
+    func bestKeepsReadingOrder() {
+        // Two sentence windows out of one paragraph. `order` is
+        // `(spineIndex, ordinal)`, so these two are indistinguishable to it —
+        // only `start` separates them, which is why `inBookOrder` sorts on
+        // that instead.
+        func window(start: Int, priority: Int) -> PassageRanker.Ranked {
+            PassageRanker.Ranked(
+                retrieved: RetrievedPassage(
+                    passage: Passage(
+                        spineIndex: 3, ordinal: 4, start: start, end: start + 20,
+                        words: 4, text: "a window at \(start)",
+                    ),
+                    bm25: -1, isTruncated: false,
+                ),
+                priority: priority,
+            )
+        }
+        let ranked = [
+            window(start: 100, priority: 1),
+            window(start: 140, priority: 0),
+            window(start: 180, priority: 2),
+        ]
+        // A filter, never a re-sort: `Array.sorted` is not stable, so re-sorting
+        // on `order` could hand the model one paragraph's sentences backwards,
+        // and no other test in the suite would notice.
+        #expect(PassageRanker.best(ranked, count: 2).map(\.passage.start) == [100, 140])
+        #expect(PassageRanker.best(ranked, count: 3) == ranked)
+        // Nested — every smaller answer is a subset of the larger one, which is
+        // what keeps the retry ladder shrinking the prompt rather than
+        // shuffling it into a different prompt of the same size.
+        for count in 0 ... 3 {
+            let smaller = Set(PassageRanker.best(ranked, count: count))
+            #expect(smaller.isSubset(of: Set(PassageRanker.best(ranked, count: count + 1))))
+        }
+    }
 }

@@ -785,20 +785,48 @@ struct AskEngineTests {
 
     // MARK: - Retry sizing
 
-    @Test("the retry sizes are all of them, then half, then two")
-    func attemptSizes() {
-        let six = (0 ..< 6).map { _ in PassageRanker.Ranked(
+    /// A ranked passage at a place in the book, with a rank of its own.
+    static func ranked(ordinal: Int, priority: Int) -> PassageRanker.Ranked {
+        PassageRanker.Ranked(
             retrieved: RetrievedPassage(
-                passage: Passage(spineIndex: 0, ordinal: 0, start: 0, end: 1, words: 1, text: "x"),
+                passage: Passage(
+                    spineIndex: 0, ordinal: ordinal, start: ordinal * 100,
+                    end: ordinal * 100 + 1, words: 1, text: "x",
+                ),
                 bm25: 0, isTruncated: false,
             ),
-            score: 0,
-        ) }
+            priority: priority,
+        )
+    }
+
+    @Test("the retry sizes are all of them, then half, then two")
+    func attemptSizes() {
+        let six = (0 ..< 6).map { Self.ranked(ordinal: $0, priority: $0) }
         #expect(AskEngine.attempts(for: six).map(\.count) == [6, 3, 2])
         // Strictly decreasing: a step that is not smaller would fail in exactly
         // the same way, five seconds later.
         #expect(AskEngine.attempts(for: Array(six.prefix(2))).map(\.count) == [2, 1])
         #expect(AskEngine.attempts(for: Array(six.prefix(1))).map(\.count) == [1])
+    }
+
+    @Test("each retry keeps the best of them, not the earliest")
+    func attemptsKeepTheBest() throws {
+        // Book order in, worst first — which is what a recap looks like, and
+        // what the reader's own question is least interested in.
+        let six = (0 ..< 6).map { Self.ranked(ordinal: $0, priority: 5 - $0) }
+        let attempts = AskEngine.attempts(for: six)
+        try #require(attempts.count == 3)
+
+        // This took a `prefix`, so the retry that was meant to save the answer
+        // threw away the end of what the reader had read and kept the opening.
+        #expect(attempts[1].map(\.passage.ordinal) == [3, 4, 5])
+        #expect(attempts[2].map(\.passage.ordinal) == [4, 5])
+        // Still reading order, and still nested: each attempt is a subset of
+        // the one before it, or the prompt does not shrink so much as change.
+        for (smaller, larger) in zip(attempts.dropFirst(), attempts) {
+            #expect(smaller.map(\.passage.ordinal) == smaller.map(\.passage.ordinal).sorted())
+            #expect(Set(smaller).isSubset(of: Set(larger)))
+        }
     }
 }
 

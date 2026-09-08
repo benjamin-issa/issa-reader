@@ -26,40 +26,83 @@ public enum PassageRanker {
         public static let recentWindow = 8
     }
 
-    /// A passage with its score, for tests and for the prompt builder's
-    /// "drop the lowest-ranked" trimming.
+    /// A passage and how badly the question wants it, for the trimming and the
+    /// retry ladder to sacrifice the right ones.
+    ///
+    /// An ordinal rather than a score, and zero is best. Two finders' numbers
+    /// meet in one array at the kinship top-up, and a BM25-derived score there
+    /// would let a book's term statistics decide that a context paragraph
+    /// outranks the kinship sentence it was context for.
     public struct Ranked: Sendable, Hashable {
         public var retrieved: RetrievedPassage
-        public var score: Double
+        /// Position among the passages this question retrieved. Required at
+        /// every call site on purpose: this replaced a `score` that was
+        /// identically zero on every production path, and a path that forgets
+        /// to stamp it should fail to compile rather than quietly revert to
+        /// book order.
+        public var priority: Int
 
-        public init(retrieved: RetrievedPassage, score: Double) {
+        public init(retrieved: RetrievedPassage, priority: Int) {
             self.retrieved = retrieved
-            self.score = score
+            self.priority = priority
         }
 
         public var passage: Passage { retrieved.passage }
     }
 
-    /// Scores, takes the best `limit`, and puts them back into book order.
+    /// Scores, takes the best `limit`, and puts them back into book order —
+    /// keeping the permutation it computed on the way.
     ///
     /// Book order matters to the answer, not to the retrieval: the model is
     /// told the excerpts are in reading order, and a model handed events out of
-    /// sequence invents a chronology to explain them.
+    /// sequence invents a chronology to explain them. But the second sort used
+    /// to throw the first one away, and everything downstream — the trimming,
+    /// the retry ladder — then had nothing to go on but position. So the place
+    /// a passage came in the score sort is written down as its `priority`.
     public static func rank(
         _ candidates: [RetrievedPassage], terms: QueryTerms, limit: Int = 6,
     ) -> [Ranked] {
         guard !candidates.isEmpty else { return [] }
         let recentCutoff = recencyCutoff(candidates)
 
-        let scored = candidates.map { candidate -> Ranked in
-            Ranked(retrieved: candidate, score: score(
+        let scored = candidates.map { candidate in
+            (candidate, score(
                 candidate, terms: terms, isRecent: isRecent(candidate, after: recentCutoff),
             ))
         }
-        return scored
-            .sorted { $0.score == $1.score ? order($0) < order($1) : $0.score > $1.score }
+        return scored.indices
+            .sorted {
+                scored[$0].1 == scored[$1].1
+                    ? order(scored[$0].0) < order(scored[$1].0)
+                    : scored[$0].1 > scored[$1].1
+            }
             .prefix(limit)
-            .sorted { order($0) < order($1) }
+            .enumerated()
+            .map { Ranked(retrieved: scored[$0.element].0, priority: $0.offset) }
+            .sorted { order($0.retrieved) < order($1.retrieved) }
+    }
+
+    /// The best `count` of them, in the order they arrived.
+    ///
+    /// **A filter, never a re-sort.** `order` is `(spineIndex, ordinal)`, and
+    /// that pair is not unique: `EvidenceFinder` mints several sentence windows
+    /// out of one paragraph, all carrying its ordinal, which is why
+    /// `inBookOrder` sorts on `(spineIndex, start)` instead. `Array.sorted` is
+    /// not stable, so sorting here could hand the model one paragraph's
+    /// sentences in the wrong order — and no test in the suite would notice.
+    ///
+    /// Nested, too: `best(r, k)` is a subset of `best(r, k + 1)`, because the
+    /// index breaks every tie. The retry ladder and the builder's trimming both
+    /// ask for a smaller `count` each time round and rely on the answer
+    /// shrinking rather than shuffling.
+    public static func best(_ ranked: [Ranked], count: Int) -> [Ranked] {
+        guard count < ranked.count else { return ranked }
+        let keep = Set(
+            ranked.indices
+                .sorted { (ranked[$0].priority, $0) < (ranked[$1].priority, $1) }
+                .prefix(max(0, count)),
+        )
+        return ranked.indices.filter(keep.contains).map { ranked[$0] }
     }
 
     /// The score for one passage. Public so a test can assert the arithmetic
@@ -104,7 +147,7 @@ public enum PassageRanker {
         (candidate.passage.spineIndex, candidate.passage.ordinal) >= cutoff
     }
 
-    static func order(_ ranked: Ranked) -> (Int, Int) {
-        (ranked.passage.spineIndex, ranked.passage.ordinal)
+    static func order(_ retrieved: RetrievedPassage) -> (Int, Int) {
+        (retrieved.passage.spineIndex, retrieved.passage.ordinal)
     }
 }
