@@ -91,9 +91,17 @@ struct AskEngineTests {
     /// question twice and get the same answer, so a reader who doubts an answer
     /// and asks again learns something from the second one.
     @Test("greedy is what ships until a measurement says otherwise")
-    func samplingIsOffByDefault() {
+    func samplingIsOffByDefault() throws {
         #expect(!AskEngine.usesNucleusSampling)
-        let options = AskEngine.generationOptions(
+        // And an engine built the way the app builds one — passing nothing —
+        // takes the kill switch's answer. The constant on its own says what is
+        // written down; this says what the model is handed.
+        let directory = try AskFixture.temporaryDirectory()
+        defer { AskFixture.remove(directory) }
+        let engine = AskEngine(
+            model: ScriptedAnswerModel(), store: AskIndexStore(directory: directory),
+        )
+        let options = engine.generationOptions(
             question: "Who is Alice?",
             bookUUID: AskFixture.bookUUID,
             boundary: ReadingBoundary(spineIndex: 2, charOffset: 100),
@@ -130,7 +138,10 @@ struct AskEngineTests {
         let (store, source, directory) = try await AskFixture.preparedStore()
         defer { AskFixture.remove(directory) }
         let model = ScriptedAnswerModel()
-        let engine = AskEngine(model: model, store: store)
+        // Sampling on, or the two option values being compared are both the
+        // greedy default and agree for a reason that has nothing to do with the
+        // seed: this test could not fail while the flag was a bare constant.
+        let engine = AskEngine(model: model, store: store, usesNucleusSampling: true)
         let boundary = try AskFixture.endOf(spine: AskFixture.Spine.chapterI)
 
         for _ in 0 ..< 2 {
@@ -143,6 +154,56 @@ struct AskEngineTests {
         // Whatever the sampler is set to, the two asks must agree about it —
         // that is the property, not the particular value.
         #expect(sent[0].options == sent[1].options)
+        #expect(sent[0].options.sampling != .greedy, "otherwise the equality proves nothing")
+    }
+
+    /// The seed the model is actually handed, end to end.
+    ///
+    /// Everything above this either reads the constant or compares two values
+    /// that were equal anyway. This asks four questions of a sampling engine and
+    /// reads what reached the model: the same ask twice must carry the same
+    /// seed, a different question or a different place must not, and the seed
+    /// must be of the *sanitised* question — the engine sanitises before it
+    /// retrieves, so a reader who double-taps the space bar has asked the same
+    /// question and must get the same answer.
+    @Test("a sampling engine seeds the model from the sanitised ask")
+    func aNucleusEngineSeedsFromTheSanitisedAsk() async throws {
+        let (store, source, directory) = try await AskFixture.preparedStore()
+        defer { AskFixture.remove(directory) }
+        let model = ScriptedAnswerModel()
+        let engine = AskEngine(model: model, store: store, usesNucleusSampling: true)
+        let boundary = try AskFixture.endOf(spine: AskFixture.Spine.chapterI)
+        let later = try AskFixture.endOf(spine: AskFixture.Spine.chapterII)
+        let spaced = "Who  is   Dinah?"
+
+        for (question, at) in [
+            (spaced, boundary), (spaced, boundary),
+            ("Who is the Rabbit?", boundary), (spaced, later),
+        ] {
+            _ = await Self.drain(engine.ask(question: question, source: source, boundary: at))
+        }
+        let sent = await model.received
+        try #require(sent.count == 4)
+
+        let expected = AskEngine.seed(
+            question: QueryTerms.sanitise(spaced),
+            bookUUID: source.bookUUID,
+            boundary: boundary,
+        )
+        #expect(sent[0].options.sampling == .nucleus(
+            probabilityThreshold: AskEngine.nucleusThreshold, seed: expected,
+        ))
+        #expect(sent[0].options.temperature == AskEngine.nucleusTemperature)
+        // The raw question is what the reader typed, and it is not what was
+        // retrieved on; seeding from it would make the double space a different
+        // ask from the single one.
+        #expect(expected != AskEngine.seed(
+            question: spaced, bookUUID: source.bookUUID, boundary: boundary,
+        ))
+
+        #expect(sent[0].options == sent[1].options, "the same ask, twice")
+        #expect(sent[2].options != sent[0].options, "another question")
+        #expect(sent[3].options != sent[0].options, "another place in the book")
     }
 
     // MARK: - Citations

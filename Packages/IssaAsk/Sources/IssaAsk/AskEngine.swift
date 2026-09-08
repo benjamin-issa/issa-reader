@@ -31,6 +31,15 @@ public actor AskEngine {
     public nonisolated let store: AskIndexStore
     private let tools: [any AskTool]
     private let turnstile: AskTurnstile
+    /// This engine's answer to `usesNucleusSampling`, defaulted from the kill
+    /// switch below.
+    ///
+    /// Stored rather than read off the type at the point of use, because a
+    /// constant read directly by the only function that consults it is a
+    /// constant no test can vary: the sampled path had a seed, a threshold and
+    /// a temperature, and every one of them was unreachable while the flag was
+    /// `false` — including from the test written to prove the seed works.
+    private let usesNucleusSampling: Bool
 
     /// - Parameter tools: the `searchBook` tool, or nothing.
     ///
@@ -45,16 +54,23 @@ public actor AskEngine {
     ///   and so an engine on its own behaves exactly as it did; the app passes
     ///   the same one to every engine it builds, which is the whole point of
     ///   the type.
+    /// - Parameter usesNucleusSampling: defaulted from the kill switch, so the
+    ///   app passes nothing and gets the shipped behaviour. It exists so the
+    ///   sampled path — seed, threshold, temperature — is reachable at all;
+    ///   while it was a bare constant the only test of the seed compared two
+    ///   greedy option values and could not fail.
     public init(
         model: any AnswerModel,
         store: AskIndexStore,
         tools: [any AskTool] = [],
         turnstile: AskTurnstile = AskTurnstile(),
+        usesNucleusSampling: Bool = AskEngine.usesNucleusSampling,
     ) {
         self.model = model
         self.store = store
         self.tools = tools
         self.turnstile = turnstile
+        self.usesNucleusSampling = usesNucleusSampling
     }
 
     // MARK: - Index
@@ -217,7 +233,7 @@ public actor AskEngine {
             continuation.yield(.phase(.thinking))
             let generated = try await generate(
                 question: sanitised, ranked: ranked,
-                options: Self.generationOptions(
+                options: generationOptions(
                     question: sanitised, bookUUID: source.bookUUID, boundary: boundary,
                 ),
                 into: continuation,
@@ -248,7 +264,11 @@ public actor AskEngine {
     /// identical, so this is not a knob to turn on a hunch — it is turned on by
     /// a scored replication or not at all. `seed` below is what keeps the
     /// promise when it is turned on.
-    static let usesNucleusSampling = false
+    ///
+    /// `public` only because it is the default of a public initialiser
+    /// parameter, and a default nobody outside the module can name is not one
+    /// they can reason about.
+    public static let usesNucleusSampling = false
     static let nucleusThreshold = 0.9
     static let nucleusTemperature = 0.3
 
@@ -274,7 +294,13 @@ public actor AskEngine {
     }
 
     /// What the model is asked to do with its sampler, for this one question.
-    static func generationOptions(
+    ///
+    /// An instance method, reading this engine's own flag: as a static it read
+    /// the constant directly, so nothing could construct an engine that samples
+    /// and the branch below had no caller in any test. `nonisolated` because it
+    /// touches one immutable stored property and the actor's state has nothing
+    /// to say about it.
+    nonisolated func generationOptions(
         question: String, bookUUID: String, boundary: ReadingBoundary,
     ) -> AskGenerationOptions {
         guard usesNucleusSampling else {
@@ -284,10 +310,10 @@ public actor AskEngine {
         }
         return AskGenerationOptions(
             maximumResponseTokens: AskPromptBuilder.Budget.responseTokens,
-            temperature: nucleusTemperature,
+            temperature: Self.nucleusTemperature,
             sampling: .nucleus(
-                probabilityThreshold: nucleusThreshold,
-                seed: seed(question: question, bookUUID: bookUUID, boundary: boundary),
+                probabilityThreshold: Self.nucleusThreshold,
+                seed: Self.seed(question: question, bookUUID: bookUUID, boundary: boundary),
             ),
         )
     }
