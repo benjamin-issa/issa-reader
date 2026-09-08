@@ -107,6 +107,14 @@ public struct AskRetriever: Sendable {
             let recap = try await store.recapPassages(
                 in: bookUUID, before: boundary, limit: limit,
             )
+            // A reader who opens the sheet before reading a word. The recap is
+            // the first chip on it, so this is one tap away — and without the
+            // guard it ran a generation over no excerpts at all, which is
+            // several seconds spent asking the model about a book it was shown
+            // none of. `.notYet(unmet: [])` is what every other branch returns
+            // for "nothing retrieved", and "the story hasn't revealed that yet"
+            // is literally true before the first indexed passage.
+            guard !recap.isEmpty else { return .notYet(unmet: []) }
             return .evidence(Self.recapRanked(recap), kind: .recap)
         }
 

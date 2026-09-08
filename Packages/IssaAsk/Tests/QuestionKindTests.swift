@@ -455,11 +455,9 @@ struct QuestionKindTests {
     func oneSentenceIsOneClause(question: String) {
         let sanitised = QueryTerms.sanitise(question)
         #expect(SentenceSplitter.ranges(in: sanitised).count == 1, "\(question)")
-        let words = QuestionReader.words(in: sanitised)
-        #expect(
-            QuestionReader.leadingClause(of: sanitised, words: words) == words,
-            "\(question)",
-        )
+        // Nil, not "the whole question": no clause is what tells the spoiler
+        // gate to check all of it, and a clause equal to the question could not.
+        #expect(QuestionReader.leadingClauseText(of: sanitised) == nil, "\(question)")
     }
 
     /// Hesitation at the front of a question is not part of the question.
@@ -478,5 +476,41 @@ struct QuestionKindTests {
         // nouns a reader can be asking about.
         #expect(!QuestionReader.leadingFillers.contains("well"))
         #expect(!QuestionReader.leadingFillers.contains("right"))
+    }
+
+    /// …and dropped for every kind of question, not only for identity.
+    ///
+    /// The strip used to live inside `identity(in:)`, so a reader who opened
+    /// with one word of hesitation kept the hesitation in front of every other
+    /// reading. The yes/no scan looks at the *first* word for its copula, and
+    /// the first word was "wait" — so "wait is Dask Ryn's brother?" was read as
+    /// `.whoIs` and the fast path answered "Ryn's brother is Dask." to a
+    /// question that had asked whether he was. "how are X and Y related" is the
+    /// same defect at the other end: the shape is recognised by its first word.
+    @Test("hesitation is dropped in front of every kind of question")
+    func leadingFillerIsDroppedForKinship() {
+        for question in [
+            "wait is Dask Ryn's brother?",
+            "so, was Dask Ryn's brother?",
+            "wait is Dask Ryn's brother? I forget.",
+        ] {
+            let kind = Self.kind(question, known: ["ryn", "dask"])
+            guard case let .kinship(subject, relation, other, form) = kind else {
+                Issue.record("\(question) classified as \(kind.label)")
+                continue
+            }
+            #expect(subject.tokens == ["ryn"], "\(question)")
+            #expect(relation?.word == "brother", "\(question)")
+            #expect(other?.tokens == ["dask"], "\(question)")
+            #expect(form == .yesNo, "\(question)")
+        }
+        let related = Self.kind("so how are Ryn and Marek related?", known: ["ryn", "marek"])
+        guard case let .kinship(subject, _, other, form) = related else {
+            Issue.record("classified as \(related.label)")
+            return
+        }
+        #expect(subject.tokens == ["ryn"])
+        #expect(other?.tokens == ["marek"])
+        #expect(form == .howRelated)
     }
 }

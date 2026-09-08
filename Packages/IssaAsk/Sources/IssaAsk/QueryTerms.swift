@@ -125,19 +125,23 @@ public struct QueryTerms: Sendable, Hashable {
             }
         }
 
+        // Classified from the names already found, rather than running
+        // `NLTagger` a second time: one pass over a question is a millisecond,
+        // and two is two.
+        let reading = QuestionReader.read(sanitised, vocabulary: Vocabulary(
+            known: known,
+            tagged: Set(names.flatMap { tokens(in: $0).map(strippingPossessive) }),
+        ))
         return QueryTerms(
             question: sanitised,
             names: names,
             terms: terms,
             kinshipGroups: Kinship.groups(matching: terms),
-            nameCandidates: nameCandidates(in: sanitised, names: names),
-            // Classified from the names already found, rather than running
-            // `NLTagger` a second time: one pass over a question is a
-            // millisecond, and two is two.
-            kind: QuestionReader.kind(of: sanitised, vocabulary: Vocabulary(
-                known: known,
-                tagged: Set(names.flatMap { tokens(in: $0).map(strippingPossessive) }),
-            )),
+            // The text the classifier decided on, not the whole question: the
+            // gate refusing a question for a name in a clause the classifier
+            // discarded is a refusal about excerpts that were never retrieved.
+            nameCandidates: nameCandidates(in: reading.text, names: names),
+            kind: reading.kind,
         )
     }
 
@@ -166,8 +170,17 @@ public struct QueryTerms: Sendable, Hashable {
     /// refusal is an annoyance the reader can rephrase past, and a wrong answer
     /// about a character forty pages ahead is the thing this feature promised
     /// not to do.
+    ///
+    /// - Parameter question: the text the classifier decided the question's
+    ///   kind on, which for a multi-sentence question is its leading clause.
+    ///   `names` is tagged over the whole question either way, so it is filtered
+    ///   to the tokens this text actually contains — a no-op when the two are
+    ///   the same, and the difference between checking the clause and checking
+    ///   the clause plus whatever `NLTagger` found in the aside.
     public static func nameCandidates(in question: String, names: [String]) -> [String] {
+        let present = Set(tokens(in: question).map(strippingPossessive))
         var candidates = Set(names.flatMap { tokens(in: $0).map(strippingPossessive) })
+            .filter(present.contains)
         for (index, word) in question.split(separator: " ").enumerated() where index > 0 {
             let bare = word.trimmingCharacters(in: CharacterSet.letters.inverted)
             guard let initial = bare.first, initial.isUppercase, bare.count > 2 else { continue }

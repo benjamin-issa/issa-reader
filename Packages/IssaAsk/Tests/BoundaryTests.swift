@@ -166,6 +166,51 @@ struct BoundaryTests {
         #expect(!early.contains { $0.lowercased().contains("cheshire") })
     }
 
+    // MARK: - The gate and the classifier
+
+    /// The spoiler gate reads the text the classifier decided on, on the book.
+    ///
+    /// A reader who has lost the thread asks their question and then checks
+    /// their own memory out loud. The classifier already ignores the aside — this
+    /// is an identity question about Dinah, and retrieval is about Dinah — but
+    /// the gate read the whole question, found a capitalised word this book has
+    /// never printed, and refused the question that was asked. The excerpts it
+    /// would have refused could not have contained that word: they were
+    /// retrieved for the clause, which is the whole argument for the change.
+    @Test("an unmet name in an aside no longer refuses the clause that was asked")
+    func theGateReadsTheLeadingClause() async throws {
+        let (store, _, directory) = try await AskFixture.preparedStore()
+        defer { AskFixture.remove(directory) }
+        let retriever = AskRetriever(
+            store: store, bookUUID: AskFixture.bookUUID,
+            boundary: try AskFixture.endOf(spine: AskFixture.Spine.chapterI),
+        )
+
+        // "Ministry" is in no spine of *Alice*, so this was `.notYet(["ministry"])`.
+        let asked = try await retriever.retrieve(
+            question: "wait who is Dinah again? Is she one of the Ministry people?",
+        )
+        if case let .evidence(ranked, kind) = asked {
+            #expect(kind.label == "identity")
+            #expect(!ranked.isEmpty)
+            #expect(ranked.contains { $0.passage.text.lowercased().contains("dinah") })
+        } else {
+            Issue.record("the clause the reader asked about was refused")
+        }
+
+        // The control, in the same test: a question the classifier read *whole*
+        // is still gated whole. Nothing here narrows what is checked; the gate
+        // moved to the classifier's own text, and this question's is all of it.
+        let refused = try await retriever.retrieve(
+            question: "i lost track. Who is the Cheshire Cat?",
+        )
+        if case let .notYet(unmet) = refused {
+            #expect(unmet == ["cheshire"])
+        } else {
+            Issue.record("a character the reader has not met must still be refused")
+        }
+    }
+
     // MARK: - Which book
 
     /// Two paragraphs from another novel entirely, so a passage that arrives

@@ -126,6 +126,33 @@ struct QueryTermsTests {
         #expect(QueryTerms.extract(from: "Did it happen on Tuesday?").nameCandidates.isEmpty)
     }
 
+    /// The gate reads exactly the text the classifier decided on.
+    ///
+    /// The classifier decides on the leading clause whenever that clause claims
+    /// a kind, and the aside after it is thrown away — but `nameCandidates` read
+    /// the whole question, so a capitalised word out of the discarded aside
+    /// could refuse the question that was actually asked. Retrieval for this one
+    /// is about Marek and nothing else; no excerpt it returns can contain the
+    /// name in the aside, so there is nothing there to be spoiled.
+    @Test("the spoiler gate reads what the classifier read")
+    func nameCandidatesFollowTheClassifier() {
+        let aside = QueryTerms.extract(
+            from: "wait who is Marek again? Is he one of the Wardens?",
+            knownNames: ["marek"],
+        )
+        #expect(aside.kind.label == "identity")
+        #expect(aside.nameCandidates == ["marek"])
+
+        // The counterpart, and the reason the rule is not "always the clause".
+        // This question's opening clause claims nothing, so it is decided on the
+        // whole question — and the gate has to see the whole question with it.
+        let fellThrough = QueryTerms.extract(
+            from: "i lost track. Is Dask Ryn's brother?", knownNames: ["ryn", "dask"],
+        )
+        #expect(fellThrough.kind.label == "kinship")
+        #expect(fellThrough.nameCandidates == ["dask", "ryn"])
+    }
+
     // MARK: - The possessive
 
     @Test("a possessive is stripped everywhere the name is used")
