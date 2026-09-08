@@ -277,6 +277,13 @@ public extension EPUBPackage {
     /// a table of contents and an equality test says it is not. Both spellings
     /// of the attribute are read because `EPUBXML` indexes attributes under the
     /// qualified name and the local one, and books use either.
+    ///
+    /// A fresh `Set` per call, per node, and that is left alone deliberately.
+    /// This runs once per landmark and once per `<nav>` while a book is being
+    /// opened — tens of calls against an archive that has just been inflated and
+    /// XML-parsed — so the allocations are far below the noise floor of the work
+    /// around them, and caching them would trade a measurable nothing for a
+    /// second place where a node's tokens are decided.
     private static func types(of node: EPUBXMLNode) -> Set<String> {
         var tokens: Set<String> = []
         for declared in [node["type"], node["epub:type"]].compactMap({ $0 }) {
@@ -426,7 +433,9 @@ public extension EPUBPackage {
             for navElement in nav.document.descendants("nav")
                 where hasType("landmarks", in: navElement)
             {
-                for anchor in navElement.descendants("a") {
+                let anchors = navElement.descendants("a")
+                guard !isPageList(navElement, anchors: anchors) else { continue }
+                for anchor in anchors {
                     guard let href = anchor["href"] else { continue }
                     consider(anchor, href: href, base: nav.href)
                 }
@@ -445,6 +454,50 @@ public extension EPUBPackage {
         let hrefs = Set(spine.map(\.href))
         if !hrefs.isEmpty, hrefs.isSubset(of: frontMatter) { return [] }
         return frontMatter
+    }
+
+    /// The most anchors a real landmarks list has, past which it is something
+    /// else wearing the name.
+    ///
+    /// The EPUB structural-semantics landmarks vocabulary has about thirty
+    /// tokens, so thirty-odd entries is the theoretical ceiling for a nav that
+    /// names each once; every landmarks nav in hand has eleven or fewer. Forty
+    /// leaves room for a book that repeats a token and still refuses a page
+    /// list, which starts at one anchor per printed page and does not stop.
+    private static let landmarksCeiling = 40
+
+    /// Whether a `<nav>` calling itself landmarks is really a page list.
+    ///
+    /// The two are the same element with the same declaration in real books:
+    /// Gutenberg's EPUB 3 conversions write
+    /// `<nav epub:type="landmarks" aria-label="Page List">` over an
+    /// `<ol class="pagelist">` holding one anchor per printed page — 453 of them
+    /// in *Pride and Prejudice* — and every one of those was then read as the
+    /// book naming a kind of content. One fragmentless anchor among them is
+    /// enough to delete a chapter, and a non-empty result also short-circuits
+    /// the `<guide>` the book may have meant to be believed instead.
+    ///
+    /// Four signals, any one of which is enough, because no single one is
+    /// present in every book that does this: the correct `page-list` token when
+    /// the producer wrote it, the label a reading system announces, the class on
+    /// the list itself, and sheer length.
+    ///
+    /// A false trip costs only this nav's exclusions — which is the behaviour
+    /// before landmarks were read at all, never a deletion — and skipping the
+    /// nav hands the `<guide>` fallback back to a book that has one.
+    private static func isPageList(_ nav: EPUBXMLNode, anchors: [EPUBXMLNode]) -> Bool {
+        if types(of: nav).contains("page-list") { return true }
+        // Case-insensitively, and by containment: "Page List", "page-list" and
+        // "List of Pages" are all in circulation.
+        if let label = nav["aria-label"], label.lowercased().contains("page") { return true }
+        if let list = nav.descendants("ol").first ?? nav.descendants("ul").first {
+            let classes = Set(
+                (list["class"] ?? "").split(whereSeparator: \.isWhitespace)
+                    .map { $0.lowercased() },
+            )
+            if !classes.isDisjoint(with: ["pagelist", "page-list"]) { return true }
+        }
+        return anchors.count > landmarksCeiling
     }
 
     private static func flatten(list: EPUBXMLNode?, base: String, depth: Int) -> [NavPoint] {

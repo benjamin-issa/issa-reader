@@ -695,6 +695,92 @@ struct FrontMatterTests {
         let older = try Self.package(guide: guide, spine: spine)
         #expect(older.frontMatter == [Self.path("two")])
     }
+
+    // MARK: - A page list wearing the landmarks name
+
+    /// One anchor per printed page, in the shape a real page list has: every
+    /// href fragmented, because a page is a place inside a document rather than
+    /// a document. The one fragmentless entry is what makes the nav dangerous —
+    /// it is the only anchor in it the front-matter rule can act on, and it
+    /// deletes a chapter.
+    static func pageAnchors(_ count: Int) -> String {
+        (1 ... count).map {
+            "<li><a href=\"three.xhtml#page-\($0)\">\($0)</a></li>"
+        }.joined(separator: "\n")
+            + "\n<li><a epub:type=\"cover\" href=\"one.xhtml\">Cover</a></li>"
+    }
+
+    /// The guide such a book still has, naming a different document — so the
+    /// assertion tells "the page list was ignored" apart from "nothing was
+    /// found", which an empty result cannot.
+    static let coverGuide = """
+    <guide><reference type="cover" title="Cover" href="xhtml/two.xhtml"/></guide>
+    """
+
+    @Test("a page list calling itself landmarks is not read as landmarks")
+    func aPageListMasqueradingAsLandmarksIsIgnored() throws {
+        // The exact shape of the Gutenberg conversion: the landmarks
+        // declaration, the label a reading system announces, and the class the
+        // list itself carries.
+        let landmarks = """
+        <nav epub:type="landmarks" aria-label="Page List">
+        <ol id="pages" class="pagelist">
+        \(Self.pageAnchors(5))
+        </ol></nav>
+        """
+        let package = try Self.package(
+            landmarks: landmarks, guide: Self.coverGuide, spine: ["one", "two", "three"],
+        )
+        // Not `one`: that is the page list's single fragmentless anchor, and
+        // believing it deletes a chapter. And the guide is consulted again,
+        // which a page list used to short-circuit by leaving a non-empty result.
+        #expect(package.frontMatter == [Self.path("two")])
+    }
+
+    @Test("a nav too long to be a landmarks list is not read as one")
+    func aNavTooLongToBeLandmarksIsIgnored() throws {
+        // Nothing but its length gives this one away — no label, no class, and
+        // the same `landmarks` declaration. 453 is the count in the *Pride and
+        // Prejudice* fixture; the vocabulary it claims to be drawn from has
+        // about thirty tokens.
+        let landmarks = """
+        <nav epub:type="landmarks"><ol>
+        \(Self.pageAnchors(453))
+        </ol></nav>
+        """
+        let package = try Self.package(
+            landmarks: landmarks, guide: Self.coverGuide, spine: ["one", "two", "three"],
+        )
+        #expect(package.frontMatter == [Self.path("two")])
+    }
+
+    /// The book the rule was written against, read whole.
+    ///
+    /// `Tools/docker/data` is git-ignored — the local test stack's library —
+    /// so this file is present in a working checkout and absent from a fresh
+    /// clone, and the test is gated on it rather than bundled as a resource
+    /// (24 MB of readaloud EPUB). The path is built from `#filePath` the way
+    /// `CustomFontsTests` builds its font directory.
+    static let prideAndPrejudice = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()  // Tests/
+        .deletingLastPathComponent()  // IssaEPUB/
+        .deletingLastPathComponent()  // Packages/
+        .deletingLastPathComponent()  // the repository root
+        .appendingPathComponent("Tools/docker/data/storyteller/library/pride-and-prejudice.epub")
+
+    @Test(
+        "the page list that prompted the rule names no front matter at all",
+        .enabled(if: FileManager.default.fileExists(
+            atPath: FrontMatterTests.prideAndPrejudice.path,
+        )),
+    )
+    func aRealPageListParsesToNothing() throws {
+        let package = try EPUBPackage.open(url: Self.prideAndPrejudice)
+        #expect(package.frontMatter.isEmpty)
+        // And the contents nav — the other `<nav>` in the same document, and
+        // the one that must still be read — is untouched by the guard.
+        #expect(package.navigation.count == 63)
+    }
 }
 
 @Suite("Inflate answers honestly about what it decoded")
