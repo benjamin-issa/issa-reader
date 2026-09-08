@@ -1,5 +1,6 @@
 import Foundation
 import GRDB
+import IssaEPUB
 import Testing
 
 @testable import IssaAsk
@@ -147,6 +148,58 @@ struct AskIndexStoreTests {
         ))
         #expect(!kept.passages.isEmpty)
         #expect(kept.length == skipped.length)
+    }
+
+    // MARK: - Front matter
+
+    @Test("a document the book's own landmarks call front matter is skipped too")
+    func frontMatterContributesNothingToTheIndex() throws {
+        // Measured on a published novel: sixteen front-matter passages reached
+        // the model as story — the dedication, the acknowledgments, the author's
+        // preface — and it answered from them. Neither Gutenberg fixture has
+        // landmarks, so Chapter I stands in for the dedication here.
+        let package = try AskFixture.package()
+        let href = package.spine[AskFixture.Spine.chapterI].href
+        let navigation = AskIndexStore.Navigation(frontMatter: [href])
+
+        let skipped = try #require(AskIndexStore.parseChapter(
+            archive: package.archive, href: href,
+            spineIndex: AskFixture.Spine.chapterI, navigation: navigation,
+        ))
+        #expect(skipped.passages.isEmpty)
+        #expect(skipped.names.isEmpty)
+        // The row still exists with its real length: the reader pages through
+        // the dedication like any other page, and a missing row would say the
+        // spine item is not there.
+        #expect(skipped.length > 0)
+    }
+
+    /// The fragment guard, against the fixture that motivated it.
+    ///
+    /// Franklin's EPUB 2 guide points `toc` at
+    /// `…20203-h-0.htm.html#pgepubid00004`, and that document also holds the
+    /// editor's Introduction *and* Chapter I. `EPUBPackage.resolve` strips
+    /// fragments, so a guide read without the guard deletes about 46 KB of the
+    /// book — every question about the introduction answered from nothing.
+    @Test("a guide entry pointing into a chapter cannot delete it")
+    func theGuideCannotDeleteAChapter() throws {
+        let package = try AskFixture.franklin.package()
+        // The cover wrapper, whose reference has no fragment. Nothing else.
+        #expect(package.frontMatter == ["OEBPS/wrap0000.html"])
+        #expect(!package.frontMatter.contains { $0.hasSuffix("20203-h-0.htm.html") })
+    }
+
+    /// What keeps `PassageChunkerTests.dropsTheContentsList` and
+    /// `IndexOffsetTests.theContentsTableIsNotStored` honest: neither Gutenberg
+    /// book declares landmarks or a guide, so this rule must change nothing
+    /// about either of them, and those two suites are asserting on exact sets of
+    /// spine indices that would move if it did.
+    @Test("a book that names no front matter loses nothing")
+    func aBookWithoutLandmarksNamesNothing() throws {
+        let package = try AskFixture.package()
+        #expect(package.frontMatter.isEmpty)
+        #expect(!AskIndexStore.Navigation(package: package)
+            .excludes(package.spine[AskFixture.Spine.chapterI].href))
     }
 
     @Test("Alice is the book's most-mentioned person")

@@ -10,6 +10,10 @@ public struct EPUBPackage: Sendable {
     public let manifest: [String: ManifestItem]
     public let spine: [SpineItem]
     public let navigation: [NavPoint]
+    /// Archive paths of the documents the book itself names as apparatus rather
+    /// than story — the cover, the title page, the dedication, the copyright
+    /// notice, the contents. See `parseFrontMatter` for the rule.
+    public let frontMatter: Set<String>
     /// Each spine item's uncompressed size, read once from the ZIP central
     /// directory. Used to weight its share of the book.
     public let spineWeights: [Double]
@@ -141,8 +145,16 @@ public extension EPUBPackage {
         let metadata = parseMetadata(opf)
         let manifest = parseManifest(opf, rootDirectory: rootDirectory)
         let spine = parseSpine(opf, manifest: manifest)
+        // Read here rather than inside each parse: the contents and the
+        // landmarks are two `<nav>` elements of one document, and inflating and
+        // parsing that document twice to read one of each buys nothing.
+        let navigationDocument = manifest.values
+            .first { $0.properties.contains("nav") }
+            .flatMap { item in
+                (try? EPUBXML.parse(archive.read(item.href))).map { (document: $0, href: item.href) }
+            }
         let navigation = (try? parseNavigation(
-            opf: opf, archive: archive, manifest: manifest, rootDirectory: rootDirectory,
+            archive: archive, manifest: manifest, navigationDocument: navigationDocument,
         )) ?? []
 
         return EPUBPackage(
@@ -152,6 +164,10 @@ public extension EPUBPackage {
             manifest: manifest,
             spine: spine,
             navigation: navigation,
+            frontMatter: parseFrontMatter(
+                opf: opf, opfPath: opfPath,
+                navigationDocument: navigationDocument, spine: spine,
+            ),
             // From the central directory, which was already read when the
             // container was opened — no inflation, no parsing.
             spineWeights: spine.map { Double(archive.size(of: $0.href) ?? 0) },
@@ -255,20 +271,27 @@ public extension EPUBPackage {
         }
     }
 
-    /// Whether this `<nav>` is the table of contents.
+    /// The `epub:type` tokens declared on a node.
     ///
     /// `epub:type` holds a space-separated token list, so `"toc bodymatter"` is
-    /// a table of contents and an equality test says it is not.
-    private static func isTableOfContents(_ node: EPUBXMLNode) -> Bool {
-        let declared = [node["type"], node["epub:type"]].compactMap { $0 }
-        return declared.contains { value in
-            value.split(whereSeparator: \.isWhitespace).contains("toc")
+    /// a table of contents and an equality test says it is not. Both spellings
+    /// of the attribute are read because `EPUBXML` indexes attributes under the
+    /// qualified name and the local one, and books use either.
+    private static func types(of node: EPUBXMLNode) -> Set<String> {
+        var tokens: Set<String> = []
+        for declared in [node["type"], node["epub:type"]].compactMap({ $0 }) {
+            tokens.formUnion(declared.split(whereSeparator: \.isWhitespace).map(String.init))
         }
+        return tokens
+    }
+
+    private static func hasType(_ token: String, in node: EPUBXMLNode) -> Bool {
+        types(of: node).contains(token)
     }
 
     private static func parseNavigation(
-        opf: EPUBXMLNode, archive: EPUBArchive,
-        manifest: [String: ManifestItem], rootDirectory: String,
+        archive: EPUBArchive, manifest: [String: ManifestItem],
+        navigationDocument: (document: EPUBXMLNode, href: String)?,
     ) throws -> [NavPoint] {
         // EPUB 3 navigation document first, NCX as the fallback for older books.
         //
@@ -276,28 +299,26 @@ public extension EPUBPackage {
         // broken* as well as one that is absent: a throw here used to abort
         // the whole function, and the caller's `try?` then showed no contents
         // at all with a perfectly good NCX unread in the manifest.
-        if let nav = manifest.values.first(where: { $0.properties.contains("nav") }) {
-            if let document = try? EPUBXML.parse(archive.read(nav.href)) {
-                for navElement in document.descendants("nav") {
-                    // `epub:type` is a space-separated token list per spec, so
-                    // exact equality skipped `epub:type="toc bodymatter"`
-                    // entirely and such a book showed no contents at all.
-                    guard Self.isTableOfContents(navElement) else { continue }
-                    // `<ul>` as well as `<ol>`: several conversion tools emit
-                    // it, invalidly but commonly.
-                    let list = navElement.descendants("ol").first
-                        ?? navElement.descendants("ul").first
-                    let points = flatten(list: list, base: nav.href, depth: 0)
-                    // Only return when there is something to return. An empty
-                    // result used to short-circuit the NCX below, so a nav
-                    // document that *parsed* but yielded nothing — a `<ul>`, or
-                    // list items carrying headings with no anchor — left the
-                    // reader with no table of contents while a perfectly good
-                    // toc.ncx sat unread in the manifest. The comment above
-                    // promised this fallback covered "there but broken"; it
-                    // only covered "throws".
-                    if !points.isEmpty { return points }
-                }
+        if let nav = navigationDocument {
+            for navElement in nav.document.descendants("nav") {
+                // `epub:type` is a space-separated token list per spec, so
+                // exact equality skipped `epub:type="toc bodymatter"`
+                // entirely and such a book showed no contents at all.
+                guard Self.hasType("toc", in: navElement) else { continue }
+                // `<ul>` as well as `<ol>`: several conversion tools emit
+                // it, invalidly but commonly.
+                let list = navElement.descendants("ol").first
+                    ?? navElement.descendants("ul").first
+                let points = flatten(list: list, base: nav.href, depth: 0)
+                // Only return when there is something to return. An empty
+                // result used to short-circuit the NCX below, so a nav
+                // document that *parsed* but yielded nothing — a `<ul>`, or
+                // list items carrying headings with no anchor — left the
+                // reader with no table of contents while a perfectly good
+                // toc.ncx sat unread in the manifest. The comment above
+                // promised this fallback covered "there but broken"; it
+                // only covered "throws".
+                if !points.isEmpty { return points }
             }
         }
         if let ncx = manifest.values.first(where: { $0.mediaType == ncxMediaType }) {
@@ -314,6 +335,115 @@ public extension EPUBPackage {
             }
         }
         return []
+    }
+
+    // MARK: - Front matter
+
+    /// `epub:type` tokens that name a document as apparatus, not story.
+    ///
+    /// Both vocabularies, because the same rule reads EPUB 3 landmarks and the
+    /// EPUB 2 `<guide>`: `titlepage` is the structural-semantics spelling and
+    /// `title-page` the guide's, and a book gets to use either.
+    private static let frontMatterTypes: Set<String> = [
+        "cover", "titlepage", "title-page", "halftitlepage", "copyright-page",
+        "dedication", "acknowledgments", "acknowledgements", "toc", "toc-brief",
+        "landmarks", "loi", "lot", "colophon",
+    ]
+
+    /// `epub:type` tokens that name a document as story, whatever else it is
+    /// also called. Any one of these vetoes an exclusion.
+    ///
+    /// `epigraph` is on this list deliberately: Mistborn's chapter epigraphs are
+    /// the Lord Ruler's logbook, which is as much the novel as the chapters are.
+    /// `preface`, `foreword` and `introduction` are here for the same reason —
+    /// a preface can be in-fiction, and a false positive deletes real prose,
+    /// which is a far worse failure than leaving apparatus in the index.
+    private static let storyTypes: Set<String> = [
+        "prologue", "chapter", "part", "volume", "division", "epilogue",
+        "preface", "foreword", "introduction", "epigraph", "afterword",
+        "conclusion", "appendix", "glossary", "index", "bibliography",
+        "notes", "endnotes", "rearnotes", "footnotes",
+    ]
+
+    /// The documents the book itself names as apparatus rather than story.
+    ///
+    /// Read from the EPUB 3 landmarks nav, falling back to the EPUB 2 `<guide>`
+    /// for books that have no landmarks. Measured on a real novel, sixteen
+    /// front-matter passages — the dedication, the acknowledgments, the author's
+    /// preface — reached the model as evidence, and it answered from them.
+    ///
+    /// **Only tokens naming a kind of content count, in either direction:
+    /// `bodymatter` and `frontmatter` are consulted for nothing.** The two
+    /// obvious designs both rest on those broad tokens and both were verified
+    /// wrong on the same book. Its `bodymatter` landmark points at
+    /// `title.xhtml#tit` — the *title page* — so "everything before the
+    /// bodymatter anchor is front matter" excludes the cover and nothing else;
+    /// and the novel's actual Prologue is a document declaring
+    /// `<body epub:type="frontmatter">`, so a body-level rule deletes the
+    /// prologue. Publishers use the structural tokens positionally, to mark
+    /// where a reading system should open the book, and position is not a claim
+    /// about what a document holds.
+    ///
+    /// Three guards follow from that:
+    ///
+    /// - **Only a fragmentless href may exclude a document.** Verified against a
+    ///   shipped fixture: Franklin's guide points its `toc` reference at
+    ///   `…20203-h-0.htm.html#pgepubid00004`, and that same document also holds
+    ///   the editor's Introduction and Chapter I. `resolve` strips fragments, so
+    ///   without this the guide deletes about 46 KB of the book. A story tag is
+    ///   still collected from a fragmented href, because vetoing errs towards
+    ///   keeping prose.
+    /// - **A story tag vetoes an exclusion**, whichever landmark declared it —
+    ///   one document may be reached by two entries, and the one naming a kind
+    ///   of story wins.
+    /// - **If the result covers the whole spine, it is dropped.** A mis-tagged
+    ///   book should leave the bug in place rather than become unanswerable.
+    private static func parseFrontMatter(
+        opf: EPUBXMLNode, opfPath: String,
+        navigationDocument: (document: EPUBXMLNode, href: String)?,
+        spine: [SpineItem],
+    ) -> Set<String> {
+        var excluded: Set<String> = []
+        var vetoed: Set<String> = []
+
+        func consider(_ node: EPUBXMLNode, href: String, base: String) {
+            var tokens = types(of: node)
+            // The type is as often on the enclosing `<li>` as on the `<a>` — a
+            // common real-world variant, and reading only one of the two loses
+            // half the books that declare anything at all.
+            if let item = node.parent, item.name == "li" { tokens.formUnion(types(of: item)) }
+            let path = resolve(href, relativeTo: base)
+            if !tokens.isDisjoint(with: storyTypes) { vetoed.insert(path) }
+            guard fragmentIdentifier(of: href) == nil else { return }
+            if !tokens.isDisjoint(with: frontMatterTypes) { excluded.insert(path) }
+        }
+
+        // A separate pass over the parsed tree, not a branch inside
+        // `parseNavigation`: that loop returns the moment it finds a contents
+        // list, which in every book that has both comes before the landmarks.
+        if let nav = navigationDocument {
+            for navElement in nav.document.descendants("nav")
+                where hasType("landmarks", in: navElement)
+            {
+                for anchor in navElement.descendants("a") {
+                    guard let href = anchor["href"] else { continue }
+                    consider(anchor, href: href, base: nav.href)
+                }
+            }
+        }
+        // The EPUB 2 `<guide>`, for books with no landmarks at all. Its hrefs
+        // are relative to the package document, so that is the base.
+        if excluded.isEmpty, let guide = opf.descendants("guide").first {
+            for reference in guide.children("reference") {
+                guard let href = reference["href"] else { continue }
+                consider(reference, href: href, base: opfPath)
+            }
+        }
+
+        let frontMatter = excluded.subtracting(vetoed)
+        let hrefs = Set(spine.map(\.href))
+        if !hrefs.isEmpty, hrefs.isSubset(of: frontMatter) { return [] }
+        return frontMatter
     }
 
     private static func flatten(list: EPUBXMLNode?, base: String, depth: Int) -> [NavPoint] {

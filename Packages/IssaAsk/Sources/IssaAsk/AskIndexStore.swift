@@ -196,21 +196,29 @@ public actor AskIndexStore {
         try? FileManager.default.removeItem(at: destination)
         try FileManager.default.moveItem(at: building, to: destination)
         Self.excludeFromBackup(destination)
-        IssaLog.info("ask index built", ["chapters": String(total)])
+        // The excluded count, because a landmarks parse that silently finds
+        // nothing fails no test while still charging every reader a reindex —
+        // this line is the only way to tell "shipped and working" from "shipped
+        // and inert" on a device.
+        IssaLog.info("ask index built", [
+            "chapters": String(total),
+            "frontMatter": String(navigation.frontMatter.count),
+        ])
     }
 
     // MARK: - Chapter parsing
 
-    /// What the book says about its own table of contents, so the index can
-    /// leave it out.
+    /// What the book says about which of its documents are not story, so the
+    /// index can leave them out.
     ///
-    /// Both signals come out of the OPF `EPUBPackage` has already parsed, so
-    /// nothing here reads the archive. They are needed together because neither
-    /// alone covers a real book: Gutenberg declares a nav document and an NCX
-    /// and puts *neither* in the spine, printing its contents table inside the
-    /// header page instead — so the exact signal fires on nothing at all in
-    /// either fixture, while the header page it misses is the one that was
-    /// caught citing "CHAPTER XII. Alice's Evidence" as evidence.
+    /// Every signal comes out of the OPF and the navigation document
+    /// `EPUBPackage` has already parsed, so nothing here reads the archive.
+    /// They are needed together because none alone covers a real book:
+    /// Gutenberg declares a nav document and an NCX and puts *neither* in the
+    /// spine, printing its contents table inside the header page instead — so
+    /// the exact signal fires on nothing at all in either fixture, while the
+    /// header page it misses is the one that was caught citing "CHAPTER XII.
+    /// Alice's Evidence" as evidence.
     struct Navigation: Sendable {
         /// Archive paths the manifest declares as navigation. Exact, and
         /// skipped whole: a document that *is* the table of contents has no
@@ -219,15 +227,31 @@ public actor AskIndexStore {
         /// The contents' own entry titles, which is what tells a list of
         /// chapter headings from a poem of equally short lines.
         var titles: [String] = []
+        /// Archive paths the book's own landmarks or guide call apparatus. On a
+        /// real novel this is what stops the dedication, the copyright notice
+        /// and the acknowledgments being served to the model as story — sixteen
+        /// such passages were measured reaching it, and it answered from them.
+        var frontMatter: Set<String> = []
 
         init(package: EPUBPackage) {
             documents = package.navigationDocuments
             titles = package.navigation.map(\.title)
+            frontMatter = package.frontMatter
         }
 
-        init(documents: Set<String> = [], titles: [String] = []) {
+        init(
+            documents: Set<String> = [], titles: [String] = [],
+            frontMatter: Set<String> = [],
+        ) {
             self.documents = documents
             self.titles = titles
+            self.frontMatter = frontMatter
+        }
+
+        /// Whether this document contributes nothing to the index — because it
+        /// *is* the navigation, or because the book calls it apparatus.
+        func excludes(_ href: String) -> Bool {
+            documents.contains(href) || frontMatter.contains(href)
         }
     }
 
@@ -292,11 +316,11 @@ public actor AskIndexStore {
 
         let text = parsed.text.string
         // The row is still written, with its real length and no passages: the
-        // chapter exists, the reader can be standing in it, and it simply has
-        // nothing to retrieve. A missing row would say the spine item does not
-        // exist, which is a different and untrue thing.
-        let isNavigation = navigation.documents.contains(href)
-        let passages = isNavigation ? [] : PassageChunker.indexable(
+        // chapter exists, the reader can be standing in it — a dedication is a
+        // page they turn past — and it simply has nothing to retrieve. A
+        // missing row would say the spine item does not exist, which is a
+        // different and untrue thing.
+        let passages = navigation.excludes(href) ? [] : PassageChunker.indexable(
             text: text, spineIndex: spineIndex, navigationTitles: navigation.titles,
         )
         return ParsedChapter(

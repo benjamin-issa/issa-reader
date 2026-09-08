@@ -73,7 +73,8 @@ struct ChapterContentsTests {
         let stripped = EPUBPackage(
             archive: package.archive, rootDirectory: package.rootDirectory,
             metadata: package.metadata, manifest: package.manifest,
-            spine: package.spine, navigation: [], spineWeights: package.spineWeights,
+            spine: package.spine, navigation: [], frontMatter: [],
+            spineWeights: package.spineWeights,
         )
         let entries = ChapterListView.build(from: stripped)
         #expect(entries.count == package.spine.count)
