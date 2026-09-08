@@ -101,6 +101,28 @@ struct EvidenceFinderTests {
         #expect(kept.map(\.passage) == [evidence[0].excerpt, evidence[2].excerpt])
     }
 
+    @Test("a sentence counted twice does not spend two of the excerpts")
+    func aDuplicateSentenceDoesNotSpendTheCap() {
+        // "Reen was a thief." is the first mention of Reen *and* a sentence
+        // that predicates something of him, so it is minted twice, once in each
+        // list, resting on the same key sentence. The cap used to be applied to
+        // the pair and the duplicate thrown away afterwards, which is how a
+        // constant reading fifteen delivered about eleven.
+        let passages = (0 ..< 2).map { index in
+            Self.passage(
+                "Reen was a thief. The rain kept on. Reen, who had trained her, waited.",
+                spine: 2, ordinal: index, start: 1_000 + index * 5_000,
+            )
+        }
+        let evidence = EvidenceFinder.identity(
+            subject: Self.subject("Reen", tokens: ["reen"]), in: passages, limit: 4,
+        )
+        // Two first mentions and two predicates, all four distinct sentences.
+        #expect(evidence.count == 4)
+        #expect(evidence.map(\.role) == [.firstMention, .predicate, .firstMention, .predicate])
+        #expect(evidence.map(\.priority) == [0, 2, 1, 3])
+    }
+
     @Test("evidence becomes ranked passages one for one, in the order it came")
     func rankedIsOneToOne() {
         func piece(spine: Int, priority: Int) -> Evidence {
@@ -239,6 +261,41 @@ struct EvidenceFinderTests {
         })
         let order = evidence.map { ($0.excerpt.spineIndex, $0.excerpt.start) }
         #expect(order.elementsEqual(order.sorted { $0 < $1 }, by: ==))
+    }
+
+    @Test("the excerpt limit reaches all four kinds of question")
+    func theLimitReachesEveryBranch() async throws {
+        // It used to reach one of them. A recap took its own constant of six,
+        // identity and kinship ignored the argument outright, and only a
+        // general question was answered with the number anybody had tuned — so
+        // the count could be raised and three questions in four would not
+        // notice. The structure is the fix here; the number is the easy half.
+        let (store, _, directory) = try await AskFixture.preparedStore()
+        defer { AskFixture.remove(directory) }
+        let boundary = try AskFixture.endOf(spine: AskFixture.Spine.chapterVI)
+        let known = try await store.topNames(in: AskFixture.bookUUID, before: boundary, limit: 200)
+        let retriever = AskRetriever(store: store, bookUUID: AskFixture.bookUUID, boundary: boundary)
+
+        var labels: Set<String> = []
+        for question in [
+            "What has happened so far?",
+            "Who is the Duchess?",
+            "Who is Alice's sister?",
+            "What did Alice drink to make herself smaller?",
+        ] {
+            let terms = QueryTerms.extract(from: question, knownNames: known)
+            labels.insert(terms.kind.label)
+            // Four, which is above `AskRetriever.Limits.kinshipFloor` and below
+            // the six every branch used to help itself to.
+            let capped = try await retriever.evidence(for: terms, limit: 4)
+            #expect(capped.count <= 4, "\(terms.kind.label) took \(capped.count)")
+            // And the cap has to be biting, or a branch that ignores it
+            // altogether passes the line above by having found very little.
+            let generous = try await retriever.evidence(for: terms, limit: 12)
+            #expect(generous.count > 4, "\(terms.kind.label) took \(generous.count)")
+        }
+        // All four branches, or the loop above tested one of them four times.
+        #expect(labels == ["recap", "identity", "kinship", "general"])
     }
 
     @Test("an unnamed relative comes back as the sentence that mentions her")

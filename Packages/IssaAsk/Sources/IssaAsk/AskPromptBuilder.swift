@@ -75,10 +75,24 @@ public enum AskPromptBuilder {
         /// The ceiling on passages regardless of what is left over, so a bigger
         /// context window in a later OS does not silently start sending a
         /// quarter of the book.
-        public static let passageCeiling = 1_800
+        ///
+        /// Raised with the excerpt count, and it had to be: fifteen 90-word
+        /// excerpts are about 7,530 characters, which the cheap `/3.6` pass
+        /// below scores at roughly 2,092 tokens. That pass runs first and never
+        /// un-does itself, so at 1,800 the set was trimmed back to about twelve
+        /// before the real tokeniser was ever consulted — and the count would
+        /// have shipped inert.
+        public static let passageCeiling = 3_000
         /// Lower with a tool registered: its schema is in the window, and its
         /// output has to fit in what remains when it is called.
-        public static let passageCeilingWithTool = 1_500
+        ///
+        /// The app always registers the search tool, so this is the only
+        /// ceiling a reader actually meets. At it, with two searches, the
+        /// window comes to roughly 3,900 of 4,096 — it fits, with little to
+        /// spare, and a book of long paragraphs can still overflow into a
+        /// `.tooMuchContext` retry. If that shows up, the levers are
+        /// `SearchBookTool.tokenCap` and its call limit, in that order.
+        public static let passageCeilingWithTool = 2_400
         /// Characters per token. Measured against English prose with the
         /// on-device tokeniser; used only to avoid asking the model to count
         /// something obviously far too large.

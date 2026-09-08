@@ -534,8 +534,13 @@ public actor AskIndexStore {
 
     /// The last passages before the boundary, for a "what has happened so far"
     /// question, which has no search terms to match on.
+    ///
+    /// `limit` has no default on purpose. It had one of six, and the recap
+    /// branch of `AskRetriever` quietly took it while every other branch was
+    /// being tuned — so a caller that forgets the excerpt count now fails to
+    /// compile rather than silently answering with a stale one.
     public func recapPassages(
-        in bookUUID: String, before boundary: ReadingBoundary, limit: Int = 6,
+        in bookUUID: String, before boundary: ReadingBoundary, limit: Int,
     ) throws -> [RetrievedPassage] {
         guard let queue = try queue(for: bookUUID) else { return [] }
         return try Self.recapPassages(before: boundary, limit: limit, in: queue)
