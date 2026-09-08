@@ -202,6 +202,19 @@ struct AskIndexStoreTests {
             .excludes(package.spine[AskFixture.Spine.chapterI].href))
     }
 
+    /// The number the build log carries, which is what a device report has to
+    /// tell "six apparatus pages" from "six chapters" with.
+    @Test("the log reports the share of the book left out, in bytes not documents")
+    func frontMatterShareIsMeasuredInBytes() throws {
+        // Franklin excludes exactly one of eleven spine documents — the 434-byte
+        // cover wrapper against half a megabyte of text. One document in eleven
+        // is 9 %; 434 bytes in 516 KB rounds to nothing, and the second is the
+        // number that says the exclusion was harmless.
+        #expect(AskIndexStore.frontMatterShare(of: try AskFixture.franklin.package()) == 0)
+        // And a book that names no apparatus at all reports nothing.
+        #expect(AskIndexStore.frontMatterShare(of: try AskFixture.package()) == 0)
+    }
+
     @Test("Alice is the book's most-mentioned person")
     func findsTheTopName() async throws {
         let (store, _, directory) = try await AskFixture.preparedStore()

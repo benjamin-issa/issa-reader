@@ -498,6 +498,7 @@ struct FrontMatterTests {
     /// document it appears in lands both on `OEBPS/xhtml/…`.
     static func package(
         landmarks: String = "", guide: String = "", spine: [String],
+        sizes: [String: Int] = [:],
     ) throws -> EPUBPackage {
         let container = """
         <?xml version="1.0"?>
@@ -533,16 +534,31 @@ struct FrontMatterTests {
             .init(name: "META-INF/container.xml", payload: Data(container.utf8)),
             .init(name: "OEBPS/content.opf", payload: Data(opf.utf8)),
             .init(name: "OEBPS/xhtml/nav.xhtml", payload: Data(nav.utf8)),
-        ] + spine.map {
+        ] + spine.map { name in
             .init(
-                name: "OEBPS/xhtml/\($0).xhtml",
-                payload: Data("<html><body><p>Prose.</p></body></html>".utf8),
+                name: "OEBPS/xhtml/\(name).xhtml",
+                payload: Data(Self.document(paddedTo: sizes[name]).utf8),
             )
         }
         return try EPUBPackage.open(archive: EPUBArchive(data: ZIPBytes.archive(entries)))
     }
 
     static func path(_ name: String) -> String { "OEBPS/xhtml/\(name).xhtml" }
+
+    /// A chapter document, padded to a size the test chose.
+    ///
+    /// Padded with a comment rather than with prose, because the rule being
+    /// tested reads the *uncompressed entry size* off the central directory —
+    /// a byte count that knows nothing about words — and a comment says so at
+    /// a glance. Entries are stored rather than deflated, so the payload's
+    /// length is the size the rule sees.
+    static func document(paddedTo size: Int?) -> String {
+        let body = "<html><body><p>Prose.</p></body></html>"
+        let comment = "<!--" + "-->"
+        guard let size, size > body.utf8.count + comment.utf8.count else { return body }
+        let filler = String(repeating: "x", count: size - body.utf8.count - comment.utf8.count)
+        return "<!--" + filler + "-->" + body
+    }
 
     /// A landmarks nav in the shape commercial EPUBs actually ship — fragments,
     /// ordering, `bodymatter` and all.
@@ -780,6 +796,35 @@ struct FrontMatterTests {
         // And the contents nav — the other `<nav>` in the same document, and
         // the one that must still be read — is untouched by the guard.
         #expect(package.navigation.count == 63)
+    }
+
+    // MARK: - A document too long to be apparatus
+
+    @Test("a document as long as a chapter is not apparatus, whatever it is tagged")
+    func aDocumentAsLongAsAChapterIsNotApparatus() throws {
+        // The shape Gutenberg's *Pride and Prejudice* has: its first document
+        // is declared front matter and holds the opening chapters, 156 KB
+        // against a 105 KB mean. The whole-spine guard cannot see it — it fires
+        // only at 100 % of the spine — so the book loses real prose in silence.
+        let landmarks = """
+        <nav epub:type="landmarks"><ol>
+        <li><a epub:type="dedication" href="one.xhtml">Dedication</a></li>
+        <li><a epub:type="cover" href="two.xhtml">Cover</a></li>
+        </ol></nav>
+        """
+        let spine = ["one", "two", "three"]
+        let padded = try Self.package(
+            landmarks: landmarks, spine: spine, sizes: ["one": 20_000],
+        )
+        // `one` is 20 KB against a mean of about 6.7 KB, so the dedication tag
+        // loses to the byte count; `two` is the size of the rest and stays out.
+        #expect(padded.frontMatter == [Self.path("two")])
+
+        // With every document the same size the rule is strictly-greater and
+        // fires on nothing, so both exclusions stand — which is also what keeps
+        // every other fixture in this suite green.
+        let even = try Self.package(landmarks: landmarks, spine: spine)
+        #expect(even.frontMatter == Set(["one", "two"].map(Self.path)))
     }
 }
 

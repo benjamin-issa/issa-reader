@@ -156,6 +156,11 @@ public extension EPUBPackage {
         let navigation = (try? parseNavigation(
             archive: archive, manifest: manifest, navigationDocument: navigationDocument,
         )) ?? []
+        // From the central directory, which was already read when the container
+        // was opened — no inflation, no parsing. Hoisted out of the initialiser
+        // because the front-matter rule weighs a document against the rest of
+        // the spine, and these are the sizes it weighs.
+        let spineWeights = spine.map { Double(archive.size(of: $0.href) ?? 0) }
 
         return EPUBPackage(
             archive: archive,
@@ -167,10 +172,9 @@ public extension EPUBPackage {
             frontMatter: parseFrontMatter(
                 opf: opf, opfPath: opfPath,
                 navigationDocument: navigationDocument, spine: spine,
+                weights: spineWeights,
             ),
-            // From the central directory, which was already read when the
-            // container was opened — no inflation, no parsing.
-            spineWeights: spine.map { Double(archive.size(of: $0.href) ?? 0) },
+            spineWeights: spineWeights,
         )
     }
 
@@ -406,10 +410,24 @@ public extension EPUBPackage {
     ///   of story wins.
     /// - **If the result covers the whole spine, it is dropped.** A mis-tagged
     ///   book should leave the bug in place rather than become unanswerable.
+    /// - **A document heavier than the spine's average stays in.** The
+    ///   whole-spine guard above only fires at 100 %, so a book that tags one
+    ///   real chapter as apparatus loses it in silence. Apparatus measures
+    ///   0.4–3 KB against 12–50 KB chapters in every book in hand, so size is a
+    ///   signal the tagging is not: Gutenberg's *Pride and Prejudice* declares
+    ///   its 156 KB first document front matter against a 105 KB mean, and it
+    ///   holds the opening chapters. Mean-relative rather than a share of the
+    ///   total, because any two- or three-document book puts each document at
+    ///   33–50 % of it; and strictly greater, so a book whose documents are all
+    ///   the same size — every synthetic fixture in the suite — is unaffected,
+    ///   and an archive with no sizes at all (mean 0) never trips it. The honest
+    ///   limit: no byte rule catches a combined `front.xhtml` whose prologue is
+    ///   shorter than a chapter.
     private static func parseFrontMatter(
         opf: EPUBXMLNode, opfPath: String,
         navigationDocument: (document: EPUBXMLNode, href: String)?,
         spine: [SpineItem],
+        weights: [Double],
     ) -> Set<String> {
         var excluded: Set<String> = []
         var vetoed: Set<String> = []
@@ -450,7 +468,14 @@ public extension EPUBPackage {
             }
         }
 
-        let frontMatter = excluded.subtracting(vetoed)
+        // A document longer than the average one in this book, whatever it is
+        // tagged. `>` and not `>=` on purpose: with every document the same
+        // size — a two-chapter book, or a hand-built fixture — every one of
+        // them equals the mean, and `>=` would exempt the lot.
+        let mean = weights.isEmpty ? 0 : weights.reduce(0, +) / Double(weights.count)
+        let heavy = Set(zip(spine, weights).filter { $0.1 > mean }.map { $0.0.href })
+
+        let frontMatter = excluded.subtracting(vetoed).subtracting(heavy)
         let hrefs = Set(spine.map(\.href))
         if !hrefs.isEmpty, hrefs.isSubset(of: frontMatter) { return [] }
         return frontMatter

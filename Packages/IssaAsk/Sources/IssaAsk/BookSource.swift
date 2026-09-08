@@ -78,7 +78,15 @@ public struct IndexKey: Sendable, Hashable, Codable {
     /// answered out of them. Same class of change, and rebuilt the same lazy
     /// way — per book, on the first question after the update, behind "Reading
     /// what you've read…".
-    public static let currentParserVersion = 3
+    ///
+    /// 4 since a document longer than the book's average chapter stops being
+    /// treated as apparatus however it is tagged: an index built before this
+    /// is missing the passages and the names of every real chapter its book
+    /// mislabelled — Gutenberg's *Pride and Prejudice* declares its opening
+    /// chapters front matter — and a reader on build 34 would otherwise keep
+    /// that hole for the life of the download, with nothing to repair it.
+    /// Changes what is stored, like 2 and 3, and rebuilt the same lazy way.
+    public static let currentParserVersion = 4
     /// 2 since the `name` table grew `nameKey`: an index built before it pools
     /// two spellings of one character as two people.
     public static let currentSchemaVersion = 2

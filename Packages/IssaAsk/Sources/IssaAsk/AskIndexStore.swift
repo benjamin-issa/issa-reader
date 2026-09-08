@@ -199,11 +199,32 @@ public actor AskIndexStore {
         // The excluded count, because a landmarks parse that silently finds
         // nothing fails no test while still charging every reader a reindex —
         // this line is the only way to tell "shipped and working" from "shipped
-        // and inert" on a device.
+        // and inert" on a device. And its share of the book, because the count
+        // alone cannot tell six apparatus pages from six chapters, which is the
+        // failure the size rule in `EPUBPackage.parseFrontMatter` exists for.
         IssaLog.info("ask index built", [
             "chapters": String(total),
             "frontMatter": String(navigation.frontMatter.count),
+            "frontMatterShare": String(Self.frontMatterShare(of: source.package)),
         ])
+    }
+
+    /// How much of the book, by uncompressed bytes, the index left out as
+    /// apparatus — a whole percent of the spine.
+    ///
+    /// A ratio and never the hrefs: publisher filenames carry the title, and
+    /// this log is exported by the reader and pasted into an email. Bytes rather
+    /// than documents because that is the quantity the rule reasons about — a
+    /// book reporting 2 % has excluded its front matter and a book reporting
+    /// 40 % has excluded its first act, and the two are the same count.
+    static func frontMatterShare(of package: EPUBPackage) -> Int {
+        let weights = package.spineWeights
+        let total = weights.reduce(0, +)
+        guard total > 0 else { return 0 }
+        let excluded = zip(package.spine, weights)
+            .filter { package.frontMatter.contains($0.0.href) }
+            .reduce(0.0) { $0 + $1.1 }
+        return Int((excluded / total * 100).rounded())
     }
 
     // MARK: - Chapter parsing
