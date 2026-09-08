@@ -487,6 +487,15 @@ struct FrontMatterTests {
     /// A `toc` nav sits in front of the landmarks in the same file on purpose:
     /// that is the arrangement every real book uses, and it is what makes the
     /// contents loop return before it ever reaches the landmarks.
+    ///
+    /// **The navigation document sits beside the content, not beside the OPF.**
+    /// While the two shared a directory the landmark hrefs and the guide's were
+    /// spelled identically, so resolving a landmark against the package document
+    /// produced exactly the right answer and every assertion in here passed
+    /// against a base that is wrong on a real book. Nested, the two bases differ:
+    /// landmark hrefs are written relative to `OEBPS/xhtml/nav.xhtml` and the
+    /// guide's relative to `OEBPS/content.opf`, and only reading each against the
+    /// document it appears in lands both on `OEBPS/xhtml/…`.
     static func package(
         landmarks: String = "", guide: String = "", spine: [String],
     ) throws -> EPUBPackage {
@@ -501,7 +510,7 @@ struct FrontMatterTests {
         <package version="3.0">
         <metadata><title>A Novel</title></metadata>
         <manifest>
-        <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+        <item id="nav" href="xhtml/nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
         \(spine.map {
             "<item id=\"\($0)\" href=\"xhtml/\($0).xhtml\" media-type=\"application/xhtml+xml\"/>"
         }.joined(separator: "\n"))
@@ -514,7 +523,7 @@ struct FrontMatterTests {
         <?xml version="1.0"?>
         <html xmlns:epub="http://www.idpf.org/2007/ops"><body>
         <nav epub:type="toc"><ol>
-        <li><a href="xhtml/\(spine[0]).xhtml">Beginning</a></li>
+        <li><a href="\(spine[0]).xhtml">Beginning</a></li>
         </ol></nav>
         \(landmarks)
         </body></html>
@@ -523,7 +532,7 @@ struct FrontMatterTests {
             .init(name: "mimetype", payload: Data("application/epub+zip".utf8)),
             .init(name: "META-INF/container.xml", payload: Data(container.utf8)),
             .init(name: "OEBPS/content.opf", payload: Data(opf.utf8)),
-            .init(name: "OEBPS/nav.xhtml", payload: Data(nav.utf8)),
+            .init(name: "OEBPS/xhtml/nav.xhtml", payload: Data(nav.utf8)),
         ] + spine.map {
             .init(
                 name: "OEBPS/xhtml/\($0).xhtml",
@@ -550,17 +559,17 @@ struct FrontMatterTests {
     <nav epub:type="landmarks" aria-labelledby="guide">
     <h1 id="guide">Guide</h1>
     <ol epub:type="list">
-    <li><a epub:type="cover" href="xhtml/cover.xhtml">Cover</a></li>
-    <li><a epub:type="titlepage" href="xhtml/title.xhtml">Title Page</a></li>
-    <li><a epub:type="dedication" href="xhtml/dedication.xhtml">Dedication</a></li>
-    <li><a epub:type="acknowledgments" href="xhtml/acknowledgments.xhtml">Acknowledgments</a></li>
-    <li><a epub:type="prologue" href="xhtml/fm10.xhtml">Prologue</a></li>
-    <li><a epub:type="part" href="xhtml/part1.xhtml#pt1">PART ONE: <i>The Long Road</i></a></li>
-    <li><a epub:type="chapter" href="xhtml/chapter1.xhtml#ch1">Chapter 1</a></li>
-    <li><a epub:type="epilogue" href="xhtml/epilogue.xhtml">Epilogue</a></li>
-    <li><a epub:type="toc" href="xhtml/contents.xhtml">Contents</a></li>
-    <li><a epub:type="copyright-page" href="xhtml/copyright.xhtml">Copyright</a></li>
-    <li><a epub:type="bodymatter" href="xhtml/title.xhtml#tit">Start of Content</a></li>
+    <li><a epub:type="cover" href="cover.xhtml">Cover</a></li>
+    <li><a epub:type="titlepage" href="title.xhtml">Title Page</a></li>
+    <li><a epub:type="dedication" href="dedication.xhtml">Dedication</a></li>
+    <li><a epub:type="acknowledgments" href="acknowledgments.xhtml">Acknowledgments</a></li>
+    <li><a epub:type="prologue" href="fm10.xhtml">Prologue</a></li>
+    <li><a epub:type="part" href="part1.xhtml#pt1">PART ONE: <i>The Long Road</i></a></li>
+    <li><a epub:type="chapter" href="chapter1.xhtml#ch1">Chapter 1</a></li>
+    <li><a epub:type="epilogue" href="epilogue.xhtml">Epilogue</a></li>
+    <li><a epub:type="toc" href="contents.xhtml">Contents</a></li>
+    <li><a epub:type="copyright-page" href="copyright.xhtml">Copyright</a></li>
+    <li><a epub:type="bodymatter" href="title.xhtml#tit">Start of Content</a></li>
     </ol>
     </nav>
     """
@@ -597,9 +606,9 @@ struct FrontMatterTests {
         // real prose is far worse than leaving apparatus in the index.
         let landmarks = """
         <nav epub:type="landmarks"><ol>
-        <li><a epub:type="titlepage" href="xhtml/one.xhtml">Title Page</a></li>
-        <li><a epub:type="preface" href="xhtml/one.xhtml">Preface</a></li>
-        <li><a epub:type="dedication" href="xhtml/two.xhtml">Dedication</a></li>
+        <li><a epub:type="titlepage" href="one.xhtml">Title Page</a></li>
+        <li><a epub:type="preface" href="one.xhtml">Preface</a></li>
+        <li><a epub:type="dedication" href="two.xhtml">Dedication</a></li>
         </ol></nav>
         """
         let package = try Self.package(landmarks: landmarks, spine: ["one", "two", "three"])
@@ -612,8 +621,8 @@ struct FrontMatterTests {
         // book that writes it this way.
         let landmarks = """
         <nav epub:type="landmarks"><ol>
-        <li epub:type="dedication"><a href="xhtml/two.xhtml">Dedication</a></li>
-        <li epub:type="chapter"><a epub:type="copyright-page" href="xhtml/one.xhtml">One</a></li>
+        <li epub:type="dedication"><a href="two.xhtml">Dedication</a></li>
+        <li epub:type="chapter"><a epub:type="copyright-page" href="one.xhtml">One</a></li>
         </ol></nav>
         """
         let package = try Self.package(landmarks: landmarks, spine: ["one", "two", "three"])
@@ -629,8 +638,8 @@ struct FrontMatterTests {
         // introduction and the first chapter, and `resolve` strips fragments.
         let landmarks = """
         <nav epub:type="landmarks"><ol>
-        <li><a epub:type="toc" href="xhtml/one.xhtml#contents">Contents</a></li>
-        <li><a epub:type="cover" href="xhtml/two.xhtml">Cover</a></li>
+        <li><a epub:type="toc" href="one.xhtml#contents">Contents</a></li>
+        <li><a epub:type="cover" href="two.xhtml">Cover</a></li>
         </ol></nav>
         """
         let package = try Self.package(landmarks: landmarks, spine: ["one", "two", "three"])
@@ -641,9 +650,9 @@ struct FrontMatterTests {
     func theBroadTokensDecideNothing() throws {
         let landmarks = """
         <nav epub:type="landmarks"><ol>
-        <li><a epub:type="frontmatter" href="xhtml/one.xhtml">Prologue</a></li>
-        <li><a epub:type="bodymatter" href="xhtml/two.xhtml">Start of Content</a></li>
-        <li><a epub:type="cover" href="xhtml/two.xhtml">Cover</a></li>
+        <li><a epub:type="frontmatter" href="one.xhtml">Prologue</a></li>
+        <li><a epub:type="bodymatter" href="two.xhtml">Start of Content</a></li>
+        <li><a epub:type="cover" href="two.xhtml">Cover</a></li>
         </ol></nav>
         """
         let package = try Self.package(landmarks: landmarks, spine: ["one", "two", "three"])
@@ -658,8 +667,8 @@ struct FrontMatterTests {
         // with "the story hasn't reached that yet".
         let landmarks = """
         <nav epub:type="landmarks"><ol>
-        <li><a epub:type="cover" href="xhtml/one.xhtml">Cover</a></li>
-        <li><a epub:type="titlepage" href="xhtml/two.xhtml">Title Page</a></li>
+        <li><a epub:type="cover" href="one.xhtml">Cover</a></li>
+        <li><a epub:type="titlepage" href="two.xhtml">Title Page</a></li>
         </ol></nav>
         """
         let package = try Self.package(landmarks: landmarks, spine: ["one", "two"])
@@ -673,7 +682,7 @@ struct FrontMatterTests {
         """
         let landmarks = """
         <nav epub:type="landmarks"><ol>
-        <li><a epub:type="dedication" href="xhtml/one.xhtml">Dedication</a></li>
+        <li><a epub:type="dedication" href="one.xhtml">Dedication</a></li>
         </ol></nav>
         """
         let spine = ["one", "two", "three"]
