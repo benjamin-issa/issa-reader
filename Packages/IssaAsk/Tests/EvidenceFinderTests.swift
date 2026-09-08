@@ -123,6 +123,56 @@ struct EvidenceFinderTests {
         #expect(evidence.map(\.priority) == [0, 2, 1, 3])
     }
 
+    @Test("a character named in every chapter still gets the sentences that describe him")
+    func aMainCharacterGetsPredicatesNotTenIntroductions() {
+        // The cap used to be a prefix of first mentions *then* predicates, so a
+        // main character — named in every early passage, described in a dozen
+        // sentences — spent ten of the fifteen excerpts on arrivals. Ten
+        // "Aldric came in from the yard" is not an answer to "who is Aldric".
+        let passages = (0 ..< 12).map { index in
+            Self.passage(
+                "Aldric came in from the yard. The rain kept on. "
+                    + "Aldric was a smith of the eastern quarter.",
+                spine: 2, ordinal: index, start: 1_000 + index * 5_000,
+            )
+        }
+        let evidence = EvidenceFinder.identity(
+            subject: Self.subject("Aldric", tokens: ["aldric"]), in: passages, limit: 15,
+        )
+        #expect(evidence.count == 15)
+        // One slot in three held for an introduction, the rest to the
+        // sentences that predicate something.
+        #expect(evidence.filter { $0.role == .firstMention }.count == 5)
+        #expect(evidence.filter { $0.role == .predicate }.count == 10)
+        // And the five kept are the earliest, which is where a novel puts the
+        // introduction.
+        let arrivals = evidence.filter { $0.role == .firstMention }
+        #expect(arrivals.map(\.excerpt.ordinal) == [0, 1, 2, 3, 4])
+    }
+
+    @Test("a character with two things said about him still gets his ten arrivals")
+    func aMinorCharacterOverflowsIntoIntroductions() {
+        // The reservation is a floor, not a quota: when one pool is short the
+        // other takes the slots it leaves, or a minor character described once
+        // would be answered from a third of the budget.
+        let passages = (0 ..< 12).map { index in
+            Self.passage(
+                index < 2
+                    ? "Marek came in from the yard. The rain kept on. "
+                        + "Marek was a smith of the eastern quarter."
+                    : "Marek came in from the yard. The rain kept on. Nobody spoke to him.",
+                spine: 2, ordinal: index, start: 1_000 + index * 5_000,
+            )
+        }
+        let evidence = EvidenceFinder.identity(
+            subject: Self.subject("Marek", tokens: ["marek"]), in: passages, limit: 15,
+        )
+        // `firstMentionPassages` is the ceiling on arrivals, and nothing else
+        // wanted the room.
+        #expect(evidence.filter { $0.role == .firstMention }.count == 10)
+        #expect(evidence.filter { $0.role == .predicate }.count == 2)
+    }
+
     @Test("evidence becomes ranked passages one for one, in the order it came")
     func rankedIsOneToOne() {
         func piece(spine: Int, priority: Int) -> Evidence {
@@ -196,6 +246,117 @@ struct EvidenceFinderTests {
             in: [Self.passage("Ryn's only sibling had died in the mines.")],
         )
         #expect(evidence.count == 1)
+    }
+
+    @Test("a sentence that states the name outranks one that only uses the word")
+    func aSentenceThatStatesTheNameOutranksOneThatOnlyUsesTheWord() throws {
+        // Book order and rank order have to disagree or this proves nothing:
+        // the sentence that answers the question comes second in the book. A
+        // prompt trimmed on book order alone keeps "Ryn glanced at her
+        // brother", which is not evidence of anything.
+        let evidence = EvidenceFinder.kinship(
+            subject: Self.subject("Ryn", tokens: ["ryn"]),
+            relation: KinRelation.matching("brother"),
+            in: [
+                Self.passage("Ryn glanced at her brother and said nothing.", start: 1_000),
+                Self.passage("Ryn's brother, Dask, had trained her.", ordinal: 1, start: 6_000),
+            ],
+        )
+        try #require(evidence.count == 2)
+        // Reading order for the model…
+        #expect(evidence.map { $0.sentenceText.contains("Dask") } == [false, true])
+        // …and the finder's preference beside it.
+        #expect(evidence.map(\.priority) == [1, 0])
+        let kept = PassageRanker.best(EvidenceFinder.ranked(evidence), count: 1)
+        #expect(kept.map(\.passage) == [evidence[1].excerpt])
+    }
+
+    @Test("two sentences that name nobody keep the order the book put them in")
+    func candidateFreeKinSentencesStayInBookOrder() throws {
+        // The tier is a preference, not a shuffle: with nothing to prefer, the
+        // priorities are book order, which is what the top-up offset and the
+        // retry ladder both count on.
+        let evidence = EvidenceFinder.kinship(
+            subject: Self.subject("Ryn", tokens: ["ryn"]),
+            relation: KinRelation.matching("brother"),
+            in: [
+                Self.passage("Ryn glanced at her brother and said nothing.", start: 1_000),
+                Self.passage(
+                    "Ryn nodded to her brother across the yard.", ordinal: 1, start: 6_000,
+                ),
+            ],
+        )
+        try #require(evidence.count == 2)
+        #expect(evidence.map(\.priority) == [0, 1])
+    }
+
+    // MARK: - Topping up a kinship question
+
+    /// A kin sentence as the finder mints it, and the paragraph it was lifted
+    /// from as the top-up returns it — the two shapes `toppedUp` has to tell
+    /// apart.
+    static func kinPiece(start: Int, priority: Int, spine: Int = 2) -> Evidence {
+        Evidence(
+            excerpt: Passage(
+                spineIndex: spine, ordinal: 0, start: start, end: start + 100, words: 18,
+                text: "Ryn's brother, Dask, had trained her to trust nobody at all.",
+            ),
+            sentence: NSRange(location: start, length: 100),
+            role: .kinship,
+            sentenceText: "Ryn's brother, Dask, had trained her to trust nobody at all.",
+            priority: priority,
+        )
+    }
+
+    static func contextPiece(start: Int, end: Int, priority: Int, spine: Int = 2) -> Evidence {
+        let passage = Passage(
+            spineIndex: spine, ordinal: 0, start: start, end: end, words: 90,
+            text: "The crew met in the shop behind the market.",
+        )
+        // As `EvidenceFinder.passages` mints it: the whole paragraph is the
+        // sentence, which is exactly why it swallows the narrower window.
+        return Evidence(
+            excerpt: passage, sentence: passage.range, role: .passage,
+            sentenceText: passage.displayText, priority: priority,
+        )
+    }
+
+    @Test("the paragraph a kin sentence came from does not replace it")
+    func theTopUpDoesNotSwallowTheKinSentence() throws {
+        // The top-up query is the same query, so one of the paragraphs it
+        // returns is the paragraph the kin sentence was lifted from. It is the
+        // same text twice and it is the wider window, so `inBookOrder` used to
+        // keep the paragraph and drop the sentence — and the fast path, with
+        // the answer in front of it, found only a paragraph and declined.
+        let found = [Self.kinPiece(start: 1_200, priority: 0)]
+        let evidence = AskRetriever.toppedUp(found, with: [
+            Self.contextPiece(start: 3_000, end: 3_500, priority: 0),
+            Self.contextPiece(start: 1_000, end: 1_500, priority: 1),
+        ])
+        try #require(evidence.count == 2)
+        #expect(evidence.map(\.role) == [.kinship, .passage])
+        // And the context still sorts behind the sentence it is context for.
+        #expect(evidence.map(\.priority) == [0, 1])
+    }
+
+    @Test("a context paragraph never ties with a kin sentence")
+    func contextNeverTiesWithAKinSentence() throws {
+        // `EvidenceFinder.kinship` ends in `inBookOrder`, which drops
+        // overlapping windows, so the priorities it hands back have gaps in
+        // them. Counting the pieces instead of measuring the highest gave a
+        // paragraph the same priority as a kin sentence, and `best` breaks the
+        // tie on position — which drops the sentence that answers the question.
+        let found = [
+            Self.kinPiece(start: 1_000, priority: 0),
+            Self.kinPiece(start: 5_000, priority: 2),
+        ]
+        let evidence = AskRetriever.toppedUp(found, with: [
+            Self.contextPiece(start: 3_000, end: 3_500, priority: 0),
+        ])
+        try #require(evidence.count == 3)
+        #expect(evidence.map(\.priority) == [0, 3, 2])
+        let kept = PassageRanker.best(EvidenceFinder.ranked(evidence), count: 2)
+        #expect(kept.map(\.passage) == [evidence[0].excerpt, evidence[2].excerpt])
     }
 
     // MARK: - Against the real book

@@ -266,7 +266,7 @@ public struct AskRetriever: Sendable {
         // Both ceilings, as on the identity path: what this question is
         // allowed, and what the finder thinks is worth reading — a dozen
         // sentences all carrying the same family word stop adding anything.
-        var found = EvidenceFinder.kinship(
+        let found = EvidenceFinder.kinship(
             subject: subject, relation: relation, in: passages,
             limit: min(limit, EvidenceFinder.Limits.kinshipSentences),
         )
@@ -281,21 +281,43 @@ public struct AskRetriever: Sendable {
         // Corran again? he's Aldric's brother right?"* was answered from two
         // kin sentences and four passages, whatever the excerpt count said.
         let extra = try await general(terms, subject: subject, limit: limit - found.count)
-        // The top-up is context for the kin sentences, never a rival to them,
-        // so its priorities continue after theirs instead of starting again at
-        // zero — which is what would let a paragraph that merely says the name
-        // outrank the one sentence that answers the question.
-        //
-        // Bound before the append: an inline `found.count` inside
-        // `found.append(contentsOf:)` is overlapping access to `found`, and
-        // Swift 6 exclusivity rejects it.
-        let offset = found.count
-        found.append(contentsOf: extra.map {
+        return Self.toppedUp(found, with: extra)
+    }
+
+    /// Kin sentences, with ordinary passages behind them for context.
+    ///
+    /// Two things the obvious version got wrong, both of which threw away the
+    /// sentence the question was asked about.
+    ///
+    /// A top-up passage is a whole paragraph, and the paragraph a kin sentence
+    /// was lifted *from* is one of the passages the same query returns. It is
+    /// the same text twice, and it is the wider of the two windows, so it sorts
+    /// ahead of the sentence and `EvidenceFinder.inBookOrder` keeps the
+    /// paragraph and drops the sentence — which is how a fast path with the
+    /// answer in front of it stopped firing. So any top-up whose range covers a
+    /// kin sentence goes, and the shortfall (at most `kinshipFloor - 1`
+    /// passages of context) is accepted rather than over-fetching to hide it.
+    ///
+    /// And the offset is one past the *highest* priority found, not the count of
+    /// them: `EvidenceFinder.kinship` ends in `inBookOrder`, which drops
+    /// overlapping windows, so the priorities it hands back can have gaps in
+    /// them. Counting instead of measuring gives a context paragraph the same
+    /// priority as a kin sentence, and `PassageRanker.best` breaks that tie on
+    /// position — dropping the sentence that answers the question in favour of
+    /// a paragraph that merely says the name.
+    static func toppedUp(_ found: [Evidence], with extra: [Evidence]) -> [Evidence] {
+        let context = extra.filter { passage in
+            !found.contains {
+                $0.excerpt.spineIndex == passage.excerpt.spineIndex
+                    && passage.excerpt.range.contains($0.sentence.location)
+            }
+        }
+        let offset = (found.map(\.priority).max() ?? -1) + 1
+        return EvidenceFinder.inBookOrder(found + context.map {
             var piece = $0
             piece.priority += offset
             return piece
         })
-        return EvidenceFinder.inBookOrder(found)
     }
 
     // MARK: - General

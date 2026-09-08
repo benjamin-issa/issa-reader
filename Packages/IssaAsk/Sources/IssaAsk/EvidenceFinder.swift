@@ -86,6 +86,13 @@ public enum EvidenceFinder {
         public static let firstMentionPassages = 10
         /// How many sentences that predicate something of X are kept.
         public static let predicateSentences = 16
+        /// One excerpt in this many is held back for a first mention when both
+        /// pools are full. A main character is named in every early passage and
+        /// described in a dozen sentences, so handing the cap a plain
+        /// concatenation spends it on introductions before a single predicate
+        /// is reached: ten "Aldric came in from the yard" and five sentences
+        /// saying what he is, for a question that asked what he is.
+        public static let firstMentionShare = 3
         /// The ceiling on identity excerpts. Fifteen sentence-windows of about
         /// sixty words is roughly 1,200 tokens — inside the budget, and still
         /// less than six whole paragraphs cost.
@@ -148,16 +155,30 @@ public enum EvidenceFinder {
         // two pieces resting on one key sentence. `inBookOrder` throws the
         // second away, so capping first spends slots on excerpts that are
         // about to be discarded: fifteen asked for, about eleven delivered.
-        //
+        let kept = deduplicated(firstMentions + predicates)
+        let introductions = kept.filter { $0.role == .firstMention }
+        let statements = kept.filter { $0.role == .predicate }
+        // A share of the budget each, rather than a prefix of the two lists
+        // concatenated. The concatenation was never a ranking: it put *every*
+        // first mention the scan found ahead of *every* predicate, so a main
+        // character named in ten early passages spent ten of the fifteen
+        // excerpts on arrivals and left five for the sentences that say what
+        // he is — which is the question. One slot in three is held for an
+        // introduction, and either pool spills into whatever the other leaves,
+        // so a minor character with two predicates still gets ten arrivals.
+        let room = max(1, limit)
+        let reserved = min(introductions.count, max(1, room / Limits.firstMentionShare))
+        let fromStatements = min(statements.count, room - reserved)
+        let fromIntroductions = min(introductions.count, room - fromStatements)
         // Then first mentions first when there is not room for everything, and
         // that preference is written down as a priority before book order is
         // restored — the instructions tell the model the excerpts are in
         // reading order, and a model handed events out of sequence invents a
         // chronology to explain them, but a prompt trimmed on book order alone
         // sacrifices the introduction and keeps the passing mention.
-        return inBookOrder(
-            prioritised(Array(deduplicated(firstMentions + predicates).prefix(limit))),
-        )
+        return inBookOrder(prioritised(
+            Array(introductions.prefix(fromIntroductions)) + statements.prefix(fromStatements),
+        ))
     }
 
     // MARK: - Kinship
@@ -169,13 +190,23 @@ public enum EvidenceFinder {
     /// comes into the window — "Ryn had been raised on the streets. Her
     /// brother, Dask, had trained her" only answers the question with both
     /// halves present.
+    ///
+    /// A sentence that *states* the relative's name ranks ahead of one that
+    /// merely uses the family word, and only then does book order decide.
+    /// Recency would be the obvious alternative and is wrong for the same
+    /// reason the identity path prefers introductions: a novel states a
+    /// relationship where the relative is introduced, and refers to him for
+    /// ever after. This is the judgement `KinshipExtractor` already makes, so
+    /// when the fast path declines, the sentences it read names out of are the
+    /// ones a trimmed prompt keeps.
     public static func kinship(
         subject: Subject, relation: KinRelation?, in passages: [RetrievedPassage],
         limit: Int = Limits.kinshipSentences,
     ) -> [Evidence] {
         let patterns = Patterns(subject: subject)
         guard let kin = Patterns.kinExpression(for: relation) else { return [] }
-        var found: [Evidence] = []
+        var named: [Evidence] = []
+        var unnamed: [Evidence] = []
 
         for passage in passages {
             let sentences = split(passage)
@@ -184,14 +215,30 @@ public enum EvidenceFinder {
                 let namesHere = patterns.mentions(sentence.text)
                 let namesBefore = index > 0 && patterns.mentions(sentences[index - 1].text)
                 guard namesHere || namesBefore else { continue }
-                found.append(evidence(
+                let piece = evidence(
                     sentences, from: namesHere ? index : index - 1, key: index, through: index,
                     in: passage, role: .kinship,
-                ))
-                if found.count == limit { return inBookOrder(prioritised(found)) }
+                )
+                // The extractor's own table, asked whether this one sentence
+                // names anybody — a rank, not an answer, which is why it is
+                // asked with no known names: a sentence-opening capital the
+                // book has not used as a name is still worth reading first,
+                // and it is the fast path, not this, that must decline it.
+                if KinshipExtractor.names(
+                    subject: subject, relation: relation, patterns: patterns,
+                    sentence: piece.sentenceText, preceding: piece.precedingText,
+                    knownNames: [],
+                ).isEmpty {
+                    unnamed.append(piece)
+                } else {
+                    named.append(piece)
+                }
+                if named.count + unnamed.count == limit {
+                    return inBookOrder(prioritised(named + unnamed))
+                }
             }
         }
-        return inBookOrder(prioritised(found))
+        return inBookOrder(prioritised(named + unnamed))
     }
 
     // MARK: - Priority

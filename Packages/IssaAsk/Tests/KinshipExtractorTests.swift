@@ -180,6 +180,48 @@ struct KinshipExtractorTests {
         #expect(Self.names("Ryn's brother, Mr. Dask, had trained her.") == ["Dask"])
     }
 
+    // MARK: - How far the finder reaches
+
+    @Test("a second name stated late is still read, and still declines")
+    func aSecondNameStatedLateStillDeclines() throws {
+        // Twelve kin sentences, not eight, and this is the reason. The ninth
+        // to the twelfth is exactly where a book names a *second* brother, and
+        // an extractor that stops before it sees one name, answers outright,
+        // and cites a sentence the book goes on to contradict. Under-reach
+        // sends the question to the model with the right sentence still in
+        // front of it; over-reach is the failure this type cannot recover from.
+        let sentences = ["Ryn's brother, Dask, had trained her."]
+            + Array(repeating: "Ryn glanced at her brother and said nothing.", count: 10)
+            + ["Ryn's brother, Marek, had come back that winter."]
+        let text = sentences.joined(separator: " ")
+        let passage = RetrievedPassage(
+            passage: Passage(
+                spineIndex: 4, ordinal: 0, start: 0, end: (text as NSString).length,
+                words: PassageChunker.wordCount(text), text: text,
+            ),
+            bm25: -1, isTruncated: false,
+        )
+        let evidence = EvidenceFinder.kinship(
+            subject: Self.ryn, relation: Self.brother, in: [passage],
+        )
+        // Written against the constant rather than against twelve, so
+        // narrowing it fails here and not in a book nobody has run this on.
+        try #require(evidence.count == EvidenceFinder.Limits.kinshipSentences)
+
+        let known: Set<String> = ["ryn", "dask", "marek"]
+        let matches = KinshipExtractor.names(
+            subject: Self.ryn, relation: Self.brother, in: evidence, knownNames: known,
+        )
+        #expect(matches.map(\.name) == ["Dask", "Marek"])
+        #expect(matches.map(\.evidenceIndex) == [0, 11])
+        // Two brothers is the book's problem, not the table's: the model gets
+        // the sentences with both names in front of it.
+        #expect(KinshipExtractor.answer(
+            subject: Self.ryn, relation: Self.brother, form: .whoIs, in: evidence,
+            knownNames: known,
+        ) == nil)
+    }
+
     // MARK: - The answer
 
     @Test("one name is answered outright, with a citation")

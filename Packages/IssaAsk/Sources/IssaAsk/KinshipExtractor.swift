@@ -89,6 +89,9 @@ public enum KinshipExtractor {
 
     // MARK: - One sentence
 
+    /// Internal rather than private because `EvidenceFinder.kinship` ranks with
+    /// it: a sentence this reads a name out of is kept ahead of one that only
+    /// carries the family word.
     static func names(
         subject: Subject,
         relation: KinRelation?,
