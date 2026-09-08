@@ -5,10 +5,10 @@ import GRDB
 /// initialisers cannot express.
 ///
 /// `FTS5Pattern(matchingAnyTokenIn:)` and its siblings run the *ASCII*
-/// tokeniser over what they are given, so "vin's" becomes `vin OR s` — an OR
+/// tokeniser over what they are given, so "ryn's" becomes `ryn OR s` — an OR
 /// with a one-letter term in it, which matches every paragraph in the book and
-/// ranks none of them usefully. That is half of why "What is the name of Vin's
-/// brother?" answered "Quellion".
+/// ranks none of them usefully. That is half of why "What is the name of Ryn's
+/// brother?" answered "Sorrel".
 ///
 /// So the patterns are written out and handed to `FTS5Pattern(rawPattern:)`,
 /// with every token double-quoted. Quoting matters twice over: it is what stops
@@ -35,11 +35,11 @@ public enum FTSQuery {
     }
 
     /// The subject required, the rest merely welcome:
-    /// `("vin") AND ("brother" OR "sister")`.
+    /// `("ryn") AND ("brother" OR "sister")`.
     ///
     /// This is the shape that fixes the measured failure. An OR over every word
     /// of the question returns paragraphs that are about the other words; five
-    /// of the six the model was shown never said "Vin" at all.
+    /// of the six the model was shown never said "Ryn" at all.
     public static func all(_ required: [String], andAnyOf optional: [String]) -> FTS5Pattern? {
         let requiredTokens = usable(required)
         guard !requiredTokens.isEmpty else { return any(optional) }

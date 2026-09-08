@@ -399,7 +399,7 @@ public actor AskIndexStore {
             // and the suggestion chip wants the total, while `firstOffset` must
             // stay the earliest so the boundary can hide someone not yet met.
             //
-            // `nameKey` is what "VIN" and "Vin" have in common. Stored rather
+            // `nameKey` is what "RYN" and "Ryn" have in common. Stored rather
             // than folded at query time so the grouping is indexed.
             try db.execute(
                 sql: """
@@ -638,7 +638,7 @@ public actor AskIndexStore {
     ) throws -> [String] {
         // Grouped by the folded key in SQL, then folded to one spelling in
         // Swift. The SQL alone cannot do the second half: choosing between
-        // "VIN" and "Vin" is a judgement about which the book prints more
+        // "RYN" and "Ryn" is a judgement about which the book prints more
         // often, and — on a tie — about which of them is a heading shouting.
         let rows = try queue.read { db in
             try Row.fetchAll(db, sql: """
@@ -801,8 +801,8 @@ public actor AskIndexStore {
             }
             try db.create(index: "name_on_position", on: "name", columns: ["spineIndex", "firstOffset"])
         }
-        // One spelling per person. Without this a book that shouts "VIN" in a
-        // chapter heading and prints "Vin" in the prose keeps two rows, splits
+        // One spelling per person. Without this a book that shouts "RYN" in a
+        // chapter heading and prints "Ryn" in the prose keeps two rows, splits
         // the mention count between them, and drops its own protagonist out of
         // the top of the name table — which is the list that promotes a token
         // `NLTagger` missed. `IndexKey.currentSchemaVersion` is bumped with it,

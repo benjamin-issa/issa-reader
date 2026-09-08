@@ -2,11 +2,11 @@ import Foundation
 
 /// Reads a name out of a sentence that states a relationship.
 ///
-/// "What is the name of Vin's brother?" is not a question a 3B model should be
-/// asked. The book contains one sentence that answers it — "Her brother, Reen,
+/// "What is the name of Ryn's brother?" is not a question a 3B model should be
+/// asked. The book contains one sentence that answers it — "Her brother, Dask,
 /// had trained her…" — and once retrieval has found that sentence, the answer
 /// is a pattern match, not an inference. Handing it to the model instead costs
-/// several seconds and introduces the possibility of "Quellion".
+/// several seconds and introduces the possibility of "Sorrel".
 ///
 /// So the table below is short and deliberately literal, and everything about
 /// it is tuned to fail *quietly*. Over-reach is a confident wrong answer with a
@@ -55,7 +55,7 @@ public enum KinshipExtractor {
 
     /// The answer, when the evidence states exactly one.
     ///
-    /// Only for "who is X's brother" — a yes/no question ("Is Reen Vin's
+    /// Only for "who is X's brother" — a yes/no question ("Is Dask Ryn's
     /// brother?") and "how are they related" both need prose, and answering
     /// either with a bare name is answering a question nobody asked. Two names
     /// is the book naming two brothers, or the pattern matching something it
@@ -152,11 +152,11 @@ public enum KinshipExtractor {
             name(words, at: index, subject: subject, kinWords: kinWords, knownNames: knownNames)
         }
 
-        // "…her brother, Reen, had trained her" — the appositive, which is how
+        // "…her brother, Dask, had trained her" — the appositive, which is how
         // a novel most often states a relationship.
         if words[kin].followedByComma, let name = valid(kin + 1) { found.append(name) }
 
-        // "Reen, her brother, said nothing" — the appositive the other way up.
+        // "Dask, her brother, said nothing" — the appositive the other way up.
         if owner > 0, words[owner - 1].followedByComma {
             if let name = nameEnding(words, at: owner - 1, subject: subject,
                                      kinWords: kinWords, knownNames: knownNames) {
@@ -164,14 +164,14 @@ public enum KinshipExtractor {
             }
         }
 
-        // "Reen was her brother."
+        // "Dask was her brother."
         if owner > 1, copulas.contains(words[owner - 1].token),
            let name = nameEnding(words, at: owner - 2, subject: subject,
                                  kinWords: kinWords, knownNames: knownNames) {
             found.append(name)
         }
 
-        // "Her brother was called Reen." / "Her brother is Reen."
+        // "Her brother was called Dask." / "Her brother is Dask."
         if kin + 1 < words.count, copulas.contains(words[kin + 1].token) {
             var start = kin + 2
             if start < words.count, ["called", "named"].contains(words[start].token) { start += 1 }
@@ -197,8 +197,8 @@ public enum KinshipExtractor {
         guard isName(words, at: start, subject: subject, kinWords: kinWords,
                      knownNames: knownNames) else { return nil }
         var display = words[start].display
-        // A second capital that is not a new clause: "Reen Venture", not
-        // "Reen, Kelsier".
+        // A second capital that is not a new clause: "Dask Venture", not
+        // "Dask, Aldric".
         if !words[start].followedByComma, start + 1 < words.count,
            isName(words, at: start + 1, subject: subject, kinWords: kinWords,
                   knownNames: knownNames) {
@@ -245,16 +245,16 @@ public enum KinshipExtractor {
 
     /// Whether the preceding sentence names the subject and nobody else.
     ///
-    /// One sentence of reach and no ambiguity in it. "Vin turned away. Kelsier
-    /// watched. Her brother, Reen, …" must not answer, because "her" is as
+    /// One sentence of reach and no ambiguity in it. "Ryn turned away. Aldric
+    /// watched. Her brother, Dask, …" must not answer, because "her" is as
     /// likely to be somebody else's.
     static func onlyNames(
         _ subject: Subject, in preceding: String?, patterns: Patterns, knownNames: Set<String>,
     ) -> Bool {
         guard let preceding else { return false }
         guard patterns.mentions(EvidenceFinder.fold(preceding)) else { return false }
-        // A competing *person*, not a competing capital. "Vin had grown up on
-        // the streets of Luthadel" has one person in it and one place, and a
+        // A competing *person*, not a competing capital. "Ryn had grown up on
+        // the streets of Ardmoor" has one person in it and one place, and a
         // rule that counted capitals would decline every sentence that
         // mentioned where it happened — which is most of them.
         for found in NameFinder.names(in: preceding, spineIndex: 0) {

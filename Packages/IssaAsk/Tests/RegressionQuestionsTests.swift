@@ -9,9 +9,9 @@ import Testing
 /// The deterministic suites prove the retrieval is right. This proves the only
 /// thing they cannot: that the sentences retrieval chose are enough for a 3B
 /// model to answer from, and that the ones it must not see are not there. It is
-/// the shape of the run that caught the original defect — "Who is Vin?"
-/// answered from passing mentions, "What is the name of Vin's brother?"
-/// answered "Quellion" — and neither would have shown up in a suite with no
+/// the shape of the run that caught the original defect — "Who is Ryn?"
+/// answered from passing mentions, "What is the name of Ryn's brother?"
+/// answered "Sorrel" — and neither would have shown up in a suite with no
 /// model in it.
 ///
 /// Both books, because the second defect it now guards is only visible on the

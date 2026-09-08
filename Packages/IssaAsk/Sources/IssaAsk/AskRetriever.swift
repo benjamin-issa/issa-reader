@@ -56,7 +56,7 @@ public struct AskRetriever: Sendable {
         /// number anybody tuned was not the number a reader was answered with.
         public static let excerpts = 15
         /// The BM25 pool a general question ranks. Raised from 40, which is
-        /// where the sentence naming Vin's brother was sitting at rank 50.
+        /// where the sentence naming Ryn's brother was sitting at rank 50.
         public static let generalPool = 120
         /// The evidence scan's ceiling. In book order, so the three hundred it
         /// keeps are the earliest — where introductions live.
@@ -95,7 +95,7 @@ public struct AskRetriever: Sendable {
 
     public func retrieve(question: String, limit: Int = Limits.excerpts) async throws -> Retrieval {
         // The book's own names, bounded by the position, so an invented one the
-        // general-purpose tagger misses ("Cheshire", "Vin") is still recognised
+        // general-purpose tagger misses ("Cheshire", "Ryn") is still recognised
         // as a name — and a character not yet met is still not.
         let known = (try? await store.topNames(
             in: bookUUID, before: boundary, limit: Limits.knownNames,
@@ -270,7 +270,7 @@ public struct AskRetriever: Sendable {
         //
         // Up to `limit`, and this is the half of the measured failure that
         // lived here: the top-up had its own constant of six, so *"who is
-        // Marsh again? he's Kelsier's brother right?"* was answered from two
+        // Corran again? he's Aldric's brother right?"* was answered from two
         // kin sentences and four passages, whatever the excerpt count said.
         let extra = try await general(terms, subject: subject, limit: limit - found.count)
         // The top-up is context for the kin sentences, never a rival to them,

@@ -29,41 +29,41 @@ struct AskIndexStoreTests {
     @Test("two spellings of one character are one row, spelled the way the book spells it")
     func topNamesFoldCase() throws {
         // The measured failure on a real book: the chapter headings shout
-        // "VIN" and the prose prints "Vin", so the protagonist held two rows,
+        // "RYN" and the prose prints "Ryn", so the protagonist held two rows,
         // split her mentions between them, and fell out of the two hundred
         // names a question is read against — which is the list that promotes a
         // token `NLTagger` missed.
         let queue = try Self.nameTable([
-            ("VIN", 0, 0, 40), ("Vin", 1, 10, 90), ("Elend", 1, 20, 100),
-            ("Sazed", 2, 5, 30),
+            ("RYN", 0, 0, 40), ("Ryn", 1, 10, 90), ("Marek", 1, 20, 100),
+            ("Halvi", 2, 5, 30),
         ])
         let names = try AskIndexStore.topNames(
             before: ReadingBoundary(spineIndex: 9, charOffset: 0), limit: 5, in: queue,
         )
-        #expect(names == ["Vin", "Elend", "Sazed"])
-        // 130 together beats Elend's 100; apart, neither half does.
-        #expect(names.first == "Vin")
+        #expect(names == ["Ryn", "Marek", "Halvi"])
+        // 130 together beats Marek's 100; apart, neither half does.
+        #expect(names.first == "Ryn")
     }
 
     @Test("a tie between two spellings is broken away from the shouted one")
     func topNamesPreferTheQuietSpelling() throws {
-        let queue = try Self.nameTable([("VIN", 0, 0, 50), ("Vin", 1, 0, 50)])
+        let queue = try Self.nameTable([("RYN", 0, 0, 50), ("Ryn", 1, 0, 50)])
         let names = try AskIndexStore.topNames(
             before: ReadingBoundary(spineIndex: 9, charOffset: 0), limit: 5, in: queue,
         )
         // An all-capitals spelling is a heading; the character is the other one.
-        #expect(names == ["Vin"])
+        #expect(names == ["Ryn"])
     }
 
     @Test("the folded name table is still bounded by the reading position")
     func topNamesStayBounded() throws {
-        let queue = try Self.nameTable([("VIN", 0, 0, 5), ("Vin", 4, 0, 90)])
+        let queue = try Self.nameTable([("RYN", 0, 0, 5), ("Ryn", 4, 0, 90)])
         let early = try AskIndexStore.topNames(
             before: ReadingBoundary(spineIndex: 2, charOffset: 0), limit: 5, in: queue,
         )
         // Only the shout has been reached, so only its count is there — the
         // fold must not drag a later chapter's mentions back over the boundary.
-        #expect(early == ["VIN"])
+        #expect(early == ["RYN"])
     }
 
     // MARK: - Matching words the reader has met

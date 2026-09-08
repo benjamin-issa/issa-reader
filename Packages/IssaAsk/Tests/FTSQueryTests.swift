@@ -14,32 +14,32 @@ struct FTSQueryTests {
     @Test("the convenience initialiser is the bug, and the raw pattern is the fix")
     func possessivesAreNotOrs() throws {
         // GRDB's `matchingAnyTokenIn` runs the ASCII tokeniser over what it is
-        // given, so "vin's" becomes `vin OR s` — an OR with a one-letter term
+        // given, so "ryn's" becomes `ryn OR s` — an OR with a one-letter term
         // in it, matching most of the book and ranking none of it usefully.
-        let convenience = try #require(FTS5Pattern(matchingAnyTokenIn: "vin's brother"))
+        let convenience = try #require(FTS5Pattern(matchingAnyTokenIn: "ryn's brother"))
         #expect(convenience.rawPattern.contains("OR"))
 
-        let required = try #require(FTSQuery.all(["vin", "brother"]))
-        #expect(required.rawPattern == "\"vin\" AND \"brother\"")
+        let required = try #require(FTSQuery.all(["ryn", "brother"]))
+        #expect(required.rawPattern == "\"ryn\" AND \"brother\"")
         #expect((try #require(FTSQuery.any(["brother", "sister"]))).rawPattern
             == "\"brother\" OR \"sister\"")
     }
 
     @Test("the subject is required and the rest merely welcome")
     func buildsTheSubjectRequiredPattern() throws {
-        let pattern = try #require(FTSQuery.all(["vin"], andAnyOf: ["brother", "sister"]))
-        #expect(pattern.rawPattern == "(\"vin\") AND (\"brother\" OR \"sister\")")
+        let pattern = try #require(FTSQuery.all(["ryn"], andAnyOf: ["brother", "sister"]))
+        #expect(pattern.rawPattern == "(\"ryn\") AND (\"brother\" OR \"sister\")")
         // A term that is also the subject must not appear on both sides: FTS5
         // would accept it, but the reader gets a pattern that says less than it
         // looks like it says.
-        let overlapping = try #require(FTSQuery.all(["vin"], andAnyOf: ["vin", "brother"]))
-        #expect(overlapping.rawPattern == "(\"vin\") AND (\"brother\")")
+        let overlapping = try #require(FTSQuery.all(["ryn"], andAnyOf: ["ryn", "brother"]))
+        #expect(overlapping.rawPattern == "(\"ryn\") AND (\"brother\")")
     }
 
     @Test("nothing a reader can type makes an invalid pattern")
     func survivesPunctuation() {
         for tokens in [
-            ["vin's"], ["near(a", "b)"], ["*"], ["\"quoted\""], ["and"], ["or"], ["not"],
+            ["ryn's"], ["near(a", "b)"], ["*"], ["\"quoted\""], ["and"], ["or"], ["not"],
             ["-"], [""], ["--", "or", "1=1"],
         ] {
             // Either a usable pattern or nothing at all; never a throw, and
@@ -84,7 +84,7 @@ struct FTSQueryTests {
         try #require(!tight.isEmpty)
         #expect(tight.count < loose.count)
         // This is the whole point: five of the six passages the model was shown
-        // for "What is the name of Vin's brother?" never said "Vin".
+        // for "What is the name of Ryn's brother?" never said "Ryn".
         #expect(tight.allSatisfy { $0.passage.text.lowercased().contains("duchess") })
     }
 

@@ -6,26 +6,26 @@ import Testing
 /// Who the book thinks its people are.
 ///
 /// The name table is not decoration: it is what promotes a token `NLTagger`
-/// never tags — "Cheshire", "Vin", "Duchess" — into the subject a question is
+/// never tags — "Cheshire", "Ryn", "Duchess" — into the subject a question is
 /// retrieved by. A character who falls out of it is a question answered from
 /// the wrong paragraphs.
 struct NameFinderTests {
     @Test("two spellings of one person share a key")
     func foldsCaseAndDiacritics() {
-        #expect(NameFinder.Name.key(for: "VIN") == NameFinder.Name.key(for: "Vin"))
+        #expect(NameFinder.Name.key(for: "RYN") == NameFinder.Name.key(for: "Ryn"))
         #expect(NameFinder.Name.key(for: "Brontë") == NameFinder.Name.key(for: "Bronte"))
-        #expect(NameFinder.Name.key(for: "Vin") != NameFinder.Name.key(for: "Vinn"))
+        #expect(NameFinder.Name.key(for: "Ryn") != NameFinder.Name.key(for: "Rynn"))
     }
 
     @Test("merging pools the spellings and keeps the earliest sighting")
     func mergePoolsOnTheKey() {
         let merged = NameFinder.merge([
-            NameFinder.Name(name: "VIN", spineIndex: 3, firstOffset: 100, mentions: 40),
-            NameFinder.Name(name: "Vin", spineIndex: 1, firstOffset: 20, mentions: 90),
-            NameFinder.Name(name: "Vin", spineIndex: 4, firstOffset: 0, mentions: 10),
-            NameFinder.Name(name: "Elend", spineIndex: 2, firstOffset: 5, mentions: 100),
+            NameFinder.Name(name: "RYN", spineIndex: 3, firstOffset: 100, mentions: 40),
+            NameFinder.Name(name: "Ryn", spineIndex: 1, firstOffset: 20, mentions: 90),
+            NameFinder.Name(name: "Ryn", spineIndex: 4, firstOffset: 0, mentions: 10),
+            NameFinder.Name(name: "Marek", spineIndex: 2, firstOffset: 5, mentions: 100),
         ])
-        #expect(merged.map(\.name) == ["Vin", "Elend"])
+        #expect(merged.map(\.name) == ["Ryn", "Marek"])
         #expect(merged.first?.mentions == 140)
         // The earliest sighting is what the boundary compares against, so a
         // later chapter's mention must never move it forward.
@@ -36,14 +36,14 @@ struct NameFinderTests {
     @Test("the order the chapters arrived in does not decide the spelling")
     func spellingIsNotOrderDependent() {
         let rows = [
-            NameFinder.Name(name: "VIN", spineIndex: 0, firstOffset: 0, mentions: 30),
-            NameFinder.Name(name: "VIN", spineIndex: 1, firstOffset: 0, mentions: 30),
-            NameFinder.Name(name: "Vin", spineIndex: 2, firstOffset: 0, mentions: 70),
+            NameFinder.Name(name: "RYN", spineIndex: 0, firstOffset: 0, mentions: 30),
+            NameFinder.Name(name: "RYN", spineIndex: 1, firstOffset: 0, mentions: 30),
+            NameFinder.Name(name: "Ryn", spineIndex: 2, firstOffset: 0, mentions: 70),
         ]
         // Folded a chapter at a time, the incumbent's running total would beat
         // the challenger's single chapter and the shout would win.
-        #expect(NameFinder.merge(rows).first?.name == "Vin")
-        #expect(NameFinder.merge(rows.reversed()).first?.name == "Vin")
+        #expect(NameFinder.merge(rows).first?.name == "Ryn")
+        #expect(NameFinder.merge(rows.reversed()).first?.name == "Ryn")
     }
 
     /// Two spellings could not show this: the comparison only becomes a
@@ -89,13 +89,13 @@ struct NameFinderTests {
 
     @Test("a tie goes to the spelling that is not shouting")
     func prefersTheQuietSpelling() {
-        #expect(NameFinder.prefers("Vin", over: "VIN", mentions: 10, against: 10))
-        #expect(!NameFinder.prefers("VIN", over: "Vin", mentions: 10, against: 10))
+        #expect(NameFinder.prefers("Ryn", over: "RYN", mentions: 10, against: 10))
+        #expect(!NameFinder.prefers("RYN", over: "Ryn", mentions: 10, against: 10))
         // Counts still come first: a book that really does print the capitals
         // more often is printing the character's name.
-        #expect(NameFinder.prefers("VIN", over: "Vin", mentions: 30, against: 10))
-        #expect(!NameFinder.isAllCaps("Vin"))
-        #expect(NameFinder.isAllCaps("VIN"))
+        #expect(NameFinder.prefers("RYN", over: "Ryn", mentions: 30, against: 10))
+        #expect(!NameFinder.isAllCaps("Ryn"))
+        #expect(NameFinder.isAllCaps("RYN"))
         // "I" is a word, not a shout, but it is also not a name that gets here.
         #expect(!NameFinder.isAllCaps("123"))
     }

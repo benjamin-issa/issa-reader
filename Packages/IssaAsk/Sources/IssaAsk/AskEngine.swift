@@ -359,7 +359,7 @@ public actor AskEngine {
     /// premise that "Alice went home" and "Rome fell" cannot be told apart
     /// without a tagger. The conclusion drawn from it was wrong. Every sentence
     /// starts with a capital, so exempting them all exempted the spoiler:
-    /// `unvettedNames(in: "Kelsier dies. Vin escapes.", question: "What happens
+    /// `unvettedNames(in: "Aldric dies. Ryn escapes.", question: "What happens
     /// next?")` returned `[]`, and both names went to the reader. So did
     /// "Bilbo found the ring in the dark." — a headline spoiler is very often
     /// the first word.
@@ -375,8 +375,8 @@ public actor AskEngine {
     /// Using its silence to exempt is worse still, because invented names are
     /// what it misses and invented names are what readers get spoiled by.
     static func unvettedNames(in answer: String, question: String) -> [String] {
-        // Possessive-stripped on both sides, so "Reen's" in the answer is
-        // checked against the index as `reen` — the word the book actually
+        // Possessive-stripped on both sides, so "Dask's" in the answer is
+        // checked against the index as `dask` — the word the book actually
         // contains — and a name the question already asked about is still
         // recognised when the answer inflects it.
         let asked = Set(QueryTerms.tokens(in: question).map(QueryTerms.strippingPossessive))
@@ -399,7 +399,7 @@ public actor AskEngine {
             // exempt only when it is a closed-class function word, because
             // those are the words a sentence capitalises for grammar rather
             // than for a person. No special case for the first word of the
-            // answer: "Kelsier dies." puts the spoiler there.
+            // answer: "Aldric dies." puts the spoiler there.
             if opensSentence, QueryTerms.sentenceOpeners.contains(bare.lowercased()) { continue }
             for token in QueryTerms.tokens(in: bare).map(QueryTerms.strippingPossessive)
                 where token.count > 2 && !asked.contains(token) {
@@ -424,7 +424,7 @@ public actor AskEngine {
     }
 
     /// No colon and no semicolon: both introduce a continuation rather than
-    /// close a sentence, and while they were here `The note said: Kelsier is
+    /// close a sentence, and while they were here `The note said: Aldric is
     /// alive.` exempted the name the note was about.
     static let sentenceEnders: Set<Character> = [".", "!", "?"]
     /// Quotation marks and brackets, which sit outside the full stop.

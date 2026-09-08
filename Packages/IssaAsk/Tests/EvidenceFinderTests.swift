@@ -29,9 +29,9 @@ struct EvidenceFinderTests {
     @Test("the first mention of a character comes with the sentence after it")
     func firstMentionCarriesItsFollowUp() {
         let evidence = EvidenceFinder.identity(
-            subject: Self.subject("Reen", tokens: ["reen"]),
+            subject: Self.subject("Dask", tokens: ["dask"]),
             in: [Self.passage(
-                "The street was empty. Reen came in from the rain. He was her brother, "
+                "The street was empty. Dask came in from the rain. He was her brother, "
                     + "and had trained her since she could walk. Nobody spoke.",
             )],
         )
@@ -39,26 +39,26 @@ struct EvidenceFinderTests {
         #expect(first?.role == .firstMention)
         // An introduction is regularly two sentences: the arrival, then who
         // they are.
-        #expect(first?.excerpt.text.contains("Reen came in") == true)
+        #expect(first?.excerpt.text.contains("Dask came in") == true)
         #expect(first?.excerpt.text.contains("her brother") == true)
         #expect(first?.excerpt.text.contains("The street was empty") == false)
     }
 
     @Test("a sentence that predicates something of the subject is kept")
     func keepsPredicateSentences() {
-        let patterns = Patterns(subject: Self.subject("Vin", tokens: ["vin"]))
+        let patterns = Patterns(subject: Self.subject("Ryn", tokens: ["ryn"]))
         for sentence in [
-            "vin was a mistborn of great skill.",
-            "vin, the heir of the survivor, said nothing.",
-            "vin, who had been raised on the streets, waited.",
-            "the crew called her vin from then on.",
-            "vin is the one they follow.",
+            "ryn was a ferrant of great skill.",
+            "ryn, the heir of the marches, said nothing.",
+            "ryn, who had been raised on the streets, waited.",
+            "the crew called her ryn from then on.",
+            "ryn is the one they follow.",
         ] {
             #expect(patterns.saysSomethingAbout(sentence), "\(sentence)")
         }
         // A sentence that merely has her in it says nothing about her, and six
         // of those is the biography stitched out of passing mentions.
-        #expect(!patterns.saysSomethingAbout("vin ran down the alley and jumped."))
+        #expect(!patterns.saysSomethingAbout("ryn ran down the alley and jumped."))
         #expect(!patterns.saysSomethingAbout("the mists closed around them."))
     }
 
@@ -71,7 +71,7 @@ struct EvidenceFinderTests {
         #expect(patterns.mentions("the rabbit was still in sight, hurrying down it."))
         #expect(!patterns.mentions("the mouse looked at her rather inquisitively."))
         // A single-word subject is not matched by anything but itself.
-        let single = Patterns(subject: Self.subject("Vin", tokens: ["vin"]))
+        let single = Patterns(subject: Self.subject("Ryn", tokens: ["ryn"]))
         #expect(!single.mentions("the vine grew over the wall."))
     }
 
@@ -82,12 +82,12 @@ struct EvidenceFinderTests {
         // later one carries a second introduction. In the book the predicate
         // sits in the middle; in the ranking it comes last.
         let evidence = EvidenceFinder.identity(
-            subject: Self.subject("Reen", tokens: ["reen"]),
+            subject: Self.subject("Dask", tokens: ["dask"]),
             in: [
                 Self.passage(
-                    "Reen came back. He waited by the door. Reen was her brother.", spine: 2,
+                    "Dask came back. He waited by the door. Dask was her brother.", spine: 2,
                 ),
-                Self.passage("Vin ran. Reen followed her down the alley.", spine: 3),
+                Self.passage("Ryn ran. Dask followed her down the alley.", spine: 3),
             ],
         )
         try #require(evidence.count == 3)
@@ -103,19 +103,19 @@ struct EvidenceFinderTests {
 
     @Test("a sentence counted twice does not spend two of the excerpts")
     func aDuplicateSentenceDoesNotSpendTheCap() {
-        // "Reen was a thief." is the first mention of Reen *and* a sentence
+        // "Dask was a thief." is the first mention of Dask *and* a sentence
         // that predicates something of him, so it is minted twice, once in each
         // list, resting on the same key sentence. The cap used to be applied to
         // the pair and the duplicate thrown away afterwards, which is how a
         // constant reading fifteen delivered about eleven.
         let passages = (0 ..< 2).map { index in
             Self.passage(
-                "Reen was a thief. The rain kept on. Reen, who had trained her, waited.",
+                "Dask was a thief. The rain kept on. Dask, who had trained her, waited.",
                 spine: 2, ordinal: index, start: 1_000 + index * 5_000,
             )
         }
         let evidence = EvidenceFinder.identity(
-            subject: Self.subject("Reen", tokens: ["reen"]), in: passages, limit: 4,
+            subject: Self.subject("Dask", tokens: ["dask"]), in: passages, limit: 4,
         )
         // Two first mentions and two predicates, all four distinct sentences.
         #expect(evidence.count == 4)
@@ -129,11 +129,11 @@ struct EvidenceFinderTests {
             Evidence(
                 excerpt: Passage(
                     spineIndex: spine, ordinal: 0, start: 0, end: 40, words: 8,
-                    text: "Her brother, Reen, had taught her that.",
+                    text: "Her brother, Dask, had taught her that.",
                 ),
                 sentence: NSRange(location: 0, length: 40),
                 role: .kinship,
-                sentenceText: "Her brother, Reen, had taught her that.",
+                sentenceText: "Her brother, Dask, had taught her that.",
                 priority: priority,
             )
         }
@@ -155,30 +155,30 @@ struct EvidenceFinderTests {
     @Test("the antecedent comes into the window when the kin sentence uses a pronoun")
     func kinshipReachesOneSentenceBack() {
         // The measured failure in one sentence: the book says "Her brother,
-        // Reen…" and never repeats her name in that sentence. Without the
+        // Dask…" and never repeats her name in that sentence. Without the
         // sentence before it, the evidence does not say whose brother he is.
         let evidence = EvidenceFinder.kinship(
-            subject: Self.subject("Vin", tokens: ["vin"]),
+            subject: Self.subject("Ryn", tokens: ["ryn"]),
             relation: KinRelation.matching("brother"),
             in: [Self.passage(
-                "Vin had been raised on the streets of Luthadel. Her brother, Reen, "
+                "Ryn had been raised on the streets of Ardmoor. Her brother, Dask, "
                     + "had trained her to trust nobody. The mists came early that year.",
             )],
         )
         let first = try? #require(evidence.first)
         #expect(first?.role == .kinship)
-        #expect(first?.sentenceText.contains("Her brother, Reen") == true)
-        #expect(first?.excerpt.text.contains("Vin had been raised") == true)
+        #expect(first?.sentenceText.contains("Her brother, Dask") == true)
+        #expect(first?.excerpt.text.contains("Ryn had been raised") == true)
         #expect(first?.excerpt.text.contains("The mists came early") == false)
     }
 
     @Test("a kin sentence about somebody else is not evidence")
     func kinshipRequiresTheSubject() {
         let evidence = EvidenceFinder.kinship(
-            subject: Self.subject("Vin", tokens: ["vin"]),
+            subject: Self.subject("Ryn", tokens: ["ryn"]),
             relation: KinRelation.matching("brother"),
             in: [Self.passage(
-                "The soldiers rested by the wall. Elend's brother had gone north years ago. "
+                "The soldiers rested by the wall. Marek's brother had gone north years ago. "
                     + "Nobody had heard from him.",
             )],
         )
@@ -191,9 +191,9 @@ struct EvidenceFinderTests {
         // sentence a reader is asking about may say "sibling" and never
         // "brother".
         let evidence = EvidenceFinder.kinship(
-            subject: Self.subject("Vin", tokens: ["vin"]),
+            subject: Self.subject("Ryn", tokens: ["ryn"]),
             relation: KinRelation.matching("brother"),
-            in: [Self.passage("Vin's only sibling had died in the pits.")],
+            in: [Self.passage("Ryn's only sibling had died in the mines.")],
         )
         #expect(evidence.count == 1)
     }
@@ -403,8 +403,8 @@ struct EvidenceFinderTests {
             )
         }
         let kept = EvidenceFinder.inBookOrder([
-            evidence(spine: 2, text: "Her brother, Reen, had taught her that."),
-            evidence(spine: 5, text: "Her sister, Elend, had taught her too."),
+            evidence(spine: 2, text: "Her brother, Dask, had taught her that."),
+            evidence(spine: 5, text: "Her sister, Marek, had taught her too."),
         ])
         #expect(kept.count == 2)
         #expect(kept.map(\.excerpt.spineIndex) == [2, 5])
@@ -414,7 +414,7 @@ struct EvidenceFinderTests {
     func oneSentenceIsOneExcerpt() {
         let passage = Passage(
             spineIndex: 2, ordinal: 0, start: 0, end: 40, words: 8,
-            text: "Her brother, Reen, had taught her that.",
+            text: "Her brother, Dask, had taught her that.",
         )
         let piece = Evidence(
             excerpt: passage, sentence: NSRange(location: 0, length: 40),

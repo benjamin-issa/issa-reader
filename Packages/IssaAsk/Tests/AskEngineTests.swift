@@ -504,7 +504,7 @@ struct AskEngineTests {
             // it is cleared from there onwards and refused before it.
             ("Rome fell.", "What happens next?", ["rome"]),
             // The bug. Both spoilers opened a sentence, so both went through.
-            ("Kelsier dies. Vin escapes.", "What happens next?", ["kelsier", "vin"]),
+            ("Aldric dies. Ryn escapes.", "What happens next?", ["aldric", "ryn"]),
             // A headline spoiler is very often the first word of the answer.
             ("Bilbo found the ring in the dark.", "What happened in the tunnel?", ["bilbo"]),
             // `Mr.` used to end a sentence, which exempted every name that
@@ -518,7 +518,7 @@ struct AskEngineTests {
                 "Who is Alice?", ["bilbo", "duchess"]
             ),
             // A colon introduces a continuation, not a sentence.
-            ("The note said: Kelsier is alive.", "What did the note say?", ["kelsier"]),
+            ("The note said: Aldric is alive.", "What did the note say?", ["aldric"]),
             // The row that earns the list: four sentences, four openers, and
             // not one of them a person.
             (
@@ -569,9 +569,9 @@ struct AskEngineTests {
     /// The sentences the measured failure turned on, in a book of four
     /// paragraphs rather than three hundred thousand words.
     static let kinshipChapter = [
-        "Vin had grown up on the streets of Luthadel, in the ash and the mist, and she had "
+        "Ryn had grown up on the streets of Ardmoor, in the rain and the smoke, and she had "
             + "learned very early that a girl who trusted anybody at all did not last long there.",
-        "Her brother, Reen, had trained her to trust nobody, and then he had left her alone in "
+        "Her brother, Dask, had trained her to trust nobody, and then he had left her alone in "
             + "that city without so much as a word of warning about what was coming for them.",
         "The crew met in the shop behind the market, where the windows were shuttered against "
             + "the ash and somebody had left a lamp burning on the counter all night long.",
@@ -588,13 +588,13 @@ struct AskEngineTests {
         let model = ScriptedAnswerModel()
         let engine = AskEngine(model: model, store: store)
 
-        // The question that answered "Quellion" on the real book.
+        // The question that answered "Sorrel" on the real book.
         let (events, failure) = await Self.drain(engine.ask(
-            question: "What is the name of Vin's brother?", source: source, boundary: boundary,
+            question: "What is the name of Ryn's brother?", source: source, boundary: boundary,
         ))
         #expect(failure == nil)
         let answer = try #require(Self.answer(events))
-        #expect(answer.text == "Vin's brother is Reen.")
+        #expect(answer.text == "Ryn's brother is Dask.")
         #expect(!answer.notYetRevealed)
         #expect(!answer.citations.isEmpty)
         // The best citation in the app, and it used to be thrown away: the
@@ -602,7 +602,7 @@ struct AskEngineTests {
         // the excerpt shown is provably the sentence the name was read out of.
         let cited = try #require(answer.sources.first)
         #expect(cited.ordinal == answer.citations.first)
-        #expect(cited.passage.displayText.contains("Reen"))
+        #expect(cited.passage.displayText.contains("Dask"))
         // And nothing generated it, so the sheet must not claim a model did.
         #expect(answer.origin == .book)
         // Nothing to think about, so nothing to wait for: no model call, and no
@@ -616,7 +616,7 @@ struct AskEngineTests {
     func twoNamesFallThroughToTheModel() async throws {
         var chapter = Self.kinshipChapter
         chapter.append(
-            "Vin's brother, Kelsier, had said much the same thing to her once, in the same "
+            "Ryn's brother, Aldric, had said much the same thing to her once, in the same "
                 + "flat voice, on an evening when the ash was falling thickly over the market.",
         )
         let (store, source, boundary, directory) = try AskFixture.syntheticStore(
@@ -627,7 +627,7 @@ struct AskEngineTests {
         let engine = AskEngine(model: model, store: store)
 
         _ = await Self.drain(engine.ask(
-            question: "Who is Vin's brother?", source: source, boundary: boundary,
+            question: "Who is Ryn's brother?", source: source, boundary: boundary,
         ))
         // Two brothers, or a pattern that matched something it should not have.
         // Either way the model reads it, with both sentences in the prompt.
@@ -637,8 +637,8 @@ struct AskEngineTests {
         // four-paragraph book, so the answer-side guard refuses it. What this
         // test asserts is what the model was handed, which is unaffected.
         let sent = try #require(await model.received.first)
-        #expect(sent.prompt.contains("Reen"))
-        #expect(sent.prompt.contains("Kelsier"))
+        #expect(sent.prompt.contains("Dask"))
+        #expect(sent.prompt.contains("Aldric"))
     }
 
     // MARK: - Evidence in the prompt
@@ -673,7 +673,7 @@ struct AskEngineTests {
 
     @Test("the instructions say what to do with a passing mention")
     func instructionsCoverPassingMentions() {
-        // "Who is Vin?" was answered with a biography stitched out of the nouns
+        // "Who is Ryn?" was answered with a biography stitched out of the nouns
         // standing near her name. Retrieval is the fix; this is the belt.
         #expect(AskPromptBuilder.instructions.contains("only mention a person in passing"))
     }

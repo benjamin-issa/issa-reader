@@ -3,12 +3,12 @@ import Foundation
 /// One sentence that says something, and the window the model is shown it in.
 ///
 /// The unit of retrieval used to be a paragraph, and that is what went wrong.
-/// Asked "Who is Vin?" at the Epilogue of a real book, BM25 returned the six
+/// Asked "Who is Ryn?" at the Epilogue of a real book, BM25 returned the six
 /// paragraphs that said her name most often — which are action scenes, not
 /// introductions — and the model stitched a biography out of the nouns standing
 /// near her. Asked for her brother's name, the one sentence in the book that
-/// says "Her brother, Reen, had trained her…" sat at rank 50 of a pool capped
-/// at 40, and the answer was "Quellion".
+/// says "Her brother, Dask, had trained her…" sat at rank 50 of a pool capped
+/// at 40, and the answer was "Sorrel".
 ///
 /// A sentence that predicates something of the subject is a different object
 /// from a paragraph that mentions it, and the difference is the whole feature.
@@ -144,7 +144,7 @@ public enum EvidenceFinder {
         }
         // De-duplicated *before* the cap, because a sentence can be both the
         // first mention of X and a sentence that predicates something of X —
-        // "Reen came in. He was her brother." is one of each — and that yields
+        // "Dask came in. He was her brother." is one of each — and that yields
         // two pieces resting on one key sentence. `inBookOrder` throws the
         // second away, so capping first spends slots on excerpts that are
         // about to be discarded: fifteen asked for, about eleven delivered.
@@ -166,8 +166,8 @@ public enum EvidenceFinder {
     ///
     /// The subject must be named in the sentence itself or in the one
     /// immediately before it, and when it is the one before, that sentence
-    /// comes into the window — "Vin had been raised on the streets. Her
-    /// brother, Reen, had trained her" only answers the question with both
+    /// comes into the window — "Ryn had been raised on the streets. Her
+    /// brother, Dask, had trained her" only answers the question with both
     /// halves present.
     public static func kinship(
         subject: Subject, relation: KinRelation?, in passages: [RetrievedPassage],
@@ -398,14 +398,14 @@ struct Patterns: Sendable {
         }
         let copulas = "was|is|were|are|had been|became"
         predicates = [
-            // "Vin was a Mistborn." / "The Duchess is the one who…"
+            // "Ryn was a Ferrant." / "The Duchess is the one who…"
             "\\b\(alternatives)\\b\\s+(?:\(copulas))\\b",
-            // "Vin, the Heir of the Survivor, …"
+            // "Ryn, the Heir of the Marches, …"
             "\\b\(alternatives)\\b\\s*,\\s*(?:the|a|an)\\b",
-            // "Vin, who had been raised on the streets, …"
+            // "Ryn, who had been raised on the streets, …"
             "\\b\(alternatives)\\b\\s*,?\\s+who\\b",
-            // "…a girl called Vin." / "…was named Vin." The optional pronoun is
-            // there because "the crew called her Vin" is how a book most often
+            // "…a girl called Ryn." / "…was named Ryn." The optional pronoun is
+            // there because "the crew called her Ryn" is how a book most often
             // says what somebody is called.
             "\\b(?:was|is|called|named)\\s+(?:him|her|them|it|the|a|an)?\\s*\(alternatives)\\b",
         ].compactMap(Patterns.expression)

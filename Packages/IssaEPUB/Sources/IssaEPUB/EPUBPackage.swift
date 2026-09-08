@@ -353,8 +353,9 @@ public extension EPUBPackage {
     /// `epub:type` tokens that name a document as story, whatever else it is
     /// also called. Any one of these vetoes an exclusion.
     ///
-    /// `epigraph` is on this list deliberately: Mistborn's chapter epigraphs are
-    /// the Lord Ruler's logbook, which is as much the novel as the chapters are.
+    /// `epigraph` is on this list deliberately: a novel whose chapter epigraphs
+    /// carry an in-world document — a journal, a chronicle, a set of letters —
+    /// is telling its story in them as much as in the chapters.
     /// `preface`, `foreword` and `introduction` are here for the same reason —
     /// a preface can be in-fiction, and a false positive deletes real prose,
     /// which is a far worse failure than leaving apparatus in the index.

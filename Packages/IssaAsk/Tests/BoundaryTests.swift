@@ -171,9 +171,9 @@ struct BoundaryTests {
     /// Two paragraphs from another novel entirely, so a passage that arrives
     /// from the wrong book is unmistakable rather than a plausible near miss.
     static let otherBook = [
-        "Vin had grown up on the streets of Luthadel, in the ash and the mist, and she had "
+        "Ryn had grown up on the streets of Ardmoor, in the rain and the smoke, and she had "
             + "learned very early that a girl who trusted anybody at all did not last long there.",
-        "Her brother, Reen, had trained her to trust nobody, and then he had left her alone in "
+        "Her brother, Dask, had trained her to trust nobody, and then he had left her alone in "
             + "that city without so much as a word of warning about what was coming for them.",
     ]
 
@@ -204,22 +204,22 @@ struct BoundaryTests {
         #expect(alices.contains { $0.passage.text.lowercased().contains("rabbit") })
 
         // The leak the uuid closes: with the book remembered rather than named,
-        // this same call came back with "Vin had grown up on the streets of
-        // Luthadel" — the *other* book's text, cut at a page number from this
+        // this same call came back with "Ryn had grown up on the streets of
+        // Ardmoor" — the *other* book's text, cut at a page number from this
         // one, in front of a reader of *Alice*.
         let elsewhere = try await store.retrieve(
-            terms: QueryTerms.extract(from: "Who is Reen?"),
+            terms: QueryTerms.extract(from: "Who is Dask?"),
             in: AskFixture.bookUUID, before: boundary,
         )
-        #expect(!elsewhere.contains { $0.passage.text.lowercased().contains("reen") })
+        #expect(!elsewhere.contains { $0.passage.text.lowercased().contains("dask") })
 
         // The mirror, so this cannot pass by answering everything from Alice.
         let theirs = try await store.retrieve(
-            terms: QueryTerms.extract(from: "Who is Reen?"),
+            terms: QueryTerms.extract(from: "Who is Dask?"),
             in: AskFixture.otherBookUUID,
             before: ReadingBoundary(spineIndex: 0, charOffset: .max),
         )
-        #expect(theirs.contains { $0.passage.text.lowercased().contains("reen") })
+        #expect(theirs.contains { $0.passage.text.lowercased().contains("dask") })
     }
 
     @Test("a read-only availability check does not repoint the store")
@@ -237,11 +237,11 @@ struct BoundaryTests {
         #expect(await store.isPrepared(source: alice))
 
         let theirs = try await store.retrieve(
-            terms: QueryTerms.extract(from: "Who is Reen?"),
+            terms: QueryTerms.extract(from: "Who is Dask?"),
             in: AskFixture.otherBookUUID,
             before: ReadingBoundary(spineIndex: 0, charOffset: .max),
         )
-        #expect(theirs.contains { $0.passage.text.lowercased().contains("reen") })
+        #expect(theirs.contains { $0.passage.text.lowercased().contains("dask") })
 
         // And in the other direction, so neither book is being answered from
         // whichever one was asked about last.

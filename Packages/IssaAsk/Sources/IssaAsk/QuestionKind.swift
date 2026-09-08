@@ -3,20 +3,20 @@ import Foundation
 /// Who or what a question is *about*, in the form retrieval can use.
 ///
 /// The tokens are what the FTS pattern is built from, so they are folded and
-/// stripped of the possessive: the reader who types "Vin's" is asking about
-/// `vin`, and a pattern built from `vin's` reaches nothing — SQLite's tokeniser
+/// stripped of the possessive: the reader who types "Ryn's" is asking about
+/// `ryn`, and a pattern built from `ryn's` reaches nothing — SQLite's tokeniser
 /// reads the apostrophe as a word break, which is the bug that made
-/// "What is the name of Vin's brother?" search for `vin OR s`.
+/// "What is the name of Ryn's brother?" search for `ryn OR s`.
 public struct Subject: Sendable, Hashable {
     /// The subject as the reader wrote it, articles removed: "White Rabbit",
-    /// "Vin", "the Duchess" → "Duchess". Shown nowhere; used to compose the
+    /// "Ryn", "the Duchess" → "Duchess". Shown nowhere; used to compose the
     /// deterministic kinship answer, which has to spell the name their way.
     public var display: String
     /// Folded, lowercased, possessive-stripped. Every one of these is required
     /// of a passage before it is even considered.
     public var tokens: [String]
     /// Whether the book's own name table recognises this, which is the only
-    /// reliable signal for an invented name: `NLTagger` tags neither "VIN" nor
+    /// reliable signal for an invented name: `NLTagger` tags neither "RYN" nor
     /// "White Rabbit" nor "Duchess" as a person.
     public var isKnownName: Bool
 
@@ -128,10 +128,10 @@ public struct KinRelation: Sendable, Hashable {
 ///
 /// Classification exists because BM25 over an OR of every question word answers
 /// a different question from the one asked. Measured on *The Hero of Ages* at
-/// the Epilogue: "What is the name of Vin's brother?" ranked the sentence that
-/// says "Her brother, Reen, had trained her…" fiftieth in a pool capped at
-/// forty, and the model — handed six passages, five of which never said "Vin" —
-/// answered "Quellion". Knowing the question is a kinship question is what lets
+/// the Epilogue: "What is the name of Ryn's brother?" ranked the sentence that
+/// says "Her brother, Dask, had trained her…" fiftieth in a pool capped at
+/// forty, and the model — handed six passages, five of which never said "Ryn" —
+/// answered "Sorrel". Knowing the question is a kinship question is what lets
 /// retrieval require the subject and then look at sentences instead of
 /// paragraphs.
 public enum QuestionKind: Sendable, Hashable {
@@ -189,7 +189,7 @@ public enum QuestionKind: Sendable, Hashable {
 ///
 /// Two lists rather than one, because they fail in opposite directions.
 /// `NLTagger` finds ordinary names and misses every invented one — it tags
-/// neither "VIN" nor "Duchess" nor "White Rabbit" — while the book's own table
+/// neither "RYN" nor "Duchess" nor "White Rabbit" — while the book's own table
 /// knows exactly the invented ones and nothing about a name the reader has not
 /// reached yet. A subject has to be allowed to come from either.
 struct Vocabulary: Sendable {
@@ -224,8 +224,8 @@ struct Vocabulary: Sendable {
 // MARK: -
 
 enum QuestionReader {
-    /// Contractions that hide an identity lead-in. "Who's Vin?" is "Who is
-    /// Vin?", and reading it as one word loses the whole question shape.
+    /// Contractions that hide an identity lead-in. "Who's Ryn?" is "Who is
+    /// Ryn?", and reading it as one word loses the whole question shape.
     static let expansions: [String: [String]] = [
         "who's": ["who", "is"], "what's": ["what", "is"],
         "whos": ["who", "is"], "whats": ["what", "is"],
@@ -242,7 +242,7 @@ enum QuestionReader {
         var out: [Words.Word] = []
         for chunk in question.split(whereSeparator: \.isWhitespace) {
             let display = String(chunk).trimmingCharacters(in: Words.edgePunctuation)
-            // "Who's Vin?" is two words, and only the split form reaches the
+            // "Who's Ryn?" is two words, and only the split form reaches the
             // "who is" lead-in the identity path matches on.
             if let expanded = expansions[display.lowercased()] {
                 for part in expanded {
@@ -270,10 +270,10 @@ enum QuestionReader {
     ///
     /// **The leading clause decides, and the whole question is consulted only
     /// when the leading clause claims nothing.** A reader who has lost the
-    /// thread does not type one clean sentence. Measured against *Mistborn*:
-    /// "wait who is marsh again? he's kelsier's brother right? but isn't he one
-    /// of the ministry people" was read as a kinship question about `kelsier`,
-    /// so retrieval hunted family words near Kelsier and returned his two
+    /// thread does not type one clean sentence. Measured against a full-length
+    /// novel: "wait who is corran again? he's aldric's brother right? but isn't he one
+    /// of the ministry people" was read as a kinship question about `aldric`,
+    /// so retrieval hunted family words near Aldric and returned his two
     /// earliest mentions. The Ministry storyline the reader was asking about was
     /// never retrieved; four settings answered "The story hasn't revealed that
     /// yet" about a character named 157 times in what that reader had read. It
@@ -298,10 +298,10 @@ enum QuestionReader {
     /// Whether an identity subject names one thing, rather than stitching two
     /// together across a connector.
     ///
-    /// "who is reen to vin again? her brother?" reads, on its leading clause
-    /// alone, as an identity question about `["reen", "vin"]` — and a two-token
+    /// "who is dask to ryn again? her brother?" reads, on its leading clause
+    /// alone, as an identity question about `["dask", "ryn"]` — and a two-token
     /// subject is required of every passage *together*, so retrieval kept the
-    /// paragraphs that name both and lost every sentence that says what Reen was
+    /// paragraphs that name both and lost every sentence that says what Dask was
     /// to her. Every answer in a sixteen-arm run then named the wrong man as her
     /// brother. It is a kinship question wearing an identity question's clothes,
     /// and the reader's own next clause says which.
@@ -341,7 +341,7 @@ enum QuestionReader {
     // MARK: Kinship
 
     /// Adjectives a reader puts between the owner and the relation. Without
-    /// these "Vin's younger brother" loses its owner and becomes a general
+    /// these "Ryn's younger brother" loses its owner and becomes a general
     /// question about brothers.
     static let kinshipAdjectives: Set<String> = [
         "own", "elder", "older", "younger", "little", "big", "twin", "half",
@@ -353,7 +353,7 @@ enum QuestionReader {
         else { return howRelated(in: words, vocabulary: vocabulary) }
         let relation = KinRelation.matching(words[kinIndex].token)
 
-        // "Vin's brother", "Vin's younger brother".
+        // "Ryn's brother", "Ryn's younger brother".
         var ownerIndex: Int?
         var scan = kinIndex - 1
         while scan >= 0, kinshipAdjectives.contains(words[scan].token) { scan -= 1 }
@@ -366,7 +366,7 @@ enum QuestionReader {
             ownerIndex = scan
         }
 
-        // "the brother of Vin".
+        // "the brother of Ryn".
         if ownerIndex == nil, kinIndex + 2 < words.count, words[kinIndex + 1].token == "of" {
             var candidate = kinIndex + 2
             if ["the", "a", "an"].contains(words[candidate].token), candidate + 1 < words.count {
@@ -379,12 +379,12 @@ enum QuestionReader {
         guard let ownerIndex else { return howRelated(in: words, vocabulary: vocabulary) }
 
         let owner = subject(from: [words[ownerIndex]], vocabulary: vocabulary)
-        // "Is Reen Vin's brother?" — a yes/no question, which the extractor
+        // "Is Dask Ryn's brother?" — a yes/no question, which the extractor
         // must not answer with a name.
         //
         // `ownerIndex > 1`, because the owner can be the very first word: a
         // question that *opens* with a possessive gives `ownerIndex == 0`, and
-        // `words[1 ..< 0]` is a trap, not an empty slice. `Was' brother Reen?`
+        // `words[1 ..< 0]` is a trap, not an empty slice. `Was' brother Dask?`
         // reached it — `edgePunctuation` deliberately keeps a trailing
         // apostrophe, because that is what says "Vins'" is possessive, and
         // `possessiveSuffixes` includes `s'`. A typed question crashed the app.
@@ -443,7 +443,7 @@ enum QuestionReader {
     /// Filler that opens a question without being part of it, mirroring
     /// `identityTrailers` at the other end.
     ///
-    /// A reader interrupting their own reading writes "wait who is marsh
+    /// A reader interrupting their own reading writes "wait who is corran
     /// again?", and the lead-in table is matched against the *start* of the
     /// question, so one word of hesitation is the difference between a name
     /// lookup and a BM25 search over the whole sentence.
@@ -462,7 +462,7 @@ enum QuestionReader {
 
     static func identity(in words: [Words.Word], vocabulary: Vocabulary) -> QuestionKind? {
         // Before the lead-in match, not after it: the table is matched against
-        // the start of the question, so "wait who is marsh again?" reaches no
+        // the start of the question, so "wait who is corran again?" reaches no
         // lead-in at all while the hesitation is still there.
         var words = words
         while let first = words.first, leadingFillers.contains(first.token) {

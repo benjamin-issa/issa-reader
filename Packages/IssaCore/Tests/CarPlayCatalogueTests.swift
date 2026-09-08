@@ -162,25 +162,25 @@ struct CarPlayCatalogueTests {
     @Test("a row says who wrote it and how much is left")
     func subtitleIsGlanceable() {
         let catalogue = CarPlayCatalogue(books: [
-            book("Novel", author: "Sanderson", progress: 0.5, audioDuration: 7200),
+            book("Novel", author: "Halloway", progress: 0.5, audioDuration: 7200),
         ])
         let entry = catalogue.entries(for: .library, limit: Self.plenty).first
-        #expect(entry?.subtitle == "Sanderson · 1h 0m left")
+        #expect(entry?.subtitle == "Halloway · 1h 0m left")
     }
 
     @Test("a book never started says its whole length")
     func subtitleWithoutProgress() {
         let catalogue = CarPlayCatalogue(books: [
-            book("Novel", author: "Sanderson", audioDuration: 5400),
+            book("Novel", author: "Halloway", audioDuration: 5400),
         ])
         #expect(catalogue.entries(for: .library, limit: Self.plenty).first?.subtitle
-            == "Sanderson · 1h 30m left")
+            == "Halloway · 1h 30m left")
     }
 
     @Test("a book with no known duration still says who wrote it")
     func subtitleWithoutDuration() {
-        let catalogue = CarPlayCatalogue(books: [book("Novel", author: "Sanderson")])
-        #expect(catalogue.entries(for: .library, limit: Self.plenty).first?.subtitle == "Sanderson")
+        let catalogue = CarPlayCatalogue(books: [book("Novel", author: "Halloway")])
+        #expect(catalogue.entries(for: .library, limit: Self.plenty).first?.subtitle == "Halloway")
     }
 
     @Test("a finished book does not report a negative remainder")

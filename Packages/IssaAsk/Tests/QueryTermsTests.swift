@@ -130,28 +130,28 @@ struct QueryTermsTests {
 
     @Test("a possessive is stripped everywhere the name is used")
     func foldsThePossessive() {
-        // The measured failure: "What is the name of Vin's brother?" tokenised
-        // to `vin's`, which SQLite reads as `vin OR s`, which is neither a
+        // The measured failure: "What is the name of Ryn's brother?" tokenised
+        // to `ryn's`, which SQLite reads as `ryn OR s`, which is neither a
         // known-name match nor a term the co-occurrence bonus can see — and the
-        // sentence that says "Her brother, Reen…" sat at pool rank 50.
-        let terms = QueryTerms.extract(from: "What is the name of Vin's brother?",
-                                       knownNames: ["Vin", "Reen"])
-        #expect(terms.terms.contains("vin"))
-        #expect(!terms.terms.contains("vin's"))
+        // sentence that says "Her brother, Dask…" sat at pool rank 50.
+        let terms = QueryTerms.extract(from: "What is the name of Ryn's brother?",
+                                       knownNames: ["Ryn", "Dask"])
+        #expect(terms.terms.contains("ryn"))
+        #expect(!terms.terms.contains("ryn's"))
         #expect(!terms.terms.contains("s"))
-        #expect(terms.names.contains { $0.lowercased() == "vin" })
-        #expect(terms.nameCandidates.contains("vin"))
-        #expect(!terms.nameCandidates.contains("vin's"))
-        #expect(terms.subject?.tokens == ["vin"])
+        #expect(terms.names.contains { $0.lowercased() == "ryn" })
+        #expect(terms.nameCandidates.contains("ryn"))
+        #expect(!terms.nameCandidates.contains("ryn's"))
+        #expect(terms.subject?.tokens == ["ryn"])
     }
 
     @Test("stripping the possessive leaves ordinary words alone")
     func stripsOnlyPossessives() {
-        #expect(QueryTerms.strippingPossessive("vin's") == "vin")
+        #expect(QueryTerms.strippingPossessive("ryn's") == "ryn")
         #expect(QueryTerms.strippingPossessive("alice's") == "alice")
         // `tokens(in:)` itself is untouched: the FTS patterns and the offset
         // tests are written against what it produces.
-        #expect(QueryTerms.tokens(in: "Vin's") == ["vin's"])
+        #expect(QueryTerms.tokens(in: "Ryn's") == ["ryn's"])
         #expect(QueryTerms.strippingPossessive("its") == "its")
         #expect(QueryTerms.strippingPossessive("o'clock") == "o'clock")
         #expect(QueryTerms.strippingPossessive("as") == "as")
@@ -159,12 +159,12 @@ struct QueryTermsTests {
 
     @Test("an answer's possessive is vetted as the name, not as the possessive")
     func vetsThePossessiveForm() {
-        // `unmetWords` looks each of these up in the index. `reen's` is a word
+        // `unmetWords` looks each of these up in the index. `dask's` is a word
         // no book contains as one token, so without the strip the guard checks
         // something that is not the name.
         #expect(AskEngine.unvettedNames(
-            in: "She trusted Reen's word.", question: "Who is Vin?",
-        ) == ["reen"])
+            in: "She trusted Dask's word.", question: "Who is Ryn?",
+        ) == ["dask"])
     }
 
     @Test("search tokens are unique and lead with the question's own words")

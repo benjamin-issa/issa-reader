@@ -19,9 +19,9 @@ import Foundation
 enum Words {
     struct Word: Sendable, Hashable {
         /// As printed, less the punctuation around it and less the possessive:
-        /// "Reen", "Vin".
+        /// "Dask", "Ryn".
         var display: String
-        /// Folded, lowercased, possessive-stripped: "reen".
+        /// Folded, lowercased, possessive-stripped: "dask".
         var token: String
         var isPossessive: Bool
         var isCapitalised: Bool
@@ -45,7 +45,7 @@ enum Words {
         let possessive = possessiveSuffixes.contains { display.hasSuffix($0) }
         var bare = display
         if possessive {
-            // "Vin's" loses two characters, "James'" loses one — and both have
+            // "Ryn's" loses two characters, "James'" loses one — and both have
             // to end up as the name the book actually prints.
             bare = display.hasSuffix("'s") || display.hasSuffix("\u{2019}s")
                 ? String(display.dropLast(2))

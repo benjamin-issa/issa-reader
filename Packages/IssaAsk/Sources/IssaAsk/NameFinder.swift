@@ -33,7 +33,7 @@ public enum NameFinder {
         /// What two spellings of one person have in common.
         ///
         /// A book that shouts a name in a chapter heading and prints it
-        /// normally in the prose — "VIN" and "Vin" — otherwise makes two rows,
+        /// normally in the prose — "RYN" and "Ryn" — otherwise makes two rows,
         /// splits the mention count between them, and drops its own
         /// protagonist out of the top of the name table. That table is what
         /// promotes a token the tagger missed, so losing the protagonist from
@@ -169,7 +169,7 @@ public enum NameFinder {
         for key in byKey.keys.sorted() {
             guard let spellings = byKey[key], !spellings.isEmpty else { continue }
             // Whichever spelling the book prints more often wins the row, so
-            // "VIN" in a heading does not become the name a chip offers.
+            // "RYN" in a heading does not become the name a chip offers.
             // `prefers` is a total order — count, then not-shouting, then
             // alphabetical — so this picks one answer and always the same one.
             var winner = spellings.sorted {

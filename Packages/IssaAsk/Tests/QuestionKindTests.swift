@@ -6,8 +6,8 @@ import Testing
 /// The table that decides which retrieval a question gets.
 ///
 /// It is written against the shapes readers actually type, including the two
-/// that failed on the real book: "Who is Vin?" was answered from passing
-/// mentions, and "What is the name of Vin's brother?" was answered "Quellion".
+/// that failed on the real book: "Who is Ryn?" was answered from passing
+/// mentions, and "What is the name of Ryn's brother?" was answered "Sorrel".
 /// Both start here — the first has to be an identity question and the second a
 /// kinship one, or no amount of later work can find the right sentence.
 struct QuestionKindTests {
@@ -24,13 +24,13 @@ struct QuestionKindTests {
     @Test("who is X, what is the X, tell me about X are identity questions")
     func readsIdentityQuestions() {
         for (question, tokens) in [
-            ("Who is Vin?", ["vin"]),
-            ("Who's Vin?", ["vin"]),
+            ("Who is Ryn?", ["ryn"]),
+            ("Who's Ryn?", ["ryn"]),
             ("Who is the White Rabbit?", ["white", "rabbit"]),
             ("Who is the Duchess?", ["duchess"]),
-            ("What is the Mistborn?", ["mistborn"]),
+            ("What is the Ferrant?", ["ferrant"]),
             ("Tell me about Dinah", ["dinah"]),
-            ("Who was the Lord Ruler really?", ["lord", "ruler"]),
+            ("Who was the Iron Warden really?", ["iron", "warden"]),
         ] {
             let kind = Self.kind(question)
             guard case let .identity(subject) = kind else {
@@ -59,14 +59,14 @@ struct QuestionKindTests {
     func allowsSingleTokenIdentity() {
         // The reader typing in a hurry gets the same retrieval as the reader
         // who capitalises.
-        guard case let .identity(subject) = Self.kind("who is vin?") else {
+        guard case let .identity(subject) = Self.kind("who is ryn?") else {
             Issue.record("expected identity")
             return
         }
-        #expect(subject.tokens == ["vin"])
+        #expect(subject.tokens == ["ryn"])
         #expect(!subject.isKnownName)
         // …and the book's own name table says so when it can.
-        guard case let .identity(known) = Self.kind("who is vin?", known: ["vin"]) else {
+        guard case let .identity(known) = Self.kind("who is ryn?", known: ["ryn"]) else {
             Issue.record("expected identity")
             return
         }
@@ -78,17 +78,17 @@ struct QuestionKindTests {
     @Test("the possessive and the relation together make a kinship question")
     func readsKinshipQuestions() {
         for question in [
-            "What is the name of Vin's brother?",
-            "Who is Vin's brother?",
-            "Who was Vin's younger brother?",
-            "Who is the brother of Vin?",
+            "What is the name of Ryn's brother?",
+            "Who is Ryn's brother?",
+            "Who was Ryn's younger brother?",
+            "Who is the brother of Ryn?",
         ] {
             let kind = Self.kind(question)
             guard case let .kinship(subject, relation, other, form) = kind else {
                 Issue.record("\(question) classified as \(kind.label)")
                 continue
             }
-            #expect(subject.tokens == ["vin"], "\(question)")
+            #expect(subject.tokens == ["ryn"], "\(question)")
             #expect(relation?.word == "brother", "\(question)")
             #expect(other == nil, "\(question)")
             #expect(form == .whoIs, "\(question)")
@@ -98,15 +98,15 @@ struct QuestionKindTests {
     @Test("a yes/no kinship question is not one the extractor may answer with a name")
     func readsYesNoKinship() {
         guard case let .kinship(subject, relation, other, form) =
-            Self.kind("Is Reen Vin's brother?", known: ["vin", "reen"])
+            Self.kind("Is Dask Ryn's brother?", known: ["ryn", "dask"])
         else {
             Issue.record("expected kinship")
             return
         }
-        #expect(subject.tokens == ["vin"])
-        #expect(other?.tokens == ["reen"])
+        #expect(subject.tokens == ["ryn"])
+        #expect(other?.tokens == ["dask"])
         #expect(relation?.word == "brother")
-        // Answering "Vin's brother is Reen." to a question that asked whether
+        // Answering "Ryn's brother is Dask." to a question that asked whether
         // he is would be a confident answer to a question nobody asked.
         #expect(form == .yesNo)
     }
@@ -114,13 +114,13 @@ struct QuestionKindTests {
     @Test("how are X and Y related is kinship with two subjects and no relation word")
     func readsHowRelated() {
         guard case let .kinship(subject, relation, other, form) =
-            Self.kind("How are Vin and Elend related?", known: ["vin", "elend"])
+            Self.kind("How are Ryn and Marek related?", known: ["ryn", "marek"])
         else {
             Issue.record("expected kinship")
             return
         }
-        #expect(subject.tokens == ["vin"])
-        #expect(other?.tokens == ["elend"])
+        #expect(subject.tokens == ["ryn"])
+        #expect(other?.tokens == ["marek"])
         #expect(relation == nil)
         #expect(form == .howRelated)
     }
@@ -220,10 +220,10 @@ struct QuestionKindTests {
     @Test("asking about a relative is a kinship question")
     func relativeIsAKinshipQuestion() {
         for question in [
-            "Who is Vin's relative?", "Who is Vin's family?",
-            "Who is Vin's grandparent?", "Who is Vin's companion?",
+            "Who is Ryn's relative?", "Who is Ryn's family?",
+            "Who is Ryn's grandparent?", "Who is Ryn's companion?",
         ] {
-            #expect(Self.kind(question, known: ["vin"]).label == "kinship", "\(question)")
+            #expect(Self.kind(question, known: ["ryn"]).label == "kinship", "\(question)")
         }
     }
 
@@ -238,7 +238,7 @@ struct QuestionKindTests {
     /// rather than an empty slice.
     @Test(
         "a question that opens with a possessive is classified, not trapped",
-        arguments: ["Was' brother Reen?", "Is' brother Reen?", "Does' sister Alice?"],
+        arguments: ["Was' brother Dask?", "Is' brother Dask?", "Does' sister Alice?"],
     )
     func aLeadingPossessiveDoesNotTrap(question: String) {
         // The classification itself is nonsense, because the question is; what
@@ -248,14 +248,14 @@ struct QuestionKindTests {
 
     @Test("a real yes/no question still finds the person being asked about")
     func theYesNoScanStillWorks() {
-        let kind = Self.kind("Is Reen Vin's brother?", known: ["vin", "reen"])
+        let kind = Self.kind("Is Dask Ryn's brother?", known: ["ryn", "dask"])
         guard case let .kinship(subject, relation, other, form) = kind else {
             Issue.record("classified as \(kind.label)")
             return
         }
-        #expect(subject.tokens == ["vin"])
+        #expect(subject.tokens == ["ryn"])
         #expect(relation?.word == "brother")
-        #expect(other?.tokens == ["reen"])
+        #expect(other?.tokens == ["dask"])
         #expect(form == .yesNo)
     }
 
@@ -265,7 +265,7 @@ struct QuestionKindTests {
     func recapComesFirst() {
         #expect(Self.kind("What has happened so far?") == .recap)
         #expect(QueryTerms.extract(from: "Summarise the story so far").isRecap)
-        #expect(!QueryTerms.extract(from: "Who is Vin?").isRecap)
+        #expect(!QueryTerms.extract(from: "Who is Ryn?").isRecap)
     }
 
     // MARK: - "The author" is not a name
@@ -297,7 +297,7 @@ struct QuestionKindTests {
 
     /// The book's own name table is the trap. Gutenberg prints "Author:
     /// Benjamin Franklin" on its header page, so `author` is a name that index
-    /// knows — and the promotion that exists to catch invented names ("Vin",
+    /// knows — and the promotion that exists to catch invented names ("Ryn",
     /// "Cheshire") would otherwise catch this one.
     @Test("a role word the index knows as a name is still not a name")
     func aKnownRoleIsStillNotASubject() {
@@ -320,26 +320,26 @@ struct QuestionKindTests {
 
     // MARK: - The question is the clause it opens with
 
-    /// The worst question in the *Mistborn* trial, at 2.04/10.
+    /// The worst question in the full-book trial, at 2.04/10.
     ///
     /// The reader has lost the thread and is checking their own memory out loud.
     /// The relation word belongs to the aside, not to what they want to know,
     /// but it was the only one in the question — so retrieval hunted family
-    /// words near Kelsier and returned his two earliest mentions, and the
+    /// words near Aldric and returned his two earliest mentions, and the
     /// Ministry storyline that was actually being asked about was never
     /// retrieved. Four of the settings measured answered "The story hasn't
     /// revealed that yet" about a character named 157 times in what that reader
     /// had already read.
     @Test("a kinship aside does not become the question")
     func aKinshipAsideIsNotTheQuestion() {
-        let question = "wait who is marsh again? he's kelsier's brother right? "
+        let question = "wait who is corran again? he's aldric's brother right? "
             + "but isn't he one of the ministry people"
-        let kind = Self.kind(question, known: ["marsh", "kelsier"])
+        let kind = Self.kind(question, known: ["corran", "aldric"])
         guard case let .identity(subject) = kind else {
             Issue.record("classified as \(kind.label)")
             return
         }
-        #expect(subject.tokens == ["marsh"])
+        #expect(subject.tokens == ["corran"])
         #expect(subject.isKnownName)
 
         // And this is the reading it replaced, kept so that collapsing the four
@@ -348,31 +348,31 @@ struct QuestionKindTests {
         // wrong person entirely.
         let hijacked = QuestionReader.kinship(
             in: QuestionReader.words(in: question),
-            vocabulary: Vocabulary(known: ["marsh", "kelsier"]),
+            vocabulary: Vocabulary(known: ["corran", "aldric"]),
         )
-        #expect(hijacked?.subject?.tokens == ["kelsier"])
+        #expect(hijacked?.subject?.tokens == ["aldric"])
     }
 
     /// The other direction, and the reason the leading clause is still tried for
     /// kinship before identity.
     ///
-    /// "Who is Vin's brother?" declines identity on its own — a possessive means
+    /// "Who is Ryn's brother?" declines identity on its own — a possessive means
     /// the question is about somebody's *something* — but "Who is the brother of
-    /// Vin?" has no possessive to decline on, and identity would happily take
-    /// "brother vin" for a name. Only the kinship reading finds the sentence.
+    /// Ryn?" has no possessive to decline on, and identity would happily take
+    /// "brother ryn" for a name. Only the kinship reading finds the sentence.
     @Test("a leading kinship clause still wins")
     func aLeadingKinshipClauseStillWins() {
         for question in [
-            "Who is the brother of Vin?",
-            "Who is Vin's brother? I forget.",
-            "Who was Vin's younger brother? he gets mentioned early on",
+            "Who is the brother of Ryn?",
+            "Who is Ryn's brother? I forget.",
+            "Who was Ryn's younger brother? he gets mentioned early on",
         ] {
-            let kind = Self.kind(question, known: ["vin"])
+            let kind = Self.kind(question, known: ["ryn"])
             guard case let .kinship(subject, relation, _, _) = kind else {
                 Issue.record("\(question) classified as \(kind.label)")
                 continue
             }
-            #expect(subject.tokens == ["vin"], "\(question)")
+            #expect(subject.tokens == ["ryn"], "\(question)")
             #expect(relation?.word == "brother", "\(question)")
         }
     }
@@ -384,19 +384,19 @@ struct QuestionKindTests {
     /// still asked a kinship question.
     /// Found by re-running the measured questions after the leading-clause rule
     /// landed: this one regressed from a correct answer to sixteen wrong ones,
-    /// every arm naming a different man as Vin's brother.
+    /// every arm naming a different man as Ryn's brother.
     @Test("a leading clause that names two people is not an identity question")
     func aSubjectStitchedFromTwoNamesIsNotIdentity() {
         // "who is X to Y" asks about a relationship, but on its leading clause
-        // alone it reads as identity with a subject of ["reen", "vin"] — and a
+        // alone it reads as identity with a subject of ["dask", "ryn"] — and a
         // two-token subject must appear in a passage *together*, so retrieval
         // kept the paragraphs naming both and lost every sentence that says what
-        // Reen was to her.
+        // Dask was to her.
         let subject = Self.subject(
-            "who is reen to vin again? her brother? and what happened to him",
-            known: ["vin", "reen", "camon", "dockson"],
+            "who is dask to ryn again? her brother? and what happened to him",
+            known: ["ryn", "dask", "torv", "halden"],
         )
-        #expect(subject?.tokens == ["reen"], "the subject is the person asked about")
+        #expect(subject?.tokens == ["dask"], "the subject is the person asked about")
     }
 
     @Test("a two-word name is still one subject")
@@ -414,19 +414,19 @@ struct QuestionKindTests {
 
     @Test("a kinship question after an aside is still found")
     func aKinshipQuestionAfterAnAsideIsStillFound() {
-        let kind = Self.kind("sorry i lost track. who is Vin's brother?", known: ["vin"])
+        let kind = Self.kind("sorry i lost track. who is Ryn's brother?", known: ["ryn"])
         guard case let .kinship(subject, relation, _, _) = kind else {
             Issue.record("classified as \(kind.label)")
             return
         }
-        #expect(subject.tokens == ["vin"])
+        #expect(subject.tokens == ["ryn"])
         #expect(relation?.word == "brother")
     }
 
     /// …and the same for identity, which is the fourth and last step.
     @Test("an identity question after an aside is still found")
     func anIdentityQuestionAfterAnAsideIsStillFound() {
-        #expect(Self.kind("wait. who is Vin?", known: ["vin"]).subject?.tokens == ["vin"])
+        #expect(Self.kind("wait. who is Ryn?", known: ["ryn"]).subject?.tokens == ["ryn"])
         #expect(Self.kind("ok. tell me about Dinah").label == "identity")
     }
 
@@ -441,15 +441,15 @@ struct QuestionKindTests {
     @Test(
         "one sentence is one clause",
         arguments: [
-            "Who is Vin?",
+            "Who is Ryn?",
             "Who is Mr. Darcy's sister?",
-            "Who was the Lord Ruler really?",
-            "Is Reen Vin's brother?",
-            "How are Vin and Elend related?",
+            "Who was the Iron Warden really?",
+            "Is Dask Ryn's brother?",
+            "How are Ryn and Marek related?",
             "What is Alice's cat called?",
             "Tell me about Dinah",
             "Who is the man standing by the river bank waiting?",
-            "Was' brother Reen?",
+            "Was' brother Dask?",
         ],
     )
     func oneSentenceIsOneClause(question: String) {
@@ -465,13 +465,13 @@ struct QuestionKindTests {
     /// Hesitation at the front of a question is not part of the question.
     @Test("a leading filler is dropped")
     func leadingFillerIsDropped() {
-        for question in ["so who is Vin?", "wait who is Vin?", "um, who is Vin?"] {
-            let kind = Self.kind(question, known: ["vin"])
+        for question in ["so who is Ryn?", "wait who is Ryn?", "um, who is Ryn?"] {
+            let kind = Self.kind(question, known: ["ryn"])
             guard case let .identity(subject) = kind else {
                 Issue.record("\(question) classified as \(kind.label)")
                 continue
             }
-            #expect(subject.tokens == ["vin"], "\(question)")
+            #expect(subject.tokens == ["ryn"], "\(question)")
         }
         // Deliberately not fillers. A word in the set is dropped from the front
         // of every question that opens with it, and both of these are ordinary

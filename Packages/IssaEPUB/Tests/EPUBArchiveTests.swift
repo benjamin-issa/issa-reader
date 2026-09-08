@@ -475,8 +475,8 @@ struct NavigationFallbackTests {
 /// Built from bytes because neither shipped fixture has a landmarks nav at all
 /// — Gutenberg writes an NCX and prints its contents inside the header page —
 /// so the rule cannot be driven by a real book without adding a third one to
-/// the repo. The published novel these are modelled on is not redistributable;
-/// its landmarks are copied verbatim into `mistbornLandmarks` instead.
+/// the repo. `publishedLandmarks` is written here instead, in the shape a
+/// commercially produced EPUB uses.
 @Suite("Front matter the book names itself")
 struct FrontMatterTests {
     /// A whole small EPUB whose landmarks, guide and spine are what a test says.
@@ -535,18 +535,18 @@ struct FrontMatterTests {
 
     static func path(_ name: String) -> String { "OEBPS/xhtml/\(name).xhtml" }
 
-    /// One published novel's landmarks, copied out of the book unaltered —
-    /// fragments, ordering, `bodymatter` and all.
+    /// A landmarks nav in the shape commercial EPUBs actually ship — fragments,
+    /// ordering, `bodymatter` and all.
     ///
-    /// Verbatim rather than tidied, because the two entries that look like noise
-    /// are the ones the whole design rests on. `bodymatter` points at
+    /// Untidied on purpose, because the two entries that look like noise are the
+    /// ones the whole design rests on. `bodymatter` points at
     /// `title.xhtml#tit` — the *title page* — so a rule that treats it as where
     /// the story starts excludes the cover and nothing else. And the entry
     /// labelled Prologue points at `fm10.xhtml`, a document whose `<body>`
     /// declares `epub:type="frontmatter"`, so a rule that reads body-level types
     /// deletes the prologue. Publishers use the broad structural tokens
     /// positionally; only the ones naming a kind of content say anything.
-    static let mistbornLandmarks = """
+    static let publishedLandmarks = """
     <nav epub:type="landmarks" aria-labelledby="guide">
     <h1 id="guide">Guide</h1>
     <ol epub:type="list">
@@ -555,7 +555,7 @@ struct FrontMatterTests {
     <li><a epub:type="dedication" href="xhtml/dedication.xhtml">Dedication</a></li>
     <li><a epub:type="acknowledgments" href="xhtml/acknowledgments.xhtml">Acknowledgments</a></li>
     <li><a epub:type="prologue" href="xhtml/fm10.xhtml">Prologue</a></li>
-    <li><a epub:type="part" href="xhtml/part1.xhtml#pt1">PART ONE: <i>The Survivor of Hathsin</i></a></li>
+    <li><a epub:type="part" href="xhtml/part1.xhtml#pt1">PART ONE: <i>The Long Road</i></a></li>
     <li><a epub:type="chapter" href="xhtml/chapter1.xhtml#ch1">Chapter 1</a></li>
     <li><a epub:type="epilogue" href="xhtml/epilogue.xhtml">Epilogue</a></li>
     <li><a epub:type="toc" href="xhtml/contents.xhtml">Contents</a></li>
@@ -568,7 +568,7 @@ struct FrontMatterTests {
     @Test("a novel's own landmarks name its apparatus and none of its story")
     func namesTheFrontMatter() throws {
         let package = try Self.package(
-            landmarks: Self.mistbornLandmarks,
+            landmarks: Self.publishedLandmarks,
             spine: [
                 "cover", "title", "dedication", "acknowledgments", "fm10",
                 "part1", "chapter1", "epilogue", "contents", "copyright",

@@ -97,11 +97,11 @@ public struct QueryTerms: Sendable, Hashable {
         var terms: [String] = []
         for raw in tokens(in: sanitised) {
             // The possessive is stripped *here* rather than inside `tokens`,
-            // which the FTS pattern tests depend on. "Vin's" has to become the
-            // name `vin`: left alone it is neither a known name nor a term the
+            // which the FTS pattern tests depend on. "Ryn's" has to become the
+            // name `ryn`: left alone it is neither a known name nor a term the
             // co-occurrence bonus can see, and SQLite's tokeniser reads it as
-            // `vin OR s` — which is how "What is the name of Vin's brother?"
-            // came back with a pool that never contained "Her brother, Reen".
+            // `ryn OR s` — which is how "What is the name of Ryn's brother?"
+            // came back with a pool that never contained "Her brother, Dask".
             let token = strippingPossessive(raw)
             // Before the promotion below, not after it. Gutenberg's own header
             // page prints "**Author**: Benjamin Franklin", so `author` is in
@@ -141,7 +141,7 @@ public struct QueryTerms: Sendable, Hashable {
         )
     }
 
-    /// "Vin's" → "Vin", "James'" → "James", everything else untouched.
+    /// "Ryn's" → "Ryn", "James'" → "James", everything else untouched.
     ///
     /// Applied to tokens rather than inside `tokens(in:)` on purpose: that
     /// function's output is what the FTS pattern is built from in the older
@@ -172,8 +172,8 @@ public struct QueryTerms: Sendable, Hashable {
             let bare = word.trimmingCharacters(in: CharacterSet.letters.inverted)
             guard let initial = bare.first, initial.isUppercase, bare.count > 2 else { continue }
             guard !capitalisedNonNames.contains(bare.lowercased()) else { continue }
-            // Possessive-stripped, or "Vin's" is checked against the index as
-            // `vin's` — a word no book contains as one token, so the spoiler
+            // Possessive-stripped, or "Ryn's" is checked against the index as
+            // `ryn's` — a word no book contains as one token, so the spoiler
             // guard tests something that is not the name.
             candidates.formUnion(tokens(in: bare).map(strippingPossessive))
         }
