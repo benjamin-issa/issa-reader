@@ -71,7 +71,14 @@ public struct IndexKey: Sendable, Hashable, Codable {
     /// Alice?". It changes *what* is stored rather than where it sits, which is
     /// the other half of what this number is for — an index that is not a
     /// faithful picture of the book has to be rebuilt whichever way it is wrong.
-    public static let currentParserVersion = 2
+    ///
+    /// 3 since the index stopped storing the front matter the book names in its
+    /// own landmarks: an index built before this still holds the dedication, the
+    /// copyright page and the acknowledgments, and a question about the book was
+    /// answered out of them. Same class of change, and rebuilt the same lazy
+    /// way — per book, on the first question after the update, behind "Reading
+    /// what you've read…".
+    public static let currentParserVersion = 3
     /// 2 since the `name` table grew `nameKey`: an index built before it pools
     /// two spellings of one character as two people.
     public static let currentSchemaVersion = 2

@@ -40,6 +40,7 @@ struct TVBookTimelineTests {
                 EPUBPackage.SpineItem(idref: $0, linear: true, href: $0, mediaOverlayID: nil)
             },
             navigation: navigation,
+            frontMatter: [],
             spineWeights: weights,
         )
     }

@@ -470,6 +470,224 @@ struct NavigationFallbackTests {
     }
 }
 
+/// The documents a book names as apparatus rather than story.
+///
+/// Built from bytes because neither shipped fixture has a landmarks nav at all
+/// — Gutenberg writes an NCX and prints its contents inside the header page —
+/// so the rule cannot be driven by a real book without adding a third one to
+/// the repo. The published novel these are modelled on is not redistributable;
+/// its landmarks are copied verbatim into `mistbornLandmarks` instead.
+@Suite("Front matter the book names itself")
+struct FrontMatterTests {
+    /// A whole small EPUB whose landmarks, guide and spine are what a test says.
+    ///
+    /// The paths mirror a published novel's — the package document one
+    /// directory down, its content one directory below that — so every href has
+    /// to be resolved against the document it appears in rather than compared.
+    /// A `toc` nav sits in front of the landmarks in the same file on purpose:
+    /// that is the arrangement every real book uses, and it is what makes the
+    /// contents loop return before it ever reaches the landmarks.
+    static func package(
+        landmarks: String = "", guide: String = "", spine: [String],
+    ) throws -> EPUBPackage {
+        let container = """
+        <?xml version="1.0"?>
+        <container version="1.0"><rootfiles>
+        <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+        </rootfiles></container>
+        """
+        let opf = """
+        <?xml version="1.0"?>
+        <package version="3.0">
+        <metadata><title>A Novel</title></metadata>
+        <manifest>
+        <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+        \(spine.map {
+            "<item id=\"\($0)\" href=\"xhtml/\($0).xhtml\" media-type=\"application/xhtml+xml\"/>"
+        }.joined(separator: "\n"))
+        </manifest>
+        <spine>\(spine.map { "<itemref idref=\"\($0)\"/>" }.joined())</spine>
+        \(guide)
+        </package>
+        """
+        let nav = """
+        <?xml version="1.0"?>
+        <html xmlns:epub="http://www.idpf.org/2007/ops"><body>
+        <nav epub:type="toc"><ol>
+        <li><a href="xhtml/\(spine[0]).xhtml">Beginning</a></li>
+        </ol></nav>
+        \(landmarks)
+        </body></html>
+        """
+        let entries: [ZIPBytes.Entry] = [
+            .init(name: "mimetype", payload: Data("application/epub+zip".utf8)),
+            .init(name: "META-INF/container.xml", payload: Data(container.utf8)),
+            .init(name: "OEBPS/content.opf", payload: Data(opf.utf8)),
+            .init(name: "OEBPS/nav.xhtml", payload: Data(nav.utf8)),
+        ] + spine.map {
+            .init(
+                name: "OEBPS/xhtml/\($0).xhtml",
+                payload: Data("<html><body><p>Prose.</p></body></html>".utf8),
+            )
+        }
+        return try EPUBPackage.open(archive: EPUBArchive(data: ZIPBytes.archive(entries)))
+    }
+
+    static func path(_ name: String) -> String { "OEBPS/xhtml/\(name).xhtml" }
+
+    /// One published novel's landmarks, copied out of the book unaltered —
+    /// fragments, ordering, `bodymatter` and all.
+    ///
+    /// Verbatim rather than tidied, because the two entries that look like noise
+    /// are the ones the whole design rests on. `bodymatter` points at
+    /// `title.xhtml#tit` — the *title page* — so a rule that treats it as where
+    /// the story starts excludes the cover and nothing else. And the entry
+    /// labelled Prologue points at `fm10.xhtml`, a document whose `<body>`
+    /// declares `epub:type="frontmatter"`, so a rule that reads body-level types
+    /// deletes the prologue. Publishers use the broad structural tokens
+    /// positionally; only the ones naming a kind of content say anything.
+    static let mistbornLandmarks = """
+    <nav epub:type="landmarks" aria-labelledby="guide">
+    <h1 id="guide">Guide</h1>
+    <ol epub:type="list">
+    <li><a epub:type="cover" href="xhtml/cover.xhtml">Cover</a></li>
+    <li><a epub:type="titlepage" href="xhtml/title.xhtml">Title Page</a></li>
+    <li><a epub:type="dedication" href="xhtml/dedication.xhtml">Dedication</a></li>
+    <li><a epub:type="acknowledgments" href="xhtml/acknowledgments.xhtml">Acknowledgments</a></li>
+    <li><a epub:type="prologue" href="xhtml/fm10.xhtml">Prologue</a></li>
+    <li><a epub:type="part" href="xhtml/part1.xhtml#pt1">PART ONE: <i>The Survivor of Hathsin</i></a></li>
+    <li><a epub:type="chapter" href="xhtml/chapter1.xhtml#ch1">Chapter 1</a></li>
+    <li><a epub:type="epilogue" href="xhtml/epilogue.xhtml">Epilogue</a></li>
+    <li><a epub:type="toc" href="xhtml/contents.xhtml">Contents</a></li>
+    <li><a epub:type="copyright-page" href="xhtml/copyright.xhtml">Copyright</a></li>
+    <li><a epub:type="bodymatter" href="xhtml/title.xhtml#tit">Start of Content</a></li>
+    </ol>
+    </nav>
+    """
+
+    @Test("a novel's own landmarks name its apparatus and none of its story")
+    func namesTheFrontMatter() throws {
+        let package = try Self.package(
+            landmarks: Self.mistbornLandmarks,
+            spine: [
+                "cover", "title", "dedication", "acknowledgments", "fm10",
+                "part1", "chapter1", "epilogue", "contents", "copyright",
+            ],
+        )
+        #expect(package.frontMatter == Set([
+            "cover", "title", "dedication", "acknowledgments", "contents", "copyright",
+        ].map(Self.path)))
+        // The four the book was measured losing: sixteen front-matter passages
+        // reached the model as story, and the fix must not take the prologue
+        // with them on the way out.
+        for story in ["fm10", "part1", "chapter1", "epilogue"] {
+            #expect(!package.frontMatter.contains(Self.path(story)), "\(story) is the book")
+        }
+        // `bodymatter` points here, and protected nothing: the title page is
+        // still apparatus, because `titlepage` says what it holds and
+        // `bodymatter` only says where to open.
+        #expect(package.frontMatter.contains(Self.path("title")))
+    }
+
+    @Test("a story tag vetoes an exclusion of the same document")
+    func aStoryTagVetoesAnExclusion() throws {
+        // One document reached by two entries is ordinary: a combined
+        // front-matter file is both the title page and the author's preface,
+        // and the entry naming a kind of story is the one that wins. Deleting
+        // real prose is far worse than leaving apparatus in the index.
+        let landmarks = """
+        <nav epub:type="landmarks"><ol>
+        <li><a epub:type="titlepage" href="xhtml/one.xhtml">Title Page</a></li>
+        <li><a epub:type="preface" href="xhtml/one.xhtml">Preface</a></li>
+        <li><a epub:type="dedication" href="xhtml/two.xhtml">Dedication</a></li>
+        </ol></nav>
+        """
+        let package = try Self.package(landmarks: landmarks, spine: ["one", "two", "three"])
+        #expect(package.frontMatter == [Self.path("two")])
+    }
+
+    @Test("the type may be on the list item instead of the anchor")
+    func theTypeMayBeOnTheListItem() throws {
+        // A common real-world variant, and reading only the anchor loses every
+        // book that writes it this way.
+        let landmarks = """
+        <nav epub:type="landmarks"><ol>
+        <li epub:type="dedication"><a href="xhtml/two.xhtml">Dedication</a></li>
+        <li epub:type="chapter"><a epub:type="copyright-page" href="xhtml/one.xhtml">One</a></li>
+        </ol></nav>
+        """
+        let package = try Self.package(landmarks: landmarks, spine: ["one", "two", "three"])
+        // The dedication came off the `<li>`, and the `<li>`'s story tag vetoed
+        // the anchor's exclusion of the other document.
+        #expect(package.frontMatter == [Self.path("two")])
+    }
+
+    @Test("only a fragmentless href may exclude a document")
+    func onlyAFragmentlessHrefExcludes() throws {
+        // The guard the shipped Franklin fixture needs: its guide points `toc`
+        // at a fragment inside the document that also holds the editor's
+        // introduction and the first chapter, and `resolve` strips fragments.
+        let landmarks = """
+        <nav epub:type="landmarks"><ol>
+        <li><a epub:type="toc" href="xhtml/one.xhtml#contents">Contents</a></li>
+        <li><a epub:type="cover" href="xhtml/two.xhtml">Cover</a></li>
+        </ol></nav>
+        """
+        let package = try Self.package(landmarks: landmarks, spine: ["one", "two", "three"])
+        #expect(package.frontMatter == [Self.path("two")])
+    }
+
+    @Test("bodymatter and frontmatter decide nothing in either direction")
+    func theBroadTokensDecideNothing() throws {
+        let landmarks = """
+        <nav epub:type="landmarks"><ol>
+        <li><a epub:type="frontmatter" href="xhtml/one.xhtml">Prologue</a></li>
+        <li><a epub:type="bodymatter" href="xhtml/two.xhtml">Start of Content</a></li>
+        <li><a epub:type="cover" href="xhtml/two.xhtml">Cover</a></li>
+        </ol></nav>
+        """
+        let package = try Self.package(landmarks: landmarks, spine: ["one", "two", "three"])
+        // `frontmatter` excluded nothing, and `bodymatter` vetoed nothing.
+        #expect(package.frontMatter == [Self.path("two")])
+    }
+
+    @Test("front matter covering the whole spine is dropped")
+    func coveringTheWholeSpineDropsIt() throws {
+        // A mis-tagged book has to leave the bug in place rather than become
+        // unanswerable: an index with no passages at all answers every question
+        // with "the story hasn't reached that yet".
+        let landmarks = """
+        <nav epub:type="landmarks"><ol>
+        <li><a epub:type="cover" href="xhtml/one.xhtml">Cover</a></li>
+        <li><a epub:type="titlepage" href="xhtml/two.xhtml">Title Page</a></li>
+        </ol></nav>
+        """
+        let package = try Self.package(landmarks: landmarks, spine: ["one", "two"])
+        #expect(package.frontMatter.isEmpty)
+    }
+
+    @Test("the guide is consulted only when the landmarks name nothing")
+    func theGuideIsOnlyTheFallback() throws {
+        let guide = """
+        <guide><reference type="cover" title="Cover" href="xhtml/two.xhtml"/></guide>
+        """
+        let landmarks = """
+        <nav epub:type="landmarks"><ol>
+        <li><a epub:type="dedication" href="xhtml/one.xhtml">Dedication</a></li>
+        </ol></nav>
+        """
+        let spine = ["one", "two", "three"]
+        // EPUB 2's vocabulary is coarser and its `cover` reference is often the
+        // whole wrapper page, so a book that says both is believed on the newer.
+        let modern = try Self.package(landmarks: landmarks, guide: guide, spine: spine)
+        #expect(modern.frontMatter == [Self.path("one")])
+        // For a book with no landmarks the guide is the only thing there is,
+        // and its hrefs resolve against the package document, not the nav.
+        let older = try Self.package(guide: guide, spine: spine)
+        #expect(older.frontMatter == [Self.path("two")])
+    }
+}
+
 @Suite("Inflate answers honestly about what it decoded")
 struct InflateHonestyTests {
     /// The canonical empty DEFLATE stream, which Python's zipfile writes for
