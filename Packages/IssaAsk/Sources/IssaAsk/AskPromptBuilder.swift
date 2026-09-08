@@ -100,24 +100,27 @@ public enum AskPromptBuilder {
     /// What was sent, and what survived the trimming.
     public struct Built: Sendable {
         public var prompt: String
-        /// In the order they were numbered, so citation `[2]` maps back to an
-        /// excerpt the sheet can show.
+        /// Book order, which is also the order they were numbered in, so
+        /// citation `[2]` maps back to an excerpt the sheet can show.
         public var passages: [Passage]
         public var promptTokens: Int
         /// How many were dropped to make it fit — logged, never shown.
         public var dropped: Int
     }
 
-    /// Packs as many of the ranked passages as fit, best first, and numbers
-    /// what survives.
+    /// Packs as many of the ranked passages as fit and numbers what survives,
+    /// in reading order.
     ///
     /// Never splits a passage. Half a paragraph is worse than none: the model
     /// answers from the half it was given and cites it with confidence, and the
     /// sentence that qualified it is the one that was cut.
     ///
     /// - Parameters:
-    ///   - ranked: best first. The *lowest*-ranked are dropped when it will not
-    ///     fit, so a question's best evidence is never the thing sacrificed.
+    ///   - ranked: in book order, each carrying its `priority`. `best` decides
+    ///     which survive and this only decides how many, because trimming on
+    ///     position alone drops the passages nearest the reader — which on a
+    ///     recap is the chapter they have just closed, and on "who is X" is
+    ///     every sentence after the first six.
     ///   - hasTool: whether a `searchBook` tool is registered, which lowers the
     ///     ceiling to leave room for its schema and its output.
     public static func build(
@@ -139,35 +142,38 @@ public enum AskPromptBuilder {
                 - framingTokenCount - Budget.margin,
         )
 
-        var kept = ranked.map(\.retrieved.passage)
-        var dropped = 0
+        // How many, never which: `best` answers that, and it answers it the
+        // same way every time round, so each pass through is a subset of the
+        // last rather than a fresh selection.
+        var count = ranked.count
+        var kept = PassageRanker.best(ranked, count: count).map(\.retrieved.passage)
         // Cheap pass first: an obviously oversized set is trimmed on the
         // character estimate before the model is asked to count anything, which
         // on a phone is a real cost per call.
-        while kept.count > 1, estimatedTokens(excerpts(kept)) > available {
-            kept.removeLast()
-            dropped += 1
+        while count > 1, estimatedTokens(excerpts(kept)) > available {
+            count -= 1
+            kept = PassageRanker.best(ranked, count: count).map(\.retrieved.passage)
         }
         // Then the real count, which is the one that decides.
         while !kept.isEmpty {
             let text = excerpts(kept)
-            let count = (try? await tokenCount(text)) ?? estimatedTokens(text)
-            if count <= available || kept.count == 1 {
+            let tokens = (try? await tokenCount(text)) ?? estimatedTokens(text)
+            if tokens <= available || kept.count == 1 {
                 return Built(
                     prompt: frame(question: question, excerpts: text),
                     passages: kept,
-                    promptTokens: count + framingTokenCount,
-                    dropped: dropped,
+                    promptTokens: tokens + framingTokenCount,
+                    dropped: ranked.count - count,
                 )
             }
-            kept.removeLast()
-            dropped += 1
+            count -= 1
+            kept = PassageRanker.best(ranked, count: count).map(\.retrieved.passage)
         }
         return Built(
             prompt: frame(question: question, excerpts: ""),
             passages: [],
             promptTokens: framingTokenCount,
-            dropped: dropped,
+            dropped: ranked.count - count,
         )
     }
 

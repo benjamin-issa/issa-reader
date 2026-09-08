@@ -440,10 +440,15 @@ public actor AskEngine {
         }
     }
 
-    /// All of them, then half, then two — strictly decreasing.
+    /// All of them, then the best half, then the best two — strictly
+    /// decreasing, and each attempt a subset of the one before it.
     ///
     /// A step that is not smaller than the one before it would fail in exactly
     /// the same way and cost the reader another five seconds to be told so.
+    ///
+    /// The best rather than the first: this took a `prefix`, and `ranked`
+    /// arrives in book order, so a retry threw away the end of what the reader
+    /// had read and kept the opening they remember perfectly well.
     static func attempts(for ranked: [PassageRanker.Ranked]) -> [[PassageRanker.Ranked]] {
         guard !ranked.isEmpty else { return [ranked] }
         var sizes: [Int] = []
@@ -451,7 +456,7 @@ public actor AskEngine {
             if let last = sizes.last, size >= last { continue }
             sizes.append(size)
         }
-        return sizes.map { Array(ranked.prefix($0)) }
+        return sizes.map { PassageRanker.best(ranked, count: $0) }
     }
 
     private func stream(

@@ -75,6 +75,59 @@ struct EvidenceFinderTests {
         #expect(!single.mentions("the vine grew over the wall."))
     }
 
+    @Test("a first mention outranks a predicate even when the book puts it later")
+    func firstMentionsOutrankPredicates() throws {
+        // Book order and rank order have to disagree or this proves nothing, so:
+        // the earlier passage carries an introduction *and* a predicate, and the
+        // later one carries a second introduction. In the book the predicate
+        // sits in the middle; in the ranking it comes last.
+        let evidence = EvidenceFinder.identity(
+            subject: Self.subject("Reen", tokens: ["reen"]),
+            in: [
+                Self.passage(
+                    "Reen came back. He waited by the door. Reen was her brother.", spine: 2,
+                ),
+                Self.passage("Vin ran. Reen followed her down the alley.", spine: 3),
+            ],
+        )
+        try #require(evidence.count == 3)
+        // Reading order for the model…
+        #expect(evidence.map(\.role) == [.firstMention, .predicate, .firstMention])
+        // …and the finder's own preference written down beside it, so a prompt
+        // that will not fit sacrifices the predicate rather than whichever
+        // sentence happens to come last in the book.
+        #expect(evidence.map(\.priority) == [0, 2, 1])
+        let kept = PassageRanker.best(EvidenceFinder.ranked(evidence), count: 2)
+        #expect(kept.map(\.passage) == [evidence[0].excerpt, evidence[2].excerpt])
+    }
+
+    @Test("evidence becomes ranked passages one for one, in the order it came")
+    func rankedIsOneToOne() {
+        func piece(spine: Int, priority: Int) -> Evidence {
+            Evidence(
+                excerpt: Passage(
+                    spineIndex: spine, ordinal: 0, start: 0, end: 40, words: 8,
+                    text: "Her brother, Reen, had taught her that.",
+                ),
+                sentence: NSRange(location: 0, length: 40),
+                role: .kinship,
+                sentenceText: "Her brother, Reen, had taught her that.",
+                priority: priority,
+            )
+        }
+        let evidence = [piece(spine: 2, priority: 1), piece(spine: 5, priority: 0)]
+        let ranked = EvidenceFinder.ranked(evidence)
+
+        // The best citation the feature has rests on this: `KinshipExtractor`
+        // cites `evidenceIndex + 1` into the array this was built from, so an
+        // excerpt dropped or reordered here is an answer pointing at a sentence
+        // it was not lifted from.
+        #expect(ranked.map(\.passage) == evidence.map(\.excerpt))
+        // And the priority comes with it, or the trimming has nothing to go on
+        // but position — which is where this whole defect started.
+        #expect(ranked.map(\.priority) == [1, 0])
+    }
+
     // MARK: - Kinship
 
     @Test("the antecedent comes into the window when the kin sentence uses a pronoun")
@@ -247,6 +300,31 @@ struct EvidenceFinderTests {
                 #expect(names.count == expected, "\(fixture.name): \(names.map(\.name))")
             }
         }
+    }
+
+    // MARK: - Recap
+
+    @Test("a recap reads forwards but gives up its oldest passages first")
+    func recapPrioritisesTheMostRecent() async throws {
+        let (store, _, directory) = try await AskFixture.preparedStore()
+        defer { AskFixture.remove(directory) }
+        let boundary = try AskFixture.endOf(spine: AskFixture.Spine.chapterVI)
+        let retriever = AskRetriever(store: store, bookUUID: AskFixture.bookUUID, boundary: boundary)
+        let terms = QueryTerms.extract(from: AskSuggestions.recap)
+        try #require(terms.isRecap)
+
+        let evidence = try await retriever.evidence(for: terms)
+        try #require(evidence.count > 1)
+        // Reading order for the model: a recap read backwards is a worse recap.
+        let order = evidence.map { ($0.excerpt.spineIndex, $0.excerpt.start) }
+        #expect(order.elementsEqual(order.sorted { $0 < $1 }, by: ==))
+        // Recency for the trimming. "What has happened so far" is a question
+        // about the end of what has happened, so when the prompt will not fit
+        // it is the opening that should go — and trimming on position dropped
+        // exactly the chapter the reader had just closed.
+        #expect(evidence.map(\.priority) == Array((0 ..< evidence.count).reversed()))
+        let kept = PassageRanker.best(EvidenceFinder.ranked(evidence), count: 1)
+        #expect(kept.first?.passage == evidence.last?.excerpt)
     }
 
     // MARK: - Ordering and de-duplication

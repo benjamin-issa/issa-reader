@@ -10,10 +10,16 @@ struct AskPromptBuilderTests {
         Int((Double(text.count) / 4).rounded(.up))
     }
 
-    static func ranked(_ passages: [Passage]) -> [PassageRanker.Ranked] {
-        passages.map {
+    /// Book order in, and by default the priority the general path would have
+    /// given them — best first, which is the one arrangement where trimming
+    /// from the bottom looked correct.
+    static func ranked(
+        _ passages: [Passage], priorities: [Int]? = nil,
+    ) -> [PassageRanker.Ranked] {
+        passages.enumerated().map { index, passage in
             PassageRanker.Ranked(
-                retrieved: RetrievedPassage(passage: $0, bm25: -1, isTruncated: false), score: 0,
+                retrieved: RetrievedPassage(passage: passage, bm25: -1, isTruncated: false),
+                priority: priorities?[index] ?? index,
             )
         }
     }
@@ -106,16 +112,42 @@ struct AskPromptBuilderTests {
         }
     }
 
-    @Test("the lowest-ranked passages are the ones sacrificed")
-    func dropsFromTheBottom() async {
+    @Test("the weakest passages are sacrificed, wherever in the book they sit")
+    func trimsByPriorityNotByPosition() async throws {
         let passages = (0 ..< 6).map { Self.passage($0, words: 90) }
+        // Every caller passes book order, and the trimming used to drop from
+        // the end of it — so a recap lost the chapter the reader had just
+        // closed. Here the best evidence is the last passage in the book and
+        // the worst is the first, which is what a recap looks like.
         let built = await AskPromptBuilder.build(
-            question: "What happened?", ranked: Self.ranked(passages),
+            question: "What happened?",
+            ranked: Self.ranked(passages, priorities: [5, 4, 3, 2, 1, 0]),
             contextSize: 1_400, hasTool: false, tokenCount: Self.counter,
         )
-        // `ranked` arrives best first, so a question's best evidence is never
-        // the thing thrown away to make room.
-        #expect(built.passages == Array(passages.prefix(built.passages.count)))
+        try #require(built.dropped > 0)
+        #expect(built.passages == Array(passages.suffix(built.passages.count)))
+    }
+
+    @Test("what survives is numbered in reading order, not in rank order")
+    func numbersInReadingOrder() async throws {
+        let passages = (0 ..< 6).map { Self.passage($0, words: 90) }
+        let built = await AskPromptBuilder.build(
+            question: "What happened?",
+            // Best in the middle, worst at either end, so a builder that showed
+            // its survivors in rank order would open the prompt with ordinal 3.
+            ranked: Self.ranked(passages, priorities: [4, 2, 1, 0, 3, 5]),
+            contextSize: 1_400, hasTool: false, tokenCount: Self.counter,
+        )
+        try #require(built.passages.count > 1)
+        try #require(built.dropped > 0)
+        // The best of them survive…
+        #expect(Set(built.passages.map(\.ordinal))
+            == Set([3, 2, 1, 4, 0, 5].prefix(built.passages.count)))
+        // …and the model reads them in the order the book puts them. The
+        // instructions say the excerpts are in reading order, and a model
+        // handed events out of sequence invents a chronology to explain them.
+        #expect(built.passages.map(\.ordinal) == built.passages.map(\.ordinal).sorted())
+        #expect(built.prompt.contains(AskPromptBuilder.excerpts(built.passages)))
     }
 
     @Test("registering a tool lowers the passage budget")
