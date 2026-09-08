@@ -78,29 +78,38 @@ public struct Evidence: Sendable, Hashable {
 public enum EvidenceFinder {
     /// Every number the finder has an opinion about.
     public enum Limits {
-        /// How many of the earliest passages contribute a first mention. Six,
-        /// because a character is introduced once and referred to for ever
-        /// after, and the introduction is what "who is X" is asking for.
-        public static let firstMentionPassages = 6
+        /// How many of the earliest passages contribute a first mention. A
+        /// character is introduced once and referred to for ever after, and the
+        /// introduction is what "who is X" is asking for — but there has to be
+        /// more of both kinds than the cap keeps, or the cap is choosing
+        /// between whatever happened to be found rather than the best of them.
+        public static let firstMentionPassages = 10
         /// How many sentences that predicate something of X are kept.
-        public static let predicateSentences = 10
-        /// The ceiling on identity excerpts. Twelve sentence-windows of about
-        /// sixty words is roughly 950 tokens — comfortably inside the budget,
-        /// and about half what six paragraphs cost.
-        public static let identityExcerpts = 12
-        /// How many kin sentences are kept.
-        public static let kinshipSentences = 8
+        public static let predicateSentences = 16
+        /// The ceiling on identity excerpts. Fifteen sentence-windows of about
+        /// sixty words is roughly 1,200 tokens — inside the budget, and still
+        /// less than six whole paragraphs cost.
+        public static let identityExcerpts = 15
+        /// How many kin sentences are kept. Below the excerpt count on purpose:
+        /// past a dozen, another sentence carrying the same family word about
+        /// the same person is not more evidence, it is the same evidence again.
+        public static let kinshipSentences = 12
     }
 
     // MARK: - Identity
 
     /// The sentences that introduce X and the sentences that say what X is.
     ///
-    /// - Parameter passages: bounded, in book order, every one containing the
-    ///   subject. Book order is what makes the store's `LIMIT` keep the
-    ///   introductions instead of the action scenes.
+    /// - Parameters:
+    ///   - passages: bounded, in book order, every one containing the subject.
+    ///     Book order is what makes the store's `LIMIT` keep the introductions
+    ///     instead of the action scenes.
+    ///   - limit: how many excerpts the question is allowed. A parameter rather
+    ///     than the constant it defaults to, so the retriever can hand every
+    ///     kind of question the same budget.
     public static func identity(
         subject: Subject, in passages: [RetrievedPassage],
+        limit: Int = Limits.identityExcerpts,
     ) -> [Evidence] {
         let patterns = Patterns(subject: subject)
         var firstMentions: [Evidence] = []
@@ -133,14 +142,21 @@ public enum EvidenceFinder {
                 ))
             }
         }
-        // First mentions first when there is not room for everything, and that
-        // preference is written down as a priority before book order is
+        // De-duplicated *before* the cap, because a sentence can be both the
+        // first mention of X and a sentence that predicates something of X —
+        // "Reen came in. He was her brother." is one of each — and that yields
+        // two pieces resting on one key sentence. `inBookOrder` throws the
+        // second away, so capping first spends slots on excerpts that are
+        // about to be discarded: fifteen asked for, about eleven delivered.
+        //
+        // Then first mentions first when there is not room for everything, and
+        // that preference is written down as a priority before book order is
         // restored — the instructions tell the model the excerpts are in
         // reading order, and a model handed events out of sequence invents a
         // chronology to explain them, but a prompt trimmed on book order alone
         // sacrifices the introduction and keeps the passing mention.
         return inBookOrder(
-            prioritised(Array((firstMentions + predicates).prefix(Limits.identityExcerpts))),
+            prioritised(Array(deduplicated(firstMentions + predicates).prefix(limit))),
         )
     }
 
@@ -305,24 +321,35 @@ public enum EvidenceFinder {
         )
     }
 
+    /// One piece per key sentence, keeping the first — which is the best one,
+    /// because every finder assembles its evidence best-first.
+    ///
+    /// Its own function rather than a step inside `inBookOrder`, because the
+    /// identity path has to run it *before* it caps: a sentence that is both a
+    /// first mention and a predicate mints two pieces resting on one sentence,
+    /// and a cap applied to the pair spends two slots to deliver one.
+    ///
+    /// Keyed on the spine index as well as the range, because `sentence` is an
+    /// offset *within its chapter*. Two chapters that open with sentences of
+    /// the same length start at the same location with the same length, so the
+    /// set called them the same sentence and threw one away — and the one it
+    /// threw away could be the only evidence there was.
+    static func deduplicated(_ evidence: [Evidence]) -> [Evidence] {
+        var seen = Set<[Int]>()
+        return evidence.filter {
+            seen.insert([$0.excerpt.spineIndex, $0.sentence.location, $0.sentence.length])
+                .inserted
+        }
+    }
+
     /// Reading order, with anything already inside an earlier window dropped.
     ///
     /// Two overlapping windows are the same text twice, numbered as two
     /// excerpts — which spends the budget twice and invites the model to cite
-    /// one fact as two sources.
+    /// one fact as two sources. The overlap loop checks the spine index, which
+    /// is why `deduplicated` has to as well.
     static func inBookOrder(_ evidence: [Evidence]) -> [Evidence] {
-        // Keyed on the spine index as well as the range, because `sentence` is
-        // an offset *within its chapter*. Two chapters that open with sentences
-        // of the same length start at the same location with the same length,
-        // so the set called them the same sentence and threw one away — and the
-        // one it threw away could be the only evidence there was. The loop
-        // below already checks the spine index; only the set did not.
-        var seen = Set<[Int]>()
-        let unique = evidence.filter {
-            seen.insert([$0.excerpt.spineIndex, $0.sentence.location, $0.sentence.length])
-                .inserted
-        }
-        let ordered = unique.sorted {
+        let ordered = deduplicated(evidence).sorted {
             ($0.excerpt.spineIndex, $0.excerpt.start) < ($1.excerpt.spineIndex, $1.excerpt.start)
         }
         var kept: [Evidence] = []

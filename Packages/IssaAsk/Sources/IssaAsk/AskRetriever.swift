@@ -40,10 +40,21 @@ public struct AskRetriever: Sendable {
         /// it costs one indexed query, and a name the list misses is a question
         /// that silently retrieves the wrong paragraphs.
         public static let knownNames = 200
-        /// Excerpts for a general question.
-        public static let excerpts = 6
-        /// Passages for "what has happened so far".
-        public static let recap = 6
+        /// Excerpts for a question, whatever kind of question it is.
+        ///
+        /// Fifteen, not six. A 280-answer trial against a novel the model has
+        /// *not* memorised scored six excerpts at 3.40/10 and twenty at 5.10;
+        /// the earlier "fewer is better" finding came from books it knew by
+        /// heart, where thin retrieval was quietly covered by recall. On an
+        /// unmemorised book thin retrieval just produces fiction — at two
+        /// excerpts the model called a metal "a drug that makes people forget
+        /// things".
+        ///
+        /// One number for all four kinds of question, because until this was
+        /// written down it reached exactly one of them: a recap took its own
+        /// constant and identity and kinship ignored it outright, so the
+        /// number anybody tuned was not the number a reader was answered with.
+        public static let excerpts = 15
         /// The BM25 pool a general question ranks. Raised from 40, which is
         /// where the sentence naming Vin's brother was sitting at rank 50.
         public static let generalPool = 120
@@ -52,10 +63,8 @@ public struct AskRetriever: Sendable {
         public static let evidencePool = 300
         /// Below this a kinship question is topped up with ordinary passages,
         /// so a book that states a relationship once is not answered from one
-        /// sentence with no context around it.
+        /// sentence with no context around it. It is topped up to `limit`.
         public static let kinshipFloor = 3
-        /// What it is topped up to.
-        public static let kinshipExcerpts = 6
     }
 
     private let store: AskIndexStore
@@ -96,7 +105,7 @@ public struct AskRetriever: Sendable {
         // A recap names nobody in particular, so it has nothing to be unmet.
         guard !terms.isRecap else {
             let recap = try await store.recapPassages(
-                in: bookUUID, before: boundary, limit: Limits.recap,
+                in: bookUUID, before: boundary, limit: limit,
             )
             return .evidence(Self.recapRanked(recap), kind: .recap)
         }
@@ -129,19 +138,26 @@ public struct AskRetriever: Sendable {
 
     /// The sentences, before they are packaged. Public so a test can assert on
     /// the evidence itself rather than on what the prompt did with it.
+    ///
+    /// - Parameter limit: the ceiling on excerpts, and it reaches every branch.
+    ///   It used to reach one: a recap took a constant of its own and the
+    ///   identity and kinship paths ignored the argument entirely, so raising
+    ///   the count raised it for general questions and for nothing else.
     public func evidence(
         for terms: QueryTerms, limit: Int = Limits.excerpts,
     ) async throws -> [Evidence] {
         switch terms.kind {
         case .recap:
             let recap = try await store.recapPassages(
-                in: bookUUID, before: boundary, limit: Limits.recap,
+                in: bookUUID, before: boundary, limit: limit,
             )
             return EvidenceFinder.passages(Self.recapRanked(recap))
         case let .identity(subject):
-            return try await identity(subject)
+            return try await identity(subject, limit: limit)
         case let .kinship(subject, relation, other, _):
-            return try await kinship(terms, subject: subject, relation: relation, other: other)
+            return try await kinship(
+                terms, subject: subject, relation: relation, other: other, limit: limit,
+            )
         case let .general(subject):
             return try await general(terms, subject: subject, limit: limit)
         }
@@ -175,7 +191,7 @@ public struct AskRetriever: Sendable {
     /// onwards. Before it, the head is a different thing entirely: "cat" ten
     /// chapters before the Cheshire Cat is Dinah, and a first mention taken
     /// from there would introduce the reader to the wrong animal.
-    private func identity(_ subject: Subject) async throws -> [Evidence] {
+    private func identity(_ subject: Subject, limit: Int) async throws -> [Evidence] {
         guard let strict = FTSQuery.all(subject.tokens) else { return [] }
         var passages = try await store.passages(
             matching: strict, in: bookUUID, before: boundary, order: .bookOrder,
@@ -191,7 +207,12 @@ public struct AskRetriever: Sendable {
             passages = Self.merged(passages, shortForm)
         }
         logIfCapped(passages.count, kind: "identity")
-        return EvidenceFinder.identity(subject: subject, in: passages)
+        // Both ceilings: what this question is allowed, and what the finder
+        // thinks is worth reading about one person however much room there is.
+        return EvidenceFinder.identity(
+            subject: subject, in: passages,
+            limit: min(limit, EvidenceFinder.Limits.identityExcerpts),
+        )
     }
 
     /// Two bounded results as one, in book order and still capped.
@@ -218,6 +239,7 @@ public struct AskRetriever: Sendable {
     /// that answers the question may say "sibling" and never "brother".
     private func kinship(
         _ terms: QueryTerms, subject: Subject, relation: KinRelation?, other: Subject?,
+        limit: Int,
     ) async throws -> [Evidence] {
         let pattern: FTS5Pattern? = {
             // "How are X and Y related?" and "Is Y X's brother?" are both
@@ -233,15 +255,24 @@ public struct AskRetriever: Sendable {
             limit: Limits.evidencePool,
         )
         logIfCapped(passages.count, kind: "kinship")
-        var found = EvidenceFinder.kinship(subject: subject, relation: relation, in: passages)
+        // Both ceilings, as on the identity path: what this question is
+        // allowed, and what the finder thinks is worth reading — a dozen
+        // sentences all carrying the same family word stop adding anything.
+        var found = EvidenceFinder.kinship(
+            subject: subject, relation: relation, in: passages,
+            limit: min(limit, EvidenceFinder.Limits.kinshipSentences),
+        )
         guard found.count < Limits.kinshipFloor else { return found }
 
         // Too little to read. Top up with ordinary passages that still have to
         // contain the subject, so the model has some context rather than one
         // sentence standing on its own.
-        let extra = try await general(
-            terms, subject: subject, limit: Limits.kinshipExcerpts - found.count,
-        )
+        //
+        // Up to `limit`, and this is the half of the measured failure that
+        // lived here: the top-up had its own constant of six, so *"who is
+        // Marsh again? he's Kelsier's brother right?"* was answered from two
+        // kin sentences and four passages, whatever the excerpt count said.
+        let extra = try await general(terms, subject: subject, limit: limit - found.count)
         // The top-up is context for the kin sentences, never a rival to them,
         // so its priorities continue after theirs instead of starting again at
         // zero — which is what would let a paragraph that merely says the name

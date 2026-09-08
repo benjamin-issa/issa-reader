@@ -583,7 +583,7 @@ struct AskEngineTests {
 
     // MARK: - Evidence in the prompt
 
-    @Test("an identity question sends sentences, not paragraphs, and no more than twelve")
+    @Test("an identity question sends sentences, not paragraphs")
     func identityPromptIsSentenceSized() async throws {
         let (store, source, directory) = try await AskFixture.preparedStore()
         defer { AskFixture.remove(directory) }
@@ -598,9 +598,17 @@ struct AskEngineTests {
         let excerpts = sent.prompt.components(separatedBy: "] (Section ").count - 1
         #expect(excerpts > 0)
         #expect(excerpts <= EvidenceFinder.Limits.identityExcerpts)
-        // Sentence windows rather than six whole paragraphs: the measured
-        // prompt on the real book was 45% smaller for the same question.
-        #expect(sent.prompt.count < 6_000)
+        // Sentence windows rather than whole paragraphs: the measured prompt on
+        // the real book was 45% smaller for the same question.
+        //
+        // Per excerpt, not in total, because that is the claim. A passage chunk
+        // is ninety words and a sentence window is one sentence or two, so the
+        // shape is what says the retrieval is working — and a bound on the
+        // total moves every time the count is tuned. The 6,000 characters that
+        // stood here had four times the room to spare at six excerpts and a
+        // third of it at fifteen, which is a test on its way to failing for a
+        // reason that has nothing to do with what it asserts.
+        #expect(sent.prompt.count / excerpts < 400)
     }
 
     @Test("the instructions say what to do with a passing mention")

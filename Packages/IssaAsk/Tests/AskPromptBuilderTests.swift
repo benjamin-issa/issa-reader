@@ -32,6 +32,28 @@ struct AskPromptBuilderTests {
         )
     }
 
+    /// Passages cut from the book's own prose, for the questions that are about
+    /// whether a real prompt fits rather than about what the trimming drops.
+    ///
+    /// `passage(_:words:)` above makes tokens nearly twice as wide as English —
+    /// "word3x47" is eight characters where *Alice* averages about 5.35 to the
+    /// word including the space between them. That is harmless when the
+    /// assertion is which passages survived, and quite wrong when it is whether
+    /// fifteen of them fit inside a budget measured in characters.
+    static func prosePassages(_ count: Int, words: Int) throws -> [Passage] {
+        let chapter = try AskFixture.text(spine: AskFixture.Spine.chapterI)
+        let all = chapter.split(whereSeparator: \.isWhitespace).map(String.init)
+        guard all.count >= count * words else { return [] }
+        return (0 ..< count).map { ordinal in
+            let text = all[(ordinal * words) ..< ((ordinal + 1) * words)].joined(separator: " ")
+            return Passage(
+                spineIndex: AskFixture.Spine.chapterI, ordinal: ordinal,
+                start: ordinal * 1_000, end: ordinal * 1_000 + text.count,
+                words: words, text: text,
+            )
+        }
+    }
+
     // MARK: - What the model is never told
 
     @Test("the instructions name neither the book nor its author")
@@ -151,8 +173,17 @@ struct AskPromptBuilderTests {
     }
 
     @Test("registering a tool lowers the passage budget")
-    func toolLowersTheCeiling() async {
-        let passages = (0 ..< 12).map { Self.passage($0, words: 90) }
+    func toolLowersTheCeiling() async throws {
+        // Sized from the ceiling rather than hand-counted. Twelve 90-word
+        // passages were far over the old ceiling and are over the new one by a
+        // hair, so the next tune of either number would have left this test
+        // passing while asserting nothing at all.
+        var passages: [Passage] = []
+        repeat {
+            passages.append(Self.passage(passages.count, words: 90))
+        } while AskPromptBuilder.estimatedTokens(AskPromptBuilder.excerpts(passages))
+            <= AskPromptBuilder.Budget.passageCeiling
+
         let without = await AskPromptBuilder.build(
             question: "What happened?", ranked: Self.ranked(passages),
             contextSize: 100_000, hasTool: false, tokenCount: Self.counter,
@@ -161,10 +192,52 @@ struct AskPromptBuilderTests {
             question: "What happened?", ranked: Self.ranked(passages),
             contextSize: 100_000, hasTool: true, tokenCount: Self.counter,
         )
+        // Without an overflow of the higher ceiling neither ceiling is
+        // consulted, and the comparison below compares two whole corpora.
+        try #require(without.dropped > 0)
         // The tool's schema is in the window, and its output has to fit in what
         // is left when the model calls it.
-        #expect(AskPromptBuilder.Budget.passageCeilingWithTool < AskPromptBuilder.Budget.passageCeiling)
+        #expect(
+            AskPromptBuilder.Budget.passageCeilingWithTool
+                < AskPromptBuilder.Budget.passageCeiling,
+        )
         #expect(with.passages.count < without.passages.count)
+    }
+
+    @Test("fifteen excerpts of the book's own prose fit inside the budget")
+    func fifteenExcerptsSurviveTheBudget() async throws {
+        // The excerpt count went to fifteen and the ceiling had to go with it.
+        // Fifteen 90-word excerpts are about 7,500 characters, which the cheap
+        // `/3.6` pre-pass scores at roughly 2,100 tokens — and that pass runs
+        // first and never un-does itself, so at the old 1,800 ceiling the set
+        // was trimmed back to about twelve before the real tokeniser was ever
+        // consulted. The change would have shipped inert, with every test in
+        // this file still green.
+        let passages = try Self.prosePassages(
+            AskRetriever.Limits.excerpts, words: PassageChunker.Limits.targetWords,
+        )
+        try #require(passages.count == AskRetriever.Limits.excerpts)
+        // The density is the whole point of using the book's own words, so it
+        // is asserted rather than assumed: *Alice* runs to about 5.35
+        // characters a word including the space, and `passage(_:words:)` above
+        // makes tokens nearly twice that wide.
+        let density = Double(passages.map(\.text.count).reduce(0, +))
+            / Double(AskRetriever.Limits.excerpts * PassageChunker.Limits.targetWords)
+        #expect(density > 4.5 && density < 6.5, "\(density) characters a word")
+
+        for hasTool in [false, true] {
+            let built = await AskPromptBuilder.build(
+                question: "What has happened so far?", ranked: Self.ranked(passages),
+                // The window a real device reports, and the estimate standing in
+                // for the real tokeniser — the conservative end of what it
+                // measures on English prose, so a pass here is not a pass bought
+                // from a lenient fake.
+                contextSize: 4_096, hasTool: hasTool,
+                tokenCount: { AskPromptBuilder.estimatedTokens($0) },
+            )
+            #expect(built.dropped == 0, "hasTool: \(hasTool)")
+            #expect(built.passages.count == AskRetriever.Limits.excerpts, "hasTool: \(hasTool)")
+        }
     }
 
     @Test("the ceiling holds even when the context window is enormous")

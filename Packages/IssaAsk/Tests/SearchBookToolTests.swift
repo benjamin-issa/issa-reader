@@ -203,14 +203,20 @@ struct SearchBookToolTests {
         // question is about the end of what has happened.
         let question = AskSuggestions.recap
 
-        // What retrieval offers the tool, so the test can name the two it
-        // should have picked without hard-coding a row of the fixture.
+        // The whole recap, so the test can name the two the tool should have
+        // picked without hard-coding a row of the fixture.
+        //
+        // A whole one rather than the tool's own two: `limit` now reaches the
+        // recap branch, so asking retrieval for two hands back exactly two and
+        // there is no choice left to assert about. Asking for the excerpt count
+        // is the same set to choose from that a reader's question offers, and
+        // `best` is nested, so its best two are the tool's two.
         let retriever = AskRetriever(
             store: store, bookUUID: AskFixture.bookUUID, boundary: boundary,
             allowsFastPath: false,
         )
         let retrieval = try await retriever.retrieve(
-            question: question, limit: SearchBookTool.passageLimit,
+            question: question, limit: AskRetriever.Limits.excerpts,
         )
         guard case let .evidence(found, _) = retrieval else {
             Issue.record("retrieval offered the tool no excerpts")

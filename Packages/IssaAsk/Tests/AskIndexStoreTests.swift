@@ -368,7 +368,9 @@ struct AskIndexStoreTests {
             in: AskFixture.bookUUID, before: boundary,
         )
         #expect(hits.contains { $0.passage.text.lowercased().contains("rabbit") })
-        #expect(try await store.recapPassages(in: AskFixture.bookUUID, before: boundary).count > 0)
+        #expect(try await store.recapPassages(
+            in: AskFixture.bookUUID, before: boundary, limit: AskRetriever.Limits.excerpts,
+        ).count > 0)
         #expect(try await store.unmetWords(
             ["zzzunlikelyword"], in: AskFixture.bookUUID, before: boundary) == ["zzzunlikelyword"])
     }
