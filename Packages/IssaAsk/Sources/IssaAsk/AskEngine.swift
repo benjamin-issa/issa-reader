@@ -216,7 +216,11 @@ public actor AskEngine {
             try Task.checkCancellation()
             continuation.yield(.phase(.thinking))
             let generated = try await generate(
-                question: sanitised, ranked: ranked, into: continuation,
+                question: sanitised, ranked: ranked,
+                options: Self.generationOptions(
+                    question: sanitised, bookUUID: source.bookUUID, boundary: boundary,
+                ),
+                into: continuation,
             )
             try Task.checkCancellation()
             continuation.yield(.answered(
@@ -236,6 +240,57 @@ public actor AskEngine {
     /// declined, this is the one line that turns it off, and every question
     /// goes back to the model with the same sentences in front of it.
     static let usesKinshipFastPath = true
+
+    /// Whether the model may sample rather than take the likeliest token.
+    ///
+    /// A kill switch in the same spirit as the one above, and false until a
+    /// measurement says otherwise. Greedy is what makes two identical asks
+    /// identical, so this is not a knob to turn on a hunch — it is turned on by
+    /// a scored replication or not at all. `seed` below is what keeps the
+    /// promise when it is turned on.
+    static let usesNucleusSampling = false
+    static let nucleusThreshold = 0.9
+    static let nucleusTemperature = 0.3
+
+    /// The seed that makes a sampled answer repeatable.
+    ///
+    /// The question, the book, and the place in it — exactly the three things
+    /// that make two asks "the same ask" to a reader. Turn back a chapter and
+    /// ask again and the seed changes, which is right, because the excerpts
+    /// changed too.
+    ///
+    /// `spineIndex` and `charOffset` and nothing else off the boundary: how the
+    /// boundary came to be fixed is not where it is, and two boundaries at the
+    /// same offset retrieve the same excerpts.
+    ///
+    /// Separated by a byte that appears in no question and no uuid, or
+    /// ("ab", "c") and ("a", "bc") would seed the same.
+    static func seed(
+        question: String, bookUUID: String, boundary: ReadingBoundary,
+    ) -> UInt64 {
+        FNV1a.hash(
+            "\(question)\u{1}\(bookUUID)\u{1}\(boundary.spineIndex)\u{1}\(boundary.charOffset)",
+        )
+    }
+
+    /// What the model is asked to do with its sampler, for this one question.
+    static func generationOptions(
+        question: String, bookUUID: String, boundary: ReadingBoundary,
+    ) -> AskGenerationOptions {
+        guard usesNucleusSampling else {
+            return AskGenerationOptions(
+                maximumResponseTokens: AskPromptBuilder.Budget.responseTokens,
+            )
+        }
+        return AskGenerationOptions(
+            maximumResponseTokens: AskPromptBuilder.Budget.responseTokens,
+            temperature: nucleusTemperature,
+            sampling: .nucleus(
+                probabilityThreshold: nucleusThreshold,
+                seed: seed(question: question, bookUUID: bookUUID, boundary: boundary),
+            ),
+        )
+    }
 
     /// Excerpts by the ordinal they were numbered with, one-based.
     ///
@@ -394,6 +449,7 @@ public actor AskEngine {
     private func generate(
         question: String,
         ranked: [PassageRanker.Ranked],
+        options: AskGenerationOptions,
         into continuation: AsyncThrowingStream<AskEvent, any Error>.Continuation,
     ) async throws -> AskAnswer {
         try await turnstile.withTurn { () async throws -> AskAnswer in
@@ -414,7 +470,7 @@ public actor AskEngine {
                 }
 
                 do {
-                    let answer = try await self.stream(built, into: continuation)
+                    let answer = try await self.stream(built, options: options, into: continuation)
                     // Resolved here, inside the attempt that survived: the retry
                     // loop means the prompt whose numbering the citations refer
                     // to is whichever one did not throw `.tooMuchContext`, and
@@ -461,6 +517,7 @@ public actor AskEngine {
 
     private func stream(
         _ built: AskPromptBuilder.Built,
+        options: AskGenerationOptions,
         into continuation: AsyncThrowingStream<AskEvent, any Error>.Continuation,
     ) async throws -> AskAnswer {
         var raw = ""
@@ -470,9 +527,7 @@ public actor AskEngine {
             instructions: AskPromptBuilder.instructions,
             prompt: built.prompt,
             tools: tools,
-            options: AskGenerationOptions(
-                maximumResponseTokens: AskPromptBuilder.Budget.responseTokens,
-            ),
+            options: options,
         )
         for try await snapshot in snapshots {
             // Per snapshot: the reader who taps Cancel expects the words to

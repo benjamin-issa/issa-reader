@@ -85,6 +85,66 @@ struct AskEngineTests {
         #expect(sent.options.maximumResponseTokens == AskPromptBuilder.Budget.responseTokens)
     }
 
+    // MARK: - The sampler
+
+    /// The reader-facing promise, in the one place it is enforced: ask the same
+    /// question twice and get the same answer, so a reader who doubts an answer
+    /// and asks again learns something from the second one.
+    @Test("greedy is what ships until a measurement says otherwise")
+    func samplingIsOffByDefault() {
+        #expect(!AskEngine.usesNucleusSampling)
+        let options = AskEngine.generationOptions(
+            question: "Who is Alice?",
+            bookUUID: AskFixture.bookUUID,
+            boundary: ReadingBoundary(spineIndex: 2, charOffset: 100),
+        )
+        #expect(options.sampling == .greedy)
+        #expect(options.temperature == 0)
+        #expect(options.maximumResponseTokens == AskPromptBuilder.Budget.responseTokens)
+    }
+
+    @Test("the seed is the question, the book and the place in it, and nothing else")
+    func theSeedIsTheWholeAsk() {
+        let boundary = ReadingBoundary(spineIndex: 2, charOffset: 100)
+        func seed(
+            _ question: String, _ book: String = "book-a", _ at: ReadingBoundary = boundary,
+        ) -> UInt64 {
+            AskEngine.seed(question: question, bookUUID: book, boundary: at)
+        }
+        #expect(seed("Who is Alice?") == seed("Who is Alice?"), "the same ask, twice")
+        #expect(seed("Who is Alice?") != seed("Who is Dinah?"))
+        #expect(seed("Who is Alice?") != seed("Who is Alice?", "book-b"))
+        // Turn back a chapter and the excerpts change, so the answer may too.
+        #expect(seed("Who is Alice?") != seed(
+            "Who is Alice?", "book-a", ReadingBoundary(spineIndex: 1, charOffset: 100),
+        ))
+        #expect(seed("Who is Alice?") != seed(
+            "Who is Alice?", "book-a", ReadingBoundary(spineIndex: 2, charOffset: 99),
+        ))
+        // Concatenation without a separator would make these one string.
+        #expect(seed("ab", "c") != seed("a", "bc"))
+    }
+
+    @Test("asking the same question twice asks the model for the same answer")
+    func theSamplerIsSeededPerQuestion() async throws {
+        let (store, source, directory) = try await AskFixture.preparedStore()
+        defer { AskFixture.remove(directory) }
+        let model = ScriptedAnswerModel()
+        let engine = AskEngine(model: model, store: store)
+        let boundary = try AskFixture.endOf(spine: AskFixture.Spine.chapterI)
+
+        for _ in 0 ..< 2 {
+            _ = await Self.drain(engine.ask(
+                question: "Who is Dinah?", source: source, boundary: boundary,
+            ))
+        }
+        let sent = await model.received
+        try #require(sent.count == 2)
+        // Whatever the sampler is set to, the two asks must agree about it —
+        // that is the property, not the particular value.
+        #expect(sent[0].options == sent[1].options)
+    }
+
     // MARK: - Citations
 
     @Test("the cited excerpts arrive with the answer, and each is one the model was shown")
