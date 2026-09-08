@@ -287,10 +287,32 @@ enum QuestionReader {
         let leading = leadingClause(of: question, words: words)
 
         if let kinship = kinship(in: leading, vocabulary: vocabulary) { return kinship }
-        if let identity = identity(in: leading, vocabulary: vocabulary) { return identity }
+        if let identity = identity(in: leading, vocabulary: vocabulary),
+           case let .identity(subject) = identity,
+           namesOneSubject(subject, vocabulary: vocabulary) { return identity }
         if let kinship = kinship(in: words, vocabulary: vocabulary) { return kinship }
         if let identity = identity(in: words, vocabulary: vocabulary) { return identity }
         return .general(generalSubject(in: words, vocabulary: vocabulary))
+    }
+
+    /// Whether an identity subject names one thing, rather than stitching two
+    /// together across a connector.
+    ///
+    /// "who is reen to vin again? her brother?" reads, on its leading clause
+    /// alone, as an identity question about `["reen", "vin"]` — and a two-token
+    /// subject is required of every passage *together*, so retrieval kept the
+    /// paragraphs that name both and lost every sentence that says what Reen was
+    /// to her. Every answer in a sixteen-arm run then named the wrong man as her
+    /// brother. It is a kinship question wearing an identity question's clothes,
+    /// and the reader's own next clause says which.
+    ///
+    /// Counting known names rather than tokens, because a real multi-word name
+    /// has one: the index knows "rabbit", not "white". And a subject rejected
+    /// here is not thrown away — it falls through to the whole-question reading,
+    /// which for a one-clause question is the same words and so the same answer.
+    /// Only a question with a later clause can be re-read by this.
+    static func namesOneSubject(_ subject: Subject, vocabulary: Vocabulary) -> Bool {
+        subject.tokens.filter(vocabulary.known.contains).count < 2
     }
 
     /// The words of the question's first sentence.

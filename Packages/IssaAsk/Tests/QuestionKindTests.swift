@@ -382,6 +382,36 @@ struct QuestionKindTests {
     /// Deciding on the leading clause must not mean *ignoring* the rest: a
     /// reader who opens with an apology and then asks a kinship question has
     /// still asked a kinship question.
+    /// Found by re-running the measured questions after the leading-clause rule
+    /// landed: this one regressed from a correct answer to sixteen wrong ones,
+    /// every arm naming a different man as Vin's brother.
+    @Test("a leading clause that names two people is not an identity question")
+    func aSubjectStitchedFromTwoNamesIsNotIdentity() {
+        // "who is X to Y" asks about a relationship, but on its leading clause
+        // alone it reads as identity with a subject of ["reen", "vin"] — and a
+        // two-token subject must appear in a passage *together*, so retrieval
+        // kept the paragraphs naming both and lost every sentence that says what
+        // Reen was to her.
+        let subject = Self.subject(
+            "who is reen to vin again? her brother? and what happened to him",
+            known: ["vin", "reen", "camon", "dockson"],
+        )
+        #expect(subject?.tokens == ["reen"], "the subject is the person asked about")
+    }
+
+    @Test("a two-word name is still one subject")
+    func aMultiWordNameSurvives() {
+        // The guard counts known names, not tokens, because a real multi-word
+        // name has one of them: the index knows "rabbit", not "white". And a
+        // subject it rejects falls through to the whole-question reading, which
+        // for a one-clause question is the same words — so this holds whether or
+        // not the index happens to know both halves.
+        #expect(Self.subject("Who is the White Rabbit?", known: ["white rabbit", "rabbit"])?
+            .tokens == ["white", "rabbit"])
+        #expect(Self.subject("Who is the White Rabbit?", known: ["white", "rabbit"])?
+            .tokens == ["white", "rabbit"])
+    }
+
     @Test("a kinship question after an aside is still found")
     func aKinshipQuestionAfterAnAsideIsStillFound() {
         let kind = Self.kind("sorry i lost track. who is Vin's brother?", known: ["vin"])
