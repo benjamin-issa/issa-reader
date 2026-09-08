@@ -267,14 +267,53 @@ enum QuestionReader {
     /// before identity, because "Who is Alice's sister?" is both a "who is"
     /// question and a kinship one and only the kinship reading finds the
     /// sentence that answers it.
+    ///
+    /// **The leading clause decides, and the whole question is consulted only
+    /// when the leading clause claims nothing.** A reader who has lost the
+    /// thread does not type one clean sentence. Measured against *Mistborn*:
+    /// "wait who is marsh again? he's kelsier's brother right? but isn't he one
+    /// of the ministry people" was read as a kinship question about `kelsier`,
+    /// so retrieval hunted family words near Kelsier and returned his two
+    /// earliest mentions. The Ministry storyline the reader was asking about was
+    /// never retrieved; four settings answered "The story hasn't revealed that
+    /// yet" about a character named 157 times in what that reader had read. It
+    /// scored 2.04/10, the worst of the ten questions in the trial. The aside is
+    /// the reader checking their own memory, not the question — and the question
+    /// is the clause they opened with.
     static func kind(of question: String, vocabulary: Vocabulary) -> QuestionKind {
         guard !QueryTerms.isRecapQuestion(question) else { return .recap }
         let words = Self.words(in: question)
         guard !words.isEmpty else { return .general(nil) }
+        let leading = leadingClause(of: question, words: words)
 
+        if let kinship = kinship(in: leading, vocabulary: vocabulary) { return kinship }
+        if let identity = identity(in: leading, vocabulary: vocabulary) { return identity }
         if let kinship = kinship(in: words, vocabulary: vocabulary) { return kinship }
         if let identity = identity(in: words, vocabulary: vocabulary) { return identity }
         return .general(generalSubject(in: words, vocabulary: vocabulary))
+    }
+
+    /// The words of the question's first sentence.
+    ///
+    /// Split with `SentenceSplitter`, which is the splitter the book's own
+    /// sentences go through, so "Who is Mr. Darcy's sister?" is one clause here
+    /// for the same reason it is one sentence there. A second spelling of "where
+    /// does a sentence end" is how "Mr." becomes a clause boundary.
+    ///
+    /// **A one-sentence question returns the caller's own array**, so
+    /// classification is not merely equal to what it was before this existed but
+    /// runs on the identical value. Every case in `QuestionKindTests` and every
+    /// fixture question is one sentence, which is what makes the four-step order
+    /// above safe to ship: it can only change a question that has a second
+    /// sentence to be wrong about.
+    ///
+    /// Commas are deliberately not clause boundaries. Splitting on them too
+    /// would reach more of the questions readers type, and it would cost exactly
+    /// the property this paragraph is about.
+    static func leadingClause(of question: String, words: [Words.Word]) -> [Words.Word] {
+        let sentences = SentenceSplitter.ranges(in: question)
+        guard sentences.count > 1, let first = sentences.first else { return words }
+        return Self.words(in: (question as NSString).substring(with: first))
     }
 
     // MARK: Kinship
@@ -379,11 +418,34 @@ enum QuestionReader {
         "in", "the", "this", "book", "story", "novel", "anyway",
     ]
 
+    /// Filler that opens a question without being part of it, mirroring
+    /// `identityTrailers` at the other end.
+    ///
+    /// A reader interrupting their own reading writes "wait who is marsh
+    /// again?", and the lead-in table is matched against the *start* of the
+    /// question, so one word of hesitation is the difference between a name
+    /// lookup and a BM25 search over the whole sentence.
+    ///
+    /// `well` and `right` are deliberately absent. Both are ordinary nouns, and
+    /// a word in this set is dropped from the front of every question that opens
+    /// with it — including the reader asking what the well is.
+    static let leadingFillers: Set<String> = [
+        "wait", "ok", "okay", "um", "uh", "hmm", "hey", "so", "and", "but",
+        "also", "sorry", "actually",
+    ]
+
     /// The most content words a subject can be before this stops being a
     /// question about a person and starts being a question about a situation.
     static let maximumSubjectTokens = 4
 
     static func identity(in words: [Words.Word], vocabulary: Vocabulary) -> QuestionKind? {
+        // Before the lead-in match, not after it: the table is matched against
+        // the start of the question, so "wait who is marsh again?" reaches no
+        // lead-in at all while the hesitation is still there.
+        var words = words
+        while let first = words.first, leadingFillers.contains(first.token) {
+            words.removeFirst()
+        }
         let tokens = words.map(\.token)
         guard let leadIn = identityLeadIns.first(where: { tokens.starts(with: $0) })
         else { return nil }

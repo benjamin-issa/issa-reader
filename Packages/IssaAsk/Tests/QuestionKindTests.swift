@@ -317,4 +317,136 @@ struct QuestionKindTests {
         #expect(kinship.label == "kinship")
         #expect(kinship.subject?.tokens == ["josiah"])
     }
+
+    // MARK: - The question is the clause it opens with
+
+    /// The worst question in the *Mistborn* trial, at 2.04/10.
+    ///
+    /// The reader has lost the thread and is checking their own memory out loud.
+    /// The relation word belongs to the aside, not to what they want to know,
+    /// but it was the only one in the question — so retrieval hunted family
+    /// words near Kelsier and returned his two earliest mentions, and the
+    /// Ministry storyline that was actually being asked about was never
+    /// retrieved. Four of the settings measured answered "The story hasn't
+    /// revealed that yet" about a character named 157 times in what that reader
+    /// had already read.
+    @Test("a kinship aside does not become the question")
+    func aKinshipAsideIsNotTheQuestion() {
+        let question = "wait who is marsh again? he's kelsier's brother right? "
+            + "but isn't he one of the ministry people"
+        let kind = Self.kind(question, known: ["marsh", "kelsier"])
+        guard case let .identity(subject) = kind else {
+            Issue.record("classified as \(kind.label)")
+            return
+        }
+        #expect(subject.tokens == ["marsh"])
+        #expect(subject.isKnownName)
+
+        // And this is the reading it replaced, kept so that collapsing the four
+        // steps back into two fails here rather than in a trial six months from
+        // now: read all at once, the question is a kinship question about the
+        // wrong person entirely.
+        let hijacked = QuestionReader.kinship(
+            in: QuestionReader.words(in: question),
+            vocabulary: Vocabulary(known: ["marsh", "kelsier"]),
+        )
+        #expect(hijacked?.subject?.tokens == ["kelsier"])
+    }
+
+    /// The other direction, and the reason the leading clause is still tried for
+    /// kinship before identity.
+    ///
+    /// "Who is Vin's brother?" declines identity on its own — a possessive means
+    /// the question is about somebody's *something* — but "Who is the brother of
+    /// Vin?" has no possessive to decline on, and identity would happily take
+    /// "brother vin" for a name. Only the kinship reading finds the sentence.
+    @Test("a leading kinship clause still wins")
+    func aLeadingKinshipClauseStillWins() {
+        for question in [
+            "Who is the brother of Vin?",
+            "Who is Vin's brother? I forget.",
+            "Who was Vin's younger brother? he gets mentioned early on",
+        ] {
+            let kind = Self.kind(question, known: ["vin"])
+            guard case let .kinship(subject, relation, _, _) = kind else {
+                Issue.record("\(question) classified as \(kind.label)")
+                continue
+            }
+            #expect(subject.tokens == ["vin"], "\(question)")
+            #expect(relation?.word == "brother", "\(question)")
+        }
+    }
+
+    /// A leading clause that claims nothing hands the whole question back.
+    ///
+    /// Deciding on the leading clause must not mean *ignoring* the rest: a
+    /// reader who opens with an apology and then asks a kinship question has
+    /// still asked a kinship question.
+    @Test("a kinship question after an aside is still found")
+    func aKinshipQuestionAfterAnAsideIsStillFound() {
+        let kind = Self.kind("sorry i lost track. who is Vin's brother?", known: ["vin"])
+        guard case let .kinship(subject, relation, _, _) = kind else {
+            Issue.record("classified as \(kind.label)")
+            return
+        }
+        #expect(subject.tokens == ["vin"])
+        #expect(relation?.word == "brother")
+    }
+
+    /// …and the same for identity, which is the fourth and last step.
+    @Test("an identity question after an aside is still found")
+    func anIdentityQuestionAfterAnAsideIsStillFound() {
+        #expect(Self.kind("wait. who is Vin?", known: ["vin"]).subject?.tokens == ["vin"])
+        #expect(Self.kind("ok. tell me about Dinah").label == "identity")
+    }
+
+    /// The property the whole change rests on.
+    ///
+    /// For a question of one sentence the leading clause *is* the question, so
+    /// classification runs on the identical array it ran on before any of this
+    /// existed. Every other case in this file and every fixture question is one
+    /// sentence, which is why they stay green by construction rather than by
+    /// luck — and the honorific is why the clause splitter has to be
+    /// `SentenceSplitter` rather than a second opinion about full stops.
+    @Test(
+        "one sentence is one clause",
+        arguments: [
+            "Who is Vin?",
+            "Who is Mr. Darcy's sister?",
+            "Who was the Lord Ruler really?",
+            "Is Reen Vin's brother?",
+            "How are Vin and Elend related?",
+            "What is Alice's cat called?",
+            "Tell me about Dinah",
+            "Who is the man standing by the river bank waiting?",
+            "Was' brother Reen?",
+        ],
+    )
+    func oneSentenceIsOneClause(question: String) {
+        let sanitised = QueryTerms.sanitise(question)
+        #expect(SentenceSplitter.ranges(in: sanitised).count == 1, "\(question)")
+        let words = QuestionReader.words(in: sanitised)
+        #expect(
+            QuestionReader.leadingClause(of: sanitised, words: words) == words,
+            "\(question)",
+        )
+    }
+
+    /// Hesitation at the front of a question is not part of the question.
+    @Test("a leading filler is dropped")
+    func leadingFillerIsDropped() {
+        for question in ["so who is Vin?", "wait who is Vin?", "um, who is Vin?"] {
+            let kind = Self.kind(question, known: ["vin"])
+            guard case let .identity(subject) = kind else {
+                Issue.record("\(question) classified as \(kind.label)")
+                continue
+            }
+            #expect(subject.tokens == ["vin"], "\(question)")
+        }
+        // Deliberately not fillers. A word in the set is dropped from the front
+        // of every question that opens with it, and both of these are ordinary
+        // nouns a reader can be asking about.
+        #expect(!QuestionReader.leadingFillers.contains("well"))
+        #expect(!QuestionReader.leadingFillers.contains("right"))
+    }
 }
