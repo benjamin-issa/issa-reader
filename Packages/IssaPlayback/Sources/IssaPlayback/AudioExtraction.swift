@@ -101,13 +101,15 @@ public enum AudioExtraction {
         let flattened = normalized.replacingOccurrences(of: "/", with: "_")
         // Long hrefs would blow the 255-byte component limit, so anything
         // unreasonable is hashed instead — stably, so the file is found again.
+        //
+        // `normalized`, not `flattened`: the flattening is only how the short
+        // name avoids a path separator, while the normalised href is the
+        // identity two spellings of one file have to agree on. Through `FNV1a`
+        // rather than a loop of its own, because these names are on devices and
+        // a second copy of the loop is a second answer about what they are.
         guard flattened.utf8.count <= 200 else {
-            var hash: UInt64 = 0xcbf2_9ce4_8422_2325
-            for byte in Data(normalized.utf8) {
-                hash = (hash ^ UInt64(byte)) &* 0x100_0000_01b3
-            }
             let ext = (normalized as NSString).pathExtension
-            return "audio-\(String(hash, radix: 16))." + (ext.isEmpty ? "mp3" : ext)
+            return "audio-\(FNV1a.hexadecimal(normalized))." + (ext.isEmpty ? "mp3" : ext)
         }
         return flattened
     }

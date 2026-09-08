@@ -720,5 +720,25 @@ struct AudioExtractionNamingTests {
         #expect(name.utf8.count <= 255)
         #expect(name.hasSuffix(".mp3"))
         #expect(name == AudioExtraction.filename(for: long), "and stable, so it is found again")
+        // The exact name, captured off the shipped loop before it was replaced
+        // by `FNV1a`. Files with these names are on devices already, and a hash
+        // that moves re-extracts every narration in the library while the old
+        // files sit beside the new ones for good.
+        #expect(name == "audio-3067f05050aa961d.mp3")
+    }
+
+    /// The same file spelled the way a producer writes it.
+    ///
+    /// Hashing the *spelling* rather than the normalised path would give this
+    /// href a second file, and neither the writer nor the timeline asking for
+    /// it would agree on which. `flattened` is only the sanity check on length;
+    /// `normalized` is the identity.
+    @Test("a long href is normalised before it is hashed, not after")
+    func longHrefsAreNormalisedBeforeHashing() {
+        let written = "./Audio/" + String(repeating: "deep/", count: 60) + "x/../track.mp3"
+        let name = AudioExtraction.filename(for: written)
+        #expect(name == "audio-3067f05050aa961d.mp3")
+        #expect(name == AudioExtraction.filename(
+            for: "Audio/" + String(repeating: "deep/", count: 60) + "track.mp3"))
     }
 }
