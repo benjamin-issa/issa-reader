@@ -104,4 +104,27 @@ struct SystemAnswerModelTests {
         #expect(AskAvailability.current().isReady)
     }
 }
+
+/// The translation between the engine's sampler and the framework's.
+///
+/// Deliberately outside the suite above: this needs the SDK but not the model,
+/// so unlike everything else in this file it runs on any machine that can
+/// compile FoundationModels — including the ones where the gated suite is
+/// skipped, which is where a dropped seed would otherwise go unnoticed.
+struct SamplingModeTests {
+    @Test("greedy stays greedy, and a seed reaches the framework intact")
+    func samplingIsTranslated() {
+        #expect(SystemAnswerModel.sampling(for: .greedy) == .greedy)
+        #expect(
+            SystemAnswerModel.sampling(for: .nucleus(probabilityThreshold: 0.9, seed: 42))
+                == .random(probabilityThreshold: 0.9, seed: 42),
+        )
+        // A seed that did not arrive and a seed that did are the difference
+        // between "ask again" and "roll again", and both compile.
+        #expect(
+            SystemAnswerModel.sampling(for: .nucleus(probabilityThreshold: 0.9, seed: 42))
+                != .random(probabilityThreshold: 0.9, seed: 43),
+        )
+    }
+}
 #endif

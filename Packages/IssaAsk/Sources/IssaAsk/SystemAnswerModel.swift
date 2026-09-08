@@ -21,9 +21,12 @@ import IssaCore
 ///   answer, nothing stored. A reused session carries the previous question's
 ///   excerpts in its transcript, which is both context spent for nothing and a
 ///   spoiler leak the moment the reader turns back a chapter and asks again.
-/// - **Greedy, temperature zero.** The same question about the same book gives
-///   the same answer twice, so a reader who doubts an answer and asks again can
-///   tell whether anything actually changed.
+/// - **Greedy by default, and seeded when it is not.** The same question about
+///   the same book gives the same answer twice, so a reader who doubts an answer
+///   and asks again can tell whether anything actually changed. Greedy gets that
+///   for free; the engine may ask for nucleus sampling instead, and when it does
+///   it supplies a seed derived from the question, the book and the reading
+///   position — the three things that make two asks the same ask.
 public struct SystemAnswerModel: AnswerModel {
     private let model: SystemLanguageModel
 
@@ -93,7 +96,7 @@ public struct SystemAnswerModel: AnswerModel {
                     let snapshots = session.streamResponse(
                         to: prompt,
                         options: GenerationOptions(
-                            sampling: .greedy,
+                            sampling: Self.sampling(for: options.sampling),
                             temperature: options.temperature,
                             maximumResponseTokens: options.maximumResponseTokens,
                         ),
@@ -109,6 +112,26 @@ public struct SystemAnswerModel: AnswerModel {
                 }
             }
             continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    /// The engine's sampler in the framework's terms.
+    ///
+    /// The only translation between the two vocabularies, which is what keeps
+    /// `AskGenerationOptions` free of FoundationModels — and that is what keeps
+    /// the pipeline testable without a model, and tvOS compiling at all.
+    ///
+    /// Internal rather than private so the mapping can be asserted without a
+    /// model: a seed that failed to arrive and a seed that arrived are the
+    /// difference between "ask again" and "roll again", and both compile.
+    static func sampling(
+        for sampling: AskGenerationOptions.Sampling,
+    ) -> GenerationOptions.SamplingMode {
+        switch sampling {
+        case .greedy:
+            .greedy
+        case let .nucleus(threshold, seed):
+            .random(probabilityThreshold: threshold, seed: seed)
         }
     }
 

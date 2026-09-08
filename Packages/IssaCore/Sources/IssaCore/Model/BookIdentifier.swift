@@ -57,19 +57,12 @@ public extension String {
     ///
     /// FNV-1a, and byte-for-byte the spelling both call sites already shipped:
     /// files named `unsafe-<hash>` exist on devices, and must still be found.
+    ///
+    /// The loop itself lives in `FNV1a` rather than here, because the Ask
+    /// engine's sampler seed needs the same arithmetic and a second copy of it
+    /// would be a second answer to "is this the same book?".
     var safePathComponent: String {
-        isBareUUID ? self : "unsafe-\(fnv1a64)"
-    }
-
-    /// 64-bit FNV-1a in hexadecimal. Not a security property — it is only here
-    /// to be stable and to contain no separator — so a non-cryptographic hash
-    /// with no dependency is the right size of tool.
-    private var fnv1a64: String {
-        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
-        for byte in Data(utf8) {
-            hash = (hash ^ UInt64(byte)) &* 0x100_0000_01b3
-        }
-        return String(hash, radix: 16)
+        isBareUUID ? self : "unsafe-\(FNV1a.hexadecimal(self))"
     }
 }
 

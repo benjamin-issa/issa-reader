@@ -116,6 +116,23 @@ struct BookIdentifierTests {
         #expect(uuid.safePathComponent == uuid,
                 "hashing the valid case would rename every file already on a device")
     }
+
+    /// The hash moved into `FNV1a` so the Ask engine's sampler seed could share
+    /// it. These are the values the old private copy produced, written down so
+    /// the move is provably a move: a path that writes a file and a path that
+    /// deletes it cannot be allowed to disagree about where it lives, and
+    /// `unsafe-<hash>` files already exist on devices.
+    ///
+    /// Note the fifteen digits on `".."`. `String(_:radix:)` drops the leading
+    /// zero, and that is the spelling that shipped.
+    @Test("the hash is still the one already written on devices")
+    func theHashIsTheSpellingAlreadyOnDisk() {
+        #expect("..".safePathComponent == "unsafe-7da1a07b4a03f2d")
+        #expect("../".safePathComponent == "unsafe-f7d93d17ec4b1066")
+        #expect(FNV1a.hash("a") == 0xaf63_dc4c_8601_ec8c)
+        #expect(FNV1a.hash("") == 0xcbf2_9ce4_8422_2325, "the offset basis, unmixed")
+        #expect(FNV1a.hexadecimal("a") == "af63dc4c8601ec8c")
+    }
 }
 
 @Suite("The catalogue refuses entries it cannot safely name")

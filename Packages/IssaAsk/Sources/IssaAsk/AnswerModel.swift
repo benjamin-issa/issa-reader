@@ -101,16 +101,37 @@ public extension AskTool {
 
 /// What the engine asks the model to do with its sampler.
 ///
-/// Greedy and zero temperature are not a style choice: the same question about
-/// the same book must give the same answer twice, or a reader who asks again
-/// after a wrong answer cannot tell whether anything changed.
+/// The same question about the same book must give the same answer twice, or a
+/// reader who asks again after a wrong answer cannot tell whether anything
+/// changed. Greedy gets that for free. Sampling gets it from a seed, and only
+/// from a seed — which is why `nucleus` has no case without one.
 public struct AskGenerationOptions: Sendable, Hashable {
+    /// How the model picks its next token, in terms the engine can hold without
+    /// importing FoundationModels.
+    public enum Sampling: Sendable, Hashable {
+        /// The likeliest token, every time.
+        case greedy
+        /// Nucleus sampling, with a fixed seed.
+        ///
+        /// The seed is not an optimisation, it is the product. Sampling without
+        /// one turns "ask again" into a coin toss dressed up as a second
+        /// opinion: the reader who doubts an answer gets a different one and
+        /// learns nothing about which to believe.
+        case nucleus(probabilityThreshold: Double, seed: UInt64)
+    }
+
     public var maximumResponseTokens: Int
     public var temperature: Double
+    public var sampling: Sampling
 
-    public init(maximumResponseTokens: Int = 250, temperature: Double = 0) {
+    public init(
+        maximumResponseTokens: Int = 250,
+        temperature: Double = 0,
+        sampling: Sampling = .greedy,
+    ) {
         self.maximumResponseTokens = maximumResponseTokens
         self.temperature = temperature
+        self.sampling = sampling
     }
 }
 
