@@ -222,7 +222,10 @@ public actor AskEngine {
         case let .answered(answer, evidence):
             continuation.yield(.answered(
                 try await vetted(
-                    AskAnswerParser.resolving(answer, among: Self.numbered(evidence.map(\.passage))),
+                    AskAnswerParser.resolving(
+                        answer, among: Self.numbered(evidence.map(\.passage)),
+                        priorities: Self.priorities(of: evidence),
+                    ),
                     question: sanitised,
                     bookUUID: source.bookUUID, boundary: boundary,
                 ),
@@ -326,6 +329,19 @@ public actor AskEngine {
     /// both count from the same place.
     static func numbered(_ passages: [Passage]) -> [Int: Passage] {
         Dictionary(uniqueKeysWithValues: passages.enumerated().map { ($0.offset + 1, $0.element) })
+    }
+
+    /// Each excerpt's place in the ranker's sort, for the sources row to pick
+    /// the strongest three with.
+    ///
+    /// Keyed by passage rather than by ordinal, because the ordinal belongs to
+    /// the prompt's numbering — which the `searchBook` tool continues — while
+    /// the priority belongs to the passage that was ranked. `uniquingKeysWith:
+    /// min`: the kinship path can rank one passage twice, once as the window
+    /// holding the kin sentence and once as context, and the better of the two
+    /// is the one that describes it.
+    static func priorities(of ranked: [PassageRanker.Ranked]) -> [Passage: Int] {
+        Dictionary(ranked.map { ($0.passage, $0.priority) }, uniquingKeysWith: min)
     }
 
     // MARK: - Vetting the answer
@@ -509,7 +525,12 @@ public actor AskEngine {
                         // prompt and the tool's copy is what the model saw last.
                         shown.merge(await tool.passagesShown()) { _, fromTool in fromTool }
                     }
-                    return AskAnswerParser.resolving(answer, among: shown)
+                    // From this attempt's ranking, not the whole retrieval: the
+                    // numbering the citations refer to is this prompt's, and a
+                    // passage the retry dropped is not in it to be shown.
+                    return AskAnswerParser.resolving(
+                        answer, among: shown, priorities: Self.priorities(of: attempt),
+                    )
                 } catch let failure as AskFailure where failure == .tooMuchContext {
                     lastFailure = failure
                     IssaLog.info("ask prompt too large", [

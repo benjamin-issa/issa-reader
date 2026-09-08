@@ -6,11 +6,53 @@ public struct AskSource: Sendable, Hashable, Identifiable {
     public var ordinal: Int
     /// Real chapter offsets, so tapping it can open the book there.
     public var passage: Passage
+    /// Where this excerpt came in the ranker's own sort, lowest first — the
+    /// `PassageRanker.Ranked.priority` the prompt was packed from.
+    ///
+    /// Optional because the `searchBook` tool numbers excerpts the ranker never
+    /// scored: they are in the prompt because the model asked for them, and
+    /// there is no rank to report. Those sort last rather than first, so an
+    /// unranked excerpt never displaces one the retrieval chose.
+    public var priority: Int?
     public var id: Int { ordinal }
 
-    public init(ordinal: Int, passage: Passage) {
+    /// - Parameter priority: last and defaulted, so the two test targets that
+    ///   build a source by hand are untouched.
+    public init(ordinal: Int, passage: Passage, priority: Int? = nil) {
         self.ordinal = ordinal
         self.passage = passage
+        self.priority = priority
+    }
+
+    /// The strongest `limit` of these, in the order the model cited them.
+    ///
+    /// Two orders at once, and both matter. *Which* to keep is the ranker's
+    /// question — a recap hands the model fifteen excerpts in book order and the
+    /// row was showing the first three, which is the opening of what the reader
+    /// has read rather than the evidence the answer leans on. *What order to
+    /// show them in* is the answer's — the citations arrive in the order the
+    /// prose used them, and re-sorting the chips by rank would put the third
+    /// sentence's excerpt in front of the first's.
+    ///
+    /// Ties break on the ordinal so the result is stable; an excerpt with no
+    /// priority sorts behind every excerpt that has one.
+    public static func best(_ sources: [AskSource], limit: Int) -> [AskSource] {
+        guard sources.count > limit else { return sources }
+        let strongest = Set(
+            sources
+                .sorted { left, right in
+                    switch (left.priority, right.priority) {
+                    case let (leftRank?, rightRank?):
+                        leftRank == rightRank ? left.ordinal < right.ordinal : leftRank < rightRank
+                    case (nil, _?): false
+                    case (_?, nil): true
+                    case (nil, nil): left.ordinal < right.ordinal
+                    }
+                }
+                .prefix(limit)
+                .map(\.ordinal),
+        )
+        return sources.filter { strongest.contains($0.ordinal) }
     }
 }
 
@@ -120,11 +162,19 @@ public enum AskAnswerParser {
     /// only defences were the ordinal being in range — and `4` from
     /// "Sources: 1 and 2 (Section 4)" is in range while naming the wrong
     /// paragraph entirely.
-    public static func sources(for citations: [Int], among shown: [Int: Passage]) -> [AskSource] {
+    ///
+    /// - Parameter priorities: each excerpt's place in the ranker's sort, by
+    ///   passage rather than by ordinal — the ordinal is the prompt's numbering
+    ///   and the tool continues it, while the passage is the thing that was
+    ///   ranked. An excerpt missing from the map carries no priority, which is
+    ///   what a tool excerpt is.
+    public static func sources(
+        for citations: [Int], among shown: [Int: Passage], priorities: [Passage: Int] = [:],
+    ) -> [AskSource] {
         var seen: Set<Int> = []
         return citations.compactMap { ordinal in
             guard seen.insert(ordinal).inserted, let passage = shown[ordinal] else { return nil }
-            return AskSource(ordinal: ordinal, passage: passage)
+            return AskSource(ordinal: ordinal, passage: passage, priority: priorities[passage])
         }
     }
 
@@ -134,9 +184,11 @@ public enum AskAnswerParser {
     /// Separate from `parse` because the numbering is not known there: the
     /// excerpts are numbered by the prompt builder, continued by the
     /// `searchBook` tool, and only the engine holds both halves.
-    public static func resolving(_ answer: AskAnswer, among shown: [Int: Passage]) -> AskAnswer {
+    public static func resolving(
+        _ answer: AskAnswer, among shown: [Int: Passage], priorities: [Passage: Int] = [:],
+    ) -> AskAnswer {
         var resolved = answer
-        resolved.sources = sources(for: answer.citations, among: shown)
+        resolved.sources = sources(for: answer.citations, among: shown, priorities: priorities)
         return resolved
     }
 

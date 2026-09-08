@@ -236,6 +236,35 @@ struct AskEngineTests {
         }
     }
 
+    /// What `AskSourcesRow` picks its three chips with.
+    ///
+    /// Without a rank the row took the first three citations, which for a recap
+    /// — fifteen excerpts, in book order — is the opening of what the reader has
+    /// read rather than the evidence the answer leans on.
+    @Test("every cited excerpt comes back with the rank the retrieval gave it")
+    func citedExcerptsCarryTheirRank() async throws {
+        let (store, source, directory) = try await AskFixture.preparedStore()
+        defer { AskFixture.remove(directory) }
+        let model = ScriptedAnswerModel(turns: [
+            .answer("Alice follows a white rabbit down a hole.\nSources: 1, 2, 3"),
+        ])
+        let engine = AskEngine(model: model, store: store)
+
+        let (events, failure) = await Self.drain(engine.ask(
+            question: "What did Alice follow down the hole?", source: source,
+            boundary: try AskFixture.endOf(spine: AskFixture.Spine.chapterI),
+        ))
+        #expect(failure == nil)
+        let answer = try #require(Self.answer(events))
+        try #require(answer.sources.count == 3)
+
+        let ranks = answer.sources.map(\.priority)
+        #expect(!ranks.contains(nil), "the ranker scored every excerpt in the prompt")
+        #expect(Set(ranks).count == ranks.count, "and no two of them hold the same place")
+        // The chips the row would draw, in the order the answer cited them.
+        #expect(AskSource.best(answer.sources, limit: 2).count == 2)
+    }
+
     @Test("an ordinal the prompt never numbered resolves to nothing")
     func anInventedOrdinalResolvesToNothing() async throws {
         let (store, source, directory) = try await AskFixture.preparedStore()
@@ -664,6 +693,10 @@ struct AskEngineTests {
         let cited = try #require(answer.sources.first)
         #expect(cited.ordinal == answer.citations.first)
         #expect(cited.passage.displayText.contains("Dask"))
+        // And it carries its place in the evidence, like a generated answer's
+        // sources do — this path resolves against its own array, not the
+        // prompt's, and used to hand the row nothing to choose with.
+        #expect(cited.priority != nil)
         // And nothing generated it, so the sheet must not claim a model did.
         #expect(answer.origin == .book)
         // Nothing to think about, so nothing to wait for: no model call, and no

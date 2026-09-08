@@ -94,6 +94,71 @@ struct AskAnswerParserTests {
         #expect(answer.sources.isEmpty)
     }
 
+    // MARK: - Which three the row shows
+
+    /// A cited excerpt with a rank of the test's choosing.
+    static func source(_ ordinal: Int, priority: Int?) -> AskSource {
+        AskSource(
+            ordinal: ordinal,
+            passage: Passage(
+                spineIndex: ordinal, ordinal: 0, start: 0, end: 10, words: 2,
+                text: "excerpt \(ordinal)",
+            ),
+            priority: priority,
+        )
+    }
+
+    @Test("the row keeps the strongest few, in the order they were cited")
+    func bestKeepsTheStrongestInCitedOrder() {
+        // The stamp a recap leaves: retrieval hands the model fifteen excerpts
+        // in book order while the ranker's own sort runs the other way, so
+        // taking the first three kept the three the answer leans on least.
+        let sources = (1 ... 5).map { Self.source($0, priority: 5 - $0) }
+        #expect(AskSource.best(sources, limit: 3).map(\.ordinal) == [3, 4, 5])
+        // Cited order, not rank order. The citations arrive in the order the
+        // prose used them, and sorting the chips by rank would put the third
+        // sentence's excerpt in front of the first's.
+        #expect(AskSource.best(sources, limit: 3).map(\.priority) == [2, 1, 0])
+
+        // An excerpt the ranker never scored — the `searchBook` tool's — sorts
+        // behind every excerpt that has a rank rather than in front of them.
+        // Cited first, so its position cannot be what saves the ranked five.
+        let withTool = [Self.source(6, priority: nil)] + sources
+        #expect(AskSource.best(withTool, limit: 3).map(\.ordinal) == [3, 4, 5])
+        #expect(AskSource.best(withTool, limit: 5).map(\.ordinal) == [1, 2, 3, 4, 5])
+
+        // Nothing to choose between: the input, untouched.
+        let two = Array(sources.prefix(2))
+        #expect(AskSource.best(two, limit: 3) == two)
+    }
+
+    @Test("two excerpts of equal rank are separated by their ordinal, not by chance")
+    func bestBreaksTiesOnTheOrdinal() {
+        let tied = [3, 1, 2].map { Self.source($0, priority: 0) }
+        #expect(AskSource.best(tied, limit: 2).map(\.ordinal) == [1, 2])
+        // And two unranked excerpts are ordered the same way.
+        let unranked = [3, 1, 2].map { Self.source($0, priority: nil) }
+        #expect(AskSource.best(unranked, limit: 2).map(\.ordinal) == [1, 2])
+    }
+
+    @Test("resolving stamps each source with the rank of the passage it names")
+    func resolvingCarriesThePriority() {
+        let shown = Self.shown(3)
+        let priorities = Dictionary(uniqueKeysWithValues: (1 ... 3).map { (shown[$0]!, 3 - $0) })
+        let answer = AskAnswerParser.resolving(
+            AskAnswer(text: "She fell.", citations: [3, 1], notYetRevealed: false),
+            among: shown, priorities: priorities,
+        )
+        #expect(answer.sources.map(\.priority) == [0, 2])
+        // A passage the ranker never saw carries nothing rather than a zero,
+        // which would make a tool excerpt the strongest thing in the row.
+        let unranked = AskAnswerParser.resolving(
+            AskAnswer(text: "She fell.", citations: [2], notYetRevealed: false),
+            among: shown,
+        )
+        #expect(unranked.sources.map(\.priority) == [nil])
+    }
+
     // MARK: - Where the answer came from
 
     @Test("the sentinel discloses nothing, because nothing was generated")

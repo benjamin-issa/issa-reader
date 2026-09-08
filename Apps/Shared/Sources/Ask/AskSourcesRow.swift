@@ -56,9 +56,16 @@ struct AskSourcesRow: View {
     /// Three. A fourth chip wraps to a second row on a phone, and by the fourth
     /// excerpt the model is citing everything it was handed rather than what it
     /// used.
+    ///
+    /// The number was tuned when a question retrieved six excerpts. It now
+    /// retrieves fifteen, and this used to be `prefix(3)` — so a recap, whose
+    /// citations arrive in book order, showed the opening of what the reader had
+    /// read rather than the evidence the answer leans on. Three chips is still
+    /// right for the row; *which* three is `AskSource.best`'s question, and it
+    /// asks the ranker.
     static let limit = 3
 
-    private var shown: [AskSource] { Array(sources.prefix(Self.limit)) }
+    private var shown: [AskSource] { AskSource.best(sources, limit: Self.limit) }
 
     private var openOrdinal: Int? { AskSourcesOpening.ordinal(opened, in: shown) }
 
