@@ -2055,10 +2055,18 @@ public final class AppModel {
                     base: service.trackBase(for: book.uuid),
                     cookies: await service.playbackCookies(for: book.uuid),
                 )
-            await attachListening(
+            let attached = await attachListening(
                 manifest: manifest, source: source, chapters: [], timeline: nil,
                 manifestKind: .original,
                 book: book, nowPlaying: nowPlaying, settings: settings)
+            // A start that produced no audio must not leave the book sitting in
+            // the listening slot. `declined` has already set `listeningError`,
+            // which is what CarPlay reads back — but `playingBookUUID`, the
+            // mini bar and the lock screen all read `listeningBook`, and a
+            // coordinator holding nothing would keep claiming the book until
+            // the next start. There is nowhere left to fall back to here: this
+            // *is* the fall-back.
+            if attached == .wouldNotPlay { stopListening(nowPlaying: nowPlaying) }
         } catch {
             IssaLog.failure("start listening", error, ["book": book.title])
             listeningError = Self.message(for: error)
