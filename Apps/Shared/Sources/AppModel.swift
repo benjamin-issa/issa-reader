@@ -1344,6 +1344,149 @@ public final class AppModel {
     public private(set) var listeningBook: Book?
     public private(set) var listeningError: String?
 
+    /// Which surface is driving playback right now.
+    ///
+    /// Platform-neutral on purpose: only the iOS target has a CarPlay scene, so
+    /// only it ever pushes `.carPlay` in, and every other target keeps the
+    /// `.phone` default and gets the ordinary behaviour rather than a `#if`
+    /// around the decision that reads it.
+    public private(set) var controlSurface: ControlSurface = .phone
+
+    /// Pushed in by the CarPlay bridge as the car comes and goes.
+    ///
+    /// The car going away is itself a reason to reconsider the hand-off: the
+    /// driver has parked, and if the reader is already on screen the book
+    /// should move to the page rather than carry on through the phone's
+    /// speaker.
+    public func setControlSurface(_ surface: ControlSurface) {
+        guard controlSurface != surface else { return }
+        controlSurface = surface
+        if surface == .phone { considerListeningHandoff(trigger: .carDisconnected) }
+    }
+
+    /// Re-entrancy guard. The four triggers overlap — waking a phone onto an
+    /// open reader fires three of them within a frame — and a second pass while
+    /// the first is awaiting an audio load would stop the engine out from under
+    /// it.
+    private var isHandingOff = false
+
+    /// Cheap enough to call from anywhere a trigger fires, which is the point:
+    /// the decision itself is a ladder in `ListeningHandoff`, and the call
+    /// sites should not each carry a copy of "is anything even playing".
+    private func considerListeningHandoff(trigger: ListeningHandoff.Trigger) {
+        guard listening != nil, !isHandingOff else { return }
+        Task { await handOffListeningToReader(trigger: trigger) }
+    }
+
+    /// Moves a book playing through the audiobook engine onto the reader that
+    /// is looking at it.
+    ///
+    /// The end of a drive. `AudiobookCoordinator` is what CarPlay and the lock
+    /// screen start, and for a downloaded read-along it plays the EPUB's own
+    /// narration chunks — so it knows exactly where it is, and the page knows
+    /// nothing. Picking the phone up used to leave the reader sitting an hour
+    /// behind the voice coming out of it. See `ListeningHandoff` for the ladder
+    /// and for why every rung of it is somebody's ordinary Tuesday.
+    ///
+    /// - Returns: what was decided, so a test can name it. Callers that just
+    ///   want the behaviour ignore it.
+    @discardableResult
+    func handOffListeningToReader(
+        trigger: ListeningHandoff.Trigger,
+    ) async -> ListeningHandoff.Decision {
+        guard !isHandingOff else { return .skip(.alreadyHandingOff) }
+        isHandingOff = true
+        defer { isHandingOff = false }
+
+        let coordinator = listening
+        let model = visibleReaderUUID.flatMap { readers[$0] }
+        let decision = ListeningHandoff.decide(
+            listeningBookUUID: listeningBook?.uuid,
+            visibleBookUUID: visibleReaderUUID,
+            surface: controlSurface,
+            isForeground: isForeground,
+            anchor: coordinator?.currentAnchor,
+            isPlaying: coordinator?.player.isPlaying ?? false,
+            package: model?.package,
+            timeline: model?.timeline,
+            hasReadalong: model?.readalong != nil,
+        )
+        guard case let .handOff(target) = decision else {
+            if case let .skip(reason) = decision, reason != .notListening {
+                // `notListening` is the resting state — three of the four
+                // triggers fire on every wake — so logging it would bury the
+                // eight reasons worth reading.
+                IssaLog.info("listening hand-off skipped", [
+                    "book": listeningBook?.title ?? "none",
+                    "trigger": trigger.rawValue, "reason": reason.rawValue,
+                ])
+            }
+            return decision
+        }
+        // Unreachable: `.handOff` needs an anchor, which needs a coordinator,
+        // and a package, which needs a model. Spelled out rather than forced.
+        guard let coordinator, let model, let book = listeningBook else { return decision }
+
+        // Before anything moves. The fifteen-second writer is bound to the
+        // audiobook's clock, and leaving it running while the read-along takes
+        // the book over means two engines writing positions for one novel.
+        listeningProgressTask?.cancel()
+        listeningProgressTask = nil
+        coordinator.player.pause()
+
+        let took = await model.resumeNarration(at: target.entry, playing: target.wasPlaying)
+        guard took else {
+            // The sentence's audio is not on disk. Nothing moved, and the car
+            // engine still knows exactly where it is — so give the book back to
+            // it rather than leaving a listener in silence with a page that did
+            // not turn either.
+            IssaLog.warning("listening hand-off failed", [
+                "book": book.title, "trigger": trigger.rawValue,
+                "reason": "audioFileMissing", "fragment": target.entry.fragmentID,
+                "audioHref": target.entry.audioHref,
+            ])
+            if target.wasPlaying {
+                coordinator.player.play()
+                watchListeningProgress(book: book, coordinator: coordinator)
+            }
+            return .skip(.audioFileMissing)
+        }
+
+        // Explicitly, and not only on the paused path. On the playing path
+        // `play(from:)` has already driven the rate observer through
+        // `narrationDidStart`, which calls `stopListening(nowPlaying: nil)` —
+        // deliberately *without* the controller, because the read-along has
+        // just claimed Now Playing and detaching it there would take the book
+        // straight back off the lock screen. On the paused path no rate ever
+        // changed, so nothing has run at all and the paused audiobook still
+        // owns the footer, the mini bar and the lock screen for a book it is no
+        // longer playing.
+        if listening != nil { stopListening(nowPlaying: nowPlayingController) }
+
+        IssaLog.info("listening handed off to reader", [
+            "book": book.title, "trigger": trigger.rawValue,
+            "fragment": target.entry.fragmentID,
+            "chapter": String(target.spineIndex),
+            "atOffset": String(format: "%.1f", target.anchor.offset),
+            "wasPlaying": String(target.wasPlaying),
+        ])
+        // The read-along may now be narrating a visible page, which is the one
+        // combination that holds the display awake.
+        updateScreenAwake()
+        return decision
+    }
+
+    /// Puts a coordinator in the listening slot and nothing else.
+    ///
+    /// A test seam. `startListening` fetches a manifest, resolves a resume
+    /// point and claims Now Playing before it gets here, none of which a test
+    /// about the hand-off has any use for — and the alternative is a suite that
+    /// needs a server to assert what happens when a car is unplugged.
+    func installListening(_ coordinator: AudiobookCoordinator, book: Book) {
+        listening = coordinator
+        listeningBook = book
+    }
+
     /// Every open book's reader model, one per book, keyed by uuid.
     ///
     /// Narration used to be owned by `ReaderModel`, which was `@State` inside a
@@ -1395,6 +1538,9 @@ public final class AppModel {
         // Both directions: a reader appearing over running narration is what
         // takes the hold, and one being dismissed is what gives it back.
         updateScreenAwake()
+        // A reader arriving on the book the car is playing is the commonest way
+        // a drive ends.
+        if visible { considerListeningHandoff(trigger: .readerVisible) }
     }
 
     /// Whether the app is frontmost, pushed in by each target's scene-phase
@@ -1429,6 +1575,8 @@ public final class AppModel {
         guard isForeground != foreground else { return }
         isForeground = foreground
         updateScreenAwake()
+        // The phone being picked up, with the reader already where it was left.
+        if foreground { considerListeningHandoff(trigger: .foreground) }
     }
 
     /// Recomputes whether the display should be held awake, and holds or
@@ -1584,6 +1732,10 @@ public final class AppModel {
                 // notifies, so the value read here is already the new one.
                 updateScreenAwake()
             }
+            // On a cold open the extraction finishes long after the screen
+            // appeared, so the reader was not yet somewhere the car could hand
+            // a book to when `readerVisible` fired.
+            self?.considerListeningHandoff(trigger: .readerReady)
         }
         readers[bookUUID] = model
         return model

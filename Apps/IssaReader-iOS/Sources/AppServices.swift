@@ -129,8 +129,14 @@ final class AppServices {
             nowPlaying.publish()
         }
 
-        bridge.onSurfaceChange = { [nowPlaying] surface in
+        bridge.onSurfaceChange = { [app, nowPlaying] surface in
             nowPlaying.setSurface(surface)
+            // The model needs it too, and for a different reason: Now Playing
+            // uses the surface to pick a command map, while `AppModel` uses it
+            // to decide whether a book playing through the car may be handed
+            // back to the reader on the phone. Doing that mid-drive would take
+            // the book off the dashboard.
+            app.setControlSurface(surface)
         }
 
         bridge.playingBookUUID = { [app] in app.playbackBook?.uuid }
