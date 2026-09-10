@@ -273,16 +273,7 @@ public struct ReaderView: View {
             // Re-sample on a genuine size change — a rotation or a split view
             // — where the unsafe edges really are different. A chrome toggle
             // does not change the window's size, so it never lands here.
-            //
-            // The reader's own top inset is handed over rather than looked up,
-            // because on the Mac there is no way to look it up: a book opens in
-            // its own window and the key window at first layout is as often the
-            // library or the Now Playing panel. This proxy is inside
-            // `.ignoresSafeArea()`, which still reports the insets it is
-            // ignoring — so it is this window's toolbar, and no other's.
-            .onChange(of: geometry.size, initial: true) {
-                deviceInsets = ReaderInsets.current(safeAreaTop: geometry.safeAreaInsets.top)
-            }
+            .onChange(of: geometry.size, initial: true) { deviceInsets = ReaderInsets.current() }
         }
         // Measure the window, not the safe-area content box.
         .ignoresSafeArea()
