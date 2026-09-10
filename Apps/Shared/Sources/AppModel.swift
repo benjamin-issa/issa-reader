@@ -2351,12 +2351,32 @@ public final class AppModel {
     ///
     /// An hour of listening is as much progress as an hour of reading, and
     /// losing it on a crash or a battery death is just as annoying.
-    private func watchListeningProgress(book: Book, coordinator: AudiobookCoordinator) {
+    ///
+    /// Internal, and with the interval in the signature, for the reason
+    /// `installListening` is internal: the only way to see what a cancelled
+    /// tick does is to cancel one mid-sleep, and a suite that had to wait
+    /// fifteen real seconds per assertion is a suite nobody runs.
+    /// - Parameter interval: how long between writes. Production passes
+    ///   nothing; a test drives it in milliseconds.
+    func watchListeningProgress(
+        book: Book, coordinator: AudiobookCoordinator, every interval: Duration = .seconds(15),
+    ) {
         listeningProgressTask?.cancel()
         listeningProgressTask = Task { [weak self, weak coordinator] in
             var lastWritten: Double = -1
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(15))
+                try? await Task.sleep(for: interval)
+                // `try?` swallows the `CancellationError`, and the loop test
+                // above only runs at the top — so a cancel landing inside the
+                // sleep used to run this whole body regardless. That matters
+                // because the body *spends* things: `consumeSteering()` below
+                // is read-and-clear, so the stray tick could label its write
+                // `.chosen`, which re-baselines the high-water mark and clears
+                // any hold. The hand-off cancels this task and then suspends at
+                // `resumeNarration`, which is exactly the window the stray tick
+                // lands in — and its write is audio-scaled, so it also flips the
+                // stored locator's clock out from under the reader.
+                guard !Task.isCancelled else { return }
                 guard let self, let coordinator else { return }
                 let progress = coordinator.bookProgress
                 // Only when it actually moved: a paused book must not generate
@@ -2385,6 +2405,13 @@ public final class AppModel {
                 // place with a track and an offset from a playback that started
                 // at zero. That overwrite is what sent the reader to chapter
                 // one on the phone after a drive.
+                //
+                // And asked again first. `writePosition` records locally and
+                // then drains the queue, which is one POST per row at
+                // URLSession's sixty-second default — seconds, by its own
+                // comment — so a cancel arriving during the write must not
+                // still land the anchor afterwards.
+                guard !Task.isCancelled else { return }
                 if accepted, let anchor = coordinator.currentAnchor {
                     try? await store?.setAudioAnchor(anchor, forBook: book.uuid)
                 }

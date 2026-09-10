@@ -1985,7 +1985,17 @@ public final class ReaderModel {
         // is a fraction of the *text*; this is a file and an offset, which is
         // the only thing the audiobook engine can act on — and the whole reason
         // switching to the car mid-book can now land on the same sentence.
-        if let anchor = readalong?.currentAnchor {
+        //
+        // Only when the position was accepted, exactly as the audiobook's
+        // fifteen-second writer has it. The anchor is the *more* durable half —
+        // `ListeningResume`'s first rung starts the car from it, and
+        // `resolveLanding` opens the book from it — so writing one for a page
+        // the guard has just refused lands the place anyway, and the next car
+        // start resolves to precisely where the refusal was protecting against,
+        // reports success, and releases the hold on the way past. This half of
+        // the rule was written for the listening writer and never given to the
+        // reader's twin.
+        if accepted, let anchor = readalong?.currentAnchor {
             await recordAudioAnchor?(anchor)
         }
     }
