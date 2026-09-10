@@ -18,6 +18,14 @@ public final class AudiobookCoordinator {
         case streaming(base: URL, cookies: [HTTPCookie])
         /// A file already on disk, played whole.
         case local(URL)
+        /// One file per track, keyed by `Track.href` — the archive path the
+        /// media overlay names and `AudioAnchor` carries.
+        ///
+        /// `.local` cannot stand in: it hands the *same* URL to every track, so
+        /// a manifest synthesised over a book's hundred and seventy-six
+        /// narration chunks would play chunk one under every one of them while
+        /// the book clock counted on regardless.
+        case files([String: URL])
     }
 
     public let manifest: AudiobookManifest
@@ -26,11 +34,44 @@ public final class AudiobookCoordinator {
     /// Seconds into the whole book, not into the current file.
     public private(set) var bookTime: TimeInterval = 0
 
+    /// The places in this book a listener would call chapters.
+    ///
+    /// Not the tracks. For the server's own upload the two coincide and this is
+    /// built from the track list, which is exactly today's behaviour; for a
+    /// manifest synthesised over a read-along's narration chunks a chapter
+    /// starts wherever the overlay says, which is usually part-way into a file.
+    /// Everything that shows a chapter — Now Playing, the scrubber, CarPlay's
+    /// Up Next, the sleep timer's "end of chapter" — reads this rather than
+    /// `trackIndex`.
+    public let chapters: [AudiobookChapter]
+    /// Which of them is playing.
+    public private(set) var chapterIndex = 0
+    /// Where each chapter begins on the book clock. Computed once: it is read
+    /// on every tick, and `startTime(ofTrackAt:)` reduces over a computed
+    /// filter.
+    private let chapterStarts: [TimeInterval]
+    /// How many loads are between choosing a track and having loaded it.
+    ///
+    /// A load moves `trackIndex` and `bookTime` before it awaits, and the
+    /// player's periodic observer keeps firing across the change with the *old*
+    /// item's time. Announcing a chapter off that arithmetic is announcing one
+    /// the listener is not in, so the clock is ignored until the load settles.
+    private var loadsInFlight = 0
+
     /// Called when the playing chapter changes, for Now Playing and the UI.
+    ///
+    /// Carries the chapter index, which is an index into `chapters` and no
+    /// longer a track index — the two differ the moment a chapter starts
+    /// mid-file.
     public var onChapterChange: ((Int) -> Void)?
     /// Called only when a chapter *ended* — the audio ran off the end of one
-    /// track into the next. Not for a chapter the listener picked, nor a
-    /// scrub that crossed a boundary.
+    /// chapter into the next under the listener. Not for a chapter the listener
+    /// picked, nor a scrub that crossed a boundary.
+    ///
+    /// A chapter, not a file. A book played from its own narration chunks
+    /// crosses a file boundary every couple of minutes; only some of those are
+    /// chapter boundaries, and only some chapter boundaries are file boundaries
+    /// at all — see `AudiobookChapter`.
     ///
     /// The sleep timer's "end of chapter" hangs off this and nothing else.
     /// It used to hang off `onChapterChange`, which every track load fires,
@@ -42,10 +83,33 @@ public final class AudiobookCoordinator {
     /// Increments per load so a superseded one cannot write back.
     private var loadGeneration = 0
 
-    public init(manifest: AudiobookManifest, source: Source, player: AudioPlayer = AudioPlayer()) {
+    /// - Parameter chapters: where this book's chapters start. Empty — the
+    ///   default, and what every caller playing the server's own manifest
+    ///   passes — means one chapter per playable track, named as the manifest
+    ///   names it, which is what this class did before chapters and tracks
+    ///   could differ. An entry naming a track this manifest does not have is
+    ///   dropped rather than trusted: the chapter list and the track list are
+    ///   built by different code, and an out-of-range index would trap on the
+    ///   first tick.
+    public init(
+        manifest: AudiobookManifest,
+        source: Source,
+        chapters: [AudiobookChapter] = [],
+        player: AudioPlayer = AudioPlayer(),
+    ) {
         self.manifest = manifest
         self.source = source
         self.player = player
+
+        let playable = manifest.playableTracks
+        let usable = chapters.filter { playable.indices.contains($0.trackIndex) }
+        let resolved = usable.isEmpty
+            ? playable.enumerated().map { index, track in
+                AudiobookChapter(title: manifest.title(of: track, at: index), trackIndex: index)
+            }
+            : usable
+        self.chapters = resolved
+        chapterStarts = resolved.map { manifest.startTime(ofTrackAt: $0.trackIndex) + $0.offset }
 
         player.onTimeUpdate = { [weak self] time in
             guard let self, time.isFinite else { return }
@@ -56,6 +120,7 @@ public final class AudiobookCoordinator {
             // cleared itself.
             guard candidate.isFinite else { return }
             bookTime = candidate
+            syncChapter(fromTick: true)
         }
         // Tracks are contiguous: the end of one is the start of the next, and a
         // listener should hear no seam at a chapter boundary.
@@ -100,29 +165,81 @@ public final class AudiobookCoordinator {
         return min(max(bookTime / totalDuration, 0), 1)
     }
 
-    /// The current track's extent on the book clock.
+    /// The current chapter's extent on the book clock.
     ///
-    /// Cached against the track index because `startTime(ofTrackAt:)` reduces
-    /// over a computed filter — O(n) and allocating — and a scrubber asks for
-    /// this on every tick.
-    private var cachedTrackSpan: (index: Int, start: TimeInterval, duration: TimeInterval)?
+    /// The chapter, not the file it happens to start in: a scrubber scoped to
+    /// the chapter runs from one chapter marker to the next, and on a
+    /// synthesised manifest a chapter spans several chunks and begins inside
+    /// one. Cached against the chapter index because a scrubber asks for this
+    /// on every tick and the arithmetic below allocates.
+    private var cachedChapterSpan: (index: Int, start: TimeInterval, duration: TimeInterval)?
 
-    var trackSpan: (start: TimeInterval, duration: TimeInterval)? {
-        let index = trackIndex
-        guard tracks.indices.contains(index),
-              let duration = tracks[index].duration, duration > 0
-        else { return nil }
-        if let cached = cachedTrackSpan, cached.index == index {
+    public var chapterSpan: (start: TimeInterval, duration: TimeInterval)? {
+        let index = chapterIndex
+        guard chapters.indices.contains(index) else { return nil }
+        if let cached = cachedChapterSpan, cached.index == index {
             return (cached.start, cached.duration)
         }
-        let start = manifest.startTime(ofTrackAt: index)
-        cachedTrackSpan = (index, start, duration)
+        let start = chapterStarts[index]
+        // The next chapter's start, or the end of the book for the last one.
+        let end = chapterStarts.indices.contains(index + 1)
+            ? chapterStarts[index + 1]
+            : totalDuration
+        let duration = end - start
+        guard duration > 0 else { return nil }
+        cachedChapterSpan = (index, start, duration)
         return (start, duration)
     }
 
     public var chapterTitle: String {
-        guard tracks.indices.contains(trackIndex) else { return "" }
-        return manifest.title(of: tracks[trackIndex], at: trackIndex)
+        guard chapters.indices.contains(chapterIndex) else { return "" }
+        return chapters[chapterIndex].title
+    }
+
+    /// The chapter playing at a point on the book clock: the last one that
+    /// starts at or before it. Binary search, because a tick asks per second.
+    private func chapterIndex(atBookTime time: TimeInterval) -> Int {
+        guard !chapterStarts.isEmpty else { return 0 }
+        var low = 0
+        var high = chapterStarts.count - 1
+        var result = 0
+        while low <= high {
+            let mid = (low + high) / 2
+            if chapterStarts[mid] <= time {
+                result = mid
+                low = mid + 1
+            } else {
+                high = mid - 1
+            }
+        }
+        return result
+    }
+
+    /// Brings the announced chapter into line with the book clock.
+    ///
+    /// - Parameter fromTick: whether this came from the player's clock rather
+    ///   than from a load or a seek. **A tick may never move into a later
+    ///   file.** Every duration a media overlay can offer is an estimate — the
+    ///   last clip ends a beat before the file does — so a stated duration
+    ///   shorter than the real one leaves the clock running past the track
+    ///   boundary while that same file is still playing, and the listener would
+    ///   be told the next chapter had begun before a word of it was spoken.
+    ///   Only `advance()` moves between files, so only `advance()` may announce
+    ///   a chapter that lives in the next one.
+    private func syncChapter(fromTick: Bool) {
+        // Mid-load the clock describes neither the old file nor the new one.
+        guard loadsInFlight == 0 else { return }
+        var index = chapterIndex(atBookTime: bookTime)
+        if fromTick {
+            while index > 0, chapters[index].trackIndex > trackIndex { index -= 1 }
+        }
+        guard index != chapterIndex else { return }
+        let advanced = index > chapterIndex
+        chapterIndex = index
+        onChapterChange?(index)
+        // A chapter that *ended* under the listener, which is the one thing the
+        // sleep timer waits for. Going backwards is a scrub, not an ending.
+        if fromTick, advanced { onChapterChangeObserved?() }
     }
 
     // MARK: - Playback
@@ -133,18 +250,33 @@ public final class AudiobookCoordinator {
         // See ReadalongCoordinator: a NaN survived the inline clamp and was
         // then written back as a chosen position.
         guard let place = progress.asProgression else { return }
-        await seek(toBookTime: totalDuration * place)
+        // Not `play()` regardless. With one file per track a missing chunk is a
+        // real outcome — a half-deleted extraction, a book whose download went
+        // while it sat paused — and calling play on a player holding nothing
+        // leaves a book that claims to be playing in silence, which is what the
+        // fifteen-second writer then persists progress against.
+        guard await seek(toBookTime: totalDuration * place) else { return }
         player.play()
     }
 
-    public func seek(toBookTime time: TimeInterval) async {
-        guard let (index, offset) = manifest.locate(bookTime: time) else { return }
+    /// - Returns: whether audio is now positioned where it was asked to be.
+    ///   False when the time names no track, or when the load that would have
+    ///   reached it did not happen.
+    @discardableResult
+    public func seek(toBookTime time: TimeInterval) async -> Bool {
+        guard let (index, offset) = manifest.locate(bookTime: time) else { return false }
         if index != trackIndex || player.currentAudioHref == nil {
-            await load(track: index, startAt: offset)
-        } else {
-            await player.seek(to: offset)
+            // `load` sets the clock and the chapter itself, and is the only one
+            // of the two branches that can decline.
+            return await load(track: index, startAt: offset)
         }
+        await player.seek(to: offset)
         bookTime = manifest.startTime(ofTrackAt: index) + offset
+        // A scrub inside one file can still cross a chapter boundary — chunks
+        // are cut by silence, chapters by the book — but crossing one this way
+        // is the listener steering, not a chapter ending.
+        syncChapter(fromTick: false)
+        return true
     }
 
     /// Set when the listener steered, cleared when the answer is read.
@@ -171,8 +303,12 @@ public final class AudiobookCoordinator {
 
     public func play(chapter index: Int) async {
         steeredAt = true
-        guard tracks.indices.contains(index) else { return }
-        await load(track: index, startAt: 0)
+        guard chapters.indices.contains(index) else { return }
+        let chapter = chapters[index]
+        // Into the chapter's own start, which on a synthesised manifest is part
+        // of the way into its chunk. Loading the track at zero would land the
+        // listener at the end of the *previous* chapter.
+        guard await load(track: chapter.trackIndex, startAt: chapter.offset) else { return }
         player.play()
     }
 
@@ -187,21 +323,23 @@ public final class AudiobookCoordinator {
         // that backwards jump to the server as `.chosen`, the one origin
         // PositionGuard never refuses. The read-along's `moveChapter` already
         // refuses at the boundary; this is the same contract.
-        guard tracks.indices.contains(trackIndex + 1) else { return }
-        await play(chapter: trackIndex + 1)
+        guard chapters.indices.contains(chapterIndex + 1) else { return }
+        await play(chapter: chapterIndex + 1)
     }
 
     public func previousChapter() async {
         steeredAt = true
-        if player.currentTime > 3 {
-            await player.seek(to: 0)
-            // Every other seek path — `seek(toBookTime:)`, `load(track:startAt:)`
-            // — updates `bookTime` itself; this was the one that didn't; a skip
-            // fired right after restarting a chapter computed its target from
-            // wherever playback had been a moment ago, not from the restart.
-            bookTime = manifest.startTime(ofTrackAt: trackIndex)
+        guard chapterStarts.indices.contains(chapterIndex) else { return }
+        let start = chapterStarts[chapterIndex]
+        // Measured against the chapter's start on the book clock, not against
+        // the player's position in the file. A chapter that begins mid-chunk is
+        // already several seconds into its file when it starts, so the player's
+        // own clock would report "well into this chapter" the instant it began
+        // and "previous" would restart a chapter nobody had heard yet.
+        if bookTime - start > 3 {
+            await seek(toBookTime: start)
         } else {
-            await play(chapter: max(trackIndex - 1, 0))
+            await play(chapter: max(chapterIndex - 1, 0))
         }
     }
 
@@ -261,10 +399,14 @@ public final class AudiobookCoordinator {
             player.pause()
             return
         }
+        let before = chapterIndex
         guard await load(track: trackIndex + 1, startAt: 0) else { return }
-        // The one place a chapter genuinely ends, so the one place the sleep
-        // timer is told.
-        onChapterChangeObserved?()
+        // Only when the *chapter* changed, not whenever a file did. A book
+        // synthesised over narration chunks crosses a file boundary every couple
+        // of minutes and a chapter boundary every half hour; telling the sleep
+        // timer that the first was the second ended the book at the next chunk,
+        // which is nowhere a listener would have chosen to stop.
+        if chapterIndex != before { onChapterChangeObserved?() }
         // Only if the boundary left it playing. An "end of chapter" sleep
         // timer pauses in the call above, and an unconditional play() here
         // undid that pause in the same turn, after the timer had already
@@ -278,6 +420,30 @@ public final class AudiobookCoordinator {
     @discardableResult
     private func load(track index: Int, startAt offset: TimeInterval) async -> Bool {
         guard tracks.indices.contains(index) else { return false }
+        let track = tracks[index]
+        // Resolved before a single piece of state moves. A `.files` track with
+        // no file is a refusal, not a load, and the old order — index and clock
+        // first, then find something to play — would have left the coordinator
+        // claiming to be in a track it never reached, with the book clock and
+        // every position written from it counting through silence.
+        let destination: (url: URL, cookies: [HTTPCookie])
+        switch source {
+        case let .streaming(base, cookies):
+            // Hrefs in the manifest are relative to the listen directory.
+            destination = (base.appending(path: track.href), cookies)
+        case let .local(url):
+            destination = (url, [])
+        case let .files(files):
+            guard let url = files[track.href] else {
+                IssaLog.warning("audio chunk has no file", [
+                    "href": track.href, "track": String(index),
+                ])
+                player.pause()
+                return false
+            }
+            destination = (url, [])
+        }
+
         // One load at a time. Two interleaved loads left `trackIndex` and
         // `bookTime` set by whichever coroutine resumed last while the audio
         // came from whichever insert won, which is the one way the book clock
@@ -285,23 +451,24 @@ public final class AudiobookCoordinator {
         let generation = loadGeneration &+ 1
         loadGeneration = generation
 
-        let track = tracks[index]
         trackIndex = index
         // Corrected BEFORE the await, not after: a publish during the load used
         // to report the start of the target track and silently drop the offset.
         bookTime = manifest.startTime(ofTrackAt: index) + offset
-        switch source {
-        case let .streaming(base, cookies):
-            // Hrefs in the manifest are relative to the listen directory.
-            let url = base.appending(path: track.href)
-            await player.load(url: url, href: track.href, startAt: offset, cookies: cookies)
-        case let .local(url):
-            await player.load(url: url, href: track.href, startAt: offset)
-        }
+        loadsInFlight += 1
+        defer { loadsInFlight -= 1 }
+        await player.load(
+            url: destination.url, href: track.href,
+            startAt: offset, cookies: destination.cookies,
+        )
         // A newer load started while this one was awaiting; it owns the state.
         guard loadGeneration == generation else { return false }
         bookTime = manifest.startTime(ofTrackAt: index) + offset
-        onChapterChange?(index)
+        // Unconditionally, as every load has always published: Now Playing
+        // rebuilds from this and a reloaded track is a new item there whether or
+        // not the chapter around it changed.
+        chapterIndex = chapterIndex(atBookTime: bookTime)
+        onChapterChange?(chapterIndex)
         return true
     }
 }
