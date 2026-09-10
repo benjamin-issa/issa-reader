@@ -326,6 +326,20 @@ public struct SMILTimeline: Sendable {
         return nil
     }
 
+    /// The first entry narrated from this audio file, whatever the offset.
+    ///
+    /// `entry(inFile:at:)` answers nothing for a time *before* the file's first
+    /// clip — correctly, since no sentence is being spoken there — and that is
+    /// the whole of the file the caller needs when an anchor's offset predates
+    /// the alignment, or arrives rounded to zero. Naming the file is still an
+    /// exact answer about which chapter it is; only the sentence is a guess,
+    /// and the first one is the honest guess.
+    public func firstEntry(inFile audioHref: String) -> SMILEntry? {
+        guard let runs = fileRanges[audioHref], let first = runs.first, !first.isEmpty
+        else { return nil }
+        return entries[first.lowerBound]
+    }
+
     /// The entry that follows `entry` in reading order, if any.
     public func entry(after entry: SMILEntry) -> SMILEntry? {
         guard let index = index(of: entry), index + 1 < entries.count else { return nil }

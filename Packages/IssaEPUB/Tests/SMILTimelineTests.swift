@@ -115,6 +115,21 @@ struct SMILTimelineTests {
         #expect(timeline.entry(forFragment: "nope-s99") == nil)
     }
 
+    /// An anchor's offset can predate the file's first clip — an aligner that
+    /// starts a chapter a moment in, an offset rounded to zero, a differently
+    /// transcoded copy. `entry(inFile:at:)` answers nothing there, which is the
+    /// hole that sent a listener resuming from the car to chapter one.
+    @Test("an offset before the first clip still names the file")
+    func anOffsetBeforeTheFirstClipStillNamesTheFile() throws {
+        let timeline = SMILParser.timeline(for: try Self.package())
+        #expect(timeline.entry(inFile: "OEBPS/Audio/track1.mp3", at: -0.5) == nil,
+                "the per-tick lookup is right to answer nothing here")
+        #expect(timeline.firstEntry(inFile: "OEBPS/Audio/track1.mp3")?.fragmentID == "ch01-s0")
+        // A file this book's overlay has never heard of is still nothing: the
+        // fallback names a file, it does not invent one.
+        #expect(timeline.firstEntry(inFile: "The Outsider.mp3") == nil)
+    }
+
     // MARK: - Where narration may begin
 
     /// The lookup that replaced `entries.first` as the fallback when a reader

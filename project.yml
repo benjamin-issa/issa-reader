@@ -107,6 +107,11 @@ targets:
       # test the assertion rather than the book.
       - path: Packages/IssaEPUB/Tests/Fixtures/alice.epub
         buildPhase: resources
+      # And the read-along fixture, for the landing rules: an audio position
+      # only resolves to a chapter through a media overlay, so testing that
+      # reverse path needs a book that actually has one.
+      - path: Packages/IssaEPUB/Tests/Fixtures/readalong.epub
+        buildPhase: resources
     dependencies:
       - target: IssaReader-iOS
       # The suite covers the reading boundary the Ask index is compared
