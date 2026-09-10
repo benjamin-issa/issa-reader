@@ -2,6 +2,7 @@ import IssaCore
 import IssaPlayback
 import IssaUI
 import SwiftUI
+import UserNotifications
 
 @main
 struct IssaReaderMacApp: App {
@@ -9,6 +10,11 @@ struct IssaReaderMacApp: App {
     @State private var app = AppModel()
     @State private var settings = PlaybackSettings()
     @State private var nowPlaying = NowPlayingController()
+    /// Above every window, because a Mac reader has several books open and an
+    /// answer must outlive the window that asked for it.
+    @State private var ask = AskCoordinator()
+    /// Owned here because `UNUserNotificationCenter` holds its delegate weakly.
+    @State private var askNotifications: AskNotificationDelegate?
 
     init() {
         // Package-bundled fonts are not registered automatically the way an
@@ -28,10 +34,18 @@ struct IssaReaderMacApp: App {
                 .environment(app)
                 .environment(settings)
                 .environment(nowPlaying)
+                .environment(ask)
                 .task {
                     nowPlaying.configure(settings: settings)
                     app.nowPlayingController = nowPlaying
                     termination.flush = { await app.flushOpenReaders() }
+                    app.ask = ask
+                    // Not in `init`: the delegate needs `app` and `ask` as they
+                    // are now, and a `@State` value read in `init` is the
+                    // initial one rather than the live one.
+                    let delegate = AskNotificationDelegate(coordinator: ask, app: app)
+                    askNotifications = delegate
+                    UNUserNotificationCenter.current().delegate = delegate
                 }
                 .tint(Palette.tangerine)
                 .frame(minWidth: 900, minHeight: 560)
@@ -50,6 +64,7 @@ struct IssaReaderMacApp: App {
                 .environment(app)
                 .environment(settings)
                 .environment(nowPlaying)
+                .environment(ask)
                 .task {
                     nowPlaying.configure(settings: settings)
                     app.nowPlayingController = nowPlaying
@@ -75,9 +90,13 @@ struct IssaReaderMacApp: App {
                     app.nowPlayingController = nowPlaying
                 }
                 .tint(Palette.tangerine)
-                .frame(width: 320, height: 560)
+                // 640, not 560: the volume row is another 60 points under the
+                // transport, and the panel is `.contentSize`-resizable — so
+                // without the extra height the cover would be squeezed to make
+                // room rather than the window growing.
+                .frame(width: 320, height: 640)
         }
-        .defaultSize(width: 320, height: 560)
+        .defaultSize(width: 320, height: 640)
         .windowResizability(.contentSize)
         .defaultPosition(.topTrailing)
         .restorationBehavior(.disabled)
@@ -88,6 +107,7 @@ struct IssaReaderMacApp: App {
                 .environment(app)
                 .environment(settings)
                 .environment(nowPlaying)
+                .environment(ask)
                 .tint(Palette.tangerine)
                 .frame(width: 520, height: 420)
         }
@@ -121,6 +141,9 @@ struct IssaCommands: Commands {
                 .keyboardShortcut("t", modifiers: [.command, .shift])
             Button("Marks") { ReaderCommand.marks.post() }
                 .keyboardShortcut("b", modifiers: [.command, .shift])
+            // ⇧⌘A, not ⌘A, which is Select All in every text field on the page.
+            Button("Ask About This Book…") { ReaderCommand.ask.post() }
+                .keyboardShortcut("a", modifiers: [.command, .shift])
             Divider()
             Button("Add Bookmark") { ReaderCommand.bookmark.post() }
                 .keyboardShortcut("d", modifiers: .command)
@@ -182,6 +205,16 @@ struct IssaCommands: Commands {
                 nowPlaying.coordinator?.player.rate = Float(settings.playbackRate)
             }
             .keyboardShortcut("[", modifiers: .command)
+
+            Divider()
+            // Posted rather than acted on here, unlike the rate above it: the
+            // rate is one setting for the whole app, but a level belongs to a
+            // book, and the menu has no idea which book the reader means. The
+            // key window does — and only one window is ever key.
+            Button("Louder for This Book") { ReaderCommand.volumeUp.post() }
+                .keyboardShortcut(.upArrow, modifiers: [.command, .option])
+            Button("Quieter for This Book") { ReaderCommand.volumeDown.post() }
+                .keyboardShortcut(.downArrow, modifiers: [.command, .option])
         }
     }
 

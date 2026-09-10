@@ -470,6 +470,364 @@ struct NavigationFallbackTests {
     }
 }
 
+/// The documents a book names as apparatus rather than story.
+///
+/// Built from bytes because neither shipped fixture has a landmarks nav at all
+/// — Gutenberg writes an NCX and prints its contents inside the header page —
+/// so the rule cannot be driven by a real book without adding a third one to
+/// the repo. `publishedLandmarks` is written here instead, in the shape a
+/// commercially produced EPUB uses.
+@Suite("Front matter the book names itself")
+struct FrontMatterTests {
+    /// A whole small EPUB whose landmarks, guide and spine are what a test says.
+    ///
+    /// The paths mirror a published novel's — the package document one
+    /// directory down, its content one directory below that — so every href has
+    /// to be resolved against the document it appears in rather than compared.
+    /// A `toc` nav sits in front of the landmarks in the same file on purpose:
+    /// that is the arrangement every real book uses, and it is what makes the
+    /// contents loop return before it ever reaches the landmarks.
+    ///
+    /// **The navigation document sits beside the content, not beside the OPF.**
+    /// While the two shared a directory the landmark hrefs and the guide's were
+    /// spelled identically, so resolving a landmark against the package document
+    /// produced exactly the right answer and every assertion in here passed
+    /// against a base that is wrong on a real book. Nested, the two bases differ:
+    /// landmark hrefs are written relative to `OEBPS/xhtml/nav.xhtml` and the
+    /// guide's relative to `OEBPS/content.opf`, and only reading each against the
+    /// document it appears in lands both on `OEBPS/xhtml/…`.
+    static func package(
+        landmarks: String = "", guide: String = "", spine: [String],
+        sizes: [String: Int] = [:],
+    ) throws -> EPUBPackage {
+        let container = """
+        <?xml version="1.0"?>
+        <container version="1.0"><rootfiles>
+        <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+        </rootfiles></container>
+        """
+        let opf = """
+        <?xml version="1.0"?>
+        <package version="3.0">
+        <metadata><title>A Novel</title></metadata>
+        <manifest>
+        <item id="nav" href="xhtml/nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+        \(spine.map {
+            "<item id=\"\($0)\" href=\"xhtml/\($0).xhtml\" media-type=\"application/xhtml+xml\"/>"
+        }.joined(separator: "\n"))
+        </manifest>
+        <spine>\(spine.map { "<itemref idref=\"\($0)\"/>" }.joined())</spine>
+        \(guide)
+        </package>
+        """
+        let nav = """
+        <?xml version="1.0"?>
+        <html xmlns:epub="http://www.idpf.org/2007/ops"><body>
+        <nav epub:type="toc"><ol>
+        <li><a href="\(spine[0]).xhtml">Beginning</a></li>
+        </ol></nav>
+        \(landmarks)
+        </body></html>
+        """
+        let entries: [ZIPBytes.Entry] = [
+            .init(name: "mimetype", payload: Data("application/epub+zip".utf8)),
+            .init(name: "META-INF/container.xml", payload: Data(container.utf8)),
+            .init(name: "OEBPS/content.opf", payload: Data(opf.utf8)),
+            .init(name: "OEBPS/xhtml/nav.xhtml", payload: Data(nav.utf8)),
+        ] + spine.map { name in
+            .init(
+                name: "OEBPS/xhtml/\(name).xhtml",
+                payload: Data(Self.document(paddedTo: sizes[name]).utf8),
+            )
+        }
+        return try EPUBPackage.open(archive: EPUBArchive(data: ZIPBytes.archive(entries)))
+    }
+
+    static func path(_ name: String) -> String { "OEBPS/xhtml/\(name).xhtml" }
+
+    /// A chapter document, padded to a size the test chose.
+    ///
+    /// Padded with a comment rather than with prose, because the rule being
+    /// tested reads the *uncompressed entry size* off the central directory —
+    /// a byte count that knows nothing about words — and a comment says so at
+    /// a glance. Entries are stored rather than deflated, so the payload's
+    /// length is the size the rule sees.
+    static func document(paddedTo size: Int?) -> String {
+        let body = "<html><body><p>Prose.</p></body></html>"
+        let comment = "<!--" + "-->"
+        guard let size, size > body.utf8.count + comment.utf8.count else { return body }
+        let filler = String(repeating: "x", count: size - body.utf8.count - comment.utf8.count)
+        return "<!--" + filler + "-->" + body
+    }
+
+    /// A landmarks nav in the shape commercial EPUBs actually ship — fragments,
+    /// ordering, `bodymatter` and all.
+    ///
+    /// Untidied on purpose, because the two entries that look like noise are the
+    /// ones the whole design rests on. `bodymatter` points at
+    /// `title.xhtml#tit` — the *title page* — so a rule that treats it as where
+    /// the story starts excludes the cover and nothing else. And the entry
+    /// labelled Prologue points at `fm10.xhtml`, a document whose `<body>`
+    /// declares `epub:type="frontmatter"`, so a rule that reads body-level types
+    /// deletes the prologue. Publishers use the broad structural tokens
+    /// positionally; only the ones naming a kind of content say anything.
+    static let publishedLandmarks = """
+    <nav epub:type="landmarks" aria-labelledby="guide">
+    <h1 id="guide">Guide</h1>
+    <ol epub:type="list">
+    <li><a epub:type="cover" href="cover.xhtml">Cover</a></li>
+    <li><a epub:type="titlepage" href="title.xhtml">Title Page</a></li>
+    <li><a epub:type="dedication" href="dedication.xhtml">Dedication</a></li>
+    <li><a epub:type="acknowledgments" href="acknowledgments.xhtml">Acknowledgments</a></li>
+    <li><a epub:type="prologue" href="fm10.xhtml">Prologue</a></li>
+    <li><a epub:type="part" href="part1.xhtml#pt1">PART ONE: <i>The Long Road</i></a></li>
+    <li><a epub:type="chapter" href="chapter1.xhtml#ch1">Chapter 1</a></li>
+    <li><a epub:type="epilogue" href="epilogue.xhtml">Epilogue</a></li>
+    <li><a epub:type="toc" href="contents.xhtml">Contents</a></li>
+    <li><a epub:type="copyright-page" href="copyright.xhtml">Copyright</a></li>
+    <li><a epub:type="bodymatter" href="title.xhtml#tit">Start of Content</a></li>
+    </ol>
+    </nav>
+    """
+
+    @Test("a novel's own landmarks name its apparatus and none of its story")
+    func namesTheFrontMatter() throws {
+        let package = try Self.package(
+            landmarks: Self.publishedLandmarks,
+            spine: [
+                "cover", "title", "dedication", "acknowledgments", "fm10",
+                "part1", "chapter1", "epilogue", "contents", "copyright",
+            ],
+        )
+        #expect(package.frontMatter == Set([
+            "cover", "title", "dedication", "acknowledgments", "contents", "copyright",
+        ].map(Self.path)))
+        // The four the book was measured losing: sixteen front-matter passages
+        // reached the model as story, and the fix must not take the prologue
+        // with them on the way out.
+        for story in ["fm10", "part1", "chapter1", "epilogue"] {
+            #expect(!package.frontMatter.contains(Self.path(story)), "\(story) is the book")
+        }
+        // `bodymatter` points here, and protected nothing: the title page is
+        // still apparatus, because `titlepage` says what it holds and
+        // `bodymatter` only says where to open.
+        #expect(package.frontMatter.contains(Self.path("title")))
+    }
+
+    @Test("a story tag vetoes an exclusion of the same document")
+    func aStoryTagVetoesAnExclusion() throws {
+        // One document reached by two entries is ordinary: a combined
+        // front-matter file is both the title page and the author's preface,
+        // and the entry naming a kind of story is the one that wins. Deleting
+        // real prose is far worse than leaving apparatus in the index.
+        let landmarks = """
+        <nav epub:type="landmarks"><ol>
+        <li><a epub:type="titlepage" href="one.xhtml">Title Page</a></li>
+        <li><a epub:type="preface" href="one.xhtml">Preface</a></li>
+        <li><a epub:type="dedication" href="two.xhtml">Dedication</a></li>
+        </ol></nav>
+        """
+        let package = try Self.package(landmarks: landmarks, spine: ["one", "two", "three"])
+        #expect(package.frontMatter == [Self.path("two")])
+    }
+
+    @Test("the type may be on the list item instead of the anchor")
+    func theTypeMayBeOnTheListItem() throws {
+        // A common real-world variant, and reading only the anchor loses every
+        // book that writes it this way.
+        let landmarks = """
+        <nav epub:type="landmarks"><ol>
+        <li epub:type="dedication"><a href="two.xhtml">Dedication</a></li>
+        <li epub:type="chapter"><a epub:type="copyright-page" href="one.xhtml">One</a></li>
+        </ol></nav>
+        """
+        let package = try Self.package(landmarks: landmarks, spine: ["one", "two", "three"])
+        // The dedication came off the `<li>`, and the `<li>`'s story tag vetoed
+        // the anchor's exclusion of the other document.
+        #expect(package.frontMatter == [Self.path("two")])
+    }
+
+    @Test("only a fragmentless href may exclude a document")
+    func onlyAFragmentlessHrefExcludes() throws {
+        // The guard the shipped Franklin fixture needs: its guide points `toc`
+        // at a fragment inside the document that also holds the editor's
+        // introduction and the first chapter, and `resolve` strips fragments.
+        let landmarks = """
+        <nav epub:type="landmarks"><ol>
+        <li><a epub:type="toc" href="one.xhtml#contents">Contents</a></li>
+        <li><a epub:type="cover" href="two.xhtml">Cover</a></li>
+        </ol></nav>
+        """
+        let package = try Self.package(landmarks: landmarks, spine: ["one", "two", "three"])
+        #expect(package.frontMatter == [Self.path("two")])
+    }
+
+    @Test("bodymatter and frontmatter decide nothing in either direction")
+    func theBroadTokensDecideNothing() throws {
+        let landmarks = """
+        <nav epub:type="landmarks"><ol>
+        <li><a epub:type="frontmatter" href="one.xhtml">Prologue</a></li>
+        <li><a epub:type="bodymatter" href="two.xhtml">Start of Content</a></li>
+        <li><a epub:type="cover" href="two.xhtml">Cover</a></li>
+        </ol></nav>
+        """
+        let package = try Self.package(landmarks: landmarks, spine: ["one", "two", "three"])
+        // `frontmatter` excluded nothing, and `bodymatter` vetoed nothing.
+        #expect(package.frontMatter == [Self.path("two")])
+    }
+
+    @Test("front matter covering the whole spine is dropped")
+    func coveringTheWholeSpineDropsIt() throws {
+        // A mis-tagged book has to leave the bug in place rather than become
+        // unanswerable: an index with no passages at all answers every question
+        // with "the story hasn't reached that yet".
+        let landmarks = """
+        <nav epub:type="landmarks"><ol>
+        <li><a epub:type="cover" href="one.xhtml">Cover</a></li>
+        <li><a epub:type="titlepage" href="two.xhtml">Title Page</a></li>
+        </ol></nav>
+        """
+        let package = try Self.package(landmarks: landmarks, spine: ["one", "two"])
+        #expect(package.frontMatter.isEmpty)
+    }
+
+    @Test("the guide is consulted only when the landmarks name nothing")
+    func theGuideIsOnlyTheFallback() throws {
+        let guide = """
+        <guide><reference type="cover" title="Cover" href="xhtml/two.xhtml"/></guide>
+        """
+        let landmarks = """
+        <nav epub:type="landmarks"><ol>
+        <li><a epub:type="dedication" href="one.xhtml">Dedication</a></li>
+        </ol></nav>
+        """
+        let spine = ["one", "two", "three"]
+        // EPUB 2's vocabulary is coarser and its `cover` reference is often the
+        // whole wrapper page, so a book that says both is believed on the newer.
+        let modern = try Self.package(landmarks: landmarks, guide: guide, spine: spine)
+        #expect(modern.frontMatter == [Self.path("one")])
+        // For a book with no landmarks the guide is the only thing there is,
+        // and its hrefs resolve against the package document, not the nav.
+        let older = try Self.package(guide: guide, spine: spine)
+        #expect(older.frontMatter == [Self.path("two")])
+    }
+
+    // MARK: - A page list wearing the landmarks name
+
+    /// One anchor per printed page, in the shape a real page list has: every
+    /// href fragmented, because a page is a place inside a document rather than
+    /// a document. The one fragmentless entry is what makes the nav dangerous —
+    /// it is the only anchor in it the front-matter rule can act on, and it
+    /// deletes a chapter.
+    static func pageAnchors(_ count: Int) -> String {
+        (1 ... count).map {
+            "<li><a href=\"three.xhtml#page-\($0)\">\($0)</a></li>"
+        }.joined(separator: "\n")
+            + "\n<li><a epub:type=\"cover\" href=\"one.xhtml\">Cover</a></li>"
+    }
+
+    /// The guide such a book still has, naming a different document — so the
+    /// assertion tells "the page list was ignored" apart from "nothing was
+    /// found", which an empty result cannot.
+    static let coverGuide = """
+    <guide><reference type="cover" title="Cover" href="xhtml/two.xhtml"/></guide>
+    """
+
+    @Test("a page list calling itself landmarks is not read as landmarks")
+    func aPageListMasqueradingAsLandmarksIsIgnored() throws {
+        // The exact shape of the Gutenberg conversion: the landmarks
+        // declaration, the label a reading system announces, and the class the
+        // list itself carries.
+        let landmarks = """
+        <nav epub:type="landmarks" aria-label="Page List">
+        <ol id="pages" class="pagelist">
+        \(Self.pageAnchors(5))
+        </ol></nav>
+        """
+        let package = try Self.package(
+            landmarks: landmarks, guide: Self.coverGuide, spine: ["one", "two", "three"],
+        )
+        // Not `one`: that is the page list's single fragmentless anchor, and
+        // believing it deletes a chapter. And the guide is consulted again,
+        // which a page list used to short-circuit by leaving a non-empty result.
+        #expect(package.frontMatter == [Self.path("two")])
+    }
+
+    @Test("a nav too long to be a landmarks list is not read as one")
+    func aNavTooLongToBeLandmarksIsIgnored() throws {
+        // Nothing but its length gives this one away — no label, no class, and
+        // the same `landmarks` declaration. 453 is the count in the *Pride and
+        // Prejudice* fixture; the vocabulary it claims to be drawn from has
+        // about thirty tokens.
+        let landmarks = """
+        <nav epub:type="landmarks"><ol>
+        \(Self.pageAnchors(453))
+        </ol></nav>
+        """
+        let package = try Self.package(
+            landmarks: landmarks, guide: Self.coverGuide, spine: ["one", "two", "three"],
+        )
+        #expect(package.frontMatter == [Self.path("two")])
+    }
+
+    /// The book the rule was written against, read whole.
+    ///
+    /// `Tools/docker/data` is git-ignored — the local test stack's library —
+    /// so this file is present in a working checkout and absent from a fresh
+    /// clone, and the test is gated on it rather than bundled as a resource
+    /// (24 MB of readaloud EPUB). The path is built from `#filePath` the way
+    /// `CustomFontsTests` builds its font directory.
+    static let prideAndPrejudice = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()  // Tests/
+        .deletingLastPathComponent()  // IssaEPUB/
+        .deletingLastPathComponent()  // Packages/
+        .deletingLastPathComponent()  // the repository root
+        .appendingPathComponent("Tools/docker/data/storyteller/library/pride-and-prejudice.epub")
+
+    @Test(
+        "the page list that prompted the rule names no front matter at all",
+        .enabled(if: FileManager.default.fileExists(
+            atPath: FrontMatterTests.prideAndPrejudice.path,
+        )),
+    )
+    func aRealPageListParsesToNothing() throws {
+        let package = try EPUBPackage.open(url: Self.prideAndPrejudice)
+        #expect(package.frontMatter.isEmpty)
+        // And the contents nav — the other `<nav>` in the same document, and
+        // the one that must still be read — is untouched by the guard.
+        #expect(package.navigation.count == 63)
+    }
+
+    // MARK: - A document too long to be apparatus
+
+    @Test("a document as long as a chapter is not apparatus, whatever it is tagged")
+    func aDocumentAsLongAsAChapterIsNotApparatus() throws {
+        // The shape Gutenberg's *Pride and Prejudice* has: its first document
+        // is declared front matter and holds the opening chapters, 156 KB
+        // against a 105 KB mean. The whole-spine guard cannot see it — it fires
+        // only at 100 % of the spine — so the book loses real prose in silence.
+        let landmarks = """
+        <nav epub:type="landmarks"><ol>
+        <li><a epub:type="dedication" href="one.xhtml">Dedication</a></li>
+        <li><a epub:type="cover" href="two.xhtml">Cover</a></li>
+        </ol></nav>
+        """
+        let spine = ["one", "two", "three"]
+        let padded = try Self.package(
+            landmarks: landmarks, spine: spine, sizes: ["one": 20_000],
+        )
+        // `one` is 20 KB against a mean of about 6.7 KB, so the dedication tag
+        // loses to the byte count; `two` is the size of the rest and stays out.
+        #expect(padded.frontMatter == [Self.path("two")])
+
+        // With every document the same size the rule is strictly-greater and
+        // fires on nothing, so both exclusions stand — which is also what keeps
+        // every other fixture in this suite green.
+        let even = try Self.package(landmarks: landmarks, spine: spine)
+        #expect(even.frontMatter == Set(["one", "two"].map(Self.path)))
+    }
+}
+
 @Suite("Inflate answers honestly about what it decoded")
 struct InflateHonestyTests {
     /// The canonical empty DEFLATE stream, which Python's zipfile writes for

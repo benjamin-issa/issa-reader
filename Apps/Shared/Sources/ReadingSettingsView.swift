@@ -29,14 +29,33 @@ public struct ReadingSettingsView: View {
 
     private var content: some View {
         @Bindable var settings = settings
+        let theme = settings.readerStyle.theme
 
         return List {
             Section {
+                caption("Page colour — \(theme.title)")
                 ThemePicker(selection: $settings.readerStyle.theme)
+
+                caption("Highlighter on \(theme.title)")
+                HighlighterPicker(theme: theme, selection: highlighter(for: theme))
+                HighlightSample(
+                    theme: theme,
+                    highlight: settings.readerStyle.highlightColor,
+                    fontFamily: settings.readerStyle.resolvedFamily,
+                )
+
+                // Only once this page colour has departed from its default, so
+                // the row is an answer to "how do I undo this" rather than a
+                // permanent piece of furniture offering to undo nothing.
+                if settings.readerStyle.highlighters[theme] != nil {
+                    Button("Use default for \(theme.title)") {
+                        settings.readerStyle.highlighters[theme] = nil
+                    }
+                }
             } header: {
-                Text("Page colour")
+                Text("Highlighter")
             } footer: {
-                Text("The same control is in the reader under Aa. Page colour is one setting for every book, not a per-book choice like the type.")
+                Text("The same control is in the reader under Aa. Page colour is one setting for every book, not a per-book choice like the type. Each page colour remembers its own highlighter for the sentence being read aloud.")
             }
             .listRowBackground(Palette.surface)
 
@@ -80,6 +99,14 @@ public struct ReadingSettingsView: View {
             }
             .listRowBackground(Palette.surface)
 
+            #if os(macOS)
+            // The Mac's Settings window has no Ask row of its own — this screen
+            // *is* its Reading tab, and there is no phone-style Settings list
+            // above it to carry the section. On iOS it lives in `SettingsView`
+            // only, so it is not offered twice.
+            AskSettingsSection()
+            #endif
+
             Section {
                 NavigationLink { FontLicencesView() } label: {
                     Label("Fonts & licences", systemImage: "textformat.alt")
@@ -105,5 +132,31 @@ public struct ReadingSettingsView: View {
             }
         }
         #endif
+    }
+
+    /// A quiet line naming what the control under it applies to.
+    ///
+    /// Both swatch rows are wordless, and stacked in one section they read as
+    /// eight anonymous circles. Naming the page colour in each also states the
+    /// thing the section is really about: the second row belongs to whichever
+    /// paper the first row has chosen.
+    private func caption(_ text: String) -> some View {
+        Text(text)
+            .font(Typography.subhead)
+            .foregroundStyle(Palette.inkSecondary)
+    }
+
+    /// A binding into one page colour's entry.
+    ///
+    /// Written out because `Binding` forwards member lookups, not subscripts,
+    /// so `$settings.readerStyle.highlighters[theme]` does not compile.
+    /// Assigning `nil` removes the key rather than storing an empty value,
+    /// which is what keeps "this page colour has been changed" answerable as a
+    /// presence test.
+    private func highlighter(for theme: ReaderTheme) -> Binding<HighlighterChoice?> {
+        Binding(
+            get: { settings.readerStyle.highlighters[theme] },
+            set: { settings.readerStyle.highlighters[theme] = $0 },
+        )
     }
 }

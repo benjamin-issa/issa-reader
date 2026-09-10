@@ -21,6 +21,7 @@ struct BookProgressTests {
             manifest: real.manifest,
             spine: Array(real.spine.prefix(sizes.count)),
             navigation: real.navigation,
+            frontMatter: [],
             spineWeights: sizes.map(Double.init),
         )
     }

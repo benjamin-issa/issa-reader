@@ -44,6 +44,11 @@ enum UITestFixture {
         // `LayoutSweepTests`' `-issa.lastServer ""` still wins where it wants
         // the signed-out screen.
         UserDefaults.standard.register(defaults: ["issa.lastServer": server])
+        // Something for the Reading tab's Downloaded section to lay out. Without
+        // it the sweep only ever measures the empty state, and the rows — a
+        // cover, a title, a byline and a right-aligned size — are the part that
+        // can overflow a margin.
+        FixtureLibrary.plantDownloads()
         return (InMemoryTokens(), server)
     }
 }

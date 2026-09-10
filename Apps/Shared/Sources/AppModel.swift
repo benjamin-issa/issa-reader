@@ -1,6 +1,9 @@
 import Foundation
 import IssaCore
 import IssaPlayback
+// For `CustomFonts`: a removal has to take the publisher face the reader model
+// extracted with it, and that directory is IssaUI's to name.
+import IssaUI
 import Observation
 import SwiftUI
 #if canImport(WidgetKit)
@@ -36,12 +39,43 @@ public final class AppModel {
     /// every two seconds while narrating. `recordPosition` recomputes only
     /// what a position can move.
     public var books: [Book] = []
-    /// Books with at least one file on disk, from a single directory read.
+    /// Books with at least one file on disk *and* not on their way off it.
     ///
     /// The download shelf and its count both need this for the whole library,
     /// and asking `isDownloaded` per book per format is a `stat` per format per
     /// book — thousands of syscalls in a scrolled frame.
+    ///
+    /// A removal waiting out its undo window is subtracted, because for those
+    /// six seconds this set was the app's only answer to "is this on the
+    /// device" and it was the wrong one. `DownloadsSection` filtered its own
+    /// rows and nothing else did — so the shelf, the offline filter, CarPlay's
+    /// catalogue and the reader all went on offering a file that was about to
+    /// be deleted underneath them. In a car, in a tunnel, that is silence.
+    ///
+    /// Only when the pending removal is the book's *last* edition: it is keyed
+    /// by book, and a book that has lost one of two has not left the device.
     public private(set) var downloadedUUIDs: Set<String> = [] { didSet { rebuildDerived() } }
+    /// What the last directory read actually found, before the undo window is
+    /// applied. The disk's own answer, kept so the window can be taken back
+    /// without another read.
+    private var downloadedOnDisk: Set<String> = []
+    /// Bumped every time the app has reason to think the Books directory has
+    /// changed, for the screens that walk it themselves.
+    ///
+    /// Those screens keyed their scans on collection *counts*, and a count
+    /// cannot see the change that matters most here: removing one edition of a
+    /// two-edition book leaves `downloadedUUIDs` — which is keyed by book —
+    /// exactly equal, and the transfer list never held it. So the row kept its
+    /// old size, the header kept its old total, and nothing re-ran until some
+    /// unrelated number happened to move. On the Apple TV, which has no undo
+    /// window either, nothing ever did.
+    ///
+    /// A counter rather than a richer key because the question is "has the disk
+    /// changed", and the only honest answer to that is from the code that
+    /// changed it. `refreshDownloadedSet` is called on exactly those occasions
+    /// — a finish, a removal, a cancel, a sign-in, the app coming forward, a car
+    /// connecting — and on no render path, so bumping it there is bounded.
+    public private(set) var downloadsRevision = 0
     /// The shelves this server defines. Fetched once per sign-in; an admin can
     /// add their own beyond the default To read / Reading / Read.
     public var statuses: [Status] = []
@@ -69,6 +103,9 @@ public final class AppModel {
     public private(set) var readingHome: ReadingHome = .empty
 
     private let keychain: any TokenPersisting
+    /// Where sign-out's broadcast goes. `.default` in the app; a test's own, so
+    /// one suite's sign-out cannot clear another suite's state.
+    private let notificationCentre: NotificationCenter
     /// The on-device catalogue. Present as soon as a server is chosen, so the
     /// shelf is populated before any request is made.
     public private(set) var store: LibraryStore?
@@ -82,8 +119,23 @@ public final class AppModel {
     /// Queued writes still waiting for a connection, for the sync row.
     public private(set) var pendingWrites = 0
 
-    public init(keychain: any TokenPersisting = KeychainStorage()) {
+    /// `notificationCentre` is injectable for one reason: sign-out broadcasts a
+    /// process-wide notification, and `PlaybackSettings` and `AskCoordinator`
+    /// both observe it on the default centre with `object: nil` — neither is
+    /// owned by an `AppModel`, which is why the message is a notification at
+    /// all. swift-testing runs suites in parallel, so a test that signs out
+    /// reached into unrelated suites and cleared their per-book styles, their
+    /// volume trims and their whole question index mid-run. That is a plausible
+    /// cause of `swift test` failing once with a single issue and passing on an
+    /// identical re-run. A test hands over a centre of its own, and the message
+    /// is then scoped to the instance under test without being weakened: it is
+    /// still posted, and still assertable.
+    public init(
+        keychain: any TokenPersisting = KeychainStorage(),
+        notificationCentre: NotificationCenter = .default,
+    ) {
         self.keychain = keychain
+        self.notificationCentre = notificationCentre
         serverAddress = UserDefaults.standard.string(forKey: Self.lastServerKey) ?? ""
         reachability.onBecameOnline = { [weak self] in
             Task { await self?.drainPendingWrites() }
@@ -423,6 +475,11 @@ public final class AppModel {
     /// - Parameter keepDownloads: books already on the device are expensive to
     ///   fetch again, so the choice is offered rather than assumed.
     public func signOut(keepDownloads: Bool = false, nowPlaying: NowPlayingController? = nil) async {
+        // Before anything else, and before the state it acts on is torn down.
+        // A removal still inside its undo window is a decision the reader has
+        // already made; leaving it to a timer that fires after the account has
+        // gone would delete a file belonging to whoever signs in next.
+        commitPendingRemoval()
         await session?.signOut()
         await clearAccountScopedState(nowPlaying: nowPlaying)
 
@@ -438,6 +495,11 @@ public final class AppModel {
             for folder in ["Books", "Audio"] {
                 try? FileManager.default.removeItem(at: StorageRoot.directory(folder))
             }
+            // The publisher faces those downloads left behind. Not `Fonts/`
+            // itself: a face the reader imported lives at its root, this is
+            // the only copy of it, and it belongs to them the way their
+            // annotations do rather than to the account that is leaving.
+            CustomFonts.removeAllExtracted()
         }
         phase = .chooseServer
     }
@@ -487,6 +549,9 @@ public final class AppModel {
         positionGuards = [:]
         books = []
         rebuildDerived()
+        // Both, or the next refresh would derive the visible set from the
+        // departing account's disk reading.
+        downloadedOnDisk = []
         downloadedUUIDs = []
         statuses = []
         ratings = [:]
@@ -500,7 +565,7 @@ public final class AppModel {
         readerRequest = nil
         visibleReaderUUID = nil
         listeningError = nil
-        NotificationCenter.default.post(name: PlaybackSettings.signOutNotification, object: nil)
+        notificationCentre.post(name: PlaybackSettings.signOutNotification, object: nil)
 
         // The account's transfers go with it. The manager itself stays: its
         // background session owns its identifier for the life of the process,
@@ -863,19 +928,302 @@ public final class AppModel {
     /// forgetting it silently orphans hundreds of megabytes — a second copy of
     /// this in another screen is a second chance to forget.
     public func removeDownload(_ book: Book, format: BookContentService.Format) {
-        guard let session else { return }
-        BookContentService(client: session.client).removeDownload(book, format: format)
-        if format == .readaloud { AudioExtraction.removeExtractedAudio(for: book.uuid) }
-        downloads?.clear(.init(bookUUID: book.uuid, format: format))
+        removeDownload(bookUUID: book.uuid, format: format)
+    }
+
+    /// The same, named by uuid, for a file whose book is no longer in the
+    /// catalogue.
+    ///
+    /// Those files are precisely the ones with no row on any screen: the
+    /// storage headline counts the whole Books directory while every band sums
+    /// books still in the library, so a download whose book has left was in the
+    /// total, absent from the bar, and impossible to delete from the interface
+    /// at all. Nothing in a removal ever needed the `Book`.
+    public func removeDownload(bookUUID: String, format: BookContentService.Format) {
+        let job = DownloadManager.Job(bookUUID: bookUUID, format: format)
+        // Cancel, then clear — and both before the file is touched.
+        //
+        // `clear` only forgets the state row; the transfer carries on, and when
+        // it lands `didFinishDownloadingTo` moves the file into place. So
+        // removing a download that was still arriving deleted nothing and the
+        // book reappeared a minute later. The Downloads section lists in-flight
+        // and on-disk items together, which puts that one tap away.
+        downloads?.cancel(job)
+        downloads?.clear(job)
+        // No session needed: this is a file being deleted, and requiring an
+        // `APIClient` for it is why a reader who had signed out keeping their
+        // downloads could not remove one.
+        BookContentService.removeDownload(bookUUID: bookUUID, format: format)
+        releaseDerivedFiles(for: bookUUID, format: format)
         refreshDownloadedSet()
     }
 
-    /// Re-reads which books have files on disk.
+    /// Stops a transfer that has not finished, and takes nothing else with it.
     ///
-    /// Called when a download finishes, when one is deleted, on sign-out, and
-    /// when the app comes forward — a transfer can complete while backgrounded.
+    /// The X on a transfer row called `removeDownload`, which is a *book*
+    /// removal: it released the publisher face and the question index as well.
+    /// So cancelling a download started by mistake destroyed derived data
+    /// belonging to a different edition of that book already on the device —
+    /// the reader tapped a cross on a progress bar and lost the index of the
+    /// copy they were reading.
+    ///
+    /// What a cancel legitimately touches is this job: the transfer, its row,
+    /// and its own file if one somehow landed. `DownloadManager.cancel` fences
+    /// the job's in-flight completion, so a file that arrives immediately after
+    /// this is discarded rather than moved into place.
+    ///
+    /// The file is removed rather than assumed absent because a transfer can
+    /// complete between the tap and this line, and a download the reader
+    /// stopped must not be left on the device unmentioned.
+    public func cancelDownload(_ job: DownloadManager.Job) {
+        downloads?.cancel(job)
+        downloads?.clear(job)
+        BookContentService.removeDownload(bookUUID: job.bookUUID, format: job.format)
+        refreshDownloadedSet()
+    }
+
+    /// Everything a download leaves behind on disk once its file has gone.
+    ///
+    /// Idempotent — every step is "remove it if it is there" — because it runs
+    /// from `removeDownload` and again from the reconciliation sweep below,
+    /// and on the ordinary path it runs from both.
+    ///
+    /// Called *after* the file has been deleted, which is what lets the check
+    /// below be a question about the disk rather than about intent.
+    private func releaseDerivedFiles(for bookUUID: String, format: BookContentService.Format?) {
+        // Narration extracted from the read-along for playback. Keyed on the
+        // format when one is named, because it is derived from that file
+        // specifically; the sweep names none, because by then it cannot tell
+        // which file went.
+        if format == nil || format == .readaloud {
+            AudioExtraction.removeExtractedAudio(for: bookUUID)
+        }
+
+        // The remaining two belong to the book, not to the edition that just
+        // went, and this method deleted them unconditionally. A book with a
+        // read-along *and* an ebook on the device therefore lost its publisher
+        // face and its whole question index when either one was removed — data
+        // derived from the copy still sitting on disk, and discovered only on
+        // the next open, when the book was set in the fallback face and the
+        // questions it had been indexed for started again from nothing.
+        //
+        // `DownloadsInventory.departed` states the rule this has to honour: "a
+        // book that lost one of two editions has not departed". So the disk is
+        // asked, and these go only when the last edition carrying the book's
+        // text has gone. The sweep reaches here for books with no file left at
+        // all, so it is unaffected.
+        guard !BookContentService.hasDownloadedText(bookUUID: bookUUID) else { return }
+
+        // The publisher's own face, extracted on every open of a book that
+        // ships one. Nothing removed these: `Fonts/<uuid>/` accumulated one
+        // directory per book for the life of the install, uncounted by the
+        // storage screen and unreachable from the interface. Only the
+        // subdirectory — faces at the root of `Fonts/` were imported by the
+        // reader and are theirs.
+        CustomFonts.removeExtracted(bookUUID: bookUUID)
+        #if !os(tvOS)
+        // The question index is derived from the file that has just gone, so it
+        // is orphaned the moment this returns — and it is text out of the
+        // reader's book sitting in a database nothing will ever open again.
+        ask?.remove(bookUUID: bookUUID)
+        #endif
+    }
+
+    /// Re-reads which books have files on disk, and cleans up after any that
+    /// went without being removed.
+    ///
+    /// Called when a download finishes, when one is deleted, on sign-out, when
+    /// the app comes forward — a transfer can complete while backgrounded — and
+    /// when a car connects.
+    /// A directory this cannot read leaves both the set and the sweep alone.
+    /// The read used to be coalesced to an empty set, and every caller below
+    /// then agreed that the reader had deleted their entire library: the shelf
+    /// emptied, and `reconcileDownloads` deleted every book's question index,
+    /// extracted narration and publisher font, none of which comes back. An
+    /// unreadable directory is a fact about this moment, not about the disk —
+    /// the last set it did read is a better answer than a wrong one, and the
+    /// next refresh is a few seconds away.
     public func refreshDownloadedSet() {
-        downloadedUUIDs = BookContentService.downloadedBookUUIDs()
+        let previous = downloadedOnDisk
+        guard let current = try? BookContentService.downloadedBookUUIDs() else {
+            IssaLog.warning("could not read the downloads directory; keeping the last set",
+                            ["kept": String(previous.count)])
+            return
+        }
+        downloadedOnDisk = current
+        applyPendingRemovalToDownloadedSet()
+        // After a successful read, so a screen does not re-scan a directory
+        // this call could not read either.
+        downloadsRevision &+= 1
+        // Against the disk's own reading, both times. The sweep asks which
+        // books lost their last *file*, and a removal inside its undo window has
+        // deliberately lost none yet — reconciling against the set the window
+        // has already been subtracted from would delete the very derived files
+        // the deferral exists to keep recoverable.
+        reconcileDownloads(previouslyDownloaded: previous)
+    }
+
+    /// Recomputes `downloadedUUIDs` from the disk's answer and the open window.
+    ///
+    /// Called whenever either changes. The pending removal costs at most three
+    /// `stat`s and only while a toast is up, which is the price of the shelf and
+    /// the car agreeing with the screen the reader is looking at.
+    private func applyPendingRemovalToDownloadedSet() {
+        guard let pending = pendingRemoval else {
+            downloadedUUIDs = downloadedOnDisk
+            return
+        }
+        let remaining = BookContentService
+            .downloadedFormats(bookUUID: pending.bookUUID)
+            .subtracting([pending.format])
+        downloadedUUIDs = remaining.isEmpty
+            ? downloadedOnDisk.subtracting([pending.bookUUID])
+            : downloadedOnDisk
+    }
+
+    /// Whether this edition is on the device and staying there.
+    ///
+    /// The per-edition question, which `downloadedUUIDs` cannot answer: it is
+    /// keyed by book, and a book with a read-along and an ebook on the device is
+    /// one entry. Everything in the app that asks about a *format* should ask
+    /// here rather than `BookContentService.isDownloaded`, which knows only
+    /// about the filesystem and so cannot see a removal that has been decided
+    /// but not yet carried out.
+    public func isDownloaded(_ book: Book, format: BookContentService.Format) -> Bool {
+        isDownloaded(bookUUID: book.uuid, format: format)
+    }
+
+    public func isDownloaded(bookUUID: String, format: BookContentService.Format) -> Bool {
+        guard pendingRemoval?.bookUUID != bookUUID || pendingRemoval?.format != format
+        else { return false }
+        return BookContentService.downloadedFormats(bookUUID: bookUUID).contains(format)
+    }
+
+    /// Runs the rest of a removal for every book whose files went behind the
+    /// app's back.
+    ///
+    /// `downloadedUUIDs` is read from the disk rather than maintained, because
+    /// a download can leave without this app deleting it. On an Apple TV every
+    /// download lives in Caches, which the system may reclaim under storage
+    /// pressure — that is the platform's contract, not a choice (see
+    /// `StorageRoot`). A restore, a failed move, a file removed underneath us:
+    /// same shape. In each case the extracted narration, the publisher's font
+    /// and the question index stay behind, and the index in particular is the
+    /// text of the reader's book — which PRIVACY.md promises is "deleted when
+    /// you delete the download or sign out".
+    ///
+    /// It is also what keeps a car honest. CarPlay is its own scene and can be
+    /// alive while the phone app never goes active, and the offline shelf
+    /// filters on nothing but this set: the car offered a book whose file had
+    /// gone, playback fell back to streaming, and in a tunnel that is silence.
+    ///
+    /// Takes the previous set rather than keeping one of its own, so there is
+    /// exactly one definition of "what is downloaded" and it is the disk.
+    func reconcileDownloads(previouslyDownloaded previous: Set<String>) {
+        let departed = DownloadsInventory.departed(from: previous, to: downloadedUUIDs)
+        guard !departed.isEmpty else { return }
+        for bookUUID in departed { releaseDerivedFiles(for: bookUUID, format: nil) }
+        IssaLog.info("reconciled downloads", ["gone": String(departed.count)])
+    }
+
+    // MARK: - Removing a download the reader can take back
+
+    /// A removal waiting out its undo window.
+    public struct PendingRemoval: Identifiable, Sendable, Equatable {
+        public let bookUUID: String
+        public let format: BookContentService.Format
+        /// For the toast — "Removed Dracula" — because the row it came from is
+        /// off the screen by the time the toast is drawn.
+        public let title: String
+        public var id: String { "\(bookUUID)-\(format.rawValue)" }
+    }
+
+    /// The one removal that can still be taken back, if any.
+    ///
+    /// One at a time, like Mail's undo send: a second removal commits the first
+    /// rather than queueing, because a toast that could mean any of three rows
+    /// is not an undo.
+    ///
+    /// The `didSet` rather than a call at each of the four sites that assign
+    /// this. Missing one is precisely the bug being fixed here: `pendingRemoval`
+    /// was honoured by the rows of one section and by nothing else, so every
+    /// other surface in the app spent the window offering a file that was about
+    /// to be deleted.
+    public private(set) var pendingRemoval: PendingRemoval? {
+        didSet { applyPendingRemovalToDownloadedSet() }
+    }
+    private var pendingRemovalTask: Task<Void, Never>?
+
+    /// How long the toast stands.
+    public static let removalUndoWindow: Duration = .seconds(6)
+
+    /// Hides an edition now and deletes it when the undo window closes.
+    ///
+    /// Deferred rather than undone, and that is the whole point. The section
+    /// this serves must offer an undo *and* must never start a download —
+    /// re-fetching 612 MB of read-along over cellular because a thumb brushed a
+    /// row is not an undo — so the only honest way to have both is for the
+    /// bytes to still be there while the toast is up.
+    ///
+    /// The timer lives here rather than in the view because the view is a row
+    /// in a `LazyVStack`: scroll it off screen, or leave the tab, and a task
+    /// owned by it is cancelled with it — leaving the file on disk and the
+    /// reader believing it gone.
+    ///
+    /// If the app is killed inside the window the removal simply does not
+    /// happen and the row is back next launch. That is the safe direction: a
+    /// book still there costs storage, a book deleted by a crash costs a
+    /// download.
+    public func removeDownload(
+        bookUUID: String, format: BookContentService.Format, title: String,
+        undoWindow: Duration = AppModel.removalUndoWindow,
+    ) {
+        commitPendingRemoval()
+        pendingRemoval = PendingRemoval(bookUUID: bookUUID, format: format, title: title)
+        pendingRemovalTask = Task { [weak self] in
+            try? await Task.sleep(for: undoWindow)
+            guard !Task.isCancelled else { return }
+            self?.commitPendingRemoval()
+        }
+    }
+
+    /// Takes back a pending removal when the very edition it is holding starts
+    /// downloading again.
+    ///
+    /// Nothing cleared `pendingRemoval` when a transfer began, so a download
+    /// restarted inside the six-second window was cancelled and deleted the
+    /// moment the window closed — by a timer armed before the reader changed
+    /// their mind. On screen it looked like a download that simply stopped:
+    /// the row appeared, the bar moved, and then both were gone with no error
+    /// anywhere, because from the app's point of view nothing had failed.
+    ///
+    /// Starting a download of an edition is the clearest possible statement
+    /// that it should be on the device, so it wins over a removal that has not
+    /// happened yet. Only for the same job: a removal of one book has nothing
+    /// to say about a download of another.
+    private func cancelPendingRemoval(matching job: DownloadManager.Job) {
+        guard pendingRemoval?.bookUUID == job.bookUUID,
+              pendingRemoval?.format == job.format else { return }
+        undoPendingRemoval()
+    }
+
+    /// Puts the row back. Nothing was deleted, so there is nothing to fetch.
+    public func undoPendingRemoval() {
+        pendingRemovalTask?.cancel()
+        pendingRemovalTask = nil
+        pendingRemoval = nil
+    }
+
+    /// Deletes what the window was holding, now.
+    ///
+    /// Called when the window closes, when a second removal displaces this one,
+    /// and by anything that must not leave a half-done removal behind.
+    public func commitPendingRemoval() {
+        pendingRemovalTask?.cancel()
+        pendingRemovalTask = nil
+        guard let pending = pendingRemoval else { return }
+        pendingRemoval = nil
+        removeDownload(bookUUID: pending.bookUUID, format: pending.format)
     }
 
     // MARK: - Deep links
@@ -1035,6 +1383,65 @@ public final class AppModel {
         } else if visibleReaderUUID == uuid {
             visibleReaderUUID = nil
         }
+        // Both directions: a reader appearing over running narration is what
+        // takes the hold, and one being dismissed is what gives it back.
+        updateScreenAwake()
+    }
+
+    /// Whether the app is frontmost, pushed in by each target's scene-phase
+    /// handler.
+    ///
+    /// Not derivable here: `AppModel` is not a view and has no `scenePhase`,
+    /// and this is the one input to `ScreenAwake` it cannot see for itself. It
+    /// starts true because the model is built while a scene is coming up, and a
+    /// launch that never reported would otherwise be treated as backgrounded
+    /// for the life of the process.
+    private var isForeground = true
+
+    /// The single holder of the display assertion. See `ScreenAwakeAssertion`
+    /// for why there is exactly one, and `ScreenAwake` for the decision it
+    /// applies.
+    private let screenAwake = ScreenAwakeAssertion()
+
+    /// Whether the display is being held awake for a read-along right now.
+    ///
+    /// Internal rather than private so `IssaSharedTests` can assert the release
+    /// paths — a keep-awake nothing releases is a flat battery, which is the
+    /// worse of the two bugs on offer here.
+    var keepsScreenAwake: Bool { screenAwake.isHeld }
+
+    /// Told when the app goes to and comes back from the background.
+    ///
+    /// The reader is a full-screen cover on iOS and being backgrounded does not
+    /// dismiss it — the same fact `flushOpenReaders()` exists for — so without
+    /// this a phone pocketed mid-read-along would go on holding its own display
+    /// awake until the book ended.
+    public func setForeground(_ foreground: Bool) {
+        guard isForeground != foreground else { return }
+        isForeground = foreground
+        updateScreenAwake()
+    }
+
+    /// Recomputes whether the display should be held awake, and holds or
+    /// releases it.
+    ///
+    /// Called from every place any of the four inputs can move:
+    /// `setReaderVisible`, `setForeground`, `stopNarration`,
+    /// `narrationDidStart`, and the rate observer installed in
+    /// `reader(for:session:)` — which is the one that catches a pause,
+    /// whichever surface asked for it, the sleep timer included.
+    private func updateScreenAwake() {
+        // `listening` is checked rather than assumed away: an audiobook and a
+        // read-along cannot both be audible (`startListening` stops narration
+        // first), but the decision must not rest on that invariant holding
+        // somewhere else in the file.
+        let narrated = listening == nil ? narratingBookUUID : nil
+        screenAwake.apply(ScreenAwake.shouldKeepAwake(
+            isPlaying: playback?.player.isPlaying ?? false,
+            isReaderVisible: visibleReaderUUID != nil,
+            followsText: narrated != nil && narrated == visibleReaderUUID,
+            isForeground: isForeground,
+        ))
     }
 
     /// Which open book, if any, owns the active narration and Now Playing.
@@ -1075,6 +1482,13 @@ public final class AppModel {
     /// starts and stops from places that have no view context to thread it
     /// through — a CarPlay list item, the end of a book, the reader closing.
     public weak var nowPlayingController: NowPlayingController?
+
+    #if !os(tvOS)
+    /// The question machinery, handed over at launch for the same reason and on
+    /// the same terms: deleting a download has to take that book's index with
+    /// it, and this object is not the owner of either.
+    weak var ask: AskCoordinator?
+    #endif
 
     /// Whatever is playing, of either kind. Nil when nothing is.
     public var playback: (any PlaybackDriving)? {
@@ -1149,8 +1563,17 @@ public final class AppModel {
         // necessarily the one whose rate actually changed.
         model.onNarrationReady = { [weak self] coordinator in
             coordinator.player.setRateObserver(for: coordinator) { [weak self] rate in
-                guard rate > 0 else { return }
-                self?.narrationDidStart(for: bookUUID)
+                guard let self else { return }
+                if rate > 0 { narrationDidStart(for: bookUUID) }
+                // Not inside the `rate > 0` branch, which is what this observer
+                // used to be entirely: a rate of zero is the *release* signal,
+                // and it is the only one that reaches every way a read-along
+                // stops — the reader's own button, the player sheet, a headphone
+                // click, a phone call, a lost route, and the sleep timer's
+                // `pause()`, which is the case a reader who set one most cares
+                // about. `AudioPlayer.pause()` writes `isPlaying` before it
+                // notifies, so the value read here is already the new one.
+                updateScreenAwake()
             }
         }
         readers[bookUUID] = model
@@ -1222,6 +1645,10 @@ public final class AppModel {
         readers[uuid]?.readalong?.player.pause()
         nowPlayingController?.attach(coordinator: nil, book: nil)
         releaseIfScreenClosed(uuid)
+        // The pause above already fired the rate observer, but this runs after
+        // `narratingBookUUID` was cleared, and that is the field the decision
+        // reads. Idempotent, so the second call costs nothing.
+        updateScreenAwake()
     }
 
     /// Lets go of a model whose screen already closed, now that the narration
@@ -1265,6 +1692,10 @@ public final class AppModel {
             // had let go of it.
             chapterTitle: { [weak model] in model?.chapterTitle },
         )
+        // `narratingBookUUID` has just moved, and it is half of `followsText`.
+        // The other half — a reader on screen for this same book — is normally
+        // already true, because this is reached by a reader pressing play.
+        updateScreenAwake()
     }
 
     /// Re-entrancy guard for `startListening`, which suspends at the manifest
@@ -1347,8 +1778,10 @@ public final class AppModel {
             // offset to that same file — a resume at 50% seeked minutes in
             // instead of hours, and then persisted the double-counted clock.
             let content = BookContentService(client: session.client)
+            // Through the model, so an audiobook inside its undo window is
+            // streamed rather than played from a file about to be deleted.
             let playableAsOneFile = manifest.playableTracks.count == 1
-                && content.isDownloaded(book, format: .audiobook)
+                && isDownloaded(book, format: .audiobook)
             let source: AudiobookCoordinator.Source = playableAsOneFile
                 ? .local(content.localURL(for: book, format: .audiobook))
                 : .streaming(
@@ -1358,6 +1791,10 @@ public final class AppModel {
 
             let coordinator = AudiobookCoordinator(manifest: manifest, source: source)
             coordinator.player.rate = Float(settings.playbackRate)
+            // The level belongs to the book, not to the surface it is played
+            // from: Listening, CarPlay and the lock screen all arrive here, and
+            // a trim set in the reader has to survive the move.
+            coordinator.player.gain = VolumeTrim.gain(settings.volumeTrim(for: book.uuid))
             listening = coordinator
             listeningBook = book
             // Play and pause both have to reach the widget, and the only
@@ -1580,7 +2017,11 @@ public final class AppModel {
         guard let session, let downloads else { throw StorytellerError.notAuthenticated }
         let content = BookContentService(client: session.client)
         let destination = content.localURL(for: book, format: format)
-        if content.isDownloaded(book, format: format) { return destination }
+        // Through the model: the bytes of an edition inside its undo window are
+        // still on disk, and returning them here would hand the reader a book
+        // that is deleted from under them six seconds later. Falling through
+        // takes the download path, which cancels that removal first.
+        if isDownloaded(book, format: format) { return destination }
 
         let job = DownloadManager.Job(bookUUID: book.uuid, format: format)
         // `download` can refuse to start at all — the Wi-Fi-only guard, most
@@ -1640,6 +2081,7 @@ public final class AppModel {
     /// free-space check still has an expected size to work with.
     public func resumeDownload(_ job: DownloadManager.Job) async {
         guard let book = books.first(where: { $0.uuid == job.bookUUID }) else {
+            cancelPendingRemoval(matching: job)
             await downloads?.start(job)
             return
         }
@@ -1673,7 +2115,12 @@ public final class AppModel {
             loadError = "Waiting for Wi-Fi to download this."
             return false
         }
-        await downloads.start(.init(bookUUID: book.uuid, format: format), expectedBytes: expected)
+        let job = DownloadManager.Job(bookUUID: book.uuid, format: format)
+        // After the guard above, so a download the Wi-Fi rule refused does not
+        // quietly take back a removal it is not going to replace — but before
+        // the transfer starts, so the timer cannot fire between the two.
+        cancelPendingRemoval(matching: job)
+        await downloads.start(job, expectedBytes: expected)
         return true
     }
 

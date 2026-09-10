@@ -19,6 +19,7 @@ struct IssaReaderApp: App {
                 .environment(services.app)
                 .environment(services.settings)
                 .environment(services.nowPlaying)
+                .environment(services.ask)
                 // Idempotent, and belt-and-braces: the delegate has normally
                 // run by now, but a scene that somehow arrives first must not
                 // find an unstarted app.
@@ -47,6 +48,7 @@ struct IssaReaderApp: App {
 
 struct RootView: View {
     @Environment(AppModel.self) private var app
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         content
@@ -75,6 +77,20 @@ struct RootView: View {
         // The session is restored by `AppServices.start()`, so that a car
         // connecting to a never-foregrounded app finds one.
         .task { await app.watchForExpiry() }
+        // Here rather than in `LibraryTabs`, which has a scene-phase handler of
+        // its own: that view exists only once the reader is signed in, and the
+        // display assertion must be released on the way to the background from
+        // any state the app can be in.
+        //
+        // The phase *asks*; it does not answer. `AppModel.isForeground` is one
+        // flag for the process and this body runs once per scene — an iPad can
+        // have two windows on this app — so writing `phase != .background`
+        // straight into it let one window going away release the hold the other
+        // window's read-along was still relying on. See `SceneForeground`,
+        // which also explains why `.inactive` counts as foreground.
+        .onChange(of: scenePhase, initial: true) { _, phase in
+            app.setForeground(SceneForeground.isAnyForeground(asking: phase))
+        }
     }
 }
 
@@ -275,10 +291,7 @@ struct LibraryTabs: View {
         // real assertion was never ended, which is what iOS kills the app for —
         // the outcome the comment above says this exists to prevent.
         let assertion = BackgroundAssertion()
-        assertion.identifier = UIApplication.shared
-            .beginBackgroundTask(withName: "issa.flushPosition") {
-                assertion.end()
-            }
+        assertion.begin(name: "issa.flushPosition")
 
         Task {
             // Not gated on the assertion. `beginBackgroundTask` returns
@@ -290,28 +303,6 @@ struct LibraryTabs: View {
             // that must not be lost.
             await app.flushOpenReaders()
             assertion.end()
-        }
-    }
-
-    /// One owner for the background-task identifier, so two closures cannot
-    /// each believe they hold it.
-    private final class BackgroundAssertion: @unchecked Sendable {
-        private let lock = NSLock()
-        private var stored: UIBackgroundTaskIdentifier = .invalid
-
-        var identifier: UIBackgroundTaskIdentifier {
-            get { lock.withLock { stored } }
-            set { lock.withLock { stored = newValue } }
-        }
-
-        /// Ends the assertion exactly once.
-        func end() {
-            let taken: UIBackgroundTaskIdentifier = lock.withLock {
-                defer { stored = .invalid }
-                return stored
-            }
-            guard taken != .invalid else { return }
-            UIApplication.shared.endBackgroundTask(taken)
         }
     }
 
@@ -351,9 +342,13 @@ struct LibraryTabs: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .background {
                 flushOnSuspend()
+                // Holds the app awake long enough to finish an answer the
+                // reader has been promised a notification about.
+                AppServices.shared.ask.appDidEnterBackground()
                 return
             }
             guard phase == .active else { return }
+            AppServices.shared.ask.appDidBecomeActive()
             // A download can finish while the app is in the background, and the
             // finish hook only fires in-process.
             app.refreshDownloadedSet()

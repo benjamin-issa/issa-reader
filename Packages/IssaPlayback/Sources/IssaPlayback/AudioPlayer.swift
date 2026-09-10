@@ -18,8 +18,69 @@ public final class AudioPlayer {
     public private(set) var currentAudioHref: String?
 
     /// 0...1, used by the sleep timer's fade-out.
+    ///
+    /// The fade owns this number outright — `NowPlayingController` hands the
+    /// timer a closure that writes it every tick — so the per-book level cannot
+    /// live here as well. It goes through `gain` instead, and the two are
+    /// combined in `applyPlayerVolume`.
     public var volume: Float = 1.0 {
-        didSet { player.volume = volume }
+        didSet { applyPlayerVolume() }
+    }
+
+    /// This book's level, as a multiplier of the recorded one.
+    ///
+    /// Separate from `volume` because it must be able to exceed 1, which
+    /// `AVPlayer.volume` cannot: a quietly mastered book needs *more* than the
+    /// file has, and that gain can only come from the samples themselves. The
+    /// value is pushed into the tap here so the real-time thread never has to
+    /// ask this actor for it.
+    public var gain: Float = 1 {
+        didSet {
+            // Clamp, then apply the clamped value, in one pass — the same
+            // shape, and for the same reason, as `PlaybackSettings.playbackRate`
+            // documents at length: this class is `@Observable`, so the property
+            // is macro-synthesised and the assignment below *does* re-enter this
+            // observer. Writing the clamped value afterwards regardless is what
+            // makes the method not depend on knowing that.
+            let legal = VolumeTrim.clampedGain(gain)
+            if legal != gain { gain = legal }
+            gainTap.gain.store(legal, ordering: .relaxed)
+            applyPlayerVolume()
+        }
+    }
+
+    /// What the player is actually set to, for tests. The interesting cases are
+    /// the ones where it is *not* `volume`: a stream with no loadable tracks
+    /// has no tap, and the quieter half of the trim is then carried here.
+    var underlyingVolume: Float { player.volume }
+
+    /// Whether the loaded item's audio genuinely runs through the tap.
+    ///
+    /// False for anything whose tracks could not be loaded, and the fallback
+    /// below depends on it. **Nil until something has been loaded to ask
+    /// about**, which is a different answer from "no": a player that has not
+    /// reached `load` yet is not a book that cannot be made louder, and a
+    /// screen that read the two as one would caption every book for the moment
+    /// before its first track resolves.
+    ///
+    /// Public because it is the only signal a reader has. Without the tap
+    /// `applyPlayerVolume` below can only go *down* — `AVPlayer.volume` is
+    /// documented 0…1 — so a book set louder plays at "as recorded" with
+    /// nothing on screen to say why. That was a 3.5 dB silent loss on the
+    /// percentage scale this replaced; with the +8 dB top rung it is an 8 dB
+    /// one. `VolumeTrimRow` reads it and says so.
+    public private(set) var tapCarriesGain: Bool?
+
+    /// The two levels, resolved into the one number `AVPlayer` accepts.
+    ///
+    /// With the tap attached the gain is already in the samples, so the fade
+    /// multiplies it rather than replacing it. Without the tap the player's own
+    /// volume is all there is: `min(gain, 1)` still delivers "quieter", and
+    /// "louder" degrades to as-recorded rather than to a value the API would
+    /// clip anyway. Nothing loaded yet takes the same branch as no tap, because
+    /// there is no tap either way.
+    private func applyPlayerVolume() {
+        player.volume = tapCarriesGain == true ? volume : volume * Swift.min(gain, 1)
     }
 
     public var rate: Float = 1.0 {
@@ -75,6 +136,9 @@ public final class AudioPlayer {
     public var onFinishedFile: (() -> Void)?
 
     private let player = AVQueuePlayer()
+    /// One tap for the life of the player, attached to every item it loads, so
+    /// a chapter change does not drop the book's level.
+    private let gainTap = GainTap()
     /// Observer tokens live outside the actor so `deinit` — which is
     /// nonisolated under Swift 6 — can still tear them down.
     private let observers = ObserverTokens()
@@ -123,29 +187,6 @@ public final class AudioPlayer {
     static func activateAudioSession() {
         #if os(iOS) || os(tvOS)
         try? AVAudioSession.sharedInstance().setActive(true)
-        #endif
-    }
-
-    /// Gives the route back, and tells whoever we interrupted that they may
-    /// resume.
-    ///
-    /// `setActive(false)` appeared nowhere in this app, so the `.playback`
-    /// session stayed active for the life of the process: the Music or podcast
-    /// playback this app interrupted never received the `.ended` interruption
-    /// with `.shouldResume` — that notification is only generated when the
-    /// interrupting app deactivates with this option — and stayed silent until
-    /// the listener restarted it by hand.
-    ///
-    /// Deliberately not called from `pause()`. There are several `AudioPlayer`
-    /// instances alive at once — one per open reader plus the audiobook — and
-    /// exclusivity between them is enforced by pausing, not by tearing down. So
-    /// "this player stopped" is not "the app has stopped making sound", and only
-    /// `AppModel`, which owns all of them, can tell the difference. It calls
-    /// this; individual players must not.
-    static func deactivateAudioSession() {
-        #if os(iOS) || os(tvOS)
-        try? AVAudioSession.sharedInstance().setActive(
-            false, options: [.notifyOthersOnDeactivation])
         #endif
     }
 
@@ -302,11 +343,37 @@ public final class AudioPlayer {
 
         player.removeAllItems()
         player.insert(item, after: nil)
+        // Both asked for at once: the tracks are wanted for the gain tap, and
+        // asking for them one after the other would be a second network round
+        // trip on every streamed track — and a second window in which a later
+        // `load` could overtake this one. Both requests are in flight before
+        // either is awaited, so this stays one round trip and one window, and
+        // the generation is re-checked exactly once below.
+        //
+        // Two of them rather than `load(.duration, .tracks)`, though, because
+        // that form is all-or-nothing: a track list that will not load — an
+        // HLS playlist, which `makeAudioMix`'s own doc anticipates — nilled the
+        // *duration* along with it, so the scrubber lost its length, "…m left"
+        // disappeared, and the end-of-track arithmetic ran against zero for an
+        // asset whose duration had resolved perfectly well. Caught one at a
+        // time, a `.tracks` failure costs the gain tap and nothing else.
+        async let loadingDuration = asset.load(.duration)
+        async let loadingTracks = asset.load(.tracks)
+        let loadedDuration = try? await loadingDuration
+        let loadedTracks = try? await loadingTracks
+        guard generation == loadGeneration else { return false }
         // `?? 0` cannot catch NaN, and a streamed asset with an indefinite
         // duration reports exactly that.
-        let loaded = (try? await asset.load(.duration).seconds) ?? 0
-        guard generation == loadGeneration else { return false }
-        duration = loaded.isFinite ? loaded : 0
+        let seconds = loadedDuration?.seconds ?? 0
+        duration = seconds.isFinite ? seconds : 0
+        // Before the seek and the rate restore, so the first sample this item
+        // plays is already at the book's level. Every read-along file and every
+        // audiobook track passes through here, which is why a chapter change
+        // needs no separate hook.
+        let audioTracks = (loadedTracks ?? []).filter { $0.mediaType == .audio }
+        item.audioMix = gainTap.makeAudioMix(for: audioTracks)
+        tapCarriesGain = item.audioMix != nil
+        applyPlayerVolume()
         if offset > 0 {
             await seek(to: offset)
             guard generation == loadGeneration else { return false }

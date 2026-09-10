@@ -1,0 +1,328 @@
+import Foundation
+import Testing
+
+@testable import IssaAsk
+
+struct PassageChunkerTests {
+    // MARK: - Tiling
+
+    @Test("passages tile the chapter with no gaps and no overlaps")
+    func tilesWithoutGaps() throws {
+        let text = try AskFixture.text(spine: AskFixture.Spine.chapterI)
+        let passages = PassageChunker.chunk(text: text, spineIndex: AskFixture.Spine.chapterI)
+        try #require(passages.count > 3)
+
+        // The straddling passage is cut to `boundary.charOffset - start`. A gap
+        // anywhere in this sequence is a hole the reader's position can fall
+        // into, and the sentence being read aloud would vanish from retrieval.
+        #expect(passages.first?.start == 0)
+        #expect(passages.last?.end == (text as NSString).length)
+        for (earlier, later) in zip(passages, passages.dropFirst()) {
+            #expect(earlier.end == later.start)
+        }
+    }
+
+    /// The tiling assertion above was made against `chunk` and never against
+    /// `indexable`, **which is why the straddle went unnoticed**: `indexable`
+    /// dropped any passage not wholly inside `bookRange` while `chunk` tiles
+    /// with no gaps, so the one passage carrying a Gutenberg marker was
+    /// discarded whole, and with it every character of book text in its tail.
+    ///
+    /// What comes back now tiles `bookRange` itself — the range the boundary
+    /// truncation is measured inside. Every spine item of both fixtures,
+    /// because the markers are on different items in each and a test pinned to
+    /// one chapter is a test that cannot see this.
+    @Test("indexable passages tile the book's own range, markers and all", arguments: [
+        AskFixture.alice, AskFixture.franklin,
+    ])
+    func indexableTilesTheBookRange(book: AskBook) throws {
+        let package = try book.package()
+        var straddles = 0
+        for spine in 0 ..< package.spine.count {
+            guard let text = try? book.text(spine: spine) else { continue }
+            let range = PassageChunker.bookRange(in: text)
+            // No navigation titles: dropping a contents list is a deliberate
+            // hole, and it is the tiling either side of the *markers* that this
+            // is about.
+            let passages = PassageChunker.indexable(text: text, spineIndex: spine)
+            guard let first = passages.first, let last = passages.last else { continue }
+
+            #expect(first.start == range.location, "spine \(spine) starts inside the book range")
+            #expect(last.end == range.upperBound, "spine \(spine) stops short of the book range")
+            for (earlier, later) in zip(passages, passages.dropFirst()) {
+                #expect(earlier.end == later.start,
+                        "spine \(spine) has a hole at \(earlier.end)…\(later.start)")
+            }
+            if range.location != 0 || range.length != (text as NSString).length { straddles += 1 }
+        }
+        #expect(straddles > 0, "no chapter of \(book.resource) carries a marker, so nothing was tested")
+    }
+
+    /// A clipped passage still says where its own characters are. This is the
+    /// invariant the boundary truncation stands on — `boundary.charOffset -
+    /// start` UTF-16 units into `text` — and a passage whose text was cut while
+    /// its `start` stayed put would cut the reader's position a title page
+    /// early.
+    @Test("a clipped passage's characters are still the chapter's characters from its start",
+          arguments: [AskFixture.alice, AskFixture.franklin])
+    func clippedTextMatchesItsOffsets(book: AskBook) throws {
+        let package = try book.package()
+        for spine in 0 ..< package.spine.count {
+            guard let text = try? book.text(spine: spine) else { continue }
+            let string = text as NSString
+            for passage in PassageChunker.indexable(text: text, spineIndex: spine) {
+                #expect(passage.start >= 0)
+                #expect(passage.end <= string.length)
+                #expect(passage.text.utf16.count <= passage.end - passage.start,
+                        "only the trailing whitespace may be dropped")
+                let expected = string.substring(
+                    with: NSRange(location: passage.start, length: passage.text.utf16.count))
+                #expect(expected == passage.text, "spine \(spine) passage \(passage.ordinal)")
+            }
+        }
+    }
+
+    /// The text that was being thrown away, named.
+    ///
+    /// *Franklin* has no separate footer spine item, so its END marker sits in
+    /// the middle of spine 10 and the passage carrying it carries the tail of
+    /// his chronology too: 639 characters, 93 words, from "The Story of the
+    /// Whistle" to "The Art of Procuring Pleasant Dreams". Filtering the
+    /// passage out took all of it; clipping keeps it and drops only the notice.
+    @Test("the book text on the far side of an END marker survives")
+    func realTextBesideTheMarkerSurvives() throws {
+        let text = try AskFixture.franklin.text(spine: 10)
+        let passages = PassageChunker.indexable(text: text, spineIndex: 10)
+        let tail = try #require(passages.last)
+        #expect(tail.text.contains("The Story of the Whistle"))
+        #expect(tail.text.contains("Procuring Pleasant Dreams"))
+        // And the notice itself is gone, which is what `bookRange` is for.
+        #expect(!passages.contains { $0.text.contains("END OF THE PROJECT GUTENBERG") })
+        #expect(!passages.contains { $0.text.contains("Updated editions will replace") })
+    }
+
+    /// The same thing at the other end, where the kept half is boilerplate and
+    /// nothing of value is lost either way — but the passage must still be cut
+    /// rather than dropped, or the tiling has a hole in it.
+    @Test("a passage straddling a START marker keeps only what follows it")
+    func straddlingTheStartMarker() throws {
+        let text = try AskFixture.alice.text(spine: 1)
+        let range = PassageChunker.bookRange(in: text)
+        let passages = PassageChunker.indexable(text: text, spineIndex: 1)
+        let first = try #require(passages.first)
+        #expect(first.start == range.location)
+        #expect(!first.text.contains("START OF THE PROJECT GUTENBERG"))
+        #expect(!passages.contains { $0.text.contains("Project Gutenberg eBook of") })
+    }
+
+    @Test("ordinals are the passage's own position, in order")
+    func ordinalsAreSequential() throws {
+        let text = try AskFixture.text(spine: AskFixture.Spine.chapterII)
+        let passages = PassageChunker.chunk(text: text, spineIndex: AskFixture.Spine.chapterII)
+        #expect(passages.map(\.ordinal) == Array(passages.indices))
+        #expect(passages.allSatisfy { $0.spineIndex == AskFixture.Spine.chapterII })
+    }
+
+    @Test("a passage's characters are the chapter's characters from its start")
+    func textMatchesItsOffsets() throws {
+        let text = try AskFixture.text(spine: AskFixture.Spine.chapterI)
+        let string = text as NSString
+        for passage in PassageChunker.chunk(text: text, spineIndex: AskFixture.Spine.chapterI) {
+            // Not trimmed at the front, deliberately: character *i* of the
+            // stored text has to be chapter offset `start + i` or the
+            // straddling cut lands a word into the next sentence.
+            let slice = string.substring(with: passage.range)
+            #expect(slice.hasPrefix(passage.text))
+        }
+    }
+
+    // MARK: - Limits
+
+    @Test("no passage exceeds the maximum, except one that cannot be split")
+    func respectsMaximum() throws {
+        let text = try AskFixture.text(spine: AskFixture.Spine.chapterVI)
+        let passages = PassageChunker.chunk(text: text, spineIndex: AskFixture.Spine.chapterVI)
+        // A single sentence longer than the maximum has nowhere to be cut, so
+        // the limit is a target for the splitter, not a guarantee. What must
+        // hold is that the splitter actually ran: the great majority fit.
+        let oversized = passages.filter { $0.words > PassageChunker.Limits.maximumWords }
+        #expect(Double(oversized.count) / Double(passages.count) < 0.1)
+    }
+
+    @Test("a long paragraph is split at sentence ends, not mid-sentence")
+    func splitsAtSentences() {
+        let sentence = "She ran down the passage and found a very small door behind a curtain. "
+        let paragraph = String(repeating: sentence, count: 12)
+        let passages = PassageChunker.chunk(text: paragraph, spineIndex: 0)
+        #expect(passages.count > 1)
+        // Every piece but the last ends where a sentence ends. A naive full-stop
+        // scan gets "Mr." wrong; this is why the splitter enumerates sentences.
+        for passage in passages.dropLast() {
+            let trimmed = passage.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            #expect(trimmed.hasSuffix("."))
+        }
+    }
+
+    @Test("a runt is merged into its neighbour rather than retrieved alone")
+    func mergesRunts() {
+        let body = String(repeating: "The garden was full of bright flowers and cool fountains. ", count: 12)
+        let text = "CHAPTER I\n\"Oh dear!\"\n\(body)"
+        let passages = PassageChunker.chunk(text: text, spineIndex: 0)
+        // A line of dialogue on its own tells the model nothing about who said
+        // it, and a heading on its own is not evidence of anything.
+        #expect(passages.allSatisfy { $0.words >= PassageChunker.Limits.minimumWords })
+        #expect(passages[0].text.contains("CHAPTER I"))
+    }
+
+    @Test("a chapter opening on a heading keeps the heading with its first paragraph")
+    func mergesLeadingHeading() {
+        let body = String(repeating: "Alice was beginning to get very tired of sitting by her sister. ", count: 10)
+        let passages = PassageChunker.chunk(text: "CHAPTER I. Down the Rabbit-Hole\n\(body)", spineIndex: 0)
+        #expect(passages.count == 1)
+        #expect(passages[0].start == 0)
+    }
+
+    // MARK: - Degenerate input
+
+    @Test("empty and whitespace-only chapters produce nothing")
+    func handlesEmptyChapters() {
+        #expect(PassageChunker.chunk(text: "", spineIndex: 0).isEmpty)
+        #expect(PassageChunker.chunk(text: "\n\n  \n", spineIndex: 0).isEmpty)
+    }
+
+    @Test("words are counted by whitespace runs")
+    func countsWords() {
+        #expect(PassageChunker.wordCount("") == 0)
+        #expect(PassageChunker.wordCount("   ") == 0)
+        #expect(PassageChunker.wordCount("one two  three\nfour") == 4)
+    }
+
+    // MARK: - Navigation
+
+    /// Verified on the simulator: "Who is Alice?" asked at 4% cited "CHAPTER
+    /// XII. Alice's Evidence". Not a boundary leak — the contents table sits at
+    /// the front of the spine and is legitimately behind the reader — but a
+    /// list of chapter titles is not evidence, and citing one makes the whole
+    /// feature look broken.
+    @Test("the contents table is not indexed, and neither is Gutenberg's wrapper")
+    func dropsTheContentsList() throws {
+        let package = try AskFixture.package()
+        let titles = package.navigation.map(\.title)
+        var dropped: [Passage] = []
+        var keptSpines: Set<Int> = []
+        for spine in package.spine.indices {
+            let text = try AskFixture.text(spine: spine)
+            let all = PassageChunker.chunk(text: text, spineIndex: spine)
+            let kept = PassageChunker.indexable(
+                text: text, spineIndex: spine, navigationTitles: titles,
+            )
+            dropped.append(contentsOf: all.filter { !kept.contains($0) })
+            if !kept.isEmpty { keptSpines.insert(spine) }
+        }
+        // The contents table, which lives on Gutenberg's header page rather
+        // than in the nav document…
+        #expect(dropped.contains { $0.spineIndex == 1 && $0.text.contains("CHAPTER XII") })
+        // …the legal notice and credits above the START marker on that page…
+        #expect(dropped.contains { $0.spineIndex == 1 && $0.text.contains("David Widger") })
+        // …and the whole licence chapter below the END marker.
+        #expect(!keptSpines.contains(1))
+        #expect(!keptSpines.contains(package.spine.count - 1))
+        // Nothing else. Every chapter of the story keeps every passage it had.
+        #expect(dropped.allSatisfy { $0.spineIndex == 1 || $0.spineIndex == package.spine.count - 1 })
+        // 0 is the SVG cover wrapper, which renders as one object-replacement
+        // character and stays: it carries no marker and no navigation title, so
+        // nothing here has an opinion about it, and one character of nothing
+        // costs the index nothing either.
+        #expect(keptSpines == Set(0 ... 13).subtracting([1]))
+    }
+
+    /// The gate that costs the most to get wrong. *Alice*'s contents table is
+    /// 13 lines averaging 4.5 words and the Mouse's Tale is 46 lines averaging
+    /// 3.0, so nothing about line length can tell them apart — which is why the
+    /// book's own navigation titles decide and the shape only qualifies.
+    @Test("a shaped poem of equally short lines is kept")
+    func keepsAPoem() throws {
+        let package = try AskFixture.package()
+        let titles = package.navigation.map(\.title)
+        // Chapter III, where "Fury said to a mouse" is set as a tail.
+        let text = try AskFixture.text(spine: 4)
+        let kept = PassageChunker.indexable(text: text, spineIndex: 4, navigationTitles: titles)
+        #expect(kept.contains { $0.text.contains("Fury said to") })
+        #expect(kept.count == PassageChunker.chunk(text: text, spineIndex: 4).count)
+    }
+
+    @Test("with no navigation and no marker to go on, nothing is dropped")
+    func withoutTitlesNothingIsDropped() throws {
+        // The navigation test is "these lines are the book's own section
+        // titles", and a book that declares no contents has nothing to be sure
+        // about — guessing from line shape alone is what would take the poem
+        // with it. Chapter I rather than the header page, which Gutenberg's own
+        // marker rules out whatever the navigation says.
+        let text = try AskFixture.text(spine: AskFixture.Spine.chapterI)
+        #expect(
+            PassageChunker.indexable(text: text, spineIndex: AskFixture.Spine.chapterI).count
+                == PassageChunker.chunk(text: text, spineIndex: AskFixture.Spine.chapterI).count,
+        )
+    }
+
+    /// The credits line is the whole point: "Arthur DiBianca and David Widger"
+    /// were tagged as people, counted in the name table, and offered as a
+    /// suggestion chip beside the book's own protagonist.
+    @Test("what Gutenberg marks as its own is outside the book")
+    func gutenbergMarkersBoundTheBook() {
+        let text = """
+            The Project Gutenberg eBook of A Book
+            Credits: David Widger
+            *** START OF THE PROJECT GUTENBERG EBOOK A BOOK ***
+            Alice was beginning to get very tired of sitting by her sister.
+            *** END OF THE PROJECT GUTENBERG EBOOK A BOOK ***
+            Updated editions will replace the previous one.
+            """
+        let range = PassageChunker.bookRange(in: text)
+        let inside = (text as NSString).substring(with: range)
+        #expect(inside.contains("Alice was beginning"))
+        #expect(!inside.contains("David Widger"))
+        #expect(!inside.contains("Updated editions"))
+        // The older spelling, which is what most files on a shelf carry.
+        #expect(PassageChunker.bookRange(
+            in: "a\n*** START OF THIS PROJECT GUTENBERG EBOOK X ***\nb",
+        ).location > 0)
+        // A book with no marker keeps all of itself.
+        let plain = "Just a chapter of prose, with no transcriber's wrapper."
+        #expect(PassageChunker.bookRange(in: plain)
+            == NSRange(location: 0, length: (plain as NSString).length))
+    }
+
+    @Test("a chapter heading above its own first paragraph is not a contents list")
+    func aHeadingIsNotNavigation() {
+        // Two of these three lines match a navigation entry, and the third is
+        // the chapter. Both the short-line share and the floor of three matches
+        // have to hold for this to survive.
+        let body = String(repeating: "Alice was beginning to get very tired of sitting. ", count: 12)
+        #expect(!PassageChunker.isNavigationList(
+            "CHAPTER I.\nDown the Rabbit-Hole\n\(body)",
+            titles: [["chapter", "i", "down", "the", "rabbit'hole"]],
+        ))
+    }
+
+    @Test("a contents list whose titles are spelled differently is still caught")
+    func matchesLooselyEnough() {
+        // Gutenberg's NCX calls the chapter "I ANCESTRY AND EARLY YOUTH IN
+        // BOSTON" and its own contents page prints "I. Ancestry and Early Life
+        // in Boston" — *Youth* against *Life*. An equality test finds nothing
+        // on the book this was measured against.
+        let titles = [
+            ["i", "ancestry", "and", "early", "youth", "in", "boston"],
+            ["ii", "beginning", "life", "as", "a", "printer"],
+            ["iii", "arrival", "in", "philadelphia"],
+        ]
+        #expect(PassageChunker.isNavigationList("""
+            I.  Ancestry and Early Life in Boston
+            3
+            II.  Beginning Life as a Printer
+            21
+            III.  Arrival in Philadelphia
+            41
+            """, titles: titles))
+    }
+}

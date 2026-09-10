@@ -67,6 +67,14 @@ public struct SettingsView: View {
             }
             .listRowBackground(Palette.surface)
 
+            #if !os(tvOS)
+            // Between reading and the machinery, because that is what it is: a
+            // reading feature, off by default, that most readers will decide
+            // about once and never revisit. Not on the television, which has no
+            // Apple Intelligence to ask.
+            AskSettingsSection()
+            #endif
+
             // Server internals and log export serve self-hosters and support,
             // not the general reader, so they collapse one tap down rather than
             // competing with Account / Library / Playback for attention.

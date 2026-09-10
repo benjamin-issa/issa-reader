@@ -1,8 +1,19 @@
+#if os(tvOS)
+// For `AccessibilityNotification.PageScrolled`: UIKit's own page-scrolled
+// notification is declared for iOS and watchOS only, so the television has no
+// other way to say that a page turned.
+import Accessibility
+#endif
 import IssaCore
 import IssaPlayback
 import IssaRender
 import IssaUI
 import SwiftUI
+#if !os(tvOS)
+// Not on the television: FoundationModels is not in that SDK, and there is no
+// Ask anywhere on it.
+import IssaAsk
+#endif
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -62,6 +73,14 @@ public struct ReaderView: View {
     @State private var showsSearch = false
     @State private var showsAnnotations = false
     @State private var showsTypography = false
+    #if !os(tvOS)
+    /// The Ask sheet on the phone, the Ask popover on the Mac.
+    @State private var showsAsk = false
+    /// Whether the answer has outgrown the half sheet. Measured rather than
+    /// guessed: a two-line answer and a nine-line one are different failures in
+    /// a medium detent.
+    @State private var askDetent: PresentationDetent = .medium
+    #endif
     /// The last place a finger was, so a long press that never moves still
     /// knows where it happened.
     @State private var touchPoint: CGPoint = .zero
@@ -110,6 +129,23 @@ public struct ReaderView: View {
     // The skip buttons move the audio from the strip, so the lock screen has
     // to be told where it landed.
     @Environment(NowPlayingController.self) private var nowPlaying
+    #if !os(tvOS)
+    /// Owned above the reader, because `AppModel.readerDidClose` evicts this
+    /// screen's model the moment it goes away and an answer has to outlive that.
+    @Environment(AskCoordinator.self) private var ask
+    @Environment(\.scenePhase) private var scenePhase
+    /// Whether this machine can answer questions, read once and kept.
+    ///
+    /// `showsAskPill` used to call `AskAvailability.current()`, and it is
+    /// reachable from three places in `body` — the toolbar, the top bar's
+    /// actions and the badge over the page. So
+    /// `SystemLanguageModel.default.availability` was consulted on every render
+    /// pass, including every tap that hides or shows the chrome. Seeded once and
+    /// refreshed when the app comes forward, which is `AskSettingsSection`'s
+    /// pattern and for the same reason: the reader may have just been to
+    /// Settings to turn Apple Intelligence on.
+    @State private var askAvailability = AskAvailability.current()
+    #endif
     #if os(macOS)
     @Environment(\.controlActiveState) private var controlActiveState
     /// The Now Playing panel is a window on the Mac, so the reader opens it
@@ -124,6 +160,7 @@ public struct ReaderView: View {
     @FocusState private var pageHasKeyboardFocus: Bool
     private var anySheetShowing: Bool {
         showsPlayer || showsContents || showsSearch || showsAnnotations || showsTypography
+            || showsAsk
     }
     #endif
 
@@ -208,6 +245,9 @@ public struct ReaderView: View {
                 // onAppear could run the coordinator is already built — every
                 // fresh open narrated at 1× whatever rate the reader saved.
                 model.preferredRate = settings.playbackRate
+                // And this book's level, which open() fixes into the same
+                // coordinator.
+                model.preferredVolumeTrim = settings.volumeTrim(for: model.book.uuid)
                 switch model.phase {
                 case .loading, .downloading:
                     // Re-entering while downloading is safe and necessary: the
@@ -351,6 +391,48 @@ public struct ReaderView: View {
             )
             .macSheetSize()
         }
+        #if !os(macOS)
+        // Medium first so the page the question is about stays visible behind
+        // it, growing only when an answer genuinely needs the room. The Mac
+        // gets a popover instead, anchored on its toolbar button.
+        .sheet(isPresented: $showsAsk, onDismiss: {
+            ask.sheetDismissed(bookUUID: model.book.uuid)
+            // Back to half height for the next question. Without this one long
+            // answer leaves every later sheet opening full-height over the page,
+            // which is the thing the medium detent exists to avoid.
+            askDetent = .medium
+        }) {
+            AskSheet(model: model) { height in
+                // A little slack: the detent is about whether the answer fits,
+                // not about the last two points of a footer.
+                if height > 300 { askDetent = .large }
+            }
+            .presentationDetents([.medium, .large], selection: $askDetent)
+            .presentationBackground(Palette.paper)
+        }
+        #endif
+        // Reopened from a notification tap, whichever platform it arrived on.
+        //
+        // `initial: true`, and it is the whole fix. The delegate sets
+        // `reopenRequest` and *then* asks for the book, so on every tap that
+        // was not already on this book's reader screen — which is every tap the
+        // notification is posted for — this screen was constructed with the
+        // value already in place, and a change handler that only watches for
+        // changes never ran. Worse than doing nothing: the stale value then
+        // blocked every later tap for the same book, because assigning a String
+        // its own value is not a change either.
+        .onChange(of: ask.reopenRequest, initial: true) { _, requested in
+            guard requested == model.book.uuid else { return }
+            ask.reopenRequest = nil
+            askDetent = .medium
+            showsAsk = true
+        }
+        // Re-read when the app comes forward, not on every pass: the reader may
+        // have just been to Settings to turn Apple Intelligence on, and this is
+        // the screen they came back to.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { askAvailability = AskAvailability.current() }
+        }
         #if os(macOS)
         // The Mac keeps a real toolbar: its window chrome never moved the page.
         .toolbar { ToolbarItemGroup(placement: .primaryAction) { macToolbar } }
@@ -366,6 +448,11 @@ public struct ReaderView: View {
         // Drawn over the page rather than above it, so showing it cannot
         // change the page's size.
         .overlay(alignment: .top) { topBar }
+        // The one cue that survives the chrome going away. Reading with the bars
+        // hidden is the ordinary case, and it is exactly when a reader is most
+        // likely to have closed the sheet and be waiting — without this the only
+        // sign the app is working disappears with the top bar.
+        .overlay(alignment: .topTrailing) { askBadge }
         // The first-run gesture guide sits above even the chrome and swallows
         // the tap that dismisses it, so the page below does not also turn.
         .overlay { coachOverlay }
@@ -420,6 +507,37 @@ public struct ReaderView: View {
                 .help("Show Player (⌥⌘P)")
                 .accessibilityLabel("Open player")
         }
+
+        if showsAskPill {
+            Button { showsAsk = true } label: {
+                Image(systemName: "sparkles")
+                    .symbolEffect(
+                        .pulse.byLayer, options: .repeating,
+                        isActive: ask.job(for: model.book.uuid)?.state.isWorking ?? false,
+                    )
+                    .overlay(alignment: .topTrailing) {
+                        if ask.job(for: model.book.uuid)?.state.isAnswered == true {
+                            Circle()
+                                .fill(model.style.theme.accent)
+                                .frame(width: 6, height: 6)
+                                .offset(x: 3, y: -2)
+                        }
+                    }
+            }
+            .help("Ask about this book (⇧⌘A)")
+            .accessibilityLabel("Ask about this book")
+            // A popover, not a sheet: the page the question is about has to
+            // stay on screen, and a Mac sheet covers the window it belongs to.
+            .popover(isPresented: $showsAsk, arrowEdge: .top) {
+                AskSheet(model: model)
+                    .frame(width: 420)
+                    .frame(minHeight: 220)
+            }
+            .onChange(of: showsAsk) { _, showing in
+                // A popover has no `onDismiss`, so the close is observed here.
+                if !showing { ask.sheetDismissed(bookUUID: model.book.uuid) }
+            }
+        }
     }
 
     /// What each reading command does, in one place.
@@ -437,7 +555,47 @@ public struct ReaderView: View {
         case .player:
             guard model.hasNarration else { return }
             openWindow(id: "NowPlaying")
+        // Guarded on narration as well as on the key window, so ⌘⌥↑ over a
+        // plain ebook does not quietly store a level for a book that has
+        // nothing to play it at.
+        case .ask:
+            guard showsAskPill else { return }
+            showsAsk = true
+        case .volumeUp, .volumeDown:
+            guard model.hasNarration else { return }
+            VolumeTrimControl.nudge(
+                by: command == .volumeUp ? VolumeTrim.step : -VolumeTrim.step,
+                for: model.book, coordinator: model.readalong, settings: settings,
+            )
         }
+    }
+    #endif
+
+    #if !os(tvOS)
+    /// Whether the reader offers to answer questions about this book.
+    ///
+    /// The setting *and* the hardware. `.appleIntelligenceOff` and
+    /// `.modelDownloading` still show it: both come right without the reader
+    /// touching this app again, and a control that vanishes and reappears is
+    /// harder to find than one that explains itself when tapped.
+    private var showsAskPill: Bool {
+        guard settings.askEnabled else { return false }
+        switch askAvailability {
+        case .available, .appleIntelligenceOff, .modelDownloading: return true
+        case .unsupportedDevice, .unsupportedOnThisPlatform: return false
+        }
+    }
+
+    /// What VoiceOver calls the sparkle.
+    ///
+    /// The last place the button's three states are said in words, now that the
+    /// glyph says them with a pulse and a dot. A reader who cannot see either
+    /// still has to be able to tell "you may ask" from "the answer you asked
+    /// for is waiting", which is the whole reason the job outlives the sheet.
+    private func askLabel(for job: AskJob?) -> String {
+        if job?.state.isWorking == true { return "Answer being prepared" }
+        if job?.state.isAnswered == true { return "Answer ready" }
+        return "Ask about this book"
     }
     #endif
 
@@ -453,6 +611,35 @@ public struct ReaderView: View {
     /// Bookmark, and the rest behind an ellipsis.
     @ViewBuilder
     private var readerActions: some View {
+        #if !os(tvOS)
+        let askJob = ask.job(for: model.book.uuid)
+        if showsAskPill {
+            // A bare glyph, so the bar's own font and ink reach it exactly as
+            // they reach the three beside it. A tinted capsule with a word in
+            // it read as a different class of control — an advertisement in a
+            // row of tools — which is not what asking a question is. The two
+            // states it still has to show are said with the glyph itself, the
+            // way the Mac toolbar has always said them.
+            Button { showsAsk = true } label: {
+                Image(systemName: "sparkles")
+                    .symbolEffect(
+                        .pulse.byLayer, options: .repeating,
+                        isActive: askJob?.state.isWorking ?? false,
+                    )
+                    .overlay(alignment: .topTrailing) {
+                        if askJob?.state.isAnswered == true {
+                            Circle()
+                                .fill(model.style.theme.accent)
+                                .frame(width: 6, height: 6)
+                                .offset(x: 3, y: -2)
+                        }
+                    }
+            }
+            .accessibilityIdentifier("reader.ask")
+            .accessibilityLabel(askLabel(for: askJob))
+        }
+        #endif
+
         Button { showsTypography = true } label: {
             Image(systemName: "textformat.size")
         }
@@ -473,6 +660,24 @@ public struct ReaderView: View {
     }
 
     #if os(iOS)
+    /// The sparkle that stays while the chrome is away.
+    @ViewBuilder
+    private var askBadge: some View {
+        let job = ask.job(for: model.book.uuid)
+        if !model.chromeVisible, showsAskPill,
+           job?.state.isWorking == true || job?.state.isAnswered == true {
+            Button { showsAsk = true } label: {
+                AskStatusBadge(theme: model.style.theme, job: job)
+            }
+            .buttonStyle(.plain)
+            // Inside the notch, like the bar it stands in for.
+            .padding(.top, deviceInsets.top + Metrics.spacing8)
+            .padding(.trailing, Metrics.spacing16)
+            .transition(.opacity)
+            .animation(.easeInOut(duration: 0.2), value: model.chromeVisible)
+        }
+    }
+
     /// The reader's own top bar, floating over the page.
     private var topBar: some View {
         HStack(spacing: Metrics.spacing16) {
@@ -743,6 +948,15 @@ public struct ReaderView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: ReaderCommand.player.notification)) { _ in
             if isActiveScene { perform(.player) }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: ReaderCommand.volumeUp.notification)) { _ in
+            if isActiveScene { perform(.volumeUp) }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: ReaderCommand.volumeDown.notification)) { _ in
+            if isActiveScene { perform(.volumeDown) }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: ReaderCommand.ask.notification)) { _ in
+            if isActiveScene { perform(.ask) }
         }
         #endif
         // A re-resolve, not an assignment: `model.style = settings.readerStyle`
@@ -1055,7 +1269,90 @@ private struct ReadAloudDoubleTap: ViewModifier {
 }
 #endif
 
+// MARK: - The page
+
+/// One page of paper: the glyphs, and everything tinted underneath them.
+///
+/// Every input is passed in rather than read from a model, which buys two
+/// things. Nothing here can change under the renderer — the television
+/// crossfades an outgoing page while the model has already moved on to the
+/// next, and a surface that re-read the model mid-fade would draw the wrong
+/// sentence — and the view redraws only when one of these values actually
+/// differs, since they are all `Equatable` or a class reference.
+///
+/// Nothing platform-specific, either: the phone, the Mac and the television
+/// draw a page with this same view.
+struct PageSurface: View {
+    /// One stored highlight's rows on this page, grouped by line and kept
+    /// together rather than flattened in with every other mark's.
+    ///
+    /// A flat list of rectangles cannot say where one highlight ends and the
+    /// next begins, and filling them one at a time is what put a doubly
+    /// composited band across every seam. Nor can it say where one *line* ends:
+    /// flattened, a tall inline run merged with the line beneath it and the
+    /// mark was painted over words the highlight does not cover.
+    struct AnnotationBlock: Equatable {
+        let lines: [[CGRect]]
+        let tint: Annotation.Tint
+    }
+
+    let layout: ChapterLayout
+    let page: RenderedPage
+    let activeFragment: String?
+    let annotations: [AnnotationBlock]
+    let selection: NSRange?
+    let theme: ReaderTheme
+    /// The fill behind the sentence being narrated, which is the reader's
+    /// choice of highlighter rather than a property of the paper.
+    let highlight: Color
+    let highlightStyle: HighlightBlock.Style
+    let size: CGSize
+
+    var body: some View {
+        Canvas(rendersAsynchronously: false) { context, _ in
+            // Everything tinted is drawn beneath the glyphs so it reads as
+            // paper tint rather than a wash over the type — and each mark is
+            // filled exactly once, as one block. Filling a rounded rectangle
+            // per line composited a translucent colour over itself along the
+            // 2 pt the two pads shared at each seam, which is the dark band
+            // that used to run through every wrapped sentence.
+            for block in annotations {
+                context.fill(
+                    Path(HighlightBlock.path(lines: block.lines, style: highlightStyle)),
+                    with: .color(ReaderPalette.color(for: block.tint).opacity(0.30)),
+                )
+            }
+            if let activeFragment {
+                context.fill(
+                    Path(HighlightBlock.path(
+                        lines: layout.highlightLines(forFragment: activeFragment, on: page),
+                        style: highlightStyle,
+                    )),
+                    with: .color(highlight),
+                )
+            }
+            if let selection {
+                context.fill(
+                    Path(HighlightBlock.path(
+                        lines: layout.lines(forRange: selection, on: page),
+                        style: highlightStyle,
+                    )),
+                    with: .color(theme.selection),
+                )
+            }
+
+            context.withCGContext { cgContext in
+                layout.draw(page: page, in: cgContext)
+            }
+        }
+        .frame(width: size.width, height: size.height)
+        .clipped()
+    }
+}
+
 /// Draws one page, plus the read-along highlight when audio is playing.
+///
+/// The reader's half of the split: it reads the model and `PageSurface` draws.
 struct PageCanvas: View {
     let model: ReaderModel
     let pageSize: CGSize
@@ -1069,39 +1366,31 @@ struct PageCanvas: View {
         let activeFragment = model.activeFragmentID
         let selection = model.selection
         let page = model.currentPage
-        let highlights = page.map { model.highlightRects(on: $0) } ?? []
+        let annotations = page.map { model.highlightBlocks(on: $0) } ?? []
         let theme = model.style.theme
+        let highlight = model.style.highlightColor
+        let layout = model.layout
 
-        Canvas(rendersAsynchronously: false) { context, _ in
-            guard let layout = model.layout, let page else { return }
-
-            // Everything tinted is drawn beneath the glyphs so it reads as
-            // paper tint rather than a wash over the type.
-            for (rect, tint) in highlights {
-                let rounded = Path(roundedRect: rect.insetBy(dx: -1, dy: -1), cornerRadius: 3)
-                context.fill(rounded, with: .color(ReaderPalette.color(for: tint).opacity(0.30)))
-            }
-            if let activeFragment {
-                for rect in layout.highlightRects(forFragment: activeFragment, on: page) {
-                    let rounded = Path(roundedRect: rect.insetBy(dx: -2, dy: -1), cornerRadius: 3)
-                    context.fill(rounded, with: .color(theme.highlight))
-                }
-            }
-            if let selection {
-                for rect in layout.rects(forRange: selection, on: page) {
-                    context.fill(
-                        Path(roundedRect: rect.insetBy(dx: -1, dy: -1), cornerRadius: 2),
-                        with: .color(theme.selection),
-                    )
-                }
-            }
-
-            context.withCGContext { cgContext in
-                layout.draw(page: page, in: cgContext)
+        Group {
+            if let layout, let page {
+                PageSurface(
+                    layout: layout,
+                    page: page,
+                    activeFragment: activeFragment,
+                    annotations: annotations,
+                    selection: selection,
+                    theme: theme,
+                    highlight: highlight,
+                    highlightStyle: HighlightBlock.Style(fontSize: model.style.fontSize),
+                    size: pageSize,
+                )
+            } else {
+                // The chapter is still being laid out. Holding the page's exact
+                // size means nothing above or below it moves when the glyphs
+                // arrive, which is the whole reason the reserve exists.
+                Color.clear.frame(width: pageSize.width, height: pageSize.height)
             }
         }
-        .frame(width: pageSize.width, height: pageSize.height)
-        .clipped()
         .modifier(PageAccessibility(model: model))
     }
 }
@@ -1126,45 +1415,34 @@ struct PageAccessibility: ViewModifier {
             .accessibilityTextContentType(.narrative)
             // A three-finger swipe is what people try in every other paged app.
             .accessibilityScrollAction { edge in
-                Task {
-                    switch edge {
-                    case .top, .leading: await model.previousPage()
-                    default: await model.nextPage()
-                    }
-                    Self.announcePage(model)
+                switch edge {
+                case .top, .leading: turn(forward: false)
+                default: turn(forward: true)
                 }
             }
             // The canvas still carries a tap gesture for sighted readers, and
             // SwiftUI would otherwise synthesise activation from it — a
             // double-tap would start narration at the page's centre. Claiming
             // the default action makes activation mean something sensible.
-            .accessibilityAction {
-                Task {
-                    await model.nextPage()
-                    Self.announcePage(model)
-                }
-            }
-            .accessibilityAction(named: "Next page") {
-                Task {
-                    await model.nextPage()
-                    Self.announcePage(model)
-                }
-            }
-            .accessibilityAction(named: "Previous page") {
-                Task {
-                    await model.previousPage()
-                    Self.announcePage(model)
-                }
-            }
+            .accessibilityAction { turn(forward: true) }
+            .accessibilityAction(named: "Next page") { turn(forward: true) }
+            .accessibilityAction(named: "Previous page") { turn(forward: false) }
             // Named for what it will actually do, since it is a toggle: an
             // action offered as "Bookmark this page" that silently deletes the
             // bookmark already there is the worst kind of surprise.
             .accessibilityAction(named: model.isPageBookmarked ? "Remove bookmark" : "Bookmark this page") {
                 model.toggleBookmark()
             }
+            // Not on the television, which has no pasteboard at all — see the
+            // header of `Clipboard`, where `copy` compiles to nothing. The
+            // action was offered there and silently did nothing, and a rotor
+            // entry that answers a deliberate double-tap with silence is worse
+            // than one that was never listed.
+            #if !os(tvOS)
             .accessibilityAction(named: "Copy page") {
                 Clipboard.copy(model.spokenPageText)
             }
+            #endif
             .accessibilityActions {
                 // Selection is made with a long press and a drag, which
                 // VoiceOver consumes — so highlighting, and playing a sentence,
@@ -1180,6 +1458,28 @@ struct PageAccessibility: ViewModifier {
             }
     }
 
+    /// Every page turn VoiceOver can make, spelled once.
+    ///
+    /// `turnPage(forward:)`, not `nextPage()`/`previousPage()`. On the
+    /// television `TVReaderStyle` forces `followNarration` on, because there
+    /// the page *is* the scrubber — so a turn that moves the page without
+    /// seeking the voice is snapped straight back at the next sentence
+    /// boundary, and a reader using VoiceOver could not move forward at all.
+    ///
+    /// It changes the phone and the Mac in exactly one case, and deliberately: a
+    /// page turned from the rotor while narration is playing now takes the voice
+    /// with it. `turnPage`'s own doc justifies leaving the voice behind by the
+    /// phone having a scrubber and a sentence to tap, and a reader using
+    /// VoiceOver has neither — selection is a long press and a drag, which
+    /// VoiceOver consumes, and that is the very reason these actions exist. A
+    /// paused book still turns silently, here as everywhere.
+    private func turn(forward: Bool) {
+        Task {
+            await model.turnPage(forward: forward)
+            Self.announcePage(model)
+        }
+    }
+
     /// Says where the reader has landed.
     ///
     /// A label that changes under an already-focused element is not spoken —
@@ -1187,7 +1487,14 @@ struct PageAccessibility: ViewModifier {
     /// the rotor would otherwise be met with silence.
     @MainActor
     static func announcePage(_ model: ReaderModel) {
-        #if canImport(UIKit) && !os(tvOS)
+        #if os(tvOS)
+        // `UIAccessibilityPageScrolledNotification` is declared for iOS and
+        // watchOS only, so the branch below is genuinely unavailable here and
+        // every turn on the television was silent. The Accessibility
+        // framework's own spelling of the same notification is on tvOS from 17,
+        // and this app's floor is 26.
+        AccessibilityNotification.PageScrolled(model.spokenPagePosition).post()
+        #elseif canImport(UIKit)
         UIAccessibility.post(notification: .pageScrolled, argument: model.spokenPagePosition)
         #endif
     }

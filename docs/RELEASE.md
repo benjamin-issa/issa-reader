@@ -141,6 +141,10 @@ counts build numbers per platform, so sharing one keeps the three apps legible
 as a single release. `manageAppVersionAndBuildNumber` is `false` in every export
 plist, so a reused number fails loudly as
 `ENTITY_ERROR.ATTRIBUTE.INVALID.DUPLICATE` rather than being silently renumbered.
+The counter never restarts for a new marketing version, because a macOS
+`CFBundleVersion` must exceed every Mac build ever uploaded — iOS and tvOS would
+allow a reset (Apple TN2420), the Mac App Store would not, and one shared counter
+is the only way all three can carry the same number.
 
 ## macOS App Store specifics
 

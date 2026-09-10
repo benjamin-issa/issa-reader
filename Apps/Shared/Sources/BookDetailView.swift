@@ -153,6 +153,11 @@ public struct BookDetailView: View {
         // per-edition download states do move — a finish writes `.finished`,
         // a removal clears the job — so they are watched as well.
         .onChange(of: editionDownloadStates) { refreshDownloaded() }
+        // And on the undo window opening or closing, for the same reason: a
+        // removal of one of this book's two editions leaves `downloadedUUIDs`
+        // equal, so without this the row for the edition being removed stays
+        // lit as "Downloaded" for the whole six seconds.
+        .onChange(of: app.pendingRemoval) { refreshDownloaded() }
         // And re-read on the way back from another screen: removing an edition
         // that was fetched in an earlier session from the downloads list moves
         // neither observed value, because its job has no state to clear.
@@ -188,9 +193,47 @@ public struct BookDetailView: View {
 
     private var heroText: some View {
         VStack(alignment: .leading, spacing: Metrics.spacing8) {
-                Text(book.title)
-                    .font(Typography.title)
-                    .foregroundStyle(Palette.ink)
+                // The title and its subtitle as one block, set tighter than the
+                // 8pt the rest of the column uses, so the subtitle reads as
+                // part of the title rather than as the first of the facts under
+                // it. Safe when there is no subtitle: a stack with one child
+                // has no gap to add, so a book without one lays out exactly as
+                // it did before.
+                VStack(alignment: .leading, spacing: Metrics.spacing4) {
+                    Text(book.title)
+                        .font(Typography.title)
+                        .foregroundStyle(Palette.ink)
+                    // The server has sent this all along and no screen drew it.
+                    // Under the title and above the author, which is where a
+                    // subtitle sits on a jacket.
+                    //
+                    // The title's own face one step down the ramp — serif 17
+                    // against the title's serif 22 — rather than the sans the
+                    // byline is set in: a subtitle is part of the title, and
+                    // `inkSecondary` is what makes it the quieter half rather
+                    // than a second heading. That also keeps it distinct from
+                    // the description further down, which is body text in the
+                    // system face.
+                    //
+                    // No line limit. Subtitles are sentences, and the hero
+                    // column beside a 130pt cover on a 402pt phone is about
+                    // 212pt wide, so anything truncated here would lose most of
+                    // itself; it wraps instead, as the title above it does.
+                    //
+                    // Nothing is done to the accessibility tree on purpose. The
+                    // screen's container is `children: .contain`, so each `Text`
+                    // stays its own element and VoiceOver reads title, subtitle,
+                    // author in that order. Welding the subtitle onto the title
+                    // as one label — the pattern used where a row is a single
+                    // control — would make a sentence-long subtitle impossible
+                    // to swipe past, and `navigationTitle` already announces the
+                    // title on its own.
+                    if let subtitle = book.displaySubtitle {
+                        Text(subtitle)
+                            .font(Typography.bookTitle)
+                            .foregroundStyle(Palette.inkSecondary)
+                    }
+                }
                 Text(book.byline)
                     .font(Typography.callout)
                     .foregroundStyle(Palette.inkSecondary)
@@ -269,11 +312,13 @@ public struct BookDetailView: View {
     /// is not observable, so a delete performed on the downloads screen would
     /// otherwise never reach an already-open book screen — and asking inside
     /// the body meant a syscall per edition per frame.
+    /// Through `app`, not `BookContentService`: an edition inside its undo
+    /// window is still on disk and this screen went on offering Read and Listen
+    /// on it for the whole six seconds, then failed when the file went.
     private func refreshDownloaded() {
-        guard let session = app.session else { downloaded = []; return }
-        let content = BookContentService(client: session.client)
+        guard app.session != nil else { downloaded = []; return }
         downloaded = Set(BookContentService.Format.allCases.filter {
-            content.isDownloaded(book, format: $0)
+            app.isDownloaded(book, format: $0)
         })
     }
 
@@ -580,13 +625,16 @@ public struct BookDetailView: View {
     private var formatBadges: some View {
         let formats = book.servableFormats
         if formats.contains(.readaloud) {
-            // "Read-along", never the server's "Readaloud" (item 03).
-            badge("Read-along", duration: book.readaloud?.duration)
+            // "Read-along", never the server's "Readaloud" (item 03) — from
+            // `Format.displayName`, which is the one place that says so.
+            badge(BookContentService.Format.readaloud.displayName,
+                  duration: book.readaloud?.duration)
         } else if formats.contains(.audiobook) {
-            badge("Audiobook", duration: book.audiobook?.duration)
+            badge(BookContentService.Format.audiobook.displayName,
+                  duration: book.audiobook?.duration)
         }
         if formats.contains(.ebook) {
-            badge("Ebook", pages: book.ebook?.pageCount)
+            badge(BookContentService.Format.ebook.displayName, pages: book.ebook?.pageCount)
         }
     }
 
@@ -668,18 +716,18 @@ public struct BookDetailView: View {
                 editionNote("Every edition is missing on the server.")
             }
             if let ebook = book.ebook {
-                editionRow(Self.editionName(.ebook), format: .ebook,
+                editionRow(BookContentService.Format.ebook.displayName, format: .ebook,
                            detail: ebook.isEpub2 == true ? "EPUB 2" : "EPUB 3",
                            size: ebook.fileSize, missing: ebook.missing == true)
             }
             if let audiobook = book.audiobook {
-                editionRow(Self.editionName(.audiobook), format: .audiobook,
+                editionRow(BookContentService.Format.audiobook.displayName, format: .audiobook,
                            detail: DurationText.text(audiobook.duration ?? 0),
                            size: audiobook.fileSize, missing: audiobook.missing == true)
             }
             if let readaloud = book.readaloud {
                 editionRow(
-                    Self.editionName(.readaloud), format: .readaloud,
+                    BookContentService.Format.readaloud.displayName, format: .readaloud,
                     detail: readaloud.isAligned
                         ? DurationText.text(readaloud.duration ?? 0)
                         : (readaloud.status ?? "processing").capitalized,
@@ -688,16 +736,6 @@ public struct BookDetailView: View {
             }
         }
         .background(Palette.surface, in: RoundedRectangle(cornerRadius: Metrics.radiusMedium))
-    }
-
-    /// The reader-facing name for an edition. "Read-along", never the server's
-    /// "Readaloud" (item 03); the other two already read plainly.
-    static func editionName(_ format: BookContentService.Format) -> String {
-        switch format {
-        case .ebook: "Ebook"
-        case .audiobook: "Audiobook"
-        case .readaloud: "Read-along"
-        }
     }
 
     private func editionRow(
@@ -793,7 +831,7 @@ public struct BookDetailView: View {
                 .frame(width: 44, height: 44)
                 .contentShape(Rectangle())
         }
-        .accessibilityLabel("\(Self.editionName(format)) options")
+        .accessibilityLabel("\(format.displayName) options")
         #endif
     }
 

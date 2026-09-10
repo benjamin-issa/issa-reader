@@ -88,12 +88,20 @@ public final class ReaderModel {
             if style.theme != oldValue.theme {
                 layout?.recolour(to: style.textColor)
             }
-            // A theme change on its own is now finished. Everything else falls
-            // through — including anything added to `ReaderStyle` later, which
-            // is why this compares the whole value rather than listing fields.
-            var withoutTheme = style
-            withoutTheme.theme = oldValue.theme
-            guard withoutTheme != oldValue else { return }
+            // A change of colour on its own is now finished: the page repaints
+            // because `style` changed, and neither the glyphs nor where they
+            // sit have moved. The highlighter joins the theme here because the
+            // Mac's colour panel streams a new value on every drag of the
+            // eyedropper — re-flowing the chapter, let alone reparsing it, on
+            // each of those would make picking a colour stutter.
+            //
+            // Everything else falls through — including anything added to
+            // `ReaderStyle` later, which is why this compares the whole value
+            // rather than listing fields.
+            var withoutColour = style
+            withoutColour.theme = oldValue.theme
+            withoutColour.highlighters = oldValue.highlighters
+            guard withoutColour != oldValue else { return }
 
             // Typography lives in the attributed text, which is immutable once
             // built, so a font or spacing change needs the chapter parsed again
@@ -131,6 +139,16 @@ public final class ReaderModel {
 
     /// Playback rate to start narration at, supplied by the app's preferences.
     public var preferredRate: Double = 1.0
+
+    /// This book's level, in decibels either side of the recording, supplied by
+    /// the app's preferences.
+    ///
+    /// Applied live rather than only at open: the slider in the player sheet
+    /// writes it while the voice is running, and the whole point of the control
+    /// is that the change is audible while the reader is still holding it.
+    public var preferredVolumeTrim: Int = 0 {
+        didSet { readalong?.player.gain = VolumeTrim.gain(preferredVolumeTrim) }
+    }
     /// Records a position durably before it is sent. Supplied by the app so the
     /// reader does not need to know about the store.
     /// Persisting annotations is the app's job, not the reader's: this model
@@ -312,7 +330,11 @@ public final class ReaderModel {
             return
         }
 
-        let alreadyOnDisk = content.isDownloaded(book, format: format)
+        // Through the model where there is one, so opening a book whose
+        // edition is inside its undo window goes down the download path — which
+        // takes the removal back — rather than reading a file about to go.
+        let alreadyOnDisk = downloadHost?.isDownloaded(book, format: format)
+            ?? content.isDownloaded(book, format: format)
         phase = alreadyOnDisk ? .loading("Opening…") : .downloading(received: 0, total: 0)
         do {
             let url: URL
@@ -662,6 +684,10 @@ public final class ReaderModel {
         // The saved rate is otherwise written to preferences and never applied,
         // so every book starts at 1x however the reader left it.
         coordinator.player.rate = Float(preferredRate)
+        // And this book's level, for the same reason: the coordinator is built
+        // here and nothing else would tell it, so a trimmed book would open at
+        // the recorded level until the reader touched the slider again.
+        coordinator.player.gain = VolumeTrim.gain(preferredVolumeTrim)
         coordinator.onFragmentChange = { [weak self] fragment in
             guard let self else { return }
             activeFragmentID = fragment
@@ -837,8 +863,17 @@ public final class ReaderModel {
 
         // 1. What the reader can see, or the next narrated sentence after it in
         //    this chapter: a page often opens on a heading or a plate carrying
-        //    no overlay of its own while the prose beneath it is narrated.
-        if let fragment = firstNarratedFragment(continuingPastPage: true),
+        //    no overlay of its own while the prose beneath it is narrated. The
+        //    rest of the chapter, not two pages of it: the proximity check
+        //    below is this rung's bound, and it is the better one here because
+        //    it is measured in the book's own progress rather than in
+        //    characters.
+        if let layout, let page = currentPage,
+           let rest = NarrationReach.restOfChapter(
+               fromPageTop: page.characterRange.location,
+               inTextOfLength: layout.attributedText.length,
+           ),
+           let fragment = firstNarratedFragment(in: rest, carriedOver: true),
            let entry = timeline.entry(forFragment: fragment) {
             return (entry, "page")
         }
@@ -959,92 +994,125 @@ public final class ReaderModel {
         ])
     }
 
-    /// The text of one media-overlay fragment.
+    /// The first narrated fragment inside a stretch of the chapter's text.
     ///
-    /// Used by the TV presentation, which shows sentences rather than pages: at
-    /// ten feet a paginated book page is unreadable, but one large sentence with
-    /// its neighbours for context is comfortable.
-    public func text(forFragment fragmentID: String) -> String? {
-        guard let layout, let range = layout.fragmentRange(for: fragmentID) else { return nil }
-        return (layout.attributedText.string as NSString)
-            .substring(with: range)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    /// The narrated sentence, plus the one before and after it.
-    public func narrationContext() -> (previous: String?, current: String?, next: String?) {
-        guard let timeline, let entry = readalong?.activeEntry else { return (nil, nil, nil) }
-        return (
-            timeline.entry(before: entry).flatMap { text(forFragment: $0.fragmentID) },
-            text(forFragment: entry.fragmentID),
-            timeline.entry(after: entry).flatMap { text(forFragment: $0.fragmentID) },
-        )
-    }
-
-    /// One sentence of the read-along window: its text and whether it is the one
-    /// being spoken.
-    public struct NarratedLine: Identifiable, Equatable, Sendable {
-        public let id: String
-        public let text: String
-        public let isCurrent: Bool
-    }
-
-    /// Several sentences either side of the spoken one, in reading order.
+    /// One scanner. There were three, alike but for the range they walked and
+    /// whether a sentence carried over from before it counted — and the range
+    /// was what was wrong with one of them, so it is now the caller's to name
+    /// out loud at each site rather than a flag buried in here.
     ///
-    /// What `narrationContext()` gives is three lines, which is all a phone has
-    /// room for. A television has a whole column, and three sentences floating
-    /// in it reads as a teleprompter rather than as a book.
+    /// The range is checked against the text it is walked over. `page`
+    /// character ranges reach this from several directions, `enumerateAttribute`
+    /// raises `NSRangeException` — an Objective-C exception Swift cannot catch,
+    /// so the process goes down — and `computePages` can emit a synthetic
+    /// trailing page at `{totalLength, 0}`. `playSelection` guards the same way,
+    /// for the same reason.
     ///
-    /// Lines with no text on the current page are dropped rather than rendered
-    /// blank: a fragment can belong to a document the layout has not painted,
-    /// and a gap in the column would read as a pause the narrator did not take.
-    public func narrationWindow(before: Int = 3, after: Int = 3) -> [NarratedLine] {
-        guard let timeline, let entry = readalong?.activeEntry,
-              let window = timeline.window(around: entry, before: before, after: after)
-        else { return [] }
-        return window.entries.enumerated().compactMap { offset, item in
-            guard let text = text(forFragment: item.fragmentID), !text.isEmpty else { return nil }
-            return NarratedLine(
-                id: item.fragmentID, text: text, isCurrent: offset == window.currentIndex)
-        }
-    }
-
-    /// The first narrated fragment at or after the top of the current page.
-    ///
-    /// `continuingPastPage: false` is the page-scoped question;`true` carries on
-    /// to the end of the chapter, which is what "start reading aloud from here"
-    /// wants when the page itself is a heading, a plate or a chapter opening.
-    func firstNarratedFragment(continuingPastPage carryOn: Bool) -> String? {
-        guard let layout, let page = currentPage, let timeline else { return nil }
-        let length = (layout.attributedText.string as NSString).length
-        let start = page.characterRange.location
-        guard start < length else { return nil }
-        let range = carryOn
-            ? NSRange(location: start, length: length - start)
-            : page.characterRange
+    /// - Parameter carriedOver: whether a fragment that *began* before `range`
+    ///   counts. `false` is what a page turn wants: the sentence a page opens
+    ///   with is usually one carried over from the page before, and seeking to
+    ///   it would turn the page straight back. A fragment whose own extent
+    ///   cannot be resolved is skipped rather than assumed to begin here.
+    private func firstNarratedFragment(in range: NSRange, carriedOver: Bool) -> String? {
+        guard let layout, let timeline else { return nil }
+        let text = layout.attributedText
+        guard range.location >= 0, range.length > 0, NSMaxRange(range) <= text.length
+        else { return nil }
         var found: String?
-        layout.attributedText.enumerateAttribute(.issaFragmentID, in: range) { value, _, stop in
-            if let id = value as? String, timeline.entry(forFragment: id) != nil {
-                found = id
-                stop.pointee = true
+        text.enumerateAttribute(.issaFragmentID, in: range) { value, _, stop in
+            guard let id = value as? String, timeline.entry(forFragment: id) != nil
+            else { return }
+            if !carriedOver {
+                guard let whole = layout.fragmentRange(for: id), whole.location >= range.location
+                else { return }
             }
+            found = id
+            stop.pointee = true
         }
         return found
     }
 
     /// The first media-overlay fragment appearing on the current page.
     func firstFragmentOnCurrentPage() -> String? {
-        guard let layout, let page = currentPage, let timeline else { return nil }
-        var found: String?
-        layout.attributedText.enumerateAttribute(
-            .issaFragmentID, in: page.characterRange,
-        ) { value, _, stop in
-            if let id = value as? String, timeline.entry(forFragment: id) != nil {
-                found = id
-                stop.pointee = true
-            }
+        guard let page = currentPage else { return nil }
+        return firstNarratedFragment(in: page.characterRange, carriedOver: true)
+    }
+
+    /// The first narrated sentence that *begins* on a page.
+    ///
+    /// Not the first one the page shows: that is usually a sentence carried
+    /// over from the page before, and seeking to it would turn the page
+    /// straight back. The television has no scrubber, so a page turn is the
+    /// only way to move the voice, and it has to land forwards.
+    ///
+    /// Falls back to the next narrated sentence starting anywhere *after* the
+    /// page's top when nothing begins on the page itself — one long sentence
+    /// covering the whole page, or a page of heading and plate — and stops at
+    /// `NarrationReach`, which is where the fallback's honesty runs out. It used
+    /// to run to the end of the chapter.
+    func firstNarratedFragment(beginningOn page: RenderedPage) -> String? {
+        guard let layout, let timeline else { return nil }
+        if let id = layout.firstFragment(
+            beginningOn: page, matching: { timeline.entry(forFragment: $0) != nil },
+        ) { return id }
+
+        guard let reach = NarrationReach.range(
+            fromPageTop: page.characterRange.location,
+            pageLength: page.characterRange.length,
+            inTextOfLength: layout.attributedText.length,
+        ) else { return nil }
+        return firstNarratedFragment(in: reach, carriedOver: false)
+    }
+
+    /// Whether the voice is speaking a sentence on the page being shown.
+    private var narrationIsOnVisiblePage: Bool {
+        guard let entry = readalong?.activeEntry, let layout else { return false }
+        guard entry.textHref == currentSpineHref else { return false }
+        return layout.page(containingFragment: entry.fragmentID)?.index == pageIndex
+    }
+
+    /// Turns the page, and takes the voice with it.
+    ///
+    /// The television's page turn, not the phone's. A phone can afford to let
+    /// narration carry on where it was and snap the page back at the next
+    /// sentence, because a reader who wanted the audio moved has a scrubber and
+    /// a sentence to tap. A remote has neither, so here the page *is* the
+    /// scrubber: turning it while the voice is talking seeks narration to the
+    /// first sentence beginning on the new page.
+    ///
+    /// A paused book turns silently — pressing right on a paused book is
+    /// reading ahead, not asking to be read to. At the end of the book nothing
+    /// happens at all, which `nextPage()` already decides; this notices that
+    /// the position did not move and leaves the voice alone.
+    public func turnPage(forward: Bool) async {
+        let wasPlaying = isPlaying
+        let before = (chapterIndex, pageIndex)
+        if forward { await nextPage() } else { await previousPage() }
+        guard (chapterIndex, pageIndex) != before else { return }
+        guard wasPlaying, let readalong, let page = currentPage,
+              let fragment = firstNarratedFragment(beginningOn: page)
+        else { return }
+        await readalong.seek(toFragment: fragment)
+    }
+
+    /// Play/pause for a page the reader may have turned away from the voice.
+    ///
+    /// Pressing play should read what is on screen. After a few silent page
+    /// turns the voice is somewhere else entirely, and resuming it would start
+    /// talking about a page nobody is looking at — so a paused book whose voice
+    /// is off-page begins at the first sentence on the visible page instead.
+    /// Everything else is the ordinary toggle.
+    public func playFromVisiblePage() async {
+        guard let readalong else { return }
+        guard !readalong.player.isPlaying, !narrationIsOnVisiblePage,
+              let page = currentPage,
+              let fragment = firstNarratedFragment(beginningOn: page)
+        else {
+            await togglePlayback()
+            return
         }
-        return found
+        // `seek(toFragment:)` starts playback, which is what was asked for.
+        await readalong.seek(toFragment: fragment)
     }
 
     public func togglePlayback() async {
@@ -1145,7 +1213,7 @@ public final class ReaderModel {
         let item = package.spine[index]
         do {
             let data = try package.archive.read(item.href)
-            let images = ChapterImageSource(archive: package.archive)
+            let images = ArchiveImageSource(archive: package.archive)
             let parsed = try HTMLContentParser(
                 style: style,
                 maxImageWidth: max(pageSize.width, 1),
@@ -1346,7 +1414,7 @@ public final class ReaderModel {
         navigation: [EPUBPackage.NavPoint],
         style: ReaderStyle,
     ) async -> [SearchHit] {
-        let images = ChapterImageSource(archive: archive)
+        let images = ArchiveImageSource(archive: archive)
         guard let data = try? archive.read(item.href),
               let parsed = try? HTMLContentParser(
                   style: style, loadImage: { images.image(for: $0) },
@@ -1377,6 +1445,35 @@ public final class ReaderModel {
         positionOrigin = .chosen
         pageIndex = page.index
         selection = NSRange(location: hit.charOffset, length: (query as NSString).length)
+        selectionChapter = chapterIndex
+        scheduleSave()
+    }
+
+    /// The same jump for somewhere that is not a search hit: a chapter, an
+    /// offset into its rendered text, and how much of it to leave marked.
+    ///
+    /// Plain integers rather than a type, because the one caller is Ask and
+    /// `ReaderModel.swift` must not import IssaAsk — the whole feature is fenced
+    /// off the television, and this file is compiled there. `ReaderModel+Ask`
+    /// spells the Ask-shaped version over this one; everything the jump needs
+    /// (`loadChapter`, `positionOrigin`, `pageIndex`, `selection`,
+    /// `selectionChapter`, `scheduleSave`) is private to this file, which is why
+    /// it cannot live there.
+    ///
+    /// - Parameters:
+    ///   - index: a spine index — the same coordinate a search hit and a reading
+    ///     boundary both use.
+    ///   - charOffset: UTF-16 units into the *rendered* chapter string, which is
+    ///     the coordinate every offset in this app is in.
+    ///   - length: how much to select. Leaving the passage selected shows the
+    ///     selection menu over it, which is the same thing a search jump does
+    ///     and is a free "here is the sentence" for nothing.
+    public func go(toChapter index: Int, charOffset: Int, marking length: Int) async {
+        guard await loadChapter(index),
+              let layout, let page = layout.page(containingOffset: charOffset) else { return }
+        positionOrigin = .chosen
+        pageIndex = page.index
+        selection = NSRange(location: charOffset, length: length)
         selectionChapter = chapterIndex
         scheduleSave()
     }
@@ -1472,7 +1569,7 @@ public final class ReaderModel {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             : chapterTitle
 
-        // `highlightRects(on:)` later rebuilds this highlight's rectangle from
+        // `highlightBlocks(on:)` later rebuilds this highlight's rectangles from
         // (charOffset, excerpt.length) — so charOffset has to name the
         // excerpt's own first character. A selection that began at a paragraph
         // break or with leading whitespace trims to a shorter excerpt without
@@ -1605,19 +1702,25 @@ public final class ReaderModel {
         )
     }
 
-    /// Rectangles for stored highlights that fall on the current page.
-    public func highlightRects(on page: RenderedPage) -> [(rect: CGRect, tint: Annotation.Tint)] {
+    /// Stored highlights that fall on the current page, one block per mark.
+    ///
+    /// Grouped rather than flattened into a list of rectangles, because each
+    /// mark is now painted as a single shape: the flat list lost the boundary
+    /// between one highlight and the next, and filling its rectangles one by
+    /// one composited the tint over itself wherever two lines met — a darker
+    /// band at every seam of every wrapped highlight.
+    func highlightBlocks(on page: RenderedPage) -> [PageSurface.AnnotationBlock] {
         guard let layout, let package, package.spine.indices.contains(chapterIndex) else { return [] }
         let href = package.spine[chapterIndex].href
-        var result: [(CGRect, Annotation.Tint)] = []
+        var result: [PageSurface.AnnotationBlock] = []
         for annotation in annotations where annotation.kind != .bookmark {
             guard annotation.locator.matchesHref(href) else { continue }
             guard let offset = annotation.locator.locations?.charOffset else { continue }
             let length = (annotation.excerpt as NSString).length
             let range = NSRange(location: offset, length: length)
-            for rect in layout.rects(forRange: range, on: page) {
-                result.append((rect, annotation.tint))
-            }
+            let lines = layout.lines(forRange: range, on: page)
+            guard !lines.isEmpty else { continue }
+            result.append(PageSurface.AnnotationBlock(lines: lines, tint: annotation.tint))
         }
         return result
     }
@@ -1810,7 +1913,7 @@ extension ReaderModel {
             }
             return
         }
-        guard let directory = CustomFonts.directory(named: "Fonts/\(book.uuid)"),
+        guard let directory = CustomFonts.prepareExtractedDirectory(bookUUID: book.uuid),
               let data = try? package.archive.read(face.path)
         else { style.publisherFamily = nil; return }
 
@@ -1843,30 +1946,4 @@ extension ReaderModel {
 
     /// Whether choosing the publisher's font would actually change anything.
     public var hasPublisherFont: Bool { style.publisherFamily != nil }
-}
-
-/// Decodes and caches a chapter's artwork, keyed by archive path.
-///
-/// A chapter asks once per plate, and the cache lives as long as the chapter
-/// does, so reflowing on a font change costs no re-decoding.
-///
-/// File scope rather than nested inside `ReaderModel`, which is `@MainActor`:
-/// a type declared inside a globally-isolated one inherits that isolation, and
-/// the search path now decodes plates off the main actor. Nothing outside this
-/// file ever named it.
-private final class ChapterImageSource {
-    private let archive: EPUBArchive
-    private var decoded: [String: PlatformImage?] = [:]
-
-    init(archive: EPUBArchive) { self.archive = archive }
-
-    func image(for href: String) -> PlatformImage? {
-        if let cached = decoded[href] { return cached }
-        var result: PlatformImage?
-        if let data = try? archive.read(href) {
-            result = PlatformImage(data: data)
-        }
-        decoded[href] = result
-        return result
-    }
 }

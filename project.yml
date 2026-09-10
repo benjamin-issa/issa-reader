@@ -22,8 +22,8 @@ settings:
     DEVELOPMENT_TEAM: "$(ISSA_TEAM_ID)"
     CODE_SIGN_STYLE: Automatic
     ENABLE_USER_SCRIPT_SANDBOXING: YES
-    MARKETING_VERSION: "1.0"
-    CURRENT_PROJECT_VERSION: "29"
+    MARKETING_VERSION: "1.1.0"
+    CURRENT_PROJECT_VERSION: "35"
 
 packages:
   IssaReaderKit:
@@ -48,6 +48,10 @@ targets:
         product: IssaRender
       - package: IssaReaderKit
         product: IssaPlayback
+      # Not the tvOS target: FoundationModels is not in that SDK at all, and
+      # there is no Ask anywhere on the television.
+      - package: IssaReaderKit
+        product: IssaAsk
       - target: IssaWidgets
         embed: true
         codeSign: true
@@ -105,6 +109,10 @@ targets:
         buildPhase: resources
     dependencies:
       - target: IssaReader-iOS
+      # The suite covers the reading boundary the Ask index is compared
+      # against, so it needs the package the host app links.
+      - package: IssaReaderKit
+        product: IssaAsk
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: "$(ISSA_BUNDLE_ID).sharedtests"
@@ -168,6 +176,10 @@ targets:
         product: IssaRender
       - package: IssaReaderKit
         product: IssaPlayback
+      # Not the tvOS target: FoundationModels is not in that SDK at all, and
+      # there is no Ask anywhere on the television.
+      - package: IssaReaderKit
+        product: IssaAsk
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: "$(ISSA_BUNDLE_ID)"

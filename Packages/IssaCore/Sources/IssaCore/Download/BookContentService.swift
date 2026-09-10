@@ -109,6 +109,31 @@ public struct BookContentService: Sendable {
         case ebook
         case audiobook
         case readaloud
+
+        /// The reader-facing name for an edition. "Read-along", never the
+        /// server's "Readaloud" (item 03); the other two already read plainly.
+        ///
+        /// Here rather than on a screen because four now say it — the book
+        /// detail's editions card, the Downloads screen's rows, its transfer
+        /// status line and the Reading tab's section — and the two on the
+        /// Downloads screen were still printing `rawValue.capitalized`, so the
+        /// app called the same edition "Read-along" in one place and
+        /// "Readaloud" in another.
+        public var displayName: String {
+            switch self {
+            case .ebook: "Ebook"
+            case .audiobook: "Audiobook"
+            case .readaloud: "Read-along"
+            }
+        }
+
+        /// Whether this edition is a source of the book's text.
+        ///
+        /// The publisher's face and the question index are derived from text,
+        /// and both the ebook and the read-along carry it. An audiobook does
+        /// not — so a book left with only an audiobook has no text on the
+        /// device, and neither of those derived files has anything behind it.
+        public var carriesText: Bool { self != .audiobook }
     }
 
     public func localURL(for book: Book, format: Format) -> URL {
@@ -130,21 +155,50 @@ public struct BookContentService: Sendable {
     /// "hash it rather than trying to sanitise". Stripping invites the next
     /// encoding that means the same thing; a hash cannot escape a directory,
     /// and it stays stable so the file is still found again afterwards.
+    ///
+    /// The rule itself is `String.safePathComponent`, shared rather than spelled
+    /// here: three other places name a file or a directory after a book, and two
+    /// of them had no guard at all.
     public static func localURL(in directory: URL, bookUUID: String, format: Format) -> URL {
-        let component = bookUUID.isBareUUID ? bookUUID : "unsafe-\(Self.digest(bookUUID))"
-        return directory.appending(path: "\(component)-\(format.rawValue).epub")
-    }
-
-    private static func digest(_ value: String) -> String {
-        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
-        for byte in Data(value.utf8) {
-            hash = (hash ^ UInt64(byte)) &* 0x100_0000_01b3
-        }
-        return String(hash, radix: 16)
+        directory.appending(path: "\(bookUUID.safePathComponent)-\(format.rawValue).epub")
     }
 
     public func isDownloaded(_ book: Book, format: Format) -> Bool {
         FileManager.default.fileExists(atPath: localURL(for: book, format: format).path)
+    }
+
+    /// Whether any edition of this book that carries text is still on the device.
+    ///
+    /// The question a removal has to ask before it releases what a download left
+    /// behind. The publisher's face and the question index belong to the *book*,
+    /// not to the edition just deleted — either the ebook or the read-along
+    /// produces them — so removing one of a book's two editions used to destroy
+    /// derived data belonging to the edition still sitting on disk. The reader
+    /// found out the next time they opened it: the book set in the fallback
+    /// face, and the questions it had already been indexed for starting again.
+    ///
+    /// Two `stat`s at most, and only on the removal path, which is why it asks
+    /// the disk rather than a set held in memory: the set is refreshed *after*
+    /// the file goes, and answering from it here would answer about the world
+    /// one step ago.
+    public static func hasDownloadedText(bookUUID: String, in directory: URL? = nil) -> Bool {
+        downloadedFormats(bookUUID: bookUUID, in: directory).contains(where: \.carriesText)
+    }
+
+    /// Which of this book's editions have a file on disk. Three `stat`s at most.
+    ///
+    /// Never for a whole library — that is what `downloadedBookUUIDs` and its
+    /// single directory read are for. This is for the two questions that are
+    /// about one book and need the format: what a removal leaves behind, and
+    /// whether the edition a screen is offering is still going to be there.
+    public static func downloadedFormats(
+        bookUUID: String, in directory: URL? = nil,
+    ) -> Set<Format> {
+        let directory = directory ?? defaultDirectory()
+        return Set(Format.allCases.filter {
+            FileManager.default.fileExists(
+                atPath: localURL(in: directory, bookUUID: bookUUID, format: $0).path)
+        })
     }
 
     /// The best format available for reading: the aligned edition when the
@@ -176,19 +230,63 @@ public struct BookContentService: Sendable {
     /// `isDownloaded` is one `stat` per book per format; asking it for a whole
     /// library — which the download shelf and its count both do — is thousands
     /// of syscalls per render.
-    public static func downloadedBookUUIDs(in directory: URL? = nil) -> Set<String> {
+    ///
+    /// **Throws rather than reporting an empty library.** The read was a `try?`
+    /// coalesced to `[]`, and the reconciliation sweep downstream of it reads
+    /// "no books on disk" as "every book departed" and irreversibly deletes each
+    /// one's question index, extracted narration and publisher font. A directory
+    /// this cannot read is not a directory with nothing in it, and the one
+    /// moment they are most likely to be confused is the moment the damage is
+    /// largest: a permissions fault, a detached volume or a device still
+    /// unlocking says nothing about what the reader downloaded.
+    ///
+    /// A directory that is *absent* is the one failure that really does mean an
+    /// empty set — that is what a fresh install and a "sign out and delete my
+    /// downloads" both leave behind — so it is answered rather than thrown.
+    public static func downloadedBookUUIDs(in directory: URL? = nil) throws -> Set<String> {
         let directory = directory ?? preparedDefaultDirectory
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+        let names: [String]
+        do {
+            names = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+            return []
+        }
         return Set(names.compactMap(bookUUID(fromFilename:)))
     }
 
     /// The uuid a download's filename encodes, or nil if it is not one of ours.
     static func bookUUID(fromFilename name: String) -> String? {
+        decodeFilename(name)?.bookUUID
+    }
+
+    /// The book *and* the edition a download's filename encodes.
+    ///
+    /// The inverse of `localURL(in:bookUUID:format:)`, and the only other place
+    /// allowed to know the shape. The storage screen needs the format as well
+    /// as the uuid — a book with two editions on disk is two rows and two
+    /// sizes — and reading a directory once to get both beats one `stat` per
+    /// book per format.
+    ///
+    /// **Bare uuids only.** This is the point where a name found on disk becomes
+    /// a book id, and everything downstream then treats that id as trustworthy:
+    /// the orphan sweep hands it to `AppModel.removeDownload`, which builds
+    /// `Fonts/<id>/` and `Audio/<id>/` and deletes them whole. `..-ebook.epub` is
+    /// a filename anybody can create — an unzipped archive, a sync client, a
+    /// hostile server naming a book — and it decoded to the id `..`, which made
+    /// both of those directories the storage root. `safePathComponent` stops the
+    /// escape a second time over; this stops it being asked for.
+    ///
+    /// It also means the inverse is honest. `localURL` writes `unsafe-<hash>`
+    /// for a malformed id, and reading that back as though it were the id would
+    /// have named a *third* file — so a name this cannot decode is deliberately
+    /// no longer one of ours, and the sweep leaves it alone rather than
+    /// deleting it under a name it invented.
+    static func decodeFilename(_ name: String) -> (bookUUID: String, format: Format)? {
         guard name.hasSuffix(".epub") else { return nil }
         let stem = String(name.dropLast(".epub".count))
         for format in Format.allCases where stem.hasSuffix("-\(format.rawValue)") {
             let uuid = String(stem.dropLast(format.rawValue.count + 1))
-            return uuid.isEmpty ? nil : uuid
+            return uuid.isBareUUID ? (uuid, format) : nil
         }
         return nil
     }
@@ -211,17 +309,21 @@ public struct BookContentService: Sendable {
     }
 
     public func removeDownload(_ book: Book, format: Format) {
-        try? FileManager.default.removeItem(at: localURL(for: book, format: format))
+        Self.removeDownload(bookUUID: book.uuid, format: format, in: cacheDirectory)
     }
 
-    /// Total bytes cached, for the Downloads screen.
-    public func cacheSize() -> Int64 {
-        guard let contents = try? FileManager.default.contentsOfDirectory(
-            at: cacheDirectory, includingPropertiesForKeys: [.fileSizeKey],
-        ) else { return 0 }
-        return contents.reduce(into: Int64(0)) { total, url in
-            let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-            total += Int64(size)
-        }
+    /// Deletes one edition's file without needing a client.
+    ///
+    /// Removal is a filesystem operation and never was anything else, but the
+    /// only spelling of it was an instance method — so `AppModel.removeDownload`
+    /// had to build a whole `BookContentService`, and therefore had to be
+    /// behind `guard let session`, and therefore did nothing at all once the
+    /// reader had signed out keeping their downloads. It also takes a uuid
+    /// rather than a `Book`, which is what lets a file whose book has left the
+    /// catalogue be deleted at all.
+    public static func removeDownload(bookUUID: String, format: Format, in directory: URL? = nil) {
+        let directory = directory ?? defaultDirectory()
+        try? FileManager.default.removeItem(
+            at: localURL(in: directory, bookUUID: bookUUID, format: format))
     }
 }

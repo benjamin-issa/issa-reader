@@ -81,6 +81,58 @@ struct BookIdentifierTests {
         #expect(name("../a") == name("../a"), "the same book must find its file again")
         #expect(name("../a") != name("../b"))
     }
+
+    // MARK: - The rule itself, where every path builder now gets it
+
+    /// `safePathComponent` is what the four path builders share. Asserting it
+    /// directly means a fifth one added later is one line from being safe, and
+    /// that its safety is not re-proved through whatever it happens to name.
+    @Test("a refused identifier becomes one component with nothing path-like in it",
+          arguments: [
+              "../../../Library/Preferences/com.benjaminissa.issareader",
+              "..",
+              ".",
+              "/etc/passwd",
+              "a/b",
+              "",
+              "11111111-1111-4111-8111-11111111111",
+          ])
+    func refusedIdentifiersBecomeOneInertComponent(_ uuid: String) {
+        let component = uuid.safePathComponent
+        #expect(component.hasPrefix("unsafe-"))
+        #expect(!component.contains("/"))
+        #expect(!component.contains(".."))
+        // The property that actually matters: appended to a directory, it names
+        // a child of that directory and not a sibling, a parent, or the root.
+        let root = URL(fileURLWithPath: "/tmp/app/Fonts", isDirectory: true)
+        let named = root.appending(path: component, directoryHint: .isDirectory)
+        #expect(named.standardizedFileURL.deletingLastPathComponent().path
+            == root.standardizedFileURL.path)
+    }
+
+    @Test("a real uuid is left exactly as it is")
+    func acceptedIdentifiersAreUnchanged() {
+        let uuid = "0198ab12-cd34-4e56-8f90-123456789abc"
+        #expect(uuid.safePathComponent == uuid,
+                "hashing the valid case would rename every file already on a device")
+    }
+
+    /// The hash moved into `FNV1a` so the Ask engine's sampler seed could share
+    /// it. These are the values the old private copy produced, written down so
+    /// the move is provably a move: a path that writes a file and a path that
+    /// deletes it cannot be allowed to disagree about where it lives, and
+    /// `unsafe-<hash>` files already exist on devices.
+    ///
+    /// Note the fifteen digits on `".."`. `String(_:radix:)` drops the leading
+    /// zero, and that is the spelling that shipped.
+    @Test("the hash is still the one already written on devices")
+    func theHashIsTheSpellingAlreadyOnDisk() {
+        #expect("..".safePathComponent == "unsafe-7da1a07b4a03f2d")
+        #expect("../".safePathComponent == "unsafe-f7d93d17ec4b1066")
+        #expect(FNV1a.hash("a") == 0xaf63_dc4c_8601_ec8c)
+        #expect(FNV1a.hash("") == 0xcbf2_9ce4_8422_2325, "the offset basis, unmixed")
+        #expect(FNV1a.hexadecimal("a") == "af63dc4c8601ec8c")
+    }
 }
 
 @Suite("The catalogue refuses entries it cannot safely name")

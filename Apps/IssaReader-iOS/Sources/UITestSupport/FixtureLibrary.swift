@@ -1,5 +1,6 @@
 #if ISSA_UITEST_FIXTURE
 import Foundation
+import IssaCore
 
 /// The catalogue the layout sweep lays out.
 ///
@@ -37,6 +38,12 @@ enum FixtureLibrary {
         /// `rail.series` identifier, and the one rail with a differently shaped
         /// header — is actually on screen to be measured.
         var series: (name: String, position: Double)? = nil
+        /// One book carries one, so the book screen's subtitle line is on
+        /// screen to be measured at all. Every other row leaves it nil, which
+        /// is the ordinary case — four of the five books in the captured
+        /// server response send `null` — and the case where the line has to
+        /// vanish without leaving a gap under the title.
+        var subtitle: String? = nil
     }
 
     private static let rows: [Row] = [
@@ -46,7 +53,11 @@ enum FixtureLibrary {
             progress: 0.51,
             formats: ["readaloud", "ebook"],
             status: "Reading",
-            createdAt: "2026-08-30T09:00:00.000Z"),
+            createdAt: "2026-08-30T09:00:00.000Z",
+            // Barrie's own subtitle, and long enough to wrap: the hero column
+            // beside a 130pt cover is about 212pt on a 402pt phone, so this
+            // takes two lines there and one on an iPad.
+            subtitle: "The Boy Who Wouldn't Grow Up"),
         Row(uuid: "22222222-2222-4222-8222-222222222222",
             // Long enough to wrap, which is the case that broke the shelf.
             title: "Frankenstein; or, the Modern Prometheus",
@@ -89,6 +100,51 @@ enum FixtureLibrary {
             series: (name: "Gothic Horror", position: 2)),
     ]
 
+    /// Plants a file per book so the Reading tab's Downloaded section has
+    /// something to lay out.
+    ///
+    /// The sweep's whole job is to measure real rows at real widths, and this
+    /// fixture writes nothing to disk — so without this the only state ever
+    /// measured was the empty one, and a cover, a title, a byline and a
+    /// right-aligned size were never checked against the margin at any width.
+    ///
+    /// Deliberately more than the section's four-row cap, so the "Show all"
+    /// link is on screen too.
+    ///
+    /// These are placeholders, not books: a sparse file of a plausible size, so
+    /// the row draws "40 MB" rather than "Zero KB". Opening one in the reader
+    /// fails — as it already did before this existed, because the stub answers
+    /// every file request with a 404.
+    ///
+    /// Never the read-along book: the sweep script plants that one's real EPUB
+    /// so the reader screen opens without a download, and a placeholder written
+    /// over it would break the screen this is meant to help measure. Existing
+    /// files are left alone for the same reason.
+    static func plantDownloads() {
+        var planted = 0
+        let directory = BookContentService.defaultDirectory()
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        for row in rows where row.uuid != readalongUUID {
+            guard let name = row.formats.first,
+                  let format = BookContentService.Format(rawValue: name) else { continue }
+            let url = BookContentService.localURL(
+                in: directory, bookUUID: row.uuid, format: format)
+            guard !FileManager.default.fileExists(atPath: url.path) else { continue }
+            // A plausible size, so the row's byte count is a real string rather
+            // than "Zero KB" — sparse, so the simulator writes no megabytes.
+            do {
+                try Data().write(to: url)
+                let handle = try FileHandle(forWritingTo: url)
+                try handle.truncate(atOffset: 40_000_000)
+                try handle.close()
+                planted += 1
+            } catch {
+                IssaLog.failure("plant fixture download", error, ["book": row.title])
+            }
+        }
+        IssaLog.info("planted fixture downloads", ["count": String(planted)])
+    }
+
     static var booksJSON: Data {
         let objects = rows.map { row -> [String: Any] in
             var book: [String: Any] = [
@@ -121,6 +177,10 @@ enum FixtureLibrary {
             if let status = row.status {
                 book["status"] = ["uuid": "status-\(status)", "name": status]
             }
+            // Absent rather than empty for the five that have none, which is
+            // how the server sends it and the only way the book screen's
+            // "no subtitle" case is the one the sweep actually measures.
+            if let subtitle = row.subtitle { book["subtitle"] = subtitle }
             if let createdAt = row.createdAt { book["createdAt"] = createdAt }
             if let series = row.series {
                 book["series"] = [[

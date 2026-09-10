@@ -84,6 +84,13 @@ public struct PlayerView: View {
             scrubber
             transport
 
+            // Under the transport, above the rate: it belongs to this book the
+            // way the rate belongs to the reader. tvOS has no slider and no
+            // player sheet to put one in.
+            #if !os(tvOS)
+            VolumeTrimRow(book: book, coordinator: coordinator)
+            #endif
+
             HStack(spacing: Metrics.spacing24) {
                 rateControl
                 Spacer()
@@ -324,16 +331,25 @@ public struct PlayerView: View {
     /// Rounded to the nearest minute rather than truncated, so a book with four
     /// hours, twelve minutes and fifty seconds left does not claim 4h 12m for
     /// most of a minute.
+    ///
+    /// The rounding is this screen's own and the wording is not. `isFinite`
+    /// plus `Int(_:)` is the guard `DurationText` names as insufficient —
+    /// `1e300` is finite, and converting it traps — and `bookRemaining` is
+    /// arithmetic over a duration the server supplied, so that is a reachable
+    /// crash. Rounded here in whole seconds, because `(seconds / 60).rounded()`
+    /// and then `Int(_:)` is the same trap under another name.
     static func durationText(_ seconds: TimeInterval) -> String {
-        guard seconds.isFinite, seconds > 0 else { return "0m" }
-        let minutes = Int((seconds / 60).rounded())
-        return minutes >= 60 ? "\(minutes / 60)h \(minutes % 60)m" : "\(minutes)m"
+        guard seconds > 0, let whole = seconds.wholeSeconds else { return "0m" }
+        return DurationText.text(Double(minutesRounding(whole)) * 60)
     }
 
     /// The same length for VoiceOver, which must not be handed `4h 12m`.
+    ///
+    /// Guarded like `durationText` above, and for the same reason: the two are
+    /// handed the same number, so a magnitude that traps one traps the other.
     static func spokenDuration(_ seconds: TimeInterval) -> String {
-        guard seconds.isFinite, seconds > 0 else { return "no time" }
-        let minutes = Int((seconds / 60).rounded())
+        guard seconds > 0, let whole = seconds.wholeSeconds else { return "no time" }
+        let minutes = minutesRounding(whole)
         let hours = minutes / 60
         let mins = minutes % 60
         let hourPart = hours == 1 ? "1 hour" : "\(hours) hours"
@@ -342,9 +358,27 @@ public struct PlayerView: View {
         return mins == 0 ? hourPart : "\(hourPart) \(minutePart)"
     }
 
+    /// Whole seconds as whole minutes, rounded rather than floored.
+    ///
+    /// `DurationText` floors, which is right for a book's length and wrong for
+    /// what is left of one: fifty seconds remaining should not read as "0m"
+    /// beside a scrubber that is visibly not at the end.
+    private static func minutesRounding(_ whole: Int) -> Int {
+        whole / 60 + (whole % 60 >= 30 ? 1 : 0)
+    }
+
+    /// A position on the clock, under the scrubber: `4:12:00` or `47:31`.
+    ///
+    /// Guarded like `durationText` and `spokenDuration` above, and it is the
+    /// same guard for the same reason — this had `isFinite` and stopped there,
+    /// which is precisely what `DurationText`'s own comment names as
+    /// insufficient. `1e300` is finite and greater than zero, and
+    /// `Int(1e300.rounded())` is an uncatchable crash rather than a wrong
+    /// number. Both readings above the bar are `total * progress` over a
+    /// duration the server supplied or an audio file's metadata declared, so a
+    /// single malformed `media:duration` takes the player down as it draws.
     static func timeText(_ seconds: TimeInterval) -> String {
-        guard seconds.isFinite, seconds > 0 else { return "0:00" }
-        let total = Int(seconds.rounded())
+        guard seconds > 0, let total = seconds.wholeSeconds else { return "0:00" }
         let hours = total / 3600
         let minutes = (total % 3600) / 60
         let secs = total % 60

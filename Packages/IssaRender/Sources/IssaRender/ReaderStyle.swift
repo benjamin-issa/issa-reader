@@ -2,6 +2,7 @@ import CoreGraphics
 import CoreText
 import Foundation
 import IssaUI
+import SwiftUI
 
 #if canImport(UIKit)
 import UIKit
@@ -131,6 +132,14 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
     /// narrated text.
     public var tapToPlay: Bool
 
+    /// One highlighter per page colour, for the sentence being read aloud.
+    ///
+    /// Sparse, like `ReaderStyleOverride`: a page colour absent from here is
+    /// using its default, which is what `ReaderTheme.highlight` already paints.
+    /// Storing all four resolved would freeze today's defaults into everyone's
+    /// settings and make a later change to the table reach nobody.
+    public var highlighters: [ReaderTheme: HighlighterChoice]
+
     public init(
         typeface: Typeface = .bundled(Self.defaultFamily),
         fontSize: CGFloat = 18,
@@ -143,6 +152,7 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
         turnPagesMidSentence: Bool = false,
         tapToPlay: Bool = true,
         progressDisplay: ProgressDisplay = .book,
+        highlighters: [ReaderTheme: HighlighterChoice] = [:],
     ) {
         self.typeface = typeface
         publisherFamily = nil
@@ -156,13 +166,30 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
         self.turnPagesMidSentence = turnPagesMidSentence
         self.tapToPlay = tapToPlay
         self.progressDisplay = progressDisplay
+        self.highlighters = highlighters
     }
 
     // Spelled out rather than synthesised, because the decoder below names them.
     enum CodingKeys: String, CodingKey {
         case typeface, fontFamily, fontSize, lineSpacing, theme, justified, pageMargin
         case highlightGranularity, followNarration, turnPagesMidSentence
-        case tapToPlay, progressDisplay
+        case tapToPlay, progressDisplay, highlighters
+    }
+
+    /// A page colour's raw value, used as a key inside `highlighters`.
+    ///
+    /// `[ReaderTheme: HighlighterChoice]` encoded the ordinary way becomes a
+    /// flat array of alternating keys and values, because `Codable` only
+    /// treats a dictionary as an object when its key is a `String` or an `Int`.
+    /// That array is unreadable by hand and cannot be decoded one entry at a
+    /// time, which is exactly what the rule below requires.
+    private struct ThemeKey: CodingKey {
+        let stringValue: String
+        var intValue: Int? { nil }
+
+        init(stringValue: String) { self.stringValue = stringValue }
+        init?(intValue _: Int) { nil }
+        init(_ theme: ReaderTheme) { stringValue = theme.rawValue }
     }
 
     /// Decoded field by field, with a default for anything absent.
@@ -201,8 +228,35 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
         tapToPlay = try container.decodeIfPresent(Bool.self, forKey: .tapToPlay) ?? fallback.tapToPlay
         progressDisplay = Self.decodeCase(
             ProgressDisplay.self, from: container, key: .progressDisplay) ?? fallback.progressDisplay
+        highlighters = Self.decodeHighlighters(from: container)
         // Belongs to the book being read, not to the settings blob.
         publisherFamily = nil
+    }
+
+    /// Reads the highlighters one page colour at a time.
+    ///
+    /// Two `try?`s, both deliberate. The outer one covers a `highlighters` that
+    /// is not an object at all — a string, a number, a blob half-written by a
+    /// crash — which would otherwise throw and reset every reading preference
+    /// the reader has. The inner one covers a single unreadable choice: a
+    /// preset name a newer build introduced costs *that* page colour its
+    /// highlighter and leaves the other three, and the font, and the margins,
+    /// exactly as they were. It is the same rule as `decodeCase`, applied one
+    /// level down.
+    private static func decodeHighlighters(
+        from container: KeyedDecodingContainer<CodingKeys>,
+    ) -> [ReaderTheme: HighlighterChoice] {
+        guard let nested = try? container.nestedContainer(
+            keyedBy: ThemeKey.self, forKey: .highlighters)
+        else { return [:] }
+        var chosen: [ReaderTheme: HighlighterChoice] = [:]
+        for key in nested.allKeys {
+            guard let theme = ReaderTheme(rawValue: key.stringValue),
+                  let choice = try? nested.decode(HighlighterChoice.self, forKey: key)
+            else { continue }
+            chosen[theme] = choice
+        }
+        return chosen
     }
 
     /// Written out by hand because `publisherFamily` must not be persisted:
@@ -221,6 +275,14 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
         try container.encode(turnPagesMidSentence, forKey: .turnPagesMidSentence)
         try container.encode(tapToPlay, forKey: .tapToPlay)
         try container.encode(progressDisplay, forKey: .progressDisplay)
+        // Written only when there is something to write, so a reader who has
+        // touched no highlighter leaves the same blob as before this existed.
+        if !highlighters.isEmpty {
+            var themes = container.nestedContainer(keyedBy: ThemeKey.self, forKey: .highlighters)
+            for (theme, choice) in highlighters {
+                try themes.encode(choice, forKey: ThemeKey(theme))
+            }
+        }
     }
 
     /// Reads a string-backed case, treating an unrecognised one as absent.
@@ -275,6 +337,14 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
     }
 
     public var textColor: PlatformColor { PlatformColor(theme.text) }
+
+    /// The fill behind the narrated sentence, for the page colour in force.
+    ///
+    /// Resolved here rather than at each call site so the phone, the Mac and
+    /// the television all ask one question and get one answer — and so a page
+    /// colour with no highlighter of its own still lands on
+    /// `ReaderTheme.highlight` rather than on a second copy of that rule.
+    public var highlightColor: Color { theme.highlightColor(for: highlighters[theme]) }
 }
 
 extension PlatformFont {
