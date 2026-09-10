@@ -149,6 +149,56 @@ struct PositionGuardTests {
         #expect(guardState.highWater == 0.5)
     }
 
+    // MARK: - Holding a clock the app could not resume honestly
+
+    /// The 2026-09-09 report, from the other end. The audiobook could not be
+    /// resumed — the anchor named a file the server's manifest has never heard
+    /// of — so playback began at zero, and fifteen seconds later the periodic
+    /// writer offered 0.0001 on a clock that had no mark of its own to be
+    /// measured against. Every derived write from such a start is a guess.
+    @Test("a held clock refuses every derived write until the listener steers")
+    func aHeldGuardRefusesEveryDerivedWriteUntilTheListenerSteers() {
+        var guardState = PositionGuard(highWater: 0, duration: 36_000, awaitingChoice: true)
+        #expect(guardState.decide(0.0001, origin: .derived) == .awaitChoice(candidate: 0.0001))
+        // Not just the small ones: nothing a clock arrives at is trustworthy
+        // while the app cannot say where the listener was.
+        #expect(!guardState.decide(0.4, origin: .derived).isAllowed)
+        #expect(guardState.highWater == 0, "a held clock's mark must not move")
+    }
+
+    /// The way out, and the only one: the listener scrubs, taps a chapter, or
+    /// picks a place. That is a claim about where they are, so it re-baselines
+    /// the mark and the clock runs normally from there.
+    @Test("a chosen write releases the hold and re-baselines")
+    func aChosenWriteReleasesTheHoldAndRebaselines() {
+        var guardState = PositionGuard(highWater: 0, duration: 36_000, awaitingChoice: true)
+        #expect(guardState.decide(0.45, origin: .chosen).isAllowed)
+        #expect(guardState.awaitingChoice == false)
+        #expect(guardState.decide(0.46, origin: .derived).isAllowed, "listening on must be recordable")
+        #expect(guardState.decide(0.30, origin: .derived) == .refuse(held: 0.46, candidate: 0.30),
+                "and the ordinary rule applies again once the hold is gone")
+    }
+
+    /// The hole a nil-tolerant hold would leave. `writePosition` hands the
+    /// locator to `recordPosition` whatever its progression, so a derived write
+    /// carrying none still replaces the stored place with an audio track's href.
+    @Test("a held clock refuses a derived write with no progression")
+    func aHeldGuardRefusesADerivedWriteWithNoProgression() {
+        var guardState = PositionGuard(highWater: 0.31, duration: 36_000, awaitingChoice: true)
+        #expect(guardState.decide(nil, origin: .derived) == .awaitChoice(candidate: nil))
+        #expect(guardState.decide(nil, origin: .chosen).isAllowed,
+                "a chosen write is the listener acting, and is never held")
+    }
+
+    /// The case that must stay green: an audiobook opened for the first time
+    /// has nothing to lose, and holding its clock would mean it recorded no
+    /// position at all until the listener touched the scrubber.
+    @Test("a fresh guard still admits a derived write from zero")
+    func aFreshGuardStillAdmitsADerivedWriteFromZero() {
+        var guardState = PositionGuard(highWater: 0)
+        #expect(guardState.decide(0.0001, origin: .derived).isAllowed)
+    }
+
     // MARK: - The seconds arm
 
     @Test("five minutes of a forty-hour audiobook is the whole tolerance")

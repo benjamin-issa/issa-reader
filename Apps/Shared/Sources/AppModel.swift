@@ -1,5 +1,8 @@
 import Foundation
 import IssaCore
+// For `SMILTimeline`: the listening resolver takes an overlay by name, so the
+// type has to be spelled out here rather than inferred from a reader's.
+import IssaEPUB
 import IssaPlayback
 // For `CustomFonts`: a removal has to take the publisher face the reader model
 // extracted with it, and that directory is IssaUI's to name.
@@ -647,8 +650,14 @@ public final class AppModel {
             let key = Self.positionGuardKey(book.uuid, isAudioScaled: locator.isAudioScaled)
             guard let guardState = positionGuards[key], progress < guardState.highWater
             else { continue }
+            // The hold travels with the mark. A re-seed answers "where is this
+            // book on the server", which is a different question from "does
+            // this app know where the listener was" — dropping `awaitingChoice`
+            // here would have let the next fifteen-second tick through on a
+            // resume nobody had steered.
             positionGuards[key] = PositionGuard(
-                highWater: progress, duration: LibraryArrangement.duration(of: book))
+                highWater: progress, duration: LibraryArrangement.duration(of: book),
+                awaitingChoice: guardState.awaitingChoice)
         }
     }
 
@@ -1814,13 +1823,22 @@ public final class AppModel {
                 coordinator: coordinator, book: book, session: session,
                 chapterTitle: { [weak coordinator] in coordinator?.chapterTitle },
             )
-            let resume = await resolveListeningStart(for: book, coordinator: coordinator)
+            let manifestKind = ListeningResume.ManifestKind.original
+            let resume = await resolveListeningStart(
+                for: book, coordinator: coordinator,
+                timeline: nil, manifestKind: manifestKind)
             IssaLog.info("listening started", [
                 "book": book.title,
-                "from": resume.reason,
+                "from": resume.reason.rawValue,
                 "atBookTime": String(format: "%.1f", resume.bookTime ?? -1),
                 "storedProgress": String(format: "%.4f", book.progress ?? -1),
+                "manifestKind": manifestKind.rawValue,
+                "trackCount": String(coordinator.tracks.count),
             ])
+            // Before a note of audio plays: an unresolved start plays from zero,
+            // and the fifteen-second writer must not be allowed to persist that
+            // zero over a place this app simply could not find.
+            prepareListeningGuard(for: book, resolved: resume.isResolved)
             if let time = resume.bookTime {
                 await coordinator.seek(toBookTime: time)
                 coordinator.player.play()
@@ -1878,7 +1896,7 @@ public final class AppModel {
                 // somewhere is not. The coordinator owns every seek entry point,
                 // so it is the only thing that can tell them apart.
                 let origin: PositionOrigin = coordinator.consumeSteering() ? .chosen : .derived
-                await writePosition(
+                let accepted = await writePosition(
                     Self.audioLocator(for: coordinator, book: book),
                     timestamp: ProgressService.now(),
                     for: book.uuid,
@@ -1888,7 +1906,15 @@ public final class AppModel {
                 // act on. The locator above is a fraction of this engine's
                 // clock and means nothing to the read-along; a file and an
                 // offset mean the same thing to both. See `AudioAnchor`.
-                if let anchor = coordinator.currentAnchor {
+                //
+                // Only when the position was accepted. A refused write must not
+                // leave its anchor behind: the anchor is the *more* durable
+                // half — the reader opens the book from it — so writing one for
+                // a position the guard has just rejected replaces the last good
+                // place with a track and an offset from a playback that started
+                // at zero. That overwrite is what sent the reader to chapter
+                // one on the phone after a drive.
+                if accepted, let anchor = coordinator.currentAnchor {
                     try? await store?.setAudioAnchor(anchor, forBook: book.uuid)
                 }
                 // `enqueue` suspends, and can drain the network for seconds.
@@ -1930,52 +1956,57 @@ public final class AppModel {
 
     /// Where an audiobook should resume, and why.
     ///
-    /// Resolved in order of exactness, because the two engines keep different
-    /// clocks and a fraction from the other one is not a place in this book.
-    /// See `AudioAnchor`. The `from` field this produces is the line that would
-    /// have caught the fifty-minute error in the car.
+    /// The ladder itself lives in `ListeningResume`, which is a pure function
+    /// and testable against the manifests that break it. This is the part that
+    /// has to reach the store and the open readers, and the part that has to
+    /// leave a log line good enough to diagnose the next one of these without
+    /// the phone in hand.
+    /// - Parameter timeline: an overlay the caller already has, for a manifest
+    ///   synthesised from one. Falls back to an open reader's, which a cold
+    ///   launch straight into CarPlay does not have.
     private func resolveListeningStart(
-        for book: Book, coordinator: AudiobookCoordinator,
-    ) async -> (bookTime: TimeInterval?, reason: String) {
-        // 1. An anchor: an audio file and an offset into it, written by
-        //    whichever engine last played. Exact, and the only thing that
-        //    survives switching between the read-along and the audiobook.
-        if let anchor = try? await store?.audioAnchor(forBook: book.uuid),
-           let time = coordinator.manifest.bookTime(for: anchor) {
-            return (time, "anchor")
+        for book: Book,
+        coordinator: AudiobookCoordinator,
+        timeline: SMILTimeline?,
+        manifestKind: ListeningResume.ManifestKind,
+    ) async -> ListeningResume.Resolution {
+        let anchor = try? await store?.audioAnchor(forBook: book.uuid)
+        let stored = book.position?.locator
+        let overlay = timeline ?? readers[book.uuid]?.timeline
+        let resolution = ListeningResume.resolve(
+            anchor: anchor, stored: stored, timeline: overlay, manifest: coordinator.manifest)
+
+        // The fields that say *why*, rather than only that it failed. The old
+        // line said "no audio anchor for this book yet" in the one case where
+        // there certainly was one — it named a file this manifest has never
+        // heard of — which is how a report about resuming at chapter one read
+        // as a book that had simply never been played.
+        var fields: [String: String] = [
+            "book": book.title,
+            "manifestKind": manifestKind.rawValue,
+            "trackCount": String(coordinator.tracks.count),
+            "firstTrack": coordinator.manifest.playableTracks.first?.href ?? "none",
+            "storedScale": stored.map { $0.isAudioScaled ? "audio" : "text" } ?? "none",
+            "storedHrefMatchesTrack": stored.map { locator in
+                locator.isAudioScaled
+                    ? String(coordinator.manifest.trackIndex(matching: locator.href) != nil)
+                    : "n/a"
+            } ?? "n/a",
+            "timeline": overlay == nil ? "absent" : "present",
+        ]
+        switch resolution.reason {
+        case .anchorNamesUnknownFile:
+            if let anchor {
+                fields["anchorHref"] = anchor.audioHref
+                fields["anchorOffset"] = String(format: "%.1f", anchor.offset)
+            }
+            IssaLog.warning("audio anchor names no track in this manifest", fields)
+        case .noAnchorStored:
+            IssaLog.warning("no audio anchor stored for this book", fields)
+        case .anchor, .audioPosition, .readingPositionViaOverlay, .noStoredPosition:
+            break
         }
-        let locator = book.position?.locator
-        // 2. A stored position already on this engine's clock — an audiobook
-        //    wrote it, so the old arithmetic was always right for this case.
-        if let locator, locator.isAudioScaled,
-           let progress = locator.totalProgression?.asProgression {
-            return (coordinator.totalDuration * progress, "audioPosition")
-        }
-        // 3. A *reading* position, converted through the media overlay — which
-        //    is the bridge Storyteller is built on, and exact when the book is
-        //    open so the timeline is in memory.
-        if let locator, !locator.isAudioScaled,
-           let timeline = readers[book.uuid]?.timeline,
-           let fragment = locator.sentenceID,
-           let entry = timeline.entry(forFragment: fragment, inDocument: locator.href),
-           let time = coordinator.manifest.bookTime(
-               for: AudioAnchor(audioHref: entry.audioHref, offset: entry.start, writtenAt: 0)) {
-            return (time, "readingPositionViaOverlay")
-        }
-        // 4. Nothing this engine can honestly act on.
-        //
-        //    Emphatically **not** the text fraction. Multiplying a fraction of
-        //    the *text* by the duration of the *audio* is exactly what put a
-        //    27-hour book tens of minutes early, and it did so silently: the
-        //    number looked reasonable, so nothing downstream could tell. In a
-        //    car a plausible wrong answer is worse than an obvious one.
-        if locator != nil {
-            IssaLog.warning("no audio anchor for this book yet", [
-                "book": book.title,
-                "storedScale": (locator?.isAudioScaled ?? false) ? "audio" : "text",
-            ])
-        }
-        return (nil, locator == nil ? "noStoredPosition" : "noAudioAnchor")
+        return resolution
     }
 
     /// A locator for a position inside an audiobook.
@@ -2212,6 +2243,87 @@ public final class AppModel {
         "\(bookUUID)#\(isAudioScaled ? "audio" : "text")"
     }
 
+    /// Puts one candidate position to this book's guard for that clock, seeding
+    /// the guard first if it has never been used.
+    ///
+    /// Split out of `writePosition` so a test can ask the question without a
+    /// mutation queue, a store or a network behind it — the guard is the part
+    /// that decides whether a reader keeps their place, and it was reachable
+    /// only through a method that suspends four times before answering.
+    func admitPosition(
+        _ locator: ReadiumLocator, origin: PositionOrigin, for bookUUID: String,
+    ) -> PositionGuard.Decision {
+        let book = books.first { $0.uuid == bookUUID }
+        // With the narration length, where there is one: the guard's absolute
+        // bound — five minutes — only exists for long audiobooks, and without
+        // the duration it was never applied, leaving a forty-hour book two
+        // hours of undetected slack.
+        let duration = book.map(LibraryArrangement.duration(of:)).flatMap { $0 > 0 ? $0 : nil }
+        // Keyed by book *and* by clock. `PositionGuard` is a high-water mark on
+        // `totalProgression`, and this app writes that field on two different
+        // scales -- a fraction of the text from the reader, a fraction of the
+        // audio from the audiobook. Sharing one guard between them meant a
+        // reading position and a listening position were compared against each
+        // other as if they were the same quantity, so one could refuse the
+        // other for going "backwards" when neither had moved at all. See
+        // AudioAnchor.
+        let guardKey = Self.positionGuardKey(bookUUID, isAudioScaled: locator.isAudioScaled)
+        // Seeded only from a stored position on this same clock, for the same
+        // reason: the book's own progress is whichever scale wrote last.
+        let seed = (book?.position?.locator).flatMap {
+            $0.isAudioScaled == locator.isAudioScaled ? $0.totalProgression : nil
+        } ?? 0
+        var state = positionGuards[guardKey] ?? PositionGuard(highWater: seed, duration: duration)
+        let decision = state.decide(locator.locations?.totalProgression, origin: origin)
+        positionGuards[guardKey] = state
+        return decision
+    }
+
+    /// Arms — or releases — the audio clock's guard as an audiobook starts.
+    ///
+    /// The half of the 2026-09-09 loss that the ladder alone does not fix.
+    /// When nothing could be resolved, playback begins at zero, and fifteen
+    /// seconds later the periodic writer offers 0.0001 on the audio clock. That
+    /// clock has no mark of its own — the stored position was the reader's, on
+    /// the text clock — so the write reads as ordinary forward progress, and
+    /// `recordPosition` then replaces a part-read novel's place with the front
+    /// of the book. Holding the clock until the listener names somewhere is the
+    /// only honest answer: the app genuinely does not know where they were.
+    /// - Parameter resolved: whether `ListeningResume` found a place to start.
+    func prepareListeningGuard(for book: Book, resolved: Bool) {
+        let key = Self.positionGuardKey(book.uuid, isAudioScaled: true)
+        let narration = LibraryArrangement.duration(of: book)
+        let duration: TimeInterval? = narration > 0 ? narration : nil
+        let stored = book.position?.locator
+        // The same seed rule as `admitPosition`: only a stored position on this
+        // clock says anything about this clock.
+        let seed = (stored?.isAudioScaled ?? false) ? (stored?.totalProgression ?? 0) : 0
+        let mark = positionGuards[key]?.highWater ?? seed
+
+        if resolved {
+            // Released at the mark it already held, never lowered to wherever
+            // this resume landed. A stale anchor can resolve to somewhere
+            // earlier than a good same-clock position — that is exactly what a
+            // high-water mark is for — and re-baselining here would hand the
+            // regression back through the front door.
+            if positionGuards[key]?.awaitingChoice == true {
+                positionGuards[key] = PositionGuard(highWater: mark, duration: duration)
+            }
+            return
+        }
+        // A book with no stored position anywhere has nothing to lose, and
+        // holding its clock would mean a pure audiobook opened for the first
+        // time recorded no position at all until the listener scrubbed.
+        guard book.position != nil else { return }
+        positionGuards[key] = PositionGuard(
+            highWater: mark, duration: duration, awaitingChoice: true)
+        IssaLog.warning("listening resume unresolved, derived writes held until the listener steers", [
+            "book": book.uuid,
+            "storedScale": (stored?.isAudioScaled ?? false) ? "audio" : "text",
+            "held": String(format: "%.4f", mark),
+        ])
+    }
+
     /// The single place a reading position is written.
     ///
     /// Both writers pass through here — the reader's own saves and the
@@ -2238,36 +2350,30 @@ public final class AppModel {
             IssaLog.warning("write dropped: no queue", ["book": bookUUID, "kind": "position"])
             return false
         }
-        let book = books.first { $0.uuid == bookUUID }
-        // With the narration length, where there is one: the guard's absolute
-        // bound — five minutes — only exists for long audiobooks, and without
-        // the duration it was never applied, leaving a forty-hour book two
-        // hours of undetected slack.
-        let duration = book.map(LibraryArrangement.duration(of:)).flatMap { $0 > 0 ? $0 : nil }
-        // Keyed by book *and* by clock. `PositionGuard` is a high-water mark on
-        // `totalProgression`, and this app writes that field on two different
-        // scales -- a fraction of the text from the reader, a fraction of the
-        // audio from the audiobook. Sharing one guard between them meant a
-        // reading position and a listening position were compared against each
-        // other as if they were the same quantity, so one could refuse the
-        // other for going "backwards" when neither had moved at all. See
-        // AudioAnchor.
-        let guardKey = Self.positionGuardKey(bookUUID, isAudioScaled: locator.isAudioScaled)
-        // Seeded only from a stored position on this same clock, for the same
-        // reason: the book's own progress is whichever scale wrote last.
-        let seed = (book?.position?.locator).flatMap {
-            $0.isAudioScaled == locator.isAudioScaled ? $0.totalProgression : nil
-        } ?? 0
-        var state = positionGuards[guardKey] ?? PositionGuard(highWater: seed, duration: duration)
-        let decision = state.decide(locator.locations?.totalProgression, origin: origin)
-        positionGuards[guardKey] = state
-
-        if case let .refuse(held, candidate) = decision {
+        switch admitPosition(locator, origin: origin, for: bookUUID) {
+        case .allow:
+            break
+        case let .refuse(held, candidate):
             IssaLog.warning("position write refused", [
                 "book": bookUUID,
                 "held": String(format: "%.4f", held),
                 "candidate": String(format: "%.4f", candidate),
                 "origin": origin.rawValue,
+                "reason": "belowHighWater",
+            ])
+            return false
+        case let .awaitChoice(candidate):
+            // A held clock, not a regression: the app could not work out where
+            // this listener was, so nothing a clock arrives at may be persisted
+            // until they say. `held` is what the mark would have been, which is
+            // the number worth having in the log.
+            let key = Self.positionGuardKey(bookUUID, isAudioScaled: locator.isAudioScaled)
+            IssaLog.warning("position write refused", [
+                "book": bookUUID,
+                "held": String(format: "%.4f", positionGuards[key]?.highWater ?? 0),
+                "candidate": candidate.map { String(format: "%.4f", $0) } ?? "none",
+                "origin": origin.rawValue,
+                "reason": "awaitingChoice",
             ])
             return false
         }
