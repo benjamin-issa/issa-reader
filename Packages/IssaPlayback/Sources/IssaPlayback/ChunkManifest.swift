@@ -79,6 +79,14 @@ public enum ChunkManifest {
     ///     that number wins — see `estimatedDurations` for what stands in.
     ///   - title: the book's title as the library knows it, which is better than
     ///     the one baked into the EPUB when the two disagree.
+    ///
+    /// Every track this returns has a length, so `readingOrder` and
+    /// `playableTracks` are the same list. They have to be: the chapters below
+    /// are numbered off the reading order while every consumer of them —
+    /// `AudiobookCoordinator`'s chapter clock, `play(chapter:)` — walks the
+    /// playable list, and `playableTracks` drops anything with no duration. One
+    /// zero-length chunk kept here shifted every chapter after it onto the
+    /// wrong track, and a range check cannot see a shift.
     public static func make(
         timeline: SMILTimeline,
         package: EPUBPackage,
@@ -96,6 +104,7 @@ public enum ChunkManifest {
         let estimates = estimatedDurations(in: timeline)
 
         var order: [String] = []
+        var tracks: [AudiobookManifest.Track] = []
         for href in fileOrder(timeline.entries) {
             guard audioFiles[href] != nil else {
                 // A track with no bytes behind it would still take its share of
@@ -104,19 +113,24 @@ public enum ChunkManifest {
                 IssaLog.warning("chunk has no extracted file", ["href": href])
                 continue
             }
+            // Resolved here rather than in the map below, because the length is
+            // what decides whether this is a track at all — see `make`'s note
+            // on why the two lists have to stay the same list.
+            let duration = durations[href] ?? estimates[href] ?? 0
+            guard duration > 0 else {
+                IssaLog.warning("chunk has no length", ["href": href])
+                continue
+            }
             order.append(href)
-        }
-
-        let tracks = order.map { href in
-            AudiobookManifest.Track(
+            tracks.append(AudiobookManifest.Track(
                 // Verbatim. This is the key `AudioAnchor` matches on, and the
                 // whole point of the synthesis is that it is the same string the
                 // read-along writes. Normalising or shortening it here would
                 // rebuild the mismatch this file exists to remove.
                 href: href,
                 type: types[href] ?? "audio/mpeg",
-                duration: durations[href] ?? estimates[href] ?? 0,
-            )
+                duration: duration,
+            ))
         }
         let total = tracks.reduce(0) { $0 + ($1.duration ?? 0) }
         let manifest = AudiobookManifest(
@@ -201,6 +215,14 @@ public enum ChunkManifest {
     /// too. A document the contents does not list gets a numbered name rather
     /// than its path: a path is not a name anybody wrote, and it is what the
     /// mini bar used to print under the book's title.
+    ///
+    /// A run is held and emitted at its first **playable** entry, not at its
+    /// first entry. A chapter whose opening chunk was dropped above still has
+    /// chunks that play, and pinning it to the entry that started the run threw
+    /// the whole chapter away with them — after which every chapter for that
+    /// stretch of the book was one out, and `bridge.onPlayChapter(n)` played the
+    /// wrong one. The marker then sits where this manifest's audio for the
+    /// chapter actually begins, which is the only place it could honestly sit.
     static func chapters(
         timeline: SMILTimeline, package: EPUBPackage, trackOrder: [String],
     ) -> [AudiobookChapter] {
@@ -215,21 +237,30 @@ public enum ChunkManifest {
 
         var chapters: [AudiobookChapter] = []
         var current: String?
+        // The run this entry belongs to, still waiting for a chunk that plays.
+        // Cleared the moment it is emitted, so the rest of the run does not
+        // become a chapter of its own.
+        var pending: (document: String, title: String?)?
         for entry in timeline.entries {
-            guard entry.textHref != current else { continue }
-            // The run has started whether or not it can be played, so this moves
-            // even when the chunk below was dropped — otherwise the next
-            // sentence of the same document would look like a fresh chapter.
-            current = entry.textHref
-            guard let trackIndex = track[entry.audioHref] else { continue }
+            if entry.textHref != current {
+                // The run has started whether or not it can be played, so this
+                // moves even when the chunk below was dropped — otherwise the
+                // next sentence of the same document would look like a fresh
+                // chapter.
+                current = entry.textHref
+                pending = (entry.textHref, titles[entry.textHref])
+            }
+            guard let waiting = pending,
+                  let trackIndex = track[entry.audioHref] else { continue }
             chapters.append(AudiobookChapter(
-                title: titles[entry.textHref] ?? "Section \(chapters.count + 1)",
+                title: waiting.title ?? "Section \(chapters.count + 1)",
                 trackIndex: trackIndex,
                 // Where the chapter's first sentence starts *inside* its chunk.
                 // Zero only when the two happen to line up.
                 offset: entry.start,
-                documentHref: entry.textHref,
+                documentHref: waiting.document,
             ))
+            pending = nil
         }
         return chapters
     }

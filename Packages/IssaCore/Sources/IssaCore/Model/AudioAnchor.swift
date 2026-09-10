@@ -55,13 +55,25 @@ public struct AudioAnchor: Codable, Sendable, Equatable {
 public extension AudiobookManifest {
     /// The playable track that names this file, if any.
     ///
-    /// Matched on the **file name alone**, not the path. The media overlay
-    /// names an archive path inside the EPUB (`OEBPS/audio/ch62.mp3`) while the
-    /// manifest names whatever the server serves (`ch62.mp3`) — the same file
-    /// under two names. `ReadiumLocator.normalizeHref` compares the last *two*
-    /// components, which is right for text, where `text/ch01` and `images/ch01`
-    /// are different resources, and wrong here for that very reason.
+    /// The exact href first, and only then the **file name alone**. The name
+    /// pass has to stay: the media overlay names an archive path inside the
+    /// EPUB (`OEBPS/audio/ch62.mp3`) while the manifest names whatever the
+    /// server serves (`ch62.mp3`) — the same file under two names.
+    /// `ReadiumLocator.normalizeHref` compares the last *two* components, which
+    /// is right for text, where `text/ch01` and `images/ch01` are different
+    /// resources, and wrong here for that very reason.
+    ///
+    /// But a file name is not always a name. A manifest synthesised over a
+    /// book's own narration chunks carries full archive paths on purpose, and a
+    /// book laid out `Audio/ch01/track.mp3`, `Audio/ch02/track.mp3` — the layout
+    /// `AudioExtraction.filename(for:)` exists to flatten — has one file name
+    /// for the whole book. On the name alone every chunk collapsed onto track
+    /// one: an anchor thirty seconds into chapter twelve resolved to thirty
+    /// seconds into the *book*, the resume reported success, and the position
+    /// guard let that zero be written over a part-read novel. The exact pass
+    /// costs a string compare and cannot be wrong.
     func trackIndex(matching audioHref: String) -> Int? {
+        if let exact = playableTracks.firstIndex(where: { $0.href == audioHref }) { return exact }
         let wanted = Self.audioFileName(audioHref)
         guard !wanted.isEmpty else { return nil }
         return playableTracks.firstIndex { Self.audioFileName($0.href) == wanted }

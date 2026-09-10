@@ -127,6 +127,69 @@ struct ChunkManifestTests {
         #expect(built.chapters[0].trackIndex == 0)
     }
 
+    /// A chunk's file name is not a name. `AudioExtraction.filename(for:)`
+    /// flattens a whole archive path into one component precisely because a
+    /// CLI-aligned read-along lays its narration out a folder per chapter, and
+    /// then every chunk in the book is called `track.mp3`. Matched on the last
+    /// component alone, every one of them is track one: an anchor thirty
+    /// seconds into chapter two resolved to thirty seconds into the *book*,
+    /// said it had succeeded, and was written over a part-read novel.
+    @Test("an anchor names the chunk at its own path, not the name they all share")
+    func anAnchorMatchesTheChunkAtItsOwnPath() throws {
+        let (_, package, _, directory) = try Self.fixture()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let timeline = Self.synthetic([
+            ("OEBPS/Audio/ch01/track.mp3", "OEBPS/ch01.xhtml", 0, 120),
+            ("OEBPS/Audio/ch02/track.mp3", "OEBPS/ch02.xhtml", 0, 90),
+        ])
+        // `make` asks only whether a chunk has a file, never what is in it.
+        let built = ChunkManifest.make(
+            timeline: timeline, package: package,
+            audioFiles: [
+                "OEBPS/Audio/ch01/track.mp3": URL(fileURLWithPath: "/dev/null"),
+                "OEBPS/Audio/ch02/track.mp3": URL(fileURLWithPath: "/dev/null"),
+            ],
+            durations: [:], title: "Fixture")
+        #expect(built.manifest.playableTracks.map(\.href)
+            == ["OEBPS/Audio/ch01/track.mp3", "OEBPS/Audio/ch02/track.mp3"])
+
+        // Exactly what `ReadalongCoordinator` writes, in a book laid out this
+        // way: the archive path of the chunk it is speaking, and the offset.
+        let anchor = AudioAnchor(audioHref: "OEBPS/Audio/ch02/track.mp3", offset: 30, writtenAt: 0)
+        let resolved = try #require(built.manifest.bookTime(for: anchor))
+        #expect(resolved == 150, "the first chunk's length, plus the offset into the second")
+    }
+
+    /// `playableTracks` drops a track with no duration, and the chapters are
+    /// numbered off the reading order — so a zero-length chunk kept here left
+    /// the two lists a track apart, and every chapter after it named the wrong
+    /// one. The coordinator's own range check cannot see a shift, only an
+    /// index off the end.
+    ///
+    /// A zero cannot come out of a parsed overlay — `SMILParser` drops clips
+    /// under 5ms — so this is a corrupt `durations.json`, or a caller handing
+    /// one over. The invariant is silent when it breaks, which is why it is
+    /// held here rather than assumed.
+    @Test("a chunk with no length is dropped, and the chapters renumber with it")
+    func aChunkWithNoLengthIsDropped() throws {
+        let (timeline, package, files, directory) = try Self.fixture()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let built = ChunkManifest.make(
+            timeline: timeline, package: package, audioFiles: files,
+            durations: ["OEBPS/Audio/track1.mp3": 0], title: "Fixture")
+
+        #expect(built.manifest.playableTracks.map(\.href) == ["OEBPS/Audio/track2.mp3"])
+        // The same list, not a filtered view of a longer one: that is the whole
+        // invariant, and the reading order is what the chapters count against.
+        #expect(built.manifest.readingOrder.map(\.href) == ["OEBPS/Audio/track2.mp3"])
+        #expect(built.files.keys.sorted() == ["OEBPS/Audio/track2.mp3"])
+        #expect(built.manifest.totalDuration == 9.75)
+
+        #expect(built.chapters.map(\.title) == ["Chapter Two"])
+        #expect(built.chapters[0].trackIndex == 0, "the track it actually plays out of")
+    }
+
     @Test("fixture tracks carry archive paths and the OPF's own media types")
     func fixtureTracksCarryArchivePathsAndOPFTypes() throws {
         let (timeline, package, files, directory) = try Self.fixture()
@@ -225,5 +288,42 @@ struct ChunkManifestTests {
 
         #expect(chapters.map(\.title) == ["Chapter One", "Chapter Two", "Chapter One"])
         #expect(chapters.map(\.trackIndex) == [0, 1, 2])
+    }
+
+    /// A chapter is a run of text document, and a run can outlive the chunk it
+    /// opens in. Pinning the chapter to the entry that *started* the run threw
+    /// the whole chapter away when that one chunk was dropped — even though the
+    /// rest of it plays perfectly well — and every chapter after it was then
+    /// one out for that stretch of the book, so choosing "Chapter One" from
+    /// CarPlay played Chapter Two.
+    @Test("a chapter whose first chunk is missing survives at its first playable one")
+    func aChapterSurvivesTheLossOfItsFirstChunk() throws {
+        let (_, package, _, directory) = try Self.fixture()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let timeline = Self.synthetic([
+            ("a.mp3", "OEBPS/ch01.xhtml", 0, 5),
+            ("b.mp3", "OEBPS/ch01.xhtml", 0, 5),
+            ("c.mp3", "OEBPS/ch02.xhtml", 0, 5),
+        ])
+
+        // `a.mp3` never extracted: a half-deleted download, or a book whose
+        // audio went while it sat paused.
+        let built = ChunkManifest.make(
+            timeline: timeline, package: package,
+            audioFiles: [
+                "b.mp3": URL(fileURLWithPath: "/dev/null"),
+                "c.mp3": URL(fileURLWithPath: "/dev/null"),
+            ],
+            durations: [:], title: "Fixture")
+
+        #expect(built.manifest.playableTracks.map(\.href) == ["b.mp3", "c.mp3"])
+        #expect(built.chapters.map(\.title) == ["Chapter One", "Chapter Two"])
+        // Chapter One at the first chunk of it that plays, and Chapter Two
+        // still at its own — not shifted onto Chapter One's.
+        #expect(built.chapters.map(\.trackIndex) == [0, 1])
+        // Where the chapter's audio begins on *this* manifest, which is where
+        // the surviving chunk begins.
+        #expect(built.chapters.map(\.offset) == [0, 0])
+        #expect(built.chapters.map(\.documentHref) == ["OEBPS/ch01.xhtml", "OEBPS/ch02.xhtml"])
     }
 }
