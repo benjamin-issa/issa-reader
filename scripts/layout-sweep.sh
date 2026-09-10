@@ -28,9 +28,18 @@ RUNTIME="com.apple.CoreSimulator.SimRuntime.iOS-26-5"
 SCHEME="IssaReader-iOS"
 # The same file the build reads, so the sweep launches the app it just built
 # rather than a bundle identifier that has drifted from it.
+#
+# `|| continue` rather than `[ -f "$f" ] &&`, which is what release.sh's
+# `signing_value` already does and for a reason worth writing down: the `&&`
+# form makes a missing file the loop's exit status, `pipefail` promotes that to
+# the pipeline's, and the assignment inherits it — so under `set -e` the sweep
+# died on its fourteenth line, silently, on every checkout without an optional
+# `Signing.local.xcconfig`. Nothing had gone wrong; the last file simply was
+# not there.
 BUNDLE_ID=$(
     for f in "$ROOT/Signing.xcconfig" "$ROOT/Signing.local.xcconfig"; do
-        [ -f "$f" ] && sed -n 's/^[[:space:]]*ISSA_BUNDLE_ID[[:space:]]*=[[:space:]]*//p' "$f"
+        [ -f "$f" ] || continue
+        sed -n 's/^[[:space:]]*ISSA_BUNDLE_ID[[:space:]]*=[[:space:]]*//p' "$f"
     done | tail -1 | sed 's/[[:space:]]*$//'
 )
 [ -n "$BUNDLE_ID" ] || { echo "ISSA_BUNDLE_ID is not set in Signing.xcconfig" >&2; exit 1; }
