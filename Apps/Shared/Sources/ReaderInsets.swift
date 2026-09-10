@@ -14,7 +14,13 @@ import AppKit
 /// the status bar all change it, and anything measured against it re-paginates
 /// the chapter. Sampled once and held, so a chrome toggle cannot reach the page.
 enum ReaderInsets {
-    static func current() -> EdgeInsets {
+    /// - Parameter safeAreaTop: What the reader's own geometry reports for its
+    ///   top inset. A `GeometryProxy` inside `.ignoresSafeArea()` still reports
+    ///   the insets the view is ignoring, so this is the reader window's own
+    ///   chrome and nobody else's — which is the whole reason it is passed in.
+    ///   Optional, and unused off the Mac, where the platform's own window is
+    ///   the one to ask.
+    static func current(safeAreaTop: CGFloat? = nil) -> EdgeInsets {
         #if canImport(UIKit) && !os(tvOS)
         let window = UIApplication.shared.connectedScenes
             .compactMap { ($0 as? UIWindowScene)?.keyWindow }
@@ -36,20 +42,13 @@ enum ReaderInsets {
         // budget. Pad only the footer and the page keeps its old height, so
         // the last line is pushed under the bar instead.
         //
-        // Bottom only. The titlebar is the top's business and AppKit already
-        // keeps content clear of it.
-        // The top is the titlebar and toolbar, measured rather than guessed:
-        // `contentLayoutRect` is exactly the part of the window AppKit leaves
-        // for content, and the reader deliberately draws outside it
-        // (`ignoresSafeArea`) so the page's ground reaches the window edge.
-        // Without this the page began 44 points down — the height of an in-page
-        // top bar the Mac never draws — and the first line's box sat under a
-        // toolbar about 52 points tall.
-        let chrome = NSApplication.shared.keyWindow.map {
+        // Bottom only. The titlebar is the top's business, and the top comes
+        // from `mac(safeAreaTop:measured:)`.
+        let measured = NSApplication.shared.keyWindow.map {
             max(0, $0.frame.height - $0.contentLayoutRect.height)
         }
         return EdgeInsets(
-            top: chrome ?? macTitlebarFallback, leading: 0,
+            top: mac(safeAreaTop: safeAreaTop ?? 0, measured: measured), leading: 0,
             bottom: macWindowCornerInset, trailing: 0)
         #else
         // tvOS reads through TVReadalongView and has no window corners to
@@ -58,9 +57,35 @@ enum ReaderInsets {
         #endif
     }
 
-    /// Used only before there is a window to measure — the first layout pass.
-    /// `onChange(of: geometry.size, initial: true)` re-samples once there is
-    /// one, so this is a starting value, not the answer.
+    /// How far down the reader's window its first line of text may begin: the
+    /// titlebar and the toolbar together.
+    ///
+    /// Deliberately pure, and deliberately outside the `#if os(macOS)` branch.
+    /// The shared suite runs on the iOS host, so a helper buried in the macOS
+    /// arm is a helper nothing can test — which is how the reader shipped
+    /// measuring the wrong window.
+    ///
+    /// The reader's own safe area is preferred because it is the only source
+    /// that is certainly about *this* window. A book opens in its own
+    /// `WindowGroup`, and at first layout the key window is as likely to be the
+    /// library or the Now Playing panel — a bare 28-point titlebar with no
+    /// toolbar at all. The page then began 28 points down under a 52-point
+    /// toolbar, and the measurement was taken once and never corrected, so the
+    /// first line of the book stayed half under the chrome for as long as it
+    /// was open.
+    ///
+    /// The AppKit measurement is kept behind it rather than dropped: it is
+    /// exact when it is about the right window, and `safeAreaTop` is zero for
+    /// the layout pass or two before SwiftUI has an answer.
+    static func mac(safeAreaTop: CGFloat, measured: CGFloat?) -> CGFloat {
+        if safeAreaTop > 0 { return safeAreaTop }
+        if let measured, measured > 0 { return measured }
+        return macTitlebarFallback
+    }
+
+    /// Used only before either source has anything to say — the first layout
+    /// pass. `onChange(of: geometry.size, initial: true)` re-samples once the
+    /// window is real, so this is a starting value, not the answer.
     static let macTitlebarFallback: CGFloat = 52
 
     /// The Mac window's bottom corner radius, near enough, plus a little air.

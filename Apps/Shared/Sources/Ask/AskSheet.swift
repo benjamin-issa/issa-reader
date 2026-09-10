@@ -13,7 +13,26 @@ import SwiftUI
 /// Done always dismisses, and a working job carries on behind it — which is the
 /// point of the whole job model, and the reason the footer says so in words.
 struct AskSheet: View {
+    /// What is holding this view, and therefore whether it may take all the
+    /// height it is offered.
+    ///
+    /// A sheet's height is the sheet's business — the detents decide it, and the
+    /// stack fills whatever they settle on so the composer stays at the top
+    /// rather than floating in the middle. A panel's height is the *content's*
+    /// business: a popover is sized by what is inside it, so a stack that always
+    /// claims the full height reports a height that means nothing, and the
+    /// scroller wrapped around it never learns there is anything to scroll.
+    enum Layout {
+        case sheet
+        case panel
+
+        /// Whether the stack grows to fill the height on offer rather than
+        /// reporting its own.
+        var fillsOfferedHeight: Bool { self == .sheet }
+    }
+
     let model: ReaderModel
+    var layout: Layout = .sheet
     @Environment(AskCoordinator.self) private var coordinator
     @Environment(\.dismiss) private var dismiss
 
@@ -76,7 +95,11 @@ struct AskSheet: View {
             }
         }
         .padding(Metrics.spacing24)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .frame(
+            maxWidth: .infinity,
+            maxHeight: layout.fillsOfferedHeight ? .infinity : nil,
+            alignment: .topLeading,
+        )
         .background(Palette.paper)
         .task {
             // Availability can have changed since the app launched — the reader
