@@ -202,32 +202,44 @@ public struct DownloadsView: View {
 
     private var settingsSection: some View {
         @Bindable var app = app
-        // No Mac has a cellular radio, so "Wi-Fi only" reads there as a setting
-        // about nothing — or worse, as one that cannot be the reason a download
-        // is waiting while the Wi-Fi symbol is lit. The rule underneath is
-        // `isExpensive`, which folds in `isConstrained`: on a Mac that is
-        // iPhone Personal Hotspot and Low Data Mode. The protection was always
-        // real; only the name was wrong.
         return Section {
-            #if os(macOS)
-            Toggle("Pause downloads on metered connections", isOn: $app.wifiOnlyDownloads)
+            Toggle(Self.meteredRowTitle, isOn: $app.wifiOnlyDownloads)
                 .font(Typography.callout)
                 .tint(Palette.tangerine)
-            #else
-            Toggle("Download over Wi-Fi only", isOn: $app.wifiOnlyDownloads)
-                .font(Typography.callout)
-                .tint(Palette.tangerine)
-            #endif
         } footer: {
-            #if os(macOS)
-            Text("Applies to downloads you start from now on. This Mac counts iPhone Personal Hotspot and Low Data Mode networks as metered; a book already in progress carries on.")
+            Text(Self.meteredRowFooter)
                 .settingsFooter()
-            #else
-            Text("Applies to downloads you start from now on. A book already in progress carries on.")
-                .settingsFooter()
-            #endif
         }
         .listRowBackground(Palette.surface)
+    }
+
+    /// What the download rule is called, on a platform that has the connection
+    /// it names.
+    ///
+    /// No Mac has a cellular radio, so "Wi-Fi only" reads there as a setting
+    /// about nothing — or worse, as one that cannot be why a download is
+    /// waiting while the Wi-Fi symbol is lit. The rule underneath is
+    /// `isExpensive`, which folds in `isConstrained`: on a Mac that means an
+    /// iPhone Personal Hotspot or a Low Data Mode network. The protection was
+    /// always real; only the name was wrong.
+    ///
+    /// Two strings rather than two copies of the row, following `hintText` in
+    /// `DownloadsSection`: a row written twice is a tint and a type ramp that
+    /// can drift apart on one platform without anyone noticing.
+    static var meteredRowTitle: String {
+        #if os(macOS)
+        "Pause downloads on metered connections"
+        #else
+        "Download over Wi-Fi only"
+        #endif
+    }
+
+    static var meteredRowFooter: String {
+        #if os(macOS)
+        "Applies to downloads you start from now on. This Mac counts iPhone Personal Hotspot and Low Data Mode networks as metered; a book already in progress carries on."
+        #else
+        "Applies to downloads you start from now on. A book already in progress carries on."
+        #endif
     }
 
     /// The same component the Reading tab draws, transfers included.
