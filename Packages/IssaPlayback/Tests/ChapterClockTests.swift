@@ -271,6 +271,49 @@ struct ChapterClockTests {
         #expect(observed == 0, "but a chapter the listener scrubbed past did not end")
     }
 
+    /// The other sample, and why setting the clock first is not enough alone.
+    ///
+    /// One carrying a *pre*-seek time lands mid-seek and drags the announced
+    /// chapter back to where the scrub started. That move fires nothing itself
+    /// — going backwards is never an ending — but it leaves the coordinator a
+    /// chapter behind the audio, and the next honest sample then reads `0 → 1`
+    /// as an advance and hands the sleep timer an "end of chapter" one tick
+    /// late, in the middle of the same deliberate skip.
+    @Test("a stale sample delivered mid-seek does not end a chapter one tick late")
+    func aStaleSampleMidSeekDoesNotEndAChapterLate() async {
+        let subject = Self.coordinator(
+            Self.manifest(trackCount: 3, each: 100),
+            chapters: [
+                AudiobookChapter(title: "A", trackIndex: 0),
+                AudiobookChapter(title: "B", trackIndex: 0, offset: 50),
+            ],
+        )
+        await subject.seek(toBookTime: 40)
+        let tick = Self.detachClock(subject)
+
+        var observed = 0
+        subject.onChapterChangeObserved = { observed += 1 }
+
+        // The player still reporting where it was when the seek began. Enqueued
+        // before the seek starts, so it runs at the seek's own suspension point
+        // — and it reports back what the counter said, because a sample that
+        // landed outside the window would prove nothing.
+        let racing = Task { @MainActor () -> Int in
+            let inFlight = subject.seeksInFlight
+            tick(40)
+            return inFlight
+        }
+        await subject.seek(toBookTime: 60)
+        #expect(await racing.value == 1, "the stale sample has to land inside the seek")
+
+        // And now the clock catches up with the audio, honestly.
+        tick(60)
+
+        #expect(subject.chapterIndex == 1, "the scrub crossed the boundary and stayed across it")
+        #expect(subject.chapterTitle == "B")
+        #expect(observed == 0, "nothing ended under the listener, one tick later or ever")
+    }
+
     /// `ChunkManifest.fileOrder` gives each chunk one track, at its first
     /// appearance — it must, or one file would answer to two stretches of book
     /// clock — so an overlay that comes back to a chunk hands a *later* chapter

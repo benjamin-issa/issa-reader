@@ -67,6 +67,22 @@ public final class AudiobookCoordinator {
     /// item's time. Announcing a chapter off that arithmetic is announcing one
     /// the listener is not in, so the clock is ignored until the load settles.
     private var loadsInFlight = 0
+    /// How many seeks are between the clock moving and the audio following it.
+    ///
+    /// `loadsInFlight`'s twin, for the branch that loads nothing: a scrub
+    /// inside the current file never reaches `load`, so nothing counted it,
+    /// and the player's periodic observer keeps firing across the await.
+    ///
+    /// The clock and the chapter are set before that await — see
+    /// `seek(toBookTime:)` — which already makes a sample carrying the *post*-
+    /// seek time harmless. This is for the one carrying a *pre*-seek time: it
+    /// drags the announced chapter back to where the scrub started, which fires
+    /// nothing on its own because going backwards is never an ending, and then
+    /// the next honest sample reads that as an advance and hands the sleep
+    /// timer an "end of chapter" in the middle of a deliberate skip.
+    ///
+    /// Internal rather than private so a test can see the window it opens.
+    var seeksInFlight = 0
 
     /// Called when the playing chapter changes, for Now Playing and the UI.
     ///
@@ -257,8 +273,10 @@ public final class AudiobookCoordinator {
     ///   Only `advance()` moves between files, so only `advance()` may announce
     ///   a chapter that lives in the next one.
     private func syncChapter(fromTick: Bool) {
-        // Mid-load the clock describes neither the old file nor the new one.
-        guard loadsInFlight == 0 else { return }
+        // Mid-load the clock describes neither the old file nor the new one,
+        // and mid-seek it describes neither where the listener was nor where
+        // they asked to go.
+        guard loadsInFlight == 0, seeksInFlight == 0 else { return }
         var index = chapterIndex(atBookTime: bookTime)
         if fromTick {
             while index > 0, chapters[index].trackIndex > trackIndex { index -= 1 }
@@ -313,6 +331,14 @@ public final class AudiobookCoordinator {
         // are cut by silence, chapters by the book — but crossing one this way
         // is the listener steering, not a chapter ending.
         syncChapter(fromTick: false)
+        // And the clock ignored for the length of the seek, exactly as it is
+        // for the length of a load. Belt as well as braces: the lines above
+        // answer the sample that arrives holding the new time, this one the
+        // sample that arrives still holding the old. Counted rather than
+        // flagged, because two scrubs in a burst overlap and the second must
+        // not reopen the clock while the first is still in flight.
+        seeksInFlight += 1
+        defer { seeksInFlight -= 1 }
         await player.seek(to: offset)
         return true
     }
