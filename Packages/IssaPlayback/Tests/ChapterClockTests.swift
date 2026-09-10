@@ -230,6 +230,96 @@ struct ChapterClockTests {
         #expect(observed == 1)
     }
 
+    /// A deliberate scrub is not a chapter ending.
+    ///
+    /// The path: `skip(by:)` → `seek(toBookTime:)`'s same-track branch, which
+    /// loads nothing and so is not covered by `loadsInFlight` → `await
+    /// player.seek` → the player's periodic observer fires with the *post*-seek
+    /// time → the clock crosses the boundary the scrub had already crossed, and
+    /// the tick claims the crossing. `NowPlayingController` hands that to
+    /// `SleepTimer.chapterDidEnd()`, and the book pauses mid-skip.
+    @Test("a scrub across a chapter boundary never reaches the sleep timer")
+    func aScrubAcrossAChapterBoundaryIsNotAChapterEnding() async {
+        let subject = Self.coordinator(
+            Self.manifest(trackCount: 3, each: 100),
+            chapters: [
+                AudiobookChapter(title: "A", trackIndex: 0),
+                AudiobookChapter(title: "B", trackIndex: 0, offset: 50),
+            ],
+        )
+        // Loads chunk one, so the scrub below is the same-track branch. Stated
+        // absolutely rather than through `skip(by:)`, which reads a book clock
+        // the real player's first tick may already have written zero over.
+        await subject.seek(toBookTime: 40)
+        let tick = Self.detachClock(subject)
+
+        var observed = 0
+        var announced: [Int] = []
+        subject.onChapterChangeObserved = { observed += 1 }
+        subject.onChapterChange = { announced.append($0) }
+
+        // The tick the periodic observer delivers mid-seek, made deterministic:
+        // this task is enqueued on the main actor before the seek begins, and
+        // the actor is not free again until the seek suspends inside
+        // `AVPlayer.seek` — which is exactly the window the race lives in.
+        let racing = Task { @MainActor in tick(60) }
+        await subject.seek(toBookTime: 60)
+        await racing.value
+
+        #expect(subject.chapterIndex == 1, "the scrub crossed the boundary")
+        #expect(announced.contains(1), "and said so, for Now Playing and the UI")
+        #expect(observed == 0, "but a chapter the listener scrubbed past did not end")
+    }
+
+    /// `ChunkManifest.fileOrder` gives each chunk one track, at its first
+    /// appearance — it must, or one file would answer to two stretches of book
+    /// clock — so an overlay that comes back to a chunk hands a *later* chapter
+    /// an *earlier* track. The timeline `(a.mp3, ch01, 0-5), (b.mp3, ch02,
+    /// 0-5), (a.mp3, ch03, 5-9)` is two tracks, nine seconds and five, whose
+    /// chapters start at 0, 9 and 5.
+    ///
+    /// Every reader of those starts broke at once: the binary search answered
+    /// with chapter one for a time inside chapter three, `chapterSpan` computed
+    /// `5 - 9` and gave the scrubber the whole book, and `nextChapter()` seeked
+    /// backwards and marked it `.chosen`.
+    @Test("a chapter that starts before the one in front of it is dropped")
+    func aChapterThatGoesBackwardsIsDropped() async throws {
+        let manifest = AudiobookManifest(
+            metadata: .init(title: ["und": "A Book In Chunks"]),
+            readingOrder: [
+                .init(href: "a.mp3", type: "audio/mpeg", duration: 9),
+                .init(href: "b.mp3", type: "audio/mpeg", duration: 5),
+            ],
+        )
+        let subject = Self.coordinator(
+            manifest,
+            chapters: [
+                AudiobookChapter(title: "One", trackIndex: 0),
+                AudiobookChapter(title: "Two", trackIndex: 1),
+                AudiobookChapter(title: "Three", trackIndex: 0, offset: 5),
+            ],
+        )
+        _ = Self.detachClock(subject)
+
+        // The two sound ones kept, not one chapter per track for the whole
+        // book: forty good boundaries are not worth losing to one bad one.
+        #expect(subject.chapters.map(\.title) == ["One", "Two"])
+
+        await subject.seek(toBookTime: 6)
+        #expect(subject.chapterIndex == 0)
+        #expect(subject.chapterTitle == "One")
+        let first = try #require(subject.chapterSpan)
+        #expect(first.start == 0)
+        #expect(first.duration == 9)
+
+        await subject.seek(toBookTime: 11)
+        #expect(subject.chapterIndex == 1, "not the chapter the bad start sorted in front of")
+        #expect(subject.chapterTitle == "Two")
+        let second = try #require(subject.chapterSpan)
+        #expect(second.start == 9)
+        #expect(second.duration == 5, "and it runs to the end of the book, not backwards")
+    }
+
     // MARK: - What the surfaces read
 
     @Test("the chapter span and title cover the chapter, not the chunk")

@@ -49,6 +49,16 @@ public final class AudiobookCoordinator {
     /// Where each chapter begins on the book clock. Computed once: it is read
     /// on every tick, and `startTime(ofTrackAt:)` reduces over a computed
     /// filter.
+    ///
+    /// **Strictly ascending**, which is a promise the chapter list itself does
+    /// not make. An overlay that revisits a chunk gives a later chapter an
+    /// earlier track — `ChunkManifest.fileOrder` records each file at its first
+    /// appearance and must, or one file would answer to two stretches of book
+    /// clock — and starts of `[0, 9, 5]` broke every reader of them at once:
+    /// the binary search below returned chapter one for a time inside chapter
+    /// three, `chapterSpan` computed `5 - 9` and handed the scrubber the whole
+    /// book instead, and `nextChapter()` seeked *backwards* and marked it
+    /// `.chosen`, the one origin `PositionGuard` never refuses.
     private let chapterStarts: [TimeInterval]
     /// How many loads are between choosing a track and having loaded it.
     ///
@@ -90,7 +100,8 @@ public final class AudiobookCoordinator {
     ///   could differ. An entry naming a track this manifest does not have is
     ///   dropped rather than trusted: the chapter list and the track list are
     ///   built by different code, and an out-of-range index would trap on the
-    ///   first tick.
+    ///   first tick. So is one that does not start after the chapter in front of
+    ///   it — see `chapterStarts`.
     public init(
         manifest: AudiobookManifest,
         source: Source,
@@ -102,14 +113,33 @@ public final class AudiobookCoordinator {
         self.player = player
 
         let playable = manifest.playableTracks
-        let usable = chapters.filter { playable.indices.contains($0.trackIndex) }
-        let resolved = usable.isEmpty
+        let inRange = chapters.filter { playable.indices.contains($0.trackIndex) }
+        let candidates = inRange.isEmpty
             ? playable.enumerated().map { index, track in
                 AudiobookChapter(title: manifest.title(of: track, at: index), trackIndex: index)
             }
-            : usable
-        self.chapters = resolved
-        chapterStarts = resolved.map { manifest.startTime(ofTrackAt: $0.trackIndex) + $0.offset }
+            : inRange
+        // One at a time, keeping only the chapters that move the clock forward.
+        // Not a fallback to one chapter per track: a book with one bad boundary
+        // still has forty good ones, and throwing them away would cost the
+        // listener every chapter marker to fix a marker they never asked for.
+        var kept: [AudiobookChapter] = []
+        var starts: [TimeInterval] = []
+        for chapter in candidates {
+            let start = manifest.startTime(ofTrackAt: chapter.trackIndex) + chapter.offset
+            guard start.isFinite, starts.last.map({ start > $0 }) ?? (start >= 0) else {
+                IssaLog.warning("chapter does not start after the one before it", [
+                    "chapter": String(kept.count),
+                    "start": String(format: "%.1f", start),
+                    "previousStart": String(format: "%.1f", starts.last ?? 0),
+                ])
+                continue
+            }
+            kept.append(chapter)
+            starts.append(start)
+        }
+        self.chapters = kept
+        chapterStarts = starts
 
         player.onTimeUpdate = { [weak self] time in
             guard let self, time.isFinite else { return }
@@ -270,12 +300,20 @@ public final class AudiobookCoordinator {
             // of the two branches that can decline.
             return await load(track: index, startAt: offset)
         }
-        await player.seek(to: offset)
+        // Both BEFORE the await, for the reason `load` corrects its own clock
+        // before one: the player's periodic observer keeps firing across the
+        // seek, and a tick that lands mid-seek is answered against whatever
+        // this coordinator has already published. Left until afterwards, the
+        // post-seek time arrived while the chapter was still the pre-seek one,
+        // so the tick — not the scrub — announced the crossing, `advanced` was
+        // true, and a deliberate skip reached the sleep timer as "the chapter
+        // ended" and paused the book mid-skip.
         bookTime = manifest.startTime(ofTrackAt: index) + offset
         // A scrub inside one file can still cross a chapter boundary — chunks
         // are cut by silence, chapters by the book — but crossing one this way
         // is the listener steering, not a chapter ending.
         syncChapter(fromTick: false)
+        await player.seek(to: offset)
         return true
     }
 
