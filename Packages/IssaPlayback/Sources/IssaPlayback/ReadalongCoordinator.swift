@@ -167,6 +167,22 @@ public final class ReadalongCoordinator {
         return true
     }
 
+    /// Positions the playhead and the highlight without making a sound.
+    ///
+    /// `play(from:)` minus the play, and deliberately not `seek(toFragment:)`:
+    /// this announces nothing through `onSeek`, because nobody named this
+    /// place. It exists for the hand-off back from the car — a driver who
+    /// parked and pressed pause wants the page they stopped on, in a quiet
+    /// room, and a seek would relabel that page as a position they *chose* and
+    /// disarm the guard that protects the real one.
+    ///
+    /// - Returns: whether it moved there. False when the entry's audio file is
+    ///   missing, in which case nothing moved.
+    @discardableResult
+    public func prepare(at entry: SMILEntry) async -> Bool {
+        await move(to: entry)
+    }
+
     /// `play(from:)` for a place the listener named: the seek is announced once
     /// the move has happened, and not at all if it did not.
     private func jump(to entry: SMILEntry) async {

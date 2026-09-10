@@ -637,6 +637,29 @@ struct ReadalongCoordinatorTests {
         await subject.perform(.play, using: map)
         #expect(subject.player.isPlaying, "play is not a toggle")
     }
+
+    /// The hand-off back from a car that was paused when it was unplugged. The
+    /// page has to move to the sentence it stopped on and the room has to stay
+    /// quiet — and it must not be announced as a seek, because nobody named
+    /// this place: an audio clock did. A seek would relabel the landing as a
+    /// position the reader *chose* and disarm the guard on their real one.
+    @Test("preparing at a sentence moves the highlight silently and announces no seek")
+    func prepareMovesWithoutPlayingOrAnnouncing() async throws {
+        let (subject, timeline, directory) = try Self.make()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let order = OrderLog()
+        subject.onFragmentChange = { _ in order.append("fragment") }
+        subject.onSeek = { order.append("seek") }
+        let entry = try #require(timeline.entries.last)
+
+        let reached = await subject.prepare(at: entry)
+
+        #expect(reached)
+        #expect(subject.activeEntry == entry)
+        #expect(subject.player.isPlaying == false, "preparing is not a play button")
+        #expect(order.events.contains("fragment"), "the highlight still has to move")
+        #expect(!order.events.contains("seek"), "nobody named this place")
+    }
 }
 
 

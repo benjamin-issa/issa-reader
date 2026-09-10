@@ -642,18 +642,15 @@ public final class ReaderModel {
         // misread.
         //
         // The media overlay is the bridge. The anchor names an audio file and
-        // an offset; the timeline says which sentence that is. Falling back to
-        // the file's first entry when the offset lands before its first clip:
-        // the file still names the chapter exactly, and only the sentence
-        // within it is approximate. See `AudioAnchor`.
+        // an offset; the timeline says which sentence that is. See
+        // `AudioAnchor`, and `ListeningHandoff.place`, which is that mapping —
+        // shared rather than copied, because the hand-off back from the car
+        // does the same thing while the book is already open and two copies of
+        // one bridge would eventually disagree about which chapter a track is.
         if stored.isAudioScaled, let anchor,
-           let entry = timeline.entry(inFile: anchor.audioHref, at: anchor.offset)
-           ?? timeline.firstEntry(inFile: anchor.audioHref),
-           let index = package.spine.firstIndex(where: {
-               ReadiumLocator(href: entry.textHref, type: "application/xhtml+xml")
-                   .matchesHref($0.href)
-           })
+           let placed = ListeningHandoff.place(anchor, in: package, timeline: timeline)
         {
+            let (index, entry) = placed
             return Landing(
                 index: index,
                 restoring: ReadiumLocator(
@@ -753,7 +750,24 @@ public final class ReaderModel {
             return
         }
 
-        let coordinator = ReadalongCoordinator(timeline: timeline, audioFiles: files)
+        attachNarration(timeline: timeline, audioFiles: files)
+    }
+
+    /// Builds the narration engine over an already-extracted set of audio files
+    /// and wires it to the page.
+    ///
+    /// Split out of `prepareNarration` at the one seam that matters: everything
+    /// above it needs a downloaded book and hundreds of megabytes through the
+    /// deflater, and everything below it is the wiring the reader's behaviour
+    /// actually depends on. A test that wants a model whose narration is hooked
+    /// up hands over the fixture's files and gets exactly the coordinator
+    /// production builds, rather than a second, kinder one that proves nothing.
+    func attachNarration(timeline: SMILTimeline, audioFiles: [String: URL]) {
+        // Set here rather than left to the caller: this is the timeline the
+        // coordinator is built over, and the two disagreeing is how a highlight
+        // ends up pointing at a sentence the page cannot find.
+        self.timeline = timeline
+        let coordinator = ReadalongCoordinator(timeline: timeline, audioFiles: audioFiles)
         // The saved rate is otherwise written to preferences and never applied,
         // so every book starts at 1x however the reader left it.
         coordinator.player.rate = Float(preferredRate)
@@ -1065,6 +1079,40 @@ public final class ReaderModel {
             "book": book.title, "chapter": String(chapterIndex),
             "page": String(pageIndex), "fragment": entry.fragmentID,
         ])
+    }
+
+    /// Picks the book up at a sentence the other engine was on.
+    ///
+    /// The reader's half of the hand-off back from the car: `ListeningHandoff`
+    /// has already turned the audiobook's anchor into a sentence, and this puts
+    /// the narration and the page on it. `playing` carries the car's own state
+    /// across, because a driver who parked mid-sentence expects the phone to
+    /// carry on and one who pressed pause at the door expects a quiet room.
+    ///
+    /// Derived at every step, and never `seek(toFragment:)`. A seek means the
+    /// reader named a place, which relabels the position `.chosen` and disarms
+    /// the high-water guard — and this place was named by an audio clock, not
+    /// by a person. `play(from:)` and `prepare(at:)` announce nothing, which is
+    /// exactly the contract wanted here.
+    ///
+    /// `positionOrigin` is set explicitly rather than left to `syncToNarration`:
+    /// that only labels the move when the page actually turned, and a hand-off
+    /// that lands on the page already on screen would otherwise be saved under
+    /// whatever the reader's last deliberate move left behind.
+    ///
+    /// - Returns: whether the narration reached the sentence. False when its
+    ///   audio file is not on disk, in which case nothing moved and the caller
+    ///   still has a car engine that knows where it is.
+    @discardableResult
+    public func resumeNarration(at entry: SMILEntry, playing: Bool) async -> Bool {
+        guard let readalong else { return false }
+        let reached = playing
+            ? await readalong.play(from: entry)
+            : await readalong.prepare(at: entry)
+        guard reached else { return false }
+        positionOrigin = .derived
+        await syncToNarration()
+        return true
     }
 
     /// The first narrated fragment inside a stretch of the chapter's text.
