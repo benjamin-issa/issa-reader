@@ -449,6 +449,110 @@ struct ChapterClockTests {
         #expect(subject.bookTime == 0)
     }
 
+    // MARK: - What counts as the listener naming a place
+
+    /// `consumeSteering()` is what the fifteen-second writer turns into
+    /// `.chosen`, and `PositionGuard`'s `.chosen` branch re-baselines the
+    /// high-water mark to the candidate and clears `awaitingChoice` without
+    /// asking anything else. So a move that never happened must never report
+    /// one: a chapter tapped in CarPlay's Up Next that the book no longer has
+    /// released the hold protecting a part-read novel and wrote roughly zero
+    /// over it. `BookClockTests.nextChapterOnLastTrackDoesNothing` pins the
+    /// same contract for `nextChapter()`, which guards before it delegates and
+    /// so needed no change.
+    @Test("a chapter the book does not have is not the listener naming a place")
+    func aChapterOutOfRangeIsNotSteering() async {
+        let subject = Self.coordinator(Self.manifest(trackCount: 3, each: 100))
+        _ = Self.detachClock(subject)
+
+        await subject.play(chapter: 99)
+
+        #expect(subject.trackIndex == 0, "nothing moved")
+        #expect(subject.consumeSteering() == false,
+                "a refused move must not be written back as a chosen position")
+    }
+
+    /// The routine one. A `.files` track with no file behind it is a refusal,
+    /// not a load — a half-deleted extraction, or a download removed while the
+    /// book sat paused — and `.files` is every downloaded read-along.
+    @Test("a chapter whose chunk is missing is not the listener naming a place")
+    func aRefusedLoadIsNotSteering() async {
+        let subject = AudiobookCoordinator(
+            manifest: Self.manifest(trackCount: 3, each: 100), source: .files([:]))
+        _ = Self.detachClock(subject)
+
+        await subject.play(chapter: 0)
+
+        #expect(subject.player.currentAudioHref == nil, "nothing was loaded")
+        #expect(subject.player.isPlaying == false)
+        #expect(subject.consumeSteering() == false)
+    }
+
+    /// A book with no clock behind it at all: `ChunkManifest` emits only the
+    /// chunks whose duration it could measure, so a book none of them resolved
+    /// for arrives with nothing playable in it. The coordinator is still
+    /// installed and still on the lock screen — a start that produced no audio
+    /// does not take itself off — so the skip button is genuinely reachable.
+    @Test("a skip with no clock behind it is not the listener naming a place")
+    func aRefusedSkipIsNotSteering() async {
+        let subject = Self.coordinator(Self.manifest(trackCount: 0, each: 100))
+        let tick = Self.detachClock(subject)
+        // The sample the guard was written for, delivered first: the
+        // coordinator's own clock hook refuses a non-finite time, so a NaN can
+        // no longer reach the book clock from here and the missing duration is
+        // what is left to refuse on.
+        tick(.nan)
+
+        await subject.skip(by: 30)
+
+        #expect(subject.bookTime == 0)
+        #expect(subject.consumeSteering() == false)
+    }
+
+    /// A scrubber handing back a value that means nothing. `asProgression`
+    /// refuses it — the inline clamp used to let a NaN through and it was
+    /// written back as a chosen position — and the refusal must not be reported
+    /// as a place the listener named either.
+    @Test("a scrub to nowhere is not the listener naming a place")
+    func aRefusedProgressSeekIsNotSteering() async {
+        let subject = Self.coordinator(Self.manifest(trackCount: 3, each: 100))
+        _ = Self.detachClock(subject)
+
+        await subject.seek(toProgress: .nan)
+
+        #expect(subject.bookTime == 0)
+        #expect(subject.consumeSteering() == false)
+    }
+
+    /// The other half, so the fix cannot be "never latch": every entry point
+    /// that lands still says the listener named the place. Without this the
+    /// four rows above are satisfied by a coordinator that has forgotten how to
+    /// report a scrub at all, and a deliberate restart would be written back as
+    /// ordinary forward progress for the guard to refuse.
+    @Test("a move that lands is still the listener naming a place")
+    func aLandedMoveIsStillSteering() async {
+        let subject = Self.coordinator(
+            Self.manifest(trackCount: 3, each: 100),
+            chapters: [
+                AudiobookChapter(title: "A", trackIndex: 0),
+                AudiobookChapter(title: "B", trackIndex: 1, offset: 30),
+            ],
+        )
+        _ = Self.detachClock(subject)
+
+        await subject.seek(toProgress: 0.5)
+        #expect(subject.consumeSteering(), "a scrub of the whole book")
+
+        await subject.skip(by: 20)
+        #expect(subject.consumeSteering(), "a skip")
+
+        await subject.play(chapter: 1)
+        #expect(subject.consumeSteering(), "a chapter tap")
+
+        await subject.previousChapter()
+        #expect(subject.consumeSteering(), "and previous, which delegates to it")
+    }
+
     /// Today's behaviour, unchanged, for every book that plays the server's own
     /// manifest: no chapters passed means one chapter per track, named as the
     /// manifest names it.

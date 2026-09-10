@@ -359,6 +359,18 @@ public final class AudiobookCoordinator {
     /// happened, so the coordinator — which owns every seek entry point —
     /// records it instead. Deliberately not set by `start(atProgress:)`: resuming
     /// a book is the app choosing a place, not the listener.
+    ///
+    /// Set once the move has *landed*, never on the way in. Every entry point
+    /// below can decline after being asked — a chapter index the book does not
+    /// have, a `.files` track whose chunk is missing, a clock with no duration
+    /// behind it — and a latch set first survives the refusal. The writer then
+    /// labels the next tick `.chosen`, and `PositionGuard`'s `.chosen` branch
+    /// re-baselines the high-water mark to the candidate and clears
+    /// `awaitingChoice` unconditionally: a chapter tap that produced no audio
+    /// released the hold protecting a part-read novel and wrote roughly zero
+    /// over it. Latching afterwards costs at most one tick — a scrub that lands
+    /// while the writer is mid-flight is read as `.chosen` fifteen seconds
+    /// later instead of now — and that is a delay, not a loss.
     private var steeredAt: Bool = false
 
     /// Whether the listener has steered since this was last asked.
@@ -367,22 +379,28 @@ public final class AudiobookCoordinator {
         return steeredAt
     }
 
+    /// Latched only if the seek actually landed — see `steeredAt`. A
+    /// non-progression is refused a line below, and a refusal that still
+    /// counted as steering is a position the guard is not allowed to question.
     public func seek(toProgress progress: Double) async {
-        steeredAt = true
         // See ReadalongCoordinator: a NaN survived the inline clamp and was
         // then written back as a chosen position.
         guard let place = progress.asProgression else { return }
-        await seek(toBookTime: totalDuration * place)
+        if await seek(toBookTime: totalDuration * place) { steeredAt = true }
     }
 
+    /// Latched after the load, not before it — see `steeredAt`. Both refusals
+    /// here are ordinary: CarPlay's Up Next can outlive a chapter list that has
+    /// been rebuilt, and a `.files` track whose chunk was deleted under a paused
+    /// book declines every time.
     public func play(chapter index: Int) async {
-        steeredAt = true
         guard chapters.indices.contains(index) else { return }
         let chapter = chapters[index]
         // Into the chapter's own start, which on a synthesised manifest is part
         // of the way into its chunk. Loading the track at zero would land the
         // listener at the end of the *previous* chapter.
         guard await load(track: chapter.trackIndex, startAt: chapter.offset) else { return }
+        steeredAt = true
         player.play()
     }
 
@@ -401,8 +419,10 @@ public final class AudiobookCoordinator {
         await play(chapter: chapterIndex + 1)
     }
 
+    /// Latched by whichever branch lands — see `steeredAt`. The restart branch
+    /// reports for itself; the other delegates to `play(chapter:)`, which
+    /// latches on its own load.
     public func previousChapter() async {
-        steeredAt = true
         guard chapterStarts.indices.contains(chapterIndex) else { return }
         let start = chapterStarts[chapterIndex]
         // Measured against the chapter's start on the book clock, not against
@@ -411,7 +431,7 @@ public final class AudiobookCoordinator {
         // own clock would report "well into this chapter" the instant it began
         // and "previous" would restart a chapter nobody had heard yet.
         if bookTime - start > 3 {
-            await seek(toBookTime: start)
+            if await seek(toBookTime: start) { steeredAt = true }
         } else {
             await play(chapter: max(chapterIndex - 1, 0))
         }
@@ -419,14 +439,20 @@ public final class AudiobookCoordinator {
 
     /// Skips within the book rather than within the file, so a skip near a
     /// chapter boundary crosses it instead of stopping dead at the edge.
+    ///
+    /// Latched only once the seek lands — see `steeredAt`. A book with no
+    /// playable track at all reaches the lock screen anyway, because a start
+    /// that produced no audio leaves the coordinator installed, and its skip
+    /// button used to report a chosen position for a book holding nothing.
     public func skip(by delta: TimeInterval) async {
-        steeredAt = true
         // Refuse rather than guess. With a non-finite clock the clamp below
         // collapsed to exactly 0, so both rewind and fast-forward threw the
         // listener back to the start of the book — and the position writer then
         // persisted that zero.
         guard bookTime.isFinite, totalDuration > 0 else { return }
-        await seek(toBookTime: max(0, min(bookTime + delta, totalDuration)))
+        if await seek(toBookTime: max(0, min(bookTime + delta, totalDuration))) {
+            steeredAt = true
+        }
     }
 
     /// Applies a mapped control action, so the lock screen, headphones, CarPlay
