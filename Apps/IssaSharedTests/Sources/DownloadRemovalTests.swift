@@ -1,5 +1,7 @@
 import Foundation
 import IssaAsk
+import IssaEPUB
+import IssaPlayback
 import IssaUI
 import Testing
 
@@ -133,6 +135,116 @@ struct DownloadRemovalTests {
         #expect(progression != nil && abs(progression! - 0.42) < 0.0001)
         let kept = try await store.annotations(for: uuid)
         #expect(kept.count == 1, "annotations are the reader's, not the download's")
+    }
+
+    // MARK: - Nothing may be playing out of a file being deleted
+
+    /// A book with no audio behind it, which is all these need: what is under
+    /// test is whether anything asked before deleting, not what came out of the
+    /// speaker.
+    private static func silentEngine() -> AudiobookCoordinator {
+        AudiobookCoordinator(
+            manifest: AudiobookManifest(
+                metadata: .init(title: ["und": "Dracula"]),
+                readingOrder: [.init(href: "track1.mp3", type: "audio/mpeg", duration: 60)]),
+            source: .files([:]))
+    }
+
+    /// A reader narrating a book, without a real EPUB behind it.
+    ///
+    /// `narratingBookUUID` is claimed by the rate observer `reader(for:session:)`
+    /// installs, so the honest way to set it is to play — and `play()` notifies
+    /// its observers whether or not anything loaded, which is the whole reason
+    /// this needs no audio.
+    private static func narrating(_ app: AppModel, _ book: Book) throws -> ReaderModel {
+        let model = app.reader(for: book, session: try session())
+        model.attachNarration(
+            timeline: SMILTimeline(entries: [
+                SMILEntry(
+                    fragmentID: "ch01-s0", textHref: "OEBPS/ch01.xhtml",
+                    audioHref: "OEBPS/Audio/track1.mp3",
+                    start: 0, end: 4, cumulativeEnd: 4),
+            ]),
+            audioFiles: [:])
+        model.readalong?.player.play()
+        return model
+    }
+
+    private static func session() throws -> Session {
+        Session(
+            serverURL: URL(string: "https://library.example")!,
+            keychain: InMemoryTokens(),
+            session: URLSession(configuration: .ephemeral),
+        )
+    }
+
+    /// The audiobook engine plays a downloaded read-along straight out of the
+    /// extracted narration directory, through a `.files` source — and
+    /// `releaseDerivedFiles` deletes that directory. Nothing asked: the current
+    /// item played on, and the next `advance()` found the file gone. Mid-drive
+    /// the book stopped dead, with a log line and no control anywhere that could
+    /// start it again.
+    @Test("removing a book that is playing stops it first")
+    func removingStopsTheAudiobook() throws {
+        let app = AppModel(keychain: InMemoryTokens(), notificationCentre: NotificationCenter())
+        let uuid = Self.freshUUID()
+        let file = try Self.plant(uuid, format: .readaloud)
+        defer { try? FileManager.default.removeItem(at: file) }
+        app.refreshDownloadedSet()
+        let engine = Self.silentEngine()
+        app.installListening(engine, book: SharedFixtures.book("Dracula", uuid: uuid))
+
+        app.removeDownload(bookUUID: uuid, format: .readaloud)
+
+        #expect(app.listening == nil, "the engine was reading out of the file that just went")
+        #expect(app.listeningBook == nil)
+        #expect(engine.player.isPlaying == false)
+        #expect(!Self.exists(file))
+    }
+
+    /// The other engine, and the other file: the reader narrates out of the
+    /// EPUB itself, which `BookContentService.removeDownload` deletes before the
+    /// derived files are touched at all.
+    @Test("removing a book being narrated stops the narration first")
+    func removingStopsTheNarration() throws {
+        let app = AppModel(keychain: InMemoryTokens(), notificationCentre: NotificationCenter())
+        let uuid = Self.freshUUID()
+        let file = try Self.plant(uuid, format: .readaloud)
+        defer { try? FileManager.default.removeItem(at: file) }
+        app.refreshDownloadedSet()
+        let book = SharedFixtures.book("Dracula", uuid: uuid, readaloud: true)
+        app.books = [book]
+        let model = try Self.narrating(app, book)
+        #expect(app.reader === model, "the setup has to have claimed narration")
+
+        app.removeDownload(bookUUID: uuid, format: .readaloud)
+
+        #expect(app.reader == nil, "nothing may narrate a book whose text has gone")
+        #expect(model.readalong?.player.isPlaying == false)
+        #expect(!Self.exists(file))
+    }
+
+    /// A removal the app did not make. On an Apple TV every download lives in
+    /// Caches, which the system may reclaim under storage pressure, and the
+    /// sweep deletes the same narration directory a tap would — so it owes the
+    /// listener the same courtesy.
+    @Test("the sweep stops a book whose file went behind the app's back")
+    func theSweepStopsAPlayingBook() throws {
+        let app = AppModel(keychain: InMemoryTokens(), notificationCentre: NotificationCenter())
+        let uuid = Self.freshUUID()
+        let file = try Self.plant(uuid, format: .readaloud)
+        defer { try? FileManager.default.removeItem(at: file) }
+        app.refreshDownloadedSet()
+        #expect(app.downloadedUUIDs.contains(uuid))
+        let engine = Self.silentEngine()
+        app.installListening(engine, book: SharedFixtures.book("Dracula", uuid: uuid))
+
+        // Gone, with no `removeDownload` anywhere near it.
+        try FileManager.default.removeItem(at: file)
+        app.refreshDownloadedSet()
+
+        #expect(app.listening == nil, "the sweep deletes what this was playing out of")
+        #expect(engine.player.isPlaying == false)
     }
 
     // MARK: - Reconciliation

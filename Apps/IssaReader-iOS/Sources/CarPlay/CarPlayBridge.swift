@@ -27,8 +27,22 @@ final class CarPlayBridge {
     var onPlay: ((String) async -> String?)?
     var onCycleRate: (() -> Void)?
     /// Told to the remote-command centre so bindings resolve against the car's
-    /// surface rather than the phone's while connected.
+    /// surface rather than the phone's while connected. Assigned through
+    /// `observeSurface(_:)`, which is the only way to take it and not be behind.
     var onSurfaceChange: ((ControlSurface) -> Void)?
+
+    /// Which surface the app is being driven from, remembered rather than only
+    /// announced.
+    ///
+    /// The connect used to be a bare `onSurfaceChange?(.carPlay)`, so the whole
+    /// truth lived in one call: a car connecting before anything had taken the
+    /// closure would have made the only announcement there was, into nothing.
+    /// Today's lifecycle does not allow that — UIKit runs
+    /// `didFinishLaunchingWithOptions`, and with it `AppServices.start()`,
+    /// before it connects any scene — but an invariant this app depends on to
+    /// keep a book on the dashboard should not rest on an ordering decided
+    /// somewhere else. Kept here, it can be replayed to whoever arrives late.
+    private(set) var surface: ControlSurface = .phone
 
     /// The chapters of whatever is playing, for the Up Next button.
     var chapters: (() -> [String])?
@@ -46,8 +60,27 @@ final class CarPlayBridge {
         onLibraryChange?()
     }
 
-    func surfaceDidConnect() { onSurfaceChange?(.carPlay) }
-    func surfaceDidDisconnect() { onSurfaceChange?(.phone) }
+    /// Takes the surface listener, and tells it straight away what the surface
+    /// already is.
+    ///
+    /// The replay is the point. Assigning alone leaves a listener correct only
+    /// from its next change onwards, and for a car that is already connected
+    /// the next change is the end of the drive.
+    func observeSurface(_ observe: @escaping (ControlSurface) -> Void) {
+        onSurfaceChange = observe
+        observe(surface)
+    }
+
+    /// Recorded as well as announced: the surface is state, not only an event.
+    func surfaceDidConnect() {
+        surface = .carPlay
+        onSurfaceChange?(.carPlay)
+    }
+
+    func surfaceDidDisconnect() {
+        surface = .phone
+        onSurfaceChange?(.phone)
+    }
 
     func entries(for shelf: CarPlayCatalogue.Shelf, limit: Int) -> [CarPlayCatalogue.Entry] {
         catalogue.entries(for: shelf, limit: limit)

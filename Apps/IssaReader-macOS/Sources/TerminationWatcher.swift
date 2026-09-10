@@ -26,10 +26,32 @@ import SwiftUI
 /// A SwiftUI app can have a delegate — `@NSApplicationDelegateAdaptor` — without
 /// giving up its scenes, which an earlier note in the plan wrongly claimed it
 /// could not.
+///
+/// It also reports whether the app is frontmost, which is a second job on one
+/// object only because AppKit allows exactly one delegate. Both are the same
+/// kind of fact: something about the *process* that no window can answer.
 @MainActor
 final class TerminationDelegate: NSObject, NSApplicationDelegate {
     /// What to run. Set once the app model exists.
     var flush: (() async -> Void)?
+
+    /// Told when the app becomes, and stops being, the frontmost one. Set
+    /// alongside `flush`, and for the same reason.
+    ///
+    /// Nothing on the Mac wrote `AppModel.isForeground` at all. It starts true
+    /// and stayed true for the life of the process, so the hand-off's
+    /// `background` rung was dead here: a `readerReady` trigger completing
+    /// while the app sat behind another one took the book off the audiobook
+    /// engine and put it on a page nobody was looking at — silently, because
+    /// the paused path makes no sound.
+    ///
+    /// `SceneForeground` is the iOS answer and is `#if os(iOS)` on purpose: it
+    /// folds every scene's `scenePhase` into one flag, because on iOS each
+    /// window has a phase of its own and the last one to move must not speak
+    /// for the rest. AppKit's active state is already app-wide, so the same
+    /// question here is one notification rather than a fold — which is why this
+    /// is the Mac's own shape rather than that file ported.
+    var foreground: ((Bool) -> Void)?
 
     /// Set while a flush is in flight.
     private var isFlushing = false
@@ -63,6 +85,19 @@ final class TerminationDelegate: NSObject, NSApplicationDelegate {
             self.reply(sender)
         }
         return .terminateLater
+    }
+
+    /// The two halves of "is this app frontmost", straight from AppKit.
+    ///
+    /// A window's `onAppear` would not do: the library window can be closed
+    /// while reader windows stay open, and an observer owned by it would take
+    /// the answer with it.
+    func applicationDidBecomeActive(_ notification: Notification) {
+        foreground?(true)
+    }
+
+    func applicationDidResignActive(_ notification: Notification) {
+        foreground?(false)
     }
 
     /// Replies once. Past the deadline the flush still completes, and without

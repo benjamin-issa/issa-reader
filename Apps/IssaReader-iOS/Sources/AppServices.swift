@@ -129,7 +129,11 @@ final class AppServices {
             nowPlaying.publish()
         }
 
-        bridge.onSurfaceChange = { [app, nowPlaying] surface in
+        // `observeSurface`, not a bare assignment: it hands the listener the
+        // surface the bridge is already on, so this is right even for a car
+        // that connected before this line ran. See `CarPlayBridge.surface` for
+        // why the ordering is not ours to rely on.
+        bridge.observeSurface { [app, nowPlaying] surface in
             nowPlaying.setSurface(surface)
             // The model needs it too, and for a different reason: Now Playing
             // uses the surface to pick a command map, while `AppModel` uses it

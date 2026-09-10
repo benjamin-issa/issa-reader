@@ -164,6 +164,23 @@ struct ListeningHandoffTests {
         #expect(decision == .skip(.background))
     }
 
+    /// The same rung on a platform that has no car in it.
+    ///
+    /// macOS keeps the `.phone` default for the life of the process — there is
+    /// no CarPlay scene to push anything else in — so `carConnected` can never
+    /// fire there, and `background` is the only thing between a `readerReady`
+    /// trigger and a book taken off the audiobook engine while the app sits
+    /// behind another one. Worth a row of its own because that is exactly the
+    /// rung the Mac had no writer for: nothing called `setForeground`, so
+    /// `isForeground` was `true` for ever and this decision was unreachable.
+    @Test("a phone surface is no excuse for a backgrounded app")
+    func backgroundHoldsWithNoCarInSight() throws {
+        let (package, timeline) = try Self.fixture()
+        let decision = Self.decide(
+            surface: .phone, isForeground: false, package: package, timeline: timeline)
+        #expect(decision == .skip(.background))
+    }
+
     /// Three ways to be half-open, and all of them mean the same thing: there
     /// is nothing yet to aim at. `readerReady` brings the decision back.
     @Test("a reader still opening its book is not ready to take one")

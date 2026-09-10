@@ -98,6 +98,30 @@ struct ListeningHandoffReaderTests {
         return coordinator
     }
 
+    /// A manifest over the fixture's own chunks, in the shape `startListening`
+    /// hands to `attachListening` for a downloaded read-along.
+    ///
+    /// Separate from `parked`, which wants a coordinator already somewhere;
+    /// these are the ingredients, so a test can decide what the engine is
+    /// handed — including a source with nothing behind it.
+    static func chunked(_ model: ReaderModel, files: [String: URL]) throws -> (
+        manifest: AudiobookManifest, chapters: [AudiobookChapter],
+        files: [String: URL], timeline: SMILTimeline
+    ) {
+        let package = try #require(model.package)
+        let timeline = SMILParser.timeline(for: package)
+        let built = ChunkManifest.make(
+            timeline: timeline, package: package, audioFiles: files,
+            durations: [:], title: "Fixture")
+        return (built.manifest, built.chapters, built.files, timeline)
+    }
+
+    /// Its own defaults suite, so a rate or a level another suite persisted
+    /// cannot change what the coordinator is built with.
+    static func settings() -> PlaybackSettings {
+        PlaybackSettings(suiteName: "test.\(UUID().uuidString)")
+    }
+
     static func settle(until condition: @MainActor () -> Bool) async {
         let deadline = ContinuousClock.now.advanced(by: .seconds(10))
         while !condition(), ContinuousClock.now < deadline {
@@ -281,6 +305,163 @@ struct ListeningHandoffReaderTests {
         #expect(model.readalong?.player.isPlaying == false, "nobody asked for audio")
         #expect(model.readalong?.activeEntry?.textHref == Self.chapterTwo)
         #expect(model.chapterIndex == 1)
+        // And the half the paused path used to drop on the floor. `prepare(at:)`
+        // changes no rate, so the observer that normally claims narration never
+        // fired, `narratingBookUUID` stayed nil, and the explicit stop then took
+        // the engine off Now Playing with nothing standing behind it —
+        // `playback` and `playbackBook` both nil, so no mini bar, no player
+        // sheet, no sleep timer, and a car whose book, chapter list and current
+        // chapter had all gone empty. The driver who parked and paused got the
+        // right page and not one transport control anywhere.
+        #expect(app.playbackBook?.uuid == Self.uuid, "something has to own the transport")
+        #expect(app.reader === model, "and the car reads its chapters off this")
+    }
+
+    /// The other paused case: the hand-off is refused, and the book stays with
+    /// the engine that still knows where it is.
+    ///
+    /// The writer is the point. The hand-off cancels it before it tries, and it
+    /// used to come back only `if target.wasPlaying` — so a *paused* car whose
+    /// hand-off failed was left with the book installed, Now Playing still
+    /// attached and nothing writing positions at all. Neither `startListening`'s
+    /// same-book fast path nor a lock-screen play re-arms it, so everything from
+    /// that pause onwards was written nowhere.
+    @Test("a paused hand-off that fails keeps writing the position")
+    func aFailedPausedHandOffKeepsTheWriter() async throws {
+        let app = AppModel(notificationCentre: NotificationCenter())
+        let (model, coordinator, book, directory) = try await Self.armed(app)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        // The reader's narration, pointed at no files at all: `resumeNarration`
+        // refuses an entry whose audio it cannot find, which is the half-deleted
+        // extraction this failure path exists for. The car engine keeps its own
+        // files and still knows exactly where it is — which is the whole reason
+        // the book is given back to it rather than left in silence.
+        let timeline = try #require(model.timeline)
+        model.attachNarration(timeline: timeline, audioFiles: [:])
+        app.installListening(coordinator, book: book)
+
+        let decision = await app.handOffListeningToReader(trigger: .carDisconnected)
+
+        #expect(decision == .skip(.audioFileMissing))
+        #expect(app.listening === coordinator, "the engine keeps a book nothing else can place")
+        #expect(app.listeningBook?.uuid == Self.uuid, "and Now Playing is still its own")
+        #expect(coordinator.player.isPlaying == false, "a paused car stays paused")
+        #expect(app.isWritingListeningPosition, "an hour from here would be written nowhere")
+    }
+
+    // MARK: - Starting, while the book is being taken away
+
+    /// The other end of the same slot.
+    ///
+    /// `attachListening` publishes `listening` and then suspends twice — a
+    /// resume to resolve, an AVFoundation item to load — and never re-read it. A
+    /// hand-off firing in that window pauses the coordinator, starts the
+    /// read-along and calls `stopListening`; the start then woke up and played
+    /// the orphan anyway. Two audible players on one book, and two position
+    /// writers arguing about where it is.
+    ///
+    /// `stopListening` stands in for the hand-off, because it is exactly what
+    /// the hand-off does to the slot — `narrationDidStart` calls it — and
+    /// staging the whole ladder inside one suspension would test the timing of
+    /// the test rather than the guard.
+    @Test("a start overrun by a hand-off leaves no second player behind")
+    func aStartOverrunByAHandOffPlaysNothing() async throws {
+        let app = AppModel(notificationCentre: NotificationCenter())
+        let book = SharedFixtures.book("Fixture", uuid: Self.uuid, readaloud: true)
+        app.books = [book]
+        let model = app.reader(for: book, session: try Self.session())
+        let (files, directory) = try await Self.opened(model)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let built = try Self.chunked(model, files: files)
+
+        // Started rather than awaited: everything under test happens while this
+        // is suspended.
+        let start = Task {
+            await app.attachListening(
+                manifest: built.manifest, source: .files(built.files),
+                chapters: built.chapters, timeline: built.timeline,
+                manifestKind: .synthesised, book: book,
+                nowPlaying: NowPlayingController(), settings: Self.settings())
+        }
+        // Everything up to the first suspension runs before this resumes, so by
+        // now the slot is published and an item is loading.
+        await Task.yield()
+        let orphan = try #require(app.listening, "the start has to have claimed the slot")
+
+        app.stopListening(nowPlaying: nil)
+        let outcome = await start.value
+
+        #expect(outcome == .slotTaken)
+        #expect(orphan.player.isPlaying == false, "two engines on one book is two voices")
+        #expect(app.listening == nil, "the start must not put itself back")
+        #expect(!app.isWritingListeningPosition, "nor leave a writer bound to a dead engine")
+    }
+
+    // MARK: - A start that makes no sound has to say so
+
+    /// A resolved resume whose audio will not load.
+    ///
+    /// CarPlay reads `listeningError` back verbatim as its success signal, so
+    /// leaving it at the nil `startListening` set on the way in made a silent
+    /// failure look exactly like a book that started: the row pushed straight to
+    /// Now Playing with nothing behind it. The publish and the fifteen-second
+    /// writer ran too, against a player holding nothing.
+    @Test("a resolved start whose chunk is missing says so instead of pretending")
+    func aDeclinedSeekSpeaksUp() async throws {
+        let app = AppModel(notificationCentre: NotificationCenter())
+        let book = SharedFixtures.book("Fixture", uuid: Self.uuid, readaloud: true)
+        app.books = [book]
+        let model = app.reader(for: book, session: try Self.session())
+        let (files, directory) = try await Self.opened(model)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let built = try Self.chunked(model, files: files)
+        // A stored position on this manifest's own clock, so the resume ladder
+        // resolves and the seek is the thing that fails.
+        let track = try #require(built.manifest.playableTracks.first?.href)
+        let resumed = SharedFixtures.book(
+            "Fixture", uuid: Self.uuid, progress: 0.01,
+            positionHref: track, positionType: "audio/mpeg", readaloud: true)
+
+        let outcome = await app.attachListening(
+            manifest: built.manifest,
+            // The manifest over an extraction that has since gone: a `.files`
+            // track with no file is the refusal `AudiobookCoordinator.load`
+            // documents, and a half-deleted extraction is the ordinary way to
+            // reach it.
+            source: .files([:]),
+            chapters: built.chapters, timeline: built.timeline,
+            manifestKind: .synthesised, book: resumed,
+            nowPlaying: NowPlayingController(), settings: Self.settings())
+
+        #expect(outcome == .wouldNotPlay)
+        #expect(app.listeningError != nil, "a silent failure must not read as a success")
+        #expect(app.listening?.player.isPlaying != true, "there is nothing to play")
+        #expect(!app.isWritingListeningPosition, "nor anything to write about")
+    }
+
+    /// The same one rung down: nothing resolved, so the start is from zero — and
+    /// `start(atProgress:)` declines in silence, returning `Void`. The player is
+    /// what has to be asked.
+    @Test("an unresolved start that loads nothing says so too")
+    func anUnresolvedStartThatLoadsNothingSpeaksUp() async throws {
+        let app = AppModel(notificationCentre: NotificationCenter())
+        let book = SharedFixtures.book("Fixture", uuid: Self.uuid, readaloud: true)
+        app.books = [book]
+        let model = app.reader(for: book, session: try Self.session())
+        let (files, directory) = try await Self.opened(model)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let built = try Self.chunked(model, files: files)
+
+        let outcome = await app.attachListening(
+            manifest: built.manifest, source: .files([:]),
+            chapters: built.chapters, timeline: built.timeline,
+            manifestKind: .synthesised, book: book,
+            nowPlaying: NowPlayingController(), settings: Self.settings())
+
+        #expect(outcome == .wouldNotPlay)
+        #expect(app.listeningError != nil)
+        #expect(app.listening?.player.currentAudioHref == nil, "nothing was ever loaded")
+        #expect(!app.isWritingListeningPosition)
     }
 
     /// A cold open: the screen appears long before the narration is extracted,
@@ -318,6 +499,67 @@ struct ListeningHandoffReaderTests {
         #expect(app.listening === coordinator)
         #expect(coordinator.player.isPlaying)
     }
+}
+
+/// Which surface the app is being driven from, and who gets told.
+///
+/// The suite above stages the `carConnected` rung by hand; this is where that
+/// value actually comes from. It used to arrive only as an event —
+/// `surfaceDidConnect()` was a bare `onSurfaceChange?(.carPlay)` — so a listener
+/// that took the closure afterwards had no way to learn what it had missed, and
+/// the next thing it would hear was the disconnect at the end of the drive.
+@Suite("Telling the app which surface it is on")
+@MainActor
+struct CarPlaySurfaceTests {
+    /// The bridge is the app's own singleton, wired up by `AppServices` in this
+    /// very process, so a test that left either the surface or the listener
+    /// moved would hand the next one a car that is not there.
+    private func restoringBridge(_ body: (CarPlayBridge) -> Void) {
+        let bridge = CarPlayBridge.shared
+        let listener = bridge.onSurfaceChange
+        defer {
+            bridge.surfaceDidDisconnect()
+            bridge.onSurfaceChange = listener
+        }
+        body(bridge)
+    }
+
+    @Test("connecting and disconnecting are remembered, not only announced")
+    func theSurfaceIsRemembered() {
+        restoringBridge { bridge in
+            bridge.surfaceDidConnect()
+            #expect(bridge.surface == .carPlay)
+            bridge.surfaceDidDisconnect()
+            #expect(bridge.surface == .phone)
+        }
+    }
+
+    /// The replay. `AppServices.start()` runs from the app delegate, which UIKit
+    /// reaches before it connects any scene — so today the car cannot in fact
+    /// beat it. But `AppModel` decides whether to take a book off the dashboard
+    /// from this value, and an invariant worth that should not rest on an
+    /// ordering decided in another framework.
+    @Test("a listener arriving after the car has connected is told at once")
+    func aLateListenerIsCaughtUp() {
+        restoringBridge { bridge in
+            bridge.surfaceDidConnect()
+            let heard = SurfaceLog()
+
+            bridge.observeSurface { heard.record($0) }
+
+            #expect(heard.surfaces == [.carPlay], "a listener must never start behind")
+            bridge.surfaceDidDisconnect()
+            #expect(heard.surfaces == [.carPlay, .phone], "and must still hear the changes")
+        }
+    }
+}
+
+/// What a surface listener was told, kept out of the closure so the assertion
+/// reads a value rather than a captured variable.
+@MainActor
+private final class SurfaceLog {
+    private(set) var surfaces: [ControlSurface] = []
+    func record(_ surface: ControlSurface) { surfaces.append(surface) }
 }
 
 /// The origin a save was written under, kept out of the closure so the

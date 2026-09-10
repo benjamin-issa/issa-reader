@@ -1,3 +1,4 @@
+import AppKit
 import IssaCore
 import IssaPlayback
 import IssaUI
@@ -39,6 +40,17 @@ struct IssaReaderMacApp: App {
                     nowPlaying.configure(settings: settings)
                     app.nowPlayingController = nowPlaying
                     termination.flush = { await app.flushOpenReaders() }
+                    // The Mac's writer for `AppModel.isForeground`, which had
+                    // none at all: see `TerminationDelegate.foreground`. On the
+                    // delegate rather than in this window, because the library
+                    // window can be closed with reader windows still open.
+                    termination.foreground = { app.setForeground($0) }
+                    // Replayed rather than waited for. AppKit has already sent
+                    // its first `didBecomeActive` by the time a window's task
+                    // runs, so an app launched *into* the background — a login
+                    // item, `open -g`, a relaunch behind another app — would
+                    // otherwise be treated as frontmost until it was clicked.
+                    app.setForeground(NSApplication.shared.isActive)
                     app.ask = ask
                     // Not in `init`: the delegate needs `app` and `ask` as they
                     // are now, and a `@State` value read in `init` is the
