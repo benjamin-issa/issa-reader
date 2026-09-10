@@ -64,6 +64,32 @@ public struct SMILEntry: Sendable, Hashable {
     public let cumulativeEnd: TimeInterval
 
     public var duration: TimeInterval { max(0, end - start) }
+
+    /// Public so an entry can be built outside the parser — a synthesised
+    /// manifest's tests state a narration in four lines rather than assembling
+    /// an EPUB to hold it.
+    ///
+    /// `cumulativeEnd` is the caller's responsibility, and deliberately not
+    /// derived here: it is a running total over the *whole book's* entries in
+    /// spine order, so an initialiser that sees one entry cannot know it. An
+    /// entry built with the wrong one is not a bad number in one place — it is
+    /// a book timeline that disagrees with itself from that point on. See
+    /// `SMILParser.timeline(for:)` for how the parser accumulates it.
+    public init(
+        fragmentID: String,
+        textHref: String,
+        audioHref: String,
+        start: TimeInterval,
+        end: TimeInterval,
+        cumulativeEnd: TimeInterval,
+    ) {
+        self.fragmentID = fragmentID
+        self.textHref = textHref
+        self.audioHref = audioHref
+        self.start = start
+        self.end = end
+        self.cumulativeEnd = cumulativeEnd
+    }
 }
 
 /// The whole book's narration, flattened and searchable.

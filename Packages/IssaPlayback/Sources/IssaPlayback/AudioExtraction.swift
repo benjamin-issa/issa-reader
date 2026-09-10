@@ -9,6 +9,18 @@ import IssaEPUB
 /// inside a ZIP, so the tracks are written out once and cached — which also
 /// means playback survives with no network at all.
 public enum AudioExtraction {
+    /// One extraction at a time, process-wide.
+    ///
+    /// The reader and the car can now ask for the same book's narration at
+    /// once: opening an aligned book extracts it, and `startListening` extracts
+    /// it again to build a manifest over the chunks. The body below is
+    /// idempotent everywhere except the legacy-name rescue — `moveItem` on a
+    /// file the other run has already moved throws, and the throw aborts an
+    /// extraction that was otherwise fine, so the book simply refuses to play.
+    /// Coarse on purpose: extraction is I/O-bound and rare, and a lock per book
+    /// would be a second thing to get right for no measurable gain.
+    private static let serial = NSLock()
+
     /// Extracts every audio file the timeline references.
     ///
     /// Returns archive href to on-disk URL. Already-extracted files are reused,
@@ -18,6 +30,17 @@ public enum AudioExtraction {
         timeline: SMILTimeline,
         bookID: String,
         into directory: URL? = nil,
+    ) throws -> [String: URL] {
+        try serial.withLock {
+            try extract(from: package, timeline: timeline, bookID: bookID, into: directory)
+        }
+    }
+
+    private static func extract(
+        from package: EPUBPackage,
+        timeline: SMILTimeline,
+        bookID: String,
+        into directory: URL?,
     ) throws -> [String: URL] {
         let base = directory ?? defaultDirectory(for: bookID)
         try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)

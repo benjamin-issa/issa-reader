@@ -14,12 +14,51 @@ public struct AudiobookManifest: Codable, Hashable, Sendable {
     public var links: [Link]?
     public var toc: [Track]?
 
+    /// Built in code, not only decoded.
+    ///
+    /// A read-along's audio is the EPUB's own narration chunks, and the track
+    /// list the server serves for the same book is the original upload — one
+    /// file where the overlay has a hundred and seventy-six. The two never
+    /// match, so the read-along path synthesises a manifest over the chunks
+    /// instead. It is built through this initialiser rather than through a
+    /// second manifest type, so everything downstream — the book clock, the
+    /// anchor bridge, the locator written back to the server — is the same code
+    /// either way.
+    public init(
+        metadata: Metadata,
+        readingOrder: [Track],
+        links: [Link]? = nil,
+        toc: [Track]? = nil,
+    ) {
+        self.metadata = metadata
+        self.readingOrder = readingOrder
+        self.links = links
+        self.toc = toc
+    }
+
     public struct Metadata: Codable, Hashable, Sendable {
         /// Readium states titles per language: `{"und": "Peter and Wendy"}`.
         public var title: [String: String]?
         public var subtitle: [String: String]?
         public var language: [String]?
         public var duration: Double?
+
+        /// Spelled out rather than left to the memberwise initialiser, because
+        /// a manifest is now built in code as well as decoded: the read-along
+        /// path synthesises one from the book's own media overlay. The labels
+        /// and the defaults are exactly the memberwise ones, so nothing that
+        /// already writes `.init(title:)` has to change.
+        public init(
+            title: [String: String]? = nil,
+            subtitle: [String: String]? = nil,
+            language: [String]? = nil,
+            duration: Double? = nil,
+        ) {
+            self.title = title
+            self.subtitle = subtitle
+            self.language = language
+            self.duration = duration
+        }
 
         /// The title in whatever language the server offered.
         public var displayTitle: String? {
@@ -38,12 +77,39 @@ public struct AudiobookManifest: Codable, Hashable, Sendable {
         public var rel: [String]?
 
         public var id: String { href }
+
+        /// See `Metadata.init`: the memberwise labels and defaults, made
+        /// public so a synthesised manifest is built through the same type the
+        /// server's is decoded into rather than a parallel one.
+        public init(
+            href: String,
+            type: String? = nil,
+            title: String? = nil,
+            duration: Double? = nil,
+            size: Int? = nil,
+            bitrate: Double? = nil,
+            rel: [String]? = nil,
+        ) {
+            self.href = href
+            self.type = type
+            self.title = title
+            self.duration = duration
+            self.size = size
+            self.bitrate = bitrate
+            self.rel = rel
+        }
     }
 
     public struct Link: Codable, Hashable, Sendable {
         public var href: String
         public var type: String?
         public var rel: [String]?
+
+        public init(href: String, type: String? = nil, rel: [String]? = nil) {
+            self.href = href
+            self.type = type
+            self.rel = rel
+        }
     }
 
     /// The tracks worth playing.
