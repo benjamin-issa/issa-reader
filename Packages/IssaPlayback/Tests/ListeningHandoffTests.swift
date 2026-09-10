@@ -38,6 +38,7 @@ struct ListeningHandoffTests {
         visibleBookUUID: String? = bookUUID,
         surface: ControlSurface = .phone,
         isForeground: Bool = true,
+        resumeWasUnresolved: Bool = false,
         anchor: AudioAnchor? = anchor(),
         isPlaying: Bool = true,
         package: EPUBPackage?,
@@ -49,6 +50,7 @@ struct ListeningHandoffTests {
             visibleBookUUID: visibleBookUUID,
             surface: surface,
             isForeground: isForeground,
+            resumeWasUnresolved: resumeWasUnresolved,
             anchor: anchor,
             isPlaying: isPlaying,
             package: package,
@@ -179,6 +181,52 @@ struct ListeningHandoffTests {
         let decision = Self.decide(
             surface: .phone, isForeground: false, package: package, timeline: timeline)
         #expect(decision == .skip(.background))
+    }
+
+    /// The hole the anchor alone cannot see.
+    ///
+    /// A listener upgrading has a stored position on the *audio* clock naming
+    /// the server's original upload. Against a manifest synthesised over the
+    /// EPUB's own chunks every rung of `ListeningResume` misses — the anchor
+    /// names a foreign file, the track lookup answers nothing, and the last
+    /// rung wants a text-scaled position — so the audio clock is held and the
+    /// book plays from zero. Chunk one at offset zero is a perfectly placeable
+    /// anchor: it resolves to the overlay's first sentence, the reader turns to
+    /// page one, and the save that follows is on the *text* clock, whose guard
+    /// nobody armed and whose seed is zero because the stored locator is on the
+    /// other one. That is the whole loss, reached the other way round.
+    @Test("a book playing from a place nobody resolved is not handed over")
+    func resumeUnresolved() throws {
+        let (package, timeline) = try Self.fixture()
+        let decision = Self.decide(
+            resumeWasUnresolved: true, package: package, timeline: timeline)
+        #expect(decision == .skip(.resumeUnresolved))
+    }
+
+    /// Where it sits, which is the whole reason the rungs are ordered.
+    ///
+    /// Below the two that exist for a person: a driver at 70mph has to be told
+    /// the car is still connected, and a phone in a pocket that the app is not
+    /// in front of has to be told that, whatever the book's clock is doing.
+    /// Above `readerNotReady`, because it is a fact about the book rather than
+    /// about the reader — a reader that finishes opening a moment later changes
+    /// nothing about a place nobody could resolve.
+    @Test("an unresolved resume loses to the car and the pocket, and beats a half-open reader")
+    func resumeUnresolvedSitsBelowThePersonAndAboveTheReader() throws {
+        let (package, timeline) = try Self.fixture()
+
+        #expect(
+            Self.decide(
+                surface: .carPlay, resumeWasUnresolved: true,
+                package: package, timeline: timeline) == .skip(.carConnected))
+        #expect(
+            Self.decide(
+                isForeground: false, resumeWasUnresolved: true,
+                package: package, timeline: timeline) == .skip(.background))
+        #expect(
+            Self.decide(resumeWasUnresolved: true, package: nil, timeline: timeline)
+                == .skip(.resumeUnresolved),
+            "a reader still opening changes nothing about a clock nobody resolved")
     }
 
     /// Three ways to be half-open, and all of them mean the same thing: there

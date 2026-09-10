@@ -61,6 +61,25 @@ public enum ListeningHandoff {
         /// reader on iOS, so a visible reader alone would fire this while the
         /// phone was in a pocket.
         case background
+        /// The audiobook is playing from a place nobody could resolve, so its
+        /// clock is held and the anchor it offers is not a fact about the book.
+        ///
+        /// `ListeningResume` matched nothing — a stored position on the *text*
+        /// clock naming the server's own upload, against a manifest synthesised
+        /// over the EPUB's chunks — so playback began at zero and
+        /// `prepareListeningGuard` armed the audio clock. Chunk one at offset
+        /// zero is an honest answer about the audio and no answer at all about
+        /// the novel: `place` resolves it to the overlay's first sentence, and
+        /// the reader would then save that page on the *text* clock, which the
+        /// hold never covered. That is the loss this release exists to prevent,
+        /// reached through the other clock.
+        ///
+        /// Skipping leaves the reader on the page it has and the car playing on
+        /// from where it started, which is what happened before any of this
+        /// existed, with the stored position intact. The listener's first scrub
+        /// is `.chosen`, which releases the hold, and the next trigger hands
+        /// the book over normally.
+        case resumeUnresolved
         /// The reader has not finished opening the book, or the book has no
         /// narration to hand to. Nothing to aim at yet; `readerReady` brings
         /// the decision back when there is.
@@ -118,14 +137,21 @@ public enum ListeningHandoff {
     /// Runs the ladder. First failing rung names the reason.
     ///
     /// Every input is passed in rather than read from a model, so the whole
-    /// decision is a function of nine facts and the cases that matter — the
+    /// decision is a function of ten facts and the cases that matter — the
     /// car still connected, the phone still in a pocket, a reader open on a
     /// different book — can be stated in a test instead of staged in a car.
+    ///
+    /// - Parameter resumeWasUnresolved: whether this listening session started
+    ///   from a place `ListeningResume` could not find, which is the same thing
+    ///   as "the audio clock is held". A fact about the book rather than about
+    ///   the reader, so it is asked before `readerNotReady`: a reader that
+    ///   finishes opening a moment later changes nothing about it.
     public static func decide(
         listeningBookUUID: String?,
         visibleBookUUID: String?,
         surface: ControlSurface,
         isForeground: Bool,
+        resumeWasUnresolved: Bool,
         anchor: AudioAnchor?,
         isPlaying: Bool,
         package: EPUBPackage?,
@@ -137,6 +163,7 @@ public enum ListeningHandoff {
         guard visibleBookUUID == listeningBookUUID else { return .skip(.differentBook) }
         guard surface != .carPlay else { return .skip(.carConnected) }
         guard isForeground else { return .skip(.background) }
+        guard !resumeWasUnresolved else { return .skip(.resumeUnresolved) }
         guard let package, let timeline, hasReadalong else { return .skip(.readerNotReady) }
         guard let anchor else { return .skip(.noAnchor) }
         guard let placed = place(anchor, in: package, timeline: timeline) else {

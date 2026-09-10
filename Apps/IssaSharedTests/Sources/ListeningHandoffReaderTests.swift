@@ -98,6 +98,24 @@ struct ListeningHandoffReaderTests {
         return coordinator
     }
 
+    /// The same engine, playing from the top — which is where a start nobody
+    /// could resolve begins, and the only place it can begin from.
+    ///
+    /// Loaded, not merely constructed: chunk one at offset zero is a real
+    /// anchor that the overlay places on the first sentence of chapter one, and
+    /// a coordinator that had never opened a file would be refused a rung lower
+    /// as `noAnchor` and prove nothing about the rung under test.
+    static func startedFromZero(
+        _ model: ReaderModel, files: [String: URL],
+    ) async throws -> AudiobookCoordinator {
+        let built = try chunked(model, files: files)
+        let coordinator = AudiobookCoordinator(
+            manifest: built.manifest, source: .files(built.files))
+        coordinator.player.onTimeUpdate = nil
+        await coordinator.start(atProgress: 0)
+        return coordinator
+    }
+
     /// A manifest over the fixture's own chunks, in the shape `startListening`
     /// hands to `attachListening` for a downloaded read-along.
     ///
@@ -347,6 +365,60 @@ struct ListeningHandoffReaderTests {
         #expect(app.listeningBook?.uuid == Self.uuid, "and Now Playing is still its own")
         #expect(coordinator.player.isPlaying == false, "a paused car stays paused")
         #expect(app.isWritingListeningPosition, "an hour from here would be written nowhere")
+    }
+
+    /// The 2026-09-09 loss, reached through the other clock.
+    ///
+    /// A listener upgrading has a stored position on the *audio* clock naming
+    /// the server's original upload, and an anchor naming the same foreign
+    /// file. On a manifest synthesised over the EPUB's own chunks every rung of
+    /// `ListeningResume` misses — the anchor names a file the chunks have never
+    /// heard of, the track lookup answers nothing, and the last rung wants a
+    /// text-scaled position — so `prepareListeningGuard` holds `uuid#audio` and
+    /// the book plays from zero.
+    ///
+    /// Then the listener parks and opens the reader, and every rung of the
+    /// hand-off passes: chunk one at offset zero places cleanly on the
+    /// overlay's first sentence. `resumeNarration` turns the page to it,
+    /// `syncToNarration` schedules a save — and that save is *text*-scaled, so
+    /// it is keyed `uuid#text`, whose seed is zero because the stored locator
+    /// is on the other clock and which nothing ever armed. Allowed, and
+    /// `recordPosition` replaces a part-read novel with the front of the book.
+    ///
+    /// Skipping is the only honest answer: the reader keeps the page it has and
+    /// the car plays on from where it started, which is the behaviour that
+    /// existed before any of this, with the stored place intact. The listener's
+    /// first scrub is `.chosen`, which releases the hold, and the next trigger
+    /// hands the book over normally.
+    @Test("a book playing from a place nobody resolved keeps the reader where it is")
+    func anUnresolvedStartIsNotHandedToTheReader() async throws {
+        let app = AppModel(notificationCentre: NotificationCenter())
+        // The server's own single upload, on the audio clock: a file this
+        // book's chunks have never heard of, which is what makes the resume
+        // ladder miss every rung it has.
+        let book = SharedFixtures.book(
+            "Fixture", uuid: Self.uuid, progress: 0.62,
+            positionHref: "the-whole-book.mp3", positionType: "audio/mpeg",
+            readaloud: true)
+        app.books = [book]
+        let model = app.reader(for: book, session: try Self.session())
+        let (files, directory) = try await Self.opened(model)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        app.setForeground(true)
+        app.setReaderVisible(Self.uuid, true)
+        // What `attachListening` does when the ladder resolves nothing, and the
+        // only reason the audio clock is held at all.
+        app.prepareListeningGuard(for: book, resolved: false)
+        let coordinator = try await Self.startedFromZero(model, files: files)
+        app.installListening(coordinator, book: book)
+
+        let decision = await app.handOffListeningToReader(trigger: .readerVisible)
+
+        #expect(decision == .skip(.resumeUnresolved))
+        #expect(model.readalong?.activeEntry == nil, "nothing may have moved the page")
+        #expect(model.chapterIndex == 0, "the reader keeps the chapter it had")
+        #expect(app.listening === coordinator, "and the car plays on from where it started")
+        #expect(app.books.first?.progress == 0.62, "with the stored place untouched")
     }
 
     // MARK: - Starting, while the book is being taken away

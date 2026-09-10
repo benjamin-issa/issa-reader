@@ -128,6 +128,12 @@ struct ChapterClockTests {
         #expect(subject.player.currentAudioHref == nil, "nothing may have been loaded")
         #expect(subject.player.isPlaying == false, "a book with no audio must not claim to play")
         #expect(subject.bookTime == 0)
+        // And it has no place to offer anybody. `trackIndex` is zero from birth
+        // and `bookTime` with it, so this used to answer "chunk one, offset
+        // zero" for an engine that had never opened a file — an anchor the
+        // hand-off places perfectly well on the overlay's first sentence, and
+        // then turns a part-read novel back to page one from.
+        #expect(subject.currentAnchor == nil, "an engine that played nothing has nowhere to name")
     }
 
     // MARK: - Boundaries

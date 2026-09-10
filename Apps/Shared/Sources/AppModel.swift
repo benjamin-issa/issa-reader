@@ -1442,11 +1442,22 @@ public final class AppModel {
 
         let coordinator = listening
         let model = visibleReaderUUID.flatMap { readers[$0] }
+        // The audio clock's own guard, asked rather than re-derived: it is
+        // `prepareListeningGuard` that decided this book started from nowhere,
+        // and a second copy of that judgement here is a second thing to keep in
+        // step. Held means the car is playing from zero because nothing could be
+        // resolved, so its anchor says nothing about the novel — see
+        // `ListeningHandoff.Skip.resumeUnresolved`.
+        let held = listeningBook.map {
+            positionGuards[Self.positionGuardKey($0.uuid, isAudioScaled: true)]?
+                .awaitingChoice ?? false
+        } ?? false
         let decision = ListeningHandoff.decide(
             listeningBookUUID: listeningBook?.uuid,
             visibleBookUUID: visibleReaderUUID,
             surface: controlSurface,
             isForeground: isForeground,
+            resumeWasUnresolved: held,
             anchor: coordinator?.currentAnchor,
             isPlaying: coordinator?.player.isPlaying ?? false,
             package: model?.package,

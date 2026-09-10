@@ -185,6 +185,16 @@ public final class AudiobookCoordinator {
     /// this engine natively knows and what the media overlay can be matched
     /// against, so the two clocks never have to be converted by arithmetic.
     public var currentAnchor: AudioAnchor? {
+        // Nothing has been loaded, so there is nowhere to name. `trackIndex` is
+        // zero from birth and `bookTime` with it, so without this a coordinator
+        // that never played a note answered "chunk one, offset zero" — which is
+        // the ordinary outcome when the `.files` source refuses a chunk, and
+        // which `ListeningHandoff.Skip.noAnchor`'s own doc already claims is
+        // impossible. `ReadalongCoordinator.currentAnchor` makes that promise
+        // through `activeEntry`; this is the same promise, through the one
+        // thing that says a file was actually opened. `attachListening` reads
+        // the same property for the same reason.
+        guard player.currentAudioHref != nil else { return nil }
         let all = tracks
         guard all.indices.contains(trackIndex) else { return nil }
         let start = manifest.startTime(ofTrackAt: trackIndex)
