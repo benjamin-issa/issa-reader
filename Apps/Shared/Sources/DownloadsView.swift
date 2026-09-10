@@ -78,7 +78,13 @@ public struct DownloadsView: View {
     // MARK: - Sections
 
     private var storageSection: some View {
-        Section {
+        // Free space is only worth stating when the scan actually produced a
+        // figure; the second half of the sentence is true either way.
+        let note = inventory.freeBytes > 0
+            ? "\(ByteCountText.text(inventory.freeBytes)) free on this device. Downloaded books open with no network at all."
+            : "Downloaded books open with no network at all."
+
+        return SettingsSection(note: note) {
             VStack(alignment: .leading, spacing: Metrics.spacing12) {
                 Text(ByteCountText.text(inventory.totalBytes))
                     .font(Typography.title)
@@ -112,11 +118,6 @@ public struct DownloadsView: View {
                 }
             }
             .padding(.vertical, Metrics.spacing8)
-        } footer: {
-            Text(inventory.freeBytes > 0
-                ? "\(ByteCountText.text(inventory.freeBytes)) free on this device. Downloaded books open with no network at all."
-                : "Downloaded books open with no network at all.")
-                .settingsFooter()
         }
         .listRowBackground(Palette.surface)
     }
@@ -202,13 +203,10 @@ public struct DownloadsView: View {
 
     private var settingsSection: some View {
         @Bindable var app = app
-        return Section {
+        return SettingsSection(note: Self.meteredRowFooter) {
             Toggle(Self.meteredRowTitle, isOn: $app.wifiOnlyDownloads)
                 .font(Typography.callout)
                 .tint(Palette.tangerine)
-        } footer: {
-            Text(Self.meteredRowFooter)
-                .settingsFooter()
         }
         .listRowBackground(Palette.surface)
     }
@@ -278,22 +276,19 @@ public struct DownloadsView: View {
     @ViewBuilder
     private var orphanSection: some View {
         if !inventory.orphans.isEmpty, !app.books.isEmpty, app.loadError == nil {
-            Section {
+            // `orphanBytes`, not `unaccountedBytes`. The sweep deletes the files
+            // this app can name, and those are a subset: anything else in the
+            // directory — an unzipped folder, a partial transfer, a file the
+            // reader put there — is counted as unaccounted and deliberately
+            // left alone. Promising the larger number offered to free space the
+            // button would not free.
+            SettingsSection(note: "\(ByteCountText.text(inventory.orphanBytes)) of downloads whose books are not in your library any more. They have no row above, so this is the only way to reclaim the space.") {
                 Button("Remove \(inventory.orphans.count) orphaned file\(inventory.orphans.count == 1 ? "" : "s")",
                        role: .destructive) { isConfirmingSweep = true }
                     .font(Typography.callout)
                     .foregroundStyle(Palette.alert)
             } header: {
                 Text("No longer in your library")
-            } footer: {
-                // `orphanBytes`, not `unaccountedBytes`. The sweep deletes the
-                // files this app can name, and those are a subset: anything
-                // else in the directory — an unzipped folder, a partial
-                // transfer, a file the reader put there — is counted as
-                // unaccounted and deliberately left alone. Promising the larger
-                // number offered to free space the button would not free.
-                Text("\(ByteCountText.text(inventory.orphanBytes)) of downloads whose books are not in your library any more. They have no row above, so this is the only way to reclaim the space.")
-                    .settingsFooter()
             }
             .listRowBackground(Palette.surface)
             .confirmationDialog(

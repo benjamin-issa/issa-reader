@@ -21,6 +21,11 @@ public struct SettingsView: View {
 
     private var list: some View {
         @Bindable var settings = settings
+        // What the bar under the player is measuring, said in the section that
+        // sets it rather than left for the reader to discover in the car.
+        let progressNote = settings.progressScope == .chapter
+            ? "The player, the Lock Screen and CarPlay all show the chapter you are in."
+            : "The player, the Lock Screen and CarPlay all show the whole book."
 
         return List {
             if let session = app.session, case let .signedIn(user) = session.state {
@@ -39,7 +44,7 @@ public struct SettingsView: View {
                 .listRowBackground(Palette.surface)
             }
 
-            Section {
+            SettingsSection(note: progressNote) {
                 // Inline rather than a level down: it is one control, and the
                 // people who want it are the ones staring at a five-hour bar
                 // wondering where their chapter is.
@@ -60,11 +65,6 @@ public struct SettingsView: View {
                 }
             } header: {
                 Text("Playback & reading")
-            } footer: {
-                Text(settings.progressScope == .chapter
-                    ? "The player, the Lock Screen and CarPlay all show the chapter you are in."
-                    : "The player, the Lock Screen and CarPlay all show the whole book.")
-                    .settingsFooter()
             }
             .listRowBackground(Palette.surface)
 

@@ -30,7 +30,9 @@ struct DiagnosticsView: View {
             }
             .listRowBackground(Palette.surface)
 
-            Section {
+            // Said before anything is shared, not after: what the file contains
+            // is the reader's decision to make.
+            SettingsSection(note: "The file names your server and the books you opened. Sign-in codes and access tokens are never recorded.") {
                 #if os(iOS) || os(macOS)
                 if let exported {
                     ShareLink(item: exported) {
@@ -46,11 +48,6 @@ struct DiagnosticsView: View {
                 } label: {
                     Label("Copy to clipboard", systemImage: "doc.on.doc")
                 }
-            } footer: {
-                // Said before anything is shared, not after: what the file
-                // contains is the reader's decision to make.
-                Text("The file names your server and the books you opened. Sign-in codes and access tokens are never recorded.")
-                    .settingsFooter()
             }
             .listRowBackground(Palette.surface)
 

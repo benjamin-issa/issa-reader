@@ -52,14 +52,11 @@ public struct ControlsSettingsView: View {
         @Bindable var settings = settings
 
         List {
-            Section {
+            SettingsSection(note: "Assign an action to each button. Bindings are per surface, so the wheel can mean something different in the car.") {
                 Picker("Surface", selection: $surface) {
                     ForEach(ControlSurface.allCases, id: \.self) { Text($0.title).tag($0) }
                 }
                 .pickerStyle(.segmented)
-            } footer: {
-                Text("Assign an action to each button. Bindings are per surface, so the wheel can mean something different in the car.")
-                    .settingsFooter()
             }
             .listRowBackground(Palette.surface)
 
@@ -84,7 +81,9 @@ public struct ControlsSettingsView: View {
             }
             .listRowBackground(Palette.surface)
 
-            Section {
+            // One setting, three places: the note names the jump buttons beside
+            // the chapter name on the reading page, which move by this too.
+            SettingsSection(note: "Used by the skip buttons wherever narration is playing — the player, the Lock Screen, CarPlay — and by the jump buttons next to the chapter name on the reading page.") {
                 // The range is `CommandMap`'s own, not a pair of numbers typed
                 // here: the decoder clamps a stored interval to it, and a
                 // stepper offering a value the decoder would refuse is a
@@ -99,11 +98,6 @@ public struct ControlsSettingsView: View {
                 )
             } header: {
                 Text("Skip amount")
-            } footer: {
-                // One setting, three places: this is also what the jump buttons
-                // beside the chapter name on the reading page move by.
-                Text("Used by the skip buttons wherever narration is playing — the player, the Lock Screen, CarPlay — and by the jump buttons next to the chapter name on the reading page.")
-                    .settingsFooter()
             }
             .listRowBackground(Palette.surface)
 
