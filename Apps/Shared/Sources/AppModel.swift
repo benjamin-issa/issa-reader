@@ -1959,8 +1959,13 @@ public final class AppModel {
         // zero over a place this app simply could not find.
         prepareListeningGuard(for: book, resolved: resume.isResolved)
         if let time = resume.bookTime {
-            await coordinator.seek(toBookTime: time)
-            coordinator.player.play()
+            // Only if the seek actually landed. `start(atProgress:)` below
+            // already refuses to play a player holding nothing; a resolved
+            // start whose chunk is missing deserves the same silence, logged
+            // by `load`, rather than a book that claims to be playing.
+            if await coordinator.seek(toBookTime: time) {
+                coordinator.player.play()
+            }
         } else {
             await coordinator.start(atProgress: 0)
         }
