@@ -116,6 +116,7 @@ public struct DownloadsView: View {
             Text(inventory.freeBytes > 0
                 ? "\(ByteCountText.text(inventory.freeBytes)) free on this device. Downloaded books open with no network at all."
                 : "Downloaded books open with no network at all.")
+                .settingsFooter()
         }
         .listRowBackground(Palette.surface)
     }
@@ -201,12 +202,30 @@ public struct DownloadsView: View {
 
     private var settingsSection: some View {
         @Bindable var app = app
+        // No Mac has a cellular radio, so "Wi-Fi only" reads there as a setting
+        // about nothing — or worse, as one that cannot be the reason a download
+        // is waiting while the Wi-Fi symbol is lit. The rule underneath is
+        // `isExpensive`, which folds in `isConstrained`: on a Mac that is
+        // iPhone Personal Hotspot and Low Data Mode. The protection was always
+        // real; only the name was wrong.
         return Section {
+            #if os(macOS)
+            Toggle("Pause downloads on metered connections", isOn: $app.wifiOnlyDownloads)
+                .font(Typography.callout)
+                .tint(Palette.tangerine)
+            #else
             Toggle("Download over Wi-Fi only", isOn: $app.wifiOnlyDownloads)
                 .font(Typography.callout)
                 .tint(Palette.tangerine)
+            #endif
         } footer: {
+            #if os(macOS)
+            Text("Applies to downloads you start from now on. This Mac counts iPhone Personal Hotspot and Low Data Mode networks as metered; a book already in progress carries on.")
+                .settingsFooter()
+            #else
             Text("Applies to downloads you start from now on. A book already in progress carries on.")
+                .settingsFooter()
+            #endif
         }
         .listRowBackground(Palette.surface)
     }
@@ -262,6 +281,7 @@ public struct DownloadsView: View {
                 // unaccounted and deliberately left alone. Promising the larger
                 // number offered to free space the button would not free.
                 Text("\(ByteCountText.text(inventory.orphanBytes)) of downloads whose books are not in your library any more. They have no row above, so this is the only way to reclaim the space.")
+                    .settingsFooter()
             }
             .listRowBackground(Palette.surface)
             .confirmationDialog(

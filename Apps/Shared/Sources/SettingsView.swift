@@ -64,6 +64,7 @@ public struct SettingsView: View {
                 Text(settings.progressScope == .chapter
                     ? "The player, the Lock Screen and CarPlay all show the chapter you are in."
                     : "The player, the Lock Screen and CarPlay all show the whole book.")
+                    .settingsFooter()
             }
             .listRowBackground(Palette.surface)
 

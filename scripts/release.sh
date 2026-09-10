@@ -247,7 +247,7 @@ for platform in "${REQUESTED[@]}"; do
         shopt -s nullglob
         scanned=0
         for binary in "$archive"/Products/Applications/*.app/IssaReader-* \
-                      "$archive"/Products/Applications/*.app/Contents/MacOS/IssaReader-* \
+                      "$archive"/Products/Applications/*.app/Contents/MacOS/* \
                       "$archive"/Products/Applications/*.app/PlugIns/*.appex/IssaWidgets; do
             [ -f "$binary" ] || continue
             scanned=$((scanned + 1))
@@ -261,9 +261,13 @@ for platform in "${REQUESTED[@]}"; do
         done
         shopt -u nullglob
 
-        # A guard that inspected nothing is not a guard. The product name is
-        # $(TARGET_NAME) today, so these globs match by coincidence; setting
-        # PRODUCT_NAME would make them vacuous with no other visible change.
+        # A guard that inspected nothing is not a guard, and this is the check
+        # that says so out loud. The Mac's product name became "Issa Reader",
+        # its executable moved with it, and the old Contents/MacOS/IssaReader-*
+        # glob went from matching to matching nothing — silently, because
+        # `nullglob` deletes an unmatched pattern rather than complaining. The
+        # macOS glob no longer names the product for that reason; keep it that
+        # way, and let this count be what catches the next rename.
         if [ "$scanned" -eq 0 ]; then
             echo "  ERROR: found no binary to scan for the fixture marker in $archive"
             RESULTS+=("$platform: fixture guard inspected no binaries")

@@ -59,6 +59,7 @@ public struct ControlsSettingsView: View {
                 .pickerStyle(.segmented)
             } footer: {
                 Text("Assign an action to each button. Bindings are per surface, so the wheel can mean something different in the car.")
+                    .settingsFooter()
             }
             .listRowBackground(Palette.surface)
 
@@ -78,6 +79,7 @@ public struct ControlsSettingsView: View {
                     Text(wheelIsBound
                         ? "The Lock Screen shows next and previous track while the wheel is assigned."
                         : "Leave the wheel unassigned and the Lock Screen shows the skip buttons instead.")
+                        .settingsFooter()
                 }
             }
             .listRowBackground(Palette.surface)
@@ -101,6 +103,7 @@ public struct ControlsSettingsView: View {
                 // One setting, three places: this is also what the jump buttons
                 // beside the chapter name on the reading page move by.
                 Text("Used by the skip buttons wherever narration is playing — the player, the Lock Screen, CarPlay — and by the jump buttons next to the chapter name on the reading page.")
+                    .settingsFooter()
             }
             .listRowBackground(Palette.surface)
 

@@ -50,7 +50,7 @@ struct DiagnosticsView: View {
                 // Said before anything is shared, not after: what the file
                 // contains is the reader's decision to make.
                 Text("The file names your server and the books you opened. Sign-in codes and access tokens are never recorded.")
-                    .font(Typography.caption)
+                    .settingsFooter()
             }
             .listRowBackground(Palette.surface)
 

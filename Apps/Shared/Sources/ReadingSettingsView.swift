@@ -56,6 +56,7 @@ public struct ReadingSettingsView: View {
                 Text("Highlighter")
             } footer: {
                 Text("The same control is in the reader under Aa. Page colour is one setting for every book, not a per-book choice like the type. Each page colour remembers its own highlighter for the sentence being read aloud.")
+                    .settingsFooter()
             }
             .listRowBackground(Palette.surface)
 
@@ -74,6 +75,7 @@ public struct ReadingSettingsView: View {
                 Text("Type")
             } footer: {
                 Text("These are your defaults. Any book can depart from them — open it and tap Aa.")
+                    .settingsFooter()
             }
             .listRowBackground(Palette.surface)
 
@@ -96,6 +98,7 @@ public struct ReadingSettingsView: View {
                 Text("Read-along")
             } footer: {
                 Text("“Follow narration” keeps the spoken sentence on screen. Turning pages mid-sentence flips as soon as the text runs off, rather than waiting for the sentence to finish. Double-tapping a sentence starts the narration there.")
+                    .settingsFooter()
             }
             .listRowBackground(Palette.surface)
 

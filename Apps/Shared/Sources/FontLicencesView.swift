@@ -30,6 +30,7 @@ struct FontLicencesView: View {
                 Text("Bundled faces")
             } footer: {
                 Text("Every face the app ships is under the SIL Open Font License 1.1. Fonts you import yourself are governed by their own terms.")
+                    .settingsFooter()
             }
             .listRowBackground(Palette.surface)
         }

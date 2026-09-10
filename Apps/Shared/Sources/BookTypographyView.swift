@@ -43,6 +43,7 @@ struct BookTypographyView: View {
                     Text("Page colour")
                 } footer: {
                     Text("Applies to every book, unlike the settings below.")
+                        .settingsFooter()
                 }
                 .listRowBackground(Palette.surface)
 
@@ -58,6 +59,7 @@ struct BookTypographyView: View {
                     Text("This book")
                 } footer: {
                     Text(footer)
+                        .settingsFooter()
                 }
                 .listRowBackground(Palette.surface)
 

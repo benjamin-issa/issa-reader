@@ -121,7 +121,11 @@ struct IssaReaderMacApp: App {
                 .environment(nowPlaying)
                 .environment(ask)
                 .tint(Palette.tangerine)
-                .frame(width: 520, height: 420)
+                // Sized for the tallest tab, not the first one. Section footers
+                // wrap to as many lines as they need now rather than truncating
+                // to one, which the Reading and Controls tabs — three long
+                // footers each — spend on height the old 520×420 did not have.
+                .frame(width: 560, height: 520)
         }
     }
 }

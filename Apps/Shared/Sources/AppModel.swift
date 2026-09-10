@@ -2647,7 +2647,14 @@ public final class AppModel {
         // multi-hundred-MB readaloud with no reported size) straight through on
         // cellular. Unknown fails safe: assumed large until proven otherwise.
         if downloads.wifiOnly, reachability.isExpensive, expected.map({ $0 > 20_000_000 }) ?? true {
+            // On a Mac this fires *while on Wi-Fi* — a Low Data Mode network is
+            // constrained, and constrained counts as expensive — so naming
+            // Wi-Fi there describes the connection the reader already has.
+            #if os(macOS)
+            loadError = "Waiting for an unmetered connection to download this."
+            #else
             loadError = "Waiting for Wi-Fi to download this."
+            #endif
             return false
         }
         let job = DownloadManager.Job(bookUUID: book.uuid, format: format)

@@ -38,6 +38,7 @@ struct AskSettingsSection: View {
             }
         } footer: {
             Text(footer)
+                .settingsFooter()
         }
         .listRowBackground(Palette.surface)
         // Re-read when the app comes forward: the reader may have just been to
