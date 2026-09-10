@@ -146,16 +146,17 @@ final class AppServices {
         // moment a book was already narrating that way. `playingBookUUID`
         // just above already had to make this same distinction.
         bridge.chapters = { [app] in
-            if let coordinator = app.listening {
-                return coordinator.tracks.enumerated().map { index, track in
-                    coordinator.manifest.title(of: track, at: index)
-                }
-            }
+            // The coordinator's chapters, not its tracks. For the server's own
+            // manifest the two are the same list; for a read-along played from
+            // its own narration chunks the tracks are a hundred and seventy-six
+            // files cut by silence, and Up Next would have offered a car a
+            // scrolling list of them under no name anybody wrote.
+            if let coordinator = app.listening { return coordinator.chapters.map(\.title) }
             guard let reader = app.reader, let package = reader.package else { return [] }
             return CarPlayChapters.entries(for: package).map(\.title)
         }
         bridge.currentChapter = { [app] in
-            if let coordinator = app.listening { return coordinator.trackIndex }
+            if let coordinator = app.listening { return coordinator.chapterIndex }
             guard let reader = app.reader, let package = reader.package else { return nil }
             return CarPlayChapters.entries(for: package).firstIndex { $0.spineIndex == reader.chapterIndex }
         }

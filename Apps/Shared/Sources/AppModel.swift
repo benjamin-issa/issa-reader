@@ -1763,6 +1763,30 @@ public final class AppModel {
             stopListening(nowPlaying: nowPlaying)
         }
         listeningError = nil
+        let content = BookContentService(client: session.client)
+        // An aligned read-along already on the device plays from its *own*
+        // narration chunks, through a manifest synthesised over them.
+        //
+        // This is the whole fix for the car. The server's manifest for the same
+        // book lists the original upload — one file named after the book —
+        // while everything this app has ever stored about it names the EPUB's
+        // chunks, so `AudioAnchor` matched nothing, the resume ladder ran out,
+        // and the drive started at chapter one. Playing the chunks the anchor
+        // already names means there is nothing left to match: the two engines
+        // share a track list by construction.
+        //
+        // Downloaded only. Streaming a book chunk by chunk is a different
+        // feature, and this path is exactly as offline as the read-along it
+        // borrows the audio from.
+        if book.readaloud?.isAligned == true, isDownloaded(book, format: .readaloud),
+           let built = await synthesisedListening(for: book, content: content) {
+            await attachListening(
+                manifest: built.manifest, source: .files(built.files),
+                chapters: built.chapters, timeline: built.timeline,
+                manifestKind: .synthesised,
+                book: book, nowPlaying: nowPlaying, settings: settings)
+            return
+        }
         let service = AudiobookService(client: session.client, baseURL: url, tokens: session.tokenProvider)
         do {
             let manifest = try await service.manifest(for: book.uuid)
@@ -1770,12 +1794,6 @@ public final class AppModel {
                 listeningError = "This audiobook has no playable tracks on the server."
                 return
             }
-            // The `stopNarration()` at the top ran before this network round
-            // trip; a read-along the reader tapped *during* the fetch would
-            // otherwise still be playing when the audiobook starts, two voices
-            // at once. Stop again now that the suspension is over, just before
-            // this coordinator takes over Now Playing.
-            stopNarration()
             // Play the downloaded file when it can stand in for the manifest;
             // otherwise stream, with the token travelling as a cookie because
             // AVFoundation makes its own requests and never sees our headers.
@@ -1786,7 +1804,7 @@ public final class AppModel {
             // Handing it one file for a 17-track book applied every per-track
             // offset to that same file — a resume at 50% seeked minutes in
             // instead of hours, and then persisted the double-counted clock.
-            let content = BookContentService(client: session.client)
+            //
             // Through the model, so an audiobook inside its undo window is
             // streamed rather than played from a file about to be deleted.
             let playableAsOneFile = manifest.playableTracks.count == 1
@@ -1797,64 +1815,161 @@ public final class AppModel {
                     base: service.trackBase(for: book.uuid),
                     cookies: await service.playbackCookies(for: book.uuid),
                 )
-
-            let coordinator = AudiobookCoordinator(manifest: manifest, source: source)
-            coordinator.player.rate = Float(settings.playbackRate)
-            // The level belongs to the book, not to the surface it is played
-            // from: Listening, CarPlay and the lock screen all arrive here, and
-            // a trim set in the reader has to survive the move.
-            coordinator.player.gain = VolumeTrim.gain(settings.volumeTrim(for: book.uuid))
-            listening = coordinator
-            listeningBook = book
-            // Play and pause both have to reach the widget, and the only
-            // recurring publish is behind a "progress moved" guard that a
-            // paused book never passes — so isPlaying could be set true and
-            // never set false again.
-            coordinator.player.setRateObserver(for: self) { [weak self, weak coordinator] rate in
-                guard let self, let coordinator else { return }
-                // The rate the player just reported, not `effectiveRate`.
-                // `play()` notifies before AVPlayer's timeControlStatus leaves
-                // `waitingToPlayAtSpecifiedRate`, so re-reading it here would
-                // publish "not playing" the instant someone pressed play.
-                self.publishListeningSnapshot(
-                    book: book, coordinator: coordinator, isPlaying: rate > 0)
-            }
-            nowPlaying.attach(
-                coordinator: coordinator, book: book, session: session,
-                chapterTitle: { [weak coordinator] in coordinator?.chapterTitle },
-            )
-            let manifestKind = ListeningResume.ManifestKind.original
-            let resume = await resolveListeningStart(
-                for: book, coordinator: coordinator,
-                timeline: nil, manifestKind: manifestKind)
-            IssaLog.info("listening started", [
-                "book": book.title,
-                "from": resume.reason.rawValue,
-                "atBookTime": String(format: "%.1f", resume.bookTime ?? -1),
-                "storedProgress": String(format: "%.4f", book.progress ?? -1),
-                "manifestKind": manifestKind.rawValue,
-                "trackCount": String(coordinator.tracks.count),
-            ])
-            // Before a note of audio plays: an unresolved start plays from zero,
-            // and the fifteen-second writer must not be allowed to persist that
-            // zero over a place this app simply could not find.
-            prepareListeningGuard(for: book, resolved: resume.isResolved)
-            if let time = resume.bookTime {
-                await coordinator.seek(toBookTime: time)
-                coordinator.player.play()
-            } else {
-                await coordinator.start(atProgress: 0)
-            }
-            // After the seek, never before: a coordinator one line old still
-            // reads bookTime 0, so publishing here would have announced every
-            // resumed audiobook at 0% and left that on disk if the listener
-            // paused inside the next fifteen seconds.
-            publishListeningSnapshot(book: book, coordinator: coordinator)
-            watchListeningProgress(book: book, coordinator: coordinator)
+            await attachListening(
+                manifest: manifest, source: source, chapters: [], timeline: nil,
+                manifestKind: .original,
+                book: book, nowPlaying: nowPlaying, settings: settings)
         } catch {
             IssaLog.failure("start listening", error, ["book": book.title])
             listeningError = Self.message(for: error)
         }
+    }
+
+    /// Builds a manifest over this book's own narration chunks, off the main
+    /// actor.
+    ///
+    /// Returns nil for every way this can honestly fail — a read-along with no
+    /// narration in it, an archive that will not open, an extraction that ran
+    /// out of disk — and the caller falls back to the server's manifest, which
+    /// is today's behaviour. Falling back is always safe: the chunk path is an
+    /// improvement on the resume, not a requirement for playing at all.
+    private func synthesisedListening(
+        for book: Book, content: BookContentService,
+    ) async -> (
+        manifest: AudiobookManifest, chapters: [AudiobookChapter],
+        files: [String: URL], timeline: SMILTimeline
+    )? {
+        let epubURL = content.localURL(for: book, format: .readaloud)
+        let bookID = book.uuid
+        let title = book.title
+        // The reader's, when a reader is open — the archive is already inflated
+        // and the overlay already parsed, and doing both again for a book on
+        // screen is seconds of work for an answer in memory. Both are `Sendable`.
+        let openPackage = readers[book.uuid]?.package
+        let openTimeline = readers[book.uuid]?.timeline
+        let started = Date()
+
+        let built = await Task.detached(priority: .userInitiated) {
+            () -> (result: ChunkManifest.Result, timeline: SMILTimeline)? in
+            do {
+                let source = try ReadaloudSource.load(
+                    epubURL: epubURL, bookID: bookID,
+                    package: openPackage, timeline: openTimeline)
+                guard !source.timeline.isEmpty, !source.audioFiles.isEmpty else {
+                    // A read-along whose alignment the server claims but whose
+                    // EPUB carries no overlay. The server's own manifest is
+                    // then the only track list there is.
+                    IssaLog.warning("read-along has no narration; playing original", [
+                        "book": title,
+                    ])
+                    return nil
+                }
+                let cached = ChunkDurations.load(bookID: bookID)
+                let measured = await ChunkDurations.measure(source.audioFiles, cached: cached)
+                // Only when it grew. A book whose lengths are all known already
+                // must not rewrite the file on every play.
+                if measured.count > cached.count {
+                    try? ChunkDurations.save(measured, bookID: bookID)
+                }
+                return (
+                    ChunkManifest.make(
+                        timeline: source.timeline, package: source.package,
+                        audioFiles: source.audioFiles, durations: measured, title: title),
+                    source.timeline
+                )
+            } catch {
+                IssaLog.failure("chunk manifest", error, ["book": title])
+                return nil
+            }
+        }.value
+
+        guard let built, !built.result.manifest.playableTracks.isEmpty else { return nil }
+        IssaLog.info("chunk manifest built", [
+            "book": title,
+            "tracks": String(built.result.manifest.playableTracks.count),
+            "chapters": String(built.result.chapters.count),
+            "ms": String(format: "%.1f", Date().timeIntervalSince(started) * 1_000),
+        ])
+        return (built.result.manifest, built.result.chapters, built.result.files, built.timeline)
+    }
+
+    /// Hands a manifest to a coordinator, the Now Playing centre and the
+    /// position writer, and starts it where the resume ladder says.
+    ///
+    /// One tail for both track lists. The two paths above differ only in what
+    /// they are playing and how they name it, and the moment the second one
+    /// existed, every fix to the order of these lines — the guard before the
+    /// seek, the publish after it — would otherwise have had to be made twice.
+    private func attachListening(
+        manifest: AudiobookManifest,
+        source: AudiobookCoordinator.Source,
+        chapters: [AudiobookChapter],
+        timeline: SMILTimeline?,
+        manifestKind: ListeningResume.ManifestKind,
+        book: Book,
+        nowPlaying: NowPlayingController,
+        settings: PlaybackSettings,
+    ) async {
+        // The `stopNarration()` in `startListening` ran before a network round
+        // trip and an extraction; a read-along the reader tapped *during* either
+        // would otherwise still be playing when the audiobook starts, two voices
+        // at once. Stop again now that the suspensions are over, just before
+        // this coordinator takes over Now Playing.
+        stopNarration()
+        let coordinator = AudiobookCoordinator(
+            manifest: manifest, source: source, chapters: chapters)
+        coordinator.player.rate = Float(settings.playbackRate)
+        // The level belongs to the book, not to the surface it is played
+        // from: Listening, CarPlay and the lock screen all arrive here, and
+        // a trim set in the reader has to survive the move.
+        coordinator.player.gain = VolumeTrim.gain(settings.volumeTrim(for: book.uuid))
+        listening = coordinator
+        listeningBook = book
+        // Play and pause both have to reach the widget, and the only
+        // recurring publish is behind a "progress moved" guard that a
+        // paused book never passes — so isPlaying could be set true and
+        // never set false again.
+        coordinator.player.setRateObserver(for: self) { [weak self, weak coordinator] rate in
+            guard let self, let coordinator else { return }
+            // The rate the player just reported, not `effectiveRate`.
+            // `play()` notifies before AVPlayer's timeControlStatus leaves
+            // `waitingToPlayAtSpecifiedRate`, so re-reading it here would
+            // publish "not playing" the instant someone pressed play.
+            self.publishListeningSnapshot(
+                book: book, coordinator: coordinator, isPlaying: rate > 0)
+        }
+        nowPlaying.attach(
+            coordinator: coordinator, book: book, session: session,
+            chapterTitle: { [weak coordinator] in coordinator?.chapterTitle },
+        )
+        let resume = await resolveListeningStart(
+            for: book, coordinator: coordinator,
+            timeline: timeline, manifestKind: manifestKind)
+        IssaLog.info("listening started", [
+            "book": book.title,
+            "from": resume.reason.rawValue,
+            "atBookTime": String(format: "%.1f", resume.bookTime ?? -1),
+            "storedProgress": String(format: "%.4f", book.progress ?? -1),
+            "manifestKind": manifestKind.rawValue,
+            "trackCount": String(coordinator.tracks.count),
+            "source": manifestKind == .synthesised ? "chunks" : "original",
+        ])
+        // Before a note of audio plays: an unresolved start plays from zero,
+        // and the fifteen-second writer must not be allowed to persist that
+        // zero over a place this app simply could not find.
+        prepareListeningGuard(for: book, resolved: resume.isResolved)
+        if let time = resume.bookTime {
+            await coordinator.seek(toBookTime: time)
+            coordinator.player.play()
+        } else {
+            await coordinator.start(atProgress: 0)
+        }
+        // After the seek, never before: a coordinator one line old still
+        // reads bookTime 0, so publishing here would have announced every
+        // resumed audiobook at 0% and left that on disk if the listener
+        // paused inside the next fifteen seconds.
+        publishListeningSnapshot(book: book, coordinator: coordinator)
+        watchListeningProgress(book: book, coordinator: coordinator)
     }
 
     /// Stops playback and lets go of everything holding onto it.
@@ -2022,10 +2137,16 @@ public final class AppModel {
         let within = (track?.duration ?? 0) > 0
             ? (coordinator.bookProgress * coordinator.totalDuration - trackStart) / (track?.duration ?? 1)
             : 0
+        // The chapter the listener is in, which on a manifest synthesised over
+        // narration chunks is not the same as the track: `title(of:at:)` would
+        // hand back "Track 87" for a place the reader knows as chapter twelve,
+        // and this locator is what every other client — Storyteller's own web
+        // player included — reads to say where the book was left.
+        let chapter = coordinator.chapterTitle
         return ReadiumLocator(
             href: track?.href ?? "",
             type: track?.type ?? "audio/mpeg",
-            title: track.map { coordinator.manifest.title(of: $0, at: index) },
+            title: track.map { chapter.isEmpty ? coordinator.manifest.title(of: $0, at: index) : chapter },
             locations: .init(
                 progression: (within.asProgression ?? 0),
                 totalProgression: coordinator.bookProgress,
