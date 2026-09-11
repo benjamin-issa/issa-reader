@@ -148,6 +148,14 @@ is the only way all three can carry the same number.
 
 ## macOS App Store specifics
 
+- **The Mac's product is named "Issa Reader"**, not the target name. `PRODUCT_NAME`
+  is set on that target alone, because the app menu comes from `CFBundleName`
+  and the Dock from the bundle's filename on disk — macOS ignores a
+  `CFBundleDisplayName` the filename does not match, which is why setting the
+  display name alone left both reading "IssaReader-macOS". The consequence for
+  this script: the fixture-leak scan must not glob on the product name. Its
+  macOS pattern is `Contents/MacOS/*`, and the "inspected no binaries" guard is
+  what catches the next rename.
 - **App Sandbox** is on in both configurations now. Debug signs with the Apple
   Development certificate rather than ad-hoc — ad-hoc gives the bundle a hash
   identifier, the sandbox cannot make a container from that, and the app trapped
