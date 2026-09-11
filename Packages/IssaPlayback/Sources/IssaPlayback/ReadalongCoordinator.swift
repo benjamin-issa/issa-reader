@@ -47,6 +47,23 @@ public final class ReadalongCoordinator {
     private let timeline: SMILTimeline
     /// Archive href to the extracted file on disk.
     private let audioFiles: [String: URL]
+    /// How many moves are between the highlight moving and the audio following
+    /// it.
+    ///
+    /// `AudiobookCoordinator`'s `loadsInFlight` and `seeksInFlight`, in the one
+    /// counter this engine needs. `AudioPlayer.observeTime` attaches its
+    /// periodic observer to the *player*, not to the item, and neither
+    /// `player.load` nor `player.seek` stops it firing — so a sample lands in
+    /// the middle of every deliberate move, and `advance(to:)` answers it
+    /// against a file the move has already changed. The read-along needs no
+    /// `fromTick` distinction to go with it: the clock (`advance`) and the steer
+    /// (`move`) are already two separate functions here, and `advance` is scoped
+    /// to `player.currentAudioHref` so it cannot reach into another file at all.
+    ///
+    /// Counted rather than flagged, because two moves in a burst overlap and the
+    /// second must not reopen the clock while the first is still in flight.
+    /// Internal rather than private so a test can see the window it opens.
+    var movesInFlight = 0
 
     public init(timeline: SMILTimeline, audioFiles: [String: URL], player: AudioPlayer = AudioPlayer()) {
         self.timeline = timeline
@@ -100,6 +117,17 @@ public final class ReadalongCoordinator {
     /// Scoped to the current file: clip times restart at zero in each track, so
     /// a book-time search here would land on the wrong sentence.
     private func advance(to time: TimeInterval) {
+        // Mid-move the clock describes neither where the listener was nor where
+        // they asked to go — and worse, it is read against a file the move has
+        // already swapped, so a clock of zero from a freshly inserted item
+        // resolves to the *first* sentence of the new chapter's audio rather
+        // than to the one the listener asked for. Answering that dragged the
+        // highlight off the destination, and, when the move crossed a document,
+        // announced a chapter the listener had deliberately scrubbed into as one
+        // that had *ended* — `NowPlayingController` hands that to
+        // `SleepTimer.chapterDidEnd()`, and a read-along with a bedtime timer
+        // paused itself mid-scrub.
+        guard movesInFlight == 0 else { return }
         guard let href = player.currentAudioHref,
               let entry = timeline.entry(inFile: href, at: time)
         else { return }
@@ -136,6 +164,11 @@ public final class ReadalongCoordinator {
         // own boundary test false. A book with one audio file per chapter
         // therefore never reported an ending at all, and a timer set at bedtime
         // played through the night.
+        //
+        // Announced from here rather than from inside `move`, which is what
+        // keeps `movesInFlight` from swallowing the one ending that is real:
+        // the counter is back to zero by the time `move` has returned, and the
+        // document that ended was captured before it was called.
         if endedDocument != next.textHref { onChapterChangeObserved?() }
         // Only if the boundary left it playing — read *after* the callback,
         // exactly as `AudiobookCoordinator.advance()` reads it. An
@@ -200,12 +233,31 @@ public final class ReadalongCoordinator {
     /// alike.
     @discardableResult
     private func move(to entry: SMILEntry) async -> Bool {
+        // Resolved before a single piece of state moves, exactly as
+        // `AudiobookCoordinator.load` resolves its own destination first: a
+        // missing audio file is a refusal, not a move, and nothing may be
+        // published for one — not the highlight, not the scrubber, not a page
+        // turn. Nil means the file is already loaded and only the playhead has
+        // to travel.
+        let destination: URL?
         if player.currentAudioHref != entry.audioHref {
             guard let url = audioFiles[entry.audioHref] else { return false }
-            await player.load(url: url, href: entry.audioHref, startAt: entry.start)
+            destination = url
         } else {
-            await player.seek(to: entry.start)
+            destination = nil
         }
+
+        // Everything published BEFORE the await, for the reason
+        // `AudiobookCoordinator.seek(toBookTime:)` publishes before its own: the
+        // player's periodic observer keeps firing across a load and a seek
+        // alike, and a sample landing in the middle is answered against whatever
+        // this coordinator has already said. Left until afterwards, the file had
+        // already been swapped while `activeEntry` still named the old sentence,
+        // so `advance(to:)` resolved the new file's clock of zero to its *first*
+        // sentence, announced that as a chapter the listener had never reached,
+        // and — because the document had changed — reported it as a chapter that
+        // *ended*. It also overwrote `activeEntry` before the lines below read
+        // `previousDocument` off it, so the real page turn was then skipped.
         let previousDocument = activeEntry?.textHref
         activeFragmentID = entry.fragmentID
         activeEntry = entry
@@ -235,6 +287,19 @@ public final class ReadalongCoordinator {
         // natural end-of-file path fires the other one, and only it.
         if let previousDocument, previousDocument != entry.textHref {
             onChapterChange?(entry.textHref)
+        }
+
+        // And the clock ignored for the length of the move, exactly as the
+        // audiobook engine ignores it for the length of a load or a seek. The
+        // lines above answer the sample that arrives holding the new place; this
+        // answers the one that arrives holding the old, which resolves against
+        // the file already swapped underneath it.
+        movesInFlight += 1
+        defer { movesInFlight -= 1 }
+        if let destination {
+            await player.load(url: destination, href: entry.audioHref, startAt: entry.start)
+        } else {
+            await player.seek(to: entry.start)
         }
         return true
     }
