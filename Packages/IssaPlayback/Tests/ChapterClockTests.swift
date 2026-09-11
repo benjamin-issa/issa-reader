@@ -646,6 +646,61 @@ struct ChapterClockTests {
                 "the chapter tap named a place, and a resume does not un-name it")
     }
 
+    /// `seeksInFlight` and `loadsInFlight` exist to disbelieve *the player's
+    /// clock*, and they were swallowing the steer as well. A finger dragged
+    /// along the lock-screen scrubber sends several seeks in a burst, and the
+    /// second of them published nothing: the clock crossed a chapter boundary
+    /// with `chapterIndex` left behind in the chapter before it, and the next
+    /// honest sample then read `0 → 1` as an advance under the listener and
+    /// handed the sleep timer an "end of chapter" in the middle of the drag.
+    ///
+    /// The counters stay on the tick path, which is what
+    /// `aStaleSampleMidSeekDoesNotEndAChapterLate` and
+    /// `aScrubAcrossAChapterBoundaryIsNotAChapterEnding` deliver their racing
+    /// samples through.
+    @Test("the second of two overlapping scrubs announces its own chapter")
+    func theSecondOfTwoOverlappingScrubsAnnouncesItsOwnChapter() async {
+        let subject = Self.coordinator(
+            Self.manifest(trackCount: 3, each: 100),
+            chapters: [
+                AudiobookChapter(title: "A", trackIndex: 0),
+                AudiobookChapter(title: "B", trackIndex: 0, offset: 50),
+            ],
+        )
+        // Both scrubs below stay inside chunk one, so both take the branch that
+        // loads nothing — the one `seeksInFlight` was added for.
+        await subject.seek(toBookTime: 10)
+        let tick = Self.detachClock(subject)
+
+        var observed = 0
+        var announced: [Int] = []
+        subject.onChapterChangeObserved = { observed += 1 }
+        subject.onChapterChange = { announced.append($0) }
+
+        // The second scrub, held until the first is genuinely in flight, and
+        // reporting back what the counter said so a run that failed to overlap
+        // reads as a harness failure rather than a pass.
+        let second = Task { @MainActor () -> Int in
+            while subject.seeksInFlight == 0 { await Task.yield() }
+            let inFlight = subject.seeksInFlight
+            await subject.seek(toBookTime: 60)
+            return inFlight
+        }
+        await subject.seek(toBookTime: 20)
+        #expect(await second.value == 1, "the second scrub has to begin inside the first")
+
+        #expect(subject.chapterIndex == 1, "the scrub that crossed the boundary said so")
+        #expect(subject.chapterTitle == "B")
+        #expect(announced.contains(1), "for Now Playing and the UI")
+        #expect(observed == 0, "and a boundary the listener scrubbed past did not end")
+
+        // The honest sample that follows, which is where the cost landed: with
+        // the chapter left behind, this read as an advance and paused the book.
+        tick(60)
+        #expect(subject.chapterIndex == 1)
+        #expect(observed == 0, "nothing ended under the listener, a tick later or ever")
+    }
+
     // MARK: - The chapter and the clock it is derived from
 
     /// `chapterIndex` used to be assigned *after* `await player.load`, while

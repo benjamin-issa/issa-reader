@@ -98,7 +98,9 @@ public final class AudiobookCoordinator {
     /// player's periodic observer keeps firing across the change with the *old*
     /// item's time. Announcing a chapter off that arithmetic is announcing one
     /// the listener is not in, so the clock is ignored until the load settles.
-    private var loadsInFlight = 0
+    ///
+    /// Internal rather than private so a test can see the window it opens.
+    var loadsInFlight = 0
     /// How many seeks are between the clock moving and the audio following it.
     ///
     /// `loadsInFlight`'s twin, for the branch that loads nothing: a scrub
@@ -314,13 +316,27 @@ public final class AudiobookCoordinator {
     ///   be told the next chapter had begun before a word of it was spoken.
     ///   Only `advance()` moves between files, so only `advance()` may announce
     ///   a chapter that lives in the next one.
+    ///
+    ///   It also decides whether the in-flight counters apply. They exist to
+    ///   ignore *the player's clock* while it is describing somewhere the
+    ///   listener is not — mid-load it describes neither the old file nor the
+    ///   new one, mid-seek neither where the listener was nor where they asked
+    ///   to go. The other caller is the thing that moved the clock, so there is
+    ///   nothing about it to disbelieve, and the guard used to swallow it: the
+    ///   second of two overlapping scrubs published nothing because the first
+    ///   was still counted, the clock crossed a chapter boundary with
+    ///   `chapterIndex` left behind, and the next honest sample read that as an
+    ///   advance and handed the sleep timer an "end of chapter" mid-burst.
+    ///
+    ///   The asymmetry is the safe direction. A suppressed steer leaves the
+    ///   chapter stale for a tick to misread as an ending; an extra steer during
+    ///   a load is one redundant Now Playing rebuild, which the landing load
+    ///   corrects a moment later — and this path can never reach
+    ///   `onChapterChangeObserved`, so the sleep timer cannot hear it either way.
     private func syncChapter(fromTick: Bool) {
-        // Mid-load the clock describes neither the old file nor the new one,
-        // and mid-seek it describes neither where the listener was nor where
-        // they asked to go.
-        guard loadsInFlight == 0, seeksInFlight == 0 else { return }
         var index = chapterIndex(atBookTime: bookTime)
         if fromTick {
+            guard loadsInFlight == 0, seeksInFlight == 0 else { return }
             while index > 0, chapters[index].trackIndex > trackIndex { index -= 1 }
         }
         guard index != chapterIndex else { return }
@@ -369,6 +385,20 @@ public final class AudiobookCoordinator {
     @discardableResult
     public func seek(toBookTime time: TimeInterval) async -> MoveOutcome {
         guard let (index, offset) = manifest.locate(bookTime: time) else { return .unplayable }
+        return await seek(toTrack: index, offset: offset)
+    }
+
+    /// The same move, for a caller that already knows the track and the offset
+    /// and has no reason to say it in book seconds first.
+    ///
+    /// A chapter is stored as a track and an offset into it — that is what
+    /// `AudiobookChapter` *is* — so restarting one by converting it to a book
+    /// time and asking `locate` to convert it back is a round trip through
+    /// arithmetic that can only lose. `play(chapter:)` already addresses a
+    /// chapter this way; this is the same address for the branch that stays in
+    /// the file it is already playing.
+    @discardableResult
+    private func seek(toTrack index: Int, offset: TimeInterval) async -> MoveOutcome {
         if index != trackIndex || player.currentAudioHref == nil {
             // `load` sets the clock and the chapter itself, and is the only one
             // of the two branches that can decline.
@@ -484,7 +514,14 @@ public final class AudiobookCoordinator {
         // own clock would report "well into this chapter" the instant it began
         // and "previous" would restart a chapter nobody had heard yet.
         if bookTime - start > 3 {
-            if await seek(toBookTime: start) == .landed { steeredAt = true }
+            // Addressed the way `play(chapter:)` addresses one — the chapter's
+            // own track and offset — rather than by handing its start back
+            // through the book clock. `chapterStarts` is built from exactly that
+            // pair, so the round trip could only ever agree with itself or lose.
+            let chapter = chapters[chapterIndex]
+            if await seek(toTrack: chapter.trackIndex, offset: chapter.offset) == .landed {
+                steeredAt = true
+            }
         } else {
             await play(chapter: max(chapterIndex - 1, 0))
         }
