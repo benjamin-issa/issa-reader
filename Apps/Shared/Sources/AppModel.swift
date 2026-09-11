@@ -2254,7 +2254,7 @@ public final class AppModel {
         // Before a note of audio plays: an unresolved start plays from zero,
         // and the fifteen-second writer must not be allowed to persist that
         // zero over a place this app simply could not find.
-        prepareListeningGuard(for: book, resolved: resume.isResolved)
+        prepareListeningGuard(for: book, trusted: resume.isTrusted)
         if let time = resume.bookTime {
             // Only if the seek actually landed. `start(atProgress:)` below
             // already refuses to play a player holding nothing; a resolved
@@ -2501,6 +2501,14 @@ public final class AppModel {
             IssaLog.warning("audio anchor names no track in this manifest", fields)
         case .noAnchorStored:
             IssaLog.warning("no audio anchor stored for this book", fields)
+        case .audioPositionFromAnotherManifest:
+            // Not a failure: the car starts in roughly the right chapter
+            // instead of at the title page. Logged all the same, because it is
+            // also the state in which the audio clock stays held — so the next
+            // report of "it played for an hour and saved nothing" has the line
+            // that explains itself.
+            fields["bookTime"] = String(format: "%.1f", resolution.bookTime ?? -1)
+            IssaLog.warning("stored audio position scaled from another track list", fields)
         case .anchor, .audioPosition, .readingPositionViaOverlay, .noStoredPosition:
             break
         }
@@ -2821,8 +2829,12 @@ public final class AppModel {
     /// `recordPosition` then replaces a part-read novel's place with the front
     /// of the book. Holding the clock until the listener names somewhere is the
     /// only honest answer: the app genuinely does not know where they were.
-    /// - Parameter resolved: whether `ListeningResume` found a place to start.
-    func prepareListeningGuard(for book: Book, resolved: Bool) {
+    /// - Parameter trusted: whether `ListeningResume` found a place the app may
+    ///   also *write down* — which is a stricter question than whether it found
+    ///   a place to start. A fraction scaled across two cuts of one narration
+    ///   starts the car in roughly the right chapter and is still a guess, so
+    ///   it plays and the clock stays held. See `ListeningResume.isTrusted`.
+    func prepareListeningGuard(for book: Book, trusted: Bool) {
         let key = Self.positionGuardKey(book.uuid, isAudioScaled: true)
         let narration = LibraryArrangement.duration(of: book)
         let duration: TimeInterval? = narration > 0 ? narration : nil
@@ -2832,7 +2844,7 @@ public final class AppModel {
         let seed = (stored?.isAudioScaled ?? false) ? (stored?.totalProgression ?? 0) : 0
         let mark = positionGuards[key]?.highWater ?? seed
 
-        if resolved {
+        if trusted {
             // Released at the mark it already held, never lowered to wherever
             // this resume landed. A stale anchor can resolve to somewhere
             // earlier than a good same-clock position — that is exactly what a

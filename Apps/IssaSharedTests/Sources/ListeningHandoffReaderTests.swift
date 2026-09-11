@@ -408,7 +408,7 @@ struct ListeningHandoffReaderTests {
         app.setReaderVisible(Self.uuid, true)
         // What `attachListening` does when the ladder resolves nothing, and the
         // only reason the audio clock is held at all.
-        app.prepareListeningGuard(for: book, resolved: false)
+        app.prepareListeningGuard(for: book, trusted: false)
         let coordinator = try await Self.startedFromZero(model, files: files)
         app.installListening(coordinator, book: book)
 

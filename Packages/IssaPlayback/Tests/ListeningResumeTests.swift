@@ -65,7 +65,7 @@ struct ListeningResumeTests {
             stored: nil, timeline: nil, manifest: manifest(chunks))
         #expect(resolution.bookTime == 630, "the second chunk starts ten minutes in")
         #expect(resolution.reason == .anchor)
-        #expect(resolution.isResolved)
+        #expect(resolution.isTrusted)
     }
 
     @Test("an anchor outranks a stored audio position")
@@ -95,26 +95,49 @@ struct ListeningResumeTests {
             manifest: manifest(original))
         #expect(resolution.bookTime == nil, "a text fraction must never be scaled by the audio")
         #expect(resolution.reason == .anchorNamesUnknownFile)
-        #expect(!resolution.isResolved)
+        #expect(!resolution.isTrusted)
     }
 
     // MARK: - Two clocks wearing the same field
 
-    /// 0.5181 of the server's single upload is five hours in; 0.5181 of the
-    /// EPUB's chunk list is ten minutes in. Same number, same field, different
-    /// book. The href is the only thing that says which.
-    @Test("a stored audio position from another manifest is not scaled")
-    func aStoredAudioPositionFromAnotherManifestIsNotScaled() {
+    /// The whole of the same narration, as the EPUB carries it: sixty chunks of
+    /// ten minutes, which is the ten hours the server serves as one file. The
+    /// two-chunk `chunks` above is a fragment of a book and cannot say anything
+    /// about scaling between the lists; this can.
+    let wholeChunks = (0 ..< 60).map {
+        (href: String(format: "OEBPS/Audio/%05d.mp3", $0), duration: 600.0)
+    }
+
+    /// The one rung here that answers approximately, and a deliberate reversal:
+    /// this used to assert that a foreign audio position was refused outright.
+    ///
+    /// The argument for refusing was that two track lists are two clocks and a
+    /// fraction of one is not a fraction of the other. That is true, and it is
+    /// still true — 18,651s is not where the listener was. What it missed is
+    /// that the two lists are the *same narration* cut up differently, so the
+    /// fraction lands within a chapter or two of the right place, and the thing
+    /// it was being refused in favour of was chapter one. In a car, silence
+    /// from the front of a book is the worse of those two by a wide margin.
+    ///
+    /// The refusal was never what protected the stored position anyway. That is
+    /// the hold: `isTrusted` is false here, so `prepareListeningGuard` keeps the
+    /// audio clock held and the fifteen-second writer cannot persist the guess
+    /// until the listener names somewhere themselves.
+    @Test("a stored audio position from another cut of the same narration is a place to start")
+    func aStoredAudioPositionFromAnotherCutIsAPlaceToStart() throws {
         let resolution = ListeningResume.resolve(
             anchor: nil,
             stored: audioLocator("The Outsider.mp3", 0.5181),
-            timeline: nil, manifest: manifest(chunks))
-        #expect(resolution.bookTime == nil)
-        #expect(resolution.reason == .noAnchorStored)
-        #expect(resolution.skippedForeignAudioPosition,
-                "the log has to be able to say why: it was stored, and it was foreign")
+            timeline: nil, manifest: manifest(wholeChunks))
+        let time = try #require(resolution.bookTime)
+        #expect(abs(time - 0.5181 * 36_000) < 0.001)
+        #expect(resolution.reason == .audioPositionFromAnotherManifest)
+        #expect(!resolution.isTrusted, "roughly right is a place to start, not a place to save")
     }
 
+    /// And the exact rung still outranks it: a position whose href names a track
+    /// in *this* manifest is a fraction of this manifest's own clock, with no
+    /// scaling between lists at all.
     @Test("a stored audio position on this manifest is trusted")
     func aStoredAudioPositionOnThisManifestIsTrusted() {
         let resolution = ListeningResume.resolve(
@@ -123,7 +146,7 @@ struct ListeningResumeTests {
             timeline: nil, manifest: manifest(original))
         #expect(resolution.bookTime == 18_000)
         #expect(resolution.reason == .audioPosition)
-        #expect(!resolution.skippedForeignAudioPosition)
+        #expect(resolution.isTrusted)
     }
 
     // MARK: - The overlay bridge
@@ -191,6 +214,5 @@ struct ListeningResumeTests {
             anchor: nil, stored: nil, timeline: nil, manifest: manifest(original))
         #expect(resolution.bookTime == nil)
         #expect(resolution.reason == .noStoredPosition)
-        #expect(!resolution.skippedForeignAudioPosition)
     }
 }

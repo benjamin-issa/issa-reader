@@ -107,19 +107,35 @@ public extension AudiobookManifest {
         return match
     }
 
-    /// Where an anchor falls on this manifest's book clock.
+    /// Where a file and an offset into it fall on this manifest's book clock.
     ///
     /// `nil` when no track answers to that file — a book whose audio the server
     /// serves under names the EPUB does not use. Returning `nil` rather than a
     /// guess is the point: a wrong number here is the bug this type exists for.
-    func bookTime(for anchor: AudioAnchor) -> TimeInterval? {
-        guard let index = trackIndex(matching: anchor.audioHref) else { return nil }
+    ///
+    /// Stated over the pair rather than only over an `AudioAnchor`, because a
+    /// media-overlay entry is a file and an offset too and has no business
+    /// pretending to be an anchor to say so. `ListeningResume`'s overlay rung
+    /// used to fabricate one stamped `writtenAt: 0` purely to reach this
+    /// arithmetic, which was harmless until an anchor's age started deciding
+    /// anything — at which point a synthetic anchor dated 1970 is a landmine.
+    func bookTime(inFile audioHref: String, offset: TimeInterval) -> TimeInterval? {
+        guard let index = trackIndex(matching: audioHref) else { return nil }
         let track = playableTracks[index]
+        // The same door `AudioAnchor.init` shuts: a non-finite offset has
+        // reached a seek in this app before, and NaN propagates through the
+        // clamp below rather than being stopped by it.
+        let sane = offset.isFinite ? max(0, offset) : 0
         // Clamped to the track: an anchor written against a differently
         // transcoded copy can overshoot, and overshooting rolls into the next
         // chapter silently.
-        let within = min(max(0, anchor.offset), track.duration ?? anchor.offset)
+        let within = min(sane, track.duration ?? sane)
         return startTime(ofTrackAt: index) + within
+    }
+
+    /// Where an anchor falls on this manifest's book clock.
+    func bookTime(for anchor: AudioAnchor) -> TimeInterval? {
+        bookTime(inFile: anchor.audioHref, offset: anchor.offset)
     }
 
     /// The last path component, lowercased, with query and fragment removed.

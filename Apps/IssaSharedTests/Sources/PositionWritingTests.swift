@@ -131,7 +131,7 @@ struct PositionWritingTests {
             "A Novel", uuid: Self.uuid, progress: 0.5363, readaloud: true, audiobook: true)
         app.books = [book]
 
-        app.prepareListeningGuard(for: book, resolved: false)
+        app.prepareListeningGuard(for: book, trusted: false)
 
         let held = app.admitPosition(Self.audioLocator(0.0001), origin: .derived, for: Self.uuid)
         #expect(held == .awaitChoice(candidate: 0.0001))
@@ -154,7 +154,7 @@ struct PositionWritingTests {
         let book = SharedFixtures.book("A Novel", uuid: Self.uuid, audiobook: true, ebook: false)
         app.books = [book]
 
-        app.prepareListeningGuard(for: book, resolved: false)
+        app.prepareListeningGuard(for: book, trusted: false)
         #expect(app.positionGuards[Self.audioGuardKey] == nil, "nothing to hold")
         #expect(!app.admitPosition(Self.audioLocator(0.0001), origin: .derived, for: Self.uuid).isRefusal)
     }
@@ -169,10 +169,10 @@ struct PositionWritingTests {
             positionHref: "The Outsider.mp3", positionType: "audio/mpeg", audiobook: true)
         app.books = [book]
 
-        app.prepareListeningGuard(for: book, resolved: false)
+        app.prepareListeningGuard(for: book, trusted: false)
         #expect(app.admitPosition(Self.audioLocator(0.31), origin: .derived, for: Self.uuid).isRefusal)
 
-        app.prepareListeningGuard(for: book, resolved: true)
+        app.prepareListeningGuard(for: book, trusted: true)
         #expect(!app.admitPosition(Self.audioLocator(0.31), origin: .derived, for: Self.uuid).isRefusal)
     }
 
@@ -188,8 +188,8 @@ struct PositionWritingTests {
             positionHref: "The Outsider.mp3", positionType: "audio/mpeg", audiobook: true)
         app.books = [book]
 
-        app.prepareListeningGuard(for: book, resolved: false)
-        app.prepareListeningGuard(for: book, resolved: true)
+        app.prepareListeningGuard(for: book, trusted: false)
+        app.prepareListeningGuard(for: book, trusted: true)
 
         let decision = app.admitPosition(Self.audioLocator(0.0004), origin: .derived, for: Self.uuid)
         #expect(decision.isRefusal)
@@ -208,7 +208,7 @@ struct PositionWritingTests {
             positionHref: "The Outsider.mp3", positionType: "audio/mpeg", audiobook: true)
         app.books = [book]
 
-        app.prepareListeningGuard(for: book, resolved: false)
+        app.prepareListeningGuard(for: book, trusted: false)
         app.reseedGuards(against: [SharedFixtures.book(
             "A Novel", uuid: Self.uuid, progress: 0.30,
             positionHref: "The Outsider.mp3", positionType: "audio/mpeg", audiobook: true)])
@@ -265,7 +265,7 @@ struct PositionWritingTests {
             readaloud: true, audiobook: true)
         app.books = [book]
 
-        app.prepareListeningGuard(for: book, resolved: false)
+        app.prepareListeningGuard(for: book, trusted: false)
         // The reader turning a page is the listener naming a place — on the
         // text clock. It says nothing whatever about where the car was.
         #expect(!app.admitPosition(Self.textLocator(0.54), origin: .chosen, for: Self.uuid).isRefusal)

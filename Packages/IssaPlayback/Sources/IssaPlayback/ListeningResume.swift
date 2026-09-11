@@ -12,11 +12,18 @@ import IssaEPUB
 /// text clock, the overlay was not in memory on a cold launch, and the app
 /// resumed at zero and then wrote that zero over a part-read novel.
 ///
-/// Nothing here ever scales a text fraction by the audio duration. A fraction
+/// Nothing here ever scales a *text* fraction by the audio duration. A fraction
 /// of the text and a fraction of the audio are fractions of different
 /// timelines — a book has spine items with no narration at all — so the
 /// arithmetic produces a plausible number that is simply wrong, which in a car
 /// is worse than an obvious one. When no rung answers, this says so.
+///
+/// An *audio* fraction from a different cut of the same narration is a
+/// different matter, and the rung for it is the one thing here that answers
+/// approximately. The two track lists are the same hours of speech chopped up
+/// differently, so the fraction lands in roughly the right chapter rather than
+/// in a different book — and every rung says, in `Reason.isExact`, whether it
+/// was exact. Nothing downstream has to guess which kind of answer it got.
 public enum ListeningResume {
     /// Which track list the manifest describes: the one the server serves, or
     /// one synthesised from the book's own media overlay. Carried only so the
@@ -37,6 +44,10 @@ public enum ListeningResume {
         case audioPosition
         /// A reading position, converted through the media overlay.
         case readingPositionViaOverlay
+        /// A stored audio position from a *different* cut of the same
+        /// narration, scaled onto this manifest's clock. Roughly the right
+        /// place in the book and provably not the exact one.
+        case audioPositionFromAnotherManifest
         /// This book has never been opened anywhere.
         case noStoredPosition
         /// There is a stored position, but nothing on the audio clock to place
@@ -45,6 +56,26 @@ public enum ListeningResume {
         /// There is an anchor, and it names a file no track in this manifest
         /// answers to. The case from the car.
         case anchorNamesUnknownFile
+
+        /// Whether this rung named the place the listener was, or inferred one.
+        ///
+        /// The distinction the caller acts on, and the reason it is a `switch`
+        /// rather than a list of the exact cases: a rung added later cannot
+        /// quietly inherit "exact" by not being mentioned. Approximate is a
+        /// real answer — somewhere roughly right beats silence at the front of
+        /// a book, in a car — but it is not a place to *write down*, and
+        /// `AppModel.prepareListeningGuard` holds the audio clock on exactly
+        /// this bit until the listener names somewhere themselves.
+        public var isExact: Bool {
+            switch self {
+            case .anchor, .audioPosition, .readingPositionViaOverlay:
+                true
+            case .audioPositionFromAnotherManifest:
+                false
+            case .noStoredPosition, .noAnchorStored, .anchorNamesUnknownFile:
+                false
+            }
+        }
     }
 
     /// The answer, with enough of the reasoning attached for a caller to log it
@@ -54,20 +85,21 @@ public enum ListeningResume {
         /// answer honestly.
         public let bookTime: TimeInterval?
         public let reason: Reason
-        /// Whether a stored audio position was passed over because its href
-        /// named no track here. Worth saying out loud: it is the difference
-        /// between "nothing was stored" and "what was stored belongs to a
-        /// different track list", and only the second is a bug worth chasing.
-        public let skippedForeignAudioPosition: Bool
 
-        public var isResolved: Bool { bookTime != nil }
+        /// Whether playback may start here *and* the position it writes may be
+        /// persisted.
+        ///
+        /// Not the same question as "did a rung answer", which is what the old
+        /// `isResolved` asked. A scaled fraction from another track list is an
+        /// answer — it starts the car somewhere in the right chapter instead of
+        /// at the title page — and it is still not a place the fifteen-second
+        /// writer may save over a part-read novel. Both halves have to hold: a
+        /// rung that answered, and a rung that was exact.
+        public var isTrusted: Bool { bookTime != nil && reason.isExact }
 
-        public init(
-            bookTime: TimeInterval?, reason: Reason, skippedForeignAudioPosition: Bool = false,
-        ) {
+        public init(bookTime: TimeInterval?, reason: Reason) {
             self.bookTime = bookTime
             self.reason = reason
-            self.skippedForeignAudioPosition = skippedForeignAudioPosition
         }
     }
 
@@ -97,34 +129,52 @@ public enum ListeningResume {
         //    upload — the two track lists are the same audio cut up
         //    differently, so both numbers look perfectly reasonable and only
         //    one of them is a place in this book.
-        var skippedForeignAudioPosition = false
-        if let stored, stored.isAudioScaled {
-            let namesATrackHere = manifest.trackIndex(matching: stored.href) != nil
-            if namesATrackHere, let progress = stored.totalProgression?.asProgression {
+        var foreignAudioProgress: Double?
+        if let stored, stored.isAudioScaled, let progress = stored.totalProgression?.asProgression {
+            if manifest.trackIndex(matching: stored.href) != nil {
                 return Resolution(bookTime: manifest.totalDuration * progress, reason: .audioPosition)
             }
-            skippedForeignAudioPosition = !namesATrackHere
+            // Held for rung 5 rather than acted on here: an exact rung below
+            // this one still outranks it.
+            foreignAudioProgress = progress
         }
 
         // 3. A *reading* position, converted through the media overlay — the
         //    bridge Storyteller is built on, and exact when the timeline is in
-        //    memory.
+        //    memory. A file and an offset is all this rung ever meant, and all
+        //    it now says.
         if let stored, !stored.isAudioScaled,
            let timeline,
            let fragment = stored.sentenceID,
            let entry = timeline.entry(forFragment: fragment, inDocument: stored.href),
-           let time = manifest.bookTime(
-               for: AudioAnchor(audioHref: entry.audioHref, offset: entry.start, writtenAt: 0)) {
+           let time = manifest.bookTime(inFile: entry.audioHref, offset: entry.start) {
             return Resolution(bookTime: time, reason: .readingPositionViaOverlay)
         }
 
-        // 4. Nothing this manifest can honestly act on, said in terms a log
+        // 5. The fraction, scaled — and said out loud to be a guess.
+        //
+        //    The rung this ladder used to refuse outright, on the argument that
+        //    two track lists are two clocks and a fraction of one is not a
+        //    fraction of the other. True, and still true: the number below is
+        //    not where the listener was. But the two lists are the *same
+        //    narration* cut differently, so the fraction does name roughly the
+        //    same place in the same book — and the alternative was chapter one,
+        //    which in a car, with no screen worth reading, is worse than being
+        //    a few minutes out. What stops a guess being written over a
+        //    part-read novel is not this refusing to answer; it is the caller
+        //    holding the audio clock because the answer was not exact. See
+        //    `Resolution.isTrusted`.
+        if let progress = foreignAudioProgress {
+            return Resolution(
+                bookTime: manifest.totalDuration * progress,
+                reason: .audioPositionFromAnotherManifest)
+        }
+
+        // 6. Nothing this manifest can honestly act on, said in terms a log
         //    line can act on too.
         let reason: Reason = stored == nil
             ? .noStoredPosition
             : (anchor == nil ? .noAnchorStored : .anchorNamesUnknownFile)
-        return Resolution(
-            bookTime: nil, reason: reason,
-            skippedForeignAudioPosition: skippedForeignAudioPosition)
+        return Resolution(bookTime: nil, reason: reason)
     }
 }
