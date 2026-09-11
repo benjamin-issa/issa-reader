@@ -67,6 +67,19 @@ public final class ReaderModel {
 
     /// The one in-flight response to a style change. Superseded, not stacked.
     private var styleTask: Task<Void, Never>?
+
+    /// The narration extraction, held so a removal can revoke it.
+    ///
+    /// It has to be held by name, for two reasons that compound. `Task.detached`
+    /// does not inherit cancellation, so cancelling whatever is awaiting it
+    /// leaves it running; and `AudioExtraction` now serialises extraction
+    /// against removal on one lock, so a removal arriving mid-extraction *waits*
+    /// where it used to race. Both were improvements on their own and together
+    /// they were a hang: `releaseDerivedFiles` runs on the main actor, and a
+    /// cold open of a long read-along holds that lock for a hundred and
+    /// seventy-six files. Cancelling first bounds the wait to one chunk, which
+    /// is what `startListening`'s own extraction already does.
+    private var narrationExtraction: Task<[String: URL]?, Never>?
     /// Whether any change in the current burst needs a reparse.
     ///
     /// Accumulated, not recomputed per change: the task is cancelled and
@@ -736,9 +749,16 @@ public final class ReaderModel {
         // cancellation on the way back, since a layout pass may have replaced
         // this open while the extraction ran.
         let bookID = book.uuid
-        let files = await Task.detached(priority: .userInitiated) {
+        // Held rather than awaited anonymously: see `narrationExtraction`. The
+        // extraction reads its *own* task's cancellation between chunks — the
+        // default `AudioExtraction.extractAudio` documents — so cancelling this
+        // handle is what stops it, and nothing else can.
+        let extraction = Task.detached(priority: .userInitiated) {
             try? AudioExtraction.extractAudio(from: package, timeline: timeline, bookID: bookID)
-        }.value
+        }
+        narrationExtraction = extraction
+        let files = await extraction.value
+        narrationExtraction = nil
         try Task.checkCancellation()
         guard let files, !files.isEmpty else {
             // A book whose play button never appears, with no reason given, is
@@ -751,6 +771,20 @@ public final class ReaderModel {
         }
 
         attachNarration(timeline: timeline, audioFiles: files)
+    }
+
+    /// Revokes an extraction that is still writing this book's narration.
+    ///
+    /// Called by whatever is about to delete those files. Without it the
+    /// deletion blocks the main actor until the extraction finishes — see
+    /// `narrationExtraction` — and then the extraction puts back what was
+    /// deleted, because it re-creates the directory on its way through.
+    ///
+    /// Safe to call when nothing is extracting, which is almost always: a
+    /// cancelled `nil` task is a no-op, and the extraction only exists for the
+    /// few seconds of a cold open.
+    func cancelNarrationExtraction() {
+        narrationExtraction?.cancel()
     }
 
     /// Builds the narration engine over an already-extracted set of audio files

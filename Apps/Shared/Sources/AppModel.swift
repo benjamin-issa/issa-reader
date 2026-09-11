@@ -1019,6 +1019,13 @@ public final class AppModel {
         // specifically; the sweep names none, because by then it cannot tell
         // which file went.
         if format == nil || format == .readaloud {
+            // Revoked before the removal, never after. `removeExtractedAudio`
+            // takes the same lock the extraction holds, so on this actor the
+            // removal would otherwise *wait* for a cold open of a long
+            // read-along to finish writing all hundred and seventy-six files —
+            // and then delete them, having frozen the app throughout. See
+            // `ReaderModel.cancelNarrationExtraction`.
+            readers[bookUUID]?.cancelNarrationExtraction()
             AudioExtraction.removeExtractedAudio(for: bookUUID)
         }
 
