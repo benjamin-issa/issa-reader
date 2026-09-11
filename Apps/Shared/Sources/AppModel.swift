@@ -1095,6 +1095,23 @@ public final class AppModel {
         if handingOffBook == bookUUID, Self.removalSilencesNarration(removing: format) {
             handingOffBook = nil
         }
+        // And a start that has claimed the book but not yet reached
+        // `attachListening`. For the whole manifest fetch, chunk extraction and
+        // duration measurement — seconds on a long book — `listeningBook` was
+        // still nil, so a removal saw nothing playing and did nothing; the start
+        // then woke up and installed a coordinator over files that had just been
+        // deleted. On the same terms as the engine, because the claim carries
+        // which download the start expects to read.
+        if startingListening?.bookUUID == bookUUID,
+           Self.removalSilencesListening(reading: startingListening?.format, removing: format) {
+            startingListening = nil
+            // Dropping the claim stops the *start*. It does not stop the work:
+            // `Task.detached` does not inherit cancellation, so without this the
+            // extraction carried on inflating several hundred megabytes back
+            // into the directory this removal is about to delete — which is how
+            // a removal came to free nothing at all.
+            listeningExtraction?.cancel()
+        }
     }
 
     /// Whether deleting one edition takes the audiobook engine with it.
@@ -2099,6 +2116,64 @@ public final class AppModel {
     /// whichever coordinator was about to be discarded.
     private var isStartingListening = false
 
+    /// The book a start has claimed but not yet attached, and which download it
+    /// expects to be reading by the time it does.
+    ///
+    /// `listeningBook` is first written inside `attachListening`, which is the
+    /// far end of a manifest fetch, a chunk extraction and a duration
+    /// measurement — seconds on a long book, and on a cold launch into CarPlay
+    /// every one of them. For that whole stretch `stopPlayback` saw an empty
+    /// slot and a removal was a no-op, so the start woke up afterwards and
+    /// installed a coordinator over files that had just been deleted.
+    ///
+    /// Worse than a no-op, in fact: `AudioExtraction.extract` re-created the
+    /// directory the removal had deleted and filled it again, so the removal
+    /// had freed nothing at all. That half is fixed in `AudioExtraction`; this
+    /// is the half that stops the start.
+    ///
+    /// The format narrows as the start learns what it is doing — `.readaloud`
+    /// while it is extracting chunks, `.audiobook` or nil once the server's
+    /// manifest has said whether there is a single file to play — so a removal
+    /// of the *other* edition leaves it alone.
+    private var startingListening: (bookUUID: String, format: BookContentService.Format?)?
+
+    /// The chunk extraction a start is waiting on.
+    ///
+    /// Held because `Task.detached` does not inherit cancellation: dropping the
+    /// claim stops the start, but the extraction would carry on inflating
+    /// several hundred megabytes into a directory the reader has just emptied.
+    /// The task is the only handle there is on it.
+    private var listeningExtraction: Task<
+        (result: ChunkManifest.Result, timeline: SMILTimeline)?, Never
+    >?
+
+    /// Which book a start has claimed, for `IssaSharedTests`.
+    ///
+    /// Internal on the same terms as `installListening`: the claim is what a
+    /// removal has to be able to see, and reaching it through `startListening`
+    /// needs a signed-in session and a server holding a manifest.
+    var startingListeningBook: String? { startingListening?.bookUUID }
+
+    /// Stages a claim without the start behind it, likewise.
+    func claimListeningStart(_ book: Book, reading format: BookContentService.Format?) {
+        startingListening = (book.uuid, format)
+    }
+
+    /// Whether the start that claimed this book still holds it.
+    ///
+    /// Asked after every suspension in `startListening`. A cleared claim means a
+    /// removal, a sign-out or another book's start landed while this one was
+    /// waiting, and the honest answer is to return without attaching anything —
+    /// the caller has nothing to tidy up, because a start that has not attached
+    /// owns nothing yet.
+    private func startStillClaimed(_ book: Book) -> Bool {
+        guard startingListening?.bookUUID == book.uuid else {
+            IssaLog.info("listening start stood down", ["book": book.title])
+            return false
+        }
+        return true
+    }
+
     /// Starts a plain audiobook: fetch the manifest, resume where the server
     /// says we were, and hand it to the Now Playing centre.
     public func startListening(
@@ -2109,7 +2184,17 @@ public final class AppModel {
         // it is in flight, so CarPlay's success signal stays honest.
         guard !isStartingListening else { return }
         isStartingListening = true
-        defer { isStartingListening = false }
+        // Claimed here, where the start begins, rather than in `attachListening`
+        // where `listeningBook` is first written — which is a manifest fetch, an
+        // extraction and a duration measurement further on. Until this existed a
+        // removal arriving in that window found nothing playing and did nothing.
+        // The format is unknown yet: which download this will read is what the
+        // next hundred lines decide.
+        startingListening = (book.uuid, nil)
+        defer {
+            isStartingListening = false
+            startingListening = nil
+        }
         // Clear last time's error at the top of every genuine attempt, so no
         // later `return` — the resume fast-path below included — can leave a
         // stale message that CarPlay's `onPlay` would read back as this
@@ -2162,40 +2247,62 @@ public final class AppModel {
         // Downloaded only. Streaming a book chunk by chunk is a different
         // feature, and this path is exactly as offline as the read-along it
         // borrows the audio from.
-        if book.readaloud?.isAligned == true, isDownloaded(book, format: .readaloud),
-           let built = await synthesisedListening(for: book, content: content) {
-            let attached = await attachListening(
-                manifest: built.manifest, source: .files(built.files),
-                chapters: built.chapters, timeline: built.timeline,
-                manifestKind: .synthesised,
-                book: book, nowPlaying: nowPlaying, settings: settings)
-            // `.wouldNotPlay` is the only outcome with anywhere left to go. A
-            // start that worked is finished, and a slot that changed hands
-            // belongs to whatever took it — trying the server's manifest there
-            // would stop the read-along a hand-off has just begun.
-            guard attached == .wouldNotPlay else { return }
-            // The chunks are on disk and the manifest built over them, and they
-            // still would not load — a half-deleted extraction is the ordinary
-            // way. The server has the original upload, so the book is not out
-            // of options: falling back is what this path already does when the
-            // manifest cannot be *built*, and a manifest that builds and then
-            // will not play is the same outcome arriving one step later.
-            IssaLog.warning("chunk playback would not start; trying the server's manifest", [
-                "book": book.title,
-            ])
-            // The coordinator that would not play still holds Now Playing and
-            // its own rate observer, and the fall-back is about to install
-            // another. The same call the "different book already playing"
-            // branch above makes, for the same reason.
-            stopListening(nowPlaying: nowPlaying)
-            // Cleared because this is a second genuine attempt and CarPlay
-            // reads `listeningError` back as the outcome of the whole call.
-            // Whatever happens below will speak for itself.
-            listeningError = nil
+        if book.readaloud?.isAligned == true, isDownloaded(book, format: .readaloud) {
+            // The claim narrows. From here to the attach this start is reading
+            // the read-along's own extracted chunks, so a removal of *that*
+            // edition must stop it and a removal of the audiobook beside it must
+            // not.
+            startingListening = (book.uuid, .readaloud)
+            if let built = await synthesisedListening(for: book, content: content) {
+                // The extraction is the longest suspension in this method —
+                // hundreds of megabytes through the deflater, and a duration
+                // measured per chunk — so it is the likeliest place for a
+                // removal to land. A cleared claim means one did.
+                //
+                // And the disk is asked again, because `isDownloaded` answers
+                // for the undo window too: the bytes are still there for six
+                // seconds after the reader taps Remove, and starting a book out
+                // of files that are already on their way off the device is what
+                // this whole guard exists to stop.
+                guard startStillClaimed(book), isDownloaded(book, format: .readaloud)
+                else { return }
+                let attached = await attachListening(
+                    manifest: built.manifest, source: .files(built.files),
+                    chapters: built.chapters, timeline: built.timeline,
+                    manifestKind: .synthesised,
+                    book: book, nowPlaying: nowPlaying, settings: settings)
+                // `.wouldNotPlay` is the only outcome with anywhere left to go.
+                // A start that worked is finished, and a slot that changed hands
+                // belongs to whatever took it — trying the server's manifest
+                // there would stop the read-along a hand-off has just begun.
+                guard attached == .wouldNotPlay else { return }
+                // The chunks are on disk and the manifest built over them, and
+                // they still would not load — a half-deleted extraction is the
+                // ordinary way. The server has the original upload, so the book
+                // is not out of options: falling back is what this path already
+                // does when the manifest cannot be *built*, and a manifest that
+                // builds and then will not play is the same outcome arriving one
+                // step later.
+                IssaLog.warning("chunk playback would not start; trying the server's manifest", [
+                    "book": book.title,
+                ])
+                // The coordinator that would not play still holds Now Playing
+                // and its own rate observer, and the fall-back is about to
+                // install another. The same call the "different book already
+                // playing" branch above makes, for the same reason.
+                stopListening(nowPlaying: nowPlaying)
+                // Cleared because this is a second genuine attempt and CarPlay
+                // reads `listeningError` back as the outcome of the whole call.
+                // Whatever happens below will speak for itself.
+                listeningError = nil
+            }
         }
         let service = AudiobookService(client: session.client, baseURL: url, tokens: session.tokenProvider)
         do {
             let manifest = try await service.manifest(for: book.uuid)
+            // The network round trip is a suspension like any other, and on a
+            // slow connection a long one.
+            guard startStillClaimed(book) else { return }
             guard !manifest.playableTracks.isEmpty else {
                 listeningError = "This audiobook has no playable tracks on the server."
                 return
@@ -2215,12 +2322,18 @@ public final class AppModel {
             // streamed rather than played from a file about to be deleted.
             let playableAsOneFile = manifest.playableTracks.count == 1
                 && isDownloaded(book, format: .audiobook)
+            // And the claim narrows for the last time: either this start is
+            // about to read the `.audiobook` download, or it is streaming and no
+            // removal can touch it.
+            startingListening = (book.uuid, playableAsOneFile ? .audiobook : nil)
             let source: AudiobookCoordinator.Source = playableAsOneFile
                 ? .local(content.localURL(for: book, format: .audiobook))
                 : .streaming(
                     base: service.trackBase(for: book.uuid),
                     cookies: await service.playbackCookies(for: book.uuid),
                 )
+            // The cookies are a second round trip on the streaming branch.
+            guard startStillClaimed(book) else { return }
             let attached = await attachListening(
                 manifest: manifest, source: source, chapters: [], timeline: nil,
                 manifestKind: .original,
@@ -2263,7 +2376,14 @@ public final class AppModel {
         let openTimeline = readers[book.uuid]?.timeline
         let started = Date()
 
-        let built = await Task.detached(priority: .userInitiated) {
+        // Held, not merely awaited. `Task.detached` does not inherit
+        // cancellation, so the only handle a removal has on this work is the
+        // task itself — and without one the extraction inside it went on
+        // inflating several hundred megabytes into a directory the reader had
+        // just emptied, putting the whole book back. See
+        // `AudioExtraction.extractAudio`, which is where the cancellation is
+        // actually noticed.
+        let extraction = Task.detached(priority: .userInitiated) {
             () -> (result: ChunkManifest.Result, timeline: SMILTimeline)? in
             do {
                 let source = try ReadaloudSource.load(
@@ -2291,11 +2411,21 @@ public final class AppModel {
                         audioFiles: source.audioFiles, durations: measured, title: title),
                     source.timeline
                 )
+            } catch is CancellationError {
+                // Ordinary, and named as such. A removal revoking an extraction
+                // is a thing the reader asked for, and logging it as a failure
+                // would send the next person reading these lines looking for a
+                // broken archive.
+                IssaLog.info("chunk extraction revoked", ["book": title])
+                return nil
             } catch {
                 IssaLog.failure("chunk manifest", error, ["book": title])
                 return nil
             }
-        }.value
+        }
+        listeningExtraction = extraction
+        defer { listeningExtraction = nil }
+        let built = await extraction.value
 
         guard let built, !built.result.manifest.playableTracks.isEmpty else { return nil }
         IssaLog.info("chunk manifest built", [

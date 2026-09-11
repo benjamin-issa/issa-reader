@@ -447,6 +447,61 @@ struct DownloadRemovalTests {
         #expect(model.readalong?.player.isPlaying == false)
     }
 
+    // MARK: - A removal that lands before the start has attached
+
+    /// `listeningBook` is first written inside `attachListening`, which is the
+    /// far end of a manifest fetch, a chunk extraction and a duration
+    /// measurement — seconds on a long book, and every one of them on a cold
+    /// launch straight into CarPlay. For that whole stretch a removal looked at
+    /// an empty listening slot and did nothing, and the start then woke up and
+    /// installed a coordinator over files that had just been deleted.
+    ///
+    /// The claim is what makes that window visible. It is staged directly here
+    /// rather than reached through `startListening`, which needs a signed-in
+    /// session and a server holding a manifest — the same terms
+    /// `installListening` is internal on.
+    @Test("a removal clears a start that has claimed the book but not attached it")
+    func aRemovalClearsAnUnattachedStart() throws {
+        let app = AppModel(keychain: InMemoryTokens(), notificationCentre: NotificationCenter())
+        let uuid = Self.freshUUID()
+        let ebook = try Self.plant(uuid, format: .ebook)
+        let readaloud = try Self.plant(uuid, format: .readaloud, bytes: 64)
+        defer { for url in [ebook, readaloud] { try? FileManager.default.removeItem(at: url) } }
+        app.refreshDownloadedSet()
+        let book = SharedFixtures.book("Dracula", uuid: uuid, readaloud: true)
+        app.claimListeningStart(book, reading: .readaloud)
+
+        app.removeDownload(bookUUID: uuid, format: .readaloud)
+
+        #expect(app.startingListeningBook == nil,
+                "a start that has not attached still owns the book it is about to play")
+        #expect(app.listening == nil, "and nothing may be installed for it afterwards")
+        #expect(!Self.exists(readaloud))
+    }
+
+    /// The claim narrows as the start works out what it is doing — `.readaloud`
+    /// while it extracts chunks, `.audiobook` or nil once the server's manifest
+    /// has said whether there is a single file to play. So it answers the same
+    /// question the engine does, and a removal of the other edition is none of
+    /// its business.
+    @Test("a removal of another edition leaves the claim alone")
+    func aRemovalOfAnotherEditionLeavesTheClaim() throws {
+        let app = AppModel(keychain: InMemoryTokens(), notificationCentre: NotificationCenter())
+        let uuid = Self.freshUUID()
+        let audiobook = try Self.plant(uuid, format: .audiobook)
+        let readaloud = try Self.plant(uuid, format: .readaloud, bytes: 64)
+        defer { for url in [audiobook, readaloud] { try? FileManager.default.removeItem(at: url) } }
+        app.refreshDownloadedSet()
+        let book = SharedFixtures.book("Dracula", uuid: uuid, readaloud: true)
+        app.claimListeningStart(book, reading: .readaloud)
+
+        app.removeDownload(bookUUID: uuid, format: .audiobook)
+
+        #expect(app.startingListeningBook == uuid,
+                "the chunks it is extracting come out of the read-along, not this")
+        #expect(Self.exists(readaloud))
+    }
+
     // MARK: - Reconciliation
 
     /// The sweep. A download can go without this app deleting it — an Apple TV
