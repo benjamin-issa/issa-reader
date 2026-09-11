@@ -60,7 +60,16 @@ public struct ControlsSettingsView: View {
             }
             .listRowBackground(Palette.surface)
 
-            Section {
+            // Worth saying, because it is the one binding with a visible side
+            // effect elsewhere: iOS draws the skip buttons only while nothing
+            // claims the track buttons. Nothing to say about a car, which has
+            // no Lock Screen — so that surface gets no note at all.
+            let wheelNote: String? = surface == .carPlay
+                ? nil
+                : wheelIsBound
+                    ? "The Lock Screen shows next and previous track while the wheel is assigned."
+                    : "Leave the wheel unassigned and the Lock Screen shows the skip buttons instead."
+            SettingsSection(note: wheelNote) {
                 ForEach(controls, id: \.self) { control in
                     Picker(control.title, selection: binding(for: control)) {
                         ForEach(actions(for: control), id: \.self) { Text($0.title).tag($0) }
@@ -68,16 +77,6 @@ public struct ControlsSettingsView: View {
                 }
             } header: {
                 Text("Buttons")
-            } footer: {
-                // Worth saying, because it is the one binding with a visible
-                // side effect elsewhere: iOS draws the skip buttons only while
-                // nothing claims the track buttons.
-                if surface != .carPlay {
-                    Text(wheelIsBound
-                        ? "The Lock Screen shows next and previous track while the wheel is assigned."
-                        : "Leave the wheel unassigned and the Lock Screen shows the skip buttons instead.")
-                        .settingsFooter()
-                }
             }
             .listRowBackground(Palette.surface)
 

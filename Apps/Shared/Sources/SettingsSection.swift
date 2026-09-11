@@ -29,7 +29,12 @@ struct SettingsSection<Content: View, Header: View>: View {
     /// The sentence under the section. A plain `String` rather than a view: it
     /// is prose, the same prose on every platform, and only this view gets to
     /// decide how it is dressed and where it is put.
-    private let note: String
+    ///
+    /// Optional, because one section's sentence is about a surface that is not
+    /// always there — the Lock Screen's track buttons, which CarPlay does not
+    /// have — and a section with nothing to explain should draw nothing rather
+    /// than an empty row.
+    private let note: String?
 
     /// The rows.
     private let content: Content
@@ -42,7 +47,7 @@ struct SettingsSection<Content: View, Header: View>: View {
     private let header: Header?
 
     init(
-        note: String,
+        note: String?,
         @ViewBuilder content: () -> Content,
         @ViewBuilder header: () -> Header,
     ) {
@@ -51,7 +56,7 @@ struct SettingsSection<Content: View, Header: View>: View {
         self.header = header()
     }
 
-    init(note: String, @ViewBuilder content: () -> Content) where Header == EmptyView {
+    init(note: String?, @ViewBuilder content: () -> Content) where Header == EmptyView {
         self.note = note
         self.content = content()
         header = nil
@@ -81,7 +86,9 @@ struct SettingsSection<Content: View, Header: View>: View {
     }
     #endif
 
-    private var noteText: some View {
-        Text(note).settingsFooter()
+    @ViewBuilder private var noteText: some View {
+        if let note {
+            Text(note).settingsFooter()
+        }
     }
 }
