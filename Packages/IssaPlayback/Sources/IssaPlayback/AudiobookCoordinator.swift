@@ -28,6 +28,38 @@ public final class AudiobookCoordinator {
         case files([String: URL])
     }
 
+    /// What became of an attempt to put the audio somewhere.
+    ///
+    /// Three outcomes, because a `Bool` had two and the middle one was being
+    /// silently rounded into the wrong neighbour. `load` can end in any of
+    /// them — no such track, no file behind the href, or a newer load that took
+    /// over while this one was awaiting AVFoundation — and `false` said the same
+    /// word for all three. The two that matter are opposites: one is a book that
+    /// will not play and has to be reported, the other is this call losing a
+    /// race it was never going to win, where the *correct* response is to keep
+    /// quiet and let the winner get on with it.
+    ///
+    /// Deliberately not `Bool?`, which would have left `nil` quietly meaning
+    /// "superseded" at five call sites, and deliberately not `throws`: a thrown
+    /// error invites `try?`, which collapses straight back into the two-way loss
+    /// this exists to undo. The precedent is `AppModel.ListeningAttachment`,
+    /// which draws the same three lines one layer up and for the same reason.
+    public enum MoveOutcome: Equatable, Sendable {
+        /// The audio is where it was asked to be, and this call owns the state.
+        case landed
+        /// There is no audio behind the place that was asked for — a time that
+        /// names no track, or a `.files` track whose chunk is not on disk. The
+        /// one outcome worth telling a listener about.
+        case unplayable
+        /// A newer load took over while this one was suspended, and owns the
+        /// player and the clock now.
+        ///
+        /// **Not a refusal.** Nothing may pause, tear down, or say the book
+        /// would not play on the strength of this: the audio is fine, it is
+        /// simply somewhere else, because something asked for somewhere else.
+        case superseded
+    }
+
     public let manifest: AudiobookManifest
     public let player: AudioPlayer
     public private(set) var trackIndex = 0
@@ -303,8 +335,18 @@ public final class AudiobookCoordinator {
     // MARK: - Playback
 
     /// Starts, or resumes, at a fraction of the whole book.
+    ///
+    /// Clears no steering latch on the way out, and never did anything useful by
+    /// clearing one. The `defer { steeredAt = false }` that stood here was
+    /// function-scoped in an `async` method, so it fired after both awaits — and
+    /// nothing reachable from this method has ever *set* the latch, back to the
+    /// commit that introduced it. Its only reachable effect was destroying a
+    /// latch that a `play(chapter:)` or `skip(by:)` running concurrently had
+    /// set, which turns a place the listener named into ordinary drift for
+    /// `PositionGuard` to second-guess. The contract it was standing in for —
+    /// resuming is the app choosing a place, not the listener — is kept by
+    /// `seek(toBookTime:)` simply not latching, which is where it belongs.
     public func start(atProgress progress: Double = 0) async {
-        defer { steeredAt = false }
         // See ReadalongCoordinator: a NaN survived the inline clamp and was
         // then written back as a chosen position.
         guard let place = progress.asProgression else { return }
@@ -313,16 +355,20 @@ public final class AudiobookCoordinator {
         // while it sat paused — and calling play on a player holding nothing
         // leaves a book that claims to be playing in silence, which is what the
         // fifteen-second writer then persists progress against.
-        guard await seek(toBookTime: totalDuration * place) else { return }
+        //
+        // `.landed` and nothing else, so `.superseded` does not play either: the
+        // newer load owns the player, and pressing play from here would start
+        // audio at a place this call no longer has any say over.
+        guard await seek(toBookTime: totalDuration * place) == .landed else { return }
         player.play()
     }
 
-    /// - Returns: whether audio is now positioned where it was asked to be.
-    ///   False when the time names no track, or when the load that would have
-    ///   reached it did not happen.
+    /// - Returns: what became of it. See `MoveOutcome`, and note that
+    ///   `.superseded` means the audio is fine and somewhere else, not that this
+    ///   book would not play.
     @discardableResult
-    public func seek(toBookTime time: TimeInterval) async -> Bool {
-        guard let (index, offset) = manifest.locate(bookTime: time) else { return false }
+    public func seek(toBookTime time: TimeInterval) async -> MoveOutcome {
+        guard let (index, offset) = manifest.locate(bookTime: time) else { return .unplayable }
         if index != trackIndex || player.currentAudioHref == nil {
             // `load` sets the clock and the chapter itself, and is the only one
             // of the two branches that can decline.
@@ -350,7 +396,7 @@ public final class AudiobookCoordinator {
         seeksInFlight += 1
         defer { seeksInFlight -= 1 }
         await player.seek(to: offset)
-        return true
+        return .landed
     }
 
     /// Set when the listener steered, cleared when the answer is read.
@@ -371,6 +417,12 @@ public final class AudiobookCoordinator {
     /// over it. Latching afterwards costs at most one tick — a scrub that lands
     /// while the writer is mid-flight is read as `.chosen` fifteen seconds
     /// later instead of now — and that is a delay, not a loss.
+    ///
+    /// `.superseded` does not latch it either, and that is right rather than an
+    /// oversight. The latch means "the position that is about to be persisted
+    /// was named by the listener" — and under supersession this call did not
+    /// determine that position at all. The load that overtook it did, and
+    /// latches for itself if whoever asked for it was the listener.
     private var steeredAt: Bool = false
 
     /// Whether the listener has steered since this was last asked.
@@ -386,7 +438,7 @@ public final class AudiobookCoordinator {
         // See ReadalongCoordinator: a NaN survived the inline clamp and was
         // then written back as a chosen position.
         guard let place = progress.asProgression else { return }
-        if await seek(toBookTime: totalDuration * place) { steeredAt = true }
+        if await seek(toBookTime: totalDuration * place) == .landed { steeredAt = true }
     }
 
     /// Latched after the load, not before it — see `steeredAt`. Both refusals
@@ -399,7 +451,8 @@ public final class AudiobookCoordinator {
         // Into the chapter's own start, which on a synthesised manifest is part
         // of the way into its chunk. Loading the track at zero would land the
         // listener at the end of the *previous* chapter.
-        guard await load(track: chapter.trackIndex, startAt: chapter.offset) else { return }
+        guard await load(track: chapter.trackIndex, startAt: chapter.offset) == .landed
+        else { return }
         steeredAt = true
         player.play()
     }
@@ -431,7 +484,7 @@ public final class AudiobookCoordinator {
         // own clock would report "well into this chapter" the instant it began
         // and "previous" would restart a chapter nobody had heard yet.
         if bookTime - start > 3 {
-            if await seek(toBookTime: start) { steeredAt = true }
+            if await seek(toBookTime: start) == .landed { steeredAt = true }
         } else {
             await play(chapter: max(chapterIndex - 1, 0))
         }
@@ -450,7 +503,7 @@ public final class AudiobookCoordinator {
         // listener back to the start of the book — and the position writer then
         // persisted that zero.
         guard bookTime.isFinite, totalDuration > 0 else { return }
-        if await seek(toBookTime: max(0, min(bookTime + delta, totalDuration))) {
+        if await seek(toBookTime: max(0, min(bookTime + delta, totalDuration))) == .landed {
             steeredAt = true
         }
     }
@@ -500,7 +553,7 @@ public final class AudiobookCoordinator {
             return
         }
         let before = chapterIndex
-        guard await load(track: trackIndex + 1, startAt: 0) else { return }
+        guard await load(track: trackIndex + 1, startAt: 0) == .landed else { return }
         // Only when the *chapter* changed, not whenever a file did. A book
         // synthesised over narration chunks crosses a file boundary every couple
         // of minutes and a chapter boundary every half hour; telling the sleep
@@ -515,11 +568,12 @@ public final class AudiobookCoordinator {
         player.play()
     }
 
-    /// - Returns: whether this load still owned the state when it finished;
-    ///   false when a newer one overtook it.
+    /// - Returns: which of the three things happened. See `MoveOutcome`: there
+    ///   is no audio here, or a newer load owns the state, or this one does —
+    ///   and the first two used to be the same word.
     @discardableResult
-    private func load(track index: Int, startAt offset: TimeInterval) async -> Bool {
-        guard tracks.indices.contains(index) else { return false }
+    private func load(track index: Int, startAt offset: TimeInterval) async -> MoveOutcome {
+        guard tracks.indices.contains(index) else { return .unplayable }
         let track = tracks[index]
         // Resolved before a single piece of state moves. A `.files` track with
         // no file is a refusal, not a load, and the old order — index and clock
@@ -539,7 +593,7 @@ public final class AudiobookCoordinator {
                     "href": track.href, "track": String(index),
                 ])
                 player.pause()
-                return false
+                return .unplayable
             }
             destination = (url, [])
         }
@@ -562,13 +616,13 @@ public final class AudiobookCoordinator {
             startAt: offset, cookies: destination.cookies,
         )
         // A newer load started while this one was awaiting; it owns the state.
-        guard loadGeneration == generation else { return false }
+        guard loadGeneration == generation else { return .superseded }
         bookTime = manifest.startTime(ofTrackAt: index) + offset
         // Unconditionally, as every load has always published: Now Playing
         // rebuilds from this and a reloaded track is a new item there whether or
         // not the chapter around it changed.
         chapterIndex = chapterIndex(atBookTime: bookTime)
         onChapterChange?(chapterIndex)
-        return true
+        return .landed
     }
 }

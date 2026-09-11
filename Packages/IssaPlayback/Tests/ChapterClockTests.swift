@@ -617,6 +617,83 @@ struct ChapterClockTests {
         #expect(subject.consumeSteering(), "and previous, which delegates to it")
     }
 
+    /// `start(atProgress:)` used to carry `defer { steeredAt = false }`, which
+    /// is function-scoped in an `async` method and so fired after both of its
+    /// awaits. Nothing reachable from `start` has ever *set* the latch — the
+    /// resume path deliberately does not, because resuming is the app choosing a
+    /// place — so the clear could only ever destroy somebody else's: a chapter
+    /// tap or a skip that landed while the start was suspended. The position
+    /// writer then labelled that deliberate move ordinary drift, and
+    /// `PositionGuard` is entitled to refuse ordinary drift that goes backwards.
+    ///
+    /// Stated sequentially rather than raced, because the two calls need no
+    /// overlap to prove it: the latch simply outlives the start.
+    @Test("a start does not spend a latch it did not set")
+    func aStartDoesNotSpendALatchItDidNotSet() async {
+        let subject = Self.coordinator(
+            Self.manifest(trackCount: 3, each: 100),
+            chapters: [
+                AudiobookChapter(title: "A", trackIndex: 0),
+                AudiobookChapter(title: "B", trackIndex: 1, offset: 30),
+            ],
+        )
+        _ = Self.detachClock(subject)
+
+        await subject.play(chapter: 1)
+        await subject.start(atProgress: 0)
+
+        #expect(subject.consumeSteering(),
+                "the chapter tap named a place, and a resume does not un-name it")
+    }
+
+    // MARK: - Which of the three things happened
+
+    /// A `Bool` said the same word for "there is no audio here" and "a newer
+    /// load took over", and the two need opposite handling. `AppModel`'s resume
+    /// read the second as the first: its `listening === coordinator` check
+    /// passes — it is the *same* coordinator — so a CarPlay chapter tap that
+    /// overtook the opening seek came back as "that book's audio would not
+    /// play", put the error banner up, and tore down a coordinator the car was
+    /// already playing out loud.
+    ///
+    /// The race is made deterministic the way
+    /// `aScrubAcrossAChapterBoundaryIsNotAChapterEnding` makes its own: the
+    /// newer seek is enqueued on the main actor before the first one begins, so
+    /// it runs at the first one's suspension inside AVFoundation — which is
+    /// exactly the window supersession lives in.
+    @Test("a load a newer one overtook is not a load that would not play")
+    func aSupersededLoadIsNotARefusal() async {
+        let subject = Self.coordinator(Self.manifest(trackCount: 3, each: 100))
+        _ = Self.detachClock(subject)
+
+        let newer = Task { @MainActor in await subject.seek(toBookTime: 250) }
+        let overtaken = await subject.seek(toBookTime: 150)
+        let winner = await newer.value
+
+        #expect(overtaken == .superseded,
+                "the audio is fine and somewhere else, which is not the same as unplayable")
+        #expect(winner == .landed, "and the load that took over owns the state")
+        #expect(subject.trackIndex == 2, "which is the track the newer seek asked for")
+        // And the losing call left nothing behind it to tidy up: it is the
+        // caller's belief that was wrong, never the player's state.
+        #expect(subject.player.currentAudioHref == "chunk2.mp3")
+    }
+
+    /// The other half of the same enum, so the fix cannot be "never say no": a
+    /// place with no audio behind it still refuses, and says so in the one word
+    /// that reaches a listener.
+    @Test("a place with no audio behind it is still unplayable, not superseded")
+    func aMissingChunkIsUnplayable() async {
+        let subject = AudiobookCoordinator(
+            manifest: Self.manifest(trackCount: 3, each: 100), source: .files([:]))
+        _ = Self.detachClock(subject)
+
+        #expect(await subject.seek(toBookTime: 150) == .unplayable)
+        // And a book with nothing playable in it at all names no track to try.
+        let empty = Self.coordinator(Self.manifest(trackCount: 0, each: 100))
+        #expect(await empty.seek(toBookTime: 0) == .unplayable)
+    }
+
     /// Today's behaviour, unchanged, for every book that plays the server's own
     /// manifest: no chapters passed means one chapter per track, named as the
     /// manifest names it.

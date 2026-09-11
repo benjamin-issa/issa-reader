@@ -2263,12 +2263,33 @@ public final class AppModel {
             // already refuses to play a player holding nothing; a resolved
             // start whose chunk is missing deserves the same silence, logged
             // by `load`, rather than a book that claims to be playing.
-            let landed = await coordinator.seek(toBookTime: time)
+            let outcome = await coordinator.seek(toBookTime: time)
             guard listening === coordinator else {
                 return slotChangedHands(book, coordinator, at: "seeked")
             }
-            guard landed else { return declined(book, reason: "seekDeclined") }
-            coordinator.player.play()
+            switch outcome {
+            case .landed:
+                coordinator.player.play()
+            case .unplayable:
+                return declined(book, reason: "seekDeclined")
+            case .superseded:
+                // A newer load inside this same coordinator overtook the resume
+                // seek — a CarPlay chapter tap while the book was opening is the
+                // ordinary way. The identity check above passes, because it is
+                // the *same* coordinator, so this used to read as "that book's
+                // audio would not play": the error banner went up and the return
+                // tore down a coordinator the car was already playing out loud.
+                //
+                // Nothing to do and nothing to say, so fall through to the
+                // publish and the position writer rather than returning. Those
+                // two are the reason: the writer has to be armed whatever landed
+                // this book on the lock screen, or an hour of listening is
+                // written nowhere. No `play()` either — the newer load decides
+                // whether this book is playing, and it has already decided.
+                IssaLog.info("listening resume was overtaken by a newer load", [
+                    "book": book.title,
+                ])
+            }
         } else {
             await coordinator.start(atProgress: 0)
             guard listening === coordinator else {
