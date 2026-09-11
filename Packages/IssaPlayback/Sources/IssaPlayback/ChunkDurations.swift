@@ -92,8 +92,25 @@ public enum ChunkDurations {
         return measured
     }
 
+    /// One file's true length.
+    ///
+    /// `AVURLAssetPreferPreciseDurationAndTimingKey`, because the default is not
+    /// a measurement at all for the format this book's audio is in: for a
+    /// constant-bitrate MP3 with no length in its header, AVFoundation divides
+    /// the file size by the bitrate and calls that the duration. The error is
+    /// small per file and always in the same direction, so across a hundred and
+    /// seventy-six chunks it sums into a book clock that disagrees with the
+    /// audio by a visible amount — which is the one thing this type exists to
+    /// prevent, and the estimate it was written to replace.
+    ///
+    /// Precise timing makes AVFoundation walk the file's frames instead, which
+    /// is slower the first time a large read-along is opened. It is a one-time
+    /// cost: the answers go through `save` and every later launch reads them
+    /// back from `load` without opening a single audio file.
     private static func duration(of url: URL) async -> TimeInterval? {
-        guard let time = try? await AVURLAsset(url: url).load(.duration) else { return nil }
+        let asset = AVURLAsset(
+            url: url, options: [AVURLAssetPreferPreciseDurationAndTimingKey: true])
+        guard let time = try? await asset.load(.duration) else { return nil }
         let seconds = time.seconds
         guard seconds.isFinite, seconds > 0 else { return nil }
         return seconds
