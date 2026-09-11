@@ -421,6 +421,103 @@ struct ListeningHandoffReaderTests {
         #expect(app.books.first?.progress == 0.62, "with the stored place untouched")
     }
 
+    // MARK: - The two states the hand-off used to wait on for nothing
+
+    /// The listener presses Listen from the book they have open.
+    ///
+    /// Every other trigger fires *before* the engine exists — a reader
+    /// appearing, the app coming forward, narration finishing extracting, the
+    /// car going away — so the decision each of them woke found nothing playing
+    /// and skipped `notListening`. A start finishing over an open reader had no
+    /// trigger at all, so the phone read itself aloud through the audiobook
+    /// engine with the page it belongs to sitting right there, not moving.
+    ///
+    /// The `isStartingListening` veto is the obstacle, and what it protects is
+    /// stated where it is written: a hand-off must not overrun `attachListening`'s
+    /// two suspensions. At the `.started` return both are behind us.
+    @Test("a start finishing over an open reader hands the book straight over")
+    func aStartOverAnOpenReaderHandsItOver() async throws {
+        let app = AppModel(notificationCentre: NotificationCenter())
+        let book = SharedFixtures.book("Fixture", uuid: Self.uuid, readaloud: true)
+        app.books = [book]
+        let model = app.reader(for: book, session: try Self.session())
+        let (files, directory) = try await Self.opened(model)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        app.setForeground(true)
+        app.setReaderVisible(Self.uuid, true)
+        let built = try Self.chunked(model, files: files)
+
+        let outcome = await app.attachListening(
+            manifest: built.manifest, source: .files(built.files),
+            chapters: built.chapters, timeline: built.timeline,
+            manifestKind: .synthesised, book: book,
+            nowPlaying: NowPlayingController(), settings: Self.settings())
+
+        #expect(outcome == .started, "the start has to have worked for this to mean anything")
+        // The hand-off runs on a task of its own, as it does from every other
+        // trigger.
+        await Self.settle { app.listening == nil }
+        #expect(app.listening == nil, "two engines on one book is two voices in the room")
+        #expect(app.reader === model, "the reader owns the book it is showing")
+        #expect(model.readalong?.activeEntry != nil, "and the page is following the voice")
+    }
+
+    /// The promise `Skip.resumeUnresolved` makes, which nothing kept.
+    ///
+    /// Its own note says the listener's first scrub is `.chosen`, which releases
+    /// the hold, "and the next trigger hands the book over normally". There was
+    /// no next trigger: by the time anybody scrubs, the reader is already
+    /// visible and the app already frontmost, so `readerVisible`, `foreground`
+    /// and `readerReady` have all fired and gone, and `carDisconnected` is what
+    /// ended the drive in the first place. The book stayed with the car engine
+    /// and the page stayed where it was for the rest of the session.
+    @Test("the listener steering releases the hold and the book moves")
+    func steeringReleasesTheHoldAndHandsTheBookOver() async throws {
+        let app = AppModel(notificationCentre: NotificationCenter())
+        // The server's own single upload, on the audio clock: a file this
+        // book's chunks have never heard of, so every rung of the resume ladder
+        // misses and the audio clock is held.
+        let book = SharedFixtures.book(
+            "Fixture", uuid: Self.uuid, progress: 0.62,
+            positionHref: "the-whole-book.mp3", positionType: "audio/mpeg",
+            readaloud: true)
+        app.books = [book]
+        let model = app.reader(for: book, session: try Self.session())
+        let (files, directory) = try await Self.opened(model)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        app.setForeground(true)
+        app.setReaderVisible(Self.uuid, true)
+        app.prepareListeningGuard(for: book, resolved: false)
+        let coordinator = try await Self.startedFromZero(model, files: files)
+        app.installListening(coordinator, book: book)
+
+        // The held state, which is where this starts and used to end.
+        let held = await app.handOffListeningToReader(trigger: .readerVisible)
+        #expect(held == .skip(.resumeUnresolved))
+
+        // The listener scrubs. `.chosen` is the listener naming a place, which
+        // is the one thing that releases a held clock — the same write the
+        // fifteen-second loop labels when `consumeSteering()` says so.
+        _ = app.admitPosition(
+            Self.audioScrub(at: 0.30), origin: .chosen, for: Self.uuid)
+
+        await Self.settle { app.listening == nil }
+        #expect(app.listening == nil, "the hold let go, so the book can move")
+        #expect(app.reader === model)
+        #expect(model.readalong?.activeEntry != nil, "and the page followed it")
+    }
+
+    /// A listening position on the audio clock, as a scrub writes it.
+    ///
+    /// `audio/mpeg` is what makes it audio-scaled, which is what files it under
+    /// the guard the unresolved start armed — a text-scaled locator is a
+    /// different clock and a different guard entirely.
+    static func audioScrub(at progression: Double) -> ReadiumLocator {
+        ReadiumLocator(
+            href: "the-whole-book.mp3", type: "audio/mpeg",
+            locations: .init(totalProgression: progression))
+    }
+
     // MARK: - The slot changing hands underneath a hand-off
 
     /// A second book's engine, with nothing behind it. What these assert is

@@ -1511,7 +1511,16 @@ public final class AppModel {
     /// Cheap enough to call from anywhere a trigger fires, which is the point:
     /// the decision itself is a ladder in `ListeningHandoff`, and the call
     /// sites should not each carry a copy of "is anything even playing".
-    private func considerListeningHandoff(trigger: ListeningHandoff.Trigger) {
+    /// - Parameter duringStart: whether the caller *is* the start, at the point
+    ///   where it has finished. Named rather than dodged: what the
+    ///   `isStartingListening` veto protects is stated above it — a hand-off
+    ///   must not overrun `attachListening`'s two suspensions — and at the
+    ///   `.started` return both are behind us, the coordinator is positioned,
+    ///   the snapshot is published and the writer is armed. There is nothing
+    ///   left for a hand-off to overrun.
+    private func considerListeningHandoff(
+        trigger: ListeningHandoff.Trigger, duringStart: Bool = false,
+    ) {
         // `isStartingListening` as well as `isHandingOff`, because the two move
         // the same slot from opposite ends. `attachListening` publishes
         // `listening` and then suspends twice — a resume to resolve, an
@@ -1519,7 +1528,8 @@ public final class AppModel {
         // stops a coordinator the start is still holding. The start re-checks
         // the slot after every await; this is the other half, so the two cannot
         // interleave in the first place.
-        guard listening != nil, !isHandingOff, !isStartingListening else { return }
+        guard listening != nil, !isHandingOff, duringStart || !isStartingListening
+        else { return }
         Task { await handOffListeningToReader(trigger: trigger) }
     }
 
@@ -2597,6 +2607,11 @@ public final class AppModel {
         // paused inside the next fifteen seconds.
         publishListeningSnapshot(book: book, coordinator: coordinator)
         watchListeningProgress(book: book, coordinator: coordinator)
+        // A start finishing over a reader already open on this book. Every other
+        // trigger fires before the engine exists, so the decision they woke
+        // found nothing playing; this is the only one that can catch a listener
+        // who pressed Listen from the page they were reading.
+        considerListeningHandoff(trigger: .listeningStarted, duringStart: true)
         return .started
     }
 
@@ -3174,6 +3189,9 @@ public final class AppModel {
         // `seededGuard`.
         var state = positionGuards[guardKey]
             ?? Self.seededGuard(for: book, isAudioScaled: locator.isAudioScaled)
+        // Read before `decide`, which is what clears it: the hold letting go is
+        // a state the hand-off waits on, and only the transition is news.
+        let wasHeld = state.awaitingChoice
         let decision = state.decide(locator.locations?.totalProgression, origin: origin)
         positionGuards[guardKey] = state
         // A steer names a place in the *book*, and the book has one of those
@@ -3196,6 +3214,14 @@ public final class AppModel {
             if let sibling = positionGuards[other] {
                 positionGuards[other] = sibling.forgettingItsMark()
             }
+        }
+        // The hold letting go is a trigger of its own; see `.listenerSteered`.
+        // The same steer that clears the sibling mark above is also the only
+        // thing that releases a held audio clock, and by the time it happens
+        // every other trigger has fired and gone — the reader is already
+        // visible and the app already foreground.
+        if wasHeld, !state.awaitingChoice, listeningBook?.uuid == bookUUID {
+            considerListeningHandoff(trigger: .listenerSteered)
         }
         return decision
     }

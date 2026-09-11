@@ -27,9 +27,9 @@ import IssaEPUB
 /// only the media overlay can say which sentence of which chapter that is. One
 /// copy, so the two directions of the same bridge cannot drift apart.
 public enum ListeningHandoff {
-    /// What woke the decision up. Carried only so the log can say which — the
-    /// four arrive in different circumstances and a hand-off that only ever
-    /// fires from one of them is a hand-off that is half wired up.
+    /// What woke the decision up. Carried only so the log can say which — they
+    /// arrive in different circumstances and a hand-off that only ever fires
+    /// from one of them is a hand-off that is half wired up.
     public enum Trigger: String, Sendable {
         /// A reader appeared, or came back to the front of the stack.
         case readerVisible
@@ -40,6 +40,26 @@ public enum ListeningHandoff {
         case readerReady
         /// The car went away. Until it does the driver is still listening.
         case carDisconnected
+        /// The listener named a place, and the held audio clock let go.
+        ///
+        /// `Skip.resumeUnresolved` holds the book with the car playing on and
+        /// the reader left where it was, and its own note promises that "the
+        /// listener's first scrub is `.chosen`, which releases the hold, and the
+        /// next trigger hands the book over normally". There was no next
+        /// trigger. By the time a scrub happens the reader is already visible
+        /// and the app already frontmost, so `readerVisible`, `foreground` and
+        /// `readerReady` have all fired and gone, and `carDisconnected` is what
+        /// ended the drive in the first place. The book sat on the wrong page
+        /// for the rest of the session.
+        case listenerSteered
+        /// A start finished while a reader was already open on that book.
+        ///
+        /// The other end of the same race the re-entrancy guards exist for: a
+        /// listener pressing Listen from the book they have open, or a start
+        /// that began before the reader appeared and landed after it. Every
+        /// other trigger fires *before* the engine exists, so the decision they
+        /// woke found nothing playing and skipped `notListening`.
+        case listeningStarted
     }
 
     /// Why nothing was handed over. Every one of these is an ordinary state,
