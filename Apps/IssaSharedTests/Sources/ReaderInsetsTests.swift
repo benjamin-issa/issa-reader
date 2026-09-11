@@ -15,6 +15,13 @@ import Testing
 /// line under a toolbar that was about to appear, which is why the same book
 /// opened cleanly one time and half under the chrome the next.
 ///
+/// Full screen is the exception, and the mirror image of the same mistake. There
+/// the titlebar and the toolbar are genuinely gone, the window measures 0 and
+/// means it, and the floor's assumption — that a small number is a window not
+/// yet finished making itself — is wrong. Believing it put 52 points of nothing
+/// above the first line on the one layout a reader picks to be alone with the
+/// page.
+///
 /// These run on the iOS host, which is why the rule is a pure function outside
 /// the `#if os(macOS)` branch rather than a few lines inline in the branch. A
 /// helper the shared suite cannot reach is how this survived a release.
@@ -53,5 +60,42 @@ struct ReaderInsetsTests {
         // is worse than the fault being fixed.
         #expect(ReaderInsets.mac(measured: -4) == ReaderInsets.macChromeMinimum)
         #expect(ReaderInsets.mac(measured: -4) > 0)
+    }
+
+    @Test("in full screen a window that measures no chrome is believed")
+    func inFullScreenAWindowThatMeasuresNoChromeIsBelieved() {
+        // macOS hides the titlebar and the toolbar in full screen, so 0 here is
+        // the truth rather than a window that has not attached its toolbar yet.
+        // Floored to 52 it became a band of blank paper above the first line, on
+        // the layout chosen to get rid of exactly that.
+        #expect(ReaderInsets.mac(measured: 0, isFullScreen: true) == 0)
+    }
+
+    @Test("full screen lifts the floor, not the measurement")
+    func fullScreenLiftsTheFloorRatherThanTheMeasurement() {
+        // Full screen is not "reserve nothing". A window still reporting chrome
+        // — a toolbar the reader has revealed, a later macOS that keeps one — is
+        // believed here for the same reason it is believed anywhere else.
+        #expect(ReaderInsets.mac(measured: 52, isFullScreen: true) == 52)
+        #expect(ReaderInsets.mac(measured: 76, isFullScreen: true) == 76)
+    }
+
+    @Test("full screen cannot turn a negative measurement into a negative reserve")
+    func fullScreenCannotTurnANegativeMeasurementIntoANegativeReserve() {
+        // The floor used to be what caught this. With the floor gone the clamp
+        // has to be its own step, or a window mid-resize would pull the page up
+        // over the menu bar.
+        #expect(ReaderInsets.mac(measured: -4, isFullScreen: true) == 0)
+    }
+
+    @Test("a window with chrome is still floored, which is what the default means")
+    func aWindowWithChromeIsStillFlooredWhichIsWhatTheDefaultMeans() {
+        // The parameter defaults to false so that every existing caller keeps
+        // the windowed rule. Stated as a test because the default is the whole
+        // safety of adding it: a caller that forgets to ask about full screen
+        // gets the conservative answer, not the bare measurement.
+        #expect(ReaderInsets.mac(measured: 0) == ReaderInsets.macChromeMinimum)
+        #expect(ReaderInsets.mac(measured: 0, isFullScreen: false)
+            == ReaderInsets.mac(measured: 0))
     }
 }

@@ -38,11 +38,22 @@ enum ReaderInsets {
         //
         // Bottom only. The titlebar is the top's business, and `mac` decides
         // how much of it to keep clear.
-        let measured = NSApplication.shared.keyWindow.map {
+        //
+        // One window, asked two questions. Splitting them across two lookups
+        // would let a window become key between them and answer as a
+        // full-screen reader with a panel's chrome measurement, or the reverse.
+        let key = NSApplication.shared.keyWindow
+        let measured = key.map {
             max(0, $0.frame.height - $0.contentLayoutRect.height)
         }
         return EdgeInsets(
-            top: mac(measured: measured), leading: 0,
+            top: mac(
+                measured: measured,
+                isFullScreen: key?.styleMask.contains(.fullScreen) ?? false),
+            leading: 0,
+            // Not skipped in full screen, unlike the top. The titlebar goes, but
+            // the *screen's* own rounded corners do not — on a laptop they are
+            // the reason this inset exists in the first place.
             bottom: macWindowCornerInset, trailing: 0)
         #else
         // tvOS reads through TVReadalongView and has no window corners to
@@ -69,8 +80,32 @@ enum ReaderInsets {
     /// the fault this exists to fix, and why it was intermittent. Reserving
     /// more than the chrome only adds air above the first line, so the largest
     /// number anyone can offer is the safe one to take.
-    static func mac(measured: CGFloat?) -> CGFloat {
-        max(measured ?? 0, macChromeMinimum)
+    ///
+    /// Except in full screen, where there is no chrome to clear: macOS hides the
+    /// titlebar and the toolbar, the window measures 0, and it is telling the
+    /// truth. The floor believed it anyway and put 52 points of dead air above
+    /// the first line — on the one layout a reader chooses precisely to be left
+    /// alone with the page. So the floor is a floor over a window that has
+    /// chrome, and full screen is the case where 0 is an answer rather than a
+    /// window that has not finished making itself.
+    ///
+    /// The flag is deliberately *not* the principled fix, which would be an
+    /// `NSViewRepresentable` window accessor so the reader measures the window
+    /// it is actually in rather than whichever one is key — the repo has no
+    /// `NSViewRepresentable` anywhere, and this would be the first. What the
+    /// guess costs: `keyWindow` is another window while a full-screen reader is
+    /// on screen only when that other window is in front of it, and a
+    /// full-screen window that is not frontmost is on another Space. Nobody is
+    /// looking at the page being mismeasured, and `ReaderView` re-reads these
+    /// insets on every size change — so switching back to it re-measures with
+    /// the reader key and lays out correctly before it is seen.
+    static func mac(measured: CGFloat?, isFullScreen: Bool = false) -> CGFloat {
+        // Clamped before the floor is applied rather than after, so full screen
+        // — which skips the floor — cannot return a negative. A negative reserve
+        // pulls the page up over the chrome instead of away from it.
+        let measured = max(0, measured ?? 0)
+        guard !isFullScreen else { return measured }
+        return max(measured, macChromeMinimum)
     }
 
     /// A titlebar and a toolbar, which is what every reader window has.
