@@ -557,6 +557,9 @@ public final class AppModel {
         // this, account A's finished book refuses every derived write account B
         // makes against it.
         positionGuards = [:]
+        // And what has already been said about them, or the first refusal the
+        // next account meets would be swallowed as a repeat of a departed one.
+        refusalsLogged = [:]
         books = []
         rebuildDerived()
         // Both, or the next refresh would derive the visible set from the
@@ -662,9 +665,9 @@ public final class AppModel {
             // this app know where the listener was" — dropping `awaitingChoice`
             // here would have let the next fifteen-second tick through on a
             // resume nobody had steered.
-            positionGuards[key] = PositionGuard(
-                highWater: progress, duration: LibraryArrangement.duration(of: book),
-                awaitingChoice: guardState.awaitingChoice)
+            positionGuards[key] = Self.seededGuard(
+                for: book, isAudioScaled: locator.isAudioScaled,
+                highWater: progress, awaitingChoice: guardState.awaitingChoice)
         }
     }
 
@@ -2776,6 +2779,42 @@ public final class AppModel {
         "\(bookUUID)#\(isAudioScaled ? "audio" : "text")"
     }
 
+    /// A guard for one of a book's two clocks, seeded from what the book itself
+    /// says about that clock.
+    ///
+    /// Three sites spelled this out — `reseedGuards`, `admitPosition` and
+    /// `prepareListeningGuard` — which is two delicate rules with three chances
+    /// to drift apart.
+    ///
+    /// The first rule is the seed: only a stored position *on this clock* says
+    /// anything about this clock, because a fraction of the text and a fraction
+    /// of the audio are fractions of different timelines. Seeding the audio
+    /// guard from the reader's number is how a listening position came to be
+    /// measured against a reading one.
+    ///
+    /// The second is the duration, which looks optional and is not: the guard's
+    /// absolute five-minute bound exists only for a book whose narration length
+    /// it knows, and a site that omitted it left a forty-hour audiobook two
+    /// hours of undetected slack under the five-per-cent rule instead.
+    /// - Parameter highWater: a mark the caller already holds — a server
+    ///   position it is re-seeding to, or the mark a held clock kept. Absent,
+    ///   the book's own position on this clock is the seed.
+    static func seededGuard(
+        for book: Book?,
+        isAudioScaled: Bool,
+        highWater: Double? = nil,
+        awaitingChoice: Bool = false,
+    ) -> PositionGuard {
+        let narration = book.map(LibraryArrangement.duration(of:)) ?? 0
+        let seed = (book?.position?.locator).flatMap {
+            $0.isAudioScaled == isAudioScaled ? $0.totalProgression : nil
+        } ?? 0
+        return PositionGuard(
+            highWater: highWater ?? seed,
+            duration: narration > 0 ? narration : nil,
+            awaitingChoice: awaitingChoice)
+    }
+
     /// Puts one candidate position to this book's guard for that clock, seeding
     /// the guard first if it has never been used.
     ///
@@ -2787,11 +2826,6 @@ public final class AppModel {
         _ locator: ReadiumLocator, origin: PositionOrigin, for bookUUID: String,
     ) -> PositionGuard.Decision {
         let book = books.first { $0.uuid == bookUUID }
-        // With the narration length, where there is one: the guard's absolute
-        // bound — five minutes — only exists for long audiobooks, and without
-        // the duration it was never applied, leaving a forty-hour book two
-        // hours of undetected slack.
-        let duration = book.map(LibraryArrangement.duration(of:)).flatMap { $0 > 0 ? $0 : nil }
         // Keyed by book *and* by clock. `PositionGuard` is a high-water mark on
         // `totalProgression`, and this app writes that field on two different
         // scales -- a fraction of the text from the reader, a fraction of the
@@ -2802,11 +2836,10 @@ public final class AppModel {
         // AudioAnchor.
         let guardKey = Self.positionGuardKey(bookUUID, isAudioScaled: locator.isAudioScaled)
         // Seeded only from a stored position on this same clock, for the same
-        // reason: the book's own progress is whichever scale wrote last.
-        let seed = (book?.position?.locator).flatMap {
-            $0.isAudioScaled == locator.isAudioScaled ? $0.totalProgression : nil
-        } ?? 0
-        var state = positionGuards[guardKey] ?? PositionGuard(highWater: seed, duration: duration)
+        // reason: the book's own progress is whichever scale wrote last. See
+        // `seededGuard`.
+        var state = positionGuards[guardKey]
+            ?? Self.seededGuard(for: book, isAudioScaled: locator.isAudioScaled)
         let decision = state.decide(locator.locations?.totalProgression, origin: origin)
         positionGuards[guardKey] = state
         // A steer names a place in the *book*, and the book has one of those
@@ -2850,13 +2883,11 @@ public final class AppModel {
     ///   it plays and the clock stays held. See `ListeningResume.isTrusted`.
     func prepareListeningGuard(for book: Book, trusted: Bool) {
         let key = Self.positionGuardKey(book.uuid, isAudioScaled: true)
-        let narration = LibraryArrangement.duration(of: book)
-        let duration: TimeInterval? = narration > 0 ? narration : nil
         let stored = book.position?.locator
-        // The same seed rule as `admitPosition`: only a stored position on this
-        // clock says anything about this clock.
-        let seed = (stored?.isAudioScaled ?? false) ? (stored?.totalProgression ?? 0) : 0
-        let mark = positionGuards[key]?.highWater ?? seed
+        // The same seed rule as `admitPosition`, through the same helper: only a
+        // stored position on this clock says anything about this clock.
+        let mark = positionGuards[key]?.highWater
+            ?? Self.seededGuard(for: book, isAudioScaled: true).highWater
 
         if trusted {
             // Released at the mark it already held, never lowered to wherever
@@ -2865,7 +2896,8 @@ public final class AppModel {
             // high-water mark is for — and re-baselining here would hand the
             // regression back through the front door.
             if positionGuards[key]?.awaitingChoice == true {
-                positionGuards[key] = PositionGuard(highWater: mark, duration: duration)
+                positionGuards[key] = Self.seededGuard(
+                    for: book, isAudioScaled: true, highWater: mark)
             }
             return
         }
@@ -2873,13 +2905,52 @@ public final class AppModel {
         // holding its clock would mean a pure audiobook opened for the first
         // time recorded no position at all until the listener scrubbed.
         guard book.position != nil else { return }
-        positionGuards[key] = PositionGuard(
-            highWater: mark, duration: duration, awaitingChoice: true)
-        IssaLog.warning("listening resume unresolved, derived writes held until the listener steers", [
+        positionGuards[key] = Self.seededGuard(
+            for: book, isAudioScaled: true, highWater: mark, awaitingChoice: true)
+        // "not exact" rather than "unresolved": since the ladder grew rungs
+        // that answer approximately, this also covers a start that found
+        // somewhere to play and cannot vouch for it.
+        IssaLog.warning("listening resume not exact, derived writes held until the listener steers", [
             "book": book.uuid,
             "storedScale": (stored?.isAudioScaled ?? false) ? "audio" : "text",
             "held": String(format: "%.4f", mark),
         ])
+    }
+
+    /// Why each clock's last refused write was refused, so that a refusal is a
+    /// line in the log rather than a state the log keeps repeating.
+    ///
+    /// Keyed by guard key — the book and the clock — and holding the reason, so
+    /// a clock that goes from held to below-the-mark still says so.
+    private var refusalsLogged: [String: String] = [:]
+
+    /// Logs a refusal when it starts, and notes when the clock starts taking
+    /// writes again.
+    ///
+    /// The audiobook's writer ticks every fifteen seconds, and a held clock
+    /// refuses every one of those until the listener steers — so an hour's
+    /// drive wrote two hundred and forty identical warnings. That is enough to
+    /// push the six-hour window out of a rotating 512 KB file on its own, and
+    /// it buries the one line that explains the state under two hundred and
+    /// thirty-nine copies of itself. `writePosition` already reasons this way
+    /// about `position moved`, which logs only a substantial move.
+    ///
+    /// The clearing edge earns its line too: "this clock started accepting
+    /// writes again" is the moment a report of "it played for an hour and saved
+    /// nothing" stops being true, and without it the log ends on a refusal
+    /// whatever happened next.
+    /// - Parameter reason: nil when the write was allowed.
+    private func noteRefusal(
+        _ reason: String?, on guardKey: String, fields: @autoclosure () -> [String: String],
+    ) {
+        guard let reason else {
+            if refusalsLogged.removeValue(forKey: guardKey) != nil {
+                IssaLog.info("position writes accepted again", ["guard": guardKey])
+            }
+            return
+        }
+        guard refusalsLogged.updateValue(reason, forKey: guardKey) != reason else { return }
+        IssaLog.warning("position write refused", fields())
     }
 
     /// The single place a reading position is written.
@@ -2908,11 +2979,12 @@ public final class AppModel {
             IssaLog.warning("write dropped: no queue", ["book": bookUUID, "kind": "position"])
             return false
         }
+        let guardKey = Self.positionGuardKey(bookUUID, isAudioScaled: locator.isAudioScaled)
         switch admitPosition(locator, origin: origin, for: bookUUID) {
         case .allow:
-            break
+            noteRefusal(nil, on: guardKey, fields: [:])
         case let .refuse(held, candidate):
-            IssaLog.warning("position write refused", [
+            noteRefusal("belowHighWater", on: guardKey, fields: [
                 "book": bookUUID,
                 "held": String(format: "%.4f", held),
                 "candidate": String(format: "%.4f", candidate),
@@ -2925,10 +2997,9 @@ public final class AppModel {
             // this listener was, so nothing a clock arrives at may be persisted
             // until they say. `held` is what the mark would have been, which is
             // the number worth having in the log.
-            let key = Self.positionGuardKey(bookUUID, isAudioScaled: locator.isAudioScaled)
-            IssaLog.warning("position write refused", [
+            noteRefusal("awaitingChoice", on: guardKey, fields: [
                 "book": bookUUID,
-                "held": String(format: "%.4f", positionGuards[key]?.highWater ?? 0),
+                "held": String(format: "%.4f", positionGuards[guardKey]?.highWater ?? 0),
                 "candidate": candidate.map { String(format: "%.4f", $0) } ?? "none",
                 "origin": origin.rawValue,
                 "reason": "awaitingChoice",

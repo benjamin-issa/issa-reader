@@ -18,18 +18,37 @@ import Testing
 /// names, so a match is not needed at all.
 @Suite("A manifest over a book's own narration chunks")
 struct ChunkManifestTests {
-    static func fixture() throws -> (
-        timeline: SMILTimeline, package: EPUBPackage, files: [String: URL], directory: URL
-    ) {
+    /// The fixture EPUB, opened and nothing more.
+    ///
+    /// Most of this suite wants a package only — for its navigation titles and
+    /// its manifest — and builds its narration from `synthetic`. Those tests
+    /// used to extract every chunk in the book to a temp directory to get at it,
+    /// which is bytes on disk for nothing.
+    static func package() throws -> EPUBPackage {
         let url = try #require(
             Bundle.module.url(forResource: "Fixtures/readalong", withExtension: "epub"))
-        let package = try EPUBPackage.open(url: url)
+        return try EPUBPackage.open(url: url)
+    }
+
+    /// The fixture with its narration actually extracted, for the tests that
+    /// need files on disk to point `make` at.
+    ///
+    /// The directory is created, handed over and removed here rather than
+    /// returned for the caller to `defer` away. The caller's `defer` only ever
+    /// ran once the helper had returned, so a throw part-way through the
+    /// extraction — the one failure the helper can actually have — left the
+    /// directory behind with no one holding a reference to it.
+    static func withExtractedFixture<T>(
+        _ body: (SMILTimeline, EPUBPackage, [String: URL]) throws -> T,
+    ) throws -> T {
+        let package = try Self.package()
         let timeline = SMILParser.timeline(for: package)
         let directory = URL(fileURLWithPath: NSTemporaryDirectory())
             .appending(path: "issa-chunk-manifest-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
         let files = try AudioExtraction.extractAudio(
             from: package, timeline: timeline, bookID: "chunk-manifest", into: directory)
-        return (timeline, package, files, directory)
+        return try body(timeline, package, files)
     }
 
     /// A narration stated in four lines, rather than an EPUB assembled to hold
@@ -89,20 +108,19 @@ struct ChunkManifestTests {
     /// is the truth and wins.
     @Test("a measured duration wins, and the estimate fills the gaps")
     func measuredDurationWinsAndTheEstimateFillsGaps() throws {
-        let (timeline, package, files, directory) = try Self.fixture()
-        defer { try? FileManager.default.removeItem(at: directory) }
+        try Self.withExtractedFixture { timeline, package, files in
+            #expect(ChunkManifest.estimatedDurations(in: timeline)
+                == ["OEBPS/Audio/track1.mp3": 23, "OEBPS/Audio/track2.mp3": 9.75])
 
-        #expect(ChunkManifest.estimatedDuration(of: "OEBPS/Audio/track1.mp3", in: timeline) == 23)
-        #expect(ChunkManifest.estimatedDuration(of: "OEBPS/Audio/track2.mp3", in: timeline) == 9.75)
+            let built = ChunkManifest.make(
+                timeline: timeline, package: package, audioFiles: files,
+                durations: ["OEBPS/Audio/track1.mp3": 42], title: "Fixture")
 
-        let built = ChunkManifest.make(
-            timeline: timeline, package: package, audioFiles: files,
-            durations: ["OEBPS/Audio/track1.mp3": 42], title: "Fixture")
-
-        #expect(built.manifest.playableTracks[0].duration == 42)
-        #expect(built.manifest.playableTracks[1].duration == 9.75)
-        #expect(built.manifest.totalDuration == 51.75)
-        #expect(built.manifest.metadata.duration == 51.75)
+            #expect(built.manifest.playableTracks[0].duration == 42)
+            #expect(built.manifest.playableTracks[1].duration == 9.75)
+            #expect(built.manifest.totalDuration == 51.75)
+            #expect(built.manifest.metadata.duration == 51.75)
+        }
     }
 
     /// A track with no bytes behind it still takes its share of the book clock,
@@ -110,21 +128,21 @@ struct ChunkManifestTests {
     /// cannot play.
     @Test("a chunk with no extracted file is dropped, with its files")
     func aChunkWithNoFileIsDropped() throws {
-        let (timeline, package, files, directory) = try Self.fixture()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        var partial = files
-        partial["OEBPS/Audio/track1.mp3"] = nil
+        try Self.withExtractedFixture { timeline, package, files in
+            var partial = files
+            partial["OEBPS/Audio/track1.mp3"] = nil
 
-        let built = ChunkManifest.make(
-            timeline: timeline, package: package, audioFiles: partial,
-            durations: [:], title: "Fixture")
+            let built = ChunkManifest.make(
+                timeline: timeline, package: package, audioFiles: partial,
+                durations: [:], title: "Fixture")
 
-        #expect(built.manifest.playableTracks.map(\.href) == ["OEBPS/Audio/track2.mp3"])
-        #expect(built.files.keys.sorted() == ["OEBPS/Audio/track2.mp3"])
-        // And the chapter that would have played out of the missing chunk goes
-        // with it, rather than pointing at a track that is no longer there.
-        #expect(built.chapters.map(\.title) == ["Chapter Two"])
-        #expect(built.chapters[0].trackIndex == 0)
+            #expect(built.manifest.playableTracks.map(\.href) == ["OEBPS/Audio/track2.mp3"])
+            #expect(built.files.keys.sorted() == ["OEBPS/Audio/track2.mp3"])
+            // And the chapter that would have played out of the missing chunk goes
+            // with it, rather than pointing at a track that is no longer there.
+            #expect(built.chapters.map(\.title) == ["Chapter Two"])
+            #expect(built.chapters[0].trackIndex == 0)
+        }
     }
 
     /// A chunk's file name is not a name. `AudioExtraction.filename(for:)`
@@ -136,8 +154,7 @@ struct ChunkManifestTests {
     /// said it had succeeded, and was written over a part-read novel.
     @Test("an anchor names the chunk at its own path, not the name they all share")
     func anAnchorMatchesTheChunkAtItsOwnPath() throws {
-        let (_, package, _, directory) = try Self.fixture()
-        defer { try? FileManager.default.removeItem(at: directory) }
+        let package = try Self.package()
         let timeline = Self.synthetic([
             ("OEBPS/Audio/ch01/track.mp3", "OEBPS/ch01.xhtml", 0, 120),
             ("OEBPS/Audio/ch02/track.mp3", "OEBPS/ch02.xhtml", 0, 90),
@@ -171,8 +188,7 @@ struct ChunkManifestTests {
     /// not.
     @Test("a chunk dropped for having no file does not hand its anchor to another chapter")
     func aDroppedChunkDoesNotHandItsAnchorToAnotherChapter() throws {
-        let (_, package, _, directory) = try Self.fixture()
-        defer { try? FileManager.default.removeItem(at: directory) }
+        let package = try Self.package()
         let timeline = Self.synthetic([
             ("OEBPS/Audio/ch01/track.mp3", "OEBPS/ch01.xhtml", 0, 120),
             ("OEBPS/Audio/ch02/track.mp3", "OEBPS/ch02.xhtml", 0, 90),
@@ -214,36 +230,36 @@ struct ChunkManifestTests {
     /// held here rather than assumed.
     @Test("a chunk with no length is dropped, and the chapters renumber with it")
     func aChunkWithNoLengthIsDropped() throws {
-        let (timeline, package, files, directory) = try Self.fixture()
-        defer { try? FileManager.default.removeItem(at: directory) }
+        try Self.withExtractedFixture { timeline, package, files in
 
-        let built = ChunkManifest.make(
-            timeline: timeline, package: package, audioFiles: files,
-            durations: ["OEBPS/Audio/track1.mp3": 0], title: "Fixture")
+            let built = ChunkManifest.make(
+                timeline: timeline, package: package, audioFiles: files,
+                durations: ["OEBPS/Audio/track1.mp3": 0], title: "Fixture")
 
-        #expect(built.manifest.playableTracks.map(\.href) == ["OEBPS/Audio/track2.mp3"])
-        // The same list, not a filtered view of a longer one: that is the whole
-        // invariant, and the reading order is what the chapters count against.
-        #expect(built.manifest.readingOrder.map(\.href) == ["OEBPS/Audio/track2.mp3"])
-        #expect(built.files.keys.sorted() == ["OEBPS/Audio/track2.mp3"])
-        #expect(built.manifest.totalDuration == 9.75)
+            #expect(built.manifest.playableTracks.map(\.href) == ["OEBPS/Audio/track2.mp3"])
+            // The same list, not a filtered view of a longer one: that is the whole
+            // invariant, and the reading order is what the chapters count against.
+            #expect(built.manifest.readingOrder.map(\.href) == ["OEBPS/Audio/track2.mp3"])
+            #expect(built.files.keys.sorted() == ["OEBPS/Audio/track2.mp3"])
+            #expect(built.manifest.totalDuration == 9.75)
 
-        #expect(built.chapters.map(\.title) == ["Chapter Two"])
-        #expect(built.chapters[0].trackIndex == 0, "the track it actually plays out of")
+            #expect(built.chapters.map(\.title) == ["Chapter Two"])
+            #expect(built.chapters[0].trackIndex == 0, "the track it actually plays out of")
+        }
     }
 
     @Test("fixture tracks carry archive paths and the OPF's own media types")
     func fixtureTracksCarryArchivePathsAndOPFTypes() throws {
-        let (timeline, package, files, directory) = try Self.fixture()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let built = ChunkManifest.make(
-            timeline: timeline, package: package, audioFiles: files,
-            durations: [:], title: "Fixture")
+        try Self.withExtractedFixture { timeline, package, files in
+            let built = ChunkManifest.make(
+                timeline: timeline, package: package, audioFiles: files,
+                durations: [:], title: "Fixture")
 
-        #expect(built.manifest.playableTracks.map(\.href)
-            == ["OEBPS/Audio/track1.mp3", "OEBPS/Audio/track2.mp3"])
-        #expect(built.manifest.playableTracks.allSatisfy { $0.type == "audio/mpeg" })
-        #expect(built.files.count == 2)
+            #expect(built.manifest.playableTracks.map(\.href)
+                == ["OEBPS/Audio/track1.mp3", "OEBPS/Audio/track2.mp3"])
+            #expect(built.manifest.playableTracks.allSatisfy { $0.type == "audio/mpeg" })
+            #expect(built.files.count == 2)
+        }
     }
 
     /// The whole point, stated as a round trip: an anchor the read-along wrote
@@ -251,42 +267,66 @@ struct ChunkManifestTests {
     /// to nothing on the server's — which is the bug, reproduced beside the fix.
     @Test("a read-along's anchor round-trips on the synthesised manifest")
     func readalongAnchorRoundTripsOnTheSynthesisedManifest() throws {
-        let (timeline, package, files, directory) = try Self.fixture()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let built = ChunkManifest.make(
-            timeline: timeline, package: package, audioFiles: files,
-            durations: [:], title: "Fixture")
+        try Self.withExtractedFixture { timeline, package, files in
+            let built = ChunkManifest.make(
+                timeline: timeline, package: package, audioFiles: files,
+                durations: [:], title: "Fixture")
 
-        // Exactly what `ReadalongCoordinator` writes: the archive path out of the
-        // media overlay, and seconds into that file.
-        let anchor = AudioAnchor(audioHref: "OEBPS/Audio/track2.mp3", offset: 5, writtenAt: 0)
-        let resolved = try #require(built.manifest.bookTime(for: anchor))
-        #expect(resolved == 23 + 5, "the first chunk's length, plus the offset into the second")
+            // Exactly what `ReadalongCoordinator` writes: the archive path out of the
+            // media overlay, and seconds into that file.
+            let anchor = AudioAnchor(audioHref: "OEBPS/Audio/track2.mp3", offset: 5, writtenAt: 0)
+            let resolved = try #require(built.manifest.bookTime(for: anchor))
+            #expect(resolved == 23 + 5, "the first chunk's length, plus the offset into the second")
 
-        // The same anchor against the server's track list for the same book: one
-        // track, named after the upload. Nothing matches, and `nil` is the
-        // honest answer — it is also what started the car at zero.
-        let original = AudiobookManifest(
-            metadata: .init(title: ["und": "Fixture"]),
-            readingOrder: [.init(href: "The Patient Record of the Days.mp3", duration: 99_000)],
-        )
-        #expect(original.bookTime(for: anchor) == nil)
+            // The same anchor against the server's track list for the same book: one
+            // track, named after the upload. Nothing matches, and `nil` is the
+            // honest answer — it is also what started the car at zero.
+            let original = AudiobookManifest(
+                metadata: .init(title: ["und": "Fixture"]),
+                readingOrder: [.init(href: "The Patient Record of the Days.mp3", duration: 99_000)],
+            )
+            #expect(original.bookTime(for: anchor) == nil)
+        }
+    }
+
+    /// The type on a track is not decoration. `ReadiumLocator.isAudioScaled`
+    /// is a `audio/` prefix test on exactly this string, and it is the only
+    /// thing in the app that says which of two clocks a written
+    /// `totalProgression` is a fraction of — so a chunk the OPF types as
+    /// anything else filed the audiobook's own positions under the *reader's*
+    /// guard, to be compared against a fraction of the text. An EPUB whose
+    /// manifest item carries no `media-type` at all gets
+    /// `application/octet-stream` from `EPUBPackage`, so this is a book away,
+    /// not a hypothetical.
+    @Test("a chunk the book types as something other than audio still writes on the audio clock")
+    func aNonAudioMediaTypeFallsBackToAudio() {
+        #expect(ChunkManifest.audioType(declaredAs: "application/octet-stream") == "audio/mpeg")
+        #expect(ChunkManifest.audioType(declaredAs: nil) == "audio/mpeg")
+        #expect(ChunkManifest.audioType(declaredAs: "") == "audio/mpeg")
+        // And the book's own claim survives when it is an audio one: a
+        // CLI-aligned read-along really does carry m4a, and that is the book
+        // telling the truth about itself.
+        #expect(ChunkManifest.audioType(declaredAs: "audio/mp4") == "audio/mp4")
+        // Servers and packagers are not reliably lower-case about media types,
+        // and `isAudioScaled` lowercases before it compares.
+        #expect(ChunkManifest.audioType(declaredAs: "AUDIO/MPEG") == "AUDIO/MPEG")
+        #expect(ReadiumLocator(href: "a", type: ChunkManifest.audioType(declaredAs: "text/plain"))
+            .isAudioScaled, "whatever comes out of here has to land on the audio guard")
     }
 
     // MARK: - Chapters
 
     @Test("chapters group by text document and take their navigation titles")
     func chaptersGroupByTextDocumentAndTakeNavigationTitles() throws {
-        let (timeline, package, files, directory) = try Self.fixture()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let built = ChunkManifest.make(
-            timeline: timeline, package: package, audioFiles: files,
-            durations: [:], title: "Fixture")
+        try Self.withExtractedFixture { timeline, package, files in
+            let built = ChunkManifest.make(
+                timeline: timeline, package: package, audioFiles: files,
+                durations: [:], title: "Fixture")
 
-        #expect(built.chapters.map(\.title) == ["Chapter One", "Chapter Two"])
-        #expect(built.chapters.map(\.trackIndex) == [0, 1])
-        #expect(built.chapters.map(\.offset) == [0, 0])
-        #expect(built.chapters.map(\.documentHref) == ["OEBPS/ch01.xhtml", "OEBPS/ch02.xhtml"])
+            #expect(built.chapters.map(\.title) == ["Chapter One", "Chapter Two"])
+            #expect(built.chapters.map(\.trackIndex) == [0, 1])
+            #expect(built.chapters.map(\.offset) == [0, 0])
+        }
     }
 
     /// Chunks are cut by silence and chapters by the book, so a chapter starts
@@ -294,8 +334,7 @@ struct ChunkManifestTests {
     /// `AudiobookChapter` carries an offset.
     @Test("a chapter can begin part-way through a chunk")
     func aChapterCanBeginMidChunk() throws {
-        let (_, package, _, directory) = try Self.fixture()
-        defer { try? FileManager.default.removeItem(at: directory) }
+        let package = try Self.package()
         let timeline = Self.synthetic([
             ("a.mp3", "OEBPS/ch01.xhtml", 0, 10),
             ("a.mp3", "OEBPS/unlisted.xhtml", 10, 20),
@@ -317,8 +356,7 @@ struct ChunkManifestTests {
     /// the listener is.
     @Test("a revisited document is a second chapter")
     func aRevisitedDocumentIsASecondChapter() throws {
-        let (_, package, _, directory) = try Self.fixture()
-        defer { try? FileManager.default.removeItem(at: directory) }
+        let package = try Self.package()
         let timeline = Self.synthetic([
             ("a.mp3", "OEBPS/ch01.xhtml", 0, 10),
             ("b.mp3", "OEBPS/ch02.xhtml", 0, 10),
@@ -340,8 +378,7 @@ struct ChunkManifestTests {
     /// CarPlay played Chapter Two.
     @Test("a chapter whose first chunk is missing survives at its first playable one")
     func aChapterSurvivesTheLossOfItsFirstChunk() throws {
-        let (_, package, _, directory) = try Self.fixture()
-        defer { try? FileManager.default.removeItem(at: directory) }
+        let package = try Self.package()
         let timeline = Self.synthetic([
             ("a.mp3", "OEBPS/ch01.xhtml", 0, 5),
             ("b.mp3", "OEBPS/ch01.xhtml", 0, 5),
@@ -366,6 +403,5 @@ struct ChunkManifestTests {
         // Where the chapter's audio begins on *this* manifest, which is where
         // the surviving chunk begins.
         #expect(built.chapters.map(\.offset) == [0, 0])
-        #expect(built.chapters.map(\.documentHref) == ["OEBPS/ch01.xhtml", "OEBPS/ch02.xhtml"])
     }
 }

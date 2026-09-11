@@ -19,18 +19,11 @@ public struct AudiobookChapter: Sendable, Hashable {
     /// which is the common case and the only one the old track-per-chapter
     /// model could express.
     public let offset: TimeInterval
-    /// The text document this chapter narrates, when it came from a media
-    /// overlay. Carried so a caller that has the book open can tie a chapter
-    /// back to a page; nil for a manifest with no overlay behind it.
-    public let documentHref: String?
 
-    public init(
-        title: String, trackIndex: Int, offset: TimeInterval = 0, documentHref: String? = nil,
-    ) {
+    public init(title: String, trackIndex: Int, offset: TimeInterval = 0) {
         self.title = title
         self.trackIndex = trackIndex
         self.offset = offset
-        self.documentHref = documentHref
     }
 }
 
@@ -128,7 +121,7 @@ public enum ChunkManifest {
                 // read-along writes. Normalising or shortening it here would
                 // rebuild the mismatch this file exists to remove.
                 href: href,
-                type: types[href] ?? "audio/mpeg",
+                type: audioType(declaredAs: types[href]),
                 duration: duration,
             ))
         }
@@ -146,6 +139,26 @@ public enum ChunkManifest {
             chapters: chapters(timeline: timeline, package: package, trackOrder: order),
             files: audioFiles.filter { kept.contains($0.key) },
         )
+    }
+
+    /// The media type to file a chunk's track under: the book's own claim where
+    /// that claim is about audio, and `audio/mpeg` where it is not.
+    ///
+    /// Not a tidying-up. `ReadiumLocator.isAudioScaled` is a `audio/` prefix
+    /// test on exactly this string, and it is the only thing in the app that
+    /// says which of two clocks a written `totalProgression` is a fraction of —
+    /// so a chunk the OPF types as anything else filed the *audiobook's* own
+    /// positions under the reader's guard, where they were measured against a
+    /// fraction of the text as though the two were the same quantity. This is
+    /// not exotic: `EPUBPackage` gives an item with no `media-type` attribute
+    /// at all `application/octet-stream`.
+    ///
+    /// And the claim is kept verbatim when it is an audio one, because a
+    /// CLI-aligned book saying `audio/mp4` rather than `audio/mpeg` is the book
+    /// telling the truth about itself, which is why `make` reads the OPF at all.
+    static func audioType(declaredAs declared: String?) -> String {
+        guard let declared, declared.lowercased().hasPrefix("audio/") else { return "audio/mpeg" }
+        return declared
     }
 
     /// The distinct audio files an overlay names, in the order the book reaches
@@ -196,12 +209,6 @@ public enum ChunkManifest {
         return longest
     }
 
-    /// One file's estimate, stated through the same pass so there is only ever
-    /// one rule about what a chunk's length is.
-    static func estimatedDuration(of href: String, in timeline: SMILTimeline) -> TimeInterval {
-        estimatedDurations(in: timeline)[href] ?? 0
-    }
-
     /// Chapters as the overlay describes them: one per run of text document.
     ///
     /// A run, not a document. A spine that revisits a document — a notes page, a
@@ -237,10 +244,12 @@ public enum ChunkManifest {
 
         var chapters: [AudiobookChapter] = []
         var current: String?
-        // The run this entry belongs to, still waiting for a chunk that plays.
-        // Cleared the moment it is emitted, so the rest of the run does not
-        // become a chapter of its own.
-        var pending: (document: String, title: String?)?
+        // Whether the run this entry belongs to is still waiting for a chunk
+        // that plays, and what to call it when one arrives. Cleared the moment
+        // it is emitted, so the rest of the run does not become a chapter of
+        // its own.
+        var awaitingAPlayableChunk = false
+        var pendingTitle: String?
         for entry in timeline.entries {
             if entry.textHref != current {
                 // The run has started whether or not it can be played, so this
@@ -248,19 +257,19 @@ public enum ChunkManifest {
                 // next sentence of the same document would look like a fresh
                 // chapter.
                 current = entry.textHref
-                pending = (entry.textHref, titles[entry.textHref])
+                awaitingAPlayableChunk = true
+                pendingTitle = titles[entry.textHref]
             }
-            guard let waiting = pending,
+            guard awaitingAPlayableChunk,
                   let trackIndex = track[entry.audioHref] else { continue }
             chapters.append(AudiobookChapter(
-                title: waiting.title ?? "Section \(chapters.count + 1)",
+                title: pendingTitle ?? "Section \(chapters.count + 1)",
                 trackIndex: trackIndex,
                 // Where the chapter's first sentence starts *inside* its chunk.
                 // Zero only when the two happen to line up.
                 offset: entry.start,
-                documentHref: waiting.document,
             ))
-            pending = nil
+            awaitingAPlayableChunk = false
         }
         return chapters
     }
