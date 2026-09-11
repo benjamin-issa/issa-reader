@@ -962,7 +962,7 @@ public final class AppModel {
         // Before a byte is touched, and before `BookContentService.removeDownload`
         // in particular: the EPUB a reader is narrating from goes in that call,
         // not only the derived files below it.
-        stopPlayback(of: bookUUID)
+        stopPlayback(of: bookUUID, format: format)
         let job = DownloadManager.Job(bookUUID: bookUUID, format: format)
         // Cancel, then clear — and both before the file is touched.
         //
@@ -1065,9 +1065,54 @@ public final class AppModel {
     /// `clearAccountScopedState` — and both are needed: an audiobook plays
     /// through `listening`, a read-along through the reader's own coordinator,
     /// and a removal cannot know which the listener chose.
-    private func stopPlayback(of bookUUID: String) {
-        if listeningBook?.uuid == bookUUID { stopListening(nowPlaying: nowPlayingController) }
-        if narratingBookUUID == bookUUID { stopNarration() }
+    ///
+    /// It does know which *file* is going, though, and that used to be thrown
+    /// away: this keyed on the book uuid alone while `releaseDerivedFiles`
+    /// beside it is format-aware. So deleting the ebook of a book whose
+    /// audiobook was streaming out of the car silenced the drive, having
+    /// deleted nothing the engine was reading.
+    ///
+    /// - Parameter format: the edition being removed, or nil for the
+    ///   reconciliation sweep — which cannot tell which file went, so
+    ///   everything playing this book goes.
+    private func stopPlayback(of bookUUID: String, format: BookContentService.Format?) {
+        if listeningBook?.uuid == bookUUID,
+           Self.removalSilencesListening(reading: listeningFormat, removing: format) {
+            stopListening(nowPlaying: nowPlayingController)
+        }
+        if narratingBookUUID == bookUUID, Self.removalSilencesNarration(removing: format) {
+            stopNarration()
+        }
+    }
+
+    /// Whether deleting one edition takes the audiobook engine with it.
+    ///
+    /// Three answers, and the two nils are the interesting ones. No format at
+    /// all is the sweep, which knows only that the book's files have gone —
+    /// everything stops. No `reading` is a *stream*, and no removal can silence
+    /// a book the device never held: stopping a stream because a download was
+    /// deleted would be a fresh bug in place of the fixed one. Otherwise the
+    /// engine stops exactly when the file it is reading is the file going away.
+    static func removalSilencesListening(
+        reading: BookContentService.Format?, removing removed: BookContentService.Format?,
+    ) -> Bool {
+        guard let removed else { return true }
+        guard let reading else { return false }
+        return reading == removed
+    }
+
+    /// And whether it takes the read-along with it.
+    ///
+    /// Narration is only ever built from the `.readaloud` package —
+    /// `ReaderModel.prepareNarration` hands `AudioExtraction` that file and no
+    /// other — so a reader opened on an `.ebook` has an empty timeline, a nil
+    /// `readalong`, and cannot be the thing making a sound. Removing the ebook
+    /// therefore stops nothing. What it *does* still take is the publisher face
+    /// and the question index, and only when it was the last text on the
+    /// device: that is `releaseDerivedFiles`' rule, and neither of those is
+    /// playback.
+    static func removalSilencesNarration(removing removed: BookContentService.Format?) -> Bool {
+        removed == nil || removed == .readaloud
     }
 
     /// Re-reads which books have files on disk, and cleans up after any that
@@ -1167,7 +1212,10 @@ public final class AppModel {
             // The sweep deletes the same narration directory a removal does, so
             // it needs the same courtesy: a book whose file left behind the
             // app's back can still be the one playing. See `stopPlayback`.
-            stopPlayback(of: bookUUID)
+            // No format, for the same reason `releaseDerivedFiles` gets none:
+            // by here the files have already gone and there is nothing left to
+            // ask which of them it was.
+            stopPlayback(of: bookUUID, format: nil)
             releaseDerivedFiles(for: bookUUID, format: nil)
         }
         IssaLog.info("reconciled downloads", ["gone": String(departed.count)])
@@ -1380,6 +1428,16 @@ public final class AppModel {
     /// screen that started it — that is the whole point of an audiobook.
     public private(set) var listening: AudiobookCoordinator?
     public private(set) var listeningBook: Book?
+    /// Which downloaded edition the engine in the slot is reading out of, or
+    /// nil when it is reading nothing on this device at all.
+    ///
+    /// Remembered rather than asked of the coordinator, which cannot answer.
+    /// `AudiobookCoordinator.source` is a `private let`, and `manifestKind`
+    /// cannot stand in for it either: `.original` covers both the downloaded
+    /// single upload and a stream, and stopping a stream because a *download*
+    /// was deleted would be a new bug of its own. So the one place that knows —
+    /// `attachListening`, which is handed the source — writes it down.
+    private(set) var listeningFormat: BookContentService.Format?
     public private(set) var listeningError: String?
 
     /// Which surface is driving playback right now.
@@ -1562,9 +1620,18 @@ public final class AppModel {
     /// point and claims Now Playing before it gets here, none of which a test
     /// about the hand-off has any use for — and the alternative is a suite that
     /// needs a server to assert what happens when a car is unplugged.
-    func installListening(_ coordinator: AudiobookCoordinator, book: Book) {
+    /// - Parameter format: which download the engine is reading, as
+    ///   `attachListening` would have derived it from the source. Defaulted to
+    ///   the read-along's own chunks, which is what every suite that predates
+    ///   the question was implicitly staging, so those keep meaning what they
+    ///   meant.
+    func installListening(
+        _ coordinator: AudiobookCoordinator, book: Book,
+        reading format: BookContentService.Format? = .readaloud,
+    ) {
         listening = coordinator
         listeningBook = book
+        listeningFormat = format
     }
 
     /// Every open book's reader model, one per book, keyed by uuid.
@@ -2212,6 +2279,12 @@ public final class AppModel {
         coordinator.player.gain = VolumeTrim.gain(settings.volumeTrim(for: book.uuid))
         listening = coordinator
         listeningBook = book
+        // Which file this engine will actually be reading, taken from the
+        // source rather than guessed later: `.files` is the read-along's own
+        // extracted chunks, `.local` is the single downloaded upload, and a
+        // stream is on nobody's disk. It is the only thing that lets a removal
+        // stop the engine that was reading what went and leave the other alone.
+        listeningFormat = Self.formatRead(by: source)
         // Play and pause both have to reach the widget, and the only
         // recurring publish is behind a "progress moved" guard that a
         // paused book never passes — so isPlaying could be set true and
@@ -2369,6 +2442,24 @@ public final class AppModel {
         listening?.player.pause()
         listening = nil
         listeningBook = nil
+        listeningFormat = nil
+    }
+
+    /// Which downloaded edition a source reads, if any.
+    ///
+    /// `.files` is a manifest synthesised over a read-along's own narration
+    /// chunks, which are extracted from — and deleted with — the `.readaloud`
+    /// package. `.local` is the server's single upload, the `.audiobook`
+    /// download played whole. A stream reads nothing on this device, so no
+    /// removal can silence it.
+    private static func formatRead(
+        by source: AudiobookCoordinator.Source,
+    ) -> BookContentService.Format? {
+        switch source {
+        case .files: .readaloud
+        case .local: .audiobook
+        case .streaming: nil
+        }
     }
 
     /// Writes the listening position back periodically.
