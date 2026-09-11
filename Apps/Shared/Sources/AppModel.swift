@@ -1083,6 +1083,18 @@ public final class AppModel {
         if narratingBookUUID == bookUUID, Self.removalSilencesNarration(removing: format) {
             stopNarration()
         }
+        // And the hand-off in flight, which owns neither of the two above yet.
+        // A hand-off suspended at `resumeNarration` has already paused the car
+        // engine and is about to start the read-along; left alone it would then
+        // claim the book through `narrationDidStart` and attach Now Playing to
+        // an extraction that is on its way off the disk. Dropping the claim is
+        // what makes it stand down — see `handingOffBook`.
+        //
+        // On the same terms as narration, because that is what a hand-off
+        // starts: out of the read-along's own text and its extracted chunks.
+        if handingOffBook == bookUUID, Self.removalSilencesNarration(removing: format) {
+            handingOffBook = nil
+        }
     }
 
     /// Whether deleting one edition takes the audiobook engine with it.
@@ -1466,6 +1478,19 @@ public final class AppModel {
     /// it.
     private var isHandingOff = false
 
+    /// The book a hand-off is in the middle of moving, held across the one
+    /// suspension that makes this hard.
+    ///
+    /// Identity on the listening slot answers almost everything, and cannot
+    /// answer this: a removal calls `stopPlayback` *before* it deletes, and on
+    /// the playing path our own `play(from:)` then completes and
+    /// `narrationDidStart` re-claims the book — attaching Now Playing to files
+    /// that are on their way off the device. From the slot's point of view
+    /// nothing is wrong: it is empty, which is exactly what a successful
+    /// playing hand-off leaves behind. The claim is what tells the two apart,
+    /// because a removal clears it and a hand-off's own transfer does not.
+    private var handingOffBook: String?
+
     /// Cheap enough to call from anywhere a trigger fires, which is the point:
     /// the decision itself is a ladder in `ListeningHandoff`, and the call
     /// sites should not each carry a copy of "is anything even playing".
@@ -1499,7 +1524,10 @@ public final class AppModel {
     ) async -> ListeningHandoff.Decision {
         guard !isHandingOff else { return .skip(.alreadyHandingOff) }
         isHandingOff = true
-        defer { isHandingOff = false }
+        defer {
+            isHandingOff = false
+            handingOffBook = nil
+        }
 
         let coordinator = listening
         let model = visibleReaderUUID.flatMap { readers[$0] }
@@ -1548,8 +1576,28 @@ public final class AppModel {
         listeningProgressTask = nil
         coordinator.player.pause()
 
+        // The claim, before the one suspension in this method. See
+        // `handingOffBook`: it is the half identity cannot see, because a
+        // removal empties the slot and so does this method's own transfer.
+        handingOffBook = book.uuid
         let took = await model.resumeNarration(at: target.entry, playing: target.wasPlaying)
         guard took else {
+            // But only to an engine that still owns the book. `play(from:)`
+            // returns false *before* `player.play()`, so on this branch no rate
+            // ever changed and `narrationDidStart` cannot have run — nothing of
+            // ours has touched the slot, and strict identity is therefore
+            // exactly right here. A slot that moved anyway was moved by
+            // somebody else: a removal, a sign-out, another book's start.
+            //
+            // Giving the book back to a coordinator `stopListening` has already
+            // stripped would be bad enough on its own; re-arming the writer for
+            // the evicted pair is worse, because `watchListeningProgress` opens
+            // by cancelling `listeningProgressTask` — which is the task the
+            // *new* book has just armed.
+            guard listening === coordinator, handingOffBook == book.uuid else {
+                slotChangedHands(book, coordinator, at: "handOffFailed")
+                return .skip(.slotChangedHands)
+            }
             // The sentence's audio is not on disk. Nothing moved, and the car
             // engine still knows exactly where it is — so give the book back to
             // it rather than leaving a listener in silence with a page that did
@@ -1572,6 +1620,37 @@ public final class AppModel {
             // writes when the progress actually moved.
             watchListeningProgress(book: book, coordinator: coordinator)
             return .skip(.audioFileMissing)
+        }
+
+        // And the same question on the branch that worked, where it cannot be
+        // asked the same way.
+        //
+        // A bare `listening === coordinator` would be wrong here, every single
+        // time, on the playing path: `play(from:)` sets the rate, the observer
+        // fires `narrationDidStart`, and that calls `stopListening(nowPlaying: nil)`
+        // — so the slot legitimately empties as part of this method's own
+        // transfer. `target.wasPlaying` is the only thing that tells the two
+        // apart, and it does so exactly. On the paused path `prepare(at:)`
+        // changes no rate and nothing of ours goes near the slot, so an empty
+        // slot there is unambiguously somebody else's work.
+        //
+        // The claim covers what identity still cannot: an empty slot left by a
+        // removal that ran `stopPlayback` on its way to deleting the files.
+        let slotIsOurs = target.wasPlaying
+            ? (listening == nil || listening === coordinator)
+            : listening === coordinator
+        guard slotIsOurs, handingOffBook == book.uuid else {
+            // The read-along this method just started is now a second voice
+            // over whatever took the book, so it has to be put down. Both
+            // lines, because only one of them applies on each path and each is
+            // a no-op in the other's case: on the playing path
+            // `narrationDidStart` has already claimed the book, so
+            // `stopNarration` is what stops it; on the paused path nothing ever
+            // claimed it, so the player is all there is to pause.
+            model.readalong?.player.pause()
+            if narratingBookUUID == book.uuid { stopNarration() }
+            slotChangedHands(book, coordinator, at: "handedOff")
+            return .skip(.slotChangedHands)
         }
 
         // Explicitly, and not only on the playing path. On that path
@@ -1599,7 +1678,13 @@ public final class AppModel {
         // Defensive only, now: `narrationDidStart` has emptied the slot on both
         // paths. Kept because a coordinator left in it would own the lock
         // screen for a book the reader is now narrating.
-        if listening != nil { stopListening(nowPlaying: nowPlayingController) }
+        //
+        // Identity rather than `!= nil`. The guard above admits an empty slot
+        // on the playing path, which is the ordinary outcome — but it cannot
+        // rule out a slot refilled in that same window by a start of our own
+        // book that got there first, and stopping *that* would silence a
+        // coordinator this hand-off has no claim on at all.
+        if listening === coordinator { stopListening(nowPlaying: nowPlayingController) }
 
         IssaLog.info("listening handed off to reader", [
             "book": book.title, "trigger": trigger.rawValue,
@@ -2414,6 +2499,13 @@ public final class AppModel {
     /// claimed it — a hand-off attaches the reader's own coordinator — and
     /// detaching here would take it straight back off the lock screen, which is
     /// the same trap `narrationDidStart` avoids by passing no controller.
+    ///
+    /// - Returns: the outcome, for `attachListening`, which has a caller that
+    ///   needs it. The hand-off calls this for the `removeRateObservers()` —
+    ///   without it the orphan goes on republishing its book to the widget and
+    ///   the lock screen over whatever took the slot — and has an answer of its
+    ///   own to give.
+    @discardableResult
     private func slotChangedHands(
         _ book: Book, _ coordinator: AudiobookCoordinator, at stage: String,
     ) -> ListeningAttachment {

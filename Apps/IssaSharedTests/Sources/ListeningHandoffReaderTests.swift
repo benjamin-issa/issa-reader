@@ -421,6 +421,137 @@ struct ListeningHandoffReaderTests {
         #expect(app.books.first?.progress == 0.62, "with the stored place untouched")
     }
 
+    // MARK: - The slot changing hands underneath a hand-off
+
+    /// A second book's engine, with nothing behind it. What these assert is
+    /// which coordinator the slot holds, not what comes out of it.
+    static func otherEngine() -> AudiobookCoordinator {
+        AudiobookCoordinator(
+            manifest: AudiobookManifest(
+                metadata: .init(title: ["und": "Another Book"]),
+                readingOrder: [.init(href: "track1.mp3", type: "audio/mpeg", duration: 60)]),
+            source: .files([:]))
+    }
+
+    /// The hand-off awaits `resumeNarration` — a chapter's audio loading, which
+    /// is seconds — and then carried on as though nothing could have happened
+    /// meanwhile. Something can: a removal, a sign-out, or, as here, a second
+    /// book starting. It finished the transfer for a pair the app no longer
+    /// held, claiming narration for a book that had left the slot and calling
+    /// `stopListening` on whatever had taken it — so the book the listener had
+    /// just started went silent, off the mini bar and off the lock screen.
+    ///
+    /// The parked path, where the re-check is plain identity: `prepare(at:)`
+    /// changes no rate, so nothing of this method's own goes near the slot and
+    /// an empty — or different — slot is unambiguously somebody else's work.
+    @Test("a slot taken while the read-along was loading is not handed over")
+    func aSlotTakenDuringTheLoadIsNotHandedOver() async throws {
+        let app = AppModel(notificationCentre: NotificationCenter())
+        let (model, coordinator, book, directory) = try await Self.armed(app)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        app.installListening(coordinator, book: book)
+
+        // Unawaited: everything under test happens while this is suspended
+        // loading chapter two's audio.
+        let handOff = Task { await app.handOffListeningToReader(trigger: .carDisconnected) }
+        await Task.yield()
+        #expect(app.listening === coordinator, "the hand-off has to still be in flight")
+
+        // The listener starts something else while the page is still loading.
+        let other = Self.otherEngine()
+        let otherBook = SharedFixtures.book("Another Book", uuid: "another-book-uuid")
+        app.installListening(other, book: otherBook)
+        let decision = await handOff.value
+
+        #expect(decision == .skip(.slotChangedHands))
+        #expect(app.listening === other, "the hand-off has no claim on what took the slot")
+        #expect(app.listeningBook?.uuid == otherBook.uuid)
+        #expect(app.reader == nil, "nor may it claim narration for a book that left")
+        #expect(model.readalong?.player.isPlaying == false, "and it started no second voice")
+    }
+
+    /// The failure branch, which has the same hole with worse consequences.
+    ///
+    /// A hand-off that cannot place the sentence gives the book back to the car
+    /// engine and re-arms the fifteen-second writer for it. Both are wrong once
+    /// the slot has moved: the engine has already been stripped by whatever took
+    /// the book, and `watchListeningProgress` opens by cancelling
+    /// `listeningProgressTask` — which by then is the task the *new* book armed.
+    /// So a failed hand-off silently disarmed the writer for a book it had
+    /// nothing to do with, and an hour of listening after that was written
+    /// nowhere.
+    ///
+    /// Staged through the car engine's own rate observer, which is the one hook
+    /// that fires inside this window on this branch: `play(from:)` refuses
+    /// *before* it ever suspends, so the slot can only move here by way of
+    /// something the hand-off itself calls, and the hand-off's first act is to
+    /// pause the car engine — which notifies its observers synchronously. The
+    /// state that reaches the guard is the same state a removal leaves on the
+    /// other branch: an empty slot, and an engine that owns nothing.
+    @Test("a failed hand-off gives nothing back to an engine it no longer owns")
+    func aFailedHandOffGivesNothingBackToAStrippedEngine() async throws {
+        let app = AppModel(notificationCentre: NotificationCenter())
+        let (model, coordinator, book, directory) = try await Self.armed(app)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        // Narration pointed at no files at all, so `resumeNarration` refuses —
+        // the half-deleted extraction this branch exists for.
+        let timeline = try #require(model.timeline)
+        model.attachNarration(timeline: timeline, audioFiles: [:])
+        app.installListening(coordinator, book: book)
+        // One shot: `slotChangedHands` pauses the engine again on its way out,
+        // and a second pass would be asserting about its own tidying up.
+        let taken = Gate()
+        coordinator.player.setRateObserver(for: taken) { _ in
+            guard taken.close() else { return }
+            app.stopListening(nowPlaying: nil)
+        }
+
+        let decision = await app.handOffListeningToReader(trigger: .carDisconnected)
+
+        #expect(decision == .skip(.slotChangedHands))
+        #expect(app.listening == nil, "the hand-off must not put a stripped engine back")
+        #expect(coordinator.player.isPlaying == false, "nor start one playing again")
+        #expect(
+            !app.isWritingListeningPosition,
+            "the writer belongs to whatever holds the book now, and must not be cancelled")
+    }
+
+    /// The case identity alone cannot see.
+    ///
+    /// A removal calls `stopPlayback` before it deletes a byte, and on the
+    /// playing path our own `play(from:)` then completes and the rate observer
+    /// fires `narrationDidStart` — which claims the book and attaches Now
+    /// Playing to an extraction that is on its way off the device. The slot is
+    /// empty at the re-check either way, because that is also exactly what a
+    /// successful playing hand-off leaves behind, so only the claim tells the
+    /// two apart: a removal clears it and the hand-off's own transfer does not.
+    @Test("a removal landing inside a playing hand-off does not claim the book")
+    func aRemovalInsideAPlayingHandOffIsNotOverrun() async throws {
+        let app = AppModel(notificationCentre: NotificationCenter())
+        let (model, coordinator, book, directory) = try await Self.armed(app)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        coordinator.player.play()
+        app.installListening(coordinator, book: book)
+
+        let handOff = Task { await app.handOffListeningToReader(trigger: .carDisconnected) }
+        await Task.yield()
+        #expect(app.listening === coordinator, "the hand-off has to still be in flight")
+
+        // The reader deletes the read-along while the page is loading. The real
+        // entry point, because what is under test is that a removal reaches
+        // this at all.
+        app.removeDownload(bookUUID: Self.uuid, format: .readaloud)
+        let decision = await handOff.value
+
+        #expect(decision == .skip(.slotChangedHands))
+        #expect(app.reader == nil, "nothing may narrate a book whose text has gone")
+        #expect(
+            model.readalong?.player.isPlaying == false,
+            "a read-along reading out of a deleted extraction is the silence this prevents")
+        #expect(app.listening == nil)
+        #expect(!app.isWritingListeningPosition)
+    }
+
     // MARK: - Starting, while the book is being taken away
 
     /// The other end of the same slot.
@@ -647,6 +778,20 @@ private final class OriginCapture {
 private final class SeekCount {
     private(set) var count = 0
     func bump() { count += 1 }
+}
+
+/// A one-shot latch, and the object a rate observer is keyed by.
+///
+/// `pause()` notifies its observers every time, and the hand-off pauses the car
+/// engine twice on the branch that uses this — once on the way in, once as it
+/// stands down. Only the first is the moment being staged.
+@MainActor
+private final class Gate {
+    private var open = true
+    func close() -> Bool {
+        defer { open = false }
+        return open
+    }
 }
 
 private extension ListeningHandoff.Decision {

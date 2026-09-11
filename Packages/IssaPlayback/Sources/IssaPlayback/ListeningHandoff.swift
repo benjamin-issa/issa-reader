@@ -100,6 +100,20 @@ public enum ListeningHandoff {
         /// disk. Decided by the caller after the fact rather than by `decide`,
         /// which cannot know what is extracted.
         case audioFileMissing
+        /// The book left the listening slot while the read-along was loading.
+        /// Decided by the caller after the fact, like `audioFileMissing`, and
+        /// for the same reason: `decide` runs before the suspension that makes
+        /// this possible.
+        ///
+        /// Loading a chapter's audio takes long enough for a removal, a
+        /// sign-out or a second book's start to land in the middle of it. What
+        /// the hand-off must not then do is finish: it would give the book back
+        /// to an engine that no longer holds it and re-arm the fifteen-second
+        /// writer for the evicted pair, and `watchListeningProgress` opens by
+        /// cancelling that task — so the writer the *new* book had just armed
+        /// would go with it, and an hour of listening after that would be
+        /// written nowhere.
+        case slotChangedHands
     }
 
     /// Where the reader has to pick the book up.
