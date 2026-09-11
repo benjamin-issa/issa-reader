@@ -449,6 +449,70 @@ struct ChapterClockTests {
         #expect(subject.bookTime == 0)
     }
 
+    /// The same restart on a book whose tracks are not a round number of
+    /// seconds — which is every book, because a duration comes off an audio file.
+    ///
+    /// With no chapter list passed, each chapter starts at exactly
+    /// `startTime(ofTrackAt:)`, and this branch hands that number straight back
+    /// to `locate`. The two used to be different roundings of one sum, so on
+    /// four chunks of `100.1` seconds the restart resolved to
+    /// `300.29999999999995` — a ULP short of the third boundary — and loaded
+    /// *chunk three*, positioned a third of a picosecond from its end. Every
+    /// fixture in this suite uses whole seconds, which are exact in binary, so
+    /// nothing here could see it; `AudiobookManifestLocateTests` states the
+    /// arithmetic on its own.
+    @Test("previous restarts the chapter, not the chunk before it, on fractional durations")
+    func previousRestartsTheChapterNotTheChunkBeforeIt() async {
+        let subject = Self.coordinator(Self.manifest(trackCount: 4, each: 100.1))
+        _ = Self.detachClock(subject)
+
+        // Ten seconds into the last chapter, which is well past the three that
+        // decide between restarting this one and moving back a whole chapter.
+        await subject.seek(toBookTime: 310)
+        #expect(subject.trackIndex == 3)
+        #expect(subject.chapterIndex == 3)
+
+        await subject.previousChapter()
+
+        #expect(subject.trackIndex == 3, "a restart stays in the chapter's own chunk")
+        #expect(subject.chapterIndex == 3)
+        #expect(subject.bookTime == subject.manifest.startTime(ofTrackAt: 3),
+                "and lands on the number the chapter list was built from")
+    }
+
+    /// What the listener actually heard when it did fall back.
+    ///
+    /// A chunk entered a hair from its end runs out inside the second. The
+    /// clock, still in the old chunk, drags the announced chapter back a place;
+    /// the file then ending loads the chunk the restart was supposed to reach,
+    /// `advance()` sees the chapter index move forward, and that is the one
+    /// signal the end-of-chapter sleep timer waits for. A listener who tapped
+    /// "previous" to hear a paragraph again had the book stop on them instead.
+    @Test("the chunk a restart did not fall back into never reports an ending")
+    func aRestartDoesNotStrandTheListenerAtTheEndOfTheChunkBefore() async {
+        let subject = Self.coordinator(Self.manifest(trackCount: 4, each: 100.1))
+        var observed = 0
+        subject.onChapterChangeObserved = { observed += 1 }
+
+        await subject.seek(toBookTime: 310)
+        let tick = Self.detachClock(subject)
+
+        await subject.previousChapter()
+        subject.player.play()
+
+        // The player's own position, whatever the restart made of it, which is
+        // what the periodic observer would deliver a moment later. In the
+        // chapter's own chunk it is zero and says nothing; in the chunk before
+        // it, it is the far end of that file.
+        tick(subject.player.currentTime)
+        subject.player.onFinishedFile?()
+        await Self.settle { observed > 0 || subject.player.isPlaying == false }
+
+        #expect(observed == 0, "nothing ended: the restart was already where it meant to be")
+        #expect(subject.trackIndex == 3)
+        #expect(subject.player.isPlaying == false, "the book simply ran out, at its own end")
+    }
+
     // MARK: - What counts as the listener naming a place
 
     /// `consumeSteering()` is what the fifteen-second writer turns into

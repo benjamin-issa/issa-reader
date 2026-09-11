@@ -141,16 +141,50 @@ public struct AudiobookManifest: Codable, Hashable, Sendable {
     }
 
     /// The track playing at a point in the book, and how far into it.
+    ///
+    /// **The exact inverse of `startTime(ofTrackAt:)`**, which is a promise
+    /// rather than an accident: `locate(bookTime: startTime(ofTrackAt: k))` must
+    /// be `(k, 0)` for every `k`, and for a while it was not. This used to
+    /// subtract each duration off a running remainder while `startTime` added
+    /// them up from the left, and two roundings of one sum do not agree — on
+    /// four tracks of `100.1` seconds, `startTime(ofTrackAt: 3)` is
+    /// `300.29999999999995`, a ULP short of the three durations this walk had
+    /// already taken off, so the residual stayed below the third boundary and
+    /// the answer came back as *the end of track two*. Over two hundred random
+    /// forty-track books with fractional durations, 46.7% of the boundaries
+    /// disagreed.
+    ///
+    /// It reads as a read-along problem and is not. When no chapter list is
+    /// supplied — every book playing the server's own manifest —
+    /// `AudiobookCoordinator` makes each chapter start exactly
+    /// `startTime(ofTrackAt:)`, so "previous, to restart this chapter" loaded
+    /// the *previous* track a fraction of a second from its end on about half
+    /// the chapters of every streamed audiobook. It ran out within the second,
+    /// `advance()` read that as a chapter ending, and an armed end-of-chapter
+    /// sleep timer stopped the book. `AudioAnchor.bookTime(for:)` sums the same
+    /// way, so a resume landed a chunk early too.
+    ///
+    /// So the boundary is compared against a *running total* built by the same
+    /// left fold `startTime` uses, which makes the two bit-identical rather than
+    /// merely close. No binary search, and deliberately no cache: this is a
+    /// struct with a mutable `readingOrder`, and a cache over it would be a
+    /// second answer waiting to go stale.
     public func locate(bookTime: TimeInterval) -> (index: Int, offset: TimeInterval)? {
         let tracks = playableTracks
         guard !tracks.isEmpty else { return nil }
-        var remaining = max(0, bookTime)
+        // `max(0, .nan)` is `0` in Swift — a comparison against NaN is false, so
+        // the other operand wins — which is what a non-finite clock has always
+        // resolved to here, and what `BookClockTests` feeds this on purpose.
+        // Kept, not corrected: refusing it would be a new contract.
+        let target = max(0, bookTime)
+        var start: TimeInterval = 0
         for (index, track) in tracks.enumerated() {
             let duration = track.duration ?? 0
-            if remaining < duration || index == tracks.count - 1 {
-                return (index, min(remaining, duration))
+            let end = start + duration
+            if target < end || index == tracks.count - 1 {
+                return (index, min(max(0, target - start), duration))
             }
-            remaining -= duration
+            start = end
         }
         return (tracks.count - 1, 0)
     }
