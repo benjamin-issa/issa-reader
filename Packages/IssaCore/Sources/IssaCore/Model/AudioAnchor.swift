@@ -45,10 +45,31 @@ public struct AudioAnchor: Codable, Sendable, Equatable {
         self.writtenAt = writtenAt
     }
 
-    /// Whether this anchor is newer than one already held.
-    public func isNewerThan(_ other: AudioAnchor?) -> Bool {
-        guard let other else { return true }
-        return writtenAt > other.writtenAt
+    /// Whether this anchor was written after some other moment — the instant a
+    /// reading position was stored, in practice.
+    ///
+    /// Against an instant rather than against another anchor. The anchor-versus-
+    /// anchor rule already ships, in SQL, in `LibraryStore.setAudioAnchor`'s
+    /// `WHERE excluded.writtenAt > audioAnchor.writtenAt`; a Swift twin of it
+    /// would be a second definition of one rule, free to drift from the one
+    /// that actually decides what is on disk. The question that had no answer
+    /// anywhere was the other one: an anchor is a *place*, a stored position is
+    /// a *place*, and until now the resume ladder trusted the anchor however
+    /// long ago it was written. Narrate to 0.20, relaunch, read on in silence
+    /// to 0.70, press Listen — and the car resumed at 0.20 and then wrote that
+    /// over the 0.70.
+    ///
+    /// `Date` rather than a bare `Double`, because the two numbers being
+    /// compared are in different units: this one is epoch seconds and
+    /// `StoredPosition.timestamp` is epoch milliseconds. See
+    /// `StoredPosition.writtenAt`.
+    ///
+    /// Strictly newer, and nothing rides on the tie: both writers stamp the
+    /// anchor *after* the position it belongs to, so an anchor that is merely
+    /// equal has already lost a race it was never in.
+    public func isNewerThan(_ instant: Date?) -> Bool {
+        guard let instant else { return true }
+        return Date(timeIntervalSince1970: writtenAt) > instant
     }
 }
 

@@ -147,13 +147,22 @@ struct AudioAnchorTests {
         #expect(truth - scaled > 10 * 60, "by \(Int((truth - scaled) / 60)) minutes here")
     }
 
-    @Test("a newer anchor wins, an older one does not")
-    func newerAnchorWins() {
-        let old = AudioAnchor(audioHref: "chapter01.mp3", offset: 10, writtenAt: 100)
-        let new = AudioAnchor(audioHref: "chapter04.mp3", offset: 10, writtenAt: 200)
-        #expect(new.isNewerThan(old))
-        #expect(!old.isNewerThan(new))
-        #expect(new.isNewerThan(nil), "anything beats having none")
+    /// The question the resume ladder asks, which is not "is this anchor newer
+    /// than that one" — that rule ships in SQL, in `setAudioAnchor`, and a
+    /// Swift twin of it would be free to drift. It is "was this anchor written
+    /// after the reading position that is stored now", because reading on in
+    /// silence moves the position and leaves the anchor exactly where the
+    /// narration stopped.
+    @Test("an anchor written after a position beats it, and one written before does not")
+    func anAnchorIsNewerThanAnInstantOrItIsNot() {
+        let anchor = AudioAnchor(audioHref: "chapter04.mp3", offset: 10, writtenAt: 200)
+        #expect(anchor.isNewerThan(Date(timeIntervalSince1970: 100)))
+        #expect(!anchor.isNewerThan(Date(timeIntervalSince1970: 300)))
+        #expect(anchor.isNewerThan(nil), "anything beats a book with no position stored")
+        // Nothing rides on the tie: both writers stamp the anchor *after* the
+        // position it belongs to, so an equal instant means the anchor lost a
+        // race it was never in.
+        #expect(!anchor.isNewerThan(Date(timeIntervalSince1970: 200)))
     }
 
     // MARK: - Which clock a stored position is on

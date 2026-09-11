@@ -44,6 +44,10 @@ public enum ListeningResume {
         case audioPosition
         /// A reading position, converted through the media overlay.
         case readingPositionViaOverlay
+        /// The anchor, resolvable but written before the position that is
+        /// stored now — so somebody read on past it without narration. A real
+        /// place in this track list, and not where the reader got to.
+        case anchorOlderThanPosition
         /// A stored audio position from a *different* cut of the same
         /// narration, scaled onto this manifest's clock. Roughly the right
         /// place in the book and provably not the exact one.
@@ -70,7 +74,7 @@ public enum ListeningResume {
             switch self {
             case .anchor, .audioPosition, .readingPositionViaOverlay:
                 true
-            case .audioPositionFromAnotherManifest:
+            case .anchorOlderThanPosition, .audioPositionFromAnotherManifest:
                 false
             case .noStoredPosition, .noAnchorStored, .anchorNamesUnknownFile:
                 false
@@ -104,20 +108,37 @@ public enum ListeningResume {
     }
 
     /// Runs the ladder, most exact rung first.
+    /// - Parameter stored: the whole stored position, not just its locator —
+    ///   the ladder needs to know *when* it was written, and a `ReadiumLocator`
+    ///   cannot say. Taking the wrapper rather than a second `Double` parameter
+    ///   is deliberate: no bare number in either epoch crosses this boundary
+    ///   for a caller to get the units of wrong. See `StoredPosition.writtenAt`.
     /// - Parameter timeline: the book's media overlay, when it is in memory.
     ///   Absent on a cold launch straight into CarPlay, which is exactly when
     ///   this matters most — hence rung 3 answering nothing rather than
     ///   guessing.
     public static func resolve(
         anchor: AudioAnchor?,
-        stored: ReadiumLocator?,
+        stored: StoredPosition?,
         timeline: SMILTimeline?,
         manifest: AudiobookManifest,
     ) -> Resolution {
-        // 1. The anchor: a file and an offset, in the one language both engines
+        let locator = stored?.locator
+        // Worked out once, because two rungs want it: the exact one at the top
+        // and the fallback at rung 4.
+        let anchorTime = anchor.flatMap { manifest.bookTime(for: $0) }
+
+        // 1. The anchor, as long as nothing has been stored since it was
+        //    written: a file and an offset, in the one language both engines
         //    speak. See `AudioAnchor`.
-        if let anchor, let time = manifest.bookTime(for: anchor) {
-            return Resolution(bookTime: time, reason: .anchor)
+        //
+        //    The age test is the half that was missing. An anchor is written
+        //    when narration plays and left alone afterwards, so reading on in
+        //    silence moves the stored position and not the anchor — narrate to
+        //    0.20, relaunch, read to 0.70, press Listen, and the car resumed at
+        //    0.20 and wrote it over the 0.70 fifteen seconds later.
+        if let anchor, let anchorTime, anchor.isNewerThan(stored?.writtenAt) {
+            return Resolution(bookTime: anchorTime, reason: .anchor)
         }
 
         // 2. A stored position already on *this* manifest's clock.
@@ -130,8 +151,8 @@ public enum ListeningResume {
         //    differently, so both numbers look perfectly reasonable and only
         //    one of them is a place in this book.
         var foreignAudioProgress: Double?
-        if let stored, stored.isAudioScaled, let progress = stored.totalProgression?.asProgression {
-            if manifest.trackIndex(matching: stored.href) != nil {
+        if let locator, locator.isAudioScaled, let progress = locator.totalProgression?.asProgression {
+            if manifest.trackIndex(matching: locator.href) != nil {
                 return Resolution(bookTime: manifest.totalDuration * progress, reason: .audioPosition)
             }
             // Held for rung 5 rather than acted on here: an exact rung below
@@ -143,12 +164,24 @@ public enum ListeningResume {
         //    bridge Storyteller is built on, and exact when the timeline is in
         //    memory. A file and an offset is all this rung ever meant, and all
         //    it now says.
-        if let stored, !stored.isAudioScaled,
+        if let locator, !locator.isAudioScaled,
            let timeline,
-           let fragment = stored.sentenceID,
-           let entry = timeline.entry(forFragment: fragment, inDocument: stored.href),
+           let fragment = locator.sentenceID,
+           let entry = timeline.entry(forFragment: fragment, inDocument: locator.href),
            let time = manifest.bookTime(inFile: entry.audioHref, offset: entry.start) {
             return Resolution(bookTime: time, reason: .readingPositionViaOverlay)
+        }
+
+        // 4. The anchor again, having lost rung 1 on age.
+        //
+        //    Not optional, and not merely tidy. Without it a losing anchor falls
+        //    all the way to nothing, the caller plays from `atProgress: 0`, and
+        //    a stale-but-real place in the book becomes chapter one — which is
+        //    strictly worse than the stale place it was rejected for. It sits
+        //    above rung 5 because a stale anchor is a place *in this track
+        //    list*, where rung 5 infers a place *across* two of them.
+        if let anchorTime {
+            return Resolution(bookTime: anchorTime, reason: .anchorOlderThanPosition)
         }
 
         // 5. The fraction, scaled — and said out loud to be a guess.

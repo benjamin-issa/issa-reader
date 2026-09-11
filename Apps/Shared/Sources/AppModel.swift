@@ -2469,10 +2469,14 @@ public final class AppModel {
         manifestKind: ListeningResume.ManifestKind,
     ) async -> ListeningResume.Resolution {
         let anchor = try? await store?.audioAnchor(forBook: book.uuid)
+        // The whole position, not just its locator: the ladder compares the
+        // anchor's age against when this was written, and a bare locator cannot
+        // say when that was.
         let stored = book.position?.locator
         let overlay = timeline ?? readers[book.uuid]?.timeline
         let resolution = ListeningResume.resolve(
-            anchor: anchor, stored: stored, timeline: overlay, manifest: coordinator.manifest)
+            anchor: anchor, stored: book.position, timeline: overlay,
+            manifest: coordinator.manifest)
 
         // The fields that say *why*, rather than only that it failed. The old
         // line said "no audio anchor for this book yet" in the one case where
@@ -2501,6 +2505,16 @@ public final class AppModel {
             IssaLog.warning("audio anchor names no track in this manifest", fields)
         case .noAnchorStored:
             IssaLog.warning("no audio anchor stored for this book", fields)
+        case .anchorOlderThanPosition:
+            // Somebody read on past the narration in silence. The anchor is
+            // still a real place in this track list, so it plays — and the
+            // clock stays held, because it is not where they got to.
+            if let anchor {
+                fields["anchorHref"] = anchor.audioHref
+                fields["anchorOffset"] = String(format: "%.1f", anchor.offset)
+            }
+            fields["positionWrittenAt"] = book.position.map { "\($0.writtenAt)" } ?? "none"
+            IssaLog.warning("audio anchor is older than the stored position", fields)
         case .audioPositionFromAnotherManifest:
             // Not a failure: the car starts in roughly the right chapter
             // instead of at the title page. Logged all the same, because it is
