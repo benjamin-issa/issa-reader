@@ -61,6 +61,49 @@ struct AudioAnchorTests {
         #expect(Self.manifest().bookTime(for: anchor) == nil)
     }
 
+    /// A book laid out a folder per chapter — `Audio/ch01/track.mp3`,
+    /// `Audio/ch02/track.mp3` — has one file name for the whole novel. The
+    /// exact-href pass covers that while every chunk is present; the moment
+    /// `ChunkManifest.make` drops one for having no file or no length, the
+    /// anchor naming the dropped chunk falls through to the name pass, and the
+    /// surviving chapters all still answer to `track.mp3`. Taking the first of
+    /// them handed back a different chapter *and called it success*, which is
+    /// what releases the hold on the audio clock. A name several tracks answer
+    /// to is a name for none of them.
+    @Test("a file name two tracks answer to names neither of them")
+    func anAmbiguousFileNameMatchesNothing() {
+        let manifest = AudiobookManifest(
+            metadata: .init(title: ["und": "A Novel"]),
+            readingOrder: [
+                .init(href: "OEBPS/Audio/ch01/track.mp3", duration: 120),
+                .init(href: "OEBPS/Audio/ch03/track.mp3", duration: 90),
+            ],
+        )
+        // ch02 was dropped, so nothing matches this href exactly.
+        let anchor = AudioAnchor(audioHref: "OEBPS/Audio/ch02/track.mp3", offset: 30, writtenAt: 1)
+        #expect(manifest.trackIndex(matching: anchor.audioHref) == nil)
+        #expect(manifest.bookTime(for: anchor) == nil,
+                "thirty seconds into a chapter that is not there is not a place in this book")
+    }
+
+    /// The other direction, so the fix cannot be "stop matching on names at
+    /// all": an anchor that names a track outright is answered by that track,
+    /// however many of its neighbours share its file name.
+    @Test("an exact href still wins over a name two tracks share")
+    func anExactHrefWinsOverASharedName() throws {
+        let manifest = AudiobookManifest(
+            metadata: .init(title: ["und": "A Novel"]),
+            readingOrder: [
+                .init(href: "OEBPS/Audio/ch01/track.mp3", duration: 120),
+                .init(href: "OEBPS/Audio/ch02/track.mp3", duration: 90),
+            ],
+        )
+        let anchor = AudioAnchor(audioHref: "OEBPS/Audio/ch02/track.mp3", offset: 30, writtenAt: 1)
+        #expect(manifest.trackIndex(matching: anchor.audioHref) == 1)
+        let time = try #require(manifest.bookTime(for: anchor))
+        #expect(time == 150, "the first chunk's length, plus the offset into the second")
+    }
+
     /// An anchor written against a differently transcoded copy can overshoot,
     /// and overshooting rolls silently into the next chapter.
     @Test("an offset past the end of its track is clamped to that track")

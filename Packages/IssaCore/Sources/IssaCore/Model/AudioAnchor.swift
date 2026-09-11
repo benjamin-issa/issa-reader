@@ -72,11 +72,39 @@ public extension AudiobookManifest {
     /// seconds into the *book*, the resume reported success, and the position
     /// guard let that zero be written over a part-read novel. The exact pass
     /// costs a string compare and cannot be wrong.
+    ///
+    /// And the exact pass is not enough on its own, because it is only reached
+    /// when it misses. `ChunkManifest.make` drops a chunk with no extracted file
+    /// and a chunk with no length, and the moment one of those `track.mp3`s is
+    /// gone the anchor naming it falls through to the name pass — where the
+    /// *other* chapters still answer to `track.mp3`, and the first of them won.
+    /// A different chapter entirely, returned as `.anchor`: reported as a
+    /// success, and a success is what releases the hold on the audio clock. So a
+    /// name that two or more playable tracks answer to is not a name for any of
+    /// them, and this returns nil rather than choosing between them.
+    ///
+    /// Not gated on where the manifest came from. This type does not know its
+    /// own provenance — `ManifestKind` is a label the caller attaches, over in
+    /// IssaPlayback, and reaching for it from IssaCore would invert a package
+    /// dependency — and provenance is in any case only a proxy for the property
+    /// that actually decides the answer, which is whether the name is ambiguous.
+    ///
+    /// One residual risk, documented rather than coded around: if every
+    /// `track.mp3` but one is dropped, the survivor's name *is* unique again,
+    /// and any anchor from that book resolves onto it. The blast radius is a
+    /// manifest with one chunk left in it, where the wrong answer and the right
+    /// one are the same track.
     func trackIndex(matching audioHref: String) -> Int? {
         if let exact = playableTracks.firstIndex(where: { $0.href == audioHref }) { return exact }
         let wanted = Self.audioFileName(audioHref)
         guard !wanted.isEmpty else { return nil }
-        return playableTracks.firstIndex { Self.audioFileName($0.href) == wanted }
+        var match: Int?
+        for (index, track) in playableTracks.enumerated()
+            where Self.audioFileName(track.href) == wanted {
+            guard match == nil else { return nil }
+            match = index
+        }
+        return match
     }
 
     /// Where an anchor falls on this manifest's book clock.

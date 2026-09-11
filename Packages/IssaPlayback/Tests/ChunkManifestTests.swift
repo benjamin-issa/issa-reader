@@ -160,6 +160,48 @@ struct ChunkManifestTests {
         #expect(resolved == 150, "the first chunk's length, plus the offset into the second")
     }
 
+    /// The sequel to the test above, and the case the exact-href pass cannot
+    /// cover by itself: it is only ever reached when it *misses*. Drop one of
+    /// three `track.mp3` chunks and the anchor naming it has no exact match
+    /// left, so it fell through to the file-name pass — where the two survivors
+    /// both answer to `track.mp3` and the first of them won. Chapter two's
+    /// anchor resolved to a place inside chapter one, `ListeningResume` reported
+    /// `.anchor`, and reporting success is what releases the hold on the audio
+    /// clock. Silence at nil is the honest answer; a plausible wrong chapter is
+    /// not.
+    @Test("a chunk dropped for having no file does not hand its anchor to another chapter")
+    func aDroppedChunkDoesNotHandItsAnchorToAnotherChapter() throws {
+        let (_, package, _, directory) = try Self.fixture()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let timeline = Self.synthetic([
+            ("OEBPS/Audio/ch01/track.mp3", "OEBPS/ch01.xhtml", 0, 120),
+            ("OEBPS/Audio/ch02/track.mp3", "OEBPS/ch02.xhtml", 0, 90),
+            ("OEBPS/Audio/ch03/track.mp3", "OEBPS/ch03.xhtml", 0, 60),
+        ])
+
+        // Chapter two's chunk never extracted: a half-deleted download, or a
+        // book whose audio went while it sat paused.
+        let built = ChunkManifest.make(
+            timeline: timeline, package: package,
+            audioFiles: [
+                "OEBPS/Audio/ch01/track.mp3": URL(fileURLWithPath: "/dev/null"),
+                "OEBPS/Audio/ch03/track.mp3": URL(fileURLWithPath: "/dev/null"),
+            ],
+            durations: [:], title: "Fixture")
+        #expect(built.manifest.playableTracks.map(\.href)
+            == ["OEBPS/Audio/ch01/track.mp3", "OEBPS/Audio/ch03/track.mp3"])
+
+        let anchor = AudioAnchor(audioHref: "OEBPS/Audio/ch02/track.mp3", offset: 30, writtenAt: 1)
+        #expect(built.manifest.bookTime(for: anchor) == nil,
+                "this would have been 30 seconds into chapter one, reported as a success")
+
+        // And the chunks that survived are still found at their own paths, so
+        // the rule cannot be "a shared file name resolves to nothing ever".
+        #expect(built.manifest.bookTime(
+            for: AudioAnchor(audioHref: "OEBPS/Audio/ch03/track.mp3", offset: 10, writtenAt: 1))
+            == 130)
+    }
+
     /// `playableTracks` drops a track with no duration, and the chapters are
     /// numbered off the reading order — so a zero-length chunk kept here left
     /// the two lists a track apart, and every chapter after it named the wrong
