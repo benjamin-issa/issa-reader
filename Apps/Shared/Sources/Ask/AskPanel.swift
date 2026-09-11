@@ -1,5 +1,4 @@
 #if os(macOS)
-import AppKit
 import IssaUI
 import SwiftUI
 
@@ -58,7 +57,9 @@ struct AskPanel: View {
     }
 
     /// Three strokes across the corner, which is what a box that can be dragged
-    /// bigger has looked like since long before this one.
+    /// bigger has looked like since long before this one — with the pointer to
+    /// match, because in a popover with no window frame this grip is the only
+    /// thing that says the panel can be resized at all.
     private var grabber: some View {
         ResizeGrip()
             .stroke(Palette.inkTertiary, style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
@@ -68,13 +69,17 @@ struct AskPanel: View {
             // nobody finds.
             .padding(5)
             .contentShape(Rectangle())
-            .onHover { inside in
-                if inside {
-                    NSCursor.frameResize(position: .bottomRight, directions: .all).push()
-                } else {
-                    NSCursor.pop()
-                }
-            }
+            // `.pointerStyle`, not `.onHover` pushing an `NSCursor`. The cursor
+            // stack is a stack: a push has to be matched by a pop, and a popover
+            // dismissed with the pointer still over the grip — which is what
+            // happens at the end of every resize drag, because the drag ends
+            // here and the click that dismisses lands outside — never sends the
+            // hover-out that would pop it. The resize cursor was then left on
+            // the stack with the view that pushed it gone, so nothing could pop
+            // it and the pointer read as a resize arrow over the whole app
+            // until it was quit. `.pointerStyle` is declared rather than
+            // pushed: the style belongs to the view, and goes when it does.
+            .pointerStyle(.frameResize(position: .bottomTrailing))
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
