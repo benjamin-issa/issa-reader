@@ -487,7 +487,7 @@ struct ListeningHandoffReaderTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         app.setForeground(true)
         app.setReaderVisible(Self.uuid, true)
-        app.prepareListeningGuard(for: book, resolved: false)
+        app.prepareListeningGuard(for: book, trusted: false)
         let coordinator = try await Self.startedFromZero(model, files: files)
         app.installListening(coordinator, book: book)
 
