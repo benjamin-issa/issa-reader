@@ -45,18 +45,25 @@ struct NowPlayingAttachTests {
     /// did, so what transfers is what is left rather than what was asked for.
     @Test("a duration timer carries its remaining time to the new engine")
     func aDurationTimerCarriesOver() throws {
+        // Named, and named as a `TimeInterval`, because `remaining` is one and
+        // a bare `45 * 60` beside it is not. Inside `.duration(…)` the literal
+        // is inferred from the parameter and comes out a `TimeInterval`; on its
+        // own in an `#expect` there is nothing to infer it from, so it settles
+        // as an `Int` and the comparison is false however equal the two numbers
+        // look in the failure message — which read `2700.0 == 2700`.
+        let fortyFiveMinutes: TimeInterval = 45 * 60
         let controller = NowPlayingController()
         let book = Self.book()
         controller.attach(coordinator: Self.engine(), book: book)
         let armed = try #require(controller.sleepTimer)
-        armed.start(.duration(45 * 60))
-        #expect(armed.remaining == 45 * 60, "the setup has to have armed something")
+        armed.start(.duration(fortyFiveMinutes))
+        #expect(armed.remaining == fortyFiveMinutes, "the setup has to have armed something")
 
         controller.attach(coordinator: Self.engine(), book: book)
 
-        #expect(controller.sleepTimer?.mode == .duration(45 * 60),
+        #expect(controller.sleepTimer?.mode == .duration(fortyFiveMinutes),
                 "the hand-off silently disarmed a timer the listener had set")
-        #expect(controller.sleepTimer?.remaining == 45 * 60)
+        #expect(controller.sleepTimer?.remaining == fortyFiveMinutes)
         #expect(controller.sleepTimer !== armed, "a new engine gets a timer of its own")
     }
 
