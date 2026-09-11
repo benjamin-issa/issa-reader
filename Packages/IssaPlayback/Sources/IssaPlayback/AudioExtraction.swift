@@ -19,20 +19,46 @@ public enum AudioExtraction {
     /// extraction that was otherwise fine, so the book simply refuses to play.
     /// Coarse on purpose: extraction is I/O-bound and rare, and a lock per book
     /// would be a second thing to get right for no measurable gain.
+    ///
+    /// `removeExtractedAudio` is under it too, and that is the other half of the
+    /// same problem. The removal deletes the very directory an extraction is
+    /// writing into, and the two racing left it torn: some chunks gone, some
+    /// still there, and a manifest built over the survivors. How long a removal
+    /// can be made to wait is bounded by the cancellation check below, which is
+    /// what makes taking the lock on the main actor tolerable — the extraction
+    /// gives up at the next chunk boundary rather than at the end of the book.
     private static let serial = NSLock()
 
     /// Extracts every audio file the timeline references.
     ///
     /// Returns archive href to on-disk URL. Already-extracted files are reused,
     /// so reopening a book costs nothing.
+    ///
+    /// - Parameter isCancelled: asked before anything is created and again
+    ///   between chunks; a true answer throws `CancellationError`. The lock
+    ///   alone is only half a fix — it turns a torn directory into an
+    ///   all-or-nothing one, but the losing run still wins, because `extract`
+    ///   opens by creating the directory and then writes every chunk into it. So
+    ///   a book deleted mid-extraction came straight back, in full, and stayed
+    ///   there uncounted by the storage screen and unreachable from the
+    ///   interface. A long read-along is a hundred and seventy-six files and
+    ///   several hundred megabytes: an extraction revoked at chunk three must
+    ///   not write the remaining hundred and seventy-three.
+    ///
+    ///   The default is honest for every caller in the app. Both of them run
+    ///   inside `Task.detached`, and `Task.isCancelled` read from a synchronous
+    ///   call reads the task that is running it.
     public static func extractAudio(
         from package: EPUBPackage,
         timeline: SMILTimeline,
         bookID: String,
         into directory: URL? = nil,
+        isCancelled: @Sendable () -> Bool = { Task.isCancelled },
     ) throws -> [String: URL] {
         try serial.withLock {
-            try extract(from: package, timeline: timeline, bookID: bookID, into: directory)
+            try extract(
+                from: package, timeline: timeline, bookID: bookID, into: directory,
+                isCancelled: isCancelled)
         }
     }
 
@@ -41,8 +67,13 @@ public enum AudioExtraction {
         timeline: SMILTimeline,
         bookID: String,
         into directory: URL?,
+        isCancelled: @Sendable () -> Bool,
     ) throws -> [String: URL] {
         let base = directory ?? defaultDirectory(for: bookID)
+        // Before the directory exists, not after. This is the line that used to
+        // undo a removal: an extraction that had been waiting on the lock woke
+        // up and re-made the folder the removal had just deleted.
+        guard !isCancelled() else { throw CancellationError() }
         try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
         var mutable = base
         var values = URLResourceValues()
@@ -65,6 +96,12 @@ public enum AudioExtraction {
         for href in hrefs { legacyClaims[(href as NSString).lastPathComponent, default: 0] += 1 }
 
         for href in hrefs {
+            // Between chunks, so a revoked extraction stops at the file it is
+            // on rather than at the end of the book. Throwing rather than
+            // returning what it has: a partial map read as a complete one is a
+            // book that plays chapter one and then stops, which is worse than a
+            // book that says it could not be prepared.
+            guard !isCancelled() else { throw CancellationError() }
             // The whole href, flattened — not `lastPathComponent`, which collides.
             // A book laid out as Audio/ch01/track.mp3, Audio/ch02/track.mp3 —
             // what a CLI-aligned readaloud produces — mapped every chapter onto
@@ -143,7 +180,18 @@ public enum AudioExtraction {
     /// this deletes is by construction the directory `extractAudio` wrote to.
     /// Deriving the path a second time here is how a write path and a delete
     /// path come to disagree, and one of the two then escapes the root.
+    ///
+    /// Under the same lock `extractAudio` holds, because the reader and the car
+    /// can both be extracting this book's narration at the moment the reader
+    /// deletes it. Unlocked, the removal landed in the middle of the write and
+    /// left the directory torn — some chunks gone, some still there — and a
+    /// manifest was then built over whichever survived. Serialised, one of the
+    /// two happens whole; the cancellation check in `extract` is what decides
+    /// which, by making the extraction stand down rather than re-make what this
+    /// has just deleted.
     public static func removeExtractedAudio(for bookID: String, in root: URL? = nil) {
-        try? FileManager.default.removeItem(at: defaultDirectory(for: bookID, in: root))
+        serial.withLock {
+            try? FileManager.default.removeItem(at: defaultDirectory(for: bookID, in: root))
+        }
     }
 }
