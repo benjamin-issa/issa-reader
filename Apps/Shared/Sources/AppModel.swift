@@ -1508,6 +1508,29 @@ public final class AppModel {
     /// because a removal clears it and a hand-off's own transfer does not.
     private var handingOffBook: String?
 
+    /// Whether this book is in the middle of changing engines.
+    ///
+    /// For the reader's own play button, which reads and drives `listening`
+    /// directly — and during this window `listening` is a coordinator that has
+    /// already been paused and is about to be discarded. A tap on it made the
+    /// outgoing engine audible for the rest of the load and, on the path where
+    /// the driver had parked and pressed pause, the hand-off then silenced it
+    /// again: the reader pressed play and the room stayed quiet.
+    ///
+    /// Driving the read-along instead is worse, not better. It has no entry yet
+    /// — `resumeNarration` sets one only once its audio has loaded — so
+    /// `togglePlayback` would take the `startNarration()` branch and run a
+    /// second `load` into the same `AVQueuePlayer` the hand-off is already
+    /// using, and the highlight could land anywhere.
+    ///
+    /// So the tap waits, for as long as one chapter's audio takes to load. At
+    /// the end of it the book is playing or paused exactly as the driver left
+    /// it, which is what the hand-off promises, and the next tap acts on the
+    /// engine that owns the book.
+    func isHandingOffToReader(_ bookUUID: String) -> Bool {
+        handingOffBook == bookUUID
+    }
+
     /// Cheap enough to call from anywhere a trigger fires, which is the point:
     /// the decision itself is a ladder in `ListeningHandoff`, and the call
     /// sites should not each carry a copy of "is anything even playing".

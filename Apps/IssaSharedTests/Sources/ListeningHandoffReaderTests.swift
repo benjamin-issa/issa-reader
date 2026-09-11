@@ -649,6 +649,39 @@ struct ListeningHandoffReaderTests {
         #expect(!app.isWritingListeningPosition)
     }
 
+    /// What the reader's own play button has to consult.
+    ///
+    /// `ReaderView.togglePlaybackForThisBook` reads and drives `app.listening`
+    /// directly, and for the length of a hand-off that is a coordinator which
+    /// has already been paused and is about to be discarded — so a tap in that
+    /// window started the engine the hand-off was taking the book away from,
+    /// and on the parked-and-paused path the hand-off then silenced it again:
+    /// the reader pressed play and the room stayed quiet. The button cannot see
+    /// that from the slot, because the slot still looks exactly as it did
+    /// before the hand-off began.
+    ///
+    /// The view is a SwiftUI view this bundle cannot build, so what is asserted
+    /// here is the fact it asks for, at the moment it would ask.
+    @Test("a book mid-hand-off says so, while its old engine is still in the slot")
+    func aBookMidHandOffIsVisibleToTheReader() async throws {
+        let app = AppModel(notificationCentre: NotificationCenter())
+        let (_, coordinator, book, directory) = try await Self.armed(app)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        app.installListening(coordinator, book: book)
+        #expect(!app.isHandingOffToReader(Self.uuid), "nothing is moving yet")
+
+        let handOff = Task { await app.handOffListeningToReader(trigger: .carDisconnected) }
+        await Task.yield()
+
+        #expect(app.listening === coordinator, "the slot looks exactly as it did before")
+        #expect(coordinator.player.isPlaying == false, "and the button would offer to play it")
+        #expect(app.isHandingOffToReader(Self.uuid),
+                "which is the one thing that says not to")
+
+        _ = await handOff.value
+        #expect(!app.isHandingOffToReader(Self.uuid), "and it is over when it is over")
+    }
+
     // MARK: - Starting, while the book is being taken away
 
     /// The other end of the same slot.

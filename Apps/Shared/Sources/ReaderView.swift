@@ -1114,6 +1114,13 @@ public struct ReaderView: View {
 
     /// Pauses or resumes whichever engine is playing this book.
     private func togglePlaybackForThisBook() async {
+        // Unless it is between the two. `app.listening` is still published
+        // while a hand-off loads the page's audio, and by then that coordinator
+        // has been paused and is about to be discarded — so a tap here started
+        // the engine the hand-off was in the middle of taking the book away
+        // from. See `AppModel.isHandingOffToReader` for why waiting beats both
+        // of the alternatives.
+        guard !app.isHandingOffToReader(model.book.uuid) else { return }
         if app.listeningBook?.uuid == model.book.uuid, let listening = app.listening {
             if listening.player.isPlaying { listening.player.pause() } else { listening.player.play() }
             return
