@@ -153,9 +153,16 @@ is the only way all three can carry the same number.
   and the Dock from the bundle's filename on disk — macOS ignores a
   `CFBundleDisplayName` the filename does not match, which is why setting the
   display name alone left both reading "IssaReader-macOS". The consequence for
-  this script: the fixture-leak scan must not glob on the product name. Its
-  macOS pattern is `Contents/MacOS/*`, and the "inspected no binaries" guard is
-  what catches the next rename.
+  this script: the fixture-leak scan must not glob on the product name, and no
+  longer does. It globs for *bundles* and asks each one what its binary is
+  called, reading `CFBundleExecutable` from the bundle's own `Info.plist`
+  (`Contents/Info.plist` on the Mac, the top level on iOS and tvOS), so a rename
+  carries the scan with it and a bundle that cannot answer fails the release by
+  name. The "inspected no binaries" count is the backstop for an archive with no
+  application bundle in it at all. It was never able to be more than that: on
+  iOS the scan also covered the widget's executable, so a renamed app binary
+  would have left the count at 1 and passed the release having never opened the
+  app.
 - **App Sandbox** is on in both configurations now. Debug signs with the Apple
   Development certificate rather than ad-hoc — ad-hoc gives the bundle a hash
   identifier, the sandbox cannot make a container from that, and the app trapped

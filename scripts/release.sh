@@ -77,6 +77,34 @@ fixture_present() {
     [ "${hits:-0}" -gt 0 ]
 }
 
+# The executable inside a bundle, as the bundle itself names it.
+#
+# Read from `CFBundleExecutable` rather than matched by a glob, because a glob
+# on a name is a guard that stops guarding the moment the name changes and says
+# nothing about it. That has already happened once: the Mac's product became
+# "Issa Reader", the old `Contents/MacOS/IssaReader-*` pattern went from
+# matching to matching nothing, and `nullglob` deleted it rather than
+# complaining. A bundle always knows what its own binary is called.
+#
+# Two shapes, because the platforms differ: macOS keeps the plist at
+# `Contents/Info.plist` and the binary in `Contents/MacOS/`, while iOS and tvOS
+# put both at the top of the bundle. An `.appex` is a bundle too and answers the
+# same question the same way, so extensions need no separate case.
+bundle_executable() {
+    local bundle="$1" plist dir name
+    if [ -f "$bundle/Contents/Info.plist" ]; then
+        plist="$bundle/Contents/Info.plist"
+        dir="$bundle/Contents/MacOS"
+    else
+        plist="$bundle/Info.plist"
+        dir="$bundle"
+    fi
+    [ -f "$plist" ] || return 1
+    name=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$plist" 2>/dev/null) || return 1
+    [ -n "$name" ] || return 1
+    printf '%s' "$dir/$name"
+}
+
 # Prove the guard can fire before trusting it to stay silent.
 #
 # This is the lesson of the bug above: for a whole release cycle the check
@@ -241,15 +269,30 @@ for platform in "${REQUESTED[@]}"; do
         # a stub server and an in-memory token store went with it. Fails the
         # release rather than the review.
         #
-        # `shopt -s nullglob` matters. Without it an unmatched pattern stays
-        # literal, `[ -f ]` skips it, and the loop body never runs — so the
-        # release passed having inspected nothing at all.
+        # The globs find *bundles*, and each bundle names its own binary — see
+        # `bundle_executable`. Nothing here is matched on a product name, so a
+        # rename cannot quietly empty the scan.
+        #
+        # `shopt -s nullglob` still matters, for the enclosing directories: a
+        # platform with no extensions must contribute no `.appex` rather than a
+        # literal pattern, and without it the unmatched one would arrive as a
+        # bundle that cannot be read.
         shopt -s nullglob
         scanned=0
-        for binary in "$archive"/Products/Applications/*.app/IssaReader-* \
-                      "$archive"/Products/Applications/*.app/Contents/MacOS/* \
-                      "$archive"/Products/Applications/*.app/PlugIns/*.appex/IssaWidgets; do
-            [ -f "$binary" ] || continue
+        for bundle in "$archive"/Products/Applications/*.app \
+                      "$archive"/Products/Applications/*.app/PlugIns/*.appex \
+                      "$archive"/Products/Applications/*.app/Contents/PlugIns/*.appex; do
+            # A bundle that will not say what its binary is, or that names one
+            # that is not there, fails the release. Skipping it is what the old
+            # glob did, and doing nothing quietly is the failure being fixed.
+            binary=$(bundle_executable "$bundle") || binary=""
+            if [ -z "$binary" ] || [ ! -f "$binary" ]; then
+                echo "  ERROR: $bundle names no executable this script can find"
+                RESULTS+=("$platform: fixture guard could not read the executable in $bundle")
+                FAILED=1
+                shopt -u nullglob
+                continue 2
+            fi
             scanned=$((scanned + 1))
             if fixture_present "$binary"; then
                 echo "  ERROR: the UI-test fixture is present in $binary"
@@ -262,12 +305,13 @@ for platform in "${REQUESTED[@]}"; do
         shopt -u nullglob
 
         # A guard that inspected nothing is not a guard, and this is the check
-        # that says so out loud. The Mac's product name became "Issa Reader",
-        # its executable moved with it, and the old Contents/MacOS/IssaReader-*
-        # glob went from matching to matching nothing — silently, because
-        # `nullglob` deletes an unmatched pattern rather than complaining. The
-        # macOS glob no longer names the product for that reason; keep it that
-        # way, and let this count be what catches the next rename.
+        # that says so out loud. It is the outer backstop rather than the whole
+        # defence: it fires when an archive holds no application bundle at all,
+        # while a bundle whose binary cannot be resolved has already failed
+        # above, by name, inside the loop. Leaning on this count alone could not
+        # have worked — an iOS archive also scanned the widget, so a renamed app
+        # binary left the count at 1 and the release passed having never opened
+        # the app itself.
         if [ "$scanned" -eq 0 ]; then
             echo "  ERROR: found no binary to scan for the fixture marker in $archive"
             RESULTS+=("$platform: fixture guard inspected no binaries")
