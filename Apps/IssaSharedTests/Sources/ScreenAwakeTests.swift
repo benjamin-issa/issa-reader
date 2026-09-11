@@ -235,6 +235,47 @@ struct AppModelScreenAwakeTests {
         #expect(!SceneForeground.isAnyForeground([.background]))
     }
 
+    /// A car is not a face.
+    ///
+    /// The table above is about *which window speaks for the process*. This is
+    /// a different question the same fold was answering by accident: whether
+    /// the scene is one a person could be looking at at all. `connectedScenes`
+    /// is every scene this process has, and on a drive that includes CarPlay's
+    /// — which stays `.foregroundActive` for the whole journey, phone locked in
+    /// a pocket or not. With no scene-class filter the OR could not go false
+    /// while the cable was in, and `setForeground` no-ops on an unchanged
+    /// value, so nothing put it right afterwards either.
+    ///
+    /// So `ListeningHandoff.decide`'s `guard isForeground` rung was dead at the
+    /// one moment it exists for: the driver parks with the phone still locked
+    /// in a pocket, the car goes away, `carDisconnected` fires, every rung
+    /// passes — and the book is handed to a read-along reading itself aloud
+    /// into a pocket, off a page nobody can see.
+    ///
+    /// `CPTemplateApplicationScene`, `CPTemplateApplicationDashboardScene` and
+    /// `CPTemplateApplicationInstrumentClusterScene` all derive from `UIScene`
+    /// **directly** rather than from `UIWindowScene`, so "is this a window" is
+    /// an exact test rather than an approximation — which is what these rows
+    /// are stated in.
+    @Test("a screen in the dashboard is not a screen anybody is looking at", arguments: [
+        // A drive with the phone locked: the only scene claiming the foreground
+        // is the one bolted to the dashboard.
+        ([SceneForeground.SceneState.car(.foregroundActive)], false),
+        // The reported case, with the phone's own window in the set as well.
+        ([.car(.foregroundActive), .window(.background)], false),
+        // The phone picked up at the lights, or the drive over and the app
+        // reopened: a window is on screen, so the car is beside the point.
+        ([.car(.background), .window(.foregroundActive)], true),
+        // And a window merely inactive is still a window being looked at — the
+        // rule the table above sets, which the car must not bend either way.
+        ([.car(.foregroundActive), .window(.foregroundInactive)], true),
+    ])
+    func aDashboardSceneIsNotAWindow(
+        scenes: [SceneForeground.SceneState], expected: Bool,
+    ) {
+        #expect(SceneForeground.isAnyForeground(scenes) == expected)
+    }
+
     /// The signal each target's scene-phase handler pushes in. `AppModel` has
     /// no `scenePhase` of its own, so this is the one input it cannot see for
     /// itself — and the one whose absence would leave a pocketed phone holding
@@ -249,5 +290,19 @@ struct AppModelScreenAwakeTests {
 
         app.setForeground(true)
         #expect(!app.keepsScreenAwake, "coming back does not invent narration that was never playing")
+    }
+}
+
+/// The two kinds of scene this app can have, named the way the failure is
+/// described rather than by the flag that tells them apart.
+private extension SceneForeground.SceneState {
+    /// A CarPlay template scene. Not a `UIWindowScene`, which is the whole
+    /// point: it is a display in a dashboard, not one in anybody's hand.
+    static func car(_ state: UIScene.ActivationState) -> Self {
+        Self(isOnThisDevice: false, state: state)
+    }
+
+    static func window(_ state: UIScene.ActivationState) -> Self {
+        Self(isOnThisDevice: true, state: state)
     }
 }
