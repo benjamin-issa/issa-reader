@@ -81,9 +81,56 @@ enum ScreenAwake {
 /// `.foregroundInactive` *is* foreground, matching the `!= .background` this
 /// replaces: an app switcher glance or a Control Centre pull is not the iPad
 /// going into a bag, and the reader is looking at the screen throughout.
+///
+/// And a car is not a face. `connectedScenes` is every scene this process has,
+/// which on a drive includes CarPlay's — and a CarPlay scene is `.foregroundActive`
+/// for the whole journey, phone locked in a pocket or not. With no scene-class
+/// filter the OR below could never go false while the car was plugged in, and
+/// `AppModel.setForeground` no-ops on an unchanged value, so nothing corrected
+/// it afterwards either: the flag was pinned true from the moment the cable went
+/// in. That made `ListeningHandoff.decide`'s `guard isForeground` rung dead at
+/// the exact moment it was written for — parking with the phone still locked
+/// handed the book to a read-along playing into a pocket. So the fold asks
+/// whether the scene is one a person could be *looking* at, which is what
+/// "foreground" was always meant to mean here.
 enum SceneForeground {
+    /// One connected scene, reduced to the two facts the fold needs.
+    ///
+    /// A value rather than the scene itself so the decision can be stated in a
+    /// test: `UIScene` cannot be constructed, and a CarPlay scene doubly so —
+    /// it needs a car.
+    struct SceneState: Equatable, Sendable {
+        /// Whether this scene draws on a display belonging to this device.
+        ///
+        /// `UIWindowScene` is an exact test, not an approximation.
+        /// `CPTemplateApplicationScene` and its dashboard and instrument-cluster
+        /// siblings all derive from `UIScene` **directly**, so every scene that
+        /// can put pixels in front of the person holding the phone is a window
+        /// scene and every scene that puts them on a dashboard is not.
+        let isOnThisDevice: Bool
+        let state: UIScene.ActivationState
+
+        init(isOnThisDevice: Bool, state: UIScene.ActivationState) {
+            self.isOnThisDevice = isOnThisDevice
+            self.state = state
+        }
+
+        init(_ scene: UIScene) {
+            self.init(isOnThisDevice: scene is UIWindowScene, state: scene.activationState)
+        }
+    }
+
+    static func isAnyForeground(_ scenes: some Sequence<SceneState>) -> Bool {
+        scenes.contains {
+            $0.isOnThisDevice && ($0.state == .foregroundActive || $0.state == .foregroundInactive)
+        }
+    }
+
+    /// The same fold over bare activation states, which is a different question
+    /// and deliberately kept: *which window speaks for the process*. Every state
+    /// handed here is a window's by construction, so they all count.
     static func isAnyForeground(_ states: some Sequence<UIScene.ActivationState>) -> Bool {
-        states.contains { $0 == .foregroundActive || $0 == .foregroundInactive }
+        isAnyForeground(states.map { SceneState(isOnThisDevice: true, state: $0) })
     }
 
     /// The same question of the live scene list, plus the asking scene's own
@@ -92,11 +139,12 @@ enum SceneForeground {
     /// The phase is OR-ed in because it is the one answer that cannot be stale:
     /// it is the transition that triggered this call. `connectedScenes` is what
     /// sees the *other* windows, which is the half `scenePhase` alone could
-    /// never answer.
+    /// never answer. Safe to OR in even now: `RootView` lives in a `WindowGroup`,
+    /// so the phase reaching here is always a window scene's own.
     @MainActor
     static func isAnyForeground(asking phase: ScenePhase) -> Bool {
         phase != .background
-            || isAnyForeground(UIApplication.shared.connectedScenes.map(\.activationState))
+            || isAnyForeground(UIApplication.shared.connectedScenes.map { SceneState($0) })
     }
 }
 #endif

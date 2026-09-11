@@ -77,6 +77,38 @@ struct StoredPositionTests {
         #expect(subject.position?.uuid == "p", "a new uuid would create a second row on the server")
     }
 
+    // MARK: - When it was written, and in whose units
+
+    /// The trap, held open so it cannot close quietly.
+    ///
+    /// `StoredPosition.timestamp` is epoch **milliseconds** and
+    /// `AudioAnchor.writtenAt` is epoch **seconds**. Both are `Double`, both
+    /// are named for the same idea, and `ListeningResume` now decides which of
+    /// the two is newer. Compared raw, a position stored this second is a
+    /// thousand times the anchor written beside it, so "the anchor is newer"
+    /// would be false for every write this side of the year 54,000 — a rule
+    /// that reads as wired up and does nothing. The assertion below is
+    /// deliberately the loud one: the raw doubles disagree, the instants agree.
+    @Test("a position's instant and an anchor's are a thousandfold apart until they are not")
+    func aPositionsInstantAndAnAnchorsAgreeOnlyAsDates() {
+        // One moment, written down by both writers in the units each uses.
+        let seconds = 1_757_000_000.0
+        let position = book(progress: 0.7, timestamp: seconds * 1000).position!
+        let anchor = AudioAnchor(audioHref: "ch04.mp3", offset: 12, writtenAt: seconds)
+
+        #expect(position.timestamp != anchor.writtenAt,
+                "the two fields are the same instant and nowhere near the same number")
+        #expect(position.timestamp / anchor.writtenAt == 1000)
+        #expect(position.writtenAt == Date(timeIntervalSince1970: anchor.writtenAt))
+
+        // And the comparison the ladder actually makes. Raw, the anchor loses
+        // to every position ever stored; as instants, a second later wins.
+        #expect(anchor.writtenAt < position.timestamp, "which is why the raw compare is a trap")
+        #expect(!anchor.isNewerThan(position.writtenAt), "written together, the anchor does not win")
+        let later = AudioAnchor(audioHref: "ch04.mp3", offset: 12, writtenAt: seconds + 1)
+        #expect(later.isNewerThan(position.writtenAt))
+    }
+
     // MARK: - Reconciling a catalogue refresh
 
     /// The library is refetched wholesale, and a refetch that predates a write

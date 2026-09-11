@@ -83,24 +83,29 @@ struct ReaderChromeTests {
             mac.pageSize(in: Self.window).height == flat.pageSize(in: Self.window).height - 14)
     }
 
-    @Test("a platform with a real toolbar does not also reserve an in-page bar")
-    func macToolbarIsTheWholeTopReserve() {
-        // The Mac draws no bar over the page — it has a window toolbar — but
-        // the reserve added `barHeight` on every platform regardless. So the
-        // page began 44 points below the window top while the titlebar and
-        // toolbar together take about 52, and the first line's box sat under
-        // the chrome. It stayed readable only because the leading above the
-        // glyphs covered the difference, which is luck, not layout: tighten the
-        // line spacing and the first line goes under the toolbar.
-        //
-        // With the toolbar's real height as `safeAreaTop`, the top reserve is
-        // that height and nothing else.
+    @Test("a real toolbar replaces the in-page bar but not the page's top margin")
+    func macToolbarIsTheToolbarPlusTheMargin() {
+        // The Mac draws no bar over the page — it has a window toolbar — and
+        // the first correction was to stop reserving 44 points for a bar that
+        // is not there. But it went one step too far and reserved the toolbar
+        // and nothing else, so the first line sat flush against the toolbar
+        // with no air above it at all and its ascenders shaved by the canvas's
+        // clip. The margin the other three edges get is not one the top can go
+        // without: it is only ever waived because a 44-point bar is already
+        // standing in that space.
         let mac = ReaderChrome(safeAreaTop: 52, safeAreaBottom: 14, margin: 24, drawsOwnTopBar: false)
-        #expect(mac.topReserve == 52)
+        #expect(mac.topReserve == mac.safeAreaTop + mac.margin)
+        #expect(mac.topReserve == 76, "a 52-point toolbar and the shipped 24-point margin")
 
-        // And the page starts exactly at the toolbar's edge — not above it,
-        // which is the bug, and not 44 points below it, which would waste a
-        // band the toolbar has already paid for.
+        // Still the assertion that matters most: the page never begins above
+        // the toolbar, which is where the whole fault started.
+        #expect(mac.topReserve >= mac.safeAreaTop)
+
+        // And it is cheaper than the in-page bar it replaces, so the Mac is not
+        // simply paying twice.
+        let flat = ReaderChrome(safeAreaTop: 52, safeAreaBottom: 14, margin: 24)
+        #expect(mac.topReserve < flat.topReserve)
+
         let phone = ReaderChrome(safeAreaTop: 59, safeAreaBottom: 34, margin: 24)
         #expect(phone.topReserve == 59 + ReaderChrome.barHeight, "unchanged off the Mac")
     }
@@ -110,8 +115,12 @@ struct ReaderChromeTests {
         let mac = ReaderChrome(safeAreaTop: 52, safeAreaBottom: 14, margin: 24, drawsOwnTopBar: false)
         let size = mac.pageSize(in: Self.window)
         // The same invariant the phone is held to: nothing unaccounted for in
-        // either direction. An under-count here is text under the toolbar.
+        // either direction. An under-count here is text under the toolbar, and
+        // a reserve the view does not also draw is the same thing — the top
+        // margin is taken out of the budget here and put on screen by
+        // `ReaderView`, and the two have to be the same number.
         #expect(mac.topReserve + size.height + mac.bottomReserve == Self.window.height)
+        #expect(size.width + mac.margin * 2 == Self.window.width)
     }
 
     @Test("negative insets cannot shrink the reserve")

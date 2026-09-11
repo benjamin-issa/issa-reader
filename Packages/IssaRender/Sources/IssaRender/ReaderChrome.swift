@@ -38,8 +38,9 @@ public struct ReaderChrome: Sendable, Equatable {
     /// the line spacing or shrink the face and the first line goes under the
     /// chrome.
     ///
-    /// Where it is false, `safeAreaTop` carries the real toolbar height and is
-    /// the whole of the top reserve.
+    /// Where it is false, `safeAreaTop` carries the real toolbar height, and
+    /// the page's own margin sits below it — the bar that would otherwise have
+    /// stood in for that margin is not there to do it.
     public let drawsOwnTopBar: Bool
 
     public init(
@@ -60,8 +61,15 @@ public struct ReaderChrome: Sendable, Equatable {
     /// with it. Forty-four points of empty bar is already more breathing room
     /// than the margin was providing, and adding both is how a reading screen
     /// ends up spending a fifth of its height before the first word.
+    ///
+    /// Where there is no such bar, the margin has to be spent after all. The
+    /// Mac reserved the toolbar's height and nothing more, so the first line
+    /// began flush against the toolbar with no air at all above it and its
+    /// ascenders shaved by the canvas's clip. A margin the other three edges
+    /// get is not one the top can go without; it is only ever waived because
+    /// something taller is already standing there.
     public var topReserve: CGFloat {
-        safeAreaTop + (drawsOwnTopBar ? Self.barHeight : 0)
+        safeAreaTop + (drawsOwnTopBar ? Self.barHeight : margin)
     }
 
     /// Distance from the bottom of the window to the last line of text: the home

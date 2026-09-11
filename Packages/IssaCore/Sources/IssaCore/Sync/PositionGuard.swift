@@ -44,9 +44,31 @@ public struct PositionGuard: Sendable, Hashable {
     /// the tolerance on very long audiobooks.
     public let duration: TimeInterval?
 
+    /// Whether this clock is held because the app could not work out, honestly,
+    /// where the listener was.
+    ///
+    /// A high-water mark alone cannot cover that case. Playback that starts at
+    /// the beginning because nothing could be resolved sits *below* the mark
+    /// only when there is a mark on this clock to sit below — and there is
+    /// none, because the stored position was on the other one. So the first
+    /// derived write from a resume-at-zero looked like ordinary forward
+    /// progress, took the mark with it, and replaced a part-read novel's
+    /// position with 0.0001.
+    ///
+    /// A held clock therefore refuses a derived write carrying *no*
+    /// progression too. Such a write makes no claim about where the reader is,
+    /// which is why the ordinary rule waves it through — but `recordPosition`
+    /// still replaces the stored locator with it, and the stored locator is
+    /// the thing being protected. Only the listener naming a place — a
+    /// `.chosen` write — releases the hold.
+    public private(set) var awaitingChoice: Bool
+
     public enum Decision: Sendable, Hashable, Equatable {
         case allow
         case refuse(held: Double, candidate: Double)
+        /// Refused because this clock is held: the app does not know where the
+        /// listener was, and will not guess on their behalf.
+        case awaitChoice(candidate: Double?)
 
         public var isAllowed: Bool { self == .allow }
     }
@@ -64,9 +86,10 @@ public struct PositionGuard: Sendable, Hashable {
     /// so long books are held to a tighter absolute bound.
     static let secondsTolerance: TimeInterval = 300
 
-    public init(highWater: Double = 0, duration: TimeInterval? = nil) {
+    public init(highWater: Double = 0, duration: TimeInterval? = nil, awaitingChoice: Bool = false) {
         self.highWater = min(max(highWater.isFinite ? highWater : 0, 0), 1)
         self.duration = duration
+        self.awaitingChoice = awaitingChoice
     }
 
     var tolerance: Double {
@@ -74,8 +97,50 @@ public struct PositionGuard: Sendable, Hashable {
         return min(Self.fractionTolerance, Self.secondsTolerance / duration)
     }
 
+    /// The same clock with its mark cleared, for when the *other* clock has
+    /// news this one cannot express.
+    ///
+    /// Guards are kept one per book *per clock* — `uuid#text` and `uuid#audio`
+    /// — because a fraction of the text and a fraction of the audio are
+    /// answers to different questions: the unnarrated front matter of a book
+    /// spends text and no seconds, so no value on one corresponds to a value on
+    /// the other. Every seeding rule in `AppModel` is same-clock-only for that
+    /// reason, and the gap it leaves is what happens when the listener steers
+    /// one of them.
+    ///
+    /// The drive: the reader reads to 0.60, so `#text` holds 0.60. In the car
+    /// they scrub, which is a place named — but named on `#audio`, where it
+    /// re-baselines that clock and nothing else. When the drive ends the reader
+    /// is handed the book back at around 0.30 of the text, and that write is
+    /// measured against a 0.60 the listener invalidated hours ago. It is
+    /// refused; `ReaderModel`'s `if accepted, let anchor` then drops the anchor
+    /// with it, and the whole drive persists nowhere.
+    ///
+    /// Cleared, then — not lowered, and not dropped. Lowered is undefined: there
+    /// is no arithmetic from a fraction of the audio to a fraction of the text,
+    /// and that impossibility is the reason the keys are split in the first
+    /// place. Dropped would be worse than it looks, because `admitPosition`
+    /// re-seeds a missing guard from `book.position` — which is exactly where
+    /// the stale mark came from, so the next write on the suspension inside
+    /// `writePosition` would resurrect the very mark being invalidated.
+    ///
+    /// What is kept is everything that is not a claim about the reader:
+    /// `duration` is a fact about the book, and `awaitingChoice` is a fact
+    /// about what this app was able to work out. The hold in particular
+    /// travels through untouched. The 2026-09-09 loss — a car starting at zero
+    /// and writing 0.0001 over a part-read novel — is prevented by the hold and
+    /// not by the mark (see `awaitingChoice`), so clearing a mark can never be
+    /// the thing that lets that write back in.
+    public func forgettingItsMark() -> PositionGuard {
+        PositionGuard(highWater: 0, duration: duration, awaitingChoice: awaitingChoice)
+    }
+
     /// Whether this write may proceed, updating the mark if it may.
     public mutating func decide(_ candidate: Double?, origin: PositionOrigin) -> Decision {
+        // Before the nil check on purpose: a held clock refuses a derived write
+        // that carries no progression as well, because the write still replaces
+        // the stored locator. See `awaitingChoice`.
+        if origin == .derived, awaitingChoice { return .awaitChoice(candidate: candidate) }
         // No progression is not a claim about where the reader is.
         guard let candidate else { return .allow }
         guard candidate.isFinite, candidate >= 0, candidate <= 1 else {
@@ -86,6 +151,8 @@ public struct PositionGuard: Sendable, Hashable {
             // just restarted a finished book must be able to read its first
             // chapter without every page being measured against the ending.
             highWater = candidate
+            // And a place named is exactly what a held clock was waiting for.
+            awaitingChoice = false
             return .allow
         }
         guard candidate >= highWater - tolerance else {

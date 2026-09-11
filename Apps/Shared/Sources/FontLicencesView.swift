@@ -10,7 +10,7 @@ import SwiftUI
 struct FontLicencesView: View {
     var body: some View {
         List {
-            Section {
+            SettingsSection(note: "Every face the app ships is under the SIL Open Font License 1.1. Fonts you import yourself are governed by their own terms.") {
                 ForEach(IssaFonts.allFaces, id: \.family) { face in
                     NavigationLink {
                         LicenceText(face: face)
@@ -28,8 +28,6 @@ struct FontLicencesView: View {
                 }
             } header: {
                 Text("Bundled faces")
-            } footer: {
-                Text("Every face the app ships is under the SIL Open Font License 1.1. Fonts you import yourself are governed by their own terms.")
             }
             .listRowBackground(Palette.surface)
         }

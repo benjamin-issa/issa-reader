@@ -78,7 +78,13 @@ public struct DownloadsView: View {
     // MARK: - Sections
 
     private var storageSection: some View {
-        Section {
+        // Free space is only worth stating when the scan actually produced a
+        // figure; the second half of the sentence is true either way.
+        let note = inventory.freeBytes > 0
+            ? "\(ByteCountText.text(inventory.freeBytes)) free on this device. Downloaded books open with no network at all."
+            : "Downloaded books open with no network at all."
+
+        return SettingsSection(note: note) {
             VStack(alignment: .leading, spacing: Metrics.spacing12) {
                 Text(ByteCountText.text(inventory.totalBytes))
                     .font(Typography.title)
@@ -112,10 +118,6 @@ public struct DownloadsView: View {
                 }
             }
             .padding(.vertical, Metrics.spacing8)
-        } footer: {
-            Text(inventory.freeBytes > 0
-                ? "\(ByteCountText.text(inventory.freeBytes)) free on this device. Downloaded books open with no network at all."
-                : "Downloaded books open with no network at all.")
         }
         .listRowBackground(Palette.surface)
     }
@@ -201,14 +203,41 @@ public struct DownloadsView: View {
 
     private var settingsSection: some View {
         @Bindable var app = app
-        return Section {
-            Toggle("Download over Wi-Fi only", isOn: $app.wifiOnlyDownloads)
+        return SettingsSection(note: Self.meteredRowFooter) {
+            Toggle(Self.meteredRowTitle, isOn: $app.wifiOnlyDownloads)
                 .font(Typography.callout)
                 .tint(Palette.tangerine)
-        } footer: {
-            Text("Applies to downloads you start from now on. A book already in progress carries on.")
         }
         .listRowBackground(Palette.surface)
+    }
+
+    /// What the download rule is called, on a platform that has the connection
+    /// it names.
+    ///
+    /// No Mac has a cellular radio, so "Wi-Fi only" reads there as a setting
+    /// about nothing — or worse, as one that cannot be why a download is
+    /// waiting while the Wi-Fi symbol is lit. The rule underneath is
+    /// `isExpensive`, which folds in `isConstrained`: on a Mac that means an
+    /// iPhone Personal Hotspot or a Low Data Mode network. The protection was
+    /// always real; only the name was wrong.
+    ///
+    /// Two strings rather than two copies of the row, following `hintText` in
+    /// `DownloadsSection`: a row written twice is a tint and a type ramp that
+    /// can drift apart on one platform without anyone noticing.
+    static var meteredRowTitle: String {
+        #if os(macOS)
+        "Pause downloads on metered connections"
+        #else
+        "Download over Wi-Fi only"
+        #endif
+    }
+
+    static var meteredRowFooter: String {
+        #if os(macOS)
+        "Applies to downloads you start from now on. This Mac counts iPhone Personal Hotspot and Low Data Mode networks as metered; a book already in progress carries on."
+        #else
+        "Applies to downloads you start from now on. A book already in progress carries on."
+        #endif
     }
 
     /// The same component the Reading tab draws, transfers included.
@@ -247,21 +276,19 @@ public struct DownloadsView: View {
     @ViewBuilder
     private var orphanSection: some View {
         if !inventory.orphans.isEmpty, !app.books.isEmpty, app.loadError == nil {
-            Section {
+            // `orphanBytes`, not `unaccountedBytes`. The sweep deletes the files
+            // this app can name, and those are a subset: anything else in the
+            // directory — an unzipped folder, a partial transfer, a file the
+            // reader put there — is counted as unaccounted and deliberately
+            // left alone. Promising the larger number offered to free space the
+            // button would not free.
+            SettingsSection(note: "\(ByteCountText.text(inventory.orphanBytes)) of downloads whose books are not in your library any more. They have no row above, so this is the only way to reclaim the space.") {
                 Button("Remove \(inventory.orphans.count) orphaned file\(inventory.orphans.count == 1 ? "" : "s")",
                        role: .destructive) { isConfirmingSweep = true }
                     .font(Typography.callout)
                     .foregroundStyle(Palette.alert)
             } header: {
                 Text("No longer in your library")
-            } footer: {
-                // `orphanBytes`, not `unaccountedBytes`. The sweep deletes the
-                // files this app can name, and those are a subset: anything
-                // else in the directory — an unzipped folder, a partial
-                // transfer, a file the reader put there — is counted as
-                // unaccounted and deliberately left alone. Promising the larger
-                // number offered to free space the button would not free.
-                Text("\(ByteCountText.text(inventory.orphanBytes)) of downloads whose books are not in your library any more. They have no row above, so this is the only way to reclaim the space.")
             }
             .listRowBackground(Palette.surface)
             .confirmationDialog(

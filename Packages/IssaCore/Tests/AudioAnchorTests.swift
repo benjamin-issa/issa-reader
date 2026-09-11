@@ -61,6 +61,49 @@ struct AudioAnchorTests {
         #expect(Self.manifest().bookTime(for: anchor) == nil)
     }
 
+    /// A book laid out a folder per chapter — `Audio/ch01/track.mp3`,
+    /// `Audio/ch02/track.mp3` — has one file name for the whole novel. The
+    /// exact-href pass covers that while every chunk is present; the moment
+    /// `ChunkManifest.make` drops one for having no file or no length, the
+    /// anchor naming the dropped chunk falls through to the name pass, and the
+    /// surviving chapters all still answer to `track.mp3`. Taking the first of
+    /// them handed back a different chapter *and called it success*, which is
+    /// what releases the hold on the audio clock. A name several tracks answer
+    /// to is a name for none of them.
+    @Test("a file name two tracks answer to names neither of them")
+    func anAmbiguousFileNameMatchesNothing() {
+        let manifest = AudiobookManifest(
+            metadata: .init(title: ["und": "A Novel"]),
+            readingOrder: [
+                .init(href: "OEBPS/Audio/ch01/track.mp3", duration: 120),
+                .init(href: "OEBPS/Audio/ch03/track.mp3", duration: 90),
+            ],
+        )
+        // ch02 was dropped, so nothing matches this href exactly.
+        let anchor = AudioAnchor(audioHref: "OEBPS/Audio/ch02/track.mp3", offset: 30, writtenAt: 1)
+        #expect(manifest.trackIndex(matching: anchor.audioHref) == nil)
+        #expect(manifest.bookTime(for: anchor) == nil,
+                "thirty seconds into a chapter that is not there is not a place in this book")
+    }
+
+    /// The other direction, so the fix cannot be "stop matching on names at
+    /// all": an anchor that names a track outright is answered by that track,
+    /// however many of its neighbours share its file name.
+    @Test("an exact href still wins over a name two tracks share")
+    func anExactHrefWinsOverASharedName() throws {
+        let manifest = AudiobookManifest(
+            metadata: .init(title: ["und": "A Novel"]),
+            readingOrder: [
+                .init(href: "OEBPS/Audio/ch01/track.mp3", duration: 120),
+                .init(href: "OEBPS/Audio/ch02/track.mp3", duration: 90),
+            ],
+        )
+        let anchor = AudioAnchor(audioHref: "OEBPS/Audio/ch02/track.mp3", offset: 30, writtenAt: 1)
+        #expect(manifest.trackIndex(matching: anchor.audioHref) == 1)
+        let time = try #require(manifest.bookTime(for: anchor))
+        #expect(time == 150, "the first chunk's length, plus the offset into the second")
+    }
+
     /// An anchor written against a differently transcoded copy can overshoot,
     /// and overshooting rolls silently into the next chapter.
     @Test("an offset past the end of its track is clamped to that track")
@@ -104,13 +147,22 @@ struct AudioAnchorTests {
         #expect(truth - scaled > 10 * 60, "by \(Int((truth - scaled) / 60)) minutes here")
     }
 
-    @Test("a newer anchor wins, an older one does not")
-    func newerAnchorWins() {
-        let old = AudioAnchor(audioHref: "chapter01.mp3", offset: 10, writtenAt: 100)
-        let new = AudioAnchor(audioHref: "chapter04.mp3", offset: 10, writtenAt: 200)
-        #expect(new.isNewerThan(old))
-        #expect(!old.isNewerThan(new))
-        #expect(new.isNewerThan(nil), "anything beats having none")
+    /// The question the resume ladder asks, which is not "is this anchor newer
+    /// than that one" — that rule ships in SQL, in `setAudioAnchor`, and a
+    /// Swift twin of it would be free to drift. It is "was this anchor written
+    /// after the reading position that is stored now", because reading on in
+    /// silence moves the position and leaves the anchor exactly where the
+    /// narration stopped.
+    @Test("an anchor written after a position beats it, and one written before does not")
+    func anAnchorIsNewerThanAnInstantOrItIsNot() {
+        let anchor = AudioAnchor(audioHref: "chapter04.mp3", offset: 10, writtenAt: 200)
+        #expect(anchor.isNewerThan(Date(timeIntervalSince1970: 100)))
+        #expect(!anchor.isNewerThan(Date(timeIntervalSince1970: 300)))
+        #expect(anchor.isNewerThan(nil), "anything beats a book with no position stored")
+        // Nothing rides on the tie: both writers stamp the anchor *after* the
+        // position it belongs to, so an equal instant means the anchor lost a
+        // race it was never in.
+        #expect(!anchor.isNewerThan(Date(timeIntervalSince1970: 200)))
     }
 
     // MARK: - Which clock a stored position is on

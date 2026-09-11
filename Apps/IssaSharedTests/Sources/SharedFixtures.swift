@@ -18,6 +18,13 @@ enum SharedFixtures {
         status: String? = nil,
         progress: Double? = nil,
         positionTimestamp: Double? = nil,
+        /// Which resource the stored position names, and on which clock its
+        /// fraction is measured. Two clocks share `totalProgression` in this
+        /// app — the reader's fraction of the text, the audiobook's fraction of
+        /// the audio — and only the type tells them apart, so a suite about
+        /// listening cannot use the reading default. See `AudioAnchor`.
+        positionHref: String = "OEBPS/ch01.xhtml",
+        positionType: String = "application/xhtml+xml",
         createdAt: String? = nil,
         readaloud: Bool = false,
         audiobook: Bool = false,
@@ -37,8 +44,8 @@ enum SharedFixtures {
         if let progress {
             json["position"] = [
                 "locator": [
-                    "href": "OEBPS/ch01.xhtml",
-                    "type": "application/xhtml+xml",
+                    "href": positionHref,
+                    "type": positionType,
                     "locations": ["totalProgression": progress, "progression": progress],
                 ],
                 "timestamp": positionTimestamp ?? 0,

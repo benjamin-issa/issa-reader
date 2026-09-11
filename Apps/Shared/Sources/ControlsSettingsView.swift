@@ -52,17 +52,24 @@ public struct ControlsSettingsView: View {
         @Bindable var settings = settings
 
         List {
-            Section {
+            SettingsSection(note: "Assign an action to each button. Bindings are per surface, so the wheel can mean something different in the car.") {
                 Picker("Surface", selection: $surface) {
                     ForEach(ControlSurface.allCases, id: \.self) { Text($0.title).tag($0) }
                 }
                 .pickerStyle(.segmented)
-            } footer: {
-                Text("Assign an action to each button. Bindings are per surface, so the wheel can mean something different in the car.")
             }
             .listRowBackground(Palette.surface)
 
-            Section {
+            // Worth saying, because it is the one binding with a visible side
+            // effect elsewhere: iOS draws the skip buttons only while nothing
+            // claims the track buttons. Nothing to say about a car, which has
+            // no Lock Screen — so that surface gets no note at all.
+            let wheelNote: String? = surface == .carPlay
+                ? nil
+                : wheelIsBound
+                    ? "The Lock Screen shows next and previous track while the wheel is assigned."
+                    : "Leave the wheel unassigned and the Lock Screen shows the skip buttons instead."
+            SettingsSection(note: wheelNote) {
                 ForEach(controls, id: \.self) { control in
                     Picker(control.title, selection: binding(for: control)) {
                         ForEach(actions(for: control), id: \.self) { Text($0.title).tag($0) }
@@ -70,19 +77,12 @@ public struct ControlsSettingsView: View {
                 }
             } header: {
                 Text("Buttons")
-            } footer: {
-                // Worth saying, because it is the one binding with a visible
-                // side effect elsewhere: iOS draws the skip buttons only while
-                // nothing claims the track buttons.
-                if surface != .carPlay {
-                    Text(wheelIsBound
-                        ? "The Lock Screen shows next and previous track while the wheel is assigned."
-                        : "Leave the wheel unassigned and the Lock Screen shows the skip buttons instead.")
-                }
             }
             .listRowBackground(Palette.surface)
 
-            Section {
+            // One setting, three places: the note names the jump buttons beside
+            // the chapter name on the reading page, which move by this too.
+            SettingsSection(note: "Used by the skip buttons wherever narration is playing — the player, the Lock Screen, CarPlay — and by the jump buttons next to the chapter name on the reading page.") {
                 // The range is `CommandMap`'s own, not a pair of numbers typed
                 // here: the decoder clamps a stored interval to it, and a
                 // stepper offering a value the decoder would refuse is a
@@ -97,10 +97,6 @@ public struct ControlsSettingsView: View {
                 )
             } header: {
                 Text("Skip amount")
-            } footer: {
-                // One setting, three places: this is also what the jump buttons
-                // beside the chapter name on the reading page move by.
-                Text("Used by the skip buttons wherever narration is playing — the player, the Lock Screen, CarPlay — and by the jump buttons next to the chapter name on the reading page.")
             }
             .listRowBackground(Palette.surface)
 

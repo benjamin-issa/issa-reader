@@ -17,7 +17,7 @@ struct AskSettingsSection: View {
     var body: some View {
         @Bindable var settings = settings
 
-        return Section {
+        return SettingsSection(note: footer) {
             switch availability {
             case .available, .modelDownloading:
                 Toggle("Ask about your book", isOn: $settings.askEnabled)
@@ -36,8 +36,6 @@ struct AskSettingsSection: View {
                 Text("Ask AI about this book")
                 BetaPill()
             }
-        } footer: {
-            Text(footer)
         }
         .listRowBackground(Palette.surface)
         // Re-read when the app comes forward: the reader may have just been to

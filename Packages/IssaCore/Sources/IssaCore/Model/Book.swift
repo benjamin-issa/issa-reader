@@ -349,6 +349,17 @@ public struct StoredPosition: Codable, Hashable, Sendable {
     public var createdAt: FlexibleDate?
     public var updatedAt: FlexibleDate?
 
+    /// When this position was written, as an instant rather than a number.
+    ///
+    /// The trap this exists to close: `timestamp` above is epoch
+    /// **milliseconds**, and `AudioAnchor.writtenAt` is epoch **seconds**. Both
+    /// are `Double`, both are named for the same idea, and comparing them
+    /// directly with `>` is always false for any two writes this decade — so a
+    /// rule about which of the two is newer would read as wired up while doing
+    /// nothing at all. `Date` is the one type both can be converted into
+    /// without either side having to remember which unit the other chose.
+    public var writtenAt: Date { Date(timeIntervalSince1970: timestamp / 1000) }
+
     /// Spelled out because the app builds one itself: a position the app has
     /// just written is already known locally, and asking the server to read it
     /// back is both a round trip and a chance to read a staler value.

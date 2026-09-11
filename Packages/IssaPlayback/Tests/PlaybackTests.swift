@@ -637,6 +637,162 @@ struct ReadalongCoordinatorTests {
         await subject.perform(.play, using: map)
         #expect(subject.player.isPlaying, "play is not a toggle")
     }
+
+    /// The hand-off back from a car that was paused when it was unplugged. The
+    /// page has to move to the sentence it stopped on and the room has to stay
+    /// quiet — and it must not be announced as a seek, because nobody named
+    /// this place: an audio clock did. A seek would relabel the landing as a
+    /// position the reader *chose* and disarm the guard on their real one.
+    @Test("preparing at a sentence moves the highlight silently and announces no seek")
+    func prepareMovesWithoutPlayingOrAnnouncing() async throws {
+        let (subject, timeline, directory) = try Self.make()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let order = OrderLog()
+        subject.onFragmentChange = { _ in order.append("fragment") }
+        subject.onSeek = { order.append("seek") }
+        let entry = try #require(timeline.entries.last)
+
+        let reached = await subject.prepare(at: entry)
+
+        #expect(reached)
+        #expect(subject.activeEntry == entry)
+        #expect(subject.player.isPlaying == false, "preparing is not a play button")
+        #expect(order.events.contains("fragment"), "the highlight still has to move")
+        #expect(!order.events.contains("seek"), "nobody named this place")
+    }
+
+    // MARK: - The clock, while a move is still in flight
+
+    /// The three sentences a mid-move sample needs: one to start from, one to
+    /// move to that is *not* the first of its audio file, and that first
+    /// sentence — which is what a freshly inserted item's clock of zero
+    /// resolves to while the move is still awaiting AVFoundation.
+    static func straySample(
+        in entries: [SMILEntry],
+    ) throws -> (origin: SMILEntry, destination: SMILEntry, stray: SMILEntry) {
+        let first = try #require(entries.first)
+        let index = try #require(
+            entries.indices.first { i in
+                i > 0 && entries[i].audioHref == entries[i - 1].audioHref
+                    && entries[i].textHref != first.textHref
+            },
+            "the fixture needs a second document whose audio file holds more than one sentence")
+        let destination = entries[index]
+        return (
+            origin: try #require(entries.last { $0.textHref == first.textHref }),
+            destination: destination,
+            stray: try #require(entries.first { $0.audioHref == destination.audioHref })
+        )
+    }
+
+    /// `move(to:)` used to set `activeFragmentID` and `activeEntry` only *after*
+    /// `player.load`, and `AudioPlayer.observeTime` attaches its observer to the
+    /// player rather than to the item — so a sample lands in the middle of every
+    /// deliberate move, with the file already swapped and the highlight still
+    /// naming the old sentence. `advance(to:)` answered it, saw the document
+    /// change, and fired `onChapterChangeObserved` →
+    /// `SleepTimer.chapterDidEnd()`: a scrub across a chapter paused a
+    /// read-along with a bedtime timer armed.
+    @Test("a sample delivered mid-move does not report a chapter ending")
+    func aMidMoveSampleIsNotAChapterEnding() async throws {
+        let (subject, timeline, directory) = try Self.make()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let places = try Self.straySample(in: timeline.entries)
+
+        await subject.play(from: places.origin)
+        // The test owns the clock from here, for the reason
+        // `chapterEndPauseSurvivesTheAdvance` spells out: the real observer
+        // would otherwise deliver its own samples over the one under test.
+        let tick = try #require(subject.player.onTimeUpdate)
+        subject.player.onTimeUpdate = nil
+        var observed = 0
+        subject.onChapterChangeObserved = { observed += 1 }
+
+        // Enqueued on the main actor before the move begins, so it runs at the
+        // move's own suspension inside AVFoundation — the window the race lives
+        // in. Zero is what a queue item reports the instant it is inserted.
+        let racing = Task { @MainActor in tick(places.stray.start) }
+        await subject.play(from: places.destination)
+        await racing.value
+
+        #expect(observed == 0, "a chapter the listener scrubbed into did not end")
+        #expect(subject.activeEntry == places.destination,
+                "and the highlight is where the move put it, not on the file's first sentence")
+    }
+
+    /// The other half of the same fix: the page and the highlight are published
+    /// before the audio is asked to travel, not after it arrives. A streamed or
+    /// simply large chapter file takes long enough that the reader sat on the
+    /// old page with the old sentence lit while the seek was still resolving.
+    @Test("the highlight moves before the audio does")
+    func theHighlightMovesBeforeTheAudioDoes() async throws {
+        let (subject, timeline, directory) = try Self.make()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let places = try Self.straySample(in: timeline.entries)
+
+        await subject.play(from: places.origin)
+        subject.player.onTimeUpdate = nil
+        var turned: [String] = []
+        subject.onChapterChange = { turned.append($0) }
+
+        // Sampled from inside the move, and reporting the counter back so a run
+        // that failed to land in the window reads as a harness failure rather
+        // than a pass.
+        let sampled = Task { @MainActor () -> (fragment: String?, progress: Double, inFlight: Int) in
+            var spins = 0
+            while subject.movesInFlight == 0, spins < 100_000 {
+                spins += 1
+                await Task.yield()
+            }
+            return (subject.activeFragmentID, subject.bookProgress, subject.movesInFlight)
+        }
+        await subject.play(from: places.destination)
+        let seen = await sampled.value
+
+        #expect(seen.inFlight == 1, "the sample has to land inside the move")
+        #expect(seen.fragment == places.destination.fragmentID,
+                "the highlight is already on the sentence being moved to")
+        #expect(seen.progress > 0, "and the scrubber has already been told")
+        #expect(turned.contains(places.destination.textHref),
+                "and the page turned, rather than being lost to a mid-move sample")
+    }
+
+    /// The one ending that is real still gets through. `advanceToNextFile`
+    /// captures the document that ran out *before* calling `move`, and announces
+    /// after it returns — by which point the counter is back to zero — so
+    /// silencing the clock for the length of a move must not silence this.
+    @Test("a chapter that ran out still reports an ending")
+    func aChapterThatRanOutStillReportsAnEnding() async throws {
+        let (subject, timeline, directory) = try Self.make()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let entries = timeline.entries
+        let index = try #require(
+            entries.indices.dropLast().first { i in
+                entries[i].audioHref != entries[i + 1].audioHref
+                    && entries[i].textHref != entries[i + 1].textHref
+            },
+            "the fixture needs a chapter boundary that is also a file boundary")
+
+        await subject.play(from: entries[index])
+        // Silenced and frozen, not paused: `isPlaying` is the intent flag the
+        // advance reads, and the real end-of-file notification would otherwise
+        // run a second advance of its own.
+        subject.player.onTimeUpdate = nil
+        subject.player.rate = 0
+        var observed = 0
+        subject.onChapterChangeObserved = { observed += 1 }
+
+        subject.player.onFinishedFile?()
+        // The advance hops through a Task and then awaits a real asset load;
+        // bounded and asserted separately so a timeout reads as a timeout.
+        let deadline = ContinuousClock.now + .seconds(10)
+        while observed == 0, ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+
+        #expect(observed == 1, "a chapter that ran out under the listener did end")
+        #expect(subject.activeEntry?.textHref == entries[index + 1].textHref)
+    }
 }
 
 

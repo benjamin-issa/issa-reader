@@ -22,8 +22,8 @@ settings:
     DEVELOPMENT_TEAM: "$(ISSA_TEAM_ID)"
     CODE_SIGN_STYLE: Automatic
     ENABLE_USER_SCRIPT_SANDBOXING: YES
-    MARKETING_VERSION: "1.1.0"
-    CURRENT_PROJECT_VERSION: "35"
+    MARKETING_VERSION: "1.1.1"
+    CURRENT_PROJECT_VERSION: "40"
 
 packages:
   IssaReaderKit:
@@ -107,6 +107,11 @@ targets:
       # test the assertion rather than the book.
       - path: Packages/IssaEPUB/Tests/Fixtures/alice.epub
         buildPhase: resources
+      # And the read-along fixture, for the landing rules: an audio position
+      # only resolves to a chapter through a media overlay, so testing that
+      # reverse path needs a book that actually has one.
+      - path: Packages/IssaEPUB/Tests/Fixtures/readalong.epub
+        buildPhase: resources
     dependencies:
       - target: IssaReader-iOS
       # The suite covers the reading boundary the Ask index is compared
@@ -183,6 +188,12 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: "$(ISSA_BUNDLE_ID)"
+        # The app menu is CFBundleName, which is $(PRODUCT_NAME), and the Dock
+        # takes its name from the bundle's filename on disk — it ignores a
+        # CFBundleDisplayName that the filename does not match. Both follow the
+        # product name, so renaming here is what stops the Mac calling itself
+        # "IssaReader-macOS" in the menu bar and under the Dock icon.
+        PRODUCT_NAME: "Issa Reader"
         INFOPLIST_FILE: Apps/IssaReader-macOS/Info.plist
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor

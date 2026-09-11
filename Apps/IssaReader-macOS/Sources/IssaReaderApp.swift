@@ -2,55 +2,43 @@ import IssaCore
 import IssaPlayback
 import IssaUI
 import SwiftUI
-import UserNotifications
 
 @main
+@MainActor
 struct IssaReaderMacApp: App {
+    /// Not optional, and not only about quitting: this is the one object the
+    /// process itself calls, and `applicationDidFinishLaunching` is where the
+    /// app is started. See `TerminationDelegate`.
     @NSApplicationDelegateAdaptor(TerminationDelegate.self) private var termination
-    @State private var app = AppModel()
-    @State private var settings = PlaybackSettings()
-    @State private var nowPlaying = NowPlayingController()
-    /// Above every window, because a Mac reader has several books open and an
-    /// answer must outlive the window that asked for it.
-    @State private var ask = AskCoordinator()
-    /// Owned here because `UNUserNotificationCenter` holds its delegate weakly.
-    @State private var askNotifications: AskNotificationDelegate?
 
-    init() {
-        // Package-bundled fonts are not registered automatically the way an
-        // app's UIAppFonts entry would be, so this must run before first render.
-        IssaFonts.register()
-        // Faces the reader imported in an earlier session. Registration is
-        // per-process, so without this a book set in an imported face renders
-        // in the fallback and the setting looks forgotten.
-        if let fonts = CustomFonts.importedDirectory { CustomFonts.registerAll(in: fonts) }
-        // Early builds put downloads in Caches, which iOS purges.
-        BookContentService.migrateFromCachesIfNeeded()
-    }
+    /// The models, owned above every scene rather than by the `App` struct.
+    ///
+    /// As `@State` here they existed for the life of the process too, so this
+    /// is not about lifetime — it is about who *starts* them. The wiring that
+    /// went with those `@State`s lived in the library window's `.task`, and a
+    /// relaunch that restores only reader windows never runs it. `MacAppServices`
+    /// has the full account.
+    private let services = MacAppServices.shared
 
     var body: some Scene {
         WindowGroup {
             MacRootView()
-                .environment(app)
-                .environment(settings)
-                .environment(nowPlaying)
-                .environment(ask)
-                .task {
-                    nowPlaying.configure(settings: settings)
-                    app.nowPlayingController = nowPlaying
-                    termination.flush = { await app.flushOpenReaders() }
-                    app.ask = ask
-                    // Not in `init`: the delegate needs `app` and `ask` as they
-                    // are now, and a `@State` value read in `init` is the
-                    // initial one rather than the live one.
-                    let delegate = AskNotificationDelegate(coordinator: ask, app: app)
-                    askNotifications = delegate
-                    UNUserNotificationCenter.current().delegate = delegate
-                }
+                .environment(services.app)
+                .environment(services.settings)
+                .environment(services.nowPlaying)
+                .environment(services.ask)
+                // Idempotent, and belt-and-braces: the delegate has normally
+                // run by now, but a scene that somehow arrives first must not
+                // find an unstarted app.
+                .task { MacAppServices.shared.start() }
                 .tint(Palette.tangerine)
                 .frame(minWidth: 900, minHeight: 560)
         }
-        .commands { IssaCommands(app: app, settings: settings, nowPlaying: nowPlaying) }
+        .commands {
+            IssaCommands(
+                app: services.app, settings: services.settings,
+                nowPlaying: services.nowPlaying)
+        }
 
         // A book opens in its own window, which is what a Mac reader should do:
         // several books can be open at once, each with its own size, position
@@ -61,14 +49,14 @@ struct IssaReaderMacApp: App {
         // reader window ever opened.
         WindowGroup(id: "Reader", for: String.self) { $bookID in
             ReaderWindow(bookID: bookID)
-                .environment(app)
-                .environment(settings)
-                .environment(nowPlaying)
-                .environment(ask)
-                .task {
-                    nowPlaying.configure(settings: settings)
-                    app.nowPlayingController = nowPlaying
-                }
+                .environment(services.app)
+                .environment(services.settings)
+                .environment(services.nowPlaying)
+                .environment(services.ask)
+                // No `.task` of its own. It used to repeat the Now Playing
+                // wiring, which is the app's and is done once in
+                // `MacAppServices.start()` — `NowPlayingController.configure`
+                // documents what a scene calling it per window cost.
                 .tint(Palette.tangerine)
                 .frame(minWidth: 520, minHeight: 640)
         }
@@ -82,13 +70,9 @@ struct IssaReaderMacApp: App {
         // is off so a relaunch does not restore an empty one.
         UtilityWindow("Now Playing", id: "NowPlaying") {
             NowPlayingPanel()
-                .environment(app)
-                .environment(settings)
-                .environment(nowPlaying)
-                .task {
-                    nowPlaying.configure(settings: settings)
-                    app.nowPlayingController = nowPlaying
-                }
+                .environment(services.app)
+                .environment(services.settings)
+                .environment(services.nowPlaying)
                 .tint(Palette.tangerine)
                 // 640, not 560: the volume row is another 60 points under the
                 // transport, and the panel is `.contentSize`-resizable — so
@@ -104,12 +88,16 @@ struct IssaReaderMacApp: App {
         // ⌘, — the one place a Mac user looks for preferences.
         Settings {
             MacSettingsView()
-                .environment(app)
-                .environment(settings)
-                .environment(nowPlaying)
-                .environment(ask)
+                .environment(services.app)
+                .environment(services.settings)
+                .environment(services.nowPlaying)
+                .environment(services.ask)
                 .tint(Palette.tangerine)
-                .frame(width: 520, height: 420)
+                // Sized for the tallest tab, not the first one. Section footers
+                // wrap to as many lines as they need now rather than truncating
+                // to one, which the Reading and Controls tabs — three long
+                // footers each — spend on height the old 520×420 did not have.
+                .frame(width: 560, height: 520)
         }
     }
 }
@@ -294,11 +282,15 @@ struct MacRootView: View {
 
     var body: some View {
         Group {
+            // No `.onAppear { app.startRestore() }` on these two any more, and
+            // no expiry watch below. Both are the process's work and both are
+            // started by `MacAppServices`, which runs whether or not this window
+            // exists — a relaunch into restored reader windows does not have one.
             switch app.phase {
             case .launching:
-                Palette.paper.ignoresSafeArea().onAppear { app.startRestore() }
+                Palette.paper.ignoresSafeArea()
             case .chooseServer, .signingIn, .expired:
-                SignInView().onAppear { app.startRestore() }
+                SignInView()
             case .ready:
                 readyBody
             }
@@ -309,10 +301,6 @@ struct MacRootView: View {
         .onReceive(NotificationCenter.default.publisher(for: ReaderCommand.player.notification)) { _ in
             openWindow(id: "NowPlaying")
         }
-        // Nothing else moves `phase` to `.expired`, and the device-grant token
-        // goes stale on every install eventually. Without this the Mac kept
-        // rendering the cached shelf while every write quietly queued forever.
-        .task { await app.watchForExpiry() }
         // The Mac declared the `issareader` scheme in its Info.plist and then
         // handled nothing: a widget, Spotlight or Handoff link brought the app
         // to the front and did nothing else. `AppModel.open` is shared and

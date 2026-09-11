@@ -1,5 +1,8 @@
 import Foundation
 import IssaCore
+// For `SMILTimeline`: the listening resolver takes an overlay by name, so the
+// type has to be spelled out here rather than inferred from a reader's.
+import IssaEPUB
 import IssaPlayback
 // For `CustomFonts`: a removal has to take the publisher face the reader model
 // extracted with it, and that directory is IssaUI's to name.
@@ -112,6 +115,13 @@ public final class AppModel {
     private var mutations: MutationQueue?
     public let reachability = Reachability()
     private var listeningProgressTask: Task<Void, Never>?
+    /// Whether the fifteen-second position writer is armed.
+    ///
+    /// Internal rather than private for the same reason as `keepsScreenAwake`:
+    /// a writer nothing re-arms is an hour of listening written nowhere, and
+    /// the paths that drop one — a hand-off that failed, a stop, a start — are
+    /// indistinguishable from outside unless the model can be asked.
+    var isWritingListeningPosition: Bool { listeningProgressTask != nil }
     private var isConnecting = false
     /// Streams books to disk in the background. Created with the session, since
     /// it needs the server URL and the bearer token.
@@ -547,6 +557,9 @@ public final class AppModel {
         // this, account A's finished book refuses every derived write account B
         // makes against it.
         positionGuards = [:]
+        // And what has already been said about them, or the first refusal the
+        // next account meets would be swallowed as a repeat of a departed one.
+        refusalsLogged = [:]
         books = []
         rebuildDerived()
         // Both, or the next refresh would derive the visible set from the
@@ -647,8 +660,14 @@ public final class AppModel {
             let key = Self.positionGuardKey(book.uuid, isAudioScaled: locator.isAudioScaled)
             guard let guardState = positionGuards[key], progress < guardState.highWater
             else { continue }
-            positionGuards[key] = PositionGuard(
-                highWater: progress, duration: LibraryArrangement.duration(of: book))
+            // The hold travels with the mark. A re-seed answers "where is this
+            // book on the server", which is a different question from "does
+            // this app know where the listener was" — dropping `awaitingChoice`
+            // here would have let the next fifteen-second tick through on a
+            // resume nobody had steered.
+            positionGuards[key] = Self.seededGuard(
+                for: book, isAudioScaled: locator.isAudioScaled,
+                highWater: progress, awaitingChoice: guardState.awaitingChoice)
         }
     }
 
@@ -940,6 +959,10 @@ public final class AppModel {
     /// total, absent from the bar, and impossible to delete from the interface
     /// at all. Nothing in a removal ever needed the `Book`.
     public func removeDownload(bookUUID: String, format: BookContentService.Format) {
+        // Before a byte is touched, and before `BookContentService.removeDownload`
+        // in particular: the EPUB a reader is narrating from goes in that call,
+        // not only the derived files below it.
+        stopPlayback(of: bookUUID, format: format)
         let job = DownloadManager.Job(bookUUID: bookUUID, format: format)
         // Cancel, then clear — and both before the file is touched.
         //
@@ -996,6 +1019,13 @@ public final class AppModel {
         // specifically; the sweep names none, because by then it cannot tell
         // which file went.
         if format == nil || format == .readaloud {
+            // Revoked before the removal, never after. `removeExtractedAudio`
+            // takes the same lock the extraction holds, so on this actor the
+            // removal would otherwise *wait* for a cold open of a long
+            // read-along to finish writing all hundred and seventy-six files —
+            // and then delete them, having frozen the app throughout. See
+            // `ReaderModel.cancelNarrationExtraction`.
+            readers[bookUUID]?.cancelNarrationExtraction()
             AudioExtraction.removeExtractedAudio(for: bookUUID)
         }
 
@@ -1027,6 +1057,98 @@ public final class AppModel {
         // reader's book sitting in a database nothing will ever open again.
         ask?.remove(bookUUID: bookUUID)
         #endif
+    }
+
+    /// Silences whatever is playing a book whose files are about to be deleted.
+    ///
+    /// The extracted narration is played straight out of the directory
+    /// `releaseDerivedFiles` removes, through a `.files` source, and nothing
+    /// asked whether anything was reading from it. The current item played on
+    /// and the next `advance()` found the file gone: mid-drive the book stopped
+    /// dead, leaving a log line, a Now Playing tile for a book that would not
+    /// resume, and no transport control anywhere that could put it right.
+    ///
+    /// The same two lines sign-out uses, for the same reason — see
+    /// `clearAccountScopedState` — and both are needed: an audiobook plays
+    /// through `listening`, a read-along through the reader's own coordinator,
+    /// and a removal cannot know which the listener chose.
+    ///
+    /// It does know which *file* is going, though, and that used to be thrown
+    /// away: this keyed on the book uuid alone while `releaseDerivedFiles`
+    /// beside it is format-aware. So deleting the ebook of a book whose
+    /// audiobook was streaming out of the car silenced the drive, having
+    /// deleted nothing the engine was reading.
+    ///
+    /// - Parameter format: the edition being removed, or nil for the
+    ///   reconciliation sweep — which cannot tell which file went, so
+    ///   everything playing this book goes.
+    private func stopPlayback(of bookUUID: String, format: BookContentService.Format?) {
+        if listeningBook?.uuid == bookUUID,
+           Self.removalSilencesListening(reading: listeningFormat, removing: format) {
+            stopListening(nowPlaying: nowPlayingController)
+        }
+        if narratingBookUUID == bookUUID, Self.removalSilencesNarration(removing: format) {
+            stopNarration()
+        }
+        // And the hand-off in flight, which owns neither of the two above yet.
+        // A hand-off suspended at `resumeNarration` has already paused the car
+        // engine and is about to start the read-along; left alone it would then
+        // claim the book through `narrationDidStart` and attach Now Playing to
+        // an extraction that is on its way off the disk. Dropping the claim is
+        // what makes it stand down — see `handingOffBook`.
+        //
+        // On the same terms as narration, because that is what a hand-off
+        // starts: out of the read-along's own text and its extracted chunks.
+        if handingOffBook == bookUUID, Self.removalSilencesNarration(removing: format) {
+            handingOffBook = nil
+        }
+        // And a start that has claimed the book but not yet reached
+        // `attachListening`. For the whole manifest fetch, chunk extraction and
+        // duration measurement — seconds on a long book — `listeningBook` was
+        // still nil, so a removal saw nothing playing and did nothing; the start
+        // then woke up and installed a coordinator over files that had just been
+        // deleted. On the same terms as the engine, because the claim carries
+        // which download the start expects to read.
+        if startingListening?.bookUUID == bookUUID,
+           Self.removalSilencesListening(reading: startingListening?.format, removing: format) {
+            startingListening = nil
+            // Dropping the claim stops the *start*. It does not stop the work:
+            // `Task.detached` does not inherit cancellation, so without this the
+            // extraction carried on inflating several hundred megabytes back
+            // into the directory this removal is about to delete — which is how
+            // a removal came to free nothing at all.
+            listeningExtraction?.cancel()
+        }
+    }
+
+    /// Whether deleting one edition takes the audiobook engine with it.
+    ///
+    /// Three answers, and the two nils are the interesting ones. No format at
+    /// all is the sweep, which knows only that the book's files have gone —
+    /// everything stops. No `reading` is a *stream*, and no removal can silence
+    /// a book the device never held: stopping a stream because a download was
+    /// deleted would be a fresh bug in place of the fixed one. Otherwise the
+    /// engine stops exactly when the file it is reading is the file going away.
+    static func removalSilencesListening(
+        reading: BookContentService.Format?, removing removed: BookContentService.Format?,
+    ) -> Bool {
+        guard let removed else { return true }
+        guard let reading else { return false }
+        return reading == removed
+    }
+
+    /// And whether it takes the read-along with it.
+    ///
+    /// Narration is only ever built from the `.readaloud` package —
+    /// `ReaderModel.prepareNarration` hands `AudioExtraction` that file and no
+    /// other — so a reader opened on an `.ebook` has an empty timeline, a nil
+    /// `readalong`, and cannot be the thing making a sound. Removing the ebook
+    /// therefore stops nothing. What it *does* still take is the publisher face
+    /// and the question index, and only when it was the last text on the
+    /// device: that is `releaseDerivedFiles`' rule, and neither of those is
+    /// playback.
+    static func removalSilencesNarration(removing removed: BookContentService.Format?) -> Bool {
+        removed == nil || removed == .readaloud
     }
 
     /// Re-reads which books have files on disk, and cleans up after any that
@@ -1122,7 +1244,16 @@ public final class AppModel {
     func reconcileDownloads(previouslyDownloaded previous: Set<String>) {
         let departed = DownloadsInventory.departed(from: previous, to: downloadedUUIDs)
         guard !departed.isEmpty else { return }
-        for bookUUID in departed { releaseDerivedFiles(for: bookUUID, format: nil) }
+        for bookUUID in departed {
+            // The sweep deletes the same narration directory a removal does, so
+            // it needs the same courtesy: a book whose file left behind the
+            // app's back can still be the one playing. See `stopPlayback`.
+            // No format, for the same reason `releaseDerivedFiles` gets none:
+            // by here the files have already gone and there is nothing left to
+            // ask which of them it was.
+            stopPlayback(of: bookUUID, format: nil)
+            releaseDerivedFiles(for: bookUUID, format: nil)
+        }
         IssaLog.info("reconciled downloads", ["gone": String(departed.count)])
     }
 
@@ -1333,7 +1464,317 @@ public final class AppModel {
     /// screen that started it — that is the whole point of an audiobook.
     public private(set) var listening: AudiobookCoordinator?
     public private(set) var listeningBook: Book?
+    /// Which downloaded edition the engine in the slot is reading out of, or
+    /// nil when it is reading nothing on this device at all.
+    ///
+    /// Remembered rather than asked of the coordinator, which cannot answer.
+    /// `AudiobookCoordinator.source` is a `private let`, and `manifestKind`
+    /// cannot stand in for it either: `.original` covers both the downloaded
+    /// single upload and a stream, and stopping a stream because a *download*
+    /// was deleted would be a new bug of its own. So the one place that knows —
+    /// `attachListening`, which is handed the source — writes it down.
+    private(set) var listeningFormat: BookContentService.Format?
     public private(set) var listeningError: String?
+
+    /// Which surface is driving playback right now.
+    ///
+    /// Platform-neutral on purpose: only the iOS target has a CarPlay scene, so
+    /// only it ever pushes `.carPlay` in, and every other target keeps the
+    /// `.phone` default and gets the ordinary behaviour rather than a `#if`
+    /// around the decision that reads it.
+    public private(set) var controlSurface: ControlSurface = .phone
+
+    /// Pushed in by the CarPlay bridge as the car comes and goes.
+    ///
+    /// The car going away is itself a reason to reconsider the hand-off: the
+    /// driver has parked, and if the reader is already on screen the book
+    /// should move to the page rather than carry on through the phone's
+    /// speaker.
+    public func setControlSurface(_ surface: ControlSurface) {
+        guard controlSurface != surface else { return }
+        controlSurface = surface
+        if surface == .phone { considerListeningHandoff(trigger: .carDisconnected) }
+    }
+
+    /// Re-entrancy guard. The four triggers overlap — waking a phone onto an
+    /// open reader fires three of them within a frame — and a second pass while
+    /// the first is awaiting an audio load would stop the engine out from under
+    /// it.
+    private var isHandingOff = false
+
+    /// The book a hand-off is in the middle of moving, held across the one
+    /// suspension that makes this hard.
+    ///
+    /// Identity on the listening slot answers almost everything, and cannot
+    /// answer this: a removal calls `stopPlayback` *before* it deletes, and on
+    /// the playing path our own `play(from:)` then completes and
+    /// `narrationDidStart` re-claims the book — attaching Now Playing to files
+    /// that are on their way off the device. From the slot's point of view
+    /// nothing is wrong: it is empty, which is exactly what a successful
+    /// playing hand-off leaves behind. The claim is what tells the two apart,
+    /// because a removal clears it and a hand-off's own transfer does not.
+    private var handingOffBook: String?
+
+    /// Whether this book is in the middle of changing engines.
+    ///
+    /// For the reader's own play button, which reads and drives `listening`
+    /// directly — and during this window `listening` is a coordinator that has
+    /// already been paused and is about to be discarded. A tap on it made the
+    /// outgoing engine audible for the rest of the load and, on the path where
+    /// the driver had parked and pressed pause, the hand-off then silenced it
+    /// again: the reader pressed play and the room stayed quiet.
+    ///
+    /// Driving the read-along instead is worse, not better. It has no entry yet
+    /// — `resumeNarration` sets one only once its audio has loaded — so
+    /// `togglePlayback` would take the `startNarration()` branch and run a
+    /// second `load` into the same `AVQueuePlayer` the hand-off is already
+    /// using, and the highlight could land anywhere.
+    ///
+    /// So the tap waits, for as long as one chapter's audio takes to load. At
+    /// the end of it the book is playing or paused exactly as the driver left
+    /// it, which is what the hand-off promises, and the next tap acts on the
+    /// engine that owns the book.
+    func isHandingOffToReader(_ bookUUID: String) -> Bool {
+        handingOffBook == bookUUID
+    }
+
+    /// Cheap enough to call from anywhere a trigger fires, which is the point:
+    /// the decision itself is a ladder in `ListeningHandoff`, and the call
+    /// sites should not each carry a copy of "is anything even playing".
+    /// - Parameter duringStart: whether the caller *is* the start, at the point
+    ///   where it has finished. Named rather than dodged: what the
+    ///   `isStartingListening` veto protects is stated above it — a hand-off
+    ///   must not overrun `attachListening`'s two suspensions — and at the
+    ///   `.started` return both are behind us, the coordinator is positioned,
+    ///   the snapshot is published and the writer is armed. There is nothing
+    ///   left for a hand-off to overrun.
+    private func considerListeningHandoff(
+        trigger: ListeningHandoff.Trigger, duringStart: Bool = false,
+    ) {
+        // `isStartingListening` as well as `isHandingOff`, because the two move
+        // the same slot from opposite ends. `attachListening` publishes
+        // `listening` and then suspends twice — a resume to resolve, an
+        // AVFoundation item to load — and a hand-off firing in that window
+        // stops a coordinator the start is still holding. The start re-checks
+        // the slot after every await; this is the other half, so the two cannot
+        // interleave in the first place.
+        guard listening != nil, !isHandingOff, duringStart || !isStartingListening
+        else { return }
+        Task { await handOffListeningToReader(trigger: trigger) }
+    }
+
+    /// Moves a book playing through the audiobook engine onto the reader that
+    /// is looking at it.
+    ///
+    /// The end of a drive. `AudiobookCoordinator` is what CarPlay and the lock
+    /// screen start, and for a downloaded read-along it plays the EPUB's own
+    /// narration chunks — so it knows exactly where it is, and the page knows
+    /// nothing. Picking the phone up used to leave the reader sitting an hour
+    /// behind the voice coming out of it. See `ListeningHandoff` for the ladder
+    /// and for why every rung of it is somebody's ordinary Tuesday.
+    ///
+    /// - Returns: what was decided, so a test can name it. Callers that just
+    ///   want the behaviour ignore it.
+    @discardableResult
+    func handOffListeningToReader(
+        trigger: ListeningHandoff.Trigger,
+    ) async -> ListeningHandoff.Decision {
+        guard !isHandingOff else { return .skip(.alreadyHandingOff) }
+        isHandingOff = true
+        defer {
+            isHandingOff = false
+            handingOffBook = nil
+        }
+
+        let coordinator = listening
+        let model = visibleReaderUUID.flatMap { readers[$0] }
+        // The audio clock's own guard, asked rather than re-derived: it is
+        // `prepareListeningGuard` that decided this book started from nowhere,
+        // and a second copy of that judgement here is a second thing to keep in
+        // step. Held means the car is playing from zero because nothing could be
+        // resolved, so its anchor says nothing about the novel — see
+        // `ListeningHandoff.Skip.resumeUnresolved`.
+        let held = listeningBook.map {
+            positionGuards[Self.positionGuardKey($0.uuid, isAudioScaled: true)]?
+                .awaitingChoice ?? false
+        } ?? false
+        let decision = ListeningHandoff.decide(
+            listeningBookUUID: listeningBook?.uuid,
+            visibleBookUUID: visibleReaderUUID,
+            surface: controlSurface,
+            isForeground: isForeground,
+            resumeWasUnresolved: held,
+            anchor: coordinator?.currentAnchor,
+            isPlaying: coordinator?.player.isPlaying ?? false,
+            package: model?.package,
+            timeline: model?.timeline,
+            hasReadalong: model?.readalong != nil,
+        )
+        guard case let .handOff(target) = decision else {
+            if case let .skip(reason) = decision, reason != .notListening {
+                // `notListening` is the resting state — three of the four
+                // triggers fire on every wake — so logging it would bury the
+                // eight reasons worth reading.
+                IssaLog.info("listening hand-off skipped", [
+                    "book": listeningBook?.title ?? "none",
+                    "trigger": trigger.rawValue, "reason": reason.rawValue,
+                ])
+            }
+            return decision
+        }
+        // Unreachable: `.handOff` needs an anchor, which needs a coordinator,
+        // and a package, which needs a model. Spelled out rather than forced.
+        guard let coordinator, let model, let book = listeningBook else { return decision }
+
+        // Before anything moves. The fifteen-second writer is bound to the
+        // audiobook's clock, and leaving it running while the read-along takes
+        // the book over means two engines writing positions for one novel.
+        listeningProgressTask?.cancel()
+        listeningProgressTask = nil
+        coordinator.player.pause()
+
+        // The claim, before the one suspension in this method. See
+        // `handingOffBook`: it is the half identity cannot see, because a
+        // removal empties the slot and so does this method's own transfer.
+        handingOffBook = book.uuid
+        let took = await model.resumeNarration(at: target.entry, playing: target.wasPlaying)
+        guard took else {
+            // But only to an engine that still owns the book. `play(from:)`
+            // returns false *before* `player.play()`, so on this branch no rate
+            // ever changed and `narrationDidStart` cannot have run — nothing of
+            // ours has touched the slot, and strict identity is therefore
+            // exactly right here. A slot that moved anyway was moved by
+            // somebody else: a removal, a sign-out, another book's start.
+            //
+            // Giving the book back to a coordinator `stopListening` has already
+            // stripped would be bad enough on its own; re-arming the writer for
+            // the evicted pair is worse, because `watchListeningProgress` opens
+            // by cancelling `listeningProgressTask` — which is the task the
+            // *new* book has just armed.
+            guard listening === coordinator, handingOffBook == book.uuid else {
+                slotChangedHands(book, coordinator, at: "handOffFailed")
+                return .skip(.slotChangedHands)
+            }
+            // The sentence's audio is not on disk. Nothing moved, and the car
+            // engine still knows exactly where it is — so give the book back to
+            // it rather than leaving a listener in silence with a page that did
+            // not turn either.
+            IssaLog.warning("listening hand-off failed", [
+                "book": book.title, "trigger": trigger.rawValue,
+                "reason": "audioFileMissing", "fragment": target.entry.fragmentID,
+                "audioHref": target.entry.audioHref,
+            ])
+            if target.wasPlaying {
+                coordinator.player.play()
+            }
+            // The writer, whatever the car was doing — and this used to be
+            // inside the branch above. A *paused* car whose hand-off failed was
+            // left with `listening` still installed, Now Playing still attached
+            // and nothing writing positions at all: neither `startListening`'s
+            // same-book fast path nor a lock-screen play re-arms it, so an hour
+            // of listening from that pause onwards was written nowhere. It
+            // costs nothing to arm on a paused book, because the loop only
+            // writes when the progress actually moved.
+            watchListeningProgress(book: book, coordinator: coordinator)
+            return .skip(.audioFileMissing)
+        }
+
+        // And the same question on the branch that worked, where it cannot be
+        // asked the same way.
+        //
+        // A bare `listening === coordinator` would be wrong here, every single
+        // time, on the playing path: `play(from:)` sets the rate, the observer
+        // fires `narrationDidStart`, and that calls `stopListening(nowPlaying: nil)`
+        // — so the slot legitimately empties as part of this method's own
+        // transfer. `target.wasPlaying` is the only thing that tells the two
+        // apart, and it does so exactly. On the paused path `prepare(at:)`
+        // changes no rate and nothing of ours goes near the slot, so an empty
+        // slot there is unambiguously somebody else's work.
+        //
+        // The claim covers what identity still cannot: an empty slot left by a
+        // removal that ran `stopPlayback` on its way to deleting the files.
+        let slotIsOurs = target.wasPlaying
+            ? (listening == nil || listening === coordinator)
+            : listening === coordinator
+        guard slotIsOurs, handingOffBook == book.uuid else {
+            // The read-along this method just started is now a second voice
+            // over whatever took the book, so it has to be put down. Both
+            // lines, because only one of them applies on each path and each is
+            // a no-op in the other's case: on the playing path
+            // `narrationDidStart` has already claimed the book, so
+            // `stopNarration` is what stops it; on the paused path nothing ever
+            // claimed it, so the player is all there is to pause.
+            model.readalong?.player.pause()
+            if narratingBookUUID == book.uuid { stopNarration() }
+            slotChangedHands(book, coordinator, at: "handedOff")
+            return .skip(.slotChangedHands)
+        }
+
+        // Explicitly, and not only on the playing path. On that path
+        // `play(from:)` has already driven the rate observer through
+        // `narrationDidStart`; on the paused path `prepare(at:)` changes no
+        // rate, so nothing had run at all.
+        //
+        // This used to be a bare `stopListening(nowPlaying: nowPlayingController)`,
+        // which does take the paused audiobook off Now Playing — and takes the
+        // book off everything else with it. `narratingBookUUID` was still nil,
+        // so `playback` and `playbackBook` both went nil too: no mini bar, no
+        // player sheet, no sleep timer, and a car whose `playingBookUUID`,
+        // chapters and current chapter had all gone empty. The driver who
+        // parked and paused got the right page and not one transport control
+        // anywhere.
+        //
+        // `narrationDidStart` is exactly the transfer that was missing: it
+        // pauses any other narrating book, calls `stopListening(nowPlaying: nil)`
+        // — deliberately *without* the controller, so Now Playing is handed
+        // over rather than stripped — claims `narratingBookUUID`, attaches Now
+        // Playing to the reader's own coordinator and recomputes the display
+        // hold. Every one of its guards passes here, and on the playing path it
+        // has already run, where its first guard makes this a no-op.
+        narrationDidStart(for: book.uuid)
+        // Defensive only, now: `narrationDidStart` has emptied the slot on both
+        // paths. Kept because a coordinator left in it would own the lock
+        // screen for a book the reader is now narrating.
+        //
+        // Identity rather than `!= nil`. The guard above admits an empty slot
+        // on the playing path, which is the ordinary outcome — but it cannot
+        // rule out a slot refilled in that same window by a start of our own
+        // book that got there first, and stopping *that* would silence a
+        // coordinator this hand-off has no claim on at all.
+        if listening === coordinator { stopListening(nowPlaying: nowPlayingController) }
+
+        IssaLog.info("listening handed off to reader", [
+            "book": book.title, "trigger": trigger.rawValue,
+            "fragment": target.entry.fragmentID,
+            "chapter": String(target.spineIndex),
+            "atOffset": String(format: "%.1f", target.anchor.offset),
+            "wasPlaying": String(target.wasPlaying),
+        ])
+        // The read-along may now be narrating a visible page, which is the one
+        // combination that holds the display awake.
+        updateScreenAwake()
+        return decision
+    }
+
+    /// Puts a coordinator in the listening slot and nothing else.
+    ///
+    /// A test seam. `startListening` fetches a manifest, resolves a resume
+    /// point and claims Now Playing before it gets here, none of which a test
+    /// about the hand-off has any use for — and the alternative is a suite that
+    /// needs a server to assert what happens when a car is unplugged.
+    /// - Parameter format: which download the engine is reading, as
+    ///   `attachListening` would have derived it from the source. Defaulted to
+    ///   the read-along's own chunks, which is what every suite that predates
+    ///   the question was implicitly staging, so those keep meaning what they
+    ///   meant.
+    func installListening(
+        _ coordinator: AudiobookCoordinator, book: Book,
+        reading format: BookContentService.Format? = .readaloud,
+    ) {
+        listening = coordinator
+        listeningBook = book
+        listeningFormat = format
+    }
 
     /// Every open book's reader model, one per book, keyed by uuid.
     ///
@@ -1386,6 +1827,9 @@ public final class AppModel {
         // Both directions: a reader appearing over running narration is what
         // takes the hold, and one being dismissed is what gives it back.
         updateScreenAwake()
+        // A reader arriving on the book the car is playing is the commonest way
+        // a drive ends.
+        if visible { considerListeningHandoff(trigger: .readerVisible) }
     }
 
     /// Whether the app is frontmost, pushed in by each target's scene-phase
@@ -1420,6 +1864,8 @@ public final class AppModel {
         guard isForeground != foreground else { return }
         isForeground = foreground
         updateScreenAwake()
+        // The phone being picked up, with the reader already where it was left.
+        if foreground { considerListeningHandoff(trigger: .foreground) }
     }
 
     /// Recomputes whether the display should be held awake, and holds or
@@ -1575,6 +2021,10 @@ public final class AppModel {
                 // notifies, so the value read here is already the new one.
                 updateScreenAwake()
             }
+            // On a cold open the extraction finishes long after the screen
+            // appeared, so the reader was not yet somewhere the car could hand
+            // a book to when `readerVisible` fired.
+            self?.considerListeningHandoff(trigger: .readerReady)
         }
         readers[bookUUID] = model
         return model
@@ -1706,6 +2156,64 @@ public final class AppModel {
     /// whichever coordinator was about to be discarded.
     private var isStartingListening = false
 
+    /// The book a start has claimed but not yet attached, and which download it
+    /// expects to be reading by the time it does.
+    ///
+    /// `listeningBook` is first written inside `attachListening`, which is the
+    /// far end of a manifest fetch, a chunk extraction and a duration
+    /// measurement — seconds on a long book, and on a cold launch into CarPlay
+    /// every one of them. For that whole stretch `stopPlayback` saw an empty
+    /// slot and a removal was a no-op, so the start woke up afterwards and
+    /// installed a coordinator over files that had just been deleted.
+    ///
+    /// Worse than a no-op, in fact: `AudioExtraction.extract` re-created the
+    /// directory the removal had deleted and filled it again, so the removal
+    /// had freed nothing at all. That half is fixed in `AudioExtraction`; this
+    /// is the half that stops the start.
+    ///
+    /// The format narrows as the start learns what it is doing — `.readaloud`
+    /// while it is extracting chunks, `.audiobook` or nil once the server's
+    /// manifest has said whether there is a single file to play — so a removal
+    /// of the *other* edition leaves it alone.
+    private var startingListening: (bookUUID: String, format: BookContentService.Format?)?
+
+    /// The chunk extraction a start is waiting on.
+    ///
+    /// Held because `Task.detached` does not inherit cancellation: dropping the
+    /// claim stops the start, but the extraction would carry on inflating
+    /// several hundred megabytes into a directory the reader has just emptied.
+    /// The task is the only handle there is on it.
+    private var listeningExtraction: Task<
+        (result: ChunkManifest.Result, timeline: SMILTimeline)?, Never
+    >?
+
+    /// Which book a start has claimed, for `IssaSharedTests`.
+    ///
+    /// Internal on the same terms as `installListening`: the claim is what a
+    /// removal has to be able to see, and reaching it through `startListening`
+    /// needs a signed-in session and a server holding a manifest.
+    var startingListeningBook: String? { startingListening?.bookUUID }
+
+    /// Stages a claim without the start behind it, likewise.
+    func claimListeningStart(_ book: Book, reading format: BookContentService.Format?) {
+        startingListening = (book.uuid, format)
+    }
+
+    /// Whether the start that claimed this book still holds it.
+    ///
+    /// Asked after every suspension in `startListening`. A cleared claim means a
+    /// removal, a sign-out or another book's start landed while this one was
+    /// waiting, and the honest answer is to return without attaching anything —
+    /// the caller has nothing to tidy up, because a start that has not attached
+    /// owns nothing yet.
+    private func startStillClaimed(_ book: Book) -> Bool {
+        guard startingListening?.bookUUID == book.uuid else {
+            IssaLog.info("listening start stood down", ["book": book.title])
+            return false
+        }
+        return true
+    }
+
     /// Starts a plain audiobook: fetch the manifest, resume where the server
     /// says we were, and hand it to the Now Playing centre.
     public func startListening(
@@ -1716,7 +2224,17 @@ public final class AppModel {
         // it is in flight, so CarPlay's success signal stays honest.
         guard !isStartingListening else { return }
         isStartingListening = true
-        defer { isStartingListening = false }
+        // Claimed here, where the start begins, rather than in `attachListening`
+        // where `listeningBook` is first written — which is a manifest fetch, an
+        // extraction and a duration measurement further on. Until this existed a
+        // removal arriving in that window found nothing playing and did nothing.
+        // The format is unknown yet: which download this will read is what the
+        // next hundred lines decide.
+        startingListening = (book.uuid, nil)
+        defer {
+            isStartingListening = false
+            startingListening = nil
+        }
         // Clear last time's error at the top of every genuine attempt, so no
         // later `return` — the resume fast-path below included — can leave a
         // stale message that CarPlay's `onPlay` would read back as this
@@ -1754,19 +2272,81 @@ public final class AppModel {
             stopListening(nowPlaying: nowPlaying)
         }
         listeningError = nil
+        let content = BookContentService(client: session.client)
+        // An aligned read-along already on the device plays from its *own*
+        // narration chunks, through a manifest synthesised over them.
+        //
+        // This is the whole fix for the car. The server's manifest for the same
+        // book lists the original upload — one file named after the book —
+        // while everything this app has ever stored about it names the EPUB's
+        // chunks, so `AudioAnchor` matched nothing, the resume ladder ran out,
+        // and the drive started at chapter one. Playing the chunks the anchor
+        // already names means there is nothing left to match: the two engines
+        // share a track list by construction.
+        //
+        // Downloaded only. Streaming a book chunk by chunk is a different
+        // feature, and this path is exactly as offline as the read-along it
+        // borrows the audio from.
+        if book.readaloud?.isAligned == true, isDownloaded(book, format: .readaloud) {
+            // The claim narrows. From here to the attach this start is reading
+            // the read-along's own extracted chunks, so a removal of *that*
+            // edition must stop it and a removal of the audiobook beside it must
+            // not.
+            startingListening = (book.uuid, .readaloud)
+            if let built = await synthesisedListening(for: book, content: content) {
+                // The extraction is the longest suspension in this method —
+                // hundreds of megabytes through the deflater, and a duration
+                // measured per chunk — so it is the likeliest place for a
+                // removal to land. A cleared claim means one did.
+                //
+                // And the disk is asked again, because `isDownloaded` answers
+                // for the undo window too: the bytes are still there for six
+                // seconds after the reader taps Remove, and starting a book out
+                // of files that are already on their way off the device is what
+                // this whole guard exists to stop.
+                guard startStillClaimed(book), isDownloaded(book, format: .readaloud)
+                else { return }
+                let attached = await attachListening(
+                    manifest: built.manifest, source: .files(built.files),
+                    chapters: built.chapters, timeline: built.timeline,
+                    manifestKind: .synthesised,
+                    book: book, nowPlaying: nowPlaying, settings: settings)
+                // `.wouldNotPlay` is the only outcome with anywhere left to go.
+                // A start that worked is finished, and a slot that changed hands
+                // belongs to whatever took it — trying the server's manifest
+                // there would stop the read-along a hand-off has just begun.
+                guard attached == .wouldNotPlay else { return }
+                // The chunks are on disk and the manifest built over them, and
+                // they still would not load — a half-deleted extraction is the
+                // ordinary way. The server has the original upload, so the book
+                // is not out of options: falling back is what this path already
+                // does when the manifest cannot be *built*, and a manifest that
+                // builds and then will not play is the same outcome arriving one
+                // step later.
+                IssaLog.warning("chunk playback would not start; trying the server's manifest", [
+                    "book": book.title,
+                ])
+                // The coordinator that would not play still holds Now Playing
+                // and its own rate observer, and the fall-back is about to
+                // install another. The same call the "different book already
+                // playing" branch above makes, for the same reason.
+                stopListening(nowPlaying: nowPlaying)
+                // Cleared because this is a second genuine attempt and CarPlay
+                // reads `listeningError` back as the outcome of the whole call.
+                // Whatever happens below will speak for itself.
+                listeningError = nil
+            }
+        }
         let service = AudiobookService(client: session.client, baseURL: url, tokens: session.tokenProvider)
         do {
             let manifest = try await service.manifest(for: book.uuid)
+            // The network round trip is a suspension like any other, and on a
+            // slow connection a long one.
+            guard startStillClaimed(book) else { return }
             guard !manifest.playableTracks.isEmpty else {
                 listeningError = "This audiobook has no playable tracks on the server."
                 return
             }
-            // The `stopNarration()` at the top ran before this network round
-            // trip; a read-along the reader tapped *during* the fetch would
-            // otherwise still be playing when the audiobook starts, two voices
-            // at once. Stop again now that the suspension is over, just before
-            // this coordinator takes over Now Playing.
-            stopNarration()
             // Play the downloaded file when it can stand in for the manifest;
             // otherwise stream, with the token travelling as a cookie because
             // AVFoundation makes its own requests and never sees our headers.
@@ -1777,66 +2357,339 @@ public final class AppModel {
             // Handing it one file for a 17-track book applied every per-track
             // offset to that same file — a resume at 50% seeked minutes in
             // instead of hours, and then persisted the double-counted clock.
-            let content = BookContentService(client: session.client)
+            //
             // Through the model, so an audiobook inside its undo window is
             // streamed rather than played from a file about to be deleted.
             let playableAsOneFile = manifest.playableTracks.count == 1
                 && isDownloaded(book, format: .audiobook)
+            // And the claim narrows for the last time: either this start is
+            // about to read the `.audiobook` download, or it is streaming and no
+            // removal can touch it.
+            startingListening = (book.uuid, playableAsOneFile ? .audiobook : nil)
             let source: AudiobookCoordinator.Source = playableAsOneFile
                 ? .local(content.localURL(for: book, format: .audiobook))
                 : .streaming(
                     base: service.trackBase(for: book.uuid),
                     cookies: await service.playbackCookies(for: book.uuid),
                 )
-
-            let coordinator = AudiobookCoordinator(manifest: manifest, source: source)
-            coordinator.player.rate = Float(settings.playbackRate)
-            // The level belongs to the book, not to the surface it is played
-            // from: Listening, CarPlay and the lock screen all arrive here, and
-            // a trim set in the reader has to survive the move.
-            coordinator.player.gain = VolumeTrim.gain(settings.volumeTrim(for: book.uuid))
-            listening = coordinator
-            listeningBook = book
-            // Play and pause both have to reach the widget, and the only
-            // recurring publish is behind a "progress moved" guard that a
-            // paused book never passes — so isPlaying could be set true and
-            // never set false again.
-            coordinator.player.setRateObserver(for: self) { [weak self, weak coordinator] rate in
-                guard let self, let coordinator else { return }
-                // The rate the player just reported, not `effectiveRate`.
-                // `play()` notifies before AVPlayer's timeControlStatus leaves
-                // `waitingToPlayAtSpecifiedRate`, so re-reading it here would
-                // publish "not playing" the instant someone pressed play.
-                self.publishListeningSnapshot(
-                    book: book, coordinator: coordinator, isPlaying: rate > 0)
-            }
-            nowPlaying.attach(
-                coordinator: coordinator, book: book, session: session,
-                chapterTitle: { [weak coordinator] in coordinator?.chapterTitle },
-            )
-            let resume = await resolveListeningStart(for: book, coordinator: coordinator)
-            IssaLog.info("listening started", [
-                "book": book.title,
-                "from": resume.reason,
-                "atBookTime": String(format: "%.1f", resume.bookTime ?? -1),
-                "storedProgress": String(format: "%.4f", book.progress ?? -1),
-            ])
-            if let time = resume.bookTime {
-                await coordinator.seek(toBookTime: time)
-                coordinator.player.play()
-            } else {
-                await coordinator.start(atProgress: 0)
-            }
-            // After the seek, never before: a coordinator one line old still
-            // reads bookTime 0, so publishing here would have announced every
-            // resumed audiobook at 0% and left that on disk if the listener
-            // paused inside the next fifteen seconds.
-            publishListeningSnapshot(book: book, coordinator: coordinator)
-            watchListeningProgress(book: book, coordinator: coordinator)
+            // The cookies are a second round trip on the streaming branch.
+            guard startStillClaimed(book) else { return }
+            let attached = await attachListening(
+                manifest: manifest, source: source, chapters: [], timeline: nil,
+                manifestKind: .original,
+                book: book, nowPlaying: nowPlaying, settings: settings)
+            // A start that produced no audio must not leave the book sitting in
+            // the listening slot. `declined` has already set `listeningError`,
+            // which is what CarPlay reads back — but `playingBookUUID`, the
+            // mini bar and the lock screen all read `listeningBook`, and a
+            // coordinator holding nothing would keep claiming the book until
+            // the next start. There is nowhere left to fall back to here: this
+            // *is* the fall-back.
+            if attached == .wouldNotPlay { stopListening(nowPlaying: nowPlaying) }
         } catch {
             IssaLog.failure("start listening", error, ["book": book.title])
             listeningError = Self.message(for: error)
         }
+    }
+
+    /// Builds a manifest over this book's own narration chunks, off the main
+    /// actor.
+    ///
+    /// Returns nil for every way this can honestly fail — a read-along with no
+    /// narration in it, an archive that will not open, an extraction that ran
+    /// out of disk — and the caller falls back to the server's manifest, which
+    /// is today's behaviour. Falling back is always safe: the chunk path is an
+    /// improvement on the resume, not a requirement for playing at all.
+    private func synthesisedListening(
+        for book: Book, content: BookContentService,
+    ) async -> (
+        manifest: AudiobookManifest, chapters: [AudiobookChapter],
+        files: [String: URL], timeline: SMILTimeline
+    )? {
+        let epubURL = content.localURL(for: book, format: .readaloud)
+        let bookID = book.uuid
+        let title = book.title
+        // The reader's, when a reader is open — the archive is already inflated
+        // and the overlay already parsed, and doing both again for a book on
+        // screen is seconds of work for an answer in memory. Both are `Sendable`.
+        let openPackage = readers[book.uuid]?.package
+        let openTimeline = readers[book.uuid]?.timeline
+        let started = Date()
+
+        // Held, not merely awaited. `Task.detached` does not inherit
+        // cancellation, so the only handle a removal has on this work is the
+        // task itself — and without one the extraction inside it went on
+        // inflating several hundred megabytes into a directory the reader had
+        // just emptied, putting the whole book back. See
+        // `AudioExtraction.extractAudio`, which is where the cancellation is
+        // actually noticed.
+        let extraction = Task.detached(priority: .userInitiated) {
+            () -> (result: ChunkManifest.Result, timeline: SMILTimeline)? in
+            do {
+                let source = try ReadaloudSource.load(
+                    epubURL: epubURL, bookID: bookID,
+                    package: openPackage, timeline: openTimeline)
+                guard !source.timeline.isEmpty, !source.audioFiles.isEmpty else {
+                    // A read-along whose alignment the server claims but whose
+                    // EPUB carries no overlay. The server's own manifest is
+                    // then the only track list there is.
+                    IssaLog.warning("read-along has no narration; playing original", [
+                        "book": title,
+                    ])
+                    return nil
+                }
+                let cached = ChunkDurations.load(bookID: bookID)
+                let measured = await ChunkDurations.measure(source.audioFiles, cached: cached)
+                // Only when it grew. A book whose lengths are all known already
+                // must not rewrite the file on every play.
+                if measured.count > cached.count {
+                    try? ChunkDurations.save(measured, bookID: bookID)
+                }
+                return (
+                    ChunkManifest.make(
+                        timeline: source.timeline, package: source.package,
+                        audioFiles: source.audioFiles, durations: measured, title: title),
+                    source.timeline
+                )
+            } catch is CancellationError {
+                // Ordinary, and named as such. A removal revoking an extraction
+                // is a thing the reader asked for, and logging it as a failure
+                // would send the next person reading these lines looking for a
+                // broken archive.
+                IssaLog.info("chunk extraction revoked", ["book": title])
+                return nil
+            } catch {
+                IssaLog.failure("chunk manifest", error, ["book": title])
+                return nil
+            }
+        }
+        listeningExtraction = extraction
+        defer { listeningExtraction = nil }
+        let built = await extraction.value
+
+        guard let built, !built.result.manifest.playableTracks.isEmpty else { return nil }
+        IssaLog.info("chunk manifest built", [
+            "book": title,
+            "tracks": String(built.result.manifest.playableTracks.count),
+            "chapters": String(built.result.chapters.count),
+            "ms": String(format: "%.1f", Date().timeIntervalSince(started) * 1_000),
+        ])
+        return (built.result.manifest, built.result.chapters, built.result.files, built.timeline)
+    }
+
+    /// How an attach ended, for the one caller that has somewhere else to go.
+    enum ListeningAttachment: Equatable {
+        /// Positioned, owned by this call, and playing unless the resume said
+        /// otherwise.
+        case started
+        /// The audio this manifest names would not load. The book is silent and
+        /// `listeningError` says so; another manifest for the same book is
+        /// worth trying.
+        case wouldNotPlay
+        /// The listening slot changed hands while this call was suspended — a
+        /// hand-off took the book. Nothing to retry and nothing to tidy: what
+        /// is in the slot now owns it, and it is not ours.
+        case slotTaken
+    }
+
+    /// Hands a manifest to a coordinator, the Now Playing centre and the
+    /// position writer, and starts it where the resume ladder says.
+    ///
+    /// One tail for both track lists. The two paths above differ only in what
+    /// they are playing and how they name it, and the moment the second one
+    /// existed, every fix to the order of these lines — the guard before the
+    /// seek, the publish after it — would otherwise have had to be made twice.
+    ///
+    /// Internal rather than private so `IssaSharedTests` can reach it, on the
+    /// same terms as `installListening`: reaching it through `startListening`
+    /// needs a signed-in session and a server holding a manifest, and the two
+    /// things worth asserting here — that a book which will not load says so,
+    /// and that a hand-off mid-flight is not overrun — are about this method
+    /// alone.
+    ///
+    /// - Returns: what became of it. See `ListeningAttachment`.
+    @discardableResult
+    func attachListening(
+        manifest: AudiobookManifest,
+        source: AudiobookCoordinator.Source,
+        chapters: [AudiobookChapter],
+        timeline: SMILTimeline?,
+        manifestKind: ListeningResume.ManifestKind,
+        book: Book,
+        nowPlaying: NowPlayingController,
+        settings: PlaybackSettings,
+    ) async -> ListeningAttachment {
+        // The `stopNarration()` in `startListening` ran before a network round
+        // trip and an extraction; a read-along the reader tapped *during* either
+        // would otherwise still be playing when the audiobook starts, two voices
+        // at once. Stop again now that the suspensions are over, just before
+        // this coordinator takes over Now Playing.
+        stopNarration()
+        let coordinator = AudiobookCoordinator(
+            manifest: manifest, source: source, chapters: chapters)
+        coordinator.player.rate = Float(settings.playbackRate)
+        // The level belongs to the book, not to the surface it is played
+        // from: Listening, CarPlay and the lock screen all arrive here, and
+        // a trim set in the reader has to survive the move.
+        coordinator.player.gain = VolumeTrim.gain(settings.volumeTrim(for: book.uuid))
+        listening = coordinator
+        listeningBook = book
+        // Which file this engine will actually be reading, taken from the
+        // source rather than guessed later: `.files` is the read-along's own
+        // extracted chunks, `.local` is the single downloaded upload, and a
+        // stream is on nobody's disk. It is the only thing that lets a removal
+        // stop the engine that was reading what went and leave the other alone.
+        listeningFormat = Self.formatRead(by: source)
+        // Play and pause both have to reach the widget, and the only
+        // recurring publish is behind a "progress moved" guard that a
+        // paused book never passes — so isPlaying could be set true and
+        // never set false again.
+        coordinator.player.setRateObserver(for: self) { [weak self, weak coordinator] rate in
+            guard let self, let coordinator else { return }
+            // The rate the player just reported, not `effectiveRate`.
+            // `play()` notifies before AVPlayer's timeControlStatus leaves
+            // `waitingToPlayAtSpecifiedRate`, so re-reading it here would
+            // publish "not playing" the instant someone pressed play.
+            self.publishListeningSnapshot(
+                book: book, coordinator: coordinator, isPlaying: rate > 0)
+        }
+        nowPlaying.attach(
+            coordinator: coordinator, book: book, session: session,
+            chapterTitle: { [weak coordinator] in coordinator?.chapterTitle },
+        )
+        let resume = await resolveListeningStart(
+            for: book, coordinator: coordinator,
+            timeline: timeline, manifestKind: manifestKind)
+        // The slot, after every suspension. `listening` was published before
+        // the two awaits in this method — a resume to resolve, then an
+        // AVFoundation item to load, which is seconds — and a hand-off firing
+        // in that window pauses this coordinator, starts the read-along and
+        // calls `stopListening`. Without this the start woke up and played the
+        // orphan anyway: two voices on one book and two position writers
+        // arguing over it. Identity, not the book's uuid, because starting the
+        // same book twice is exactly the case that has to lose. The precedent
+        // is `watchListeningProgress`'s own check on resume, and `load`'s
+        // generation counter one layer down.
+        guard listening === coordinator else {
+            return slotChangedHands(book, coordinator, at: "resolvedStart")
+        }
+        IssaLog.info("listening started", [
+            "book": book.title,
+            "from": resume.reason.rawValue,
+            "atBookTime": String(format: "%.1f", resume.bookTime ?? -1),
+            "storedProgress": String(format: "%.4f", book.progress ?? -1),
+            "manifestKind": manifestKind.rawValue,
+            "trackCount": String(coordinator.tracks.count),
+            "source": manifestKind == .synthesised ? "chunks" : "original",
+        ])
+        // Before a note of audio plays: an unresolved start plays from zero,
+        // and the fifteen-second writer must not be allowed to persist that
+        // zero over a place this app simply could not find.
+        prepareListeningGuard(for: book, trusted: resume.isTrusted)
+        if let time = resume.bookTime {
+            // Only if the seek actually landed. `start(atProgress:)` below
+            // already refuses to play a player holding nothing; a resolved
+            // start whose chunk is missing deserves the same silence, logged
+            // by `load`, rather than a book that claims to be playing.
+            let outcome = await coordinator.seek(toBookTime: time)
+            guard listening === coordinator else {
+                return slotChangedHands(book, coordinator, at: "seeked")
+            }
+            switch outcome {
+            case .landed:
+                coordinator.player.play()
+            case .unplayable:
+                return declined(book, reason: "seekDeclined")
+            case .superseded:
+                // A newer load inside this same coordinator overtook the resume
+                // seek — a CarPlay chapter tap while the book was opening is the
+                // ordinary way. The identity check above passes, because it is
+                // the *same* coordinator, so this used to read as "that book's
+                // audio would not play": the error banner went up and the return
+                // tore down a coordinator the car was already playing out loud.
+                //
+                // Nothing to do and nothing to say, so fall through to the
+                // publish and the position writer rather than returning. Those
+                // two are the reason: the writer has to be armed whatever landed
+                // this book on the lock screen, or an hour of listening is
+                // written nowhere. No `play()` either — the newer load decides
+                // whether this book is playing, and it has already decided.
+                IssaLog.info("listening resume was overtaken by a newer load", [
+                    "book": book.title,
+                ])
+            }
+        } else {
+            await coordinator.start(atProgress: 0)
+            guard listening === coordinator else {
+                return slotChangedHands(book, coordinator, at: "started")
+            }
+            // `start(atProgress:)` returns nothing and declines in silence, so
+            // the player is what has to be asked. The href rather than the
+            // anchor: the anchor is being worked on elsewhere, and this is the
+            // plainer fact anyway — a player holding no audio at all.
+            guard coordinator.player.currentAudioHref != nil else {
+                return declined(book, reason: "nothingLoaded")
+            }
+        }
+        // After the seek, never before: a coordinator one line old still
+        // reads bookTime 0, so publishing here would have announced every
+        // resumed audiobook at 0% and left that on disk if the listener
+        // paused inside the next fifteen seconds.
+        publishListeningSnapshot(book: book, coordinator: coordinator)
+        watchListeningProgress(book: book, coordinator: coordinator)
+        // A start finishing over a reader already open on this book. Every other
+        // trigger fires before the engine exists, so the decision they woke
+        // found nothing playing; this is the only one that can catch a listener
+        // who pressed Listen from the page they were reading.
+        considerListeningHandoff(trigger: .listeningStarted, duringStart: true)
+        return .started
+    }
+
+    /// Says out loud that a start produced no audio, and stops before it can
+    /// look like one that did.
+    ///
+    /// The publish and the position writer both used to run here regardless, on
+    /// a player holding nothing — and `listeningError` was left at the nil
+    /// `startListening` set on the way in. CarPlay reads that value back
+    /// verbatim as its success signal, so a silent failure pushed the row
+    /// straight to Now Playing with no audio behind it: the exact outcome
+    /// `startListening`'s own note says must never happen again.
+    private func declined(_ book: Book, reason: String) -> ListeningAttachment {
+        IssaLog.warning("listening produced no audio", [
+            "book": book.title, "reason": reason,
+        ])
+        listeningError = "That book's audio would not play. Try downloading it again."
+        return .wouldNotPlay
+    }
+
+    /// Silences a start that woke up to find the book already somewhere else.
+    ///
+    /// Silenced, not merely abandoned: `start(atProgress:)` plays as part of
+    /// starting, so by the time this is reached the orphan can already be
+    /// audible — which is the second voice the re-check exists to prevent. Its
+    /// rate observers go too, or they would keep republishing this book to the
+    /// widget and the lock screen over whatever took the slot.
+    ///
+    /// Now Playing is deliberately left alone. Whatever took the book has
+    /// claimed it — a hand-off attaches the reader's own coordinator — and
+    /// detaching here would take it straight back off the lock screen, which is
+    /// the same trap `narrationDidStart` avoids by passing no controller.
+    ///
+    /// - Returns: the outcome, for `attachListening`, which has a caller that
+    ///   needs it. The hand-off calls this for the `removeRateObservers()` —
+    ///   without it the orphan goes on republishing its book to the widget and
+    ///   the lock screen over whatever took the slot — and has an answer of its
+    ///   own to give.
+    @discardableResult
+    private func slotChangedHands(
+        _ book: Book, _ coordinator: AudiobookCoordinator, at stage: String,
+    ) -> ListeningAttachment {
+        coordinator.player.removeRateObservers()
+        coordinator.player.pause()
+        IssaLog.info("listening slot changed hands while starting", [
+            "book": book.title, "stage": stage,
+        ])
+        return .slotTaken
     }
 
     /// Stops playback and lets go of everything holding onto it.
@@ -1856,18 +2709,56 @@ public final class AppModel {
         listening?.player.pause()
         listening = nil
         listeningBook = nil
+        listeningFormat = nil
+    }
+
+    /// Which downloaded edition a source reads, if any.
+    ///
+    /// `.files` is a manifest synthesised over a read-along's own narration
+    /// chunks, which are extracted from — and deleted with — the `.readaloud`
+    /// package. `.local` is the server's single upload, the `.audiobook`
+    /// download played whole. A stream reads nothing on this device, so no
+    /// removal can silence it.
+    private static func formatRead(
+        by source: AudiobookCoordinator.Source,
+    ) -> BookContentService.Format? {
+        switch source {
+        case .files: .readaloud
+        case .local: .audiobook
+        case .streaming: nil
+        }
     }
 
     /// Writes the listening position back periodically.
     ///
     /// An hour of listening is as much progress as an hour of reading, and
     /// losing it on a crash or a battery death is just as annoying.
-    private func watchListeningProgress(book: Book, coordinator: AudiobookCoordinator) {
+    ///
+    /// Internal, and with the interval in the signature, for the reason
+    /// `installListening` is internal: the only way to see what a cancelled
+    /// tick does is to cancel one mid-sleep, and a suite that had to wait
+    /// fifteen real seconds per assertion is a suite nobody runs.
+    /// - Parameter interval: how long between writes. Production passes
+    ///   nothing; a test drives it in milliseconds.
+    func watchListeningProgress(
+        book: Book, coordinator: AudiobookCoordinator, every interval: Duration = .seconds(15),
+    ) {
         listeningProgressTask?.cancel()
         listeningProgressTask = Task { [weak self, weak coordinator] in
             var lastWritten: Double = -1
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(15))
+                try? await Task.sleep(for: interval)
+                // `try?` swallows the `CancellationError`, and the loop test
+                // above only runs at the top — so a cancel landing inside the
+                // sleep used to run this whole body regardless. That matters
+                // because the body *spends* things: `consumeSteering()` below
+                // is read-and-clear, so the stray tick could label its write
+                // `.chosen`, which re-baselines the high-water mark and clears
+                // any hold. The hand-off cancels this task and then suspends at
+                // `resumeNarration`, which is exactly the window the stray tick
+                // lands in — and its write is audio-scaled, so it also flips the
+                // stored locator's clock out from under the reader.
+                guard !Task.isCancelled else { return }
                 guard let self, let coordinator else { return }
                 let progress = coordinator.bookProgress
                 // Only when it actually moved: a paused book must not generate
@@ -1878,7 +2769,7 @@ public final class AppModel {
                 // somewhere is not. The coordinator owns every seek entry point,
                 // so it is the only thing that can tell them apart.
                 let origin: PositionOrigin = coordinator.consumeSteering() ? .chosen : .derived
-                await writePosition(
+                let accepted = await writePosition(
                     Self.audioLocator(for: coordinator, book: book),
                     timestamp: ProgressService.now(),
                     for: book.uuid,
@@ -1888,7 +2779,22 @@ public final class AppModel {
                 // act on. The locator above is a fraction of this engine's
                 // clock and means nothing to the read-along; a file and an
                 // offset mean the same thing to both. See `AudioAnchor`.
-                if let anchor = coordinator.currentAnchor {
+                //
+                // Only when the position was accepted. A refused write must not
+                // leave its anchor behind: the anchor is the *more* durable
+                // half — the reader opens the book from it — so writing one for
+                // a position the guard has just rejected replaces the last good
+                // place with a track and an offset from a playback that started
+                // at zero. That overwrite is what sent the reader to chapter
+                // one on the phone after a drive.
+                //
+                // And asked again first. `writePosition` records locally and
+                // then drains the queue, which is one POST per row at
+                // URLSession's sixty-second default — seconds, by its own
+                // comment — so a cancel arriving during the write must not
+                // still land the anchor afterwards.
+                guard !Task.isCancelled else { return }
+                if accepted, let anchor = coordinator.currentAnchor {
                     try? await store?.setAudioAnchor(anchor, forBook: book.uuid)
                 }
                 // `enqueue` suspends, and can drain the network for seconds.
@@ -1930,52 +2836,79 @@ public final class AppModel {
 
     /// Where an audiobook should resume, and why.
     ///
-    /// Resolved in order of exactness, because the two engines keep different
-    /// clocks and a fraction from the other one is not a place in this book.
-    /// See `AudioAnchor`. The `from` field this produces is the line that would
-    /// have caught the fifty-minute error in the car.
+    /// The ladder itself lives in `ListeningResume`, which is a pure function
+    /// and testable against the manifests that break it. This is the part that
+    /// has to reach the store and the open readers, and the part that has to
+    /// leave a log line good enough to diagnose the next one of these without
+    /// the phone in hand.
+    /// - Parameter timeline: an overlay the caller already has, for a manifest
+    ///   synthesised from one. Falls back to an open reader's, which a cold
+    ///   launch straight into CarPlay does not have.
     private func resolveListeningStart(
-        for book: Book, coordinator: AudiobookCoordinator,
-    ) async -> (bookTime: TimeInterval?, reason: String) {
-        // 1. An anchor: an audio file and an offset into it, written by
-        //    whichever engine last played. Exact, and the only thing that
-        //    survives switching between the read-along and the audiobook.
-        if let anchor = try? await store?.audioAnchor(forBook: book.uuid),
-           let time = coordinator.manifest.bookTime(for: anchor) {
-            return (time, "anchor")
+        for book: Book,
+        coordinator: AudiobookCoordinator,
+        timeline: SMILTimeline?,
+        manifestKind: ListeningResume.ManifestKind,
+    ) async -> ListeningResume.Resolution {
+        let anchor = try? await store?.audioAnchor(forBook: book.uuid)
+        // The whole position, not just its locator: the ladder compares the
+        // anchor's age against when this was written, and a bare locator cannot
+        // say when that was.
+        let stored = book.position?.locator
+        let overlay = timeline ?? readers[book.uuid]?.timeline
+        let resolution = ListeningResume.resolve(
+            anchor: anchor, stored: book.position, timeline: overlay,
+            manifest: coordinator.manifest)
+
+        // The fields that say *why*, rather than only that it failed. The old
+        // line said "no audio anchor for this book yet" in the one case where
+        // there certainly was one — it named a file this manifest has never
+        // heard of — which is how a report about resuming at chapter one read
+        // as a book that had simply never been played.
+        var fields: [String: String] = [
+            "book": book.title,
+            "manifestKind": manifestKind.rawValue,
+            "trackCount": String(coordinator.tracks.count),
+            "firstTrack": coordinator.manifest.playableTracks.first?.href ?? "none",
+            "storedScale": stored.map { $0.isAudioScaled ? "audio" : "text" } ?? "none",
+            "storedHrefMatchesTrack": stored.map { locator in
+                locator.isAudioScaled
+                    ? String(coordinator.manifest.trackIndex(matching: locator.href) != nil)
+                    : "n/a"
+            } ?? "n/a",
+            "timeline": overlay == nil ? "absent" : "present",
+        ]
+        switch resolution.reason {
+        case .anchorNamesUnknownFile:
+            if let anchor {
+                fields["anchorHref"] = anchor.audioHref
+                fields["anchorOffset"] = String(format: "%.1f", anchor.offset)
+            }
+            IssaLog.warning("audio anchor names no track in this manifest", fields)
+        case .noAnchorStored:
+            IssaLog.warning("no audio anchor stored for this book", fields)
+        case .anchorOlderThanPosition:
+            // Somebody read on past the narration in silence. The anchor is
+            // still a real place in this track list, so it plays — and the
+            // clock stays held, because it is not where they got to.
+            if let anchor {
+                fields["anchorHref"] = anchor.audioHref
+                fields["anchorOffset"] = String(format: "%.1f", anchor.offset)
+            }
+            fields["positionWrittenAt"] = book.position.map { "\($0.writtenAt)" } ?? "none"
+            IssaLog.warning("audio anchor is older than the stored position", fields)
+        case .audioPositionFromAnotherManifest:
+            // Not a failure: the car starts in roughly the right chapter
+            // instead of at the title page. Logged all the same, because it is
+            // also the state in which the audio clock stays held — so the next
+            // report of "it played for an hour and saved nothing" has the line
+            // that explains itself.
+            fields["bookTime"] = String(format: "%.1f", resolution.bookTime ?? -1)
+            IssaLog.warning("stored audio position scaled from another track list", fields)
+        case .anchor, .audioPosition, .readingPositionViaOverlay, .noStoredPosition:
+            break
         }
-        let locator = book.position?.locator
-        // 2. A stored position already on this engine's clock — an audiobook
-        //    wrote it, so the old arithmetic was always right for this case.
-        if let locator, locator.isAudioScaled,
-           let progress = locator.totalProgression?.asProgression {
-            return (coordinator.totalDuration * progress, "audioPosition")
-        }
-        // 3. A *reading* position, converted through the media overlay — which
-        //    is the bridge Storyteller is built on, and exact when the book is
-        //    open so the timeline is in memory.
-        if let locator, !locator.isAudioScaled,
-           let timeline = readers[book.uuid]?.timeline,
-           let fragment = locator.sentenceID,
-           let entry = timeline.entry(forFragment: fragment, inDocument: locator.href),
-           let time = coordinator.manifest.bookTime(
-               for: AudioAnchor(audioHref: entry.audioHref, offset: entry.start, writtenAt: 0)) {
-            return (time, "readingPositionViaOverlay")
-        }
-        // 4. Nothing this engine can honestly act on.
-        //
-        //    Emphatically **not** the text fraction. Multiplying a fraction of
-        //    the *text* by the duration of the *audio* is exactly what put a
-        //    27-hour book tens of minutes early, and it did so silently: the
-        //    number looked reasonable, so nothing downstream could tell. In a
-        //    car a plausible wrong answer is worse than an obvious one.
-        if locator != nil {
-            IssaLog.warning("no audio anchor for this book yet", [
-                "book": book.title,
-                "storedScale": (locator?.isAudioScaled ?? false) ? "audio" : "text",
-            ])
-        }
-        return (nil, locator == nil ? "noStoredPosition" : "noAudioAnchor")
+        return resolution
     }
 
     /// A locator for a position inside an audiobook.
@@ -1991,10 +2924,16 @@ public final class AppModel {
         let within = (track?.duration ?? 0) > 0
             ? (coordinator.bookProgress * coordinator.totalDuration - trackStart) / (track?.duration ?? 1)
             : 0
+        // The chapter the listener is in, which on a manifest synthesised over
+        // narration chunks is not the same as the track: `title(of:at:)` would
+        // hand back "Track 87" for a place the reader knows as chapter twelve,
+        // and this locator is what every other client — Storyteller's own web
+        // player included — reads to say where the book was left.
+        let chapter = coordinator.chapterTitle
         return ReadiumLocator(
             href: track?.href ?? "",
             type: track?.type ?? "audio/mpeg",
-            title: track.map { coordinator.manifest.title(of: $0, at: index) },
+            title: track.map { chapter.isEmpty ? coordinator.manifest.title(of: $0, at: index) : chapter },
             locations: .init(
                 progression: (within.asProgression ?? 0),
                 totalProgression: coordinator.bookProgress,
@@ -2112,7 +3051,14 @@ public final class AppModel {
         // multi-hundred-MB readaloud with no reported size) straight through on
         // cellular. Unknown fails safe: assumed large until proven otherwise.
         if downloads.wifiOnly, reachability.isExpensive, expected.map({ $0 > 20_000_000 }) ?? true {
+            // On a Mac this fires *while on Wi-Fi* — a Low Data Mode network is
+            // constrained, and constrained counts as expensive — so naming
+            // Wi-Fi there describes the connection the reader already has.
+            #if os(macOS)
+            loadError = "Waiting for an unmetered connection to download this."
+            #else
             loadError = "Waiting for Wi-Fi to download this."
+            #endif
             return false
         }
         let job = DownloadManager.Job(bookUUID: book.uuid, format: format)
@@ -2212,6 +3158,191 @@ public final class AppModel {
         "\(bookUUID)#\(isAudioScaled ? "audio" : "text")"
     }
 
+    /// A guard for one of a book's two clocks, seeded from what the book itself
+    /// says about that clock.
+    ///
+    /// Three sites spelled this out — `reseedGuards`, `admitPosition` and
+    /// `prepareListeningGuard` — which is two delicate rules with three chances
+    /// to drift apart.
+    ///
+    /// The first rule is the seed: only a stored position *on this clock* says
+    /// anything about this clock, because a fraction of the text and a fraction
+    /// of the audio are fractions of different timelines. Seeding the audio
+    /// guard from the reader's number is how a listening position came to be
+    /// measured against a reading one.
+    ///
+    /// The second is the duration, which looks optional and is not: the guard's
+    /// absolute five-minute bound exists only for a book whose narration length
+    /// it knows, and a site that omitted it left a forty-hour audiobook two
+    /// hours of undetected slack under the five-per-cent rule instead.
+    /// - Parameter highWater: a mark the caller already holds — a server
+    ///   position it is re-seeding to, or the mark a held clock kept. Absent,
+    ///   the book's own position on this clock is the seed.
+    static func seededGuard(
+        for book: Book?,
+        isAudioScaled: Bool,
+        highWater: Double? = nil,
+        awaitingChoice: Bool = false,
+    ) -> PositionGuard {
+        let narration = book.map(LibraryArrangement.duration(of:)) ?? 0
+        let seed = (book?.position?.locator).flatMap {
+            $0.isAudioScaled == isAudioScaled ? $0.totalProgression : nil
+        } ?? 0
+        return PositionGuard(
+            highWater: highWater ?? seed,
+            duration: narration > 0 ? narration : nil,
+            awaitingChoice: awaitingChoice)
+    }
+
+    /// Puts one candidate position to this book's guard for that clock, seeding
+    /// the guard first if it has never been used.
+    ///
+    /// Split out of `writePosition` so a test can ask the question without a
+    /// mutation queue, a store or a network behind it — the guard is the part
+    /// that decides whether a reader keeps their place, and it was reachable
+    /// only through a method that suspends four times before answering.
+    func admitPosition(
+        _ locator: ReadiumLocator, origin: PositionOrigin, for bookUUID: String,
+    ) -> PositionGuard.Decision {
+        let book = books.first { $0.uuid == bookUUID }
+        // Keyed by book *and* by clock. `PositionGuard` is a high-water mark on
+        // `totalProgression`, and this app writes that field on two different
+        // scales -- a fraction of the text from the reader, a fraction of the
+        // audio from the audiobook. Sharing one guard between them meant a
+        // reading position and a listening position were compared against each
+        // other as if they were the same quantity, so one could refuse the
+        // other for going "backwards" when neither had moved at all. See
+        // AudioAnchor.
+        let guardKey = Self.positionGuardKey(bookUUID, isAudioScaled: locator.isAudioScaled)
+        // Seeded only from a stored position on this same clock, for the same
+        // reason: the book's own progress is whichever scale wrote last. See
+        // `seededGuard`.
+        var state = positionGuards[guardKey]
+            ?? Self.seededGuard(for: book, isAudioScaled: locator.isAudioScaled)
+        // Read before `decide`, which is what clears it: the hold letting go is
+        // a state the hand-off waits on, and only the transition is news.
+        let wasHeld = state.awaitingChoice
+        let decision = state.decide(locator.locations?.totalProgression, origin: origin)
+        positionGuards[guardKey] = state
+        // A steer names a place in the *book*, and the book has one of those
+        // however many clocks are measuring it. The other clock cannot be told
+        // where that place is — there is no arithmetic between the two, which
+        // is why they are keyed apart — but it can be told that whatever it was
+        // holding is no longer true. Without this, hours the listener steered
+        // in the car were measured against the page they left off at before the
+        // drive, every write after the drive was refused, and the anchor went
+        // with them. See `PositionGuard.forgettingItsMark`.
+        //
+        // Gated on the decision, not on the origin alone: a `.chosen` write
+        // carrying a non-finite progression falls to `.refuse` and is not a
+        // place named at all, so it must invalidate nothing.
+        if origin == .chosen, decision.isAllowed {
+            let other = Self.positionGuardKey(bookUUID, isAudioScaled: !locator.isAudioScaled)
+            // Only a guard that already exists. Creating one here would invent a
+            // rule about a clock this app has never written a position on, and
+            // the seeding rules deliberately say nothing about such a clock.
+            if let sibling = positionGuards[other] {
+                positionGuards[other] = sibling.forgettingItsMark()
+            }
+        }
+        // The hold letting go is a trigger of its own; see `.listenerSteered`.
+        // The same steer that clears the sibling mark above is also the only
+        // thing that releases a held audio clock, and by the time it happens
+        // every other trigger has fired and gone — the reader is already
+        // visible and the app already foreground.
+        if wasHeld, !state.awaitingChoice, listeningBook?.uuid == bookUUID {
+            considerListeningHandoff(trigger: .listenerSteered)
+        }
+        return decision
+    }
+
+    /// Arms — or releases — the audio clock's guard as an audiobook starts.
+    ///
+    /// The half of the 2026-09-09 loss that the ladder alone does not fix.
+    /// When nothing could be resolved, playback begins at zero, and fifteen
+    /// seconds later the periodic writer offers 0.0001 on the audio clock. That
+    /// clock has no mark of its own — the stored position was the reader's, on
+    /// the text clock — so the write reads as ordinary forward progress, and
+    /// `recordPosition` then replaces a part-read novel's place with the front
+    /// of the book. Holding the clock until the listener names somewhere is the
+    /// only honest answer: the app genuinely does not know where they were.
+    /// - Parameter trusted: whether `ListeningResume` found a place the app may
+    ///   also *write down* — which is a stricter question than whether it found
+    ///   a place to start. A fraction scaled across two cuts of one narration
+    ///   starts the car in roughly the right chapter and is still a guess, so
+    ///   it plays and the clock stays held. See `ListeningResume.isTrusted`.
+    func prepareListeningGuard(for book: Book, trusted: Bool) {
+        let key = Self.positionGuardKey(book.uuid, isAudioScaled: true)
+        let stored = book.position?.locator
+        // The same seed rule as `admitPosition`, through the same helper: only a
+        // stored position on this clock says anything about this clock.
+        let mark = positionGuards[key]?.highWater
+            ?? Self.seededGuard(for: book, isAudioScaled: true).highWater
+
+        if trusted {
+            // Released at the mark it already held, never lowered to wherever
+            // this resume landed. A stale anchor can resolve to somewhere
+            // earlier than a good same-clock position — that is exactly what a
+            // high-water mark is for — and re-baselining here would hand the
+            // regression back through the front door.
+            if positionGuards[key]?.awaitingChoice == true {
+                positionGuards[key] = Self.seededGuard(
+                    for: book, isAudioScaled: true, highWater: mark)
+            }
+            return
+        }
+        // A book with no stored position anywhere has nothing to lose, and
+        // holding its clock would mean a pure audiobook opened for the first
+        // time recorded no position at all until the listener scrubbed.
+        guard book.position != nil else { return }
+        positionGuards[key] = Self.seededGuard(
+            for: book, isAudioScaled: true, highWater: mark, awaitingChoice: true)
+        // "not exact" rather than "unresolved": since the ladder grew rungs
+        // that answer approximately, this also covers a start that found
+        // somewhere to play and cannot vouch for it.
+        IssaLog.warning("listening resume not exact, derived writes held until the listener steers", [
+            "book": book.uuid,
+            "storedScale": (stored?.isAudioScaled ?? false) ? "audio" : "text",
+            "held": String(format: "%.4f", mark),
+        ])
+    }
+
+    /// Why each clock's last refused write was refused, so that a refusal is a
+    /// line in the log rather than a state the log keeps repeating.
+    ///
+    /// Keyed by guard key — the book and the clock — and holding the reason, so
+    /// a clock that goes from held to below-the-mark still says so.
+    private var refusalsLogged: [String: String] = [:]
+
+    /// Logs a refusal when it starts, and notes when the clock starts taking
+    /// writes again.
+    ///
+    /// The audiobook's writer ticks every fifteen seconds, and a held clock
+    /// refuses every one of those until the listener steers — so an hour's
+    /// drive wrote two hundred and forty identical warnings. That is enough to
+    /// push the six-hour window out of a rotating 512 KB file on its own, and
+    /// it buries the one line that explains the state under two hundred and
+    /// thirty-nine copies of itself. `writePosition` already reasons this way
+    /// about `position moved`, which logs only a substantial move.
+    ///
+    /// The clearing edge earns its line too: "this clock started accepting
+    /// writes again" is the moment a report of "it played for an hour and saved
+    /// nothing" stops being true, and without it the log ends on a refusal
+    /// whatever happened next.
+    /// - Parameter reason: nil when the write was allowed.
+    private func noteRefusal(
+        _ reason: String?, on guardKey: String, fields: @autoclosure () -> [String: String],
+    ) {
+        guard let reason else {
+            if refusalsLogged.removeValue(forKey: guardKey) != nil {
+                IssaLog.info("position writes accepted again", ["guard": guardKey])
+            }
+            return
+        }
+        guard refusalsLogged.updateValue(reason, forKey: guardKey) != reason else { return }
+        IssaLog.warning("position write refused", fields())
+    }
+
     /// The single place a reading position is written.
     ///
     /// Both writers pass through here — the reader's own saves and the
@@ -2238,36 +3369,30 @@ public final class AppModel {
             IssaLog.warning("write dropped: no queue", ["book": bookUUID, "kind": "position"])
             return false
         }
-        let book = books.first { $0.uuid == bookUUID }
-        // With the narration length, where there is one: the guard's absolute
-        // bound — five minutes — only exists for long audiobooks, and without
-        // the duration it was never applied, leaving a forty-hour book two
-        // hours of undetected slack.
-        let duration = book.map(LibraryArrangement.duration(of:)).flatMap { $0 > 0 ? $0 : nil }
-        // Keyed by book *and* by clock. `PositionGuard` is a high-water mark on
-        // `totalProgression`, and this app writes that field on two different
-        // scales -- a fraction of the text from the reader, a fraction of the
-        // audio from the audiobook. Sharing one guard between them meant a
-        // reading position and a listening position were compared against each
-        // other as if they were the same quantity, so one could refuse the
-        // other for going "backwards" when neither had moved at all. See
-        // AudioAnchor.
         let guardKey = Self.positionGuardKey(bookUUID, isAudioScaled: locator.isAudioScaled)
-        // Seeded only from a stored position on this same clock, for the same
-        // reason: the book's own progress is whichever scale wrote last.
-        let seed = (book?.position?.locator).flatMap {
-            $0.isAudioScaled == locator.isAudioScaled ? $0.totalProgression : nil
-        } ?? 0
-        var state = positionGuards[guardKey] ?? PositionGuard(highWater: seed, duration: duration)
-        let decision = state.decide(locator.locations?.totalProgression, origin: origin)
-        positionGuards[guardKey] = state
-
-        if case let .refuse(held, candidate) = decision {
-            IssaLog.warning("position write refused", [
+        switch admitPosition(locator, origin: origin, for: bookUUID) {
+        case .allow:
+            noteRefusal(nil, on: guardKey, fields: [:])
+        case let .refuse(held, candidate):
+            noteRefusal("belowHighWater", on: guardKey, fields: [
                 "book": bookUUID,
                 "held": String(format: "%.4f", held),
                 "candidate": String(format: "%.4f", candidate),
                 "origin": origin.rawValue,
+                "reason": "belowHighWater",
+            ])
+            return false
+        case let .awaitChoice(candidate):
+            // A held clock, not a regression: the app could not work out where
+            // this listener was, so nothing a clock arrives at may be persisted
+            // until they say. `held` is what the mark would have been, which is
+            // the number worth having in the log.
+            noteRefusal("awaitingChoice", on: guardKey, fields: [
+                "book": bookUUID,
+                "held": String(format: "%.4f", positionGuards[guardKey]?.highWater ?? 0),
+                "candidate": candidate.map { String(format: "%.4f", $0) } ?? "none",
+                "origin": origin.rawValue,
+                "reason": "awaitingChoice",
             ])
             return false
         }

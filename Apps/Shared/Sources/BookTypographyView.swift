@@ -37,16 +37,14 @@ struct BookTypographyView: View {
                 // justification and nothing else, so a theme written through
                 // `style` would be dropped on the floor by `difference(to:)` —
                 // it would appear to work and then not persist.
-                Section {
+                SettingsSection(note: "Applies to every book, unlike the settings below.") {
                     ThemePicker(selection: $settings.readerStyle.theme)
                 } header: {
                     Text("Page colour")
-                } footer: {
-                    Text("Applies to every book, unlike the settings below.")
                 }
                 .listRowBackground(Palette.surface)
 
-                Section {
+                SettingsSection(note: footer) {
                     TypographyControls(
                         style: $style,
                         publisherFamily: publisherFamily,
@@ -56,8 +54,6 @@ struct BookTypographyView: View {
                     )
                 } header: {
                     Text("This book")
-                } footer: {
-                    Text(footer)
                 }
                 .listRowBackground(Palette.surface)
 

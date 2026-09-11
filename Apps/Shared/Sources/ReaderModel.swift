@@ -67,6 +67,19 @@ public final class ReaderModel {
 
     /// The one in-flight response to a style change. Superseded, not stacked.
     private var styleTask: Task<Void, Never>?
+
+    /// The narration extraction, held so a removal can revoke it.
+    ///
+    /// It has to be held by name, for two reasons that compound. `Task.detached`
+    /// does not inherit cancellation, so cancelling whatever is awaiting it
+    /// leaves it running; and `AudioExtraction` now serialises extraction
+    /// against removal on one lock, so a removal arriving mid-extraction *waits*
+    /// where it used to race. Both were improvements on their own and together
+    /// they were a hang: `releaseDerivedFiles` runs on the main actor, and a
+    /// cold open of a long read-along holds that lock for a hundred and
+    /// seventy-six files. Cancelling first bounds the wait to one chunk, which
+    /// is what `startListening`'s own extraction already does.
+    private var narrationExtraction: Task<[String: URL]?, Never>?
     /// Whether any change in the current burst needs a reparse.
     ///
     /// Accumulated, not recomputed per change: the task is cancelled and
@@ -401,75 +414,49 @@ public final class ReaderModel {
             // own player — while the replacement did it all again.
             try Task.checkCancellation()
             restoredSentenceID = stored?.locator.sentenceID
-            var resumed = stored.flatMap { position in
-                package.spine.firstIndex { position.locator.matchesHref($0.href) }
-            }
+            // Fetched up front rather than inside the branch that wants it, so
+            // the decision below is a pure function of what is known. Only an
+            // audio-scaled position has anything to gain from an anchor: a
+            // reading position already names its own chapter.
+            let anchor = (stored?.locator.isAudioScaled ?? false)
+                ? await loadAudioAnchor?() : nil
+            let landing = Self.resolveLanding(
+                stored: stored?.locator, anchor: anchor, package: package, timeline: timeline)
+            let resumed = landing.index
             // The anchor the chapter load restores from. Usually the stored
             // locator itself; replaced when that locator names no chapter.
-            var restoring = stored?.locator
-            if let position = stored, resumed == nil {
-                // An audiobook wrote this position, so its `totalProgression`
-                // is a fraction of the *audio* clock — a different timeline
-                // entirely. Reading it as a fraction of the text is the mirror
-                // image of the bug that resumed the car tens of minutes early,
-                // and it is what produced the `storedFragment=kobo.1.1
-                // storedProgress=0.7284` pairs in the logs: a fragment at the
-                // front of a chapter beside a progress three-quarters through
-                // the book, because the fragment was synthesised by the branch
-                // below after the number had already been misread.
-                //
-                // The media overlay is the bridge. The anchor names an audio
-                // file and an offset; the timeline says which sentence that is.
-                // See `AudioAnchor`.
-                if position.locator.isAudioScaled,
-                   let anchor = await loadAudioAnchor?(),
-                   let entry = timeline.entry(inFile: anchor.audioHref, at: anchor.offset),
-                   let index = package.spine.firstIndex(where: {
-                       ReadiumLocator(href: entry.textHref, type: "application/xhtml+xml")
-                           .matchesHref($0.href)
-                   })
-                {
-                    resumed = index
-                    restoring = ReadiumLocator(
-                        href: package.spine[index].href,
-                        type: "application/xhtml+xml",
-                        locations: .init(fragments: [entry.fragmentID]),
-                    )
-                    IssaLog.info("stored position resolved by audio anchor", [
+            var restoring = landing.restoring
+            if let position = stored {
+                // Said before the fallback it explains. An anchor that names a
+                // file the overlay does not narrate means this book's audio
+                // reached the device under a different set of names — the case
+                // that dropped a listener at chapter one — and the progression
+                // landing below is a guess where the anchor would have been
+                // exact.
+                if position.locator.isAudioScaled, let anchor, landing.how != .audioAnchor {
+                    IssaLog.warning("audio anchor names no file in the overlay", [
                         "book": book.title,
-                        "fragment": entry.fragmentID,
-                        "chapter": String(index),
+                        "anchorHref": anchor.audioHref,
+                        "narratedFiles": String(Set(timeline.entries.map(\.audioHref)).count),
                     ])
                 }
-                // An href no spine entry can match — an audiobook position,
-                // whose href is an audio track's path, or a chapter file a
-                // revision renamed. The whole-book progression still says
-                // where the reader was, so land there: falling back to the
-                // front of the book put the first page turn's save over their
-                // real position.
-                //
-                // Last resort, and approximate when the position came from the
-                // audiobook: the two clocks do not convert by arithmetic. Said
-                // in the log rather than left to be inferred.
-                else if let progress = position.locator.totalProgression, progress.isFinite,
-                   let landing = Self.spinePosition(atTotalProgression: progress, in: package) {
-                    resumed = landing.index
-                    // A synthetic anchor rather than the stored locator: its
-                    // `progression` is within the original resource — for an
-                    // audiobook, the track — not within this chapter, and
-                    // `LocatorAnchoring` would otherwise anchor on it.
-                    restoring = ReadiumLocator(
-                        href: package.spine[landing.index].href,
-                        type: "application/xhtml+xml",
-                        locations: .init(progression: landing.within),
-                    )
+                switch landing.how {
+                case .storedHref:
+                    break
+                case .audioAnchor:
+                    IssaLog.info("stored position resolved by audio anchor", [
+                        "book": book.title,
+                        "fragment": landing.restoring?.sentenceID ?? "none",
+                        "chapter": String(landing.index ?? -1),
+                    ])
+                case .progression:
                     IssaLog.info("stored position resolved by progression", [
                         "book": book.title,
                         "href": position.locator.href,
-                        "progress": String(format: "%.4f", progress),
-                        "chapter": String(landing.index),
+                        "progress": String(format: "%.4f", position.locator.totalProgression ?? -1),
+                        "chapter": String(landing.index ?? -1),
                     ])
-                } else {
+                case .none:
                     // Nothing left to resolve from: the reader is about to
                     // land at the front of the book, and the first page turn
                     // will save that over their real position.
@@ -617,6 +604,102 @@ public final class ReaderModel {
         return 0
     }
 
+    /// Where opening a book lands, and how that was decided.
+    ///
+    /// `index` is nil when nothing resolved — the caller falls back to the
+    /// first readable chapter — and `restoring` is the locator the chapter load
+    /// anchors on, which is the stored one only when it named a chapter of
+    /// this book.
+    struct Landing: Equatable {
+        enum How: String {
+            /// The stored locator named a spine item outright.
+            case storedHref
+            /// An audio position, placed through the media overlay.
+            case audioAnchor
+            /// The whole-book fraction, which is a guess but a bounded one.
+            case progression
+            /// Nothing this package can resolve.
+            case none
+        }
+
+        let index: Int?
+        let restoring: ReadiumLocator?
+        let how: How
+    }
+
+    /// Turns a stored position into a chapter to open at.
+    ///
+    /// A pure function of what is known, so the reverse of the listening
+    /// ladder can be tested against the same fixtures — an audio position and
+    /// an anchor written by the car, a text position that must be untouched by
+    /// either. It used to be forty lines inline in `open()`, reachable only by
+    /// downloading a book over a network.
+    static func resolveLanding(
+        stored: ReadiumLocator?,
+        anchor: AudioAnchor?,
+        package: EPUBPackage,
+        timeline: SMILTimeline,
+    ) -> Landing {
+        guard let stored else { return Landing(index: nil, restoring: nil, how: .none) }
+        if let index = package.spine.firstIndex(where: { stored.matchesHref($0.href) }) {
+            return Landing(index: index, restoring: stored, how: .storedHref)
+        }
+        // An audiobook wrote this position, so its `totalProgression` is a
+        // fraction of the *audio* clock — a different timeline entirely.
+        // Reading it as a fraction of the text is the mirror image of the bug
+        // that resumed the car tens of minutes early, and it is what produced
+        // the `storedFragment=kobo.1.1 storedProgress=0.7284` pairs in the
+        // logs: a fragment at the front of a chapter beside a progress
+        // three-quarters through the book, because the fragment was
+        // synthesised by the branch below after the number had already been
+        // misread.
+        //
+        // The media overlay is the bridge. The anchor names an audio file and
+        // an offset; the timeline says which sentence that is. See
+        // `AudioAnchor`, and `ListeningHandoff.place`, which is that mapping —
+        // shared rather than copied, because the hand-off back from the car
+        // does the same thing while the book is already open and two copies of
+        // one bridge would eventually disagree about which chapter a track is.
+        if stored.isAudioScaled, let anchor,
+           let placed = ListeningHandoff.place(anchor, in: package, timeline: timeline)
+        {
+            let (index, entry) = placed
+            return Landing(
+                index: index,
+                restoring: ReadiumLocator(
+                    href: package.spine[index].href,
+                    type: "application/xhtml+xml",
+                    locations: .init(fragments: [entry.fragmentID]),
+                ),
+                how: .audioAnchor)
+        }
+        // An href no spine entry can match — an audiobook position, whose href
+        // is an audio track's path, or a chapter file a revision renamed. The
+        // whole-book progression still says roughly where the reader was, so
+        // land there: falling back to the front of the book put the first page
+        // turn's save over their real position.
+        //
+        // Last resort, and approximate when the position came from the
+        // audiobook: the two clocks do not convert by arithmetic. Said in the
+        // caller's log rather than left to be inferred.
+        if let progress = stored.totalProgression, progress.isFinite,
+           let landing = Self.spinePosition(atTotalProgression: progress, in: package) {
+            return Landing(
+                index: landing.index,
+                // A synthetic anchor rather than the stored locator: its
+                // `progression` is within the original resource — for an
+                // audiobook, the track — not within this chapter, and
+                // `LocatorAnchoring` would otherwise anchor on it.
+                restoring: ReadiumLocator(
+                    href: package.spine[landing.index].href,
+                    type: "application/xhtml+xml",
+                    locations: .init(progression: landing.within),
+                ),
+                how: .progression)
+        }
+        return Landing(index: nil, restoring: stored, how: .none)
+    }
+
     /// The spine location a whole-book progression names — the inverse of
     /// `EPUBPackage.bookProgress(spineIndex:within:)`, sharing its weighting
     /// and its equal-count fallback so the two round-trip.
@@ -666,9 +749,16 @@ public final class ReaderModel {
         // cancellation on the way back, since a layout pass may have replaced
         // this open while the extraction ran.
         let bookID = book.uuid
-        let files = await Task.detached(priority: .userInitiated) {
+        // Held rather than awaited anonymously: see `narrationExtraction`. The
+        // extraction reads its *own* task's cancellation between chunks — the
+        // default `AudioExtraction.extractAudio` documents — so cancelling this
+        // handle is what stops it, and nothing else can.
+        let extraction = Task.detached(priority: .userInitiated) {
             try? AudioExtraction.extractAudio(from: package, timeline: timeline, bookID: bookID)
-        }.value
+        }
+        narrationExtraction = extraction
+        let files = await extraction.value
+        narrationExtraction = nil
         try Task.checkCancellation()
         guard let files, !files.isEmpty else {
             // A book whose play button never appears, with no reason given, is
@@ -680,7 +770,38 @@ public final class ReaderModel {
             return
         }
 
-        let coordinator = ReadalongCoordinator(timeline: timeline, audioFiles: files)
+        attachNarration(timeline: timeline, audioFiles: files)
+    }
+
+    /// Revokes an extraction that is still writing this book's narration.
+    ///
+    /// Called by whatever is about to delete those files. Without it the
+    /// deletion blocks the main actor until the extraction finishes — see
+    /// `narrationExtraction` — and then the extraction puts back what was
+    /// deleted, because it re-creates the directory on its way through.
+    ///
+    /// Safe to call when nothing is extracting, which is almost always: a
+    /// cancelled `nil` task is a no-op, and the extraction only exists for the
+    /// few seconds of a cold open.
+    func cancelNarrationExtraction() {
+        narrationExtraction?.cancel()
+    }
+
+    /// Builds the narration engine over an already-extracted set of audio files
+    /// and wires it to the page.
+    ///
+    /// Split out of `prepareNarration` at the one seam that matters: everything
+    /// above it needs a downloaded book and hundreds of megabytes through the
+    /// deflater, and everything below it is the wiring the reader's behaviour
+    /// actually depends on. A test that wants a model whose narration is hooked
+    /// up hands over the fixture's files and gets exactly the coordinator
+    /// production builds, rather than a second, kinder one that proves nothing.
+    func attachNarration(timeline: SMILTimeline, audioFiles: [String: URL]) {
+        // Set here rather than left to the caller: this is the timeline the
+        // coordinator is built over, and the two disagreeing is how a highlight
+        // ends up pointing at a sentence the page cannot find.
+        self.timeline = timeline
+        let coordinator = ReadalongCoordinator(timeline: timeline, audioFiles: audioFiles)
         // The saved rate is otherwise written to preferences and never applied,
         // so every book starts at 1x however the reader left it.
         coordinator.player.rate = Float(preferredRate)
@@ -992,6 +1113,40 @@ public final class ReaderModel {
             "book": book.title, "chapter": String(chapterIndex),
             "page": String(pageIndex), "fragment": entry.fragmentID,
         ])
+    }
+
+    /// Picks the book up at a sentence the other engine was on.
+    ///
+    /// The reader's half of the hand-off back from the car: `ListeningHandoff`
+    /// has already turned the audiobook's anchor into a sentence, and this puts
+    /// the narration and the page on it. `playing` carries the car's own state
+    /// across, because a driver who parked mid-sentence expects the phone to
+    /// carry on and one who pressed pause at the door expects a quiet room.
+    ///
+    /// Derived at every step, and never `seek(toFragment:)`. A seek means the
+    /// reader named a place, which relabels the position `.chosen` and disarms
+    /// the high-water guard — and this place was named by an audio clock, not
+    /// by a person. `play(from:)` and `prepare(at:)` announce nothing, which is
+    /// exactly the contract wanted here.
+    ///
+    /// `positionOrigin` is set explicitly rather than left to `syncToNarration`:
+    /// that only labels the move when the page actually turned, and a hand-off
+    /// that lands on the page already on screen would otherwise be saved under
+    /// whatever the reader's last deliberate move left behind.
+    ///
+    /// - Returns: whether the narration reached the sentence. False when its
+    ///   audio file is not on disk, in which case nothing moved and the caller
+    ///   still has a car engine that knows where it is.
+    @discardableResult
+    public func resumeNarration(at entry: SMILEntry, playing: Bool) async -> Bool {
+        guard let readalong else { return false }
+        let reached = playing
+            ? await readalong.play(from: entry)
+            : await readalong.prepare(at: entry)
+        guard reached else { return false }
+        positionOrigin = .derived
+        await syncToNarration()
+        return true
     }
 
     /// The first narrated fragment inside a stretch of the chapter's text.
@@ -1864,7 +2019,17 @@ public final class ReaderModel {
         // is a fraction of the *text*; this is a file and an offset, which is
         // the only thing the audiobook engine can act on — and the whole reason
         // switching to the car mid-book can now land on the same sentence.
-        if let anchor = readalong?.currentAnchor {
+        //
+        // Only when the position was accepted, exactly as the audiobook's
+        // fifteen-second writer has it. The anchor is the *more* durable half —
+        // `ListeningResume`'s first rung starts the car from it, and
+        // `resolveLanding` opens the book from it — so writing one for a page
+        // the guard has just refused lands the place anyway, and the next car
+        // start resolves to precisely where the refusal was protecting against,
+        // reports success, and releases the hold on the way past. This half of
+        // the rule was written for the listening writer and never given to the
+        // reader's twin.
+        if accepted, let anchor = readalong?.currentAnchor {
             await recordAudioAnchor?(anchor)
         }
     }

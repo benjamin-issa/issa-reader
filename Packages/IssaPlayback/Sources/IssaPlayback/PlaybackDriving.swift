@@ -56,7 +56,9 @@ public protocol PlaybackDriving: AnyObject {
 extension AudiobookCoordinator: PlaybackDriving {
     public var bookProgress: Double { progress }
     public var currentChapterTitle: String { chapterTitle }
-    public var chapterSpan: (start: TimeInterval, duration: TimeInterval)? { trackSpan }
+    // `chapterSpan` is the coordinator's own property now. It used to be
+    // `trackSpan` bridged through here, which was honest only while a chapter
+    // and a track were the same thing — see `AudiobookChapter`.
     public func seek(toBookProgress progress: Double) async {
         await seek(toProgress: progress)
     }

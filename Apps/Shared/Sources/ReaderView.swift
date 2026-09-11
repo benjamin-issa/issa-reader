@@ -528,10 +528,14 @@ public struct ReaderView: View {
             .accessibilityLabel("Ask about this book")
             // A popover, not a sheet: the page the question is about has to
             // stay on screen, and a Mac sheet covers the window it belongs to.
+            //
+            // `AskPanel` rather than the sheet itself because a popover cannot
+            // be resized by its edges and takes its size from its content — so
+            // it is the content that has to scroll and be draggable, and a
+            // fixed frame around a view that reports its full height is how an
+            // answer came to be cut off with no way to see the rest.
             .popover(isPresented: $showsAsk, arrowEdge: .top) {
-                AskSheet(model: model)
-                    .frame(width: 420)
-                    .frame(minHeight: 220)
+                AskPanel(model: model)
             }
             .onChange(of: showsAsk) { _, showing in
                 // A popover has no `onDismiss`, so the close is observed here.
@@ -755,10 +759,9 @@ public struct ReaderView: View {
             // ended up spending a fifth of its height before the first word.
             //
             // Nothing on the Mac, which draws no such bar: there the window's
-            // own toolbar is the top chrome, and `deviceInsets.top` — measured
-            // from `contentLayoutRect` — is what holds the page clear of it.
-            // Reserving 44 here as well put the page's first line 8 points
-            // under a 52-point toolbar.
+            // own toolbar is the top chrome, and `deviceInsets.top` is what
+            // holds the page clear of it. Reserving 44 here as well put the
+            // page's first line 8 points under a 52-point toolbar.
             if Self.drawsOwnTopBar {
                 Color.clear.frame(height: ReaderChrome.barHeight)
             }
@@ -766,6 +769,13 @@ public struct ReaderView: View {
             PageCanvas(model: model, pageSize: size)
                 .padding(.horizontal, model.style.pageMargin)
                 .padding(.bottom, model.style.pageMargin)
+                // And the top margin, where there is no bar standing in for it
+                // — which is the Mac. It has to be drawn as well as reserved:
+                // `ReaderChrome.topReserve` takes it out of the page's height
+                // budget, and if nothing then puts it on screen the page simply
+                // sits that much higher, back under the toolbar with the space
+                // spent at the bottom instead.
+                .padding(.top, pageTopMargin)
                 .contentShape(Rectangle())
                 #if !os(tvOS)
                 // Double tap first: SwiftUI gives the higher count priority,
@@ -884,6 +894,13 @@ public struct ReaderView: View {
         // Bare arrow keys turn pages, which is what a Mac reader tries first.
         // The menu shortcuts are ⌘-arrow so the two do not collide.
         .focusable()
+        // The page is a document, not a control. Focus here is only how the key
+        // presses below are received — the reader is never choosing between this
+        // and something else — and the default ring is a rounded rect around a
+        // stack as wide as the window, so all that shows of it is a tangerine
+        // rule under the toolbar and another over the footer, for as long as the
+        // book is open. That is not what a focus ring is for.
+        .focusEffectDisabled()
         .focused($pageHasKeyboardFocus)
         // Asynchronous on purpose: a `@FocusState` write from `onAppear` lands
         // inside the transaction that is presenting the page.
@@ -1063,14 +1080,25 @@ public struct ReaderView: View {
         .padding(Metrics.spacing32)
     }
 
-    /// Tap coordinates arrive in the padded frame's space; the layout speaks
-    /// in the canvas's, which starts one margin in.
+    /// The page's top margin, drawn only where nothing else is standing in for
+    /// it — which is the Mac, where the top chrome is a window toolbar rather
+    /// than one of the reader's own bars.
+    ///
+    /// One value because two things must agree about it: the padding that puts
+    /// it on screen, and `canvasPoint`, which has to take it back off again.
+    private var pageTopMargin: CGFloat {
+        Self.drawsOwnTopBar ? 0 : model.style.pageMargin
+    }
+
     /// A point in the padded page's coordinates, in the canvas's own.
     ///
-    /// Horizontal only: the page keeps its side margins, while its top margin is
-    /// now the bar's reserve sitting above it, outside this view entirely.
+    /// Tap coordinates arrive in the padded frame's space; the layout speaks in
+    /// the canvas's, which starts one margin in from the side — and, where the
+    /// reader draws no top bar, one `pageTopMargin` down as well. Off the Mac
+    /// that term is zero: there the top margin is the bar's reserve sitting
+    /// above this view entirely.
     private func canvasPoint(_ point: CGPoint) -> CGPoint {
-        CGPoint(x: point.x - model.style.pageMargin, y: point.y)
+        CGPoint(x: point.x - model.style.pageMargin, y: point.y - pageTopMargin)
     }
 
     /// Whether this book is playing, by whichever engine happens to own it.
@@ -1086,6 +1114,13 @@ public struct ReaderView: View {
 
     /// Pauses or resumes whichever engine is playing this book.
     private func togglePlaybackForThisBook() async {
+        // Unless it is between the two. `app.listening` is still published
+        // while a hand-off loads the page's audio, and by then that coordinator
+        // has been paused and is about to be discarded — so a tap here started
+        // the engine the hand-off was in the middle of taking the book away
+        // from. See `AppModel.isHandingOffToReader` for why waiting beats both
+        // of the alternatives.
+        guard !app.isHandingOffToReader(model.book.uuid) else { return }
         if app.listeningBook?.uuid == model.book.uuid, let listening = app.listening {
             if listening.player.isPlaying { listening.player.pause() } else { listening.player.play() }
             return
