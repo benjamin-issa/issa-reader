@@ -605,10 +605,32 @@ public final class AudiobookCoordinator {
         let generation = loadGeneration &+ 1
         loadGeneration = generation
 
+        // All three of them together, and all three BEFORE the await. The clock
+        // was already corrected here — a publish during the load used to report
+        // the start of the target track and silently drop the offset — but the
+        // chapter was left until afterwards, and for a streaming load that is
+        // one or two seconds in which `chapterIndex` names a chapter the book
+        // clock is no longer inside.
+        //
+        // Every reader of the pair assumes `chapterIndex ==
+        // chapterIndex(atBookTime: bookTime)`, so all of them were wrong at
+        // once, in different ways: `chapterSpan` measured the new book time
+        // against the *old* chapter's start and handed the lock-screen chapter
+        // scrubber a negative elapsed or one past the end; `chapterTitle` named
+        // the chapter the listener had just left, and CarPlay's Up Next
+        // highlighted that row; and `nextChapter()` — which is `chapterIndex +
+        // 1` — sent a second tap during the same load back to the chapter the
+        // first tap had already reached.
+        //
+        // Assigning it here is safe rather than merely convenient: there is no
+        // suspension between this and `loadsInFlight += 1`, so no tick can
+        // interleave; `syncChapter`'s `guard index != chapterIndex` is reached
+        // only when that counter is zero; and `advance()` captures its `before`
+        // *outside* this call, so it still compares against the pre-load
+        // chapter.
         trackIndex = index
-        // Corrected BEFORE the await, not after: a publish during the load used
-        // to report the start of the target track and silently drop the offset.
         bookTime = manifest.startTime(ofTrackAt: index) + offset
+        chapterIndex = chapterIndex(atBookTime: bookTime)
         loadsInFlight += 1
         defer { loadsInFlight -= 1 }
         await player.load(
@@ -617,11 +639,18 @@ public final class AudiobookCoordinator {
         )
         // A newer load started while this one was awaiting; it owns the state.
         guard loadGeneration == generation else { return .superseded }
+        // Restated rather than trusted: the player's periodic observer writes
+        // `bookTime` on every tick without consulting the counter — only the
+        // chapter announcement is gated — so a sample that landed during the
+        // load has left the clock describing the file being replaced.
         bookTime = manifest.startTime(ofTrackAt: index) + offset
-        // Unconditionally, as every load has always published: Now Playing
-        // rebuilds from this and a reloaded track is a new item there whether or
-        // not the chapter around it changed.
         chapterIndex = chapterIndex(atBookTime: bookTime)
+        // Announced late, and unconditionally, as every load has always
+        // announced: Now Playing rebuilds from this and a reloaded track is a
+        // new item there whether or not the chapter around it changed. The
+        // assignment moved; the announcement did not, because announcing a
+        // chapter the audio has not reached yet is what `loadsInFlight` exists
+        // to prevent.
         onChapterChange?(chapterIndex)
         return .landed
     }

@@ -646,6 +646,87 @@ struct ChapterClockTests {
                 "the chapter tap named a place, and a resume does not un-name it")
     }
 
+    // MARK: - The chapter and the clock it is derived from
+
+    /// `chapterIndex` used to be assigned *after* `await player.load`, while
+    /// `trackIndex` and `bookTime` moved before it — so for the second or two a
+    /// streaming track takes to open, the announced chapter belonged to the
+    /// file the listener had just left. Everything that reads the pair together
+    /// was wrong at once, and `chapterSpan` is the loudest: it measures the book
+    /// clock against `chapterStarts[chapterIndex]`, so a chapter tap that moves
+    /// *backwards* gave the lock-screen chapter scrubber a negative elapsed.
+    @Test("the chapter never disagrees with the clock it is derived from")
+    func theChapterNeverDisagreesWithTheClockMidLoad() async {
+        let subject = Self.coordinator(
+            Self.manifest(trackCount: 3, each: 100),
+            chapters: [
+                AudiobookChapter(title: "A", trackIndex: 0),
+                AudiobookChapter(title: "B", trackIndex: 1, offset: 30),
+                AudiobookChapter(title: "C", trackIndex: 2, offset: 40),
+            ],
+        )
+        _ = Self.detachClock(subject)
+        var announced: [Int] = []
+
+        await subject.play(chapter: 2)
+        subject.onChapterChange = { announced.append($0) }
+
+        // Sampled from inside the load, the way the lock screen samples: this
+        // task is enqueued on the main actor before the tap begins, so it runs
+        // at the load's own suspension inside AVFoundation. It waits for the
+        // load to have moved the track — which happens before that suspension —
+        // so it cannot read the state in front of the window, and the
+        // announcement below proves it did not read it behind.
+        let sampled = Task { @MainActor () -> (
+            track: Int, chapter: Int, title: String, elapsed: TimeInterval, announced: Bool
+        ) in
+            while subject.trackIndex != 1 { await Task.yield() }
+            return (
+                subject.trackIndex, subject.chapterIndex, subject.chapterTitle,
+                subject.bookTime - (subject.chapterSpan?.start ?? 0), !announced.isEmpty
+            )
+        }
+        await subject.play(chapter: 1)
+        let seen = await sampled.value
+
+        #expect(seen.track == 1, "the sample has to land after the load moved the track")
+        #expect(seen.announced == false, "and before the load announced anything")
+        #expect(seen.chapter == 1, "the chapter the load is going to, not the one it left")
+        #expect(seen.title == "B", "which is what Now Playing and CarPlay's Up Next read")
+        #expect(seen.elapsed == 0,
+                "and the chapter scrubber's elapsed is inside the chapter, not \(seen.elapsed)")
+    }
+
+    /// The victim a listener meets: two taps on "next chapter" while a track is
+    /// still opening. `nextChapter()` is `chapterIndex + 1`, and with the index
+    /// left behind until the load landed, the second tap recomputed the *same*
+    /// destination as the first — so a listener who tapped twice moved one
+    /// chapter and a listener who held the wheel button moved none at all.
+    @Test("two chapter taps inside one load advance two chapters")
+    func twoChapterTapsInsideOneLoadAdvanceTwoChapters() async {
+        let subject = Self.coordinator(
+            Self.manifest(trackCount: 3, each: 100),
+            chapters: [
+                AudiobookChapter(title: "A", trackIndex: 0),
+                AudiobookChapter(title: "B", trackIndex: 1, offset: 30),
+                AudiobookChapter(title: "C", trackIndex: 2, offset: 40),
+            ],
+        )
+        _ = Self.detachClock(subject)
+
+        // Enqueued back to back on the main actor, so the second runs at the
+        // first one's suspension — a burst of two remote commands, which is what
+        // a steering-wheel button sends when it is held.
+        let first = Task { @MainActor in await subject.nextChapter() }
+        let second = Task { @MainActor in await subject.nextChapter() }
+        await first.value
+        await second.value
+
+        #expect(subject.chapterIndex == 2, "two taps, two chapters")
+        #expect(subject.chapterTitle == "C")
+        #expect(subject.trackIndex == 2)
+    }
+
     // MARK: - Which of the three things happened
 
     /// A `Bool` said the same word for "there is no audio here" and "a newer
