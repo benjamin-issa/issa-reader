@@ -133,12 +133,37 @@ public final class NowPlayingController {
     }
 
     /// Called when a book starts playing, and again when it stops.
+    ///
+    /// Idempotent, on the same terms as `configure(settings:)` above and for a
+    /// sharper reason than sparing the work: this rebuilds `SleepTimer` from
+    /// scratch every time, and a rebuilt timer is a disarmed one. Re-attaching
+    /// the same coordinator for the same book therefore used to be a silent way
+    /// of cancelling a sleep timer the listener had set.
     public func attach(
         coordinator: (any PlaybackDriving)?,
         book: Book?,
         session: Session? = nil,
         chapterTitle: @escaping () -> String? = { nil },
     ) {
+        // Identity for the engine, uuid for the book: the `Book` value is
+        // re-fetched and re-decoded constantly — every position write rebuilds
+        // one — while what matters here is that it is the same novel.
+        if let coordinator, let book,
+           self.coordinator === coordinator, self.book?.uuid == book.uuid {
+            return
+        }
+
+        // Captured before anything is replaced, because `cancel()` below resets
+        // the mode to `.off` and this is the state that has to survive.
+        let previousBook = self.book?.uuid
+        let armed = sleepTimer.map { (mode: $0.mode, remaining: $0.remaining) }
+        // Cancelled, not merely dropped. `SleepTimer.cancel()` is the only
+        // caller of `fade(1)`, so replacing the object during the eight-second
+        // fade left `player.volume` stuck at whatever level the fade had reached
+        // — a book that plays on at a tenth of its volume, with nothing on any
+        // screen to say why.
+        sleepTimer?.cancel()
+
         self.coordinator = coordinator
         self.book = book
         self.session = session
@@ -192,6 +217,35 @@ public final class NowPlayingController {
         // Publish the moment anything changes, rather than waiting up to five
         // seconds for the poll — a lock screen that lags a play tap looks broken.
         coordinator.player.setRateObserver(for: self) { [weak self] _ in self?.publish() }
+
+        // A sleep timer set before the engine changed hands, carried across.
+        //
+        // The automatic hand-off at the end of a drive replaces the audiobook
+        // coordinator with the reader's read-along for the *same book*, and the
+        // rebuilt timer silently disarmed whatever the listener had set: `mode`
+        // read `.off`, the moon in the player went hollow, and the book read
+        // itself aloud all night. The discarded timer could not save it either —
+        // its `onExpire` captures the old coordinator weakly, so its expiry
+        // paused nothing.
+        //
+        // Only for the same book. A different novel starting is the listener
+        // choosing something else, and inheriting the old book's timer would be
+        // a decision nobody made.
+        //
+        // `.endOfChapter` is stateless, so it transfers as itself. `.duration`
+        // transfers as what is *left* rather than what was set: the listener
+        // asked for forty-five minutes forty minutes ago, and five is the honest
+        // remainder — the clock does not start again because the engine did.
+        if let armed, previousBook == book.uuid {
+            switch armed.mode {
+            case .off:
+                break
+            case .endOfChapter:
+                timer.start(.endOfChapter)
+            case let .duration(seconds):
+                timer.start(.duration(armed.remaining ?? seconds))
+            }
+        }
 
         loadArtwork(for: book)
         // The system reads Now Playing on a pull, but the elapsed time it shows
