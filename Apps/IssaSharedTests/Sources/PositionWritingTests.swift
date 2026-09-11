@@ -99,6 +99,18 @@ struct PositionWritingTests {
             locations: .init(progression: progress, totalProgression: progress))
     }
 
+    /// What the reader's own save produces: a chapter document, and a fraction
+    /// of the *text*. The twin of `audioLocator`, and the pair is the whole
+    /// point — the two differ only in the type, and only the type says which
+    /// clock the identical-looking fraction belongs to.
+    static func textLocator(
+        _ progress: Double, href: String = "OEBPS/ch41.xhtml",
+    ) -> ReadiumLocator {
+        ReadiumLocator(
+            href: href, type: "application/xhtml+xml",
+            locations: .init(progression: progress, totalProgression: progress))
+    }
+
     /// With a notification centre of its own: swift-testing runs suites in
     /// parallel and sign-out broadcasts process-wide, so a default centre lets
     /// one suite clear another's state mid-run.
@@ -206,6 +218,61 @@ struct PositionWritingTests {
         #expect(app.admitPosition(Self.audioLocator(0.31), origin: .derived, for: Self.uuid)
             == .awaitChoice(candidate: 0.31),
             "a re-seed is not the listener saying where they are")
+    }
+
+    // MARK: - A steer on one clock, and what the other is owed
+
+    /// The hours that persisted nowhere. The reader read to 0.60 of the text;
+    /// in the car the listener scrubbed, which re-baselines `uuid#audio` and,
+    /// before this, told `uuid#text` nothing at all. The drive ends somewhere
+    /// around 0.30 of the text, the reader hands that back — and it was
+    /// measured against a 0.60 the listener had invalidated hours earlier, so
+    /// it was refused, and `ReaderModel`'s `if accepted, let anchor` dropped the
+    /// anchor with it. There is no arithmetic from the scrub to the page, which
+    /// is the whole reason the clocks are keyed apart; what there is, is the
+    /// fact that the stale mark is no longer true.
+    @Test("a drive the listener steered lets the page that follows it be saved")
+    func aSteeredDriveLetsThePageThatFollowsItBeSaved() {
+        let app = Self.model()
+        let book = SharedFixtures.book(
+            "A Novel", uuid: Self.uuid, progress: 0.60,
+            readaloud: true, audiobook: true)
+        app.books = [book]
+
+        // Before the drive: reading to 0.60, deliberately.
+        #expect(!app.admitPosition(Self.textLocator(0.60), origin: .chosen, for: Self.uuid).isRefusal)
+        // The drive: a scrub in the car, named on the audio clock and nowhere
+        // else — the only news the text clock ever gets about those hours.
+        #expect(!app.admitPosition(Self.audioLocator(0.55), origin: .chosen, for: Self.uuid).isRefusal)
+        // After the drive: the book comes back to the reader further back in the
+        // text than it was left, because the two fractions never agreed.
+        #expect(!app.admitPosition(Self.textLocator(0.30), origin: .derived, for: Self.uuid).isRefusal,
+                "a whole drive has to be able to land somewhere")
+    }
+
+    /// The safety rail on the test above, and the one that matters more. A place
+    /// named is a place named *on a clock*: it re-baselines that clock's mark,
+    /// and it invalidates the other clock's — but invalidating a mark is not the
+    /// same act as answering "where was this listener", which is the question a
+    /// hold is waiting on. A page turn in the reader must therefore leave a
+    /// held audio clock exactly as held as it found it, or the 2026-09-09 loss
+    /// walks back in behind an unrelated write.
+    @Test("a place named on one clock does not release a hold on the other")
+    func aPlaceNamedOnOneClockDoesNotReleaseAHoldOnTheOther() {
+        let app = Self.model()
+        let book = SharedFixtures.book(
+            "A Novel", uuid: Self.uuid, progress: 0.5363,
+            readaloud: true, audiobook: true)
+        app.books = [book]
+
+        app.prepareListeningGuard(for: book, resolved: false)
+        // The reader turning a page is the listener naming a place — on the
+        // text clock. It says nothing whatever about where the car was.
+        #expect(!app.admitPosition(Self.textLocator(0.54), origin: .chosen, for: Self.uuid).isRefusal)
+
+        #expect(app.admitPosition(Self.audioLocator(0.0001), origin: .derived, for: Self.uuid)
+            == .awaitChoice(candidate: 0.0001),
+            "the app still cannot say where the listener was, so it still must not guess")
     }
 }
 

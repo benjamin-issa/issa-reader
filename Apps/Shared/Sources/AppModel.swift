@@ -2787,6 +2787,27 @@ public final class AppModel {
         var state = positionGuards[guardKey] ?? PositionGuard(highWater: seed, duration: duration)
         let decision = state.decide(locator.locations?.totalProgression, origin: origin)
         positionGuards[guardKey] = state
+        // A steer names a place in the *book*, and the book has one of those
+        // however many clocks are measuring it. The other clock cannot be told
+        // where that place is — there is no arithmetic between the two, which
+        // is why they are keyed apart — but it can be told that whatever it was
+        // holding is no longer true. Without this, hours the listener steered
+        // in the car were measured against the page they left off at before the
+        // drive, every write after the drive was refused, and the anchor went
+        // with them. See `PositionGuard.forgettingItsMark`.
+        //
+        // Gated on the decision, not on the origin alone: a `.chosen` write
+        // carrying a non-finite progression falls to `.refuse` and is not a
+        // place named at all, so it must invalidate nothing.
+        if origin == .chosen, decision.isAllowed {
+            let other = Self.positionGuardKey(bookUUID, isAudioScaled: !locator.isAudioScaled)
+            // Only a guard that already exists. Creating one here would invent a
+            // rule about a clock this app has never written a position on, and
+            // the seeding rules deliberately say nothing about such a clock.
+            if let sibling = positionGuards[other] {
+                positionGuards[other] = sibling.forgettingItsMark()
+            }
+        }
         return decision
     }
 

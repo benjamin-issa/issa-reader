@@ -97,6 +97,44 @@ public struct PositionGuard: Sendable, Hashable {
         return min(Self.fractionTolerance, Self.secondsTolerance / duration)
     }
 
+    /// The same clock with its mark cleared, for when the *other* clock has
+    /// news this one cannot express.
+    ///
+    /// Guards are kept one per book *per clock* — `uuid#text` and `uuid#audio`
+    /// — because a fraction of the text and a fraction of the audio are
+    /// answers to different questions: the unnarrated front matter of a book
+    /// spends text and no seconds, so no value on one corresponds to a value on
+    /// the other. Every seeding rule in `AppModel` is same-clock-only for that
+    /// reason, and the gap it leaves is what happens when the listener steers
+    /// one of them.
+    ///
+    /// The drive: the reader reads to 0.60, so `#text` holds 0.60. In the car
+    /// they scrub, which is a place named — but named on `#audio`, where it
+    /// re-baselines that clock and nothing else. When the drive ends the reader
+    /// is handed the book back at around 0.30 of the text, and that write is
+    /// measured against a 0.60 the listener invalidated hours ago. It is
+    /// refused; `ReaderModel`'s `if accepted, let anchor` then drops the anchor
+    /// with it, and the whole drive persists nowhere.
+    ///
+    /// Cleared, then — not lowered, and not dropped. Lowered is undefined: there
+    /// is no arithmetic from a fraction of the audio to a fraction of the text,
+    /// and that impossibility is the reason the keys are split in the first
+    /// place. Dropped would be worse than it looks, because `admitPosition`
+    /// re-seeds a missing guard from `book.position` — which is exactly where
+    /// the stale mark came from, so the next write on the suspension inside
+    /// `writePosition` would resurrect the very mark being invalidated.
+    ///
+    /// What is kept is everything that is not a claim about the reader:
+    /// `duration` is a fact about the book, and `awaitingChoice` is a fact
+    /// about what this app was able to work out. The hold in particular
+    /// travels through untouched. The 2026-09-09 loss — a car starting at zero
+    /// and writing 0.0001 over a part-read novel — is prevented by the hold and
+    /// not by the mark (see `awaitingChoice`), so clearing a mark can never be
+    /// the thing that lets that write back in.
+    public func forgettingItsMark() -> PositionGuard {
+        PositionGuard(highWater: 0, duration: duration, awaitingChoice: awaitingChoice)
+    }
+
     /// Whether this write may proceed, updating the mark if it may.
     public mutating func decide(_ candidate: Double?, origin: PositionOrigin) -> Decision {
         // Before the nil check on purpose: a held clock refuses a derived write

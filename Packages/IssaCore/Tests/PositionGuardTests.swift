@@ -199,6 +199,38 @@ struct PositionGuardTests {
         #expect(guardState.decide(0.0001, origin: .derived).isAllowed)
     }
 
+    // MARK: - News arriving from the other clock
+
+    /// Clearing a mark says "what this clock was holding is no longer true". It
+    /// does not say "the app has worked out where the listener was", and those
+    /// are the two different questions `highWater` and `awaitingChoice` answer.
+    /// A hold that a steer on the *other* clock could lift would hand back the
+    /// 2026-09-09 loss through a door nobody was watching.
+    @Test("a clock that forgets its mark keeps the hold it was under")
+    func forgettingAMarkKeepsTheHold() {
+        var forgotten = PositionGuard(highWater: 0.60, duration: 36_000, awaitingChoice: true)
+            .forgettingItsMark()
+        #expect(forgotten.highWater == 0)
+        #expect(forgotten.duration == 36_000, "how long the book runs is not a claim about the reader")
+        #expect(forgotten.decide(0.0001, origin: .derived) == .awaitChoice(candidate: 0.0001),
+                "a cleared mark must not become a released hold")
+    }
+
+    /// The drive, told from the reading clock's side. The listener scrubbed the
+    /// audiobook to somewhere this clock has no word for, so the 0.60 it was
+    /// holding is stale — and the page the reader is handed back at has to be
+    /// recordable. From there the ordinary rule has to resume immediately:
+    /// clearing the mark buys one write, not an open season.
+    @Test("a clock that forgot its mark admits the write carrying the move, then guards again")
+    func forgettingAMarkAdmitsTheMoveThenGuardsAgain() {
+        var forgotten = PositionGuard(highWater: 0.60).forgettingItsMark()
+        #expect(forgotten.decide(0.30, origin: .derived).isAllowed,
+                "the place the drive left the reader at has to be able to land")
+        #expect(forgotten.highWater == 0.30, "and it becomes the new mark")
+        #expect(forgotten.decide(0.02, origin: .derived) == .refuse(held: 0.30, candidate: 0.02),
+                "after which a derived write back to chapter one is a regression again")
+    }
+
     // MARK: - The seconds arm
 
     @Test("five minutes of a forty-hour audiobook is the whole tolerance")
