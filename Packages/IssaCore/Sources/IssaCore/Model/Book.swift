@@ -164,6 +164,19 @@ public extension Book {
         return names.joined(separator: ", ")
     }
 
+    /// The series to name where there is only room for one.
+    ///
+    /// A book can belong to two — an omnibus sits in its own series and in the
+    /// publisher's — and a cover badge or a one-line caption has to pick one.
+    /// The first membership carrying a position wins, because it is the only
+    /// one that can say *which* book this is; an unnumbered membership is a
+    /// shelf label, and naming it in place of "Book 2" loses the number the
+    /// reader was after. Screens with room for every membership — the book
+    /// screen's hero — read `series` directly instead.
+    var primarySeries: SeriesMembership? {
+        series.first { $0.position != nil } ?? series.first
+    }
+
     /// The subtitle worth putting on a screen, or nil when there is none.
     ///
     /// The server has always sent this and the app has always kept it —
