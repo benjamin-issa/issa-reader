@@ -15,6 +15,7 @@ public struct LibraryArrangement: Codable, Hashable, Sendable {
         case progress
         case duration
         case narrator
+        case series
 
         public var id: String { rawValue }
 
@@ -27,6 +28,7 @@ public struct LibraryArrangement: Codable, Hashable, Sendable {
             case .progress: "Progress"
             case .duration: "Length"
             case .narrator: "Narrator"
+            case .series: "Series"
             }
         }
     }
@@ -260,8 +262,48 @@ public extension LibraryArrangement {
                 case (nil, nil): return false
                 }
             }
+        case .series:
+            // Standalone books sort after every series either way, the rule
+            // `.recent` and `.narrator` follow for the bucket that has nothing
+            // to compare — so the direction lives in the comparator, and the
+            // blanket reversal below cannot lift a library's unseried majority
+            // above the sequences this sort exists to show.
+            return books.sorted { Self.inSeriesOrder($0, $1, ascending: ascending) }
         }
         return ascending ? ordered.reversed() : ordered
+    }
+
+    /// Reading order across a whole shelf: series first, each in its own order,
+    /// standalone books after them.
+    ///
+    /// Its own function because the rule is three comparisons deep — series
+    /// name, then position within it, then title — and each has to flip with
+    /// the direction while the two buckets that carry no value at all, an
+    /// unnumbered book and an unseried one, stay where they are.
+    static func inSeriesOrder(_ left: Book, _ right: Book, ascending: Bool) -> Bool {
+        // The same spelling `.narrator` uses: a comparison that reads forward
+        // is `.orderedAscending` unless the reader asked for the reverse.
+        let forward: ComparisonResult = ascending ? .orderedDescending : .orderedAscending
+        switch (left.primarySeries, right.primarySeries) {
+        case let (l?, r?):
+            let byName = l.name.localizedCaseInsensitiveCompare(r.name)
+            if byName != .orderedSame { return byName == forward }
+            switch (l.position, r.position) {
+            case let (lp?, rp?) where lp != rp: return ascending ? lp > rp : lp < rp
+            // A book the server never numbered has no place in the run, so it
+            // sits after the numbered ones whichever way the series is read.
+            case (nil, _?): return false
+            case (_?, nil): return true
+            // Same series, same position, or neither numbered: the title
+            // decides, below.
+            default: break
+            }
+        case (nil, _?): return false
+        case (_?, nil): return true
+        case (nil, nil): break
+        }
+        return sortKey(left.title)
+            .localizedCaseInsensitiveCompare(sortKey(right.title)) == forward
     }
 
     static func duration(of book: Book) -> Double {
