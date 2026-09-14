@@ -139,12 +139,7 @@ struct SeriesTile: View {
         }
         .frame(width: Self.width, height: Self.coverWidth / Metrics.coverAspect + 6, alignment: .topLeading)
         .overlay(alignment: .bottomTrailing) {
-            Text("\(series.books.count)")
-                .font(Typography.caption.weight(.bold).monospacedDigit())
-                .foregroundStyle(.white)
-                .padding(.horizontal, Metrics.spacing8)
-                .padding(.vertical, 2)
-                .background(Palette.slate, in: Capsule())
+            NumberBadge("\(series.books.count)")
         }
     }
 }

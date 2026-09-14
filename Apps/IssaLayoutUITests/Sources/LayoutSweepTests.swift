@@ -163,15 +163,42 @@ final class LayoutSweepTests: XCTestCase {
             XCTFail("no book cell to open")
         }
 
-        selectTab("Settings", in: grid)
+        // The series screen hangs off a book that is in one, and the shelf
+        // puts the newest arrival first — which is not one of the fixture's
+        // Gothic Horror pair. So this leg opens Dracula by name rather than
+        // whichever cell leads, and a fresh launch rather than a walk back up
+        // the stack: what the sweep measures should not depend on the route
+        // taken to reach it.
+        grid.terminate()
+        let shelf = launch(["-issa.library.mode", "all"])
+        waitForLibrary(shelf)
+        selectTab("Library", in: shelf)
+        // By label rather than by cell identifier, which would put a second
+        // copy of a fixture UUID in this file: a cell is a button whose label
+        // is everything the cover says, so the title is inside it either way.
+        let seriesBook = shelf.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS %@", "Dracula"))
+            .firstMatch
+        XCTAssertTrue(seriesBook.waitForExistence(timeout: 15), "no series book to open")
+        // A tap does not scroll to what it is aimed at, and the fixture's
+        // series books are the oldest arrivals — last on a shelf ordered by
+        // date, which is below the fold on a short screen.
+        if !seriesBook.isHittable { shelf.swipeUp() }
+        seriesBook.tap()
+        let seriesLink = shelf.descendants(matching: .any)["bookDetail.series"]
+        XCTAssertTrue(seriesLink.waitForExistence(timeout: 15), "no series link in the hero")
+        seriesLink.tap()
+        try check(shelf, screen: "series", root: "screen.series", content: nil)
+
+        selectTab("Settings", in: shelf)
         // No margin assertion: Settings is a `List`, its row insets are UIKit's,
         // and asserting against Apple's private metrics is a test that breaks on
         // the next point release for no benefit. It still gets containment and
         // a screenshot.
-        XCTAssertTrue(grid.descendants(matching: .any)["screen.settings"].waitForExistence(timeout: 15))
-        let reference = try LayoutReference.read(from: grid)
-        assertHorizontallyContained(try grid.snapshot(), reference, screen: "settings")
-        capture(grid, "settings")
+        XCTAssertTrue(shelf.descendants(matching: .any)["screen.settings"].waitForExistence(timeout: 15))
+        let reference = try LayoutReference.read(from: shelf)
+        assertHorizontallyContained(try shelf.snapshot(), reference, screen: "settings")
+        capture(shelf, "settings")
     }
 
     /// `content:` is accepted and ignored, deliberately — see below.

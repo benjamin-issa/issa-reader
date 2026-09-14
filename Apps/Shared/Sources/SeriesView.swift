@@ -22,13 +22,17 @@ struct SeriesView: View {
             if let series {
                 VStack(alignment: .leading, spacing: Metrics.spacing12) {
                     Text("\(series.books.count) books").overlineStyle()
-                    BookGrid(books: series.books, session: app.session) { book in
-                        series.position(of: book).map(BookDetailView.positionText)
+                    // No series line under these covers: every book here is
+                    // in the same series, which the navigation title already
+                    // says, and the caption below is its position in it.
+                    BookGrid(books: series.books, session: app.session, showsSeriesLine: false) { book in
+                        series.position(of: book).map(SeriesText.position)
                     }
                 }
                 .padding(Metrics.spacing16)
             }
         }
+        .accessibilityIdentifier("screen.series")
         .background(Palette.paper)
         .navigationTitle(name)
         .overlay {

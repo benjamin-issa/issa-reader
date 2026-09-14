@@ -170,6 +170,10 @@ public struct BookGrid: View {
     /// Off where every book already has audio, so the mark says nothing.
     let showsFormatMark: Bool
 
+    /// Off where the whole grid is one series, which its own title already
+    /// says — naming it under every cover repeats it a dozen times.
+    let showsSeriesLine: Bool
+
     /// A line under the title in place of the byline — a series screen says
     /// "Book 2" where the author's name would say nothing new.
     let caption: ((Book) -> String?)?
@@ -178,12 +182,14 @@ public struct BookGrid: View {
         books: [Book], session: Session?,
         shape: LibraryService.CoverShape = .portrait,
         showsFormatMark: Bool = true,
+        showsSeriesLine: Bool = true,
         caption: ((Book) -> String?)? = nil,
     ) {
         self.books = books
         self.session = session
         self.shape = shape
         self.showsFormatMark = showsFormatMark
+        self.showsSeriesLine = showsSeriesLine
         self.caption = caption
     }
 
@@ -197,11 +203,18 @@ public struct BookGrid: View {
     #endif
 
     public var body: some View {
-        LazyVGrid(columns: columns, alignment: .leading, spacing: Metrics.spacing24) {
+        // Asked once for the grid rather than once per cell, and in the grid
+        // rather than in the cell: the row has to be reserved so a book in a
+        // series does not stand a line taller than its neighbours, and a
+        // library with no series in it must not pay an empty line under every
+        // cover for a rule nothing here triggers. Only the grid can see both.
+        let reservesSeriesLine = showsSeriesLine && books.contains { $0.primarySeries != nil }
+        return LazyVGrid(columns: columns, alignment: .leading, spacing: Metrics.spacing24) {
             ForEach(books) { book in
                 BookGridItem(
                     book: book, session: session, shape: shape,
-                    showsFormatMark: showsFormatMark, caption: caption?(book))
+                    showsFormatMark: showsFormatMark, showsSeriesLine: showsSeriesLine,
+                    reservesSeriesLine: reservesSeriesLine, caption: caption?(book))
                     // Rows size to their tallest cell and centre vertically —
                     // LazyVGrid's alignment is horizontal only — so a title
                     // wrapping to two lines pushed its neighbours down.
@@ -220,18 +233,22 @@ struct BookGridItem: View {
     let session: Session?
     var shape: LibraryService.CoverShape = .portrait
     var showsFormatMark = true
+    var showsSeriesLine = true
+    var reservesSeriesLine = false
     var caption: String?
 
     var body: some View {
         #if os(tvOS)
         TVPosterItem(
             book: book, session: session, shape: shape,
-            showsFormatMark: showsFormatMark, caption: caption)
+            showsFormatMark: showsFormatMark, showsSeriesLine: showsSeriesLine,
+            reservesSeriesLine: reservesSeriesLine, caption: caption)
         #else
         BookLink(book: book, session: session) {
             BookCell(
                 book: book, session: session, shape: shape,
-                showsFormatMark: showsFormatMark, caption: caption)
+                showsFormatMark: showsFormatMark, showsSeriesLine: showsSeriesLine,
+                reservesSeriesLine: reservesSeriesLine, caption: caption)
         }
         #endif
     }
@@ -259,6 +276,8 @@ struct TVPosterItem: View {
     let session: Session?
     var shape: LibraryService.CoverShape = .portrait
     var showsFormatMark = true
+    var showsSeriesLine = true
+    var reservesSeriesLine = false
     var caption: String?
 
     @FocusState private var focused: Bool
@@ -292,7 +311,8 @@ struct TVPosterItem: View {
     private var cell: BookCell {
         BookCell(
             book: book, session: session, shape: shape,
-            showsFormatMark: showsFormatMark, caption: caption)
+            showsFormatMark: showsFormatMark, showsSeriesLine: showsSeriesLine,
+            reservesSeriesLine: reservesSeriesLine, caption: caption)
     }
 }
 #endif
@@ -304,6 +324,12 @@ public struct BookCell: View {
     /// Off on a screen made entirely of audiobooks, where marking every cover
     /// marks nothing.
     var showsFormatMark = true
+    /// Off where the screen has already named the series.
+    var showsSeriesLine = true
+    /// Whether to hold the series line's height open on a cell that has no
+    /// series to name. Set by the grid, which is the only thing that can see
+    /// whether any of its neighbours do; see `BookGrid`.
+    var reservesSeriesLine = false
     /// Shown instead of the byline when given.
     var caption: String?
     #if os(macOS)
@@ -341,6 +367,10 @@ public struct BookCell: View {
                     .overlay(alignment: .topTrailing) {
                         if showsFormatMark { formatMark }
                     }
+                    // Opposite corner to the format mark, so a book that is
+                    // both the second of a series and a read-along shows both
+                    // rather than one on top of the other.
+                    .overlay(alignment: .topLeading) { SeriesMark(book: book) }
                     // The Mac's selection ring: a click selects into the
                     // inspector rather than opening a window, so the cover has
                     // to say which book the column is describing.
@@ -379,6 +409,27 @@ public struct BookCell: View {
                 .foregroundStyle(Palette.inkTertiary)
                 .lineLimit(1)
                 .truncationMode(.tail)
+            if showsSeriesLine { seriesLine }
+    }
+
+    /// Which series the book belongs to, under the byline.
+    ///
+    /// The cover's badge carries the number and this carries the name, because
+    /// a bare "2" on artwork says which book without ever saying of what. Kept
+    /// to one truncating line for the reason the byline above it is: a cell has
+    /// only the width of its cover, and a series name can be a sentence.
+    @ViewBuilder
+    private var seriesLine: some View {
+        let series = book.primarySeries
+        if series != nil || reservesSeriesLine {
+            Text(series.map {
+                SeriesText.label(name: $0.name, position: $0.position, count: nil)
+            } ?? "")
+                .font(Typography.caption)
+                .foregroundStyle(Palette.inkTertiary)
+                .lineLimit(1, reservesSpace: true)
+                .truncationMode(.tail)
+        }
     }
 
     /// Whether a book can be listened to, in one glyph.
@@ -403,6 +454,28 @@ public struct BookCell: View {
                 .background(Palette.surface.opacity(0.92), in: Circle())
                 .padding(Metrics.spacing4)
                 .accessibilityLabel(formats.contains(.readaloud) ? "Read along" : "Audiobook")
+        }
+    }
+}
+
+/// Which book of its series a cover is, on the cover.
+///
+/// A numeral rather than "Book 2": at cover size there is room for a digit,
+/// and the caption under it names the series in full — so the badge answers
+/// "which one" and the line answers "of what". Only for a book the server
+/// actually numbered; an unnumbered membership has no number to draw.
+///
+/// Its own view because the grid and the rails both draw it. The rail on the
+/// book screen is the case that makes it worth having: a shelf of the same
+/// series reads 1, 3, 4 and says at a glance which one is missing.
+struct SeriesMark: View {
+    let book: Book
+
+    var body: some View {
+        if let series = book.primarySeries, let position = series.position {
+            NumberBadge(SeriesText.ordinal(position))
+                .padding(Metrics.spacing4)
+                .accessibilityLabel("\(SeriesText.position(position)) in \(series.name)")
         }
     }
 }
