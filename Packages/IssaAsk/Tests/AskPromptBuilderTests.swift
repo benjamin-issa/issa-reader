@@ -178,19 +178,22 @@ struct AskPromptBuilderTests {
         // passages were far over the old ceiling and are over the new one by a
         // hair, so the next tune of either number would have left this test
         // passing while asserting nothing at all.
+        // A window so large that only the ceiling can be what trims — and the
+        // ceiling for *this* window, which grows with it up to a cap.
+        let window = 100_000
         var passages: [Passage] = []
         repeat {
             passages.append(Self.passage(passages.count, words: 90))
         } while AskPromptBuilder.estimatedTokens(AskPromptBuilder.excerpts(passages))
-            <= AskPromptBuilder.Budget.passageCeiling
+            <= AskPromptBuilder.Budget.passageCeiling(contextSize: window, hasTool: false)
 
         let without = await AskPromptBuilder.build(
             question: "What happened?", ranked: Self.ranked(passages),
-            contextSize: 100_000, hasTool: false, tokenCount: Self.counter,
+            contextSize: window, hasTool: false, tokenCount: Self.counter,
         )
         let with = await AskPromptBuilder.build(
             question: "What happened?", ranked: Self.ranked(passages),
-            contextSize: 100_000, hasTool: true, tokenCount: Self.counter,
+            contextSize: window, hasTool: true, tokenCount: Self.counter,
         )
         // Without an overflow of the higher ceiling neither ceiling is
         // consulted, and the comparison below compares two whole corpora.
@@ -198,8 +201,8 @@ struct AskPromptBuilderTests {
         // The tool's schema is in the window, and its output has to fit in what
         // is left when the model calls it.
         #expect(
-            AskPromptBuilder.Budget.passageCeilingWithTool
-                < AskPromptBuilder.Budget.passageCeiling,
+            AskPromptBuilder.Budget.passageCeiling(contextSize: window, hasTool: true)
+                < AskPromptBuilder.Budget.passageCeiling(contextSize: window, hasTool: false),
         )
         #expect(with.passages.count < without.passages.count)
     }
@@ -249,8 +252,11 @@ struct AskPromptBuilderTests {
         )
         let excerptTokens = try await Self.counter(AskPromptBuilder.excerpts(built.passages))
         // A bigger window in a later OS must not silently start sending a
-        // quarter of the book to the model.
-        #expect(excerptTokens <= AskPromptBuilder.Budget.passageCeiling)
+        // quarter of the book to the model: the ceiling grows with the window,
+        // and stops at twice the number that was measured.
+        let ceiling = AskPromptBuilder.Budget.passageCeiling(contextSize: 1_000_000, hasTool: false)
+        #expect(ceiling == AskPromptBuilder.Budget.passageCeiling * 2)
+        #expect(excerptTokens <= ceiling)
     }
 
     @Test("one enormous passage is sent whole rather than cut or dropped")
@@ -274,3 +280,38 @@ struct AskPromptBuilderTests {
         #expect(built.prompt.contains("Question: What happened?"))
     }
 }
+
+/// The window-scaled ceilings, which exist so a larger model window is used
+/// and a 26 device is not touched.
+@Suite("Ceilings follow the window")
+struct WindowScalingTests {
+    @Test("the tuned window yields exactly the tuned ceilings")
+    func tunedWindowIsUnchanged() {
+        let tuned = AskPromptBuilder.Budget.tunedContextSize
+        #expect(AskPromptBuilder.Budget.passageCeiling(contextSize: tuned, hasTool: true)
+            == AskPromptBuilder.Budget.passageCeilingWithTool)
+        #expect(AskPromptBuilder.Budget.passageCeiling(contextSize: tuned, hasTool: false)
+            == AskPromptBuilder.Budget.passageCeiling)
+        #expect(AskRetriever.Limits.excerpts(for: tuned) == AskRetriever.Limits.excerpts)
+    }
+
+    @Test("a larger window is given to passages, up to a cap")
+    func largerWindowGrows() {
+        let with = AskPromptBuilder.Budget.passageCeilingWithTool
+        #expect(AskPromptBuilder.Budget.passageCeiling(contextSize: 5_000, hasTool: true) == with + 904)
+        #expect(AskPromptBuilder.Budget.passageCeiling(contextSize: 8_192, hasTool: true) == with * 2)
+        #expect(AskPromptBuilder.Budget.passageCeiling(contextSize: 100_000, hasTool: false)
+            == AskPromptBuilder.Budget.passageCeiling * 2)
+        #expect(AskRetriever.Limits.excerpts(for: 6_144) == 22)
+        #expect(AskRetriever.Limits.excerpts(for: 8_192) == AskRetriever.Limits.excerptsCeiling)
+        #expect(AskRetriever.Limits.excerpts(for: 100_000) == AskRetriever.Limits.excerptsCeiling)
+    }
+
+    @Test("a smaller window is never given fewer excerpts to choose from")
+    func smallerWindowIsTheBuildersProblem() {
+        #expect(AskRetriever.Limits.excerpts(for: 2_048) == AskRetriever.Limits.excerpts)
+        #expect(AskPromptBuilder.Budget.passageCeiling(contextSize: 2_048, hasTool: true)
+            == AskPromptBuilder.Budget.passageCeilingWithTool)
+    }
+}
+

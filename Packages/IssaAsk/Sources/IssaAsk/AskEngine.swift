@@ -187,7 +187,11 @@ public actor AskEngine {
             store: store, bookUUID: source.bookUUID, boundary: boundary,
             allowsFastPath: Self.usesKinshipFastPath,
         )
-        let retrieval = try await retriever.retrieve(question: question)
+        // Fifteen on the window the number was measured against, more on a
+        // larger one: the builder packs to the ceiling, and the ceiling grows.
+        let retrieval = try await retriever.retrieve(
+            question: question, limit: AskRetriever.Limits.excerpts(for: model.contextSize),
+        )
         let sanitised = QueryTerms.sanitise(question)
 
         switch retrieval {

@@ -55,6 +55,19 @@ public struct AskRetriever: Sendable {
         /// constant and identity and kinship ignored it outright, so the
         /// number anybody tuned was not the number a reader was answered with.
         public static let excerpts = 15
+        /// The most excerpts any window is given, however large. Twenty is the
+        /// most any trial has scored; thirty leaves room to measure past it
+        /// without letting a future window send a quarter of the book.
+        public static let excerptsCeiling = 30
+        /// Excerpts for a window this size: `excerpts` at the 4,096 tokens the
+        /// number was measured against, growing in proportion above it, and
+        /// never fewer — a smaller window is trimmed by the prompt builder,
+        /// which is the layer that can count.
+        public static func excerpts(for contextSize: Int) -> Int {
+            let tuned = AskPromptBuilder.Budget.tunedContextSize
+            let scaled = excerpts * max(contextSize, tuned) / tuned
+            return min(excerptsCeiling, scaled)
+        }
         /// The BM25 pool a general question ranks. Raised from 40, which is
         /// where the sentence naming Ryn's brother was sitting at rank 50.
         public static let generalPool = 120
