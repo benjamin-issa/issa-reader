@@ -402,6 +402,16 @@ struct MacRootView: View {
             .background(Palette.paper)
             .navigationSplitViewColumnWidth(min: 200, ideal: 220)
         } detail: {
+            // The book column sits beside the stack in a plain HStack rather
+            // than in `.inspector`. It was an inspector until macOS 27, where
+            // an inspector inside a NavigationSplitView puts AppKit into an
+            // update-constraints storm the second time the selection changes
+            // — "more Update Constraints in Window passes than there are
+            // views in the window" — and the process is killed. The shipped
+            // 1.1.1 dies the same way. A conditional trailing column has no
+            // NSSplitView behind it, collapses the same way, and gives the
+            // grid its width back just as the inspector did.
+            HStack(spacing: 0) {
             // A stack, because the Browse rails and the book detail both push a
             // series screen. Without one those were links to nowhere — which
             // did not show before, because the Mac never rendered the rails and
@@ -431,13 +441,16 @@ struct MacRootView: View {
             // does not survive a switch to Downloads. These links are closures,
             // not a path, so nothing else can pop them.
             .id(selection)
-        }
-        // The third column. Applied to the split view rather than inside the
-        // detail's stack, so it is a real trailing column that collapses and
-        // gives the grid its full width back.
-        .inspector(isPresented: showsInspector) {
-            MacBookInspector(bookID: inspected.bookID)
-                .inspectorColumnWidth(min: 280, ideal: 320, max: 440)
+            if showsInspector.wrappedValue {
+                Divider()
+                // The inspector's old minimum, as a fixed width: the column is
+                // a reading pane, not a drawer to drag, and 280 is what the
+                // detail lays out for on a phone.
+                MacBookInspector(bookID: inspected.bookID)
+                    .frame(width: 280)
+                    .frame(maxHeight: .infinity)
+            }
+            }
         }
         .environment(inspected)
         .toolbar {
