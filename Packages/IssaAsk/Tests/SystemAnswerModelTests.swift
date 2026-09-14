@@ -1,5 +1,6 @@
-#if canImport(FoundationModels)
+#if canImport(FoundationModels) && !os(tvOS)
 import Foundation
+import FoundationModels
 import Testing
 
 @testable import IssaAsk
@@ -28,23 +29,32 @@ struct SystemAnswerModelTests {
         try await store.prepare(source: source)
         let indexMilliseconds = Self.elapsedMilliseconds(since: indexStart)
 
-        let engine = AskEngine(model: SystemAnswerModel(), store: store)
+        let model = SystemAnswerModel()
+        let engine = AskEngine(model: model, store: store)
         let question = "What did Alice follow down the hole?"
         let askStart = ContinuousClock.now
         var answer: AskAnswer?
+        // The last partial is what the model actually said, before the engine
+        // vetted it — the thing to read when the answer below is the sentinel.
+        var streamed = ""
         for try await event in engine.ask(
             question: question, source: source,
             boundary: try AskFixture.endOf(spine: AskFixture.Spine.chapterI),
         ) {
-            if case let .answered(value) = event { answer = value }
+            switch event {
+            case let .answered(value): answer = value
+            case let .partial(text): streamed = text
+            case .phase: break
+            }
         }
         let askMilliseconds = Self.elapsedMilliseconds(since: askStart)
 
         let found = try #require(answer)
         print("""
-        [ask] index \(indexMilliseconds) ms, answer \(askMilliseconds) ms
+        [ask] \(model.modelDescription); index \(indexMilliseconds) ms, answer \(askMilliseconds) ms
         [ask] Q: \(question)
         [ask] A: \(found.text)
+        [ask] streamed: \(streamed)
         [ask] citations \(found.citations), notYetRevealed \(found.notYetRevealed)
         """)
         #expect(found.text.lowercased().contains("rabbit"))
@@ -125,6 +135,88 @@ struct SamplingModeTests {
             SystemAnswerModel.sampling(for: .nucleus(probabilityThreshold: 0.9, seed: 42))
                 != .random(probabilityThreshold: 0.9, seed: 43),
         )
+    }
+}
+
+/// The error table, case by case, with errors built from the framework's own
+/// public initialisers.
+///
+/// Outside the gated suite for the same reason `SamplingModeTests` is: this
+/// needs the SDK, not the model, and the table is exactly the kind of thing
+/// that ships inert when a framework renames its cases — which the 27 SDK did.
+struct FailureTableTests {
+    @available(iOS 27.0, macOS 27.0, visionOS 27.0, *)
+    @Test("every 27 error lands on the failure the engine expects")
+    func currentTable() {
+        let context = LanguageModelError.contextSizeExceeded(
+            .init(contextSize: 4_096, tokenCount: 5_000, debugDescription: "test"))
+        #expect(SystemAnswerModel.failure(for: context) == .tooMuchContext)
+        #expect(SystemAnswerModel.failure(for: LanguageModelError.guardrailViolation(
+            .init(debugDescription: "test"))) == .declined)
+        #expect(SystemAnswerModel.failure(for: LanguageModelError.refusal(
+            .init(explanation: "no", debugDescription: "test"))) == .declined)
+        #expect(SystemAnswerModel.failure(for: LanguageModelError.unsupportedLanguageOrLocale(
+            .init(languageCode: .init("xx"), debugDescription: "test"))) == .unsupportedLanguage)
+        #expect(SystemAnswerModel.failure(for: LanguageModelError.rateLimited(
+            .init(resetDate: nil, debugDescription: "test"))) == .busy)
+        #expect(SystemAnswerModel.failure(for: LanguageModelError.timeout(
+            .init(debugDescription: "test"))) == .timedOut)
+        #expect(SystemAnswerModel.failure(for: LanguageModelError.unsupportedGenerationGuide(
+            .init(schemaName: nil, debugDescription: "test")))
+            == .other(SystemAnswerModel.couldNotAnswer))
+        #expect(SystemAnswerModel.failure(for: SystemLanguageModel.Error.assetsUnavailable(
+            .init(debugDescription: "test"))) == .modelDownloading)
+        #expect(SystemAnswerModel.failure(for: LanguageModelSession.Error.concurrentRequests) == .busy)
+    }
+
+    @available(iOS 27.0, macOS 27.0, visionOS 27.0, *)
+    @Test("a tool's failure is judged by what was under it")
+    func toolCallUnwraps() {
+        let inner = LanguageModelError.timeout(.init(debugDescription: "test"))
+        let wrapped = LanguageModelSession.ToolCallError(
+            tool: FailureTableTests.Probe(), underlyingError: inner)
+        #expect(SystemAnswerModel.failure(for: wrapped) == .timedOut)
+    }
+
+    /// The 26 table, still reachable from a 26 device: the same cases the
+    /// original switch mapped, mapped the same way.
+    @available(iOS, deprecated: 27.0)
+    @available(macOS, deprecated: 27.0)
+    @available(visionOS, deprecated: 27.0)
+    @Test("the 26 table survived the move")
+    func legacyTable() {
+        typealias Legacy = LanguageModelSession.GenerationError
+        let context = Legacy.Context(debugDescription: "test")
+        #expect(SystemAnswerModel.failure(for: Legacy.exceededContextWindowSize(context)) == .tooMuchContext)
+        #expect(SystemAnswerModel.failure(for: Legacy.assetsUnavailable(context)) == .modelDownloading)
+        #expect(SystemAnswerModel.failure(for: Legacy.guardrailViolation(context)) == .declined)
+        #expect(SystemAnswerModel.failure(for: Legacy.refusal(.init(transcriptEntries: []), context)) == .declined)
+        #expect(SystemAnswerModel.failure(for: Legacy.unsupportedLanguageOrLocale(context)) == .unsupportedLanguage)
+        #expect(SystemAnswerModel.failure(for: Legacy.rateLimited(context)) == .busy)
+        #expect(SystemAnswerModel.failure(for: Legacy.concurrentRequests(context)) == .busy)
+        #expect(SystemAnswerModel.failure(for: Legacy.decodingFailure(context))
+            == .other(SystemAnswerModel.couldNotAnswer))
+    }
+
+    @Test("an error from neither family is reported, not mislabelled")
+    func unknownFamily() {
+        struct Stray: Error {}
+        #expect(SystemAnswerModel.failure(for: Stray()) == .other(SystemAnswerModel.couldNotAnswer))
+    }
+
+    @Test("a timeout tells the reader to try again, not to wait")
+    func timeoutSentence() {
+        let sentence = AskFailure.timedOut.message(deviceNoun: "Mac")
+        #expect(sentence.contains("Try again"))
+        #expect(!sentence.lowercased().contains("busy"))
+    }
+
+    /// The smallest possible tool, so a `ToolCallError` can be built.
+    struct Probe: Tool {
+        let name = "probe"
+        let description = "A tool that exists so an error can name it."
+        @Generable struct Arguments { var query: String }
+        func call(arguments: Arguments) async throws -> String { "" }
     }
 }
 #endif

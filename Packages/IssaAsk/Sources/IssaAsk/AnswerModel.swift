@@ -42,12 +42,20 @@ public protocol AnswerModel: Sendable {
     /// has watched a spinner for eight seconds — and it is the one failure that
     /// will never come right on a retry.
     func supportsLanguage(_ bcp47: String?) -> Bool
+
+    /// Which model this is, for the log and the scorecard — never for a reader.
+    ///
+    /// Apple's answers with the variant name the framework reports on 27, so a
+    /// scorecard run says which model it measured.
+    var modelDescription: String { get }
 }
 
 public extension AnswerModel {
     /// A model that has no opinion about languages answers about any book: the
     /// scripted model in the tests, and anything a later OS adds.
     func supportsLanguage(_: String?) -> Bool { true }
+
+    var modelDescription: String { "an answer model" }
 }
 
 // MARK: -
@@ -180,6 +188,9 @@ public enum AskFailure: Error, Sendable, Hashable {
     case unsupportedLanguage
     /// The prompt would not fit even after both retries.
     case tooMuchContext
+    /// The model gave up before it finished — a 27 failure with its own case,
+    /// because the advice is "try again", not "wait".
+    case timedOut
     /// The device or the OS cannot run the model at all.
     case unavailable
     /// The index could not be built or read.
@@ -204,6 +215,8 @@ public enum AskFailure: Error, Sendable, Hashable {
             "Apple Intelligence doesn't support this book's language yet."
         case .tooMuchContext:
             "That question needed more of the book than fits. Try asking something narrower."
+        case .timedOut:
+            "Apple Intelligence took too long to answer. Try again."
         case .unavailable:
             "This \(deviceNoun) doesn't support Apple Intelligence, so asking isn't available here."
         case .indexFailed:
