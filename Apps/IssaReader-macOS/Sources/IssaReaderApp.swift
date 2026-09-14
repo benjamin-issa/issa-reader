@@ -417,6 +417,15 @@ struct MacRootView: View {
                     }
                 }
                 .navigationTitle((selection ?? .shelf(.all)).title)
+                // The inspector's series link lands here: it has no stack of
+                // its own any more (see `MacBookSelection.pushedSeries`), so
+                // it asks, and this is the stack that answers.
+                .navigationDestination(item: Binding(
+                    get: { inspected.pushedSeries },
+                    set: { inspected.pushedSeries = $0 },
+                )) { name in
+                    SeriesView(name: name)
+                }
             }
             // A fresh stack per sidebar row, so a series pushed under Library
             // does not survive a switch to Downloads. These links are closures,

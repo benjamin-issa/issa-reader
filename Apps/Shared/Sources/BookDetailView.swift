@@ -32,6 +32,11 @@ public struct BookDetailView: View {
     @State private var showsPlayer = false
     #if os(macOS)
     @Environment(\.openWindow) private var openWindow
+    #if os(macOS)
+    /// Present only inside the Mac's library window, where the inspector
+    /// lives; nil in a reader window and everywhere else.
+    @Environment(MacBookSelection.self) private var selection: MacBookSelection?
+    #endif
     #endif
     /// The book as it was when this screen opened. Identity only — everything
     /// drawn comes from `book` below.
@@ -286,17 +291,31 @@ public struct BookDetailView: View {
             if group != nil {
                 // A series with more than one book has a screen; a book alone
                 // in its series has nowhere to go.
-                NavigationLink {
-                    SeriesView(name: membership.name)
-                } label: {
-                    seriesLine(text, showsLink: true)
-                }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("bookDetail.series")
+                seriesLink(to: membership.name) { seriesLine(text, showsLink: true) }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("bookDetail.series")
             } else {
                 seriesLine(text, showsLink: false)
             }
         }
+    }
+
+    /// The control that opens a series screen from the hero.
+    ///
+    /// A link into the enclosing stack everywhere but the Mac's inspector,
+    /// which has no stack: there it asks the window to push instead, for the
+    /// reason `MacBookSelection.pushedSeries` gives.
+    @ViewBuilder
+    private func seriesLink(to name: String, @ViewBuilder label: () -> some View) -> some View {
+        #if os(macOS)
+        if layout == .inspector, let selection {
+            Button { selection.pushedSeries = name } label: { label() }
+        } else {
+            NavigationLink { SeriesView(name: name) } label: { label() }
+        }
+        #else
+        NavigationLink { SeriesView(name: name) } label: { label() }
+        #endif
     }
 
     /// The line itself, in the hero's own secondary voice so it reads as one

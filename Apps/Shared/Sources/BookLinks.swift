@@ -24,6 +24,18 @@ public final class MacBookSelection {
     /// the only way back was clicking a cover again.
     public private(set) var lastShownBookID: String?
 
+    /// A series the inspector has asked the window to show.
+    ///
+    /// The inspector has no navigation stack of its own. It used to: on
+    /// macOS 27 a stack inside the inspector column re-vends the window's
+    /// toolbar on every layout pass, AppKit counts the passes, and the app
+    /// dies with "more Update Constraints in Window passes than there are
+    /// views in the window" the second time a cover is clicked. So a series
+    /// link in the inspector sets this, and the window's own stack — which
+    /// exists precisely because the rails and the detail both push a series —
+    /// does the pushing.
+    public var pushedSeries: String?
+
     public init() {}
 }
 

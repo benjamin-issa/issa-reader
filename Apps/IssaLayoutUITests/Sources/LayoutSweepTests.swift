@@ -179,10 +179,17 @@ final class LayoutSweepTests: XCTestCase {
         let seriesBook = shelf.descendants(matching: .any)
             .matching(NSPredicate(format: "label CONTAINS %@", "Dracula"))
             .firstMatch
+        // The grid is lazy, so a cell below the fold does not merely fail to
+        // be hittable — it does not exist yet. The fixture's series books are
+        // the oldest arrivals, last on a shelf ordered by date, and on a
+        // 375-point screen that is two swipes down. Scroll until the cell has
+        // been built, then once more if it is on screen but under the bar.
+        var swipes = 0
+        while !seriesBook.exists, swipes < 6 {
+            shelf.swipeUp()
+            swipes += 1
+        }
         XCTAssertTrue(seriesBook.waitForExistence(timeout: 15), "no series book to open")
-        // A tap does not scroll to what it is aimed at, and the fixture's
-        // series books are the oldest arrivals — last on a shelf ordered by
-        // date, which is below the fold on a short screen.
         if !seriesBook.isHittable { shelf.swipeUp() }
         seriesBook.tap()
         let seriesLink = shelf.descendants(matching: .any)["bookDetail.series"]
