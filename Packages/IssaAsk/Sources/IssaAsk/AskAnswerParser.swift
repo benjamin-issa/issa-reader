@@ -213,6 +213,14 @@ public enum AskAnswerParser {
         } else if isPrefixOfSourcesLabel(text) {
             return ""
         }
+        // The same hold for a footer begun on the prose's own line, after its
+        // last full stop — where the 27 model puts it.
+        if let sentenceEnd = lastSentenceEnd(in: text) {
+            let tail = String(text[sentenceEnd...])
+            if isPrefixOfSourcesLabel(tail) {
+                text = String(text[..<sentenceEnd])
+            }
+        }
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
@@ -226,10 +234,43 @@ public enum AskAnswerParser {
         return sourcesLabel.lowercased().hasPrefix(trimmed.lowercased())
     }
 
+    /// The characters a sentence can end on, for finding a footer that was
+    /// written straight after the prose instead of under it.
+    static let sentenceTerminators: Set<Character> = [".", "!", "?", "\"", "\u{201D}", "\u{2019}", "'", ")"]
+
+    /// The index just past the last sentence end that is followed by
+    /// whitespace, or nil when the text has no such break.
+    static func lastSentenceEnd(in text: String) -> String.Index? {
+        var index = text.endIndex
+        while index > text.startIndex {
+            let previous = text.index(before: index)
+            if text[previous].isWhitespace, previous > text.startIndex,
+               sentenceTerminators.contains(text[text.index(before: previous)]) {
+                return index
+            }
+            index = previous
+        }
+        return nil
+    }
+
+    /// Whether what follows the label reads as citations and nothing else:
+    /// ordinals, their separators, and the two words a model puts among them.
+    static func isCitationTail(_ tail: String) -> Bool {
+        let words = tail.lowercased()
+            .split { !$0.isLetter && !$0.isNumber }
+            .map(String.init)
+        return words.allSatisfy { $0.allSatisfy(\.isNumber) || ["and", "section", "sections"].contains($0) }
+    }
+
     /// Splits the prose from the citation line, wherever the model put it.
     ///
     /// Searched from the end: a passage quoted in the answer can contain the
     /// word, and the line that counts is the last one.
+    ///
+    /// A footer counts when it begins a line — the shape the instructions ask
+    /// for — or when it follows the end of a sentence and nothing but citations
+    /// comes after it, which is where the 27 model writes it. "The sources: he
+    /// said" in the middle of prose is still prose.
     static func splitSources(_ raw: String) -> (body: String, citations: [Int]) {
         let string = raw as NSString
         var best: NSRange?
@@ -239,14 +280,18 @@ public enum AskAnswerParser {
                 of: sourcesLabel, options: [.caseInsensitive, .backwards], range: searchRange,
             )
             guard found.location != NSNotFound else { break }
-            // Only when it begins a line: "the sources: he said" inside prose is
-            // not a citation line.
             let lineStart = string.lineRange(for: NSRange(location: found.location, length: 0)).location
             let prefix = string.substring(
                 with: NSRange(location: lineStart, length: found.location - lineStart),
             )
-            if prefix.trimmingCharacters(in: .whitespaces).isEmpty {
+            let trimmedPrefix = prefix.trimmingCharacters(in: .whitespaces)
+            if trimmedPrefix.isEmpty {
                 best = NSRange(location: lineStart, length: string.length - lineStart)
+                break
+            }
+            let tail = string.substring(from: found.location + found.length)
+            if let last = trimmedPrefix.last, sentenceTerminators.contains(last), isCitationTail(tail) {
+                best = NSRange(location: found.location, length: string.length - found.location)
                 break
             }
             searchRange = NSRange(location: 0, length: found.location)

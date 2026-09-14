@@ -229,3 +229,38 @@ struct AskAnswerParserTests {
         #expect(seen.last == "Alice follows a white rabbit down a hole.")
     }
 }
+
+/// The footer as the 27 model writes it: after the last sentence, on the same
+/// line, rather than underneath. The first run on that model withheld a correct
+/// answer about a rabbit because "Sources" read as a name nobody had introduced.
+@Suite("A footer on the prose's own line")
+struct InlineFooterTests {
+    @Test("a footer written straight after the last sentence still counts")
+    func inlineFooterIsParsed() {
+        let answer = AskAnswerParser.parse(
+            "She ran after it and saw it pop down a large rabbit-hole. Sources: 2, 3")
+        #expect(answer.text == "She ran after it and saw it pop down a large rabbit-hole.")
+        #expect(answer.citations == [2, 3])
+    }
+
+    @Test("the word inside a sentence is still prose")
+    func midSentenceIsProse() {
+        let answer = AskAnswerParser.parse("She checked the sources: he said nothing. Then she left.")
+        #expect(answer.citations.isEmpty)
+        #expect(answer.text.hasSuffix("Then she left."))
+    }
+
+    @Test("a footer followed by more prose is not a footer")
+    func footerMustEndTheAnswer() {
+        let answer = AskAnswerParser.parse("She left. Sources: 2 say she was tired.")
+        #expect(answer.citations.isEmpty)
+    }
+
+    @Test("a half-typed inline footer never reaches the screen")
+    func inlinePrefixIsHeld() {
+        #expect(AskAnswerParser.visible("She fell down the well. Sour") == "She fell down the well.")
+        #expect(AskAnswerParser.visible("She fell down the well. Sources: 2,") == "She fell down the well.")
+        #expect(AskAnswerParser.visible("She fell down the well. Soon") == "She fell down the well. Soon")
+    }
+}
+
