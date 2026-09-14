@@ -177,6 +177,14 @@ struct BookRail: View {
                             VStack(alignment: .leading, spacing: Metrics.spacing4) {
                                 CoverImage(book: book, session: app.session)
                                     .frame(width: coverWidth)
+                                    // The same mark the grid draws, and the
+                                    // reason it is worth drawing: a rail of
+                                    // one series reads 1, 3, 4, which says
+                                    // which book is missing without opening
+                                    // any of them.
+                                    .overlay(alignment: .topLeading) {
+                                        SeriesMark(book: book)
+                                    }
                                     // The same ring the grid draws. A rail
                                     // cover opens the inspector too, and
                                     // without it the reader loses track of
