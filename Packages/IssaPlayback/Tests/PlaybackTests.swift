@@ -490,25 +490,33 @@ struct ReadalongCoordinatorTests {
                     && entries[i].textHref != entries[i + 1].textHref
             },
             "the fixture needs a chapter boundary that is also a file boundary")
-        await subject.play(from: entries[index])
-        #expect(subject.player.isPlaying)
-        // The test owns the clock from here. `play(from:)` starts genuine
-        // playback of a short fixture file, and two things then race the
-        // manual end-of-file below: the periodic observer's first tick can
+        // The test owns the clock from before the first note. `play(from:)`
+        // starts genuine playback of a short fixture file, and two things then
+        // race the manual end-of-file below: the periodic observer's tick can
         // report a time a hair *before* the entry's start — seek tolerance —
         // and `advance(to:)` then moves `activeEntry` back one sentence, so
         // the advance seeks within the file instead of loading the next one
-        // and no chapter callback fires; and the real
-        // `AVPlayerItemDidPlayToEndTime` can arrive on its own and run a
-        // second advance. Both happened; the first version of this test was
-        // green twice and red the third time. Silencing the observer and
-        // freezing the underlying player leaves `isPlaying` — the intent flag
-        // the guard reads — true, with nothing else able to move.
+        // and no chapter callback fires; or, on a faster player, a hair
+        // *after* the sentence's end, so `activeEntry` is already the next
+        // sentence of the same document and the boundary the callback is for
+        // is no longer the one being crossed. The first version of this test
+        // was green twice and red the third time; the second froze the clock
+        // after `play(from:)` and went red on every run under the 27 SDK,
+        // where the first tick beat the freeze. Silencing the observer and
+        // freezing the rate *before* playing leaves `isPlaying` — the intent
+        // flag the guard reads — true, with nothing else able to move.
         subject.player.onTimeUpdate = nil
         subject.player.rate = 0
+        await subject.play(from: entries[index])
         #expect(subject.player.isPlaying, "freezing the rate must not read as a pause")
+        try #require(subject.activeEntry?.fragmentID == entries[index].fragmentID,
+                     "the clock moved before the test took it")
 
-        subject.onChapterChangeObserved = { subject.player.pause() }
+        var reported = false
+        subject.onChapterChangeObserved = {
+            reported = true
+            subject.player.pause()
+        }
         subject.player.onFinishedFile?()
         // The advance hops through a Task and then awaits a real
         // `AVURLAsset.load(.duration)`. Under a parallel full-suite run that
@@ -516,13 +524,21 @@ struct ReadalongCoordinatorTests {
         // on "the advance did not happen" after passing twice in isolation — a
         // flake that shipped in a commit claiming the suite green. Bounded at
         // ten seconds and asserted separately, so a timeout reads as a timeout.
+        //
+        // Waited for the callback, not for `activeEntry`: `move(to:)` publishes
+        // the entry *before* it awaits the load, so the entry changes while the
+        // advance is still in flight, and under the 27 SDK the load outlasts
+        // one poll below — the test then read `isPlaying` before the pause it
+        // was asserting had been given the chance to happen. The guard that
+        // decides whether to resume runs in the same synchronous stretch as
+        // the callback, so once it has been reported the decision is made.
         let deadline = ContinuousClock.now + .seconds(10)
-        while subject.activeEntry?.fragmentID == entries[index].fragmentID,
-              ContinuousClock.now < deadline {
+        while !reported, ContinuousClock.now < deadline {
             try? await Task.sleep(for: .milliseconds(20))
         }
+        try #require(reported, "the chapter ending was not reported within ten seconds")
         try #require(subject.activeEntry?.fragmentID != entries[index].fragmentID,
-                     "the advance did not complete within ten seconds")
+                     "the advance did not move off the ended sentence")
 
         #expect(subject.activeEntry?.textHref == entries[index + 1].textHref, "the advance landed in the wrong document")
         #expect(subject.player.isPlaying == false,
