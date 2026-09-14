@@ -169,12 +169,11 @@ public struct DeviceCodeView: View {
             // Three steps in order, rather than one instruction with the
             // address printed below the code it refers to.
             #if os(tvOS)
-            step(1) { Text("Scan the code, or go to ") + Text(auth.verificationURI).bold() + Text(".") }
+            step(1) { Text("Scan the code, or go to \(Text(auth.verificationURI).bold()).") }
             step(2) { Text("Enter the code below if you are asked for one.") }
             #else
             step(1) {
-                Text("Open ") + Text(auth.verificationURI).bold()
-                    + Text(" on this device or another one.")
+                Text("Open \(Text(auth.verificationURI).bold()) on this device or another one.")
             }
             step(2) { Text("Enter the code below if you are asked for one.") }
             #endif
@@ -263,11 +262,11 @@ public struct DeviceCodeView: View {
                     .font(Typography.footnote)
                     .foregroundStyle(Palette.inkSecondary)
             } else if let expiresAt = model.expiresAt, expiresAt > .now {
-                Text("Waiting for approval · ")
+                // Interpolated rather than concatenated: `Text + Text` was
+                // deprecated in the 26 SDKs, and interpolation keeps the timer's
+                // own monospaced digits.
+                Text("Waiting for approval · \(Text(timerInterval: .now ... expiresAt, countsDown: true).font(Typography.footnote.monospacedDigit()))")
                     .font(Typography.footnote)
-                    .foregroundStyle(Palette.inkSecondary)
-                    + Text(timerInterval: .now ... expiresAt, countsDown: true)
-                    .font(Typography.footnote.monospacedDigit())
                     .foregroundStyle(Palette.inkSecondary)
             } else {
                 Text("Waiting for approval…")

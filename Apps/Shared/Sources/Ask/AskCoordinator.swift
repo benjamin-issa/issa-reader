@@ -96,7 +96,7 @@ final class AskCoordinator {
     ) {
         self.store = store
         // The real one unless a test hands over a scripted stand-in.
-        #if canImport(FoundationModels)
+        #if canImport(FoundationModels) && !os(tvOS)
         self.model = model ?? SystemAnswerModel()
         #else
         self.model = model ?? ScriptedAnswerModel()
@@ -140,7 +140,7 @@ final class AskCoordinator {
             // sheet that opens onto an error before the reader has typed a word
             // is worse than one that quietly retries when they do. The question
             // itself builds the index again and reports properly.
-            try? await preparer.prepareIndex(source: source)
+            _ = try? await preparer.prepareIndex(source: source)
             await preparer.prewarm()
             guard !Task.isCancelled else { return }
             prepared.insert(uuid)
@@ -227,7 +227,7 @@ final class AskCoordinator {
         // Built per question because the tool captures the boundary, which is
         // what makes it unable to reach past it whatever the model asks for.
         var tools: [any AskTool] = []
-        #if canImport(FoundationModels)
+        #if canImport(FoundationModels) && !os(tvOS)
         if Self.usesSearchTool {
             tools = [SearchBookTool(store: store, bookUUID: uuid, boundary: boundary)]
         }

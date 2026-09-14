@@ -3,7 +3,7 @@
 A native Apple client suite for **[Storyteller](https://storyteller-platform.dev/)** —
 ebooks, audiobooks, and synchronised read-along on iPhone, iPad, Apple TV and the Mac.
 
-Written in Swift 6 for iOS 26, macOS 26 and tvOS 26.
+Written in Swift 6 for iOS 26, macOS 26 and tvOS 26, built with Xcode 27.
 
 ![Read-along on iPhone](docs/screenshots/ios-09-readalong-highlight.png)
 

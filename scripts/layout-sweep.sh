@@ -24,7 +24,7 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 ROOT="$PWD"
 
-RUNTIME="com.apple.CoreSimulator.SimRuntime.iOS-26-5"
+RUNTIME="com.apple.CoreSimulator.SimRuntime.iOS-27-0"
 SCHEME="IssaReader-iOS"
 # The same file the build reads, so the sweep launches the app it just built
 # rather than a bundle identifier that has drifted from it.

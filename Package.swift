@@ -51,8 +51,8 @@ let package = Package(
             // The on-device question pipeline: it parses chapters with the
             // renderer's own parser so the index's offsets are the reader's,
             // reads them straight out of the EPUB, and keeps its per-book
-            // full-text index in SQLite. Not linked on tvOS, where
-            // FoundationModels does not exist.
+            // full-text index in SQLite. Not linked on tvOS: the 27 SDK carries
+            // FoundationModels, but every symbol is unavailable there.
             name: "IssaAsk",
             dependencies: [
                 "IssaCore",

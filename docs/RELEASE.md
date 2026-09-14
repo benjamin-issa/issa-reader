@@ -19,6 +19,9 @@ Uploading is the one outward-facing step, and it consumes a build number
 permanently. The script checks App Store Connect first and refuses to start a
 six-minute archive it already knows will be rejected.
 
+Building needs Xcode 27 (the 27.0 SDKs); the layout sweep below also needs the
+iOS 27 simulator runtime, which `xcodebuild -downloadPlatform iOS` installs.
+
 ## Credentials
 
 Two files in the home directory, read at run time and never hard-coded:

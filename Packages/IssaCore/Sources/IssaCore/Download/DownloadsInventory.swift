@@ -294,7 +294,7 @@ public struct DownloadsInventory: Sendable, Equatable {
             sizes.coverBytes = directorySize(caches.appending(path: "Covers", directoryHint: .isDirectory))
             sizes.publisherFontBytes = subdirectorySize(StorageRoot.directory("Fonts"))
             // Must match `AskIndexStore.defaultDirectory`. Not linked on tvOS,
-            // where FoundationModels does not exist and this directory is
+            // where FoundationModels is unavailable and this directory is
             // therefore never written — sizing it there costs one failed
             // directory read and reports the zero that is true.
             sizes.askIndexBytes = directorySize(StorageRoot.directory("Ask"))

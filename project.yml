@@ -48,7 +48,8 @@ targets:
         product: IssaRender
       - package: IssaReaderKit
         product: IssaPlayback
-      # Not the tvOS target: FoundationModels is not in that SDK at all, and
+      # Not the tvOS target: FoundationModels is unavailable on tvOS (the 27
+      # SDK ships the framework with every symbol marked unavailable), and
       # there is no Ask anywhere on the television.
       - package: IssaReaderKit
         product: IssaAsk
@@ -181,7 +182,8 @@ targets:
         product: IssaRender
       - package: IssaReaderKit
         product: IssaPlayback
-      # Not the tvOS target: FoundationModels is not in that SDK at all, and
+      # Not the tvOS target: FoundationModels is unavailable on tvOS (the 27
+      # SDK ships the framework with every symbol marked unavailable), and
       # there is no Ask anywhere on the television.
       - package: IssaReaderKit
         product: IssaAsk

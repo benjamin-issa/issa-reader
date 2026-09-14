@@ -270,7 +270,7 @@ public final class BrowserSignInModel {
         task = Task { [weak self] in
             let outcome = await AppTokenSignInFlow(
                 serverURL: url, browser: SafariApprovalBrowser()).run()
-            await self?.finish(outcome, from: attempt)
+            self?.finish(outcome, from: attempt)
         }
     }
 

@@ -203,9 +203,11 @@ final class AppServices {
         withObservationTracking {
             _ = app.books
             _ = app.downloadedUUIDs
-        } onChange: {
+        } onChange: { [weak self] in
             // `onChange` fires on willSet and off the main actor; the hop is
             // also what defers the read until the new values have landed.
+            // Weak here as well as on the task: a strong outer capture would
+            // make the inner one a formality.
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 CarPlayBridge.shared.update(books: app.books, downloaded: app.downloadedUUIDs)

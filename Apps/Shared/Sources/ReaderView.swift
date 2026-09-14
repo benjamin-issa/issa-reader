@@ -10,8 +10,8 @@ import IssaRender
 import IssaUI
 import SwiftUI
 #if !os(tvOS)
-// Not on the television: FoundationModels is not in that SDK, and there is no
-// Ask anywhere on it.
+// Not on the television: FoundationModels is unavailable there (the 27 SDK
+// ships it, every symbol marked unavailable), and there is no Ask anywhere on it.
 import IssaAsk
 #endif
 #if canImport(UIKit)

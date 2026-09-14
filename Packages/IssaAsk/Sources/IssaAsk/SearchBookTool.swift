@@ -1,4 +1,4 @@
-#if canImport(FoundationModels)
+#if canImport(FoundationModels) && !os(tvOS)
 import Foundation
 import FoundationModels
 import IssaCore
