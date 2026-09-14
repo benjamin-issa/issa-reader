@@ -176,21 +176,23 @@ final class LayoutSweepTests: XCTestCase {
         // By label rather than by cell identifier, which would put a second
         // copy of a fixture UUID in this file: a cell is a button whose label
         // is everything the cover says, so the title is inside it either way.
+        // Found through the library's own search rather than by scrolling:
+        // the grid is lazy, so a cell below the fold does not exist to be
+        // waited for, and the fixture's series books are the oldest arrivals
+        // — last on a shelf ordered by date, and on a 375-point screen further
+        // down than a fixed number of swipes reliably reaches. A search puts
+        // the one cell wanted at the top at every width.
+        // The phone's search is a plain text field under the header, not a
+        // `.searchable` bar, so it is found by the placeholder that names the
+        // fields the index covers.
+        let search = shelf.textFields["Title, author, narrator, series, tag"]
+        XCTAssertTrue(search.waitForExistence(timeout: 15), "no library search field")
+        search.tap()
+        search.typeText("Dracula\n")
         let seriesBook = shelf.descendants(matching: .any)
             .matching(NSPredicate(format: "label CONTAINS %@", "Dracula"))
             .firstMatch
-        // The grid is lazy, so a cell below the fold does not merely fail to
-        // be hittable — it does not exist yet. The fixture's series books are
-        // the oldest arrivals, last on a shelf ordered by date, and on a
-        // 375-point screen that is two swipes down. Scroll until the cell has
-        // been built, then once more if it is on screen but under the bar.
-        var swipes = 0
-        while !seriesBook.exists, swipes < 6 {
-            shelf.swipeUp()
-            swipes += 1
-        }
         XCTAssertTrue(seriesBook.waitForExistence(timeout: 15), "no series book to open")
-        if !seriesBook.isHittable { shelf.swipeUp() }
         seriesBook.tap()
         let seriesLink = shelf.descendants(matching: .any)["bookDetail.series"]
         XCTAssertTrue(seriesLink.waitForExistence(timeout: 15), "no series link in the hero")
