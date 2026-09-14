@@ -234,6 +234,7 @@ public struct BookDetailView: View {
                             .foregroundStyle(Palette.inkSecondary)
                     }
                 }
+                seriesLines
                 Text(book.byline)
                     .font(Typography.callout)
                     .foregroundStyle(Palette.inkSecondary)
@@ -254,6 +255,65 @@ public struct BookDetailView: View {
                         .font(Typography.caption)
                         .foregroundStyle(Palette.inkTertiary)
                 }
+        }
+    }
+
+    /// Which series the book belongs to, and where in it.
+    ///
+    /// In the hero rather than among the Details below the description: a
+    /// reader deciding whether this is the one to start with should not have
+    /// to scroll past a synopsis to learn it is the third. The related rail
+    /// further down shows the rest of the series; this is the sentence that
+    /// says there is one.
+    ///
+    /// One line per membership, because a book can be in two and naming only
+    /// the first is silently wrong for it. Each is its own element rather than
+    /// a phrase welded onto the title, for the reason the subtitle above gives:
+    /// the screen's container is `children: .contain`, so VoiceOver reads
+    /// title, subtitle, series, author in that order.
+    ///
+    /// The count comes from the library rather than the book — the server
+    /// numbers a book within a series but never says how long the series is —
+    /// so a book alone in its series has no group, no count, and reads
+    /// "Gothic Horror · Book 1".
+    @ViewBuilder
+    private var seriesLines: some View {
+        ForEach(book.series) { membership in
+            let group = app.rails.series.first { $0.name == membership.name }
+            let text = SeriesText.label(
+                name: membership.name, position: membership.position,
+                count: group?.books.count)
+            if group != nil {
+                // A series with more than one book has a screen; a book alone
+                // in its series has nowhere to go.
+                NavigationLink {
+                    SeriesView(name: membership.name)
+                } label: {
+                    seriesLine(text, showsLink: true)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("bookDetail.series")
+            } else {
+                seriesLine(text, showsLink: false)
+            }
+        }
+    }
+
+    /// The line itself, in the hero's own secondary voice so it reads as one
+    /// of the facts about the book rather than as a second heading. The
+    /// chevron carries the affordance instead of a tint, which is the division
+    /// the Details rows make too: the value looks like a value, and the mark
+    /// beside it says this one leads somewhere.
+    private func seriesLine(_ text: String, showsLink: Bool) -> some View {
+        HStack(spacing: Metrics.spacing4) {
+            Text(text)
+                .font(Typography.callout)
+                .foregroundStyle(Palette.inkSecondary)
+            if showsLink {
+                Image(systemName: "chevron.forward")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Palette.tangerine)
+            }
         }
     }
 
@@ -839,21 +899,6 @@ public struct BookDetailView: View {
         VStack(alignment: .leading, spacing: Metrics.spacing8) {
             Text("Details").overlineStyle()
             VStack(spacing: 1) {
-                if let series = book.series.first {
-                    let text = series.position.map { "\(series.name) · \(Self.positionText($0))" } ?? series.name
-                    if app.rails.series.contains(where: { $0.name == series.name }) {
-                        // A series with more than one book has a screen; a
-                        // book alone in its series has nowhere to go.
-                        NavigationLink {
-                            SeriesView(name: series.name)
-                        } label: {
-                            factRow("Series", text, showsLink: true)
-                        }
-                        .buttonStyle(.plain)
-                    } else {
-                        factRow("Series", text)
-                    }
-                }
                 if let published = book.publicationDate?.value {
                     factRow("Published", published.formatted(.dateTime.year()))
                 }
@@ -970,11 +1015,6 @@ public struct BookDetailView: View {
     private func rail(_ title: String, books: [Book]) -> some View {
         BookRail(title: title, books: books)
     }
-
-    static func positionText(_ position: Double) -> String {
-        position == position.rounded() ? "Book \(Int(position))" : "Book \(position)"
-    }
-
 }
 
 /// Wraps its children onto as many lines as needed. Used for tag chips, where
