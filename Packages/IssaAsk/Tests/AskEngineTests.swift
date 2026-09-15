@@ -990,6 +990,52 @@ struct AskEngineTests {
             #expect(Set(smaller).isSubset(of: Set(larger)))
         }
     }
+
+    // MARK: - An answer with no prose in it
+
+    /// The bug a reader hit on 1.2.0 (41): a card with three sources and
+    /// nothing above them. The parser no longer eats the prose, and these two
+    /// pin what happens when a generation genuinely produces none.
+    @Test("a generation that is only a footer reaches the reader as a failure")
+    func footerOnlyGenerationFails() async throws {
+        let (store, source, directory) = try await AskFixture.preparedStore()
+        defer { AskFixture.remove(directory) }
+        let model = ScriptedAnswerModel(turns: [Turn(partials: ["Sources: 1, 2"])])
+        let engine = AskEngine(model: model, store: store)
+
+        let (events, failure) = await Self.drain(engine.ask(
+            question: "What did Alice follow?",
+            source: source,
+            boundary: try AskFixture.endOf(spine: AskFixture.Spine.chapterI),
+        ))
+        // Not an answer with a hole in it — a sentence the reader can retry.
+        #expect(Self.answer(events) == nil)
+        #expect(AskEngine.failure(for: try #require(failure)) == .other(AskFailure.couldNotAnswer))
+    }
+
+    @Test("a stream that restarts mid-answer keeps the prose it already sent")
+    func segmentedStreamKeepsItsProse() async throws {
+        let (store, source, directory) = try await AskFixture.preparedStore()
+        defer { AskFixture.remove(directory) }
+        // The second snapshot does not carry the first: a fresh segment, which
+        // is what a tool round trip can produce. Taking it whole would have
+        // thrown the sentence away and left the footer as the whole answer.
+        let model = ScriptedAnswerModel(turns: [Turn(partials: [
+            "Alice follows a white rabbit down a hole.",
+            "\nSources: 1, 2",
+        ])])
+        let engine = AskEngine(model: model, store: store)
+
+        let (events, failure) = await Self.drain(engine.ask(
+            question: "What did Alice follow?",
+            source: source,
+            boundary: try AskFixture.endOf(spine: AskFixture.Spine.chapterI),
+        ))
+        #expect(failure == nil)
+        let answer = try #require(Self.answer(events))
+        #expect(answer.text == "Alice follows a white rabbit down a hole.")
+        #expect(answer.citations == [1, 2])
+    }
 }
 
 /// Shorthand, because every test in here writes one.

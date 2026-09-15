@@ -178,6 +178,12 @@ public enum AskEvent: Sendable, Hashable {
 /// in the view: every one of them has to say what happened, whether it is worth
 /// trying again, and — where the answer is "turn something on" — where.
 public enum AskFailure: Error, Sendable, Hashable {
+    /// The sentence for a generation that produced nothing usable, wherever it
+    /// was noticed. Here rather than on `SystemAnswerModel` because the engine
+    /// reaches the same conclusion on its own, and that file is not compiled on
+    /// every platform.
+    public static let couldNotAnswer = "Apple Intelligence couldn't answer that one. Try again."
+
     /// The model refused, or the guardrails did.
     case declined
     /// Busy, or asked twice at once.

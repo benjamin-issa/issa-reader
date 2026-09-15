@@ -584,8 +584,17 @@ public actor AskEngine {
             // Per snapshot: the reader who taps Cancel expects the words to
             // stop arriving, not to finish and then be thrown away.
             try Task.checkCancellation()
-            raw = snapshot
-            let visible = AskAnswerParser.visible(snapshot)
+            // Assigned while the stream is cumulative — the shape
+            // `streamResponse` documents and `ScriptedAnswerModel` mirrors — and
+            // appended when it is not. A snapshot that does not carry what came
+            // before it is a fresh segment rather than a longer answer, and
+            // taking it whole would throw away the prose already streamed.
+            if snapshot.hasPrefix(raw) {
+                raw = snapshot
+            } else if !raw.hasPrefix(snapshot) {
+                raw += snapshot
+            }
+            let visible = AskAnswerParser.visible(raw)
             guard visible != shown else { continue }
             shown = visible
             if !hasAnswered, !visible.isEmpty {
@@ -595,9 +604,26 @@ public actor AskEngine {
             continuation.yield(.partial(visible))
         }
         try Task.checkCancellation()
+        let answer = AskAnswerParser.parse(raw)
+        // A generation that produced tokens but no prose is a failure, not an
+        // answer. Without this the sheet drew the sources under nothing at all,
+        // which is how 1.2.0 (41) shipped: a reader saw a question, a blank, and
+        // three excerpts. A sentence they can retry is worth more than a card
+        // with a hole in it.
+        //
+        // The shape is logged and never the text: `PRIVACY.md` promises a
+        // question and its answer are never written down, and the log is
+        // exported by the reader and pasted into an email.
+        guard !answer.text.isEmpty else {
+            IssaLog.error("ask answer had no prose", [
+                "rawLength": String(raw.count),
+                "citations": String(answer.citations.count),
+            ])
+            throw AskFailure.other(AskFailure.couldNotAnswer)
+        }
         // Returned rather than yielded: the answer still has to be vetted
         // against the boundary before the reader sees it as final.
-        return AskAnswerParser.parse(raw)
+        return answer
     }
 
     // MARK: - Failures

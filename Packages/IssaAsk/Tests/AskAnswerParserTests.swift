@@ -264,3 +264,103 @@ struct InlineFooterTests {
     }
 }
 
+/// The shapes that blanked an answer in 1.2.0 (41), and the ones around them.
+///
+/// The reader tapped a suggested question and got a card with three sources and
+/// no answer above them. The model had written prose; the parser had eaten it,
+/// because a `Sources:` line was allowed to swallow everything after it without
+/// anyone checking that what followed was citations.
+@Suite("A footer never swallows the answer")
+struct FooterNeverEatsProseTests {
+    @Test("a footer written first does not eat the answer")
+    func leadingFooterKeepsTheProse() {
+        let answer = AskAnswerParser.parse("""
+        Sources: 1, 2, 3
+        Laurence Arne-Sayles is a scholar the Journal names among the Dead.
+        """)
+        #expect(answer.text == "Laurence Arne-Sayles is a scholar the Journal names among the Dead.")
+        #expect(answer.citations == [1, 2, 3])
+    }
+
+    @Test("a footer written first does not turn the prose's numbers into citations")
+    func leadingFooterDoesNotScanTheProse() {
+        let answer = AskAnswerParser.parse("Sources: 1, 2\nThere are fifteen of them, and 12 remain.")
+        #expect(answer.citations == [1, 2])
+    }
+
+    @Test("a footer and nothing else is not an answer")
+    func footerAloneIsNotAnAnswer() {
+        #expect(AskAnswerParser.parse("Sources: 1, 2, 3").text.isEmpty)
+    }
+
+    @Test("prose after a mid-answer footer is still part of the answer")
+    func proseAfterAFooterSurvives() {
+        let answer = AskAnswerParser.parse("""
+        Sources: 2
+        He is a scholar.
+        He is also called the Prophet.
+        """)
+        #expect(answer.text.contains("Prophet"))
+    }
+
+    @Test("no raw with prose in it ever parses to an empty answer")
+    func theInvariant() {
+        let shapes = [
+            "Sources: 1\nAlice ran.",
+            "Alice ran.\nSources: 1",
+            "Alice ran. Sources: 1",
+            "  \n\nSources: 1, 2\n\nAlice ran.\n",
+            "sources: 1\nAlice ran.",
+            "Alice ran.",
+            "Sources are what she followed.",
+        ]
+        for shape in shapes {
+            #expect(!AskAnswerParser.parse(shape).text.isEmpty, "\(shape)")
+        }
+    }
+}
+
+/// The four faults found beside the one that blanked the answer.
+@Suite("What counts as a footer")
+struct FooterBoundaryTests {
+    @Test("a quoted title beginning Sources: is not a footer")
+    func aQuotedTitleIsProse() {
+        let answer = AskAnswerParser.parse("He read the chapter titled \"Sources: 3\"")
+        #expect(answer.citations.isEmpty)
+        #expect(answer.text.hasSuffix("\"Sources: 3\""))
+    }
+
+    @Test("a clause ending in a colon does not end a sentence")
+    func aColonIsNotASentenceEnd() {
+        let answer = AskAnswerParser.parse("He named the following: Sources: 1")
+        #expect(answer.citations.isEmpty)
+    }
+
+    @Test("an answer ending in an ellipsis keeps its citations")
+    func anEllipsisEndsASentence() {
+        let answer = AskAnswerParser.parse("She trailed off… Sources: 2, 4")
+        #expect(answer.citations == [2, 4])
+        #expect(answer.text == "She trailed off…")
+    }
+
+    @Test("a full stop inside quotation marks still ends the sentence")
+    func aQuotedSentenceEnds() {
+        let answer = AskAnswerParser.parse("She said \"I saw her.\" Sources: 1")
+        #expect(answer.citations == [1])
+    }
+
+    @Test("a plural Sections is a chapter, not a citation")
+    func pluralSectionsAreNotCitations() {
+        let answer = AskAnswerParser.parse("She left. Sources: 1 (Sections 3)")
+        #expect(answer.citations == [1])
+    }
+
+    @Test("a half-typed footer never reaches the screen, however far it got")
+    func theHoldSurvivesTheLabel() {
+        #expect(AskAnswerParser.visible("She fell. Sour") == "She fell.")
+        #expect(AskAnswerParser.visible("She fell. Sources: 1 a") == "She fell.")
+        #expect(AskAnswerParser.visible("She fell. Sources: 1 and 2 (Sec") == "She fell.")
+        #expect(AskAnswerParser.visible("She fell. Soon after, she stood.")
+            == "She fell. Soon after, she stood.")
+    }
+}

@@ -138,7 +138,16 @@ struct AskSheet: View {
         } else if let job {
             switch job.state {
             case .working: working(job)
-            case let .answered(answer): answered(job, answer)
+            case let .answered(answer):
+                // An answer with no prose in it is a failure that got this far.
+                // The engine refuses those now, so this is the last line of
+                // defence — and it is the line that would have turned 1.2.0
+                // (41)'s blank card into a sentence the reader could act on.
+                if answer.text.isEmpty {
+                    failed(job, .other(AskFailure.couldNotAnswer))
+                } else {
+                    answered(job, answer)
+                }
             case let .failed(failure): failed(job, failure)
             }
         } else {

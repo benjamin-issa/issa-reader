@@ -163,7 +163,7 @@ public struct SystemAnswerModel: AnswerModel {
 
     // MARK: - Failures
 
-    static let couldNotAnswer = "Apple Intelligence couldn't answer that one. Try again."
+    static let couldNotAnswer = AskFailure.couldNotAnswer
 
     /// The plan's error table, and the only place a framework error is ever
     /// looked at.
