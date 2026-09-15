@@ -63,7 +63,14 @@ struct BookLink<Label: View>: View {
                 // Without one — a window that has none — a click still opens
                 // the book, which is what the Mac did before the inspector
                 // existed.
-                if let selection { selection.bookID = book.uuid } else { openReader() }
+                // Animated for the same reason the toggle is: the first click
+                // of a session opens the column, and a panel that appears
+                // between two frames reads as a glitch.
+                if let selection {
+                    withAnimation(.snappy(duration: 0.2)) { selection.bookID = book.uuid }
+                } else {
+                    openReader()
+                }
             } label: {
                 label()
             }
@@ -195,7 +202,7 @@ struct BookRail: View {
                                     // which book is missing without opening
                                     // any of them.
                                     .overlay(alignment: .topLeading) {
-                                        SeriesMark(book: book)
+                                        SeriesMark(membership: book.primarySeries)
                                     }
                                     // The same ring the grid draws. A rail
                                     // cover opens the inspector too, and

@@ -25,7 +25,7 @@ struct SeriesView: View {
                     // No series line under these covers: every book here is
                     // in the same series, which the navigation title already
                     // says, and the caption below is its position in it.
-                    BookGrid(books: series.books, session: app.session, showsSeriesLine: false) { book in
+                    BookGrid(books: series.books, session: app.session, series: series.name) { book in
                         series.position(of: book).map(SeriesText.position)
                     }
                 }

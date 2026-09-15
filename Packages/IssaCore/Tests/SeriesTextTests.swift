@@ -91,4 +91,29 @@ struct SeriesTextTests {
     func noSeries() {
         #expect(book("Alone", series: []).primarySeries == nil)
     }
+
+    @Test("a series never claims more books than it can hold")
+    func theCountMustContainThePosition() {
+        // `count` is what the library holds, not how long the series is: own
+        // books one and three of five and the third used to read "Book 3 of 2".
+        #expect(SeriesText.label(name: "Gothic Horror", position: 3, count: 2)
+            == "Gothic Horror · Book 3")
+        #expect(SeriesText.label(name: "Gothic Horror", position: 4, count: 3)
+            == "Gothic Horror · Book 4")
+        // The honest cases still say it.
+        #expect(SeriesText.label(name: "Gothic Horror", position: 2, count: 3)
+            == "Gothic Horror · Book 2 of 3")
+        #expect(SeriesText.label(name: "Gothic Horror", position: 3, count: 3)
+            == "Gothic Horror · Book 3 of 3")
+        #expect(SeriesText.label(name: "Gothic Horror", position: 1.5, count: 2)
+            == "Gothic Horror · Book 1.5 of 2")
+    }
+
+    @Test("the numeral does not follow the device's locale")
+    func theNumeralIsFixed() {
+        // The words around it are English; a comma decimal among them would be
+        // half a translation.
+        #expect(SeriesText.ordinal(1.5) == "1.5")
+        #expect(SeriesText.ordinal(1200) == "1200")
+    }
 }

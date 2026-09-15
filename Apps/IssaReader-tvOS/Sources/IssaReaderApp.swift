@@ -267,10 +267,21 @@ struct TVLibraryView: View {
                     section("Continue reading") {
                         // A row rather than a grid, so the shelf reads as
                         // "these first" rather than as more of the same.
+                        // The row reserves the series line the way a grid
+                        // does. Built by hand rather than through `BookGrid`,
+                        // it used to take the default and reserve nothing, so a
+                        // row mixing a numbered book with standalone ones had
+                        // posters whose captions ended at different heights.
+                        let continuing = Array(app.derivation.continueReading.prefix(8))
+                        let labelling = SeriesLabelling.mixed(
+                            reservingLine: continuing.contains { $0.primarySeries != nil },
+                        )
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(alignment: .top, spacing: Metrics.spacing32) {
-                                ForEach(app.derivation.continueReading.prefix(8)) { book in
-                                    TVPosterItem(book: book, session: app.session)
+                                ForEach(continuing) { book in
+                                    TVPosterItem(
+                                        book: book, session: app.session, labelling: labelling,
+                                    )
                                 }
                             }
                             // Room for the focus lift, which grows the poster

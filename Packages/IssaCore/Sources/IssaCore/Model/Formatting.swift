@@ -39,7 +39,14 @@ public enum SeriesText {
     /// novella legitimately sits at 1.5, so `"\(position)"` prints "2.0" for
     /// the ordinary case and can print "1.5000001" for the fractional one.
     public static func ordinal(_ position: Double) -> String {
-        position.formatted(.number.precision(.fractionLength(0 ... 2)))
+        // A fixed locale, not the reader's. "Book" and "of" around this numeral
+        // are hard-coded English, so a device set to German would have produced
+        // "Book 1,5 of 3" — half-translated — and a four-figure series would
+        // have grown a grouping separator the rest of the app never shows.
+        position.formatted(
+            .number.locale(Locale(identifier: "en_US_POSIX"))
+                .precision(.fractionLength(0 ... 2)),
+        )
     }
 
     /// The position as a phrase: "Book 2", "Book 1.5".
@@ -54,10 +61,15 @@ public enum SeriesText {
     /// are — so it is passed in, and left out where it is not known. "of 1" is
     /// never said: a series of one is a book, and the count only adds anything
     /// once there is somewhere else to go.
+    /// - Parameter count: how many books of the series the *library holds*,
+    ///   which is not how long the series is — the server numbers a book within
+    ///   its series and never says how many there are. So "of N" is said only
+    ///   when it can be true: own books 1 and 3 of five and the third is "Book
+    ///   3", not "Book 3 of 2".
     public static func label(name: String, position: Double?, count: Int?) -> String {
         guard let position else { return name }
         var text = "\(name) · \(self.position(position))"
-        if let count, count > 1 { text += " of \(count)" }
+        if let count, count > 1, Double(count) >= position { text += " of \(count)" }
         return text
     }
 }

@@ -328,6 +328,23 @@ struct LibraryArrangementTests {
         #expect(LibraryArrangement.Sort.series.title == "Series")
     }
 
+    /// The other direction: a build that has never heard of this sort.
+    ///
+    /// An older binary reading a blob written here decodes field by field and
+    /// treats a sort it does not recognise as absent, so the reader loses the
+    /// sort and keeps the shelf, the tags and the direction. The forward test
+    /// above never checked that, and a synthesised decoder would have failed
+    /// the whole blob and reset all four.
+    @Test("an unknown sort costs the sort and nothing else")
+    func anUnknownSortDoesNotResetEverything() throws {
+        let json = #"{"sort":"chronological","ascending":true,"shelf":"reading","tags":["Gothic"]}"#
+        let restored = try JSONDecoder().decode(LibraryArrangement.self, from: Data(json.utf8))
+        #expect(restored.sort == LibraryArrangement().sort)
+        #expect(restored.shelf == .reading)
+        #expect(restored.tags == ["Gothic"])
+        #expect(restored.ascending)
+    }
+
     /// A sort with no sentinel bucket must still actually reverse.
     @Test("reverse order reverses a title sort end to end")
     func titleSortReversed() {

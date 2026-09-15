@@ -355,11 +355,16 @@ struct MacRootView: View {
             // Both directions. The `true` case used to be unreachable, which
             // together with the `.disabled` below made this a switch that could
             // be turned off and never on.
+            // Animated, because `.inspector` animated and a column that
+            // appears between two frames reads as a glitch rather than as a
+            // panel opening.
             set: { shown in
-                if shown {
-                    inspected.bookID = inspected.bookID ?? inspected.lastShownBookID
-                } else {
-                    inspected.bookID = nil
+                withAnimation(.snappy(duration: 0.2)) {
+                    if shown {
+                        inspected.bookID = inspected.bookID ?? inspected.lastShownBookID
+                    } else {
+                        inspected.bookID = nil
+                    }
                 }
             },
         )
@@ -430,10 +435,7 @@ struct MacRootView: View {
                 // The inspector's series link lands here: it has no stack of
                 // its own any more (see `MacBookSelection.pushedSeries`), so
                 // it asks, and this is the stack that answers.
-                .navigationDestination(item: Binding(
-                    get: { inspected.pushedSeries },
-                    set: { inspected.pushedSeries = $0 },
-                )) { name in
+                .navigationDestination(item: $inspected.pushedSeries) { name in
                     SeriesView(name: name)
                 }
             }
@@ -443,16 +445,25 @@ struct MacRootView: View {
             .id(selection)
             if showsInspector.wrappedValue {
                 Divider()
-                // The inspector's old minimum, as a fixed width: the column is
-                // a reading pane, not a drawer to drag, and 280 is what the
-                // detail lays out for on a phone.
+                // The inspector's old *ideal* width, fixed. It can no longer be
+                // dragged: that needs the `NSSplitView` behind `.inspector`,
+                // which is what crashes on macOS 27. The width and the
+                // collapse survive the move; the drag does not, and saying so
+                // here is better than a comment claiming nothing was lost.
                 MacBookInspector(bookID: inspected.bookID)
-                    .frame(width: 280)
+                    .frame(width: 320)
                     .frame(maxHeight: .infinity)
+                    .transition(.move(edge: .trailing))
             }
             }
         }
         .environment(inspected)
+        // The stack that answers `pushedSeries` is rebuilt by `.id(selection)`
+        // above, and rebuilding is not popping — so a series pushed under
+        // Library was still asked for when the reader clicked Downloads, and
+        // the fresh stack pushed it straight over the downloads list. The
+        // request belongs to the row it was made from.
+        .onChange(of: selection) { _, _ in inspected.pushedSeries = nil }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Toggle(isOn: showsInspector) {

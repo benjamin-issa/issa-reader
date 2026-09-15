@@ -32,11 +32,9 @@ public struct BookDetailView: View {
     @State private var showsPlayer = false
     #if os(macOS)
     @Environment(\.openWindow) private var openWindow
-    #if os(macOS)
     /// Present only inside the Mac's library window, where the inspector
     /// lives; nil in a reader window and everywhere else.
     @Environment(MacBookSelection.self) private var selection: MacBookSelection?
-    #endif
     #endif
     /// The book as it was when this screen opened. Identity only — everything
     /// drawn comes from `book` below.
@@ -123,7 +121,14 @@ public struct BookDetailView: View {
         }
         .accessibilityIdentifier("screen.bookDetail")
         .background(Palette.paper)
-        .navigationTitle(book.title)
+        // Omitted in the inspector, not emptied. There the detail is a sibling
+        // of the library's navigation stack rather than a screen inside it, so
+        // this preference reached the split view's detail column and won the
+        // window title from the shelf — clicking a cover under "Downloads"
+        // retitled the window "Dracula". An empty title would have won it just
+        // as surely and left the window with no name at all. The phone and the
+        // reader window are unaffected: there this view *is* the screen.
+        .navigationTitle(book.title, when: layout != .inspector)
         // Writing a position moves the status server-side, so the shelf shown
         // here is stale after a reading session unless it is re-read.
         .task { await app.refresh(book: book) }
@@ -293,7 +298,13 @@ public struct BookDetailView: View {
                 // in its series has nowhere to go.
                 seriesLink(to: membership.name) { seriesLine(text, showsLink: true) }
                     .buttonStyle(.plain)
-                    .accessibilityIdentifier("bookDetail.series")
+                    // On the first link only. A subscript query resolves to
+                    // exactly one element, so a book in two grouped series used
+                    // to raise "multiple matching elements" in the sweep
+                    // instead of tapping.
+                    .accessibilityIdentifier(
+                        membership.id == book.series.first?.id ? "bookDetail.series" : "",
+                    )
             } else {
                 seriesLine(text, showsLink: false)
             }
@@ -319,10 +330,12 @@ public struct BookDetailView: View {
     }
 
     /// The line itself, in the hero's own secondary voice so it reads as one
-    /// of the facts about the book rather than as a second heading. The
-    /// chevron carries the affordance instead of a tint, which is the division
-    /// the Details rows make too: the value looks like a value, and the mark
-    /// beside it says this one leads somewhere.
+    /// of the facts about the book rather than as a second heading.
+    ///
+    /// A chevron rather than the `arrow.up.right` the Details rows use for an
+    /// identifier: that one leaves the app for a web page, this one pushes a
+    /// screen inside it, and a reader should be able to tell those apart before
+    /// tapping. The affordance is the mark alone, with no tint on the value.
     private func seriesLine(_ text: String, showsLink: Bool) -> some View {
         HStack(spacing: Metrics.spacing4) {
             Text(text)
@@ -1012,7 +1025,13 @@ public struct BookDetailView: View {
         let byAuthor = app.booksByAuthor
         let byNarrator = app.booksByNarrator
         return VStack(alignment: .leading, spacing: Metrics.spacing24) {
-            if let series = book.series.first,
+            // `primarySeries`, like the badge, the caption, the sort and the
+            // hero. On `series.first` an omnibus filed first under an unnumbered
+            // publisher's shelf showed a "2" on its cover, "Gothic Horror · Book
+            // 2" beneath it, a hero linking Gothic Horror — and then a rail of
+            // the publisher's shelf, or no rail at all when that shelf held one
+            // book.
+            if let series = book.primarySeries,
                let siblings = app.rails.series.first(where: { $0.name == series.name })?
                    .books.filter({ $0.uuid != book.uuid }),
                !siblings.isEmpty {
@@ -1070,5 +1089,16 @@ struct FlowRow: Layout {
             x += size.width + spacing
             lineHeight = max(lineHeight, size.height)
         }
+    }
+}
+
+private extension View {
+    /// `navigationTitle` where a view is sometimes a screen and sometimes a
+    /// column beside one. Applied or not at all, because the modifier has no
+    /// "no title" value: an empty string is a title, and it wins the same
+    /// argument.
+    @ViewBuilder
+    func navigationTitle(_ title: String, when condition: Bool) -> some View {
+        if condition { navigationTitle(title) } else { self }
     }
 }
