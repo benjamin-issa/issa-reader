@@ -165,6 +165,18 @@ public struct SystemAnswerModel: AnswerModel {
 
     static let couldNotAnswer = AskFailure.couldNotAnswer
 
+    /// A case a later OS added to a family this table already reads.
+    ///
+    /// Logged rather than folded silently into "couldn't answer": the whole
+    /// point of keeping these tables is to know when the framework grows a case
+    /// they do not cover, and four `@unknown default` arms that returned without
+    /// a word would have made the next revision look like a model that simply
+    /// failed.
+    static func unrecognised(_ family: String) -> AskFailure {
+        IssaLog.error("ask model returned an unrecognised failure", ["family": family])
+        return .other(couldNotAnswer)
+    }
+
     /// The plan's error table, and the only place a framework error is ever
     /// looked at.
     ///
@@ -224,7 +236,7 @@ public struct SystemAnswerModel: AnswerModel {
                 IssaLog.error("ask model returned an unexpected shape")
                 return .other(couldNotAnswer)
             @unknown default:
-                return .other(couldNotAnswer)
+                return unrecognised("LanguageModelError")
             }
         }
         if let failure = error as? SystemLanguageModel.Error {
@@ -232,7 +244,7 @@ public struct SystemAnswerModel: AnswerModel {
             case .assetsUnavailable:
                 return .modelDownloading
             @unknown default:
-                return .other(couldNotAnswer)
+                return unrecognised("SystemLanguageModel.Error")
             }
         }
         if let failure = error as? LanguageModelSession.Error {
@@ -245,7 +257,7 @@ public struct SystemAnswerModel: AnswerModel {
                 IssaLog.error("ask session transcript changed mid-response")
                 return .other(couldNotAnswer)
             @unknown default:
-                return .other(couldNotAnswer)
+                return unrecognised("LanguageModelSession.Error")
             }
         }
         return nil
@@ -276,7 +288,7 @@ public struct SystemAnswerModel: AnswerModel {
             IssaLog.error("ask model returned an unexpected shape")
             return .other(couldNotAnswer)
         @unknown default:
-            return .other(couldNotAnswer)
+            return unrecognised("LanguageModelSession.GenerationError")
         }
     }
 }

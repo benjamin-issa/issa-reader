@@ -4,7 +4,7 @@ import Foundation
 ///
 /// A protocol rather than a direct call into FoundationModels, for two reasons
 /// that are both about being able to prove the feature is safe. FoundationModels
-/// does not exist on tvOS and is unavailable on a Mac without Apple
+/// is unavailable on tvOS and on a Mac without Apple
 /// Intelligence, so the pipeline would otherwise be untestable under
 /// `swift test`; and the spoiler defence — the boundary, the trimming, the
 /// short-circuit, the retry — is exactly the part that must be tested
@@ -102,7 +102,7 @@ public extension AskTool {
     ///
     /// Defaulted rather than required so a tool that only computes — and the
     /// stand-ins in the tests — are untouched, and so this file still builds
-    /// where FoundationModels does not exist and `SearchBookTool` is not
+    /// where FoundationModels is unavailable and `SearchBookTool` is not
     /// compiled at all.
     func passagesShown() async -> [Int: Passage] { [:] }
 }

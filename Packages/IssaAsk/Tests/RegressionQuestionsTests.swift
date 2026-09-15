@@ -52,10 +52,10 @@ struct RegressionRun {
 
     init(book: AskBook) async throws {
         self.book = book
-        directory = try AskFixture.temporaryDirectory()
-        store = AskIndexStore(directory: directory)
-        source = try book.source()
-        try await store.prepare(source: source)
+        // The helper twenty-eight other suites use, rather than a fourth copy
+        // of the same four lines — and it is where the directory is made, so a
+        // book that fails to index cannot leave one behind.
+        (store, source, directory) = try await book.preparedStore()
         model = SystemAnswerModel()
         engine = AskEngine(model: model, store: store)
     }
@@ -95,30 +95,34 @@ struct RegressionRun {
             """)
         }
 
-        func assert() {
-            if let expectedNotYet {
-                #expect(notYetRevealed == expectedNotYet, "\(name)")
-            }
-            #expect(modelCalled == expectedModelCalled, "\(name)")
-            if let containsExpected {
-                #expect(containsExpected, "\(name): \(answer)")
-            }
-            #expect(leaked.isEmpty, "\(name): leaked \(leaked)")
-            if !allowsNewNames, !notYetRevealed {
+        /// Every check this suite makes, in one list.
+        ///
+        /// `assert()` and the scorecard's tally both read it, because when they
+        /// were two hand-written copies a sixth check added to one and not the
+        /// other would have had the scorecard reporting a failing question as
+        /// passed — in the file the next model comparison is built on.
+        var checks: [(passed: Bool, detail: String)] {
+            [
+                (expectedNotYet.map { $0 == notYetRevealed } ?? true,
+                 "\(name): notYetRevealed \(notYetRevealed)"),
+                (modelCalled == expectedModelCalled,
+                 "\(name): modelCalled \(modelCalled)"),
+                (containsExpected ?? true, "\(name): \(answer)"),
+                (leaked.isEmpty, "\(name): leaked \(leaked)"),
                 // A name the question did not ask about and the book has not
                 // introduced is the one thing this feature promised not to do.
-                #expect(newNames.isEmpty, "\(name): \(newNames)")
+                (newNames.isEmpty, "\(name): \(newNames)"),
+            ]
+        }
+
+        func assert() {
+            for check in checks {
+                #expect(check.passed, "\(check.detail)")
             }
         }
 
         /// Whether every assertion would pass, for the scorecard's tally.
-        var passes: Bool {
-            (expectedNotYet.map { $0 == notYetRevealed } ?? true)
-                && modelCalled == expectedModelCalled
-                && (containsExpected ?? true)
-                && leaked.isEmpty
-                && (allowsNewNames || notYetRevealed || newNames.isEmpty)
-        }
+        var passes: Bool { checks.allSatisfy(\.passed) }
     }
 
     func ask(_ fixture: AskQuestionFixture) async throws -> Outcome {
@@ -143,8 +147,14 @@ struct RegressionRun {
         // applies. `unvettedNames` alone is deliberately generous — it catches
         // "Rome" and "Cooks" so the probe can clear them — so the store has the
         // last word.
-        let candidates = AskEngine.unvettedNames(in: found.text, question: fixture.question)
-        let newNames = try await store.unmetWords(candidates, in: book.bookUUID, before: boundary)
+        // Only where a fixture actually forbids new names. Asking anyway made
+        // an FTS error able to fail a question that does not check this.
+        var newNames: [String] = []
+        if !fixture.allowsNewNames, !found.notYetRevealed {
+            let candidates = AskEngine.unvettedNames(in: found.text, question: fixture.question)
+            newNames = try await store.unmetWords(candidates, in: book.bookUUID, before: boundary)
+                .sorted()
+        }
 
         return Outcome(
             book: book.resource,
@@ -162,7 +172,7 @@ struct RegressionRun {
                 ? nil
                 : fixture.answerContainsAny.contains { lowered.range(of: $0) != nil },
             leaked: fixture.answerExcludes.filter { lowered.contains($0) },
-            newNames: Array(newNames).sorted(),
+            newNames: newNames,
             answerWords: found.text.split(whereSeparator: \.isWhitespace).count,
             expectedNotYet: fixture.notYet,
             expectedModelCalled: fixture.modelCalled,

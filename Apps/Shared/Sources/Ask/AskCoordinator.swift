@@ -96,7 +96,7 @@ final class AskCoordinator {
     ) {
         self.store = store
         // The real one unless a test hands over a scripted stand-in.
-        #if canImport(FoundationModels) && !os(tvOS)
+        #if canImport(FoundationModels)
         self.model = model ?? SystemAnswerModel()
         #else
         self.model = model ?? ScriptedAnswerModel()
@@ -227,7 +227,7 @@ final class AskCoordinator {
         // Built per question because the tool captures the boundary, which is
         // what makes it unable to reach past it whatever the model asks for.
         var tools: [any AskTool] = []
-        #if canImport(FoundationModels) && !os(tvOS)
+        #if canImport(FoundationModels)
         if Self.usesSearchTool {
             tools = [SearchBookTool(store: store, bookUUID: uuid, boundary: boundary)]
         }

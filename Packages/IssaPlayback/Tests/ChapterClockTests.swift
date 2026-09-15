@@ -305,6 +305,14 @@ struct ChapterClockTests {
         // — and it reports back what the counter said, because a sample that
         // landed outside the window would prove nothing.
         let racing = Task { @MainActor () -> Int in
+            // Waited for rather than raced. Enqueuing the sample and hoping it
+            // landed inside the seek made this test fail about one run in
+            // three: the task can be scheduled before the seek begins as
+            // easily as at its suspension point. `seeksInFlight` is raised
+            // before the seek's first await, so yielding until it is non-zero
+            // puts the sample inside the window by construction — the shape
+            // `aSampleFromBeforeALoadIsIgnored` below already uses.
+            while subject.seeksInFlight == 0 { await Task.yield() }
             let inFlight = subject.seeksInFlight
             tick(40)
             return inFlight

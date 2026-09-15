@@ -25,8 +25,17 @@ struct AskScorecardTests {
     func scoreEveryFixtureQuestion() async throws {
         let label = try #require(AskScorecard.label)
         let url = AskScorecard.directory.appending(path: "ask-scorecard-\(label).jsonl")
-        FileManager.default.createFile(atPath: url.path, contents: nil)
+        // Appended, never truncated. The doc comment above calls this file the
+        // artefact and says a comparison has to be over more than one run — and
+        // `createFile` silently emptied it, so a second invocation destroyed the
+        // first one's ten minutes of measurements.
+        if !FileManager.default.fileExists(atPath: url.path) {
+            guard FileManager.default.createFile(atPath: url.path, contents: nil) else {
+                throw ScorecardError.cannotWrite(url)
+            }
+        }
         let handle = try FileHandle(forWritingTo: url)
+        try handle.seekToEnd()
         defer { try? handle.close() }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
@@ -71,3 +80,15 @@ enum AskScorecard {
     }
 }
 #endif
+
+/// Named, because the failure it replaces was an opaque `FileHandle` error one
+/// line further on that never mentioned the directory.
+enum ScorecardError: Error, CustomStringConvertible {
+    case cannotWrite(URL)
+
+    var description: String {
+        switch self {
+        case let .cannotWrite(url): "cannot write a scorecard at \(url.path)"
+        }
+    }
+}

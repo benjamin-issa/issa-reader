@@ -18,7 +18,8 @@ public enum AskAvailability: Sendable, Hashable {
     case modelDownloading
     /// This hardware will never run it.
     case unsupportedDevice
-    /// The framework does not exist here at all — Apple TV.
+    /// Apple TV. The 27 SDK ships the framework, with every symbol in it
+    /// marked unavailable there, so there is nothing to ask either way.
     case unsupportedOnThisPlatform
 
     /// Whether a question can be asked right now. `modelDownloading` is *not*
