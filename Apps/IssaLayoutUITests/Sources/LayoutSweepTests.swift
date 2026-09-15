@@ -163,25 +163,30 @@ final class LayoutSweepTests: XCTestCase {
             XCTFail("no book cell to open")
         }
 
-        // The series screen hangs off a book that is in one, and the shelf
-        // puts the newest arrival first — which is not one of the fixture's
-        // Gothic Horror pair. So this leg opens Dracula by name rather than
-        // whichever cell leads, and a fresh launch rather than a walk back up
-        // the stack: what the sweep measures should not depend on the route
-        // taken to reach it.
-        grid.terminate()
-        let shelf = launch(["-issa.library.mode", "all"])
-        waitForLibrary(shelf)
-        selectTab("Library", in: shelf)
+        // The series screen hangs off a book that is in one, and the shelf puts
+        // the newest arrival first — which is not one of the fixture's Gothic
+        // Horror pair. So this leg walks back and asks for Dracula by name.
+        //
+        // Back, not a cold relaunch. Relaunching cost eight to fifteen seconds
+        // a device, and on a machine under memory pressure the second launch is
+        // where the runner died — XCTest then restarted and re-ran only the
+        // signed-out test, so the suite reported two tests and no failures
+        // while quietly capturing neither this screen nor Settings. A pop needs
+        // no new process and cannot be jetsammed.
+        let shelf = grid
+        shelf.navigationBars.buttons.firstMatch.tap()
+        XCTAssertTrue(shelf.descendants(matching: .any)["screen.library"]
+            .waitForExistence(timeout: 15), "the book screen did not pop back to the shelf")
+        // Found through the library's own search rather than by scrolling: the
+        // grid is lazy, so a cell below the fold does not exist to be waited
+        // for, and the fixture's series books are the oldest arrivals — last on
+        // a shelf ordered by date, and on a 375-point screen further down than
+        // a fixed number of swipes reliably reaches. A search puts the one cell
+        // wanted at the top at every width.
+        //
         // By label rather than by cell identifier, which would put a second
         // copy of a fixture UUID in this file: a cell is a button whose label
         // is everything the cover says, so the title is inside it either way.
-        // Found through the library's own search rather than by scrolling:
-        // the grid is lazy, so a cell below the fold does not exist to be
-        // waited for, and the fixture's series books are the oldest arrivals
-        // — last on a shelf ordered by date, and on a 375-point screen further
-        // down than a fixed number of swipes reliably reaches. A search puts
-        // the one cell wanted at the top at every width.
         // The phone's search is a plain text field under the header, not a
         // `.searchable` bar, so it is found by the placeholder that names the
         // fields the index covers.
