@@ -468,6 +468,48 @@ struct ReadalongCoordinatorTests {
         return (ReadalongCoordinator(timeline: timeline, audioFiles: files), timeline, directory)
     }
 
+    /// The clock is allowed to jitter; it is not allowed to turn the page back.
+    ///
+    /// `SMIL.entry(inFile:at:)` is a half-open search, so a sample one frame
+    /// before the active sentence resolves to the sentence *before* it. Seek
+    /// targets used to quantise below the sentence they named — `CMTime` rounds
+    /// to nearest, and a sentence rarely begins on an exact 1/600 s — so this
+    /// fired after an ordinary tap: the highlight stepped back one, and where
+    /// the sentence before belonged to the previous document the reader's page
+    /// turned back and the sleep timer was told a chapter had ended.
+    @Test("a tick a hair before the current sentence does not step back")
+    func anEarlyTickDoesNotStepBack() async throws {
+        let (subject, timeline, directory) = try Self.make()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        // Any sentence with one before it inside the same audio file: that is
+        // what an early sample can resolve to.
+        let entries = timeline.entries
+        let index = try #require(
+            entries.indices.dropFirst().first { i in
+                entries[i].audioHref == entries[i - 1].audioHref
+            },
+            "the fixture needs two sentences in one audio file")
+
+        await subject.play(from: entries[index])
+        // Take the clock, then drive exactly one tick by hand.
+        let tick = subject.player.onTimeUpdate
+        subject.player.onTimeUpdate = nil
+        subject.player.rate = 0
+        var fragments: [String] = []
+        var chapters: [String] = []
+        var endings = 0
+        subject.onFragmentChange = { fragments.append($0) }
+        subject.onChapterChange = { chapters.append($0) }
+        subject.onChapterChangeObserved = { endings += 1 }
+
+        tick?(entries[index].start - 0.0005)
+
+        #expect(subject.activeEntry?.fragmentID == entries[index].fragmentID)
+        #expect(fragments.isEmpty, "the highlight moved backwards")
+        #expect(chapters.isEmpty, "the page turned backwards")
+        #expect(endings == 0, "a chapter that did not end was reported as ended")
+    }
+
     /// An end-of-chapter sleep timer pauses inside `onChapterChangeObserved`.
     /// The first version of the end-of-file guard latched `isPlaying` *before*
     /// `move(to:)`, then called `play()` after the callback — undoing the pause
@@ -490,27 +532,22 @@ struct ReadalongCoordinatorTests {
                     && entries[i].textHref != entries[i + 1].textHref
             },
             "the fixture needs a chapter boundary that is also a file boundary")
-        // The test owns the clock from before the first note. `play(from:)`
-        // starts genuine playback of a short fixture file, and two things then
-        // race the manual end-of-file below: the periodic observer's tick can
-        // report a time a hair *before* the entry's start — seek tolerance —
-        // and `advance(to:)` then moves `activeEntry` back one sentence, so
-        // the advance seeks within the file instead of loading the next one
-        // and no chapter callback fires; or, on a faster player, a hair
-        // *after* the sentence's end, so `activeEntry` is already the next
-        // sentence of the same document and the boundary the callback is for
-        // is no longer the one being crossed. The first version of this test
-        // was green twice and red the third time; the second froze the clock
-        // after `play(from:)` and went red on every run under the 27 SDK,
-        // where the first tick beat the freeze. Silencing the observer and
-        // freezing the rate *before* playing leaves `isPlaying` — the intent
-        // flag the guard reads — true, with nothing else able to move.
+        await subject.play(from: entries[index])
+        #expect(subject.player.isPlaying)
+        // The test owns the clock from here, and deliberately not before it.
+        // A tick that arrives between the play and the freeze is the product
+        // path this file's own fix is about: one reporting a hair *before* the
+        // entry's start used to step `activeEntry` back a sentence, so the
+        // advance below seeked inside the file instead of loading the next one
+        // and no chapter callback fired. Freezing first would hide that, which
+        // is exactly what a previous version of this test did. The seek now
+        // rounds up and `advance(to:)` refuses a micro-step backwards, so the
+        // race is gone and the honest ordering is safe again.
         subject.player.onTimeUpdate = nil
         subject.player.rate = 0
-        await subject.play(from: entries[index])
         #expect(subject.player.isPlaying, "freezing the rate must not read as a pause")
         try #require(subject.activeEntry?.fragmentID == entries[index].fragmentID,
-                     "the clock moved before the test took it")
+                     "a tick between the play and the freeze moved the sentence")
 
         var reported = false
         subject.onChapterChangeObserved = {

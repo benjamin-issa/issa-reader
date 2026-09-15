@@ -116,6 +116,12 @@ public final class ReadalongCoordinator {
     ///
     /// Scoped to the current file: clip times restart at zero in each track, so
     /// a book-time search here would land on the wrong sentence.
+    /// How far before the active sentence a sample may fall and still be read
+    /// as clock jitter rather than as a move. One frame of the player's 1/600 s
+    /// timescale is 1.7 ms; twenty is far below the smallest deliberate skip
+    /// and far above any rounding.
+    static let backwardsClockSlack: TimeInterval = 0.02
+
     private func advance(to time: TimeInterval) {
         // Mid-move the clock describes neither where the listener was nor where
         // they asked to go — and worse, it is read against a file the move has
@@ -131,6 +137,21 @@ public final class ReadalongCoordinator {
         guard let href = player.currentAudioHref,
               let entry = timeline.entry(inFile: href, at: time)
         else { return }
+
+        // A sample a hair before the sentence the listener is already on
+        // resolves to the sentence *before* it — the lookup is half-open — so a
+        // clock that lands a fraction early would step the highlight back one,
+        // and across a document boundary turn the page back and hand the sleep
+        // timer a chapter that had not ended. The seek rounds up so this should
+        // not arise; this is the second lock on the same door, because the cost
+        // of being wrong is a book that pauses itself at bedtime.
+        //
+        // Only a hair: a deliberate move backwards is orders of magnitude
+        // larger than this, and arrives through `move(to:)` rather than here.
+        if let active = activeEntry, entry.start < active.start,
+           active.start - time < Self.backwardsClockSlack {
+            return
+        }
 
         if entry.fragmentID != activeFragmentID {
             let previousDocument = activeEntry?.textHref

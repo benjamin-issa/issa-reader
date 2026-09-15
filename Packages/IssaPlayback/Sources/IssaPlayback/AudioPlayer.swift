@@ -423,7 +423,16 @@ public final class AudioPlayer {
     }
 
     public func seek(to seconds: TimeInterval) async {
-        let target = CMTime(seconds: max(0, seconds), preferredTimescale: 600)
+        // Rounded *up* to the timescale rather than to nearest. A sentence
+        // rarely begins on an exact 1/600 of a second, so half of all targets
+        // used to quantise a fraction of a millisecond *below* the sentence
+        // they name — and the fragment lookup is half-open, so the next tick
+        // resolved to the sentence before, dragged the highlight back, and
+        // across a document turned the page back and told the sleep timer a
+        // chapter had ended. Up to 1/600 s late is inaudible; early is visible.
+        let target = CMTime(
+            value: CMTimeValue((max(0, seconds) * 600).rounded(.up)), timescale: 600,
+        )
         // Exact seeking: a read-along highlight lands on the wrong sentence if
         // the player rounds to the nearest keyframe.
         await player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
