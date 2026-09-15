@@ -445,11 +445,18 @@ struct MacRootView: View {
             .id(selection)
             if showsInspector.wrappedValue {
                 Divider()
-                // The inspector's old *ideal* width, fixed. It can no longer be
-                // dragged: that needs the `NSSplitView` behind `.inspector`,
-                // which is what crashes on macOS 27. The width and the
-                // collapse survive the move; the drag does not, and saying so
-                // here is better than a comment claiming nothing was lost.
+                // The inspector's old ideal width, asked for rather than
+                // imposed: measured on macOS 27 the column comes out around 485
+                // points whatever this says, because the detail inside sizes
+                // itself against the window through `containerRelativeFrame`.
+                // Left at the honest number rather than tuned to a value that
+                // does nothing.
+                //
+                // It can no longer be dragged either: that needs the
+                // `NSSplitView` behind `.inspector`, which is what crashes on
+                // macOS 27. The collapse survives the move; the drag does not,
+                // and saying so is better than a comment claiming nothing was
+                // lost.
                 MacBookInspector(bookID: inspected.bookID)
                     .frame(width: 320)
                     .frame(maxHeight: .infinity)
