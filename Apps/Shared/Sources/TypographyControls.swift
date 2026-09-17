@@ -102,12 +102,16 @@ struct TypographyControls: View {
         // and a switch could not say whose wins. "Follow the book" is the
         // default and does what the publisher set; the other two are the
         // reader overruling it either way.
+        //
+        // A row with the choice on the right, like "Progress bar" in Settings,
+        // rather than the segmented control the line spacing above uses:
+        // "Follow the book" is a phrase, and three of those do not fit across a
+        // 375pt screen without one of them becoming "Follow the…".
         Picker("Justify text", selection: $style.justification) {
             ForEach(ReaderStyle.Justification.allCases, id: \.self) { justification in
                 Text(justification.title).tag(justification)
             }
         }
-        .pickerStyle(.segmented)
     }
 
     /// Keeps a selection that is no longer offered from clearing the picker.
