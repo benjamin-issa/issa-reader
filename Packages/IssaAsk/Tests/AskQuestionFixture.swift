@@ -34,18 +34,38 @@ struct AskQuestionFixture: Decodable, Sendable {
     /// is right (the degradation cases) or because one was pinned and the model
     /// has since moved off it.
     ///
-    /// One case is the latter, and it is worth knowing about. "Who is the
-    /// author's father?" answered *Benjamin* Franklin once — the book's own
-    /// author rather than his father — which is why the question is in this
-    /// file at all; it was fixed, and it answered *Josiah* Franklin for several
-    /// releases. On 2026-09-17 the renderer stopped keeping the stray space
-    /// that pretty-printed markup left at the start of every paragraph, and
-    /// that shortened every excerpt by a character, so one more excerpt now
-    /// fits the model's budget — and with more of the grandfather's family in
-    /// front of it the model blends the two men together. Retrieval is still
-    /// right: `evidenceContains` still finds Josiah in the excerpts. The
-    /// wording is not, and no prompt change ships on one question, so it is
-    /// recorded here rather than asserted away.
+    /// One case is the latter, and what moved it is worth writing down, because
+    /// the first two explanations given for it were both wrong.
+    ///
+    /// "Who is the author's father?" answered *Benjamin* Franklin once — the
+    /// book's own author rather than his father — which is why the question is
+    /// in this file at all; it was fixed, and it answered *Josiah* Franklin for
+    /// several releases. On 2026-09-17 the renderer stopped keeping the stray
+    /// space that pretty-printed markup leaves between two blocks, and the
+    /// answer stopped naming him.
+    ///
+    /// It was first recorded here that shortening the excerpts let one more of
+    /// them fit the model's budget. **That is not what happened**, and it was
+    /// asserted without being measured. Both versions were then run side by
+    /// side over every question in this file, dumping what retrieval chose and
+    /// what the prompt carried:
+    ///
+    /// - retrieval chose the **same four passages, in the same order**;
+    /// - the prompt carried **all four, in both**, dropping none;
+    /// - the prompt was *longer* afterwards, 526 tokens against 529, even
+    ///   though the text had lost characters.
+    ///
+    /// So nothing was selected differently. What changed is how the same prose
+    /// tokenises once a space between two paragraphs is gone, and generation is
+    /// greedy (`usesNucleusSampling = false`), so one different token at the
+    /// front is a different answer all the way down. Six of the fifteen
+    /// questions reworded; five of the six were harmless and this one was not.
+    ///
+    /// Which is why it is recorded rather than asserted away: there is nothing
+    /// in retrieval to fix, pinning a wording pins the model rather than the
+    /// feature, and no prompt change ships on one question. `evidenceContains`
+    /// still checks the excerpts, and `leaked` and `newNames` still check the
+    /// answer — see `WhitespaceStabilityTests` for what is now held down.
     var answerContainsAny: [String]
     /// None of these may.
     var answerExcludes: [String]

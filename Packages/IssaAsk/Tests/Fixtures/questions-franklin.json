@@ -14,7 +14,7 @@
       "allowsNewNames": true
     },
     {
-      "name": "the second reported case: answered Benjamin Franklin, then Josiah Franklin, and since the stray paragraph space went, neither",
+      "name": "the second reported case: answered Benjamin Franklin, then Josiah Franklin, and since the renderer's spacing changed, neither",
       "question": "Who is the author's father?",
       "spine": 2,
       "kind": "general",
