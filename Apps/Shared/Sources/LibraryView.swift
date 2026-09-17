@@ -202,18 +202,11 @@ public struct BookGrid: View {
     #endif
 
     public var body: some View {
-        // Asked once for the grid rather than once per cell, and in the grid
-        // rather than in the cell: the row has to be reserved so a book in a
-        // series does not stand a line taller than its neighbours, and a
-        // library with no series in it must not pay an empty line under every
-        // cover for a rule nothing here triggers. Only the grid can see both.
-        let labelling: SeriesLabelling = series.map(SeriesLabelling.series)
-            ?? .mixed(reservingLine: books.contains { $0.primarySeries != nil })
-        return LazyVGrid(columns: columns, alignment: .leading, spacing: Metrics.spacing24) {
+        LazyVGrid(columns: columns, alignment: .leading, spacing: Metrics.spacing24) {
             ForEach(books) { book in
                 BookGridItem(
                     book: book, session: session, shape: shape,
-                    showsFormatMark: showsFormatMark, labelling: labelling,
+                    showsFormatMark: showsFormatMark, series: series,
                     caption: caption?(book))
                     // Rows size to their tallest cell and centre vertically —
                     // LazyVGrid's alignment is horizontal only — so a title
@@ -233,19 +226,20 @@ struct BookGridItem: View {
     let session: Session?
     var shape: LibraryService.CoverShape = .portrait
     var showsFormatMark = true
-    var labelling = SeriesLabelling.mixed(reservingLine: false)
+    /// Which series this grid is about, if it is about one; see `BookCell`.
+    var series: String?
     var caption: String?
 
     var body: some View {
         #if os(tvOS)
         TVPosterItem(
             book: book, session: session, shape: shape,
-            showsFormatMark: showsFormatMark, labelling: labelling, caption: caption)
+            showsFormatMark: showsFormatMark, series: series, caption: caption)
         #else
         BookLink(book: book, session: session) {
             BookCell(
                 book: book, session: session, shape: shape,
-                showsFormatMark: showsFormatMark, labelling: labelling, caption: caption)
+                showsFormatMark: showsFormatMark, series: series, caption: caption)
         }
         #endif
     }
@@ -273,7 +267,7 @@ struct TVPosterItem: View {
     let session: Session?
     var shape: LibraryService.CoverShape = .portrait
     var showsFormatMark = true
-    var labelling = SeriesLabelling.mixed(reservingLine: false)
+    var series: String?
     var caption: String?
 
     @FocusState private var focused: Bool
@@ -307,7 +301,7 @@ struct TVPosterItem: View {
     private var cell: BookCell {
         BookCell(
             book: book, session: session, shape: shape,
-            showsFormatMark: showsFormatMark, labelling: labelling, caption: caption)
+            showsFormatMark: showsFormatMark, series: series, caption: caption)
     }
 }
 #endif
@@ -319,8 +313,14 @@ public struct BookCell: View {
     /// Off on a screen made entirely of audiobooks, where marking every cover
     /// marks nothing.
     var showsFormatMark = true
-    /// What this cell says about series membership; see `SeriesLabelling`.
-    var labelling = SeriesLabelling.mixed(reservingLine: false)
+    /// The series this screen is about, if it is about one.
+    ///
+    /// A numeral on a cover answers "which one of these", and that question is
+    /// only being asked on a series screen. Everywhere else — the library, a
+    /// search, a rail of recently added books — the covers have no series in
+    /// common, so a numeral on one of them answers a question nobody asked and
+    /// reads as a badge on an arbitrary book.
+    var series: String?
     /// Shown instead of the byline when given.
     var caption: String?
     #if os(macOS)
@@ -362,7 +362,9 @@ public struct BookCell: View {
                     // both the second of a series and a read-along shows both
                     // rather than one on top of the other.
                     .overlay(alignment: .topLeading) {
-                        SeriesMark(membership: labelling.membership(of: book))
+                        SeriesMark(membership: series.flatMap { name in
+                            book.series.first { $0.name == name }
+                        })
                     }
                     // The Mac's selection ring: a click selects into the
                     // inspector rather than opening a window, so the cover has
@@ -402,27 +404,6 @@ public struct BookCell: View {
                 .foregroundStyle(Palette.inkTertiary)
                 .lineLimit(1)
                 .truncationMode(.tail)
-            if labelling.showsLine { seriesLine }
-    }
-
-    /// Which series the book belongs to, under the byline.
-    ///
-    /// The cover's badge carries the number and this carries the name, because
-    /// a bare "2" on artwork says which book without ever saying of what. Kept
-    /// to one truncating line for the reason the byline above it is: a cell has
-    /// only the width of its cover, and a series name can be a sentence.
-    @ViewBuilder
-    private var seriesLine: some View {
-        let series = book.primarySeries
-        if series != nil || labelling.reservesLine {
-            Text(series.map {
-                SeriesText.label(name: $0.name, position: $0.position, count: nil)
-            } ?? "")
-                .font(Typography.caption)
-                .foregroundStyle(Palette.inkTertiary)
-                .lineLimit(1, reservesSpace: true)
-                .truncationMode(.tail)
-        }
     }
 
     /// Whether a book can be listened to, in one glyph.
@@ -451,49 +432,16 @@ public struct BookCell: View {
     }
 }
 
-/// What a grid's covers say about series membership.
-///
-/// One value rather than the two Bools this replaces, because those could
-/// express a state that cannot exist — and because the series screen needs to
-/// say *which* series it is about. It used to badge every cover with the book's
-/// primary series, so on the Gothic Horror screen an omnibus also filed under a
-/// publisher's shelf wore that shelf's number over a Gothic Horror caption.
-enum SeriesLabelling: Sendable, Equatable {
-    /// A mixed shelf: each cover carries its own primary series. The grid
-    /// reserves the caption line's height when any book here has one, so a
-    /// series-free library pays nothing and a mixed row still ends level.
-    case mixed(reservingLine: Bool)
-    /// One series' own screen. The badge is that series' number, and the name
-    /// is not repeated under every cover because the title already says it.
-    case series(String)
-
-    /// The membership a cover should be badged with, if any.
-    func membership(of book: Book) -> SeriesMembership? {
-        switch self {
-        case .mixed: book.primarySeries
-        case let .series(name): book.series.first { $0.name == name }
-        }
-    }
-
-    var showsLine: Bool {
-        if case .mixed = self { true } else { false }
-    }
-
-    var reservesLine: Bool {
-        if case let .mixed(reserving) = self { reserving } else { false }
-    }
-}
-
 /// Which book of its series a cover is, on the cover.
 ///
-/// A numeral rather than "Book 2": at cover size there is room for a digit,
-/// and the caption under it names the series in full — so the badge answers
-/// "which one" and the line answers "of what". Only for a book the server
-/// actually numbered; an unnumbered membership has no number to draw.
+/// A numeral rather than "Book 2": on a series screen the title has already
+/// said which series, so the cover only has to say which one of them — and at
+/// cover size there is room for a digit and not for a sentence. Only for a book
+/// the server actually numbered; an unnumbered membership has no number to draw.
 ///
-/// Its own view because the grid and the rails both draw it. The rail on the
-/// book screen is the case that makes it worth having: a shelf of the same
-/// series reads 1, 3, 4 and says at a glance which one is missing.
+/// Drawn on a series screen and nowhere else. It used to be on every cover in
+/// the app, and a numeral among books with no series in common reads as a badge
+/// on an arbitrary book rather than as its place in anything.
 struct SeriesMark: View {
     let membership: SeriesMembership?
 

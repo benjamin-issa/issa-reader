@@ -5,9 +5,9 @@ import Testing
 
 /// How a series is worded, and which membership a screen with one line shows.
 ///
-/// The phrasing is pinned here because four screens draw it — a badge on a
-/// cover, a caption under it, the book screen's hero and the series screen —
-/// and the point of one formatter is that they cannot drift apart.
+/// The phrasing is pinned here because three screens draw it — the badge on a
+/// cover of the series screen, that screen's caption, and the book screen's
+/// hero — and the point of one formatter is that they cannot drift apart.
 @Suite("Wording a series")
 struct SeriesTextTests {
     /// Decoded, like every other fixture: the model has no public initialiser.

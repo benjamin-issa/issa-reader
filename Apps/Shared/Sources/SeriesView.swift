@@ -22,9 +22,10 @@ struct SeriesView: View {
             if let series {
                 VStack(alignment: .leading, spacing: Metrics.spacing12) {
                     Text("\(series.books.count) books").overlineStyle()
-                    // No series line under these covers: every book here is
-                    // in the same series, which the navigation title already
-                    // says, and the caption below is its position in it.
+                    // Passing the name is what puts the numeral on these
+                    // covers: this is the one screen a series number answers a
+                    // question on. The caption below spells the same position
+                    // out in words, because a badge on artwork is small.
                     BookGrid(books: series.books, session: app.session, series: series.name) { book in
                         series.position(of: book).map(SeriesText.position)
                     }
