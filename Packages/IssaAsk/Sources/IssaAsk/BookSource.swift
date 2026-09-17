@@ -86,7 +86,15 @@ public struct IndexKey: Sendable, Hashable, Codable {
     /// chapters front matter — and a reader on build 34 would otherwise keep
     /// that hole for the life of the download, with nothing to repair it.
     /// Changes what is stored, like 2 and 3, and rebuilt the same lazy way.
-    public static let currentParserVersion = 4
+    ///
+    /// 5 since the renderer stopped treating the whitespace *between* two block
+    /// elements as content: pretty-printed markup puts a newline after every
+    /// `</p>`, and it was being collapsed to a space and kept, so every
+    /// paragraph but the first began with one. Removing it moves one character
+    /// per paragraph, which is every passage offset in every index built
+    /// before it — and an offset a character out is a spoiler boundary a
+    /// sentence out. Rebuilt the same lazy way as 2, 3 and 4.
+    public static let currentParserVersion = 5
     /// 2 since the `name` table grew `nameKey`: an index built before it pools
     /// two spellings of one character as two people.
     public static let currentSchemaVersion = 2

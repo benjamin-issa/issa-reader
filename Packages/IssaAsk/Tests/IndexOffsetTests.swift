@@ -45,7 +45,7 @@ struct IndexOffsetTests {
             typeface: .publisher,
             fontSize: 40,
             lineSpacing: .roomy,
-            justified: true,
+            justification: .always,
             pageMargin: 4,
         )
         for spine in [AskFixture.Spine.chapterI, AskFixture.Spine.chapterVI] {

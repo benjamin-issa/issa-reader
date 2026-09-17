@@ -31,7 +31,7 @@ struct ReaderStyleMigrationTests {
         let style = try JSONDecoder().decode(ReaderStyle.self, from: Data(legacy.utf8))
         #expect(style.fontSize == 22)
         #expect(style.theme == .night)
-        #expect(style.justified)
+        #expect(style.justification == .always)
         #expect(style.pageMargin == 32)
         #expect(style.lineSpacing == .roomy)
         #expect(style.highlightGranularity == .word)
@@ -109,7 +109,7 @@ struct ReaderStyleMigrationTests {
         #expect(style.highlighters == [.night: .preset(.sage)])
         #expect(style.fontSize == 23)
         #expect(style.theme == .slate)
-        #expect(style.justified)
+        #expect(style.justification == .always)
     }
 
     /// And a `highlighters` that is not an object at all must not reset the

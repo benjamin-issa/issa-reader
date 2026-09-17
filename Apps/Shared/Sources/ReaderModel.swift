@@ -25,6 +25,16 @@ public final class ReaderModel {
 
     public private(set) var phase: Phase = .loading("Opening…")
     public internal(set) var package: EPUBPackage?
+
+    /// The book's stylesheets, parsed once each.
+    ///
+    /// Every chapter of a book links the same two or three sheets, so this is
+    /// read once per book and consulted once per chapter. Held beside `package`
+    /// rather than on `ReaderStyle`, because it belongs to the book and not to
+    /// the reader's preferences — and so it must stay out of the `style`
+    /// observer above, which would otherwise reparse the chapter whenever
+    /// nothing about it had changed.
+    private var styleSheets: [String: EPUBStyleSheet] = [:]
     public private(set) var timeline: SMILTimeline?
     public private(set) var layout: ChapterLayout?
     public private(set) var chapterIndex = 0
@@ -124,7 +134,7 @@ public final class ReaderModel {
                 || style.publisherFamily != oldValue.publisherFamily
                 || style.fontSize != oldValue.fontSize
                 || style.lineSpacing != oldValue.lineSpacing
-                || style.justified != oldValue.justified
+                || style.justification != oldValue.justification
 
             pendingReparse = pendingReparse || needsReparse
             styleTask?.cancel()
@@ -369,6 +379,7 @@ public final class ReaderModel {
 
             // Before the first parse, so a book set in its own face is set in
             // it from the first page rather than re-flowing into it.
+            styleSheets = Self.styleSheets(in: package)
             resolvePublisherFont(in: package)
 
             // Resume where the server says we were, before the first render, so
@@ -1369,11 +1380,14 @@ public final class ReaderModel {
         do {
             let data = try package.archive.read(item.href)
             let images = ArchiveImageSource(archive: package.archive)
+            let sheets = styleSheets
             let parsed = try HTMLContentParser(
                 style: style,
                 maxImageWidth: max(pageSize.width, 1),
                 maxImageHeight: max(pageSize.height, 1),
+                columnWidth: max(pageSize.width, 1),
                 loadImage: { images.image(for: $0) },
+                loadStyleSheet: { sheets[$0] },
             ).parse(xhtml: data, baseHref: item.href)
             let layout = ChapterLayout(text: parsed.text, fragmentRanges: parsed.fragmentRanges)
             layout.layout(pageSize: pageSize)
@@ -1868,9 +1882,10 @@ public final class ReaderModel {
         guard let layout, let package, package.spine.indices.contains(chapterIndex) else { return [] }
         let href = package.spine[chapterIndex].href
         var result: [PageSurface.AnnotationBlock] = []
+        let text = layout.attributedText.string as NSString
         for annotation in annotations where annotation.kind != .bookmark {
             guard annotation.locator.matchesHref(href) else { continue }
-            guard let offset = annotation.locator.locations?.charOffset else { continue }
+            guard let offset = Self.offset(of: annotation, in: text) else { continue }
             let length = (annotation.excerpt as NSString).length
             let range = NSRange(location: offset, length: length)
             let lines = layout.lines(forRange: range, on: page)
@@ -1878,6 +1893,48 @@ public final class ReaderModel {
             result.append(PageSurface.AnnotationBlock(lines: lines, tint: annotation.tint))
         }
         return result
+    }
+
+    /// Where a stored highlight's own words are in the chapter as it reads now.
+    ///
+    /// Its own words first, and the recorded offset only as a fallback. This
+    /// used to be the offset alone, which made every highlight in a book hostage
+    /// to the chapter rendering to exactly the same length for ever — and the
+    /// day the renderer stopped keeping the stray space at the start of every
+    /// paragraph, every highlight in every book would have been painted a
+    /// character further along for each paragraph above it. Reading positions
+    /// have re-anchored by their quoted text since they were written
+    /// (`LocatorAnchoring.characterOffset`); highlights never did.
+    ///
+    /// The search starts from the recorded offset, so a phrase the reader
+    /// highlighted twice resolves to the copy they marked rather than to the
+    /// first one in the chapter.
+    static func offset(of annotation: Annotation, in text: NSString) -> Int? {
+        let recorded = annotation.locator.locations?.charOffset
+        let excerpt = annotation.excerpt
+        guard !excerpt.isEmpty else { return recorded }
+        if let recorded, recorded >= 0, recorded + (excerpt as NSString).length <= text.length,
+           text.substring(
+               with: NSRange(location: recorded, length: (excerpt as NSString).length)) == excerpt {
+            return recorded
+        }
+        var best: Int?
+        var searchFrom = 0
+        while searchFrom < text.length {
+            let found = text.range(
+                of: excerpt, options: [],
+                range: NSRange(location: searchFrom, length: text.length - searchFrom))
+            guard found.location != NSNotFound else { break }
+            if let recorded {
+                if best == nil || abs(found.location - recorded) < abs(best! - recorded) {
+                    best = found.location
+                }
+            } else {
+                return found.location
+            }
+            searchFrom = found.location + 1
+        }
+        return best ?? recorded
     }
 
     // MARK: - Progress
@@ -2066,6 +2123,25 @@ extension ReaderModel {
     /// different files both called "Minion Pro" cannot collide — registration
     /// is process-wide, and the second would otherwise render in the first's
     /// face.
+    /// Every stylesheet the book declares, parsed, keyed by archive path.
+    ///
+    /// Read whole rather than lazily: a book has two or three sheets and they
+    /// are small, and doing it here means a chapter parse never touches the
+    /// archive for anything but its own text and pictures.
+    static func styleSheets(in package: EPUBPackage) -> [String: EPUBStyleSheet] {
+        var sheets: [String: EPUBStyleSheet] = [:]
+        for href in EPUBFontResolver.stylesheets(in: package) {
+            guard let data = try? package.archive.read(href),
+                  let css = String(data: data, encoding: .utf8)
+                      ?? String(data: data, encoding: .isoLatin1)
+            else { continue }
+            var sheet = EPUBStyleSheet()
+            sheet.add(css: css)
+            if !sheet.isEmpty { sheets[href] = sheet }
+        }
+        return sheets
+    }
+
     func resolvePublisherFont(in package: EPUBPackage) {
         let resolution = EPUBFontResolver.resolve(in: package)
         publisherFont = resolution
@@ -2078,20 +2154,47 @@ extension ReaderModel {
             }
             return
         }
-        guard let directory = CustomFonts.prepareExtractedDirectory(bookUUID: book.uuid),
-              let data = try? package.archive.read(face.path)
+        guard let directory = CustomFonts.prepareExtractedDirectory(bookUUID: book.uuid)
         else { style.publisherFamily = nil; return }
 
-        let url = directory.appendingPathComponent((face.path as NSString).lastPathComponent)
-        if !FileManager.default.fileExists(atPath: url.path) {
-            try? data.write(to: url, options: .atomic)
+        // Every member of the family, not only the one the page is set in.
+        // CoreText never synthesises an oblique — `withItalicTrait()` returns
+        // the upright face when the family has no italic member — so a book
+        // registered one file at a time is a book with no emphasis anywhere in
+        // it, which is the fault this release is about.
+        var registered: [String] = []
+        var chosen: String?
+        for member in EPUBFontResolver.members(of: face.family, in: package) {
+            guard let data = try? package.archive.read(member.path) else { continue }
+            // Named by the whole archive path, flattened: two members of one
+            // family can be `regular/Body.otf` and `italic/Body.otf`, and by
+            // last path component alone the second would overwrite the first.
+            let name = member.path.replacingOccurrences(of: "/", with: "_")
+            let url = directory.appendingPathComponent(name)
+            if !FileManager.default.fileExists(atPath: url.path) {
+                try? data.write(to: url, options: .atomic)
+            }
+            // The family CoreText files it under, which is not always the one
+            // the stylesheet called it: a foundry that ships its italic as its
+            // own family puts it out of reach of the upright's italic trait,
+            // and this log line is how that is diagnosed rather than guessed.
+            guard let family = CustomFonts.register(url) else { continue }
+            registered.append(family)
+            // The page is set in the member `resolve` picked — the upright one
+            // — and not merely in whichever member was declared first.
+            if member.path == face.path { chosen = family }
         }
-        let family = CustomFonts.register(url)
+
+        guard let family = chosen ?? registered.first else {
+            style.publisherFamily = nil
+            return
+        }
         style.publisherFamily = family
         IssaLog.info("publisher font", [
             "book": book.title,
             "declared": face.family,
-            "family": family ?? "unavailable",
+            "family": family,
+            "members": registered.joined(separator: ", "),
         ])
     }
 

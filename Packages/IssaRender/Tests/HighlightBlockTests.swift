@@ -582,7 +582,7 @@ struct HighlightBlockTests {
             ReaderStyle(lineSpacing: .tight),
             ReaderStyle(lineSpacing: .normal),
             ReaderStyle(lineSpacing: .roomy),
-            ReaderStyle(lineSpacing: .normal, justified: true),
+            ReaderStyle(lineSpacing: .normal, justification: .always),
         ],
     )
     @MainActor
@@ -602,7 +602,7 @@ struct HighlightBlockTests {
         let package = try EPUBPackage.open(url: url)
         var found: HTMLContentParser.Result?
         for item in package.spine {
-            let parsed = try HTMLContentParser(style: ReaderStyle(justified: true))
+            let parsed = try HTMLContentParser(style: ReaderStyle(justification: .always))
                 .parse(xhtml: try package.archive.read(item.href), baseHref: item.href)
             if parsed.text.length > 4000 { found = parsed; break }
         }

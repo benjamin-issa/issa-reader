@@ -29,7 +29,23 @@ struct AskQuestionFixture: Decodable, Sendable {
     var evidenceContains: [String]
     /// …and that must not appear in any of them.
     var evidenceExcludes: [String]
-    /// At least one of these must appear in the answer.
+    /// At least one of these must appear in the answer. Empty means the
+    /// question's wording is not pinned — either because no particular answer
+    /// is right (the degradation cases) or because one was pinned and the model
+    /// has since moved off it.
+    ///
+    /// One case is the latter, and it is worth knowing about. "Who is the
+    /// author's father?" answered *Benjamin* Franklin once — the book's own
+    /// author rather than his father — which is why the question is in this
+    /// file at all; it was fixed, and it answered *Josiah* Franklin for several
+    /// releases. On 2026-09-17 the renderer stopped keeping the stray space
+    /// that pretty-printed markup left at the start of every paragraph, and
+    /// that shortened every excerpt by a character, so one more excerpt now
+    /// fits the model's budget — and with more of the grandfather's family in
+    /// front of it the model blends the two men together. Retrieval is still
+    /// right: `evidenceContains` still finds Josiah in the excerpts. The
+    /// wording is not, and no prompt change ships on one question, so it is
+    /// recorded here rather than asserted away.
     var answerContainsAny: [String]
     /// None of these may.
     var answerExcludes: [String]

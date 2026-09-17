@@ -101,7 +101,34 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
     public var fontSize: CGFloat
     public var lineSpacing: LineSpacing
     public var theme: ReaderTheme
-    public var justified: Bool
+
+    /// Who decides whether a page is justified: the book, or the reader.
+    ///
+    /// This was a `Bool`, and a `Bool` cannot tell "I want ragged text" from "I
+    /// have never touched this" — which matters now that a book's own
+    /// `text-align` is read. Most trade fiction asks to be justified, and a
+    /// reader who has expressed no view should see the book as its publisher
+    /// set it; a reader who has expressed one should be obeyed everywhere.
+    ///
+    /// Only justification. Where a book centres an epigraph or ranges a
+    /// signature line right, that is structure rather than taste and is honoured
+    /// under every case here — see `HTMLContentParser.attributes(for:)`.
+    public enum Justification: String, Codable, Sendable, CaseIterable {
+        /// The book's own `text-align`, and ragged where it asks for nothing.
+        case followBook
+        case always
+        case never
+
+        public var title: String {
+            switch self {
+            case .followBook: "Follow the book"
+            case .always: "Always"
+            case .never: "Never"
+            }
+        }
+    }
+
+    public var justification: Justification
     public var pageMargin: CGFloat
     public var highlightGranularity: HighlightGranularity
     /// Keep the narrated sentence on screen while audio plays.
@@ -145,7 +172,7 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
         fontSize: CGFloat = 18,
         lineSpacing: LineSpacing = .normal,
         theme: ReaderTheme = .paper,
-        justified: Bool = false,
+        justification: Justification = .followBook,
         pageMargin: CGFloat = 24,
         highlightGranularity: HighlightGranularity = .sentence,
         followNarration: Bool = true,
@@ -159,7 +186,7 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
         self.fontSize = fontSize
         self.lineSpacing = lineSpacing
         self.theme = theme
-        self.justified = justified
+        self.justification = justification
         self.pageMargin = pageMargin
         self.highlightGranularity = highlightGranularity
         self.followNarration = followNarration
@@ -171,7 +198,7 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
 
     // Spelled out rather than synthesised, because the decoder below names them.
     enum CodingKeys: String, CodingKey {
-        case typeface, fontFamily, fontSize, lineSpacing, theme, justified, pageMargin
+        case typeface, fontFamily, fontSize, lineSpacing, theme, justified, justification, pageMargin
         case highlightGranularity, followNarration, turnPagesMidSentence
         case tapToPlay, progressDisplay, highlighters
     }
@@ -216,7 +243,17 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
         lineSpacing = Self.decodeCase(LineSpacing.self, from: container, key: .lineSpacing)
             ?? fallback.lineSpacing
         theme = Self.decodeCase(ReaderTheme.self, from: container, key: .theme) ?? fallback.theme
-        justified = try container.decodeIfPresent(Bool.self, forKey: .justified) ?? fallback.justified
+        // `justification` replaced `justified`. A reader who deliberately
+        // turned justification on keeps it everywhere; a stored `false` is the
+        // untouched default of a control that only ever had two positions, so
+        // it becomes "follow the book" rather than a standing refusal.
+        if let stored = Self.decodeCase(Justification.self, from: container, key: .justification) {
+            justification = stored
+        } else if let legacy = try? container.decodeIfPresent(Bool.self, forKey: .justified) {
+            justification = legacy ? .always : .followBook
+        } else {
+            justification = fallback.justification
+        }
         pageMargin = try container.decodeIfPresent(CGFloat.self, forKey: .pageMargin) ?? fallback.pageMargin
         highlightGranularity = Self.decodeCase(
             HighlightGranularity.self, from: container, key: .highlightGranularity)
@@ -268,7 +305,7 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
         try container.encode(fontSize, forKey: .fontSize)
         try container.encode(lineSpacing, forKey: .lineSpacing)
         try container.encode(theme, forKey: .theme)
-        try container.encode(justified, forKey: .justified)
+        try container.encode(justification, forKey: .justification)
         try container.encode(pageMargin, forKey: .pageMargin)
         try container.encode(highlightGranularity, forKey: .highlightGranularity)
         try container.encode(followNarration, forKey: .followNarration)

@@ -27,7 +27,7 @@ struct ReaderStyleOverrideTests {
         #expect(resolved.fontSize == 24)
         #expect(resolved.typeface == .bundled("Newsreader"))
         #expect(resolved.lineSpacing == defaults.lineSpacing)
-        #expect(resolved.justified == defaults.justified)
+        #expect(resolved.justification == defaults.justification)
     }
 
     /// The reason for storing a difference rather than a style. The reader sets
@@ -63,7 +63,7 @@ struct ReaderStyleOverrideTests {
     @Test("a round trip through storage keeps the override intact")
     func overrideSurvivesEncoding() throws {
         let override = ReaderStyleOverride(
-            typeface: .custom("Some Imported Face"), fontSize: 21, justified: true)
+            typeface: .custom("Some Imported Face"), fontSize: 21, justification: .always)
         let data = try JSONEncoder().encode(override)
         #expect(try JSONDecoder().decode(ReaderStyleOverride.self, from: data) == override)
     }
@@ -82,7 +82,7 @@ struct TypefaceTests {
         let style = try decode(#"{"fontFamily":"Public Sans","fontSize":21,"justified":true}"#)
         #expect(style.typeface == .bundled("Public Sans"))
         #expect(style.fontSize == 21, "the rest of the blob must survive too")
-        #expect(style.justified == true)
+        #expect(style.justification == .always)
     }
 
     @Test("a blob naming neither falls back to the app's own face")

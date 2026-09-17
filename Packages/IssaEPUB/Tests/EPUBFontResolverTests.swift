@@ -173,3 +173,66 @@ struct EPUBFontResolverTests {
         #expect(EPUBFontResolver.blocks(named: "body", in: "}}}{{{").isEmpty)
     }
 }
+
+/// Which member of an embedded family the page is set in, and which others are
+/// kept so a word in italic can be italic.
+@Suite("Every member of the publisher's family")
+struct EmbeddedFamilyTests {
+    /// A real book's ordering: the italic face declared first, because that is
+    /// the order its publisher happened to write them in.
+    static let css = """
+    @font-face {font-family: AGaramondPro; font-style: italic; src: url(font_rsrc14R.otf)}
+    @font-face {font-family: AGaramondPro; src: url(font_rsrc14H.otf)}
+    @font-face {font-family: AGaramondPro; font-weight: bold; src: url(font_rsrc14B.otf)}
+    """
+
+    @Test("a face's descriptors are read, not assumed")
+    func descriptors() {
+        let faces = EPUBFontResolver.fontFaces(in: Self.css, relativeTo: "OEBPS/style.css")
+        #expect(faces.count == 3)
+        #expect(faces[0].isItalic)
+        #expect(!faces[0].isBold)
+        #expect(!faces[1].isItalic && !faces[1].isBold)
+        #expect(faces[2].isBold)
+    }
+
+    /// Before this, the first rule won — so this book would have been set
+    /// entirely in italic, with no upright face left for the running text and
+    /// nothing for `withItalicTrait()` to add on an emphasised word.
+    @Test("the page is set in the upright member, whatever order they came in")
+    func uprightWins() throws {
+        let faces = EPUBFontResolver.fontFaces(in: Self.css, relativeTo: "OEBPS/style.css")
+        let chosen = try #require(EPUBFontResolver.upright(among: faces))
+        #expect(chosen.path == "OEBPS/font_rsrc14H.otf")
+    }
+
+    @Test("a family with only an italic is still better than no face at all")
+    func onlyItalic() throws {
+        let faces = EPUBFontResolver.fontFaces(
+            in: "@font-face {font-family: X; font-style: italic; src: url(i.otf)}",
+            relativeTo: "OEBPS/style.css")
+        #expect(try EPUBFontResolver.upright(among: faces)?.path == "OEBPS/i.otf")
+    }
+
+    @Test("the body's class and id are read off the tag")
+    func bodyTag() throws {
+        let attributes = try #require(EPUBFontResolver.bodyAttributes(
+            in: "<html><head/>\n<body class=\"class-1\" id=\"top\">\n<p>Hi</p></body></html>"))
+        #expect(attributes["class"] == "class-1")
+        #expect(attributes["id"] == "top")
+    }
+
+    @Test("a body with nothing on it says nothing")
+    func bareBodyTag() {
+        #expect(EPUBFontResolver.bodyAttributes(in: "<html><body>\n<p>Hi</p></body></html>") == nil)
+        #expect(EPUBFontResolver.bodyAttributes(in: "<html><head/></html>") == nil)
+    }
+
+    @Test("single quotes, and an entity in the value, survive the scan")
+    func awkwardBodyTag() throws {
+        let attributes = try #require(EPUBFontResolver.bodyAttributes(
+            in: "<BODY  class='a b'  epub:type='bodymatter'>"))
+        #expect(attributes["class"] == "a b")
+        #expect(attributes["epub:type"] == "bodymatter")
+    }
+}

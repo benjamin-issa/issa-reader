@@ -21,7 +21,7 @@ struct TVReaderStyleTests {
         style.theme = .night
         style.typeface = .bundled("Newsreader")
         style.lineSpacing = .roomy
-        style.justified = true
+        style.justification = .always
         style.fontSize = 22
         style.pageMargin = 48
         style.followNarration = false
@@ -55,7 +55,7 @@ struct TVReaderStyleTests {
         #expect(derived.theme == style.theme)
         #expect(derived.typeface == style.typeface)
         #expect(derived.lineSpacing == style.lineSpacing)
-        #expect(derived.justified == style.justified)
+        #expect(derived.justification == style.justification)
         #expect(derived.highlightGranularity == style.highlightGranularity)
         #expect(derived.turnPagesMidSentence == style.turnPagesMidSentence)
     }

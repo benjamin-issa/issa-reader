@@ -235,7 +235,7 @@ struct RealProseTapTests {
     @Test("justified text, where hyphenation and stretched spaces move every line")
     func justified() throws {
         var style = ReaderStyle()
-        style.justified = true
+        style.justification = .always
         let layout = try Self.chapter(style: style)
         let (checked, wrong, _) = Self.audit(layout)
         #expect(wrong == 0, "\(wrong) of \(checked) points resolved elsewhere when justified")

@@ -2,17 +2,16 @@ import Foundation
 
 /// Finds the face a book asks to be set in.
 ///
-/// **This is not a CSS engine, and should not become one.** The renderer
-/// honours no stylesheets at all: `<style>` blocks are discarded before their
-/// text is read, and no rule has ever reached a glyph. What this does is read
-/// two things out of a book's CSS — the `@font-face` rules, and the family the
-/// body is set in — and resolve them to one file. No cascade, no classes, no
-/// specificity, no inheritance. A book with an elaborate stylesheet gets its
-/// body face and nothing else.
+/// Two questions, both answered out of the book's own CSS: which files it
+/// embeds, and which family its running text is set in. The cascade itself
+/// lives in `EPUBStyleSheet`; this is only about fonts.
 ///
 /// That is the whole of "the publisher's font" as an option beside Newsreader
-/// and Public Sans: one face for the running text, which is what a reader means
-/// by it.
+/// and Public Sans: one family for the running text, which is what a reader
+/// means by it — but *every member* of that family, which is what makes a word
+/// in italic look italic. A family registered with only its upright member is a
+/// book with no emphasis in it, and one registered with only its italic member
+/// is a book entirely in italic; both have happened here.
 public enum EPUBFontResolver {
     /// A face a book ships, resolved to something that can be registered.
     public struct Face: Sendable, Hashable {
@@ -20,6 +19,16 @@ public enum EPUBFontResolver {
         public let family: String
         /// Where the file is inside the container.
         public let path: String
+        /// Which member of the family this file is, as the rule declares it.
+        ///
+        /// A stylesheet lists one `@font-face` per member, and nothing but
+        /// these two descriptors distinguishes them. Reading them is what lets
+        /// the *upright* member be the one the page is set in: taking the first
+        /// rule instead set one real book entirely in italic, because that is
+        /// the order its publisher happened to write them in.
+        public var isItalic = false
+        public var isBold = false
+
         /// The file's extension, lowercased.
         ///
         /// `path` carries no query string — see `fontFaces(in:relativeTo:)`,
@@ -52,43 +61,70 @@ public enum EPUBFontResolver {
     /// The body face this book asks for.
     public static func resolve(in package: EPUBPackage) -> Resolution {
         let obfuscated = obfuscatedPaths(in: package)
-        var faces: [String: Face] = [:]
-        var bodyFamilies: [String] = []
+        let embedded = members(in: package)
+        guard !embedded.isEmpty else { return .unavailable(.noEmbeddedFont) }
 
+        // The body's own family first; failing that, the single family the book
+        // embeds. A book that embeds exactly one family means it for the text.
+        let candidates = bodyFamilies(in: package).compactMap { embedded[$0.lowercased()] }
+        let chosen = candidates.first ?? (embedded.count == 1 ? embedded.values.first : nil)
+        guard let members = chosen, let representative = upright(among: members) else {
+            return .unavailable(.noEmbeddedFont)
+        }
+
+        if obfuscated.contains(representative.path) { return .unavailable(.obfuscated) }
+        guard ["otf", "ttf", "ttc", "otc"].contains(representative.format) else {
+            return .unavailable(.unreadableFormat(representative.format))
+        }
+        return .found(representative)
+    }
+
+    /// Every face of one family the book embeds, in declaration order.
+    ///
+    /// What `resolvePublisherFont` registers. The upright regular is the face
+    /// the page is set in; the others are what CoreText needs in order to have
+    /// an italic to resolve to when a word asks for one — it is never
+    /// synthesised, so a missing member is a missing italic.
+    public static func members(of family: String, in package: EPUBPackage) -> [Face] {
+        let obfuscated = obfuscatedPaths(in: package)
+        return (members(in: package)[family.lowercased()] ?? [])
+            .filter { ["otf", "ttf", "ttc", "otc"].contains($0.format) }
+            .filter { !obfuscated.contains($0.path) }
+    }
+
+    /// Every embedded face, grouped by family.
+    static func members(in package: EPUBPackage) -> [String: [Face]] {
+        var faces: [String: [Face]] = [:]
         for sheet in stylesheets(in: package) {
-            guard let css = try? package.archive.read(sheet),
-                  let text = String(data: css, encoding: .utf8)
-                      ?? String(data: css, encoding: .isoLatin1)
-            else { continue }
+            guard let text = css(at: sheet, in: package) else { continue }
             for face in fontFaces(in: text, relativeTo: sheet) {
-                // First rule wins, matching how a browser resolves a repeated
-                // family: later ones are alternates for weights we do not use.
-                if faces[face.family.lowercased()] == nil {
-                    faces[face.family.lowercased()] = face
-                }
+                faces[face.family.lowercased(), default: []].append(face)
             }
-            bodyFamilies.append(contentsOf: bodyFontFamilies(in: text))
         }
+        return faces
+    }
 
-        guard !faces.isEmpty else { return .unavailable(.noEmbeddedFont) }
+    /// The upright, regular member of a family, or the first there is.
+    ///
+    /// Falling back to the first matters: a book may embed only an italic, and
+    /// setting the page in it is still better than ignoring the book's face —
+    /// but it is a last resort, not the default it used to be.
+    static func upright(among members: [Face]) -> Face? {
+        members.first { !$0.isItalic && !$0.isBold } ?? members.first
+    }
 
-        // The body's own family first; failing that, the single face the book
-        // embeds. A book that embeds exactly one font means it for the text.
-        let candidates = bodyFamilies.compactMap { faces[$0.lowercased()] }
-        let chosen = candidates.first ?? (faces.count == 1 ? faces.values.first : nil)
-        guard let chosen else { return .unavailable(.noEmbeddedFont) }
-
-        if obfuscated.contains(chosen.path) { return .unavailable(.obfuscated) }
-        guard ["otf", "ttf", "ttc", "otc"].contains(chosen.format) else {
-            return .unavailable(.unreadableFormat(chosen.format))
-        }
-        return .found(chosen)
+    static func css(at href: String, in package: EPUBPackage) -> String? {
+        guard let data = try? package.archive.read(href) else { return nil }
+        return String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1)
     }
 
     // MARK: - Reading the CSS
 
     /// Every stylesheet the book declares, in manifest order.
-    static func stylesheets(in package: EPUBPackage) -> [String] {
+    ///
+    /// Public because the renderer reads the same list for the same book: this
+    /// answers "which files", and `EPUBStyleSheet` answers what is in them.
+    public static func stylesheets(in package: EPUBPackage) -> [String] {
         package.manifest.values
             .filter { $0.mediaType == "text/css" || $0.href.lowercased().hasSuffix(".css") }
             .map(\.href)
@@ -116,15 +152,81 @@ public enum EPUBFontResolver {
                 // strips a fragment but not a query, and publishers ship
                 // `url('fonts/Charis.otf?#iefix')`.
                 path: EPUBPackage.resolve(withoutQuery(source), relativeTo: sheet),
+                isItalic: (value(of: "font-style", in: block) ?? "").contains("italic")
+                    || (value(of: "font-style", in: block) ?? "").contains("oblique"),
+                isBold: EPUBStyleSheet.isBold(
+                    (value(of: "font-weight", in: block) ?? "").trimmingCharacters(
+                        in: .whitespacesAndNewlines).lowercased()) ?? false,
             ))
         }
         return faces
     }
 
-    /// The families a `body` or `html` rule sets, most specific first.
+    /// The families this book's running text is set in, most likely first.
     ///
-    /// Only these two selectors. Honouring more would mean a cascade, and the
-    /// renderer has nothing to apply one to.
+    /// A bare `body` or `html` rule is the easy case and comes first. Failing
+    /// that, the book's own `<body>` element is read — its class and its id —
+    /// and the cascade asked what that element is set in. That second route is
+    /// not exotic: an InDesign export writes `<body class="class-1">` against
+    /// `.class-1 {font-family: AGaramondPro}` and never mentions `body` at all,
+    /// so before it, a book that plainly embeds and names a face reported that
+    /// it had none.
+    static func bodyFamilies(in package: EPUBPackage) -> [String] {
+        var families: [String] = []
+        var sheet = EPUBStyleSheet()
+        for href in stylesheets(in: package) {
+            guard let text = css(at: href, in: package) else { continue }
+            families.append(contentsOf: bodyFontFamilies(in: text))
+            sheet.add(css: text)
+        }
+        guard !sheet.isEmpty else { return families }
+        // The first document that has a <body> with anything on it. They are
+        // all set the same way, and reading one is enough.
+        for item in package.spine.prefix(3) {
+            guard let data = try? package.archive.read(item.href),
+                  let html = String(data: data, encoding: .utf8)
+                      ?? String(data: data, encoding: .isoLatin1),
+                  let body = bodyAttributes(in: html)
+            else { continue }
+            let asked = sheet.declarations(
+                tag: "body", classes: body["class"], identifier: body["id"],
+                inlineStyle: body["style"])
+            if let declared = asked.families {
+                families.append(contentsOf: declared)
+                break
+            }
+        }
+        return families
+    }
+
+    /// The attributes on a document's `<body>` open tag.
+    ///
+    /// Scanned rather than parsed, and deliberately: an XHTML chapter routinely
+    /// names HTML entities that XML does not define, which fails a strict parse
+    /// outright — the renderer rewrites them first, and it would be a poor
+    /// trade to move that whole table here so that a *font* heuristic can read
+    /// two attributes off one tag. The tag is the first `<body` in the file.
+    static func bodyAttributes(in html: String) -> [String: String]? {
+        guard let start = html.range(of: "<body", options: .caseInsensitive),
+              let end = html[start.upperBound...].firstIndex(of: ">")
+        else { return nil }
+        var attributes: [String: String] = [:]
+        let tag = html[start.upperBound ..< end]
+        var rest = Substring(tag)
+        while let equals = rest.firstIndex(of: "=") {
+            let name = rest[..<equals].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            var value = rest[rest.index(after: equals)...]
+                .drop(while: { $0 == " " || $0 == "\n" || $0 == "\t" })
+            guard let quote = value.first, quote == "\"" || quote == "'" else { break }
+            value = value.dropFirst()
+            guard let closing = value.firstIndex(of: quote) else { break }
+            if !name.isEmpty, !name.contains(" ") { attributes[name] = String(value[..<closing]) }
+            rest = value[value.index(after: closing)...]
+        }
+        return attributes.isEmpty ? nil : attributes
+    }
+
+    /// The families a `body` or `html` rule sets, most specific first.
     static func bodyFontFamilies(in css: String) -> [String] {
         var families: [String] = []
         for selector in ["body", "html"] {

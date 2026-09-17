@@ -98,7 +98,16 @@ struct TypographyControls: View {
         }
         .pickerStyle(.segmented)
 
-        Toggle("Justified", isOn: $style.justified)
+        // Three positions rather than two, because a book has an opinion here
+        // and a switch could not say whose wins. "Follow the book" is the
+        // default and does what the publisher set; the other two are the
+        // reader overruling it either way.
+        Picker("Justify text", selection: $style.justification) {
+            ForEach(ReaderStyle.Justification.allCases, id: \.self) { justification in
+                Text(justification.title).tag(justification)
+            }
+        }
+        .pickerStyle(.segmented)
     }
 
     /// Keeps a selection that is no longer offered from clearing the picker.

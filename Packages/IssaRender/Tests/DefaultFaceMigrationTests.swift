@@ -40,12 +40,12 @@ struct DefaultFaceMigrationTests {
         style.fontSize = 27
         style.lineSpacing = .roomy
         style.theme = .night
-        style.justified = true
+        style.justification = .always
         let moved = style.replacingLegacyDefaultFace()
         #expect(moved.fontSize == 27)
         #expect(moved.lineSpacing == .roomy)
         #expect(moved.theme == .night)
-        #expect(moved.justified)
+        #expect(moved.justification == .always)
     }
 
     /// It runs behind a flag, but a migration that is not idempotent is a
