@@ -264,13 +264,20 @@ struct ChapterClockTests {
         subject.onChapterChangeObserved = { observed += 1 }
         subject.onChapterChange = { announced.append($0) }
 
-        // The tick the periodic observer delivers mid-seek, made deterministic:
-        // this task is enqueued on the main actor before the seek begins, and
-        // the actor is not free again until the seek suspends inside
-        // `AVPlayer.seek` — which is exactly the window the race lives in.
-        let racing = Task { @MainActor in tick(60) }
+        // The tick the periodic observer delivers mid-seek, stated rather than
+        // raced. Enqueuing a task and trusting the seek to suspend was the old
+        // shape, and it did not merely flake: when the seek does not suspend —
+        // which is the normal case here, because these tracks never load — the
+        // tick landed *after* the scrub, `syncChapter`'s `guard index !=
+        // chapterIndex` returned, and this test passed having proved nothing.
+        // `landedInFlight` is what makes that impossible now.
+        var landedInFlight = 0
+        subject.whileSeeking = {
+            landedInFlight = subject.seeksInFlight
+            tick(60)
+        }
         await subject.seek(toBookTime: 60)
-        await racing.value
+        #expect(landedInFlight == 1, "the mid-seek tick has to land inside the seek")
 
         #expect(subject.chapterIndex == 1, "the scrub crossed the boundary")
         #expect(announced.contains(1), "and said so, for Now Playing and the UI")
@@ -300,25 +307,22 @@ struct ChapterClockTests {
         var observed = 0
         subject.onChapterChangeObserved = { observed += 1 }
 
-        // The player still reporting where it was when the seek began. Enqueued
-        // before the seek starts, so it runs at the seek's own suspension point
-        // — and it reports back what the counter said, because a sample that
-        // landed outside the window would prove nothing.
-        let racing = Task { @MainActor () -> Int in
-            // Waited for rather than raced. Enqueuing the sample and hoping it
-            // landed inside the seek made this test fail about one run in
-            // three: the task can be scheduled before the seek begins as
-            // easily as at its suspension point. `seeksInFlight` is raised
-            // before the seek's first await, so yielding until it is non-zero
-            // puts the sample inside the window by construction — the shape
-            // `aSampleFromBeforeALoadIsIgnored` below already uses.
-            while subject.seeksInFlight == 0 { await Task.yield() }
-            let inFlight = subject.seeksInFlight
+        // The player still reporting where it was when the seek began,
+        // delivered from inside the seek rather than raced against it.
+        //
+        // This was a task that yielded until `seeksInFlight` came up. That
+        // waited for ever: these tracks point at /dev/null, so the player's
+        // item never becomes ready, `AVPlayer` answers the seek immediately on
+        // the calling thread, and an `await` whose continuation has already
+        // been resumed never yields the actor. The task first ran when the body
+        // suspended to read its value — by which time the counter was back down.
+        var landedInFlight = 0
+        subject.whileSeeking = {
+            landedInFlight = subject.seeksInFlight
             tick(40)
-            return inFlight
         }
         await subject.seek(toBookTime: 60)
-        #expect(await racing.value == 1, "the stale sample has to land inside the seek")
+        #expect(landedInFlight == 1, "the stale sample has to land inside the seek")
 
         // And now the clock catches up with the audio, honestly.
         tick(60)
@@ -685,17 +689,17 @@ struct ChapterClockTests {
         subject.onChapterChangeObserved = { observed += 1 }
         subject.onChapterChange = { announced.append($0) }
 
-        // The second scrub, held until the first is genuinely in flight, and
-        // reporting back what the counter said so a run that failed to overlap
-        // reads as a harness failure rather than a pass.
-        let second = Task { @MainActor () -> Int in
-            while subject.seeksInFlight == 0 { await Task.yield() }
-            let inFlight = subject.seeksInFlight
+        // The second scrub begun from inside the first, which is where a second
+        // command in a lock-screen drag arrives. The seam is spent when it
+        // fires, so the scrub below cannot re-enter it; during that scrub
+        // `seeksInFlight` is 2, exactly as in a real overlap.
+        var landedInFlight = 0
+        subject.whileSeeking = {
+            landedInFlight = subject.seeksInFlight
             await subject.seek(toBookTime: 60)
-            return inFlight
         }
         await subject.seek(toBookTime: 20)
-        #expect(await second.value == 1, "the second scrub has to begin inside the first")
+        #expect(landedInFlight == 1, "the second scrub has to begin inside the first")
 
         #expect(subject.chapterIndex == 1, "the scrub that crossed the boundary said so")
         #expect(subject.chapterTitle == "B")
@@ -719,7 +723,7 @@ struct ChapterClockTests {
     /// clock against `chapterStarts[chapterIndex]`, so a chapter tap that moves
     /// *backwards* gave the lock-screen chapter scrubber a negative elapsed.
     @Test("the chapter never disagrees with the clock it is derived from")
-    func theChapterNeverDisagreesWithTheClockMidLoad() async {
+    func theChapterNeverDisagreesWithTheClockMidLoad() async throws {
         let subject = Self.coordinator(
             Self.manifest(trackCount: 3, each: 100),
             chapters: [
@@ -734,30 +738,35 @@ struct ChapterClockTests {
         await subject.play(chapter: 2)
         subject.onChapterChange = { announced.append($0) }
 
-        // Sampled from inside the load, the way the lock screen samples: this
-        // task is enqueued on the main actor before the tap begins, so it runs
-        // at the load's own suspension inside AVFoundation. It waits for the
-        // load to have moved the track — which happens before that suspension —
-        // so it cannot read the state in front of the window, and the
-        // announcement below proves it did not read it behind.
-        let sampled = Task { @MainActor () -> (
-            track: Int, chapter: Int, title: String, elapsed: TimeInterval, announced: Bool
-        ) in
-            while subject.trackIndex != 1 { await Task.yield() }
-            return (
+        // Sampled from inside the load, the way the lock screen samples. The
+        // seam fires once the load has moved the track, the clock and the
+        // chapter and before it has asked the player for anything, so the
+        // sample can land neither in front of the window nor behind it.
+        //
+        // Unlike its two siblings above, the task this replaces did still work:
+        // a load genuinely suspends, because opening a file is real work even
+        // when the file is /dev/null. It hung only by being starved — every
+        // test here is on the main actor, and an unbounded yield loop in
+        // another one never gives that actor back. Converted anyway: the bet it
+        // was making is the same bet, and it should not be able to hang when
+        // the next test makes a worse one.
+        var seen: (track: Int, chapter: Int, title: String,
+                   elapsed: TimeInterval, announced: Bool)?
+        subject.whileLoading = {
+            seen = (
                 subject.trackIndex, subject.chapterIndex, subject.chapterTitle,
                 subject.bookTime - (subject.chapterSpan?.start ?? 0), !announced.isEmpty
             )
         }
         await subject.play(chapter: 1)
-        let seen = await sampled.value
+        let sample = try #require(seen, "the load has to have opened a window to sample")
 
-        #expect(seen.track == 1, "the sample has to land after the load moved the track")
-        #expect(seen.announced == false, "and before the load announced anything")
-        #expect(seen.chapter == 1, "the chapter the load is going to, not the one it left")
-        #expect(seen.title == "B", "which is what Now Playing and CarPlay's Up Next read")
-        #expect(seen.elapsed == 0,
-                "and the chapter scrubber's elapsed is inside the chapter, not \(seen.elapsed)")
+        #expect(sample.track == 1, "the sample has to land after the load moved the track")
+        #expect(sample.announced == false, "and before the load announced anything")
+        #expect(sample.chapter == 1, "the chapter the load is going to, not the one it left")
+        #expect(sample.title == "B", "which is what Now Playing and CarPlay's Up Next read")
+        #expect(sample.elapsed == 0,
+                "and the chapter scrubber's elapsed is inside the chapter, not \(sample.elapsed)")
     }
 
     /// The victim a listener meets: two taps on "next chapter" while a track is

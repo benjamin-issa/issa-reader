@@ -118,6 +118,33 @@ public final class AudiobookCoordinator {
     /// Internal rather than private so a test can see the window it opens.
     var seeksInFlight = 0
 
+    /// Called from inside a seek, once, while `seeksInFlight` is still up.
+    ///
+    /// A test seam, nil on every path a listener can reach, and the only honest
+    /// way to *state* that window rather than race for it. The tests that cover
+    /// it used to enqueue a task on the main actor before the seek and trust it
+    /// to run at the seek's own suspension point — but there is no suspension
+    /// point when the item the player holds never loaded. `AVPlayer` calls such
+    /// a seek's completion handler straight back on the calling thread, and a
+    /// continuation resumed before its task reaches the suspend point does not
+    /// suspend the task at all. The tasks then waited for a counter that had
+    /// already come down, and waited for ever, at full CPU, naming no test.
+    ///
+    /// Spent when it fires, which is load-bearing twice: a second scrub made
+    /// from inside it — the thing one of those tests is about — cannot re-enter
+    /// it and recurse, and a closure stored here that captured this object
+    /// stops holding it the moment it has been used.
+    ///
+    /// The `await` below sits inside an `if let`, so a shipping build adds no
+    /// suspension point and no behaviour.
+    var whileSeeking: (@MainActor () async -> Void)?
+
+    /// `whileSeeking`'s twin for the other window, called once the track, the
+    /// clock and the chapter have all moved and before the player has been
+    /// asked to open anything — which is the state a load is judged on, and the
+    /// state a superseded load has not yet returned from.
+    var whileLoading: (@MainActor () async -> Void)?
+
     /// Called when the playing chapter changes, for Now Playing and the UI.
     ///
     /// Carries the chapter index, which is an index into `chapters` and no
@@ -426,6 +453,16 @@ public final class AudiobookCoordinator {
         seeksInFlight += 1
         defer { seeksInFlight -= 1 }
         await player.seek(to: offset)
+        // Still inside the window: the engine has been asked and the counter is
+        // not down yet, which is where a sample generated before the seek
+        // arrives — the observer's cadence is a second, and a seek is not.
+        // After the engine call rather than before it, because the overlapping
+        // -scrub test issues its second seek from here and a drag really does
+        // reach the player in that order.
+        if let hook = whileSeeking {
+            whileSeeking = nil
+            await hook()
+        }
         return .landed
     }
 
@@ -670,6 +707,15 @@ public final class AudiobookCoordinator {
         chapterIndex = chapterIndex(atBookTime: bookTime)
         loadsInFlight += 1
         defer { loadsInFlight -= 1 }
+        // Inside the window and before the engine is asked, which is where the
+        // lock screen samples: the track, the clock and the chapter have moved
+        // and nothing has been announced yet. After the counter, so the
+        // no-suspension argument above — which is about the three assignments
+        // and the counter — is untouched.
+        if let hook = whileLoading {
+            whileLoading = nil
+            await hook()
+        }
         await player.load(
             url: destination.url, href: track.href,
             startAt: offset, cookies: destination.cookies,

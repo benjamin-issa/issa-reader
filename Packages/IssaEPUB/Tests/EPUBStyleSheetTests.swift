@@ -96,6 +96,64 @@ struct EPUBStyleSheetTests {
         }
     }
 
+    /// The bug this suite missed: refusing the second class used to clear the
+    /// class and keep the tag, so a rule written for one kind of paragraph
+    /// applied to every paragraph in the book.
+    @Test("a tag with two classes matches nothing, not everything with that tag")
+    func tagWithTwoClasses() {
+        let sheet = sheet("div.a.b {font-style: italic}")
+        #expect(sheet.declarations(tag: "div", classes: "a b", identifier: nil).italic == nil)
+        #expect(sheet.declarations(tag: "div", classes: "zzz", identifier: nil).italic == nil)
+        #expect(sheet.declarations(tag: "div", classes: nil, identifier: nil).italic == nil)
+    }
+
+    @Test("two ids, or an id beside a second class, are refused the same way")
+    func otherRefusedShapes() {
+        for selector in ["p#a#b", "#x.a.b", "p.a.b", "span#one#two"] {
+            let sheet = sheet("\(selector) {font-weight: bold}")
+            #expect(
+                sheet.declarations(tag: "p", classes: "a b", identifier: "x").bold == nil,
+                "\(selector) should match nothing")
+            #expect(
+                sheet.declarations(tag: "span", classes: nil, identifier: "one").bold == nil,
+                "\(selector) should match nothing")
+        }
+    }
+
+    @Test("a separator with nothing after it is malformed, not a bare tag")
+    func trailingSeparator() {
+        #expect(sheet("p. {font-style: italic}")
+            .declarations(tag: "p", classes: nil, identifier: nil).italic == nil)
+        #expect(sheet("p# {font-style: italic}")
+            .declarations(tag: "p", classes: nil, identifier: nil).italic == nil)
+    }
+
+    @Test("the shapes that are supported still match")
+    func stillSupported() {
+        #expect(sheet("p {font-style: italic}")
+            .declarations(tag: "p", classes: nil, identifier: nil).italic == true)
+        #expect(sheet(".a {font-style: italic}")
+            .declarations(tag: "p", classes: "a", identifier: nil).italic == true)
+        #expect(sheet("#a {font-style: italic}")
+            .declarations(tag: "p", classes: nil, identifier: "a").italic == true)
+        #expect(sheet("p.a {font-style: italic}")
+            .declarations(tag: "p", classes: "a", identifier: nil).italic == true)
+    }
+
+    /// A page set in a zero-point font is blank, and no reader setting brings
+    /// it back.
+    @Test("a size of zero or less is refused")
+    func nonPositiveSizes() {
+        for value in ["0", "-1em", "0%", "-50%"] {
+            #expect(
+                sheet("p {font-size: \(value)}")
+                    .declarations(tag: "p", classes: nil, identifier: nil).fontScale == nil,
+                "font-size: \(value) should be ignored")
+        }
+        #expect(sheet("p {font-size: 1.3em}")
+            .declarations(tag: "p", classes: nil, identifier: nil).fontScale == 1.3)
+    }
+
     @Test("a media query's rules are skipped whole")
     func mediaQuery() {
         // Skipped, not misread: the closing brace of the inner rule must not be

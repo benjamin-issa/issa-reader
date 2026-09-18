@@ -26,6 +26,31 @@ struct ReaderStyleMigrationTests {
     }
     """
 
+    @Test("a blob this build writes is still readable by the build before it")
+    func aBlobThisBuildWritesIsReadableByTheBuildBeforeIt() throws {
+        // A reader who moves back a build must not silently lose their
+        // justification: the old build reads only `justified`, so this one
+        // keeps writing it. `.always` is the only case that build can express.
+        func legacyBool(of justification: ReaderStyle.Justification) throws -> Bool? {
+            var style = ReaderStyle()
+            style.justification = justification
+            let data = try JSONEncoder().encode(style)
+            let blob = try #require(
+                try JSONSerialization.jsonObject(with: data) as? [String: Any])
+            return blob["justified"] as? Bool
+        }
+        #expect(try legacyBool(of: .always) == true)
+        #expect(try legacyBool(of: .never) == false)
+        #expect(try legacyBool(of: .followBook) == false)
+
+        // And the new key is still there, so this build round-trips exactly.
+        var style = ReaderStyle()
+        style.justification = .never
+        let restored = try JSONDecoder().decode(
+            ReaderStyle.self, from: JSONEncoder().encode(style))
+        #expect(restored.justification == .never)
+    }
+
     @Test("a blob saved before the new field still decodes, keeping every setting")
     func legacyBlobSurvives() throws {
         let style = try JSONDecoder().decode(ReaderStyle.self, from: Data(legacy.utf8))

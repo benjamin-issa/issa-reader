@@ -217,15 +217,27 @@ public struct EPUBStyleSheet: Sendable, Equatable {
         var selector = Selector()
         var current = ""
         var kind: Character = " "
+        // Refusing a shape means refusing the *whole* selector, and tracking
+        // that in a flag rather than by clearing a field. Clearing was the bug:
+        // `div.a.b` dropped the second class and kept the tag, so a rule meant
+        // for one kind of div silently applied to every div in the book —
+        // precisely the half-applied rule this type exists not to produce.
+        var supported = true
         func commit() {
-            guard !current.isEmpty else { return }
+            guard !current.isEmpty else {
+                // A separator with nothing after it — `p.`, `#` — is malformed,
+                // and it used to leave a bare tag behind that matched
+                // everything.
+                if kind != " " { supported = false }
+                return
+            }
             switch kind {
             case ".":
-                // Two classes on one selector is a shape this reader does not
-                // carry, so the whole selector is refused rather than half-kept.
-                if selector.klass != nil { selector.klass = nil; current = ""; return }
+                if selector.klass != nil { supported = false }
                 selector.klass = current
-            case "#": selector.identifier = current
+            case "#":
+                if selector.identifier != nil { supported = false }
+                selector.identifier = current
             default: selector.tag = current
             }
             current = ""
@@ -239,7 +251,8 @@ public struct EPUBStyleSheet: Sendable, Equatable {
             }
         }
         commit()
-        guard selector.tag != nil || selector.klass != nil || selector.identifier != nil
+        guard supported,
+              selector.tag != nil || selector.klass != nil || selector.identifier != nil
         else { return nil }
         return selector
     }
@@ -288,12 +301,18 @@ public struct EPUBStyleSheet: Sendable, Equatable {
             case "text-indent":
                 declarations.textIndent = Self.length(value)
             case "font-size":
-                declarations.fontScale = Self.length(value).map { length in
-                    switch length {
-                    case let .fraction(value): value
-                    case let .ems(value): value
+                // A non-positive size is refused rather than obeyed: a book
+                // asking for zero is asking for nothing renderable, and a page
+                // set in a zero-point font is blank with no setting a reader
+                // could use to get it back.
+                declarations.fontScale = Self.length(value)
+                    .map { length in
+                        switch length {
+                        case let .fraction(value): value
+                        case let .ems(value): value
+                        }
                     }
-                }
+                    .flatMap { $0 > 0 ? $0 : nil }
             case "text-decoration", "text-decoration-line":
                 declarations.underlined = value.contains("underline")
                     ? true

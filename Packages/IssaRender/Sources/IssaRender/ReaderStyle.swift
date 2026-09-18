@@ -306,6 +306,15 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
         try container.encode(lineSpacing, forKey: .lineSpacing)
         try container.encode(theme, forKey: .theme)
         try container.encode(justification, forKey: .justification)
+        // The key this replaced, written as well as the new one for a release.
+        // A build that predates the three-position setting reads only this, and
+        // without it a reader who moves back a build finds their justification
+        // silently gone. That build had a switch, so it can be told "justified"
+        // or "not", and both `.never` and `.followBook` are honestly "not" —
+        // following the book is a thing it cannot do. Coming back up reads
+        // `.followBook` rather than the `.never` someone may have chosen, which
+        // is the most an older writer can say.
+        try container.encode(justification == .always, forKey: .justified)
         try container.encode(pageMargin, forKey: .pageMargin)
         try container.encode(highlightGranularity, forKey: .highlightGranularity)
         try container.encode(followNarration, forKey: .followNarration)

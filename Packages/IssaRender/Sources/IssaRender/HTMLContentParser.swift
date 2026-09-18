@@ -290,7 +290,13 @@ public struct HTMLContentParser {
                 // Relative to the parent, replacing the tag's own size rather
                 // than compounding with it: `h1 {font-size: 1.3em}` is a
                 // smaller heading, not a 2.5x one.
-                child.sizeScale = context.sizeScale * CGFloat(scale)
+                //
+                // Bounded, because `em` does compound through nesting — two
+                // nested `2em`s are already four — and a line taller than the
+                // page cannot be paged through. That is the same reason
+                // `maxImageHeight` bounds a plate: content drawn outside the
+                // canvas is content the reader can never reach.
+                child.sizeScale = min(context.sizeScale * CGFloat(scale), Self.maximumFontScale)
             }
             if let alignment = asked.alignment {
                 child.alignment = Self.alignment(alignment, under: context.style.justification)
@@ -515,6 +521,11 @@ public struct HTMLContentParser {
         if drawing.contains(node.name.lowercased()) { return true }
         return node.children.contains { containsVectorDrawing($0) }
     }
+
+    /// The largest a book may make its own text, as a multiple of the reader's
+    /// chosen size. Above `<h1>`'s 1.9 with room to spare, and far below the
+    /// point where one line fills a page.
+    static let maximumFontScale: CGFloat = 3
 
     private static let blockElements: Set<String> = [
         "p", "div", "section", "article", "h1", "h2", "h3", "h4", "h5", "h6",

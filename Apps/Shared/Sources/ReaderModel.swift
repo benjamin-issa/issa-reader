@@ -1395,6 +1395,10 @@ public final class ReaderModel {
             // Everything committed together, once nothing can still throw.
             self.layout = layout
             chapterIndex = index
+            // Here rather than at the top of this method: everything above can
+            // throw, and a chapter that failed to load must leave the one on
+            // screen — and its anchors — alone.
+            anchorAnnotations()
             if let locator, let offset = LocatorAnchoring.characterOffset(
                 for: locator, in: parsed.text.string, fragmentRanges: parsed.fragmentRanges,
             ), let page = layout.page(containingOffset: offset) {
@@ -1658,7 +1662,26 @@ public final class ReaderModel {
     /// over whatever now sits at those offsets in the new chapter.
     private var selectionChapter: Int?
     /// Annotations for this book, drawn under the text and listed on demand.
-    public private(set) var annotations: [Annotation] = []
+    public private(set) var annotations: [Annotation] = [] {
+        didSet { anchorAnnotations() }
+    }
+
+    /// Where each of this chapter's annotations actually starts, resolved once.
+    ///
+    /// Whole-book `annotations` holds every chapter's marks; this holds only
+    /// the ones the loaded chapter claims, by annotation id.
+    ///
+    /// `@ObservationIgnored` because `highlightBlocks(on:)` is read from inside
+    /// a view's `body` — `PageCanvas` reads it directly — and a plain stored
+    /// property on an `@Observable` class publishes its mutations, which from
+    /// inside view evaluation is how a redraw loop starts. Nothing observes
+    /// this; it is derived from two things that are observed.
+    ///
+    /// Offsets and never rectangles: `relayoutCurrentChapter` re-paginates the
+    /// same `ChapterLayout` in place on a rotation or a margin change, so
+    /// cached geometry would be drawn at stale positions, while an offset into
+    /// the text survives both that and `recolour`.
+    @ObservationIgnored private var anchoredOffsets: [String: Int] = [:]
     private var selectionAnchor: Int?
 
     public var selectedText: String? {
@@ -1772,6 +1795,35 @@ public final class ReaderModel {
         return annotation
     }
 
+    /// Resolves this chapter's annotations to character offsets, once.
+    ///
+    /// Re-run whenever the chapter changes or `annotations` does — the reader
+    /// can make a mark, delete one, or have a session's worth loaded from the
+    /// database after the page is already on screen.
+    ///
+    /// The work this replaces was being done per annotation *per draw*. A mark
+    /// made before the renderer stopped keeping the space between two blocks no
+    /// longer matches its stored offset, so it took the scanning path; and
+    /// `highlightBlocks(on:)` is called from a view body that re-evaluates on
+    /// every narrated sentence. That is a whole-chapter search per sentence,
+    /// for ever, because the corrected offset was never kept.
+    private func anchorAnnotations() {
+        guard let layout, let package, package.spine.indices.contains(chapterIndex) else {
+            anchoredOffsets = [:]
+            return
+        }
+        let href = package.spine[chapterIndex].href
+        let text = layout.attributedText.string as NSString
+        var resolved: [String: Int] = [:]
+        for annotation in annotations
+            where annotation.kind != .bookmark && annotation.locator.matchesHref(href) {
+            if let offset = Self.offset(of: annotation, in: text) {
+                resolved[annotation.id] = offset
+            }
+        }
+        anchoredOffsets = resolved
+    }
+
     /// Opens the page an annotation is on.
     public func go(to annotation: Annotation) async {
         guard let package else { return }
@@ -1882,10 +1934,11 @@ public final class ReaderModel {
         guard let layout, let package, package.spine.indices.contains(chapterIndex) else { return [] }
         let href = package.spine[chapterIndex].href
         var result: [PageSurface.AnnotationBlock] = []
-        let text = layout.attributedText.string as NSString
         for annotation in annotations where annotation.kind != .bookmark {
             guard annotation.locator.matchesHref(href) else { continue }
-            guard let offset = Self.offset(of: annotation, in: text) else { continue }
+            // Resolved when the chapter loaded, not here: this runs inside a
+            // view's body, once per narrated sentence.
+            guard let offset = anchoredOffsets[annotation.id] else { continue }
             let length = (annotation.excerpt as NSString).length
             let range = NSRange(location: offset, length: length)
             let lines = layout.lines(forRange: range, on: page)

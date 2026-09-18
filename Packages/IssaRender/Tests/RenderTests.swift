@@ -930,6 +930,18 @@ struct StyledChapterTests {
                 == paragraphStyle(plain, at: 0).paragraphSpacing)
     }
 
+    /// Nesting compounds, so a book can reach an enormous size without ever
+    /// declaring one — and a line taller than the page cannot be paged through.
+    @Test("a book cannot set its text larger than the page can carry")
+    func sizeIsBounded() throws {
+        let plain = try parse("<body><p>Plain.</p></body>", css: "")
+        let nested = try parse(
+            "<body class=\"big\"><div class=\"big\"><p class=\"big\">Plain.</p></div></body>",
+            css: ".big {font-size: 2em}")
+        let base = try font(plain, at: 0).pointSize
+        #expect(try font(nested, at: 0).pointSize == base * HTMLContentParser.maximumFontScale)
+    }
+
     @Test("a chapter with no stylesheet renders as it always did")
     func noStyleSheet() throws {
         let html = Data("""
