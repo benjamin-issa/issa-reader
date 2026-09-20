@@ -445,12 +445,16 @@ struct MacRootView: View {
             .id(selection)
             if showsInspector.wrappedValue {
                 Divider()
-                // The inspector's old ideal width, asked for rather than
-                // imposed: measured on macOS 27 the column comes out around 485
-                // points whatever this says, because the detail inside sizes
-                // itself against the window through `containerRelativeFrame`.
-                // Left at the honest number rather than tuned to a value that
-                // does nothing.
+                // The inspector's old ideal width, and it governs — which it
+                // did not in 1.2.0 (41) through (44). The detail inside was
+                // pinning itself to `containerRelativeFrame`, which walks past
+                // this `HStack` to the split view's detail column: measured on
+                // macOS 27 at a 1114pt window, 894 points of content centred
+                // on this 320pt frame, painting 287pt over the grid on one
+                // side and 287pt off the window on the other. The grid looked
+                // clipped because it was covered, not because it was too wide.
+                // `BookDetailView.pinnedToContainerWidth` is where that is
+                // fixed, and why.
                 //
                 // It can no longer be dragged either: that needs the
                 // `NSSplitView` behind `.inspector`, which is what crashes on

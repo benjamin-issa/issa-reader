@@ -115,9 +115,11 @@ public struct BookDetailView: View {
             .padding(Metrics.screenMargin)
             // The scroll view centres content that overflows its cross axis,
             // which turns one over-wide subview into wrong margins for the
-            // whole screen. Pinning the width to the container makes that
-            // failure visible as clipping inside one row instead.
-            .containerRelativeFrame(.horizontal)
+            // whole screen. Pinning the width makes that failure visible as
+            // clipping inside one row instead — but where the width comes from
+            // depends on whether this view is the screen or a column beside
+            // one, so the two cases ask differently. See `pinnedToContainerWidth`.
+            .pinnedToContainerWidth(layout)
         }
         .accessibilityIdentifier("screen.bookDetail")
         .background(Palette.paper)
@@ -1100,5 +1102,28 @@ private extension View {
     @ViewBuilder
     func navigationTitle(_ title: String, when condition: Bool) -> some View {
         if condition { navigationTitle(title) } else { self }
+    }
+
+    /// Fill the width, asking the right thing for the width.
+    ///
+    /// A screen asks its container, because that is the only honest source
+    /// when the screen *is* the container's content. A column beside one must
+    /// not: `containerRelativeFrame` walks past an `HStack` — which is not a
+    /// container — to the `NavigationSplitView`'s detail column, and on the
+    /// Mac that is the whole window minus the sidebar. Measured on macOS 27 at
+    /// a 1114pt window, the detail laid out 894pt wide inside its 320pt frame
+    /// and drew 287pt over the grid on one side and off the window on the
+    /// other. The column takes the width it is offered instead.
+    ///
+    /// The screen's branch is not `maxWidth: .infinity` and must not become
+    /// it: a flexible frame takes its child's size as a lower bound, so one
+    /// rigid over-wide subview would move the whole screen again, which is the
+    /// phone bug this pin was added to stop.
+    @ViewBuilder
+    func pinnedToContainerWidth(_ layout: BookDetailView.Layout) -> some View {
+        switch layout {
+        case .full: containerRelativeFrame(.horizontal)
+        case .inspector: frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 }

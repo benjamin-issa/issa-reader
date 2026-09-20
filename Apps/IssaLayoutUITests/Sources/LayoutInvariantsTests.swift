@@ -4,11 +4,17 @@ import XCTest
 ///
 /// The sweep's whole value is that it fails when a screen is wrong, and the
 /// only honest way to know it does is to hand it a screen that is. Driving the
-/// real app into the exact failure is unreliable — the app has since grown the
-/// `containerRelativeFrame` that makes that particular overflow impossible, and
-/// an injected over-wide subview did not reproduce it — so the invariants are
-/// fed hand-built trees instead, shaped exactly like the four bugs that
-/// prompted them.
+/// real app into the exact failure is unreliable — the book screen has since
+/// grown the `containerRelativeFrame` that makes that particular overflow
+/// impossible on a phone, and an injected over-wide subview did not reproduce
+/// it — so the invariants are fed hand-built trees instead, shaped exactly
+/// like the four bugs that prompted them.
+///
+/// That pin is not a general defence, and this comment used to imply it was.
+/// On the Mac the same modifier *caused* an overflow, because it resolves
+/// against whatever container it can find and the book column's nearest one is
+/// the split view's detail area; see `BookDetailView.pinnedToContainerWidth`.
+/// A sweep that ran on macOS would have caught it in 1.2.0 (41). None does.
 ///
 /// These need no simulator app: `XCUIElementSnapshot` is a protocol.
 @MainActor
