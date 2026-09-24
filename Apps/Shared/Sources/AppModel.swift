@@ -719,6 +719,18 @@ public final class AppModel {
         guard let session else { return }
         isLoadingLibrary = true
         defer { isLoadingLibrary = false }
+        // What this device has written that the answer may not include,
+        // taken before the request is sent.
+        //
+        // The fence used to be read after the fetch, and a status the reader
+        // set while the request was in flight was on its way to the server
+        // by then: not in the queue, so not kept, and the response — captured
+        // before the server had it — put the old status back. On 3.x that
+        // was an empty one, and the next page turned filed the book over the
+        // reader's choice. Taken first, the fence holds every write that
+        // could still be unsent when the server answered, and the ledger's
+        // mark catches every write begun after it (`UnsentFence`).
+        let fence = await unsentFence()
         do {
             let service = LibraryService(client: session.client)
             // Everything fetched into locals and published in ONE assignment at
@@ -732,32 +744,24 @@ public final class AppModel {
             let fetched = try await service.allBooks()
             let fetchedStatuses = (try? await service.statuses()) ?? statuses
             let fetchedRatings = (try? await service.myRatings()) ?? ratings
-            // Asked before `known` is read rather than beside the ratings'
-            // question below, so no suspension falls between reading `books`
-            // and replacing it: a position recorded in that gap would be lost.
-            // An automatic filing still on its way into the queue counts as
-            // queued: `applyStatus` sets the book here before it queues the
-            // write, and a catalogue landing in between would put the server's
-            // empty status back over it. See `autoFilingsInFlight`.
-            let pendingStatuses = await pendingStatusBookUUIDs()
-                .union(autoFilingsInFlight.keys)
 
             // Reconciled, not assigned: a refetch that predates a write still in
             // the queue carries a stale position, and `replaceCatalogue` below
             // would then persist it for the next cold launch to read back.
             //
-            // A status still in the queue is kept the same way, for the reason
-            // ratings are below. The catalogue is fetched before the queue
-            // drains, so a status set offline — by the reader, or after a
-            // position write on a book 3.x left with none — came back as the
-            // server's old one, the book changed shelves, and the drain then
-            // moved it back.
+            // A status this device wrote and the server may not hold yet is
+            // kept the same way, for the reason ratings are below. The
+            // catalogue is fetched before the queue drains, so a status set
+            // offline — by the reader, or after a position write on a book 3.x
+            // left with none — came back as the server's old one, the book
+            // changed shelves, and the drain then moved it back. Nothing from
+            // here to the assignment suspends, so a position recorded while
+            // this runs cannot fall between reading `books` and replacing it.
             let known = Dictionary(books.map { ($0.uuid, $0) }, uniquingKeysWith: { first, _ in first })
             let merged = fetched.map { fresh in
                 guard let mine = known[fresh.uuid] else { return fresh }
-                var book = mine.reconciled(with: fresh)
-                if pendingStatuses.contains(fresh.uuid) { book.status = mine.status }
-                return book
+                return mine.reconciled(
+                    with: fresh, keepingStatus: keepsLocal(.status, fresh.uuid, given: fence))
             }
             books = merged
             reseedGuards(against: merged)
@@ -766,9 +770,11 @@ public final class AppModel {
             // Reconciled against the queue, not assigned verbatim. A rating
             // changed offline is still pending, so taking the server's answer
             // wholesale put the old value back on screen — and the drain
-            // kicked off below then removed it again a moment later.
+            // kicked off below then removed it again a moment later. From the
+            // same fence as the statuses, and so with no second read of the
+            // queue after the fetch.
             var mergedRatings = fetchedRatings
-            for uuid in await pendingRatingBookUUIDs() {
+            for uuid in fence.ratings.union(localWrites.books(.rating, writtenAfter: fence.mark)) {
                 if let local = ratings[uuid] { mergedRatings[uuid] = local }
                 else { mergedRatings[uuid] = nil }
             }
@@ -826,29 +832,68 @@ public final class AppModel {
         pendingWrites = (try? await mutations.count) ?? 0
     }
 
-    /// Books whose rating is still waiting to reach the server.
+    /// The status and rating writes a server's answer may not include yet, as
+    /// they stood just before the request for it was sent.
     ///
-    /// A refresh that assigns `myRatings()` verbatim overwrites a change the
-    /// queue has not drained yet, so the old value flashes back on screen and
-    /// is then removed again when the drain lands.
-    private func pendingRatingBookUUIDs() async -> Set<String> {
-        guard let mutations else { return [] }
-        let rows = (try? await mutations.pending()) ?? []
-        return Set(rows.filter { $0.kind == .rating }.map(\.bookUUID))
+    /// A refresh that took the server's status or rating as given put back
+    /// whatever the queue had not drained yet: the old value flashed on
+    /// screen and the drain then removed it again, and a status is written
+    /// for the reader often now — after the first position on a book 3.x left
+    /// with none — so the flicker followed every offline start of a new book.
+    private struct UnsentFence {
+        /// Where `LocalWrites` stood. A write begun after this is not in the
+        /// sets below, and may not be in the answer either.
+        let mark: LocalWrites.Mark
+        /// Books with a status write in the queue or on its way into it.
+        let statuses: Set<String>
+        /// The same for ratings.
+        let ratings: Set<String>
     }
 
-    /// Books whose status is still waiting to reach the server.
+    /// Takes the fence, before the fetch it guards.
     ///
-    /// The same defence as `pendingRatingBookUUIDs`, for the same defect:
-    /// `reconciled(with:)` takes the server's status as given, so a refresh
-    /// landing before the queued PUT put the old status back and the book
-    /// flipped shelves twice. A status is written for the reader more often
-    /// now — after the first position on a book 3.x left with none — so the
-    /// flicker would otherwise follow every offline start of a new book.
-    private func pendingStatusBookUUIDs() async -> Set<String> {
-        guard let mutations else { return [] }
-        let rows = (try? await mutations.pending()) ?? []
-        return Set(rows.filter { $0.kind == .status }.map(\.bookUUID))
+    /// The mark and the writes in flight first, with nothing suspending
+    /// between them, then one read of the queue for both kinds. That covers
+    /// every write that could be missing from the answer. One begun after the
+    /// mark is caught by its stamp. One begun before it was either still on
+    /// its way into the queue, and is in flight here; or in the queue, and is
+    /// read here — a row leaves the queue only once the server has answered
+    /// for it; or it had already been sent and answered for, before the
+    /// request this fence guards was even made, so the answer includes it.
+    ///
+    /// One read where there were two after every catalogue fetch — statuses
+    /// and ratings read the whole table separately, and the per-book refresh
+    /// and the rule each asked their own way, three spellings of "not sent
+    /// yet" that had already drifted apart.
+    private func unsentFence() async -> UnsentFence {
+        let mark = localWrites.mark
+        var statuses = localWrites.inFlight(.status)
+        var ratings = localWrites.inFlight(.rating)
+        for row in (try? await mutations?.pending()) ?? [] {
+            switch row.kind {
+            case .status: statuses.insert(row.bookUUID)
+            case .rating: ratings.insert(row.bookUUID)
+            case .position: continue
+            }
+        }
+        return UnsentFence(mark: mark, statuses: statuses, ratings: ratings)
+    }
+
+    /// Whether a merge must keep this device's value over the server's: the
+    /// write was unsent when the fence was taken, or has begun since.
+    ///
+    /// Positions are never asked: they carry a timestamp, and
+    /// `reconciled(with:)` keeps the newer one on its own.
+    private func keepsLocal(
+        _ kind: MutationQueue.Kind, _ bookUUID: String, given fence: UnsentFence,
+    ) -> Bool {
+        let unsent: Set<String> = switch kind {
+        case .status: fence.statuses
+        case .rating: fence.ratings
+        case .position: []
+        }
+        return unsent.contains(bookUUID)
+            || localWrites.books(kind, writtenAfter: fence.mark).contains(bookUUID)
     }
 
     /// Records a write locally, then attempts it.
@@ -3140,7 +3185,9 @@ public final class AppModel {
     /// the rule in `advanceStatusIfUnset` never overrides a choice made by
     /// hand. That includes one still waiting to drain: it replaces the rule's
     /// own status in the queue, and the rule would otherwise go on asking as
-    /// if the server had none.
+    /// if the server had none. A filing of the rule's that had already set
+    /// the book here but not yet queued its status gives way as well: this
+    /// is the newer write, and `applyStatus` queues only the newest.
     public func setStatus(_ status: Status, for book: Book) async {
         autoFiledBookUUIDs.remove(book.uuid)
         await applyStatus(status, to: book)
@@ -3151,20 +3198,63 @@ public final class AppModel {
     /// The local copy is updated first so the shelf changes under the finger,
     /// and rolled back if the server refuses — a status that silently reverts on
     /// the next refresh is worse than one that never appeared to change.
+    ///
+    /// Counted in `localWrites` from before it first suspends until its row
+    /// is in the queue, whoever chose it. Only the rule's filings used to be
+    /// counted, so a refresh landing while the reader's own choice was being
+    /// saved found no row and nothing in flight, and put the server's status
+    /// back over the choice — on 3.x an empty one, for the next page turned
+    /// to file over.
+    ///
+    /// Queued only while it is still the newest write for the book. The rule
+    /// can set a book and suspend here, and the reader choose a status in
+    /// that gap; the choice queued first and the rule's status then replaced
+    /// it, since the queue keeps the newest row per book and that was the
+    /// rule's. A superseded write queues nothing, and saves the book again:
+    /// its own save, made before it suspended, can reach the store after the
+    /// newer write's.
     private func applyStatus(_ status: Status, to book: Book) async {
-        guard let session, let index = books.firstIndex(where: { $0.uuid == book.uuid }) else { return }
+        guard session != nil, let index = books.firstIndex(where: { $0.uuid == book.uuid }) else { return }
+        let mark = localWrites.begin(.status, book.uuid)
+        defer { localWrites.end(.status, book.uuid) }
         books[index].status = status
         rebuildDerived()
         try? await store?.upsert(books[index])
+        await beforeQueueingStatus?(book.uuid)
+        guard localWrites.isNewest(mark, .status, book.uuid) else {
+            if let current = books.first(where: { $0.uuid == book.uuid }) {
+                try? await store?.upsert(current)
+            }
+            return
+        }
         // Queued, not sent directly: a shelf change made offline must survive,
         // and rolling it back under the reader's finger was the old behaviour.
+        // Nothing suspends between the check above and the INSERT being
+        // submitted, so a newer write, which has yet to begin, queues after it.
         await enqueue(.status, bookUUID: book.uuid,
                       payload: MutationDrain.StatusPayload(status: status.uuid))
-        _ = session
     }
 
+    /// Runs between a status's local save and the queueing of its row, when
+    /// set.
+    ///
+    /// A test seam, nil in production, and internal for that reason alone,
+    /// as `useStore` is. That gap is where a refresh and a status chosen by
+    /// hand each met a status write half done, and nothing outside the model
+    /// can otherwise stop a write inside it: the only suspension there is the
+    /// store's upsert, and holding the database to stall it stalls the
+    /// queue's INSERT as well, so the order under test would be left to
+    /// chance.
+    @ObservationIgnored var beforeQueueingStatus: (@MainActor (String) async -> Void)?
+
+    /// Rates a book, or clears its rating.
+    ///
+    /// Counted in `localWrites` the way `applyStatus` counts a status, so a
+    /// refresh keeps a rating set while its request was in flight.
     public func setRating(_ value: Double?, for book: Book) async {
         guard session != nil else { return }
+        localWrites.begin(.rating, book.uuid)
+        defer { localWrites.end(.rating, book.uuid) }
         if let value { ratings[book.uuid] = value } else { ratings.removeValue(forKey: book.uuid) }
         // Persisted the way `setStatus` persists a shelf change. Without this
         // the map lived only in memory and was repopulated solely from
@@ -3513,14 +3603,16 @@ public final class AppModel {
     /// this far, as it never reached the server either.
     ///
     /// Until the server holds it, not just once. A book the rule filed is in
-    /// `autoFiledBookUUIDs`, and while its status is still queued the rule is
+    /// `autoFiledBookUUIDs`, and while its status is still unsent the rule is
     /// asked again as if the book had none, because on the server it has none
     /// (see `autoFiledBookUUIDs`). Once that status has drained the book is
-    /// left to the server, which advances a book with a status itself. The
-    /// book goes into the set before `applyStatus` first suspends, so a write
-    /// that arrives while this one's status is still being sent re-evaluates
-    /// rather than taking the new status as the server's. Nothing here writes
-    /// a position, so it cannot come back through `writePosition`.
+    /// left to the server, which advances a book with a status itself.
+    /// "Unsent" is the question a refresh asks, answered the same way: queued,
+    /// on its way into the queue (`localWrites`, which `applyStatus` joins
+    /// before it first suspends), or begun while the queue was being read. So
+    /// a write that arrives while this one's status is still being saved
+    /// re-evaluates rather than taking the new status as the server's. Nothing
+    /// here writes a position, so it cannot come back through `writePosition`.
     ///
     /// Forward only, and so only on a change: no status, then Reading, then
     /// Read. Asked as if the book had no status, a write at 50% after one at
@@ -3555,12 +3647,12 @@ public final class AppModel {
         var unfiledOnServer = false
         if autoFiledBookUUIDs.contains(bookUUID) {
             // A filing still on its way into the queue is as unsent as one
-            // waiting in it; see `autoFilingsInFlight`.
-            var queued = autoFilingsInFlight[bookUUID] != nil
+            // waiting in it, and says so without a read of the queue.
+            var queued = localWrites.inFlight(.status).contains(bookUUID)
             if !queued {
-                let inQueue = await pendingStatusBookUUIDs().contains(bookUUID)
-                // And again after the await, which a filing can begin during.
-                queued = inQueue || autoFilingsInFlight[bookUUID] != nil
+                let fence = await unsentFence()
+                // Including a filing begun while the queue was read.
+                queued = keepsLocal(.status, bookUUID, given: fence)
             }
             if queued {
                 // Asked again after the await: a status chosen by hand while
@@ -3570,27 +3662,24 @@ public final class AppModel {
                 autoFiledBookUUIDs.remove(bookUUID)
             }
         }
-        let generation = session?.capabilities.generation
+        // Only a book the rule could file goes further. `statusToSet` answers
+        // nil for any other, but only after the statuses the shelf carries had
+        // been gathered from the whole library, on every position written.
+        guard let book = bookByUUID[bookUUID], book.status == nil || unfiledOnServer else { return }
+        let serverGeneration = session?.capabilities.generation
         let known = statuses.isEmpty ? books.compactMap(\.status) : statuses
-        guard let book = bookByUUID[bookUUID],
-              let next = StatusAdvance.statusToSet(
+        guard let next = StatusAdvance.statusToSet(
                   after: locator, current: unfiledOnServer ? nil : book.status,
-                  generation: generation, statuses: known),
+                  generation: serverGeneration, statuses: known),
               Self.advanceRank(of: next) > Self.advanceRank(of: book.status)
         else { return }
         IssaLog.info("status set after a position write", [
             "book": bookUUID,
             "status": next.name,
-            "generation": generation?.rawValue ?? "undetermined",
+            "generation": serverGeneration?.rawValue ?? "undetermined",
         ])
         autoFiledBookUUIDs.insert(bookUUID)
-        autoFilingsInFlight[bookUUID, default: 0] += 1
         await applyStatus(next, to: book)
-        if let count = autoFilingsInFlight[bookUUID], count > 1 {
-            autoFilingsInFlight[bookUUID] = count - 1
-        } else {
-            autoFilingsInFlight[bookUUID] = nil
-        }
     }
 
     /// Books `advanceStatusIfUnset` filed, until their status is seen to have
@@ -3618,17 +3707,78 @@ public final class AppModel {
     /// relaunch waits for that write, which is all this costs.
     private var autoFiledBookUUIDs: Set<String> = []
 
-    /// Automatic filings between setting the book's status here and queueing
-    /// it, counted per book.
+    /// Status and rating changes this device has made, for the two questions
+    /// asked of a change the server may not hold yet: is it still on its way
+    /// into the queue, and has a newer one for the same book begun since?
     ///
-    /// `applyStatus` saves the book locally before it queues the write, and it
-    /// suspends in between. A second position for the same book in that gap —
-    /// the reader and the listening loop both write during a read-along —
-    /// read the queue, found no status row yet, took the empty queue for a
-    /// drained one, and let go of the book, which then ended at Reading exactly
-    /// as it did before the set existed. Counted rather than a set because the
-    /// two writers can each have a filing in flight.
-    private var autoFilingsInFlight: [String: Int] = [:]
+    /// Every status and rating write joins before it first suspends and
+    /// leaves once its row is in the queue (`begin`, `end`). A write sets the
+    /// book here, saves it, and only then queues it, suspending in between.
+    /// Only the rule's filings used to be counted across that gap, so a
+    /// status chosen by hand in it looked sent to anything that asked: a
+    /// refresh put the server's status back over it, and the rule — which had
+    /// already counted its own filings for the same reason, when a second
+    /// position in the gap took the empty queue for a drained one — could
+    /// queue its status after the reader's. Counted rather than flagged
+    /// because two writers can each have one in flight.
+    ///
+    /// Each `begin` is stamped with a serial, which is what reaches the write
+    /// the queue cannot show. A status set and sent while a fetch was in
+    /// flight is in no read of the queue — not yet queued when one was taken
+    /// before the fetch, already drained when one was taken after it — and
+    /// the server's answer, captured before the write reached it, carried the
+    /// old status. A refresh keeps the value of any book written after the
+    /// mark it took before sending (`UnsentFence`), and `applyStatus` queues
+    /// only a write no later one has superseded (`isNewest`).
+    private struct LocalWrites {
+        typealias Mark = Int
+
+        private struct Record {
+            /// The serial of the newest write begun for the book.
+            var serial: Int
+            var inFlight: Int
+        }
+
+        private var serial = 0
+        private var records: [MutationQueue.Kind: [String: Record]] = [:]
+
+        /// Where the serial stands. Every write begun after this is stamped
+        /// with a later one.
+        var mark: Mark { serial }
+
+        /// Counts a write in, stamped as the newest for its book.
+        @discardableResult
+        mutating func begin(_ kind: MutationQueue.Kind, _ bookUUID: String) -> Mark {
+            serial += 1
+            let inFlight = records[kind]?[bookUUID]?.inFlight ?? 0
+            records[kind, default: [:]][bookUUID] = Record(serial: serial, inFlight: inFlight + 1)
+            return serial
+        }
+
+        /// Counts a write out, once its row is in the queue or it has given up.
+        mutating func end(_ kind: MutationQueue.Kind, _ bookUUID: String) {
+            guard let record = records[kind]?[bookUUID] else { return }
+            records[kind]?[bookUUID]?.inFlight = max(0, record.inFlight - 1)
+        }
+
+        /// Whether no write of this kind has begun for the book since the one
+        /// stamped `mark`.
+        func isNewest(_ mark: Mark, _ kind: MutationQueue.Kind, _ bookUUID: String) -> Bool {
+            (records[kind]?[bookUUID]?.serial ?? mark) <= mark
+        }
+
+        /// Books with a write of this kind between its `begin` and its `end`.
+        func inFlight(_ kind: MutationQueue.Kind) -> Set<String> {
+            Set((records[kind] ?? [:]).filter { $0.value.inFlight > 0 }.keys)
+        }
+
+        /// Books with a write of this kind begun after `mark`.
+        func books(_ kind: MutationQueue.Kind, writtenAfter mark: Mark) -> Set<String> {
+            Set((records[kind] ?? [:]).filter { $0.value.serial > mark }.keys)
+        }
+    }
+
+    private var localWrites = LocalWrites()
 
     /// How far along the rule's own statuses a book is: none, then Reading,
     /// then Read. Anything else ranks with none, but only a book the rule
@@ -3647,15 +3797,16 @@ public final class AppModel {
     /// Writing a reading position moves the status on the server, so after a
     /// reading session the local copy is stale in a way the user can see.
     public func refresh(book: Book) async {
-        guard let session,
-              books.contains(where: { $0.uuid == book.uuid }),
-              let fresh = try? await LibraryService(client: session.client).book(book.uuid)
+        guard let session, books.contains(where: { $0.uuid == book.uuid }) else { return }
+        // An unsent status is kept, as `refreshLibrary` keeps one, and asked
+        // about the same way: from a fence taken before the request is sent,
+        // for the same reason. This runs on every appearance of the book
+        // screen, so it is the refresh most likely to land before the queue
+        // drains — and the likeliest to be in flight while the reader, on
+        // that very screen, picks a status.
+        let fence = await unsentFence()
+        guard let fresh = try? await LibraryService(client: session.client).book(book.uuid)
         else { return }
-        // A queued status is kept, as `refreshLibrary` keeps one. This runs on
-        // every appearance of the book screen, so it is the refresh most
-        // likely to land before the queue drains.
-        let statusPending = await pendingStatusBookUUIDs().contains(book.uuid)
-            || autoFilingsInFlight[book.uuid] != nil
         // Resolved *after* the await, not before it. The index used to be bound
         // in the same guard that then suspends on a network round trip, and
         // `books` can be replaced entirely during that suspension — signing out
@@ -3664,9 +3815,8 @@ public final class AppModel {
         // catalogue wrote this book's server data into whichever book had taken
         // its place, and then persisted that.
         guard let index = books.firstIndex(where: { $0.uuid == book.uuid }) else { return }
-        var merged = books[index].reconciled(with: fresh)
-        if statusPending { merged.status = books[index].status }
-        books[index] = merged
+        books[index] = books[index].reconciled(
+            with: fresh, keepingStatus: keepsLocal(.status, book.uuid, given: fence))
         rebuildDerived()
     }
 }
