@@ -305,6 +305,11 @@ struct DrainExclusionTests {
             paused.mark()
         }
         await settleUntilWaiting(on: queue)
+        // The settle gives up quietly. Without this, a pause that never got in
+        // line leaves the check below passing for nothing, and the failure
+        // lands further down on the drain, for sending a row it had no one to
+        // yield to.
+        #expect(await queue.shouldYield, "the pause never got in line for the lock")
         #expect(!paused.done, "the pause took the lock from under a request in flight")
 
         BlockingProtocol.release()
