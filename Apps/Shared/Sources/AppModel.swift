@@ -570,6 +570,12 @@ public final class AppModel {
         // Book uuids as well, standing for status writes the `mutation` table
         // held — and it has just been cleared.
         autoFiledBookUUIDs = []
+        // And the record of this device's status and rating writes, keyed by
+        // the same uuids: left in place, the next account's first refresh kept
+        // the departed account's status over the server's for any book it had
+        // just changed, and the rule took its writes for the arriving
+        // account's. Only the records go; the serial runs on (`LocalWrites`).
+        localWrites.removeAll()
         ratings = [:]
         loadError = nil
         // Everything else keyed by a value the next account shares. The server
@@ -719,8 +725,8 @@ public final class AppModel {
         guard let session else { return }
         isLoadingLibrary = true
         defer { isLoadingLibrary = false }
-        // What this device has written that the answer may not include,
-        // taken before the request is sent.
+        // Whose catalogue this is, and what this device has written that the
+        // answer may not include — both taken before the request is sent.
         //
         // The fence used to be read after the fetch, and a status the reader
         // set while the request was in flight was on its way to the server
@@ -730,6 +736,7 @@ public final class AppModel {
         // reader's choice. Taken first, the fence holds every write that
         // could still be unsent when the server answered, and the ledger's
         // mark catches every write begun after it (`UnsentFence`).
+        let generation = catalogueGeneration
         let fence = await unsentFence()
         do {
             let service = LibraryService(client: session.client)
@@ -744,6 +751,12 @@ public final class AppModel {
             let fetched = try await service.allBooks()
             let fetchedStatuses = (try? await service.statuses()) ?? statuses
             let fetchedRatings = (try? await service.myRatings()) ?? ratings
+            // The in-memory half of the fence the detached write below checks.
+            // Only that half was ever fenced, so a refresh in flight across an
+            // account switch published the departed account's catalogue on
+            // the arriving account's screen, over the one its own refresh had
+            // just put there.
+            guard catalogueGeneration == generation else { return }
 
             // Reconciled, not assigned: a refetch that predates a write still in
             // the queue carries a stale position, and `replaceCatalogue` below
@@ -792,8 +805,8 @@ public final class AppModel {
             // interleaved, `clearAccountData()` ran its DELETE, and then a full
             // catalogue was written back. The next launch read it with only a
             // `hasCredential` gate in front, which is the leak that gate exists
-            // to prevent.
-            let generation = catalogueGeneration
+            // to prevent. The generation is the one taken before the fetch,
+            // which the guard above has just confirmed.
             let ratingsToPersist = mergedRatings
             Task { [weak self] in
                 guard let self, self.catalogueGeneration == generation else { return }
@@ -3213,17 +3226,28 @@ public final class AppModel {
     /// rule's. A superseded write queues nothing, and saves the book again:
     /// its own save, made before it suspended, can reach the store after the
     /// newer write's.
+    ///
+    /// And only while the catalogue is still the account's that set it. The
+    /// rule runs at the end of a position write, which can outlive its
+    /// account on a slow request; resuming into the next account's library,
+    /// it queued a status for that account's copy of the same book.
     private func applyStatus(_ status: Status, to book: Book) async {
         guard session != nil, let index = books.firstIndex(where: { $0.uuid == book.uuid }) else { return }
+        let generation = catalogueGeneration
         let mark = localWrites.begin(.status, book.uuid)
-        defer { localWrites.end(.status, book.uuid) }
+        // Not after a switch: the records were cleared with the account, and
+        // this write's count is not the arriving account's to take down.
+        defer {
+            if catalogueGeneration == generation { localWrites.end(.status, book.uuid) }
+        }
         books[index].status = status
         rebuildDerived()
-        try? await store?.upsert(books[index])
+        await persist(books[index], generation: generation)
         await beforeQueueingStatus?(book.uuid)
+        guard catalogueGeneration == generation else { return }
         guard localWrites.isNewest(mark, .status, book.uuid) else {
             if let current = books.first(where: { $0.uuid == book.uuid }) {
-                try? await store?.upsert(current)
+                await persist(current, generation: generation)
             }
             return
         }
@@ -3239,22 +3263,26 @@ public final class AppModel {
     /// set.
     ///
     /// A test seam, nil in production, and internal for that reason alone,
-    /// as `useStore` is. That gap is where a refresh and a status chosen by
-    /// hand each met a status write half done, and nothing outside the model
-    /// can otherwise stop a write inside it: the only suspension there is the
-    /// store's upsert, and holding the database to stall it stalls the
-    /// queue's INSERT as well, so the order under test would be left to
-    /// chance.
+    /// as `useStore` is. That gap is where a refresh, a status chosen by hand
+    /// and an account switch each met a status write half done, and nothing
+    /// outside the model can otherwise stop a write inside it: the only
+    /// suspension there is the store's upsert, and holding the database to
+    /// stall it stalls the queue's INSERT and the switch's DELETE as well, so
+    /// the order under test would be left to chance.
     @ObservationIgnored var beforeQueueingStatus: (@MainActor (String) async -> Void)?
 
     /// Rates a book, or clears its rating.
     ///
     /// Counted in `localWrites` the way `applyStatus` counts a status, so a
-    /// refresh keeps a rating set while its request was in flight.
+    /// refresh keeps a rating set while its request was in flight, and queued
+    /// only while the catalogue is still the account's that rated it.
     public func setRating(_ value: Double?, for book: Book) async {
         guard session != nil else { return }
+        let generation = catalogueGeneration
         localWrites.begin(.rating, book.uuid)
-        defer { localWrites.end(.rating, book.uuid) }
+        defer {
+            if catalogueGeneration == generation { localWrites.end(.rating, book.uuid) }
+        }
         if let value { ratings[book.uuid] = value } else { ratings.removeValue(forKey: book.uuid) }
         // Persisted the way `setStatus` persists a shelf change. Without this
         // the map lived only in memory and was repopulated solely from
@@ -3262,6 +3290,7 @@ public final class AppModel {
         // launch — the queued write still reached the server eventually, but
         // the reader had every reason to think it was lost and enter it again.
         try? await store?.setRating(value, forBook: book.uuid)
+        guard catalogueGeneration == generation else { return }
         await enqueue(.rating, bookUUID: book.uuid,
                       payload: MutationDrain.RatingPayload(rating: value))
     }
@@ -3289,9 +3318,26 @@ public final class AppModel {
         _ locator: ReadiumLocator, timestamp: Double, for bookUUID: String,
     ) async {
         guard let index = books.firstIndex(where: { $0.uuid == bookUUID }) else { return }
+        let generation = catalogueGeneration
         books[index].adopt(position: locator, timestamp: timestamp)
         rebuildAfterPositionChange()
-        try? await store?.upsert(books[index])
+        await persist(books[index], generation: generation)
+    }
+
+    /// Saves a book this account has just changed, unless the catalogue has
+    /// stopped being this account's.
+    ///
+    /// The check is the whole point, and it sits immediately before the upsert
+    /// is submitted with nothing that suspends between them. An account switch
+    /// bumps `catalogueGeneration` before it first suspends and submits the
+    /// store's DELETE only after that, so an upsert submitted while the
+    /// generation still held is ahead of the DELETE and goes with it, and one
+    /// that would come later is never submitted. Without that, a write that
+    /// outlived its account put the departed account's book back into the
+    /// store for the arriving account's next launch to read.
+    private func persist(_ book: Book, generation: Int) async {
+        guard catalogueGeneration == generation else { return }
+        try? await store?.upsert(book)
     }
 
     /// One high-water mark per book, for the life of the session.
@@ -3512,6 +3558,16 @@ public final class AppModel {
     /// gets it back. The refusal is self-clearing: it can only ever apply to a
     /// `.derived` write, and the reader's next deliberate move re-baselines the
     /// mark unconditionally.
+    ///
+    /// A write can outlive its account: a POST that takes its time holds it
+    /// in the queue's drain while a sign-in hands the device to someone else,
+    /// who is given the same book uuids. So it stops, reporting `false`,
+    /// wherever it resumes to find the catalogue has changed hands. Carrying
+    /// on queued the departed account's position for the arriving account's
+    /// drain, filed the arriving account's copy of the book by the departed
+    /// account's place in it, and — through `true` — had the caller publish a
+    /// widget snapshot and an audio anchor into the arriving account's
+    /// device state.
     @discardableResult
     public func writePosition(
         _ locator: ReadiumLocator,
@@ -3525,6 +3581,8 @@ public final class AppModel {
             IssaLog.warning("write dropped: no queue", ["book": bookUUID, "kind": "position"])
             return false
         }
+        // Whose write this is, taken before anything can suspend.
+        let generation = catalogueGeneration
         let guardKey = Self.positionGuardKey(bookUUID, isAudioScaled: locator.isAudioScaled)
         switch admitPosition(locator, origin: origin, for: bookUUID) {
         case .allow:
@@ -3576,12 +3634,15 @@ public final class AppModel {
         // comment says the code was changed to prevent: "a chapter read offline
         // and then killed came back at the old percentage."
         await recordPosition(locator, timestamp: timestamp, for: bookUUID)
+        guard catalogueGeneration == generation else { return false }
         await enqueue(
             .position, bookUUID: bookUUID,
             payload: MutationDrain.PositionPayload(locator: locator, timestamp: timestamp),
             supersedes: timestamp,
         )
+        guard catalogueGeneration == generation else { return false }
         await advanceStatusIfUnset(after: locator, for: bookUUID)
+        guard catalogueGeneration == generation else { return false }
         return true
     }
 
@@ -3642,6 +3703,9 @@ public final class AppModel {
         if case .signedIn(let user)? = session?.state, user.permissions?.bookDownload == false {
             return
         }
+        // Re-checked after the one await below. A switch during it hands the
+        // same uuids to another reader, and what follows would file theirs.
+        let generation = catalogueGeneration
         // Only a book the rule filed asks the queue, so the common case never
         // leaves the main actor.
         var unfiledOnServer = false
@@ -3651,6 +3715,7 @@ public final class AppModel {
             var queued = localWrites.inFlight(.status).contains(bookUUID)
             if !queued {
                 let fence = await unsentFence()
+                guard catalogueGeneration == generation else { return }
                 // Including a filing begun while the queue was read.
                 queued = keepsLocal(.status, bookUUID, given: fence)
             }
@@ -3730,6 +3795,12 @@ public final class AppModel {
     /// old status. A refresh keeps the value of any book written after the
     /// mark it took before sending (`UnsentFence`), and `applyStatus` queues
     /// only a write no later one has superseded (`isNewest`).
+    ///
+    /// The serial is never reset, an account switch included, so a mark taken
+    /// before one still compares correctly with a write begun after it. The
+    /// records go with the account (`removeAll`), and a departed account's
+    /// write still suspended skips its `end` rather than take down a count
+    /// the arriving account may have started for the same uuid.
     private struct LocalWrites {
         typealias Mark = Int
 
@@ -3762,7 +3833,9 @@ public final class AppModel {
         }
 
         /// Whether no write of this kind has begun for the book since the one
-        /// stamped `mark`.
+        /// stamped `mark`. A book with no record has had none since the
+        /// records were cleared, which only an account switch does, and that
+        /// is `catalogueGeneration`'s to answer.
         func isNewest(_ mark: Mark, _ kind: MutationQueue.Kind, _ bookUUID: String) -> Bool {
             (records[kind]?[bookUUID]?.serial ?? mark) <= mark
         }
@@ -3775,6 +3848,11 @@ public final class AppModel {
         /// Books with a write of this kind begun after `mark`.
         func books(_ kind: MutationQueue.Kind, writtenAfter mark: Mark) -> Set<String> {
             Set((records[kind] ?? [:]).filter { $0.value.serial > mark }.keys)
+        }
+
+        /// Forgets every book, and keeps the serial.
+        mutating func removeAll() {
+            records = [:]
         }
     }
 
@@ -3804,8 +3882,12 @@ public final class AppModel {
         // screen, so it is the refresh most likely to land before the queue
         // drains — and the likeliest to be in flight while the reader, on
         // that very screen, picks a status.
+        let generation = catalogueGeneration
         let fence = await unsentFence()
-        guard let fresh = try? await LibraryService(client: session.client).book(book.uuid)
+        guard let fresh = try? await LibraryService(client: session.client).book(book.uuid),
+              // Not into another account's copy of the book, which has the
+              // same uuid.
+              catalogueGeneration == generation
         else { return }
         // Resolved *after* the await, not before it. The index used to be bound
         // in the same guard that then suspends on a network round trip, and
