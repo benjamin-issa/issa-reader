@@ -299,6 +299,22 @@ public final class ReadalongCoordinator {
         if await play(from: entry) { onSeek?() }
     }
 
+    /// How far short of an entry's end a move into it may land.
+    ///
+    /// A scrub to the far end of the bar names the very end of the last entry,
+    /// which is the end of its file. A seek that lands exactly on an item's
+    /// end may never be told it played to the end, and without that
+    /// notification `isPlaying` stays true over a player that has stopped —
+    /// the failure `AudioPlayer.load` guards against for an offset of zero.
+    /// Landing a hair short lets the file play out and the book end the
+    /// ordinary way.
+    ///
+    /// Two frames of the player's 1/600 s timescale rather than one, because
+    /// `AudioPlayer.seek` rounds its target *up* to the next frame: a target
+    /// one frame short of an end that sits on a frame boundary comes back up
+    /// onto it about one time in fifty.
+    static let endOfEntryMargin: TimeInterval = 2.0 / 600
+
     /// Moves the playhead and the highlight without touching whether audio is
     /// playing. False when the entry's audio file is missing and nothing moved.
     ///
@@ -308,8 +324,13 @@ public final class ReadalongCoordinator {
     /// `play(from:)` made a paused book start reading itself aloud in a quiet
     /// room, from the scrubber, the skip buttons and the macOS key commands
     /// alike.
+    ///
+    /// - Parameter offset: how far into the entry to land, for a scrub or a
+    ///   skip, which name a time rather than a sentence. Every other move
+    ///   lands at the entry's start. Clamped into the entry, and short of its
+    ///   very end by `endOfEntryMargin`.
     @discardableResult
-    private func move(to entry: SMILEntry) async -> Bool {
+    private func move(to entry: SMILEntry, offset: TimeInterval = 0) async -> Bool {
         // Resolved before a single piece of state moves, exactly as
         // `AudiobookCoordinator.load` resolves its own destination first: a
         // missing audio file is a refusal, not a move, and nothing may be
@@ -323,6 +344,8 @@ public final class ReadalongCoordinator {
         } else {
             destination = nil
         }
+        let within = offset.isFinite
+            ? min(max(0, offset), max(0, entry.duration - Self.endOfEntryMargin)) : 0
 
         // Everything published BEFORE the await, for the reason
         // `AudiobookCoordinator.seek(toBookTime:)` publishes before its own: the
@@ -341,7 +364,7 @@ public final class ReadalongCoordinator {
         // Set here rather than left to the time observer: a paused player's
         // clock does not tick, so without this a paused scrub never reached
         // the scrubber or the Lock Screen.
-        bookProgress = timeline.progression(atBookTime: entry.cumulativeEnd - entry.duration)
+        bookProgress = timeline.progression(atBookTime: entry.cumulativeEnd - entry.duration + within)
         onFragmentChange?(entry.fragmentID)
         // The boundary, announced from the one funnel every seek, skip,
         // sentence, paragraph and chapter command passes through.
@@ -374,9 +397,9 @@ public final class ReadalongCoordinator {
         movesInFlight += 1
         defer { movesInFlight -= 1 }
         if let destination {
-            await player.load(url: destination, href: entry.audioHref, startAt: entry.start)
+            await player.load(url: destination, href: entry.audioHref, startAt: entry.start + within)
         } else {
-            await player.seek(to: entry.start)
+            await player.seek(to: entry.start + within)
         }
         return true
     }
@@ -386,7 +409,6 @@ public final class ReadalongCoordinator {
         await jump(to: entry)
     }
 
-    /// Seeks by fraction of the whole book, for a scrubber.
     /// Skips within the BOOK, not within the current audio file.
     ///
     /// `AudioPlayer.skip` moves the playhead inside whichever file is loaded and
@@ -414,6 +436,18 @@ public final class ReadalongCoordinator {
         await seek(toBookProgress: max(0, min(current + delta, total)) / total)
     }
 
+    /// Seeks by fraction of the whole book, for a scrubber, and for
+    /// `skipBook` — to the time that fraction names, not to the start of the
+    /// entry it falls in.
+    ///
+    /// The entry says which file and which fragment; how far into it the time
+    /// falls is the other half of the place, and it used to be thrown away, so
+    /// every scrub and skip landed at the start of the containing entry. On a
+    /// v2 book that is a sentence, a few seconds early. On a v3 book a hole or
+    /// an audio chapter is one entry minutes long: a scrub anywhere inside it
+    /// went back to its start, a thirty-second skip forward from its middle
+    /// went *backwards* — and every skip after it back to the same place — and
+    /// the reader saved that start as a position the listener had chosen.
     public func seek(toBookProgress progress: Double) async {
         // A non-finite progress is not a place in the book. Refusing it is
         // the point: the inline clamp let NaN through, `totalDuration * NaN`
@@ -423,10 +457,13 @@ public final class ReadalongCoordinator {
         guard let place = progress.asProgression else { return }
         let time = timeline.totalDuration * place
         guard let entry = timeline.entry(atBookTime: time) else { return }
+        // Past the entry's end only at the end of the book, where
+        // `entry(atBookTime:)` answers the last entry; `move` clamps it back.
+        let within = time - (entry.cumulativeEnd - entry.duration)
         // A seek is not a play button: it lands paused when paused, playing
         // when playing, exactly as the audiobook implementation of this same
         // protocol method always has.
-        if await move(to: entry) { onSeek?() }
+        if await move(to: entry, offset: within) { onSeek?() }
     }
 
     // MARK: - Actions
