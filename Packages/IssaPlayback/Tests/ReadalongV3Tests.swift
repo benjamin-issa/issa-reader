@@ -433,4 +433,37 @@ struct ReadalongV3ShapesTests {
         }
         #expect(endings == 1, "chapter one ended once, after its last hole")
     }
+
+    /// The overlap-to-file-end shape a CTC back-jump leaves after
+    /// `collapseRanges`: the last clip in the file starts *before* the one
+    /// read just ahead of it and runs to the file's end. At 40 s the clip
+    /// playing is the later entry, whose start is earlier than the active
+    /// one's. The jitter guard read that as a clock sampled a hair early and
+    /// kept the stale entry, so the end of the file advanced from it — into
+    /// the out-of-order clip, back in the same file.
+    @Test("a clip out of time order is taken when the clock is past the active one's start")
+    func outOfOrderClipIsNotJitter() async throws {
+        let timeline = Self.narration([
+            ("ch01-s0", Self.chapterOne, Self.track1, 20, 35, false),
+            ("ch01-s1", Self.chapterOne, Self.track1, 5, 44, false),
+            ("ch02-s0", Self.chapterTwo, Self.track2, 0, 5, false),
+        ])
+        let (subject, directory) = try Self.make(timeline)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let entries = timeline.entries
+
+        #expect(await subject.prepare(at: entries[0]))
+        let tick = try #require(subject.player.onTimeUpdate)
+        subject.player.onTimeUpdate = nil
+
+        tick(40)
+        #expect(subject.activeEntry == entries[1], "the clip playing at 40 s is the out-of-order one")
+
+        subject.player.onFinishedFile?()
+        let advanced = await ReadalongV3Tests.waitUntil {
+            subject.activeEntry == entries[2] && subject.movesInFlight == 0
+        }
+        #expect(advanced, "the end of the file went back into the same file")
+        #expect(subject.player.currentAudioHref == Self.track2)
+    }
 }

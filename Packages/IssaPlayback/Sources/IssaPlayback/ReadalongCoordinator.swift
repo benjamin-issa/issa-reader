@@ -148,8 +148,16 @@ public final class ReadalongCoordinator {
         //
         // Only a hair: a deliberate move backwards is orders of magnitude
         // larger than this, and arrives through `move(to:)` rather than here.
+        //
+        // And only *before* the active sentence. A clock at or past its start
+        // is not early, even when the entry it resolves to began earlier: in a
+        // run the CTC aligner left out of order, the clip playing now can start
+        // before the one that played last. v2's clips are ascending, where that
+        // cannot happen, so for them this half changes nothing; without it,
+        // the out-of-order answer was thrown away and the end of the file
+        // advanced from the stale entry back into the same file.
         if let active = activeEntry, entry.start < active.start,
-           active.start - time < Self.backwardsClockSlack {
+           time < active.start, active.start - time < Self.backwardsClockSlack {
             return
         }
 
