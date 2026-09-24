@@ -310,4 +310,127 @@ struct ReadalongV3ShapesTests {
         #expect(subject.player.currentAudioHref == Self.track2)
         #expect(endings == 0, "the same chapter carries on")
     }
+
+    ///      0  ch01-s0                 track1  0–30.65
+    ///      1  ch01-s5                 track1  30.65–35.75
+    ///      2  storyteller_audio_1-a0  track1  35.75–44   the interlude opens mid-file
+    ///      3  storyteller_audio_1-a1  bonus1  0–180
+    ///      4  storyteller_audio_1-a2  bonus2  0–150
+    ///      5  ch02-s0                 track2a 0–5
+    ///
+    /// What holes.ts plans when chapter one's file ends in a few seconds of
+    /// silence and two untitled tracks follow: one run of boundary holes, over
+    /// five minutes long, so one audio chapter, starting where the last
+    /// sentence of chapter one stops.
+    static func untitledTracks() -> SMILTimeline {
+        narration([
+            ("ch01-s0", chapterOne, track1, 0, 30.65, false),
+            ("ch01-s5", chapterOne, track1, 30.65, 35.75, false),
+            ("storyteller_audio_1-s0", interlude, track1, 35.75, 44, true),
+            ("storyteller_audio_1-s0", interlude, bonus1, 0, 180, true),
+            ("storyteller_audio_1-s0", interlude, bonus2, 0, 150, true),
+            ("ch02-s0", chapterTwo, track2, 0, 5, false),
+        ])
+    }
+
+    /// No file boundary to announce it, so the clock does: chapter one has
+    /// ended, the page turns to the audio chapter's heading, once.
+    @Test("the clock crossing into an audio chapter mid-file turns the page and ends the chapter, once")
+    func midFileInterlude() async throws {
+        let timeline = Self.untitledTracks()
+        let (subject, directory) = try Self.make(timeline)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let entries = timeline.entries
+
+        #expect(await subject.prepare(at: entries[1]))
+        let tick = try #require(subject.player.onTimeUpdate)
+        subject.player.onTimeUpdate = nil
+        var fragments: [String] = []
+        var chapters: [String] = []
+        var endings = 0
+        subject.onFragmentChange = { fragments.append($0) }
+        subject.onChapterChange = { chapters.append($0) }
+        subject.onChapterChangeObserved = { endings += 1 }
+
+        tick(40)
+        tick(41)
+        #expect(subject.activeEntry == entries[2])
+        #expect(fragments == ["storyteller_audio_1-s0"])
+        #expect(chapters == [Self.interlude])
+        #expect(endings == 1)
+
+        // Its own next two files are the same chapter; the file after is not.
+        subject.player.onFinishedFile?()
+        #expect(await ReadalongV3Tests.waitUntil {
+            subject.activeEntry == entries[3] && subject.movesInFlight == 0
+        })
+        subject.player.onFinishedFile?()
+        #expect(await ReadalongV3Tests.waitUntil {
+            subject.activeEntry == entries[4] && subject.movesInFlight == 0
+        })
+        #expect(endings == 1)
+        #expect(chapters == [Self.interlude])
+
+        subject.player.onFinishedFile?()
+        #expect(await ReadalongV3Tests.waitUntil {
+            subject.activeEntry == entries[5] && subject.movesInFlight == 0
+        })
+        #expect(endings == 2)
+        #expect(chapters == [Self.interlude, Self.chapterTwo])
+    }
+
+    /// The car's chapter list for the same book: the audio chapter begins in
+    /// chapter one's track, where chapter one's narration stops.
+    @Test("a mid-file audio chapter is a chapter at its offset into the shared track")
+    func midFileInterludeChapter() throws {
+        let (_, package) = try ReadalongV3Tests.timeline()
+        let chapters = ChunkManifest.chapters(
+            timeline: Self.untitledTracks(), package: package,
+            trackOrder: [Self.track1, Self.bonus1, Self.bonus2, Self.track2])
+        #expect(chapters == [
+            AudiobookChapter(title: "Chapter One", trackIndex: 0, offset: 0),
+            AudiobookChapter(title: "After Chapter One", trackIndex: 0, offset: 35.75),
+            AudiobookChapter(title: "Chapter Two", trackIndex: 3, offset: 0),
+        ])
+    }
+
+    /// What holes.ts plans for the same audio when the bonus tracks are
+    /// titled: each is a run of its own, none reaches five minutes, and the
+    /// last sentence of chapter one keeps an after-hole in all three files.
+    /// Every one of them names that sentence, and every file ends in one.
+    @Test("a sentence's after-holes in three files play through, and chapter one ends once")
+    func afterHolesInThreeFiles() async throws {
+        let timeline = Self.narration([
+            ("ch01-s5", Self.chapterOne, Self.track1, 30.65, 35.75, false),
+            ("ch01-s5", Self.chapterOne, Self.track1, 35.75, 44, true),
+            ("ch01-s5", Self.chapterOne, Self.bonus1, 0, 180, true),
+            ("ch01-s5", Self.chapterOne, Self.bonus2, 0, 150, true),
+            ("ch02-s0", Self.chapterTwo, Self.track2, 0, 5, false),
+        ])
+        let (subject, directory) = try Self.make(timeline)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let entries = timeline.entries
+
+        #expect(await subject.prepare(at: entries[0]))
+        let tick = try #require(subject.player.onTimeUpdate)
+        subject.player.onTimeUpdate = nil
+        var fragments: [String] = []
+        var endings = 0
+        subject.onFragmentChange = { fragments.append($0) }
+        subject.onChapterChangeObserved = { endings += 1 }
+
+        tick(40)
+        #expect(subject.activeEntry == entries[1])
+        #expect(fragments.isEmpty)
+
+        for index in 2 ... 4 {
+            subject.player.onFinishedFile?()
+            let advanced = await ReadalongV3Tests.waitUntil {
+                subject.activeEntry == entries[index] && subject.movesInFlight == 0
+            }
+            #expect(advanced, "the end of the file before entry \(index) did not reach it")
+            #expect(subject.player.currentAudioHref == entries[index].audioHref)
+        }
+        #expect(endings == 1, "chapter one ended once, after its last hole")
+    }
 }

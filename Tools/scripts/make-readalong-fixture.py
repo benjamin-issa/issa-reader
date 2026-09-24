@@ -44,6 +44,11 @@ continuation starts the next file, clips that run backwards inside one file
 Which holes join an audio chapter is chosen to fit those in, not replayed
 through holes.ts: there, chapter one's short tail and an untitled audio
 chapter behind it would share a boundary and be planned as one chapter.
+What holes.ts does make of that audio is not in this book: an audio chapter
+that opens mid-file in chapter one's track (untitled bonus tracks), or
+chapter one's last sentence with an after-hole in each of three files
+(titled ones). Those, and word granularity, are stated by hand in
+SMILV3Tests and ReadalongV3Tests instead.
 """
 import sys, zipfile, pathlib
 from collections import namedtuple

@@ -133,6 +133,9 @@ struct SMILV3Tests {
         #expect(timeline.entry(after: entries[18]) == nil)
     }
 
+    /// A pin rather than a proof: resolving the continuation to its sentence,
+    /// as the timeline did before it told the two apart, lands here too. The
+    /// test below is the one that fails without it.
     @Test("previous sentence from a continuation is the sentence before the one it continues")
     func previousFromAContinuation() throws {
         let timeline = try Self.timeline()
@@ -234,6 +237,9 @@ struct SMILV3Tests {
         #expect(timeline.entry(inFile: Self.track3, at: time) == timeline.entries[expected])
     }
 
+    /// Pins: the binary search this run used to get happens to answer both of
+    /// these right, and ch03's last entry is also the one that ends last.
+    /// `pastTheEndIsTheLatestEnding` is the case where it is not.
     @Test("a gap inside a backwards run is no sentence, and past its end is its last")
     func backwardsRunGapAndEnd() throws {
         let timeline = try Self.timeline()
@@ -277,6 +283,25 @@ struct SMILV3Tests {
         #expect(timeline.entry(inFile: "a.mp3", at: 12) == entries[2])
         #expect(timeline.entry(inFile: "a.mp3", at: 17) == entries[3])
         #expect(timeline.entry(inFile: "a.mp3", at: 25) == entries[3], "the later of the two that end last")
+    }
+
+    /// The end of a run that goes backwards is where its latest clip ends,
+    /// and here that is not its last entry: "b" is heard last and ends at 15,
+    /// "c" is listed last and ends at 10. From 15 on the answer is "b", the
+    /// sentence just heard; taking the last entry answered "c", one read
+    /// before it.
+    @Test("past the end of a backwards run is the clip that ends last, not the last listed")
+    func pastTheEndIsTheLatestEnding() {
+        let timeline = narration([
+            ("a", "c.xhtml", "a.mp3", 0, 5, false),
+            ("b", "c.xhtml", "a.mp3", 10, 15, false),
+            ("c", "c.xhtml", "a.mp3", 5, 10, false),
+        ])
+        let entries = timeline.entries
+        #expect(timeline.entry(inFile: "a.mp3", at: 7) == entries[2])
+        #expect(timeline.entry(inFile: "a.mp3", at: 12) == entries[1])
+        #expect(timeline.entry(inFile: "a.mp3", at: 15) == entries[1])
+        #expect(timeline.entry(inFile: "a.mp3", at: 20) == entries[1])
     }
 }
 
@@ -406,6 +431,121 @@ struct SMILWordGranularV3Tests {
         let timeline = try Self.timeline()
         #expect(timeline.entry(forFragment: "ch01-s0", inDocument: "OEBPS/ch01.xhtml")
             == timeline.entries[0])
+    }
+}
+
+/// The two shapes Storyteller 3's `planAudioChapters` actually makes of long
+/// untexted audio at a chapter boundary, which the generated fixture does not
+/// reach: it pairs a short tail hole *and* an untitled audio chapter at one
+/// boundary, where holes.ts would plan them as one.
+///
+/// With untitled bonus tracks, the tail of chapter one's file and both bonus
+/// files are one run, over five minutes long, so the audio chapter opens in
+/// the middle of chapter one's file. With titled ones, each track is a run of
+/// its own and none reaches five minutes, so there is no audio chapter at all:
+/// the last sentence keeps an after-hole in each of three files.
+@Suite("Untexted audio at a chapter boundary, as Storyteller 3 plans it")
+struct SMILPlannedHolesTests {
+    static let chapterOne = "OEBPS/ch01.xhtml", chapterTwo = "OEBPS/ch02.xhtml"
+    static let interlude = "OEBPS/storyteller-audio-1.xhtml"
+    static let track1 = "OEBPS/Audio/track1.mp3"
+    static let bonus1 = "OEBPS/Audio/bonus1.mp3", bonus2 = "OEBPS/Audio/bonus2.mp3"
+    static let track2 = "OEBPS/Audio/track2a.mp3"
+
+    ///      0  ch01-s0                 track1  0–30.65
+    ///      1  ch01-s5                 track1  30.65–35.75
+    ///      2  storyteller_audio_1-a0  track1  35.75–44   the interlude opens mid-file
+    ///      3  storyteller_audio_1-a1  bonus1  0–180
+    ///      4  storyteller_audio_1-a2  bonus2  0–150
+    ///      5  ch02-s0                 track2a 0–5
+    static func untitledTracks() -> SMILTimeline {
+        narration([
+            ("ch01-s0", chapterOne, track1, 0, 30.65, false),
+            ("ch01-s5", chapterOne, track1, 30.65, 35.75, false),
+            ("storyteller_audio_1-s0", interlude, track1, 35.75, 44, true),
+            ("storyteller_audio_1-s0", interlude, bonus1, 0, 180, true),
+            ("storyteller_audio_1-s0", interlude, bonus2, 0, 150, true),
+            ("ch02-s0", chapterTwo, track2, 0, 5, false),
+        ])
+    }
+
+    ///      0  ch01-s5                 track1  30.65–35.75
+    ///      1  ch01-s5  after0         track1  35.75–44
+    ///      2  ch01-s5  after1         bonus1  0–180
+    ///      3  ch01-s5  after2         bonus2  0–150
+    ///      4  ch02-s0                 track2a 0–5
+    static func titledTracks() -> SMILTimeline {
+        narration([
+            ("ch01-s5", chapterOne, track1, 30.65, 35.75, false),
+            ("ch01-s5", chapterOne, track1, 35.75, 44, true),
+            ("ch01-s5", chapterOne, bonus1, 0, 180, true),
+            ("ch01-s5", chapterOne, bonus2, 0, 150, true),
+            ("ch02-s0", chapterTwo, track2, 0, 5, false),
+        ])
+    }
+
+    @Test("an audio chapter that opens mid-file is found by the clock in that file")
+    func midFileInterludeByClock() {
+        let timeline = Self.untitledTracks()
+        let entries = timeline.entries
+        #expect(timeline.entry(inFile: Self.track1, at: 33) == entries[1])
+        #expect(timeline.entry(inFile: Self.track1, at: 35.75) == entries[2])
+        #expect(timeline.entry(inFile: Self.track1, at: 40) == entries[2])
+        #expect(timeline.entry(inFile: Self.track1, at: 99) == entries[2], "past the end of the file")
+        #expect(timeline.entry(inFile: Self.bonus2, at: 75) == entries[4])
+    }
+
+    @Test("sentence steps pass over a mid-file audio chapter; the end of a file walks through it")
+    func midFileInterludeNavigation() {
+        let timeline = Self.untitledTracks()
+        let entries = timeline.entries
+        for index in [1, 2, 3, 4] {
+            #expect(timeline.entry(after: entries[index]) == entries[5], "after \(index)")
+        }
+        #expect(timeline.entry(before: entries[5]) == entries[1])
+        #expect(timeline.entry(before: entries[3]) == entries[1])
+        for index in 1 ... 4 {
+            #expect(timeline.entry(following: entries[index]) == entries[index + 1], "following \(index)")
+        }
+    }
+
+    @Test("a mid-file audio chapter is a chapter span of its own")
+    func midFileInterludeSpan() throws {
+        let timeline = Self.untitledTracks()
+        let entries = timeline.entries
+        let chapterOne = try #require(timeline.span(ofDocumentContaining: entries[1]))
+        #expect(chapterOne.start == 0)
+        #expect(abs(chapterOne.duration - 35.75) < 0.000_1)
+        let interlude = try #require(timeline.span(ofDocumentContaining: entries[3]))
+        #expect(abs(interlude.start - 35.75) < 0.000_1)
+        #expect(abs(interlude.duration - 338.25) < 0.000_1)
+    }
+
+    @Test("a sentence's after-holes in three files are walked by the end of each, and stepped over by next")
+    func afterHolesInThreeFiles() {
+        let timeline = Self.titledTracks()
+        let entries = timeline.entries
+        for index in 0 ... 3 {
+            #expect(timeline.entry(following: entries[index]) == entries[index + 1], "following \(index)")
+            #expect(timeline.entry(after: entries[index]) == entries[4], "after \(index)")
+        }
+        #expect(timeline.entry(following: entries[4]) == nil)
+        #expect(timeline.entry(before: entries[4]) == entries[0])
+        #expect(timeline.entry(before: entries[3]) == nil)
+        #expect(timeline.entry(inFile: Self.bonus1, at: 90) == entries[2])
+    }
+
+    @Test("each of a sentence's after-holes is its own place in the book")
+    func afterHolesAreTheirOwnPlaces() throws {
+        let timeline = Self.titledTracks()
+        let entries = timeline.entries
+        for index in 1 ... 3 {
+            let window = try #require(timeline.window(around: entries[index], before: 0, after: 0))
+            #expect(window.entries == [entries[index]], "window \(index)")
+        }
+        let span = try #require(timeline.span(ofDocumentContaining: entries[3]))
+        #expect(span.start == 0)
+        #expect(abs(span.duration - 343.35) < 0.000_1)
     }
 }
 
