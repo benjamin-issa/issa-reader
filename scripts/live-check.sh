@@ -284,13 +284,21 @@ stop_approver
 
 # A run that skipped (no settings reached the runner) or never built exits as
 # quietly as a pass, so what actually ran is read from the result bundle.
+#
+# And one that ran is judged by xcodebuild's exit too, not only by the lines
+# below. Those are the checks the test got to write; a failure raised outside
+# `record` — a tab that never appeared, a tap on an element that went away,
+# the app crashing — fails the run without writing one, and a summary built
+# from the lines alone read all PASS over a run xcodebuild called failed.
 RAN=$(xcrun xcresulttool get test-results summary --path "$OUT/result.xcresult" --format json 2>/dev/null \
   | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("passedTests",0)+d.get("failedTests",0))' \
   2>/dev/null) || RAN=0
-if [ "${RAN:-0}" -gt 0 ]; then
-  pass "test ran: xcodebuild exit $TEST_STATUS"
-else
+if [ "${RAN:-0}" -eq 0 ]; then
   fail "test did not run: see $OUT/xcodebuild.log"
+elif [ "$TEST_STATUS" != 0 ]; then
+  fail "test: xcodebuild exit $TEST_STATUS; a failure not among the checks below is in $OUT/xcodebuild.log"
+else
+  pass "test ran: xcodebuild exit 0"
 fi
 
 # The pairing, when there was one to approve.
@@ -307,6 +315,13 @@ if [ -f "$OUT/checks.txt" ]; then
   while read -r check verdict detail; do
     if [ "$verdict" = PASS ]; then pass "$check: $detail"; else fail "$check: $detail"; fi
   done < "$OUT/checks.txt"
+fi
+# The line both tests write last. Without it the run stopped part-way, and
+# the checks it never reached are missing from the list rather than failed
+# in it — on the television, with no API checks after, that list could be
+# all PASS.
+if ! grep -q '^sessionAtEnd ' "$OUT/checks.txt" 2>/dev/null; then
+  fail "sessionAtEnd: the test stopped before its last check; see $OUT/xcodebuild.log"
 fi
 
 # What only the server can say. The position is compared by its timestamp,
