@@ -298,7 +298,19 @@ public struct Status: Codable, Hashable, Sendable, Identifiable {
 
     /// What to show a reader: the label where the server has one, as its own
     /// web UI does, and the name everywhere else.
-    public var displayName: String { label ?? name }
+    ///
+    /// A blank label counts as none. 3.x's admin dialog accepts a label of
+    /// spaces and its API accepts `""`, and `label ?? name` passed either one
+    /// straight through: a status pill with nothing in it, a menu entry with
+    /// no words, and an accessibility value VoiceOver reads as silence. The
+    /// name is always there to fall back on, as `Identifier.label` falls back
+    /// to its slug. A label with words in it is shown as the server sent it.
+    public var displayName: String {
+        guard let label, !label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return name
+        }
+        return label
+    }
 
     /// The three statuses a default install ships with. Compared by name because
     /// the uuids are generated per-server and an admin may add their own.
