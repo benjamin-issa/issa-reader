@@ -259,8 +259,9 @@ struct CoverRedirectTests {
         #expect(await tokens.invalidations == 0)
     }
 
-    /// The other half of the contract, stated so narrowing `getData` cannot
-    /// quietly widen: a JSON route's 401 is the server's verdict on the token.
+    /// The other half of the contract: the redirect exception is `getData`'s
+    /// alone. A JSON route's 401 is the server's verdict on the token, whatever
+    /// `getData` decides about a redirected one.
     @Test("a 401 on a JSON route still invalidates the token")
     func apiUnauthorizedStillInvalidates() async throws {
         let server = StubServer(covers: .redirectToImages, refuses: .everyRequest)
