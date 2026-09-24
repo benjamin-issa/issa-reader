@@ -38,7 +38,31 @@ public actor MutationQueue {
     /// the two PUTs raced; whichever landed second won, so the server could
     /// end on the status the reader did not choose. Both also called
     /// `recordFailure` on failure, halving the effective abandon budget.
+    ///
+    /// The lock has more than one kind of holder now. A drain holds it for as
+    /// long as its loop runs; an exit path waits its turn for it
+    /// (`waitToDrain`); a pause holds it across a change of bearer
+    /// (`pauseDraining`), sending nothing. A drain gives it up before its next
+    /// row once anyone is waiting (`shouldYield`), so no holder waits behind
+    /// a backlog, only behind the request already in flight. Retirement never
+    /// takes it: it is a flag the drain reads before each row, and the lock
+    /// keeps passing from holder to holder on a retired queue exactly as
+    /// before, so no caller has to know whether it was handed a live one.
     private var isDraining = false
+
+    /// Set by `retire()`, and never cleared.
+    private var retired = false
+
+    /// Whether a drain holding the lock should stop before its next row.
+    ///
+    /// When someone is waiting — an exit path or a pause — finishing the
+    /// drain's snapshot first would make them wait for the whole backlog,
+    /// each row a request that can take URLSession's sixty seconds, rather
+    /// than for the one request in flight. Nothing is skipped by stopping: an
+    /// exit path reads the queue afresh when it is handed the lock, and the
+    /// rows a pause holds back go with the next drain after it. A retired
+    /// queue's rows are nobody's to send.
+    var shouldYield: Bool { retired || !waiters.isEmpty }
 
     /// Claims the right to drain, or declines because someone else holds it.
     func beginDraining() -> Bool {
@@ -79,6 +103,53 @@ public actor MutationQueue {
         }
     }
 
+    /// Takes the drain lock and keeps it until `resumeDraining()`.
+    ///
+    /// For the moment a bearer changes hands. A drain reads the token afresh
+    /// for every request, so a sign-in that swaps it under a running drain
+    /// sends the rows that drain has left — the departed account's — with the
+    /// arriving account's bearer, and a drain that starts during the swap
+    /// does the same from the top. Holding the lock across the swap makes
+    /// that impossible rather than unlikely: no drain can start, and the one
+    /// in flight finishes its current request and stops, because it yields to
+    /// a waiter before each row. The wait is one request at most, never the
+    /// backlog.
+    ///
+    /// Waits in line with the exit paths and is handed the lock directly, so
+    /// nothing can slip in between the drain stopping and the pause holding.
+    public func pauseDraining() async {
+        await waitToDrain()
+    }
+
+    /// Gives back the lock `pauseDraining()` took, and only that: calling it
+    /// without a pause would release a drain's lock from under it. Nothing
+    /// drains on resuming; the rows the pause held back go with whatever
+    /// drain is triggered next. Harmless on a retired queue, which passes the
+    /// lock on as a live one does.
+    public func resumeDraining() {
+        endDraining()
+    }
+
+    /// What `enqueue` throws once the queue is retired.
+    public struct Retired: Error, Sendable {}
+
+    /// Stops this queue for good: every later `enqueue` throws `Retired`, and
+    /// no drain sends another row — the one in flight stops before its next.
+    ///
+    /// For an account switch. The rows belong to the departed account and the
+    /// app is about to empty the table, but emptying it is not enough on its
+    /// own: a write already on its way into the queue could insert its row
+    /// after the DELETE, where the arriving account's drain would find it and
+    /// send it under the new bearer. Retiring first puts every insert in one
+    /// order on this actor — one submitted before `retire()` lands before it
+    /// and so before the DELETE, and one submitted after is refused.
+    ///
+    /// Only a flag. It never waits for the lock, so it is safe while a pause
+    /// holds it, and it deletes nothing: the rows are the caller's to clear.
+    public func retire() {
+        retired = true
+    }
+
     public init(store: LibraryStore) throws {
         // This opens a second connection to the same file `LibraryStore`
         // already has open — the queue and the catalogue live in one SQLite
@@ -109,11 +180,13 @@ public actor MutationQueue {
     ///   `nil` keeps the unconditional collapse, which is right for status and
     ///   rating: there the newest call always wins by definition.
     /// - Returns: whether anything was recorded.
+    /// - Throws: `Retired` once `retire()` has run, before touching the table.
     @discardableResult
     public func enqueue(
         _ kind: Kind, bookUUID: String, payload: Data, supersedes ordering: Double? = nil,
     ) throws -> Bool {
-        try dbQueue.write { db in
+        guard !retired else { throw Retired() }
+        return try dbQueue.write { db in
             let existing = try Row.fetchOne(
                 db,
                 sql: "SELECT ordering, attempts, createdAt, payload FROM mutation WHERE bookUUID = ? AND kind = ?",
@@ -293,6 +366,10 @@ public struct MutationDrain: Sendable {
         var sent = 0
 
         for item in pending {
+            // Before every row, not once: a pause taken mid-drain waits for
+            // the request in flight, not for everything behind it, and a
+            // queue retired mid-drain sends nothing more.
+            guard await !queue.shouldYield else { break }
             do {
                 try await send(item)
                 try? await queue.remove(item.id)
