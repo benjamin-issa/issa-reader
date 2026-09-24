@@ -3540,7 +3540,15 @@ public final class AppModel {
         // leaves the main actor.
         var unfiledOnServer = false
         if autoFiledBookUUIDs.contains(bookUUID) {
-            if await pendingStatusBookUUIDs().contains(bookUUID) {
+            // A filing still on its way into the queue is as unsent as one
+            // waiting in it; see `autoFilingsInFlight`.
+            var queued = autoFilingsInFlight[bookUUID] != nil
+            if !queued {
+                let inQueue = await pendingStatusBookUUIDs().contains(bookUUID)
+                // And again after the await, which a filing can begin during.
+                queued = inQueue || autoFilingsInFlight[bookUUID] != nil
+            }
+            if queued {
                 // Asked again after the await: a status chosen by hand while
                 // the queue was read takes the book out, and stays the reader's.
                 unfiledOnServer = autoFiledBookUUIDs.contains(bookUUID)
@@ -3562,7 +3570,13 @@ public final class AppModel {
             "generation": generation?.rawValue ?? "undetermined",
         ])
         autoFiledBookUUIDs.insert(bookUUID)
+        autoFilingsInFlight[bookUUID, default: 0] += 1
         await applyStatus(next, to: book)
+        if let count = autoFilingsInFlight[bookUUID], count > 1 {
+            autoFilingsInFlight[bookUUID] = count - 1
+        } else {
+            autoFilingsInFlight[bookUUID] = nil
+        }
     }
 
     /// Books `advanceStatusIfUnset` filed, until their status is seen to have
@@ -3589,6 +3603,18 @@ public final class AppModel {
     /// by the server itself, as on 2.x. A book finished offline across a
     /// relaunch waits for that write, which is all this costs.
     private var autoFiledBookUUIDs: Set<String> = []
+
+    /// Automatic filings between setting the book's status here and queueing
+    /// it, counted per book.
+    ///
+    /// `applyStatus` saves the book locally before it queues the write, and it
+    /// suspends in between. A second position for the same book in that gap —
+    /// the reader and the listening loop both write during a read-along —
+    /// read the queue, found no status row yet, took the empty queue for a
+    /// drained one, and let go of the book, which then ended at Reading exactly
+    /// as it did before the set existed. Counted rather than a set because the
+    /// two writers can each have a filing in flight.
+    private var autoFilingsInFlight: [String: Int] = [:]
 
     /// How far along the rule's own statuses a book is: none, then Reading,
     /// then Read. Anything else ranks with none, but only a book the rule
