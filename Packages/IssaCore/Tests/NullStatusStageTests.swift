@@ -5,10 +5,10 @@ import Testing
 
 /// Where a book with no status is shelved.
 ///
-/// 2.x never sent one: every position write moved the book along. 3.x sends
-/// them and never moves them, so a book read to the end elsewhere would sit on
-/// "To read" for good. The shelf reads its progress instead, by the server's
-/// own thresholds.
+/// 2.x never sent one: it gives every book a status row for every reader. 3.x
+/// sends them and never moves them, so a book read to the end elsewhere would
+/// sit on "To read" for good. The shelf reads its progress instead, by the
+/// server's own thresholds.
 @Suite("Shelving a book with no status")
 struct NullStatusStageTests {
     /// Decoded, like every other fixture: the model has no public initialiser.

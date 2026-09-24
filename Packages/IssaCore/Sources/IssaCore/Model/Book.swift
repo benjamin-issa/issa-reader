@@ -281,10 +281,11 @@ public struct Collection: Codable, Hashable, Sendable, Identifiable {
 
 public struct Status: Codable, Hashable, Sendable, Identifiable {
     public var uuid: String
-    /// What the status *is*. On 2.x an admin could rename any status, so this
-    /// was also what it said. On 3.x the three built-in names are fixed — the
-    /// server keys its own rules on them — and renaming edits `label` instead,
-    /// which makes this the steadier of the two to classify by.
+    /// What the status *is*. 2.14.21 ships exactly the three built-ins, with no
+    /// API to add or rename one, so there this is also what it says. 3.x keeps
+    /// the built-in names fixed — the server keys its own rules on them — lets
+    /// an admin add statuses named as they like, and puts any rewording in
+    /// `label`, which makes this the steadier of the two to classify by.
     public var name: String
     /// What the status *says*, on 3.x: "Read" relabelled "Finished" still has
     /// the name "Read". nil on 2.x, which has no such field.

@@ -176,22 +176,27 @@ public extension LibraryArrangement {
 
     /// Which of the three reading stages a book is in.
     ///
-    /// Status names belong to the server and a 2.x admin may rename them, so
-    /// this reads the name rather than matching a fixed vocabulary. Order
-    /// matters: "Currently Reading" contains "read", so testing for finished
-    /// first would file every book in progress as done. It reads `name`, never
-    /// `label`: 3.x fixes the built-in names and puts an admin's wording in the
-    /// label, so "Read" relabelled "Finished" is still named "Read".
+    /// This matches the status name loosely rather than against a fixed
+    /// vocabulary. 2.14.21 ships exactly the three built-ins, with no API to
+    /// add or rename one, so there the looseness is only defensive; 3.x lets an
+    /// admin add statuses of their own, which it files by their wording where
+    /// that says a stage. Order matters: "Currently Reading" contains "read",
+    /// so testing for finished first would file every book in progress as
+    /// done. It reads `name`, never `label`: 3.x fixes the built-in names and
+    /// puts an admin's wording in the label, so "Read" relabelled "Finished" is
+    /// still named "Read".
     ///
     /// A book with *no* status is filed by its progress, with the server's own
     /// thresholds: at 98% or more it is finished, past the start it is being
-    /// read, otherwise it is unstarted. 2.x never sends one without a status,
-    /// because every position write moved it along. 3.x does — and never moves
-    /// it, because its position write updates a status row the book does not
-    /// have — so a book read to the end in the web reader would otherwise sit
-    /// on "To read" forever. This files it where 2.x would have. Display only:
-    /// nothing is written back; `StatusAdvance` does that for positions this
-    /// device writes.
+    /// read, otherwise it is unstarted. 2.x never sends one without a status:
+    /// it gives every book a status row for every reader — adding a book
+    /// writes one per user, adding a user one per book, and a migration
+    /// backfilled any gap. 3.x does send one, and never moves it — its
+    /// position write updates a status row the book does not have — so a book
+    /// read to the end in the web reader would otherwise sit on "To read"
+    /// forever. This files it where 2.x would have. Display only: nothing is
+    /// written back; `StatusAdvance` does that for positions this device
+    /// writes.
     static func stage(of book: Book) -> Stage {
         guard let status = book.status else {
             let progress = book.progress ?? 0
