@@ -148,19 +148,31 @@ public extension Book {
     }
 
     /// Takes everything the server says about this book except a reading
-    /// position older than the one already held.
+    /// position older than the one already held — and, when asked, the status.
     ///
     /// The catalogue is refetched wholesale, and a refetch that predates a write
     /// still sitting in the mutation queue carries a stale `position`. Assigning
     /// it verbatim walks the Continue card — and the place the reader resumes at
     /// — backwards by however long the queue has been holding.
     ///
-    /// Position only. Title, formats, alignment, tags and page counts are all
-    /// newer server truth and are taken as given; a `status` one refresh stale is
-    /// cosmetic, where a position one refresh stale is the bug this exists for.
-    func reconciled(with fresh: Book) -> Book {
-        guard let mine = position else { return fresh }
+    /// Title, formats, alignment, tags and page counts are all newer server
+    /// truth and are taken as given. The position is kept by its timestamp,
+    /// which the book carries. The status carries nothing to compare, so the
+    /// caller says whether this copy's is one the server may not hold yet.
+    ///
+    /// - Parameter keepingStatus: keep this copy's `status` over the server's.
+    ///   A stale status is not cosmetic when this device set it: a refresh
+    ///   that puts the server's older value back shows the reader a choice
+    ///   undone, and on 3.x an empty one invites the next position write to
+    ///   file the book again over what the reader chose. Whether the write is
+    ///   still unsent is the app's to know — the queue and the writes on their
+    ///   way into it — so this only applies the answer, the same way at every
+    ///   merge. It is applied before the position rule returns early, because
+    ///   a book with no position of its own can still have a status set on it.
+    func reconciled(with fresh: Book, keepingStatus: Bool = false) -> Book {
         var merged = fresh
+        if keepingStatus { merged.status = status }
+        guard let mine = position else { return merged }
         // A server that has never heard of our position must not clear it: the
         // write may simply not have drained yet.
         if fresh.position.map({ mine.timestamp > $0.timestamp }) ?? true {
