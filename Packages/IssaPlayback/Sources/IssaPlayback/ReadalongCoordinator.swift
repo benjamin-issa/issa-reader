@@ -203,15 +203,22 @@ public final class ReadalongCoordinator {
     }
 
     private func advanceToNextFile() async {
-        // An ending that arrives while a move is in flight is not this file's:
-        // the listener has already gone somewhere else. `AudioPlayer.load`
-        // removes the old item's end observer, but a notification the old item
-        // posted just before is already queued on the main queue, and it runs
-        // at the move's first suspension — with `activeEntry` already naming
-        // the destination. Answering it advanced from *there*, past the rest
-        // of a file the listener had only just scrubbed into. Nothing is lost
-        // by dropping it: the move owns the playhead, and the file it loads
-        // posts its own ending when it runs out.
+        // An ending that arrives while a move is in flight is not one to act
+        // on: the listener has already gone somewhere else. The ending reaches
+        // here through the Task `init` hops it through, so a scrub or a tap
+        // whose move starts before that Task runs has already put
+        // `activeEntry` on its destination by the time it does. Answering it
+        // advanced from *there*, past the rest of a file the listener had only
+        // just moved into, and reported the chapter they moved into as ended.
+        // Nothing is lost by dropping it: the move owns the playhead, and the
+        // file it lands in posts its own ending when it runs out.
+        //
+        // The hop is the only window. `AudioPlayer.load` removes the replaced
+        // item's end observer before it suspends, and a notification that item
+        // had already queued for the main queue goes with it — tried: posted
+        // from another thread while the main thread was held, it was not
+        // delivered once a load had run — so the player needs no guard of its
+        // own.
         guard movesInFlight == 0 else { return }
         // The first entry of the next file, whatever it is — not the next
         // sentence. When a file runs out, what plays next is whatever audio

@@ -102,10 +102,11 @@ struct ReadalongFileEndTests {
         #expect(endings() == 1)
     }
 
-    /// The end of track1 is posted just as the listener moves to chapter two,
-    /// and runs at the move's first suspension, with `activeEntry` already on
-    /// chapter two. Answered, it advanced from there — past the rest of
-    /// chapter two, into chapter three, and reported chapter two as ended.
+    /// The end of track1 reaches the coordinator just as the listener moves to
+    /// chapter two, and the advance it schedules runs at the move's first
+    /// suspension, with `activeEntry` already on chapter two. Answered, it
+    /// advanced from there — past the rest of chapter two, into chapter three,
+    /// and reported chapter two as ended.
     @Test("an ending that arrives while the listener is moving elsewhere is not acted on")
     func aStaleEndingIsDropped() async throws {
         let timeline = Shapes.narration([
