@@ -2,8 +2,11 @@ import Foundation
 
 /// A book as returned by `GET /api/v2/books` and `GET /api/v2/books/{uuid}`.
 ///
-/// Modelled against live JSON from a `web-v2.14.21` server. Two things about the
-/// list endpoint shape the whole client:
+/// Modelled against live JSON from `web-v2.14.21` and `web-v3.0.0-beta.40`
+/// servers. 3.x only adds to the shape — a cover reference on each format, a
+/// `label` on each status, and a status that may be `null` — so one type decodes
+/// both, and the additions are optional. Two things about the list endpoint
+/// shape the whole client:
 ///
 /// 1. It takes no query parameters and returns the entire library in one
 ///    unpaginated array. We ingest it wholesale and derive search, facets and
@@ -59,6 +62,13 @@ public struct Book: Codable, Hashable, Sendable, Identifiable {
     ///
     /// The server also changes this on its own when a reading position is
     /// written, so a locally-set value can be superseded by simply reading on.
+    /// On 3.x it can also be `null` — a reader may clear it, deleting a custom
+    /// status clears it from every book that had it, and a library with no
+    /// default status never sets one — and 3.x never advances a book out of
+    /// that state: its position write updates a status row, and a book with no
+    /// status has no row to update. `StatusAdvance` is the client doing what
+    /// the server meant to; `LibraryArrangement.stage(of:)` shelves such a book
+    /// by its progress in the meantime.
     public var status: Status?
     /// Per-user reading position. Present only when authenticated, and `nil`
     /// until the book has been opened at least once.
@@ -271,12 +281,23 @@ public struct Collection: Codable, Hashable, Sendable, Identifiable {
 
 public struct Status: Codable, Hashable, Sendable, Identifiable {
     public var uuid: String
+    /// What the status *is*. On 2.x an admin could rename any status, so this
+    /// was also what it said. On 3.x the three built-in names are fixed — the
+    /// server keys its own rules on them — and renaming edits `label` instead,
+    /// which makes this the steadier of the two to classify by.
     public var name: String
+    /// What the status *says*, on 3.x: "Read" relabelled "Finished" still has
+    /// the name "Read". nil on 2.x, which has no such field.
+    public var label: String?
     public var isDefault: Bool?
     public var createdAt: FlexibleDate?
     public var updatedAt: FlexibleDate?
 
     public var id: String { uuid }
+
+    /// What to show a reader: the label where the server has one, as its own
+    /// web UI does, and the name everywhere else.
+    public var displayName: String { label ?? name }
 
     /// The three statuses a default install ships with. Compared by name because
     /// the uuids are generated per-server and an admin may add their own.

@@ -88,17 +88,29 @@ struct SharedTestBundleTests {
         #expect(abs(progression - 0.99) < 0.0001)
     }
 
-    /// The classifier that made the sweep's fixture file every book as unread:
-    /// it reads `status` and never consults position, so a book at 99% with no
-    /// status is "to read".
-    @Test("a book with no status is filed as unread however far into it the reader is")
+    /// The classifier the sweep's fixture is built against. A status decides
+    /// the shelf whenever there is one; only a book with none — which 3.x
+    /// sends and never advances — is filed by its progress, at the server's
+    /// own thresholds, where 2.x would have put it.
+    @Test("a status decides the shelf, and progress decides only when there is none")
     func statusNotProgressDecidesTheShelf() {
-        let unlabelled = SharedFixtures.book("Dracula", progress: 0.99)
-        #expect(LibraryArrangement.stage(of: unlabelled) == .toRead)
+        let finishedUnlabelled = SharedFixtures.book("Dracula", progress: 0.99)
+        #expect(LibraryArrangement.stage(of: finishedUnlabelled) == .finished)
+
+        let unstartedUnlabelled = SharedFixtures.book("Dracula", progress: 0)
+        #expect(LibraryArrangement.stage(of: unstartedUnlabelled) == .toRead)
+
+        let midwayUnlabelled = SharedFixtures.book("Dracula", progress: 0.4)
+        #expect(LibraryArrangement.stage(of: midwayUnlabelled) == .reading)
 
         let labelled = SharedFixtures.book("Dracula", status: "Finished", progress: 0.99)
         #expect(
             LibraryArrangement.stage(of: labelled) == .finished,
             "the shelf must follow the server's status once there is one")
+
+        let rereading = SharedFixtures.book("Dracula", status: "To read", progress: 0.99)
+        #expect(
+            LibraryArrangement.stage(of: rereading) == .toRead,
+            "progress must not override a status the reader chose")
     }
 }

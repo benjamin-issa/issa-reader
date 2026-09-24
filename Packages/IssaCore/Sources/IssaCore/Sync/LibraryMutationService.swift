@@ -23,7 +23,9 @@ public struct LibraryMutationService: Sendable {
     /// position is written — to "Reading" below 98% and "Read" at or above it.
     /// A manual choice can therefore be overwritten by simply continuing to
     /// read, which is usually what someone wants but is surprising if they have
-    /// just marked something "To read".
+    /// just marked something "To read". 3.x skips a book with *no* status — its
+    /// update has no row to change — so the client makes that one move itself
+    /// (`StatusAdvance`), through this call, which inserts the missing row.
     public func setStatus(_ statusUUID: String, for bookUUID: String) async throws {
         try await client.put(Endpoint.status(bookUUID), body: StatusBody(status: statusUUID))
     }
