@@ -329,6 +329,7 @@ public final class AppModel {
         // position into the previous server's file while the catalogue lived
         // in the new one — and rows left behind there could later drain into
         // the wrong account. Rebuilding over the same file is cheap.
+        let replaced = mutations
         mutations = nil
         // The queue belongs with the store, not with the credential. It used to
         // sit inside the `hasCredential` branch below, which meant a first-time
@@ -337,6 +338,11 @@ public final class AppModel {
         // silently dropped every position, status and rating write. It looked
         // fine, because the in-memory book still moved; only the server knew.
         ensureMutationQueue()
+        // And the old one retired, once the new one is in place so no write
+        // finds neither. A drain it was running kept sending from a table the
+        // new queue now drains too, under a lock the new queue does not share;
+        // retired, it stops before its next row. Its rows stay where they are.
+        await replaced?.retire()
         // Only for someone who is actually signed in. Showing the cached shelf
         // on the strength of the database alone meant signing out left the
         // entire library readable: the token went, the rows did not, and the
@@ -417,10 +423,40 @@ public final class AppModel {
             phase = .chooseServer
             return
         }
+        // No drain may be running while the bearer changes hands. A drain
+        // reads the token afresh for every request, and `session.adopt`
+        // installs the new one before the identity call can say whose it is —
+        // so the rows a running drain had left, or a drain that started during
+        // the identity call's retries, went out as the departed account's
+        // writes with the arriving account's bearer, and the account switch
+        // below cleared the table only after they had been sent. Paused here,
+        // nothing is sent until the hand-over has decided whose rows these are
+        // and, if they are the departed account's, retired the queue that
+        // holds them.
+        //
+        // The pause waits for the one request a drain may have on the wire,
+        // which cannot be recalled — URLSession's sixty seconds at the very
+        // worst — and never for the backlog behind it, since a drain yields
+        // before its next row. It is taken on every sign-in, the same
+        // account's included: whose token this is is known only once the
+        // identity call has been answered, and by then it has been installed.
+        // With no queue there is nothing to pause.
+        let paused = mutations
+        await paused?.pauseDraining()
         await session.adopt(token: token)
-        switch session.state {
-        case let .signedIn(user):
+        // Read once: the hand-over suspends, and the branch taken below has to
+        // be the one it acted on.
+        let state = session.state
+        if case let .signedIn(user) = state {
             await handOverIfTheAccountChanged(to: user, on: session.serverURL)
+        }
+        // Before `enterLibrary`, whose refresh drains what the same account
+        // left queued. The queue the pause was taken on, whichever it is now:
+        // a retired one passes the lock on and sends nothing, and the failure
+        // branches keep the queue they had, as they always have.
+        await paused?.resumeDraining()
+        switch state {
+        case .signedIn:
             await enterLibrary()
         case let .failed(reason):
             // The grant worked and the token is in the keychain — only the
@@ -544,14 +580,25 @@ public final class AppModel {
         // And the open book, which since it outlives its screen would otherwise
         // keep narrating the departed account's library out loud.
         releaseAllReaders()
+        // The departed account's queue is retired and put out of reach before
+        // its table is emptied. Emptying the `mutation` table was said to be
+        // what kept the departed account's undrained writes from going out
+        // under the arriving account's token, and alone it was not: a write
+        // already on its way into the queue could insert its row after the
+        // DELETE, for the next drain to find and send with the new bearer, and
+        // a drain caught mid-backlog went on sending rows it had read before
+        // the DELETE. A retired queue refuses the one and stops the other
+        // before its next row (`MutationQueue.retire`), and with `mutations`
+        // nil nothing written while this suspends is queued at all. A request
+        // already on the wire when a sign-in began was waited for by `adopt`'s
+        // pause; `signOut` has invalidated the token before this runs, so a
+        // drain there gets a 401 and stops.
+        let retiring = mutations
+        mutations = nil
+        await retiring?.retire()
         // The catalogue belongs to the account, so it goes with it. Annotations
         // do not: they are device-local and this is their only copy.
-        //
-        // This clears the `mutation` table too, which is what stops the
-        // departed account's undrained position writes being posted under the
-        // arriving account's token.
         try? await store?.clearAccountData()
-        mutations = nil
         // The high-water marks go too. They are keyed by book uuid, and the
         // same server hands the same uuids to a different account — so without
         // this, account A's finished book refuses every derived write account B

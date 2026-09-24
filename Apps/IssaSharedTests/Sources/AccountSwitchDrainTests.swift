@@ -8,18 +8,21 @@ import Testing
 ///
 /// `AccountSwitchTests` covers what an account switch clears from memory. This
 /// covers the writes and reads in flight across it, which it had no queue or
-/// server to see. A position write held on a slow request resumed into the
-/// arriving account's library — same server, same book uuids — and filed that
-/// account's copy of the book from the departing account's place in it. And a
-/// refresh held the same way put the departing account's catalogue on the
-/// arriving account's screen.
+/// server to see. The drain reads the bearer afresh for every request and
+/// `session.adopt` installs the new token before the identity call says whose
+/// it is, so a drain running across a sign-in sent the rest of the departing
+/// account's rows with the arriving account's token. A position write held on
+/// a slow request resumed into the arriving account's library — same server,
+/// same book uuids — and filed that account's copy of the book from the
+/// departing account's place in it. And a refresh held the same way put the
+/// departing account's catalogue on the arriving account's screen.
 ///
-/// Through `AppModel.adopt(token:)`, `writePosition` and the two refreshes,
-/// against a real store and queue and a server that tells its readers apart
-/// by bearer and logs which bearer every request carried.
+/// Through `AppModel.adopt(token:)`, `drainPendingWrites`, `writePosition` and
+/// the two refreshes, against a real store and queue and a server that tells
+/// its readers apart by bearer and logs which bearer every request carried.
 ///
-/// `.serialized`: the stub keeps its log and its hold in static state, and the
-/// account last signed in lives in `UserDefaults.standard`.
+/// `.serialized`: the stub keeps its log and its holds in static state, and
+/// the account last signed in lives in `UserDefaults.standard`.
 @Suite("An account switch never sends one account's writes as another's", .serialized)
 @MainActor
 struct AccountSwitchDrainTests {
@@ -81,11 +84,68 @@ struct AccountSwitchDrainTests {
         fixture.tearDown()
     }
 
+    static func position(_ progress: Double) -> MutationDrain.PositionPayload {
+        MutationDrain.PositionPayload(locator: StatusParityTests.locator(progress), timestamp: 10)
+    }
+
     /// Yields until `condition` holds or a bounded number of turns pass.
-    private func settle(until condition: () -> Bool) async {
-        for _ in 0 ..< 400 where !condition() {
+    private func settle(turns: Int = 400, until condition: () -> Bool) async {
+        for _ in 0 ..< turns where !condition() {
             try? await Task.sleep(for: .milliseconds(5))
         }
+    }
+
+    /// Finding #5. Reader A's drain is mid-request with a second row behind it
+    /// when reader B signs in on the same session. The request on the wire
+    /// cannot be recalled and was A's to send, so B's sign-in waits for it —
+    /// and only for it: the row behind it is A's too, and it must not go at
+    /// all, with either token. It goes with A's queue when the switch clears it.
+    ///
+    /// B's identity call is held until the drain has finished, which is what
+    /// shows the difference: without the pause B's token is installed while
+    /// A's drain still has a row to send, and it sends it with that token.
+    @Test("a drain caught mid-request finishes as the departing account, and the arriving account's token waits for it")
+    func aDrainInFlightNeverBorrowsTheArrivingAccountsToken() async throws {
+        let fixture = try await Self.fixture()
+        defer { Self.tearDown(fixture) }
+        BearerServer.hold(.firstPosition)
+        BearerServer.hold(.arrivingIdentity)
+
+        // Both of A's rows are queued before the drain reads the queue, so the
+        // second is in the backlog it would go on to send.
+        let queue = try MutationQueue(store: fixture.store)
+        for (book, progress) in [(Self.first, 0.2), (Self.second, 0.3)] {
+            try await queue.enqueue(
+                .position, bookUUID: book,
+                payload: JSONEncoder().encode(Self.position(progress)), supersedes: 10)
+        }
+        let draining = Task { await fixture.app.drainPendingWrites() }
+        await settle { BearerServer.sent(.post).count == 1 }
+        try #require(BearerServer.sent(.post).count == 1, "A's drain has to be mid-request")
+        #expect(try await fixture.queued().count == 2, "A's second row has to be waiting behind the first")
+
+        let switching = Task { await fixture.app.adopt(token: "token-B") }
+        await settle(turns: 100) { BearerServer.sent(.get, Endpoint.user).isEmpty == false }
+        #expect(BearerServer.sent(.get, Endpoint.user).isEmpty,
+                "B's token was installed while A's drain was still sending")
+
+        BearerServer.release(.firstPosition)
+        await draining.value
+        await settle { BearerServer.sent(.get, Endpoint.user).isEmpty == false }
+        BearerServer.release(.arrivingIdentity)
+        await switching.value
+
+        #expect(Self.reader(of: fixture.app.session) == "reader-B")
+        let posts = BearerServer.sent(.post)
+        #expect(posts.count == 1, "A's second row was sent after the switch began")
+        #expect(posts.allSatisfy { $0.bearer == "token-A" }, "A's row went out with B's token")
+        let log = BearerServer.log
+        let answered = try #require(log.firstIndex { $0.moment == .answered && $0.method == "POST" })
+        let identified = try #require(log.firstIndex {
+            $0.moment == .sent && $0.path == Endpoint.user && $0.bearer == "token-B"
+        })
+        #expect(answered < identified, "B's token went out before A's request had been answered")
+        #expect(try await fixture.queued().isEmpty, "A's row outlived the switch, for B's drain to send")
     }
 
     /// Finding #4. Reader A's position write files the book it was read in,
@@ -203,10 +263,12 @@ private final class SeamHold {
 /// library to every reader — titled for the reader asking, so a test can tell
 /// whose answer landed. Positions and statuses are accepted.
 ///
-/// Reader A's catalogue reads can be held until released, so a refresh can
-/// be caught in flight. A held request is answered later from another queue
-/// rather than by blocking `startLoading`, which would hold up every other
-/// request the session makes.
+/// Three kinds of request can be held until released: the first position
+/// write, so a drain can be caught mid-request; reader B's identity call, so
+/// the moment B's token is installed can be kept open; and reader A's
+/// catalogue reads, so a refresh can be caught in flight. A held request is
+/// answered later from another queue rather than by blocking `startLoading`,
+/// which would hold up every other request the session makes.
 private final class BearerServer: URLProtocol, @unchecked Sendable {
     static let first = "11111111-1111-4111-8111-111111111111"
     static let second = "22222222-2222-4222-8222-222222222222"
@@ -216,23 +278,29 @@ private final class BearerServer: URLProtocol, @unchecked Sendable {
     }
 
     struct Entry: Sendable {
+        enum Moment: Sendable { case sent, answered }
+        let moment: Moment
         let method: String
         let path: String
         let bearer: String?
     }
 
-    enum Hold: Sendable { case departingCatalogue }
+    enum Hold: Sendable { case firstPosition, arrivingIdentity, departingCatalogue }
 
     private static let lock = NSLock()
     nonisolated(unsafe) private static var entries: [Entry] = []
     nonisolated(unsafe) private static var holding: Set<Hold> = []
     nonisolated(unsafe) private static var held: [Hold: [@Sendable () -> Void]] = [:]
     nonisolated(unsafe) private static var heldCounts: [Hold: Int] = [:]
+    nonisolated(unsafe) private static var positionsSeen = 0
 
     static func reset() {
+        release(.firstPosition)
+        release(.arrivingIdentity)
         release(.departingCatalogue)
         lock.withLock {
             entries = []
+            positionsSeen = 0
             heldCounts = [:]
         }
     }
@@ -253,10 +321,13 @@ private final class BearerServer: URLProtocol, @unchecked Sendable {
         for answer in answers { DispatchQueue.global().async(execute: answer) }
     }
 
+    /// Every request and answer so far, in order.
+    static var log: [Entry] { lock.withLock { entries } }
+
     /// The requests sent with this method, and to this path if one is given.
     static func sent(_ method: Method, _ path: String? = nil) -> [Entry] {
-        lock.withLock { entries }.filter { entry in
-            entry.method == method.rawValue && (path.map { entry.path == $0 } ?? true)
+        log.filter { entry in
+            entry.moment == .sent && entry.method == method.rawValue && (path.map { entry.path == $0 } ?? true)
         }
     }
 
@@ -274,6 +345,9 @@ private final class BearerServer: URLProtocol, @unchecked Sendable {
         let path = url.path
         let (status, body) = Self.answer(method: method, path: path, bearer: bearer)
         let answer: @Sendable () -> Void = { [self] in
+            Self.lock.withLock {
+                Self.entries.append(Entry(moment: .answered, method: method, path: path, bearer: bearer))
+            }
             let response = HTTPURLResponse(
                 url: url, statusCode: status,
                 httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
@@ -282,9 +356,14 @@ private final class BearerServer: URLProtocol, @unchecked Sendable {
             client?.urlProtocolDidFinishLoading(self)
         }
         let deferred = Self.lock.withLock {
-            Self.entries.append(Entry(method: method, path: path, bearer: bearer))
+            Self.entries.append(Entry(moment: .sent, method: method, path: path, bearer: bearer))
             let hold: Hold?
-            if method == "GET", bearer == "token-A",
+            if method == "POST", path.hasSuffix("/positions") {
+                Self.positionsSeen += 1
+                hold = Self.positionsSeen == 1 ? .firstPosition : nil
+            } else if path == Endpoint.user, bearer == "token-B" {
+                hold = .arrivingIdentity
+            } else if method == "GET", bearer == "token-A",
                       path == Endpoint.books || [Self.first, Self.second].map(Endpoint.book).contains(path) {
                 hold = .departingCatalogue
             } else {
