@@ -418,10 +418,15 @@ public struct StoredPosition: Codable, Hashable, Sendable {
 ///
 /// Each format carries its own, because each format has its own art — the
 /// audiobook's is square. The server sends `width`, `height`, `blurhash` and
-/// `colors` beside the hash; synthesized decoding ignores them, since drawing a
-/// placeholder from them would be new functionality rather than parity.
+/// `colors` beside the hash; decoding ignores them, since drawing a placeholder
+/// from them would be new functionality rather than parity.
 public struct CoverReference: Codable, Hashable, Sendable {
     public var sha256: String
+
+    // Spelled out rather than synthesised, because the decoder below names them.
+    enum CodingKeys: String, CodingKey {
+        case sha256
+    }
 
     /// Whether this is 64 lowercase hex characters, which is all the server
     /// ever writes.
@@ -435,6 +440,27 @@ public struct CoverReference: Codable, Hashable, Sendable {
             (UInt8(ascii: "0") ... UInt8(ascii: "9")).contains(byte)
                 || (UInt8(ascii: "a") ... UInt8(ascii: "f")).contains(byte)
         }
+    }
+}
+
+// In an extension so the memberwise initialiser survives beside it.
+extension CoverReference {
+    /// Decoded leniently: a `cover` that is not an object with a string
+    /// `sha256` becomes an unusable reference, which every reader of this type
+    /// already treats as no cover at all.
+    ///
+    /// Throwing would not stay local. It would fail the format, the format
+    /// would fail its `Book`, and one book fails the single `[Book]` decode
+    /// behind `LibraryService.allBooks()` — so one reshaped cover would stop
+    /// the whole catalogue refreshing, where 1.2.0 ignored the key and read
+    /// on. beta.40 always sends a string hash, but this client follows a beta
+    /// line, and an unreadable cover already has an answer: the placeholder.
+    /// That is the opposite trade from `FlexibleDate`, which throws because a
+    /// wrong date is silent; a missing cover is visible and costs one image.
+    public init(from decoder: any Decoder) throws {
+        let container = try? decoder.container(keyedBy: CodingKeys.self)
+        // `try?` flattens the doubly-optional decodeIfPresent result.
+        sha256 = (try? container?.decodeIfPresent(String.self, forKey: .sha256)) ?? ""
     }
 }
 

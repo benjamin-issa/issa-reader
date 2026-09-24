@@ -96,6 +96,47 @@ struct BookDecodingV3Tests {
         #expect(emma.coverReference(for: .portrait) == emma.ebook?.cover)
     }
 
+    /// 1.2.0 ignored the `cover` key, so a reshaped one must cost that cover
+    /// and nothing more: a book that fails to decode takes the whole refresh
+    /// with it. Three shapes beta.40 never sends, on the capture itself.
+    @Test("a malformed cover reads as no cover, and the library still decodes")
+    func malformedCover() throws {
+        var library = try #require(
+            try JSONSerialization.jsonObject(with: BookDecodingTests.fixture("v3/books"))
+                as? [[String: Any]])
+        let peterIndex = try #require(library.firstIndex { $0["title"] as? String == "Peter and Wendy" })
+        var peter = library[peterIndex]
+        var peterEbook = try #require(peter["ebook"] as? [String: Any])
+        var peterAudiobook = try #require(peter["audiobook"] as? [String: Any])
+        peterEbook["cover"] = [String: Any]()
+        peterAudiobook["cover"] = "x"
+        peter["ebook"] = peterEbook
+        peter["audiobook"] = peterAudiobook
+        library[peterIndex] = peter
+
+        let emmaIndex = try #require(library.firstIndex { $0["title"] as? String == "Emma" })
+        var emma = library[emmaIndex]
+        var emmaEbook = try #require(emma["ebook"] as? [String: Any])
+        emmaEbook["cover"] = ["sha256": 42]
+        emma["ebook"] = emmaEbook
+        library[emmaIndex] = emma
+
+        let books = try JSONDecoder().decode(
+            [Book].self, from: JSONSerialization.data(withJSONObject: library))
+        #expect(books.count == 25)
+
+        let decodedPeter = try #require(books.first { $0.title == "Peter and Wendy" })
+        #expect(decodedPeter.ebook?.cover?.isUsable == false, "an object with no hash")
+        #expect(decodedPeter.coverReference(for: .square) == nil, "not an object at all")
+        #expect(
+            decodedPeter.coverReference(for: .portrait) == decodedPeter.readaloud?.cover,
+            "an unreadable ebook cover falls through to the read-along's, like an unusable one")
+
+        let decodedEmma = try #require(books.first { $0.title == "Emma" })
+        #expect(decodedEmma.coverReference(for: .portrait) == nil, "a hash that is not a string")
+        #expect(decodedEmma.ebook?.uuid != nil, "the format itself still decodes")
+    }
+
     @Test("the 3.x status list decodes with its labels")
     func statusList() throws {
         let statuses = try JSONDecoder().decode(
