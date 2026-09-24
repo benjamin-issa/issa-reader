@@ -278,9 +278,17 @@ final class LiveServerTests: XCTestCase {
     ///
     /// The Gap Book's first file ends in an after-hole, audio that runs on past
     /// the file's last sentence: the crossing 1.3.0 had to fix, and the one a
-    /// coordinator that misreads a file's end would stop or loop at. Still
-    /// playing well past it is the check. It plays through the Mac's
-    /// speakers, which is why the script asks for `--audio` explicitly.
+    /// coordinator that misreads a file's end would stop or loop at. It plays
+    /// through the Mac's speakers, which is why the script asks for `--audio`
+    /// explicitly.
+    ///
+    /// Only stopping is judged here. A player looping at the file's end, or
+    /// stuck on it, still shows Pause narration, so whether it got past is
+    /// the script's to decide from where the position ended up. The script
+    /// puts the book back at the top of its first chapter before the run, and
+    /// 75 s is measured from there: the Gap Book's first file is under a
+    /// minute, so by then narration is into the second, where the pause at
+    /// the end is saved.
     private func readAlong(_ app: XCUIApplication) {
         guard let book = setting("E2E_READALONG_BOOK") else {
             record("readAlong", false, "--audio given but no read-along book")
@@ -315,6 +323,10 @@ final class LiveServerTests: XCTestCase {
             ? "still playing after \(Int(seconds)) s"
             : "stopped before \(Int(seconds)) s")
         if pause.exists { pause.tap() }
+        // The pause is a position change like any other, saved after the
+        // same two-second debounce, and the script reads what it leaves: the
+        // test ending first would take that write with it.
+        Thread.sleep(forTimeInterval: 10)
     }
 
     // MARK: - Helpers

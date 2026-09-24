@@ -44,7 +44,8 @@ below again against the new tag. How to bring both up is in the README, under
    <server> <label>` installs the app fresh on a simulator (`--device` names
    one; the iPhone 17 Pro by default), pairs it by device code, drives every
    check above through `Apps/IssaLiveUITests`, then asks the server whether
-   the position arrived and, on 3.x, whether the book was filed. Its
+   the position arrived, on 3.x whether the book was filed, and with
+   `--audio` whether the read-along's position got past its first file. Its
    `.build/live-check/<label>/summary.txt` has a PASS or FAIL per check and
    is the record. Run it once per server per device, with `--audio` for the
    read-along (it plays through the speakers, so ask first) and `--fresh` to

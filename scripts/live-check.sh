@@ -15,7 +15,8 @@
 # playing past the end of its first audio file. The screen is driven by
 # Apps/IssaLiveUITests; this script sets the server up for it, approves the
 # pairing code it writes out, and checks over the API what the screen cannot
-# show — that the position reached the server and, on 3.x, filed the book.
+# show — that the position reached the server and, on 3.x, filed the book,
+# and that the read-along's position got past its first file.
 #
 # Everything lands in .build/live-check/<label>/: summary.txt with a PASS or
 # FAIL per check, the screenshots, the app's log and the xcodebuild output.
@@ -31,7 +32,8 @@
 # library has; override them for another library with
 #   LIVE_STATUS_TITLE     a book whose status label is checked
 #   LIVE_READ_TITLE       a book opened and read (on 3.x its status is cleared first)
-#   LIVE_READALONG_TITLE  a read-along whose first audio file ends in a gap
+#   LIVE_READALONG_TITLE  a read-along whose first narrated chapter is its first
+#                         audio file, under 75 s long and ending in a gap
 #
 # With --platform tvos it runs Apps/IssaLiveTVUITests on an Apple TV simulator
 # instead, moving by XCUIRemote: the pairing, the library, the session and
@@ -202,6 +204,35 @@ if [ "$BOOKS" = 1 ] && [ "$GENERATION" = v3 ]; then
     || { echo "error: could not clear the status of \"$READ_TITLE\"" >&2; exit 1; }
 fi
 
+# A read-along picks up where it was left, and a run that crossed its first
+# file leaves it in the second chapter, where the next run would play on
+# inside one file and cross nothing. So it is put back at the top of its first
+# narrated chapter, as a position newer than any the server holds. The test
+# cannot judge the crossing itself: its "still playing" is the Pause narration
+# button, which a player stuck at the file's end, or looping it, shows just
+# the same. The verdict is the server's, afterwards: the position must have
+# moved on to a later chapter.
+if [ "$BOOKS" = 1 ] && [ "$AUDIO" = 1 ]; then
+  api "$SERVER/api/v2/books/$READALONG_BOOK/read/manifest.json" > "$OUT/readalong-manifest.json" \
+    || { echo "error: no reading order for \"$READALONG_TITLE\"" >&2; exit 1; }
+  python3 - "$OUT/readalong-manifest.json" > "$OUT/readalong-start.json" <<'PY'
+import json, sys, time
+order = json.load(open(sys.argv[1]))["readingOrder"]
+# The first chapter with a media overlay: a title page ahead of it has no
+# audio, so starting there would reach the narration without crossing a file.
+narrated = [r for r in order
+            if any("guided-navigation" in (a.get("type") or "") for a in r.get("alternate") or [])]
+first = (narrated or order)[0]
+print(json.dumps({
+    "locator": {"href": first["href"], "type": first.get("type") or "application/xhtml+xml",
+                "locations": {"progression": 0, "totalProgression": 0}},
+    "timestamp": round(time.time() * 1000)}))
+PY
+  api -X POST -H "Content-Type: application/json" --data @"$OUT/readalong-start.json" \
+      "$SERVER/api/v2/books/$READALONG_BOOK/positions" >/dev/null \
+    || { echo "error: could not put \"$READALONG_TITLE\" back at its start" >&2; exit 1; }
+fi
+
 # ── The simulator ─────────────────────────────────────────────────────────
 
 # By name, on the newest runtime of the platform that has one, so nothing
@@ -345,6 +376,27 @@ PY
       pass "filed: \"$READ_TITLE\" went from no status to Reading"
     else
       fail "filed: \"$READ_TITLE\" had no status and is now \"$READ_STATUS\", not Reading"
+    fi
+  fi
+  # The read-along was put at the top of its first narrated chapter, so a
+  # position anywhere later in the reading order is narration that got past
+  # the end of the first file, and the same chapter is narration that did not.
+  if [ "$AUDIO" = 1 ]; then
+    python3 - "$OUT/books-after.json" "$READALONG_BOOK" "$OUT/readalong-manifest.json" \
+        "$OUT/readalong-start.json" > "$OUT/readalong-after.txt" <<'PY'
+import json, sys
+book = next(b for b in json.load(open(sys.argv[1])) if b["uuid"] == sys.argv[2])
+order = [r["href"] for r in json.load(open(sys.argv[3]))["readingOrder"]]
+start = json.load(open(sys.argv[4]))["locator"]["href"]
+after = ((book.get("position") or {}).get("locator") or {}).get("href") or "nowhere"
+crossed = after in order and order.index(after) > order.index(start)
+print("PASS" if crossed else "FAIL", start, after)
+PY
+    read -r CROSSED START_HREF AFTER_HREF < "$OUT/readalong-after.txt"
+    if [ "$CROSSED" = PASS ]; then
+      pass "crossed: \"$READALONG_TITLE\" moved on from $START_HREF to $AFTER_HREF on the server"
+    else
+      fail "crossed: \"$READALONG_TITLE\" was put at $START_HREF and is at $AFTER_HREF, so narration never got past its first file"
     fi
   fi
 fi

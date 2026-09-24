@@ -158,9 +158,11 @@ through `approve-device.mjs` as the fixture admin. `Apps/IssaLiveUITests` then
 drives the real app through the library, Settings › Advanced's server version,
 a book's status label and a page read, and the script asks the server whether
 the position arrived and, on 3.x, whether the book was filed. `--audio` adds a
-read-along crossing the end of an audio file, out of the speakers; `--fresh`
-clears the simulator's keychain, so the pairing is a real one rather than a
-remembered token. The verdicts, screenshots and the app's log land in
+read-along crossing the end of an audio file, out of the speakers: the script
+puts the book back at its first chapter, and the crossing is judged by the
+server's position reaching a later one, since a player stuck at the file's end
+still shows Pause. `--fresh` clears the simulator's keychain, so the pairing is
+a real one rather than a remembered token. The verdicts, screenshots and the app's log land in
 `.build/live-check/<label>/`. `--platform tvos` runs the television's share on
 the Apple TV simulator, by remote: the pairing, the library, the session and
 the server version.
