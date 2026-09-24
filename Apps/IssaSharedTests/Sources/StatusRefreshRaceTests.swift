@@ -1,4 +1,5 @@
 import Foundation
+import SQLite3
 import Testing
 
 @testable import IssaCore
@@ -266,6 +267,99 @@ struct StatusRefreshRaceTests {
                 "the rule's status replaced the reader's choice in the queue")
         let stored = try await fixture.store.allBooks().first { $0.uuid == Self.dracula }
         #expect(stored?.status == Self.read)
+    }
+
+    /// An overruled write's save, made before it suspended, can reach the
+    /// store after the newer write's. The store takes waiting saves by
+    /// priority, not in the order they were made. The rule files a book from
+    /// whatever task wrote the position, and a choice made under the reader's
+    /// finger runs higher. Queueing nothing for the overruled status was not
+    /// enough: its save landed last and stayed, one status behind the screen
+    /// until the next refresh, and it came back at the next cold launch. The
+    /// overruled write saves the book again.
+    ///
+    /// Both writes here are chosen by hand, the older at a low priority.
+    /// Nothing outside the model can hold the rule between its position's
+    /// save and its status's, and `applyStatus` treats the two alike. The
+    /// store is held by a third save that waits on a write lock the test
+    /// takes on its own connection, so both status saves queue behind it and
+    /// the store picks between them.
+    @Test("a status overruled while it was being saved does not leave its save in the store")
+    func anOverruledStatusSavedLastDoesNotStayInTheStore() async throws {
+        let fixture = try Self.fixture(books: [
+            SharedFixtures.book("Dracula (cached)", uuid: Self.dracula, progress: 0.1),
+            SharedFixtures.book("Bleak House (cached)", uuid: Self.bleakHouse),
+        ])
+        let lock = try WriteLock(path: await fixture.store.url.path)
+        defer {
+            lock.release()
+            fixture.tearDown()
+        }
+        let dracula = try #require(fixture.app.bookByUUID[Self.dracula])
+        let bleakHouse = try #require(fixture.app.bookByUUID[Self.bleakHouse])
+
+        let occupied = Flag()
+        let occupying = Task {
+            occupied.raise()
+            try? await fixture.store.upsert(bleakHouse)
+        }
+        await settle { occupied.isRaised }
+        let overruled = Task(priority: .low) { await fixture.app.setStatus(Self.reading, for: dracula) }
+        await settle { fixture.app.bookByUUID[Self.dracula]?.status == Self.reading }
+        try #require(fixture.app.bookByUUID[Self.dracula]?.status == Self.reading,
+                     "the older write has to be waiting to save")
+        let choosing = Task(priority: .high) { await fixture.app.setStatus(Self.read, for: dracula) }
+        await settle { fixture.app.bookByUUID[Self.dracula]?.status == Self.read }
+        try #require(fixture.app.bookByUUID[Self.dracula]?.status == Self.read,
+                     "the newer write has to be waiting to save")
+
+        lock.release()
+        await occupying.value
+        await choosing.value
+        await overruled.value
+
+        #expect(fixture.app.bookByUUID[Self.dracula]?.status == Self.read)
+        #expect(try await fixture.queuedStatus()?.status == Self.read.uuid,
+                "the overruled status replaced the newer one in the queue")
+        let stored = try await fixture.store.allBooks().first { $0.uuid == Self.dracula }
+        #expect(stored?.status == Self.read, "the overruled status's save landed last and was left there")
+    }
+}
+
+/// A flag the test raises from inside a task, to know it has started.
+@MainActor
+private final class Flag {
+    private(set) var isRaised = false
+    func raise() { isRaised = true }
+}
+
+/// Holds the write lock on a database file from a connection of its own, as
+/// another process writing would, until released.
+///
+/// `BEGIN IMMEDIATE` takes the lock or fails at once, so once this exists the
+/// lock is held. A store write started after that waits in its busy timeout,
+/// and it waits on the store actor, which takes nothing else until the lock
+/// is let go.
+private final class WriteLock {
+    private var connection: OpaquePointer?
+
+    struct Refused: Error {}
+
+    init(path: String) throws {
+        guard sqlite3_open(path, &connection) == SQLITE_OK,
+              sqlite3_exec(connection, "BEGIN IMMEDIATE", nil, nil, nil) == SQLITE_OK
+        else {
+            sqlite3_close(connection)
+            connection = nil
+            throw Refused()
+        }
+    }
+
+    func release() {
+        guard let connection else { return }
+        sqlite3_exec(connection, "ROLLBACK", nil, nil, nil)
+        sqlite3_close(connection)
+        self.connection = nil
     }
 }
 
