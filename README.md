@@ -120,12 +120,37 @@ node Tools/docker/verify-device-flow.mjs      # full sign-in round trip
 scripts/release.sh --archive-only             # archive all three apps
 ```
 
+A Storyteller 3 beta can run beside it, on port 8003, for checking the client
+against both generations. It needs its own **copy** of the library: 3.x
+migrates the database one way, the stable server cannot open the result, and
+the copy is tied to the `STORYTELLER_SECRET_KEY` it first boots with.
+
+```bash
+cd Tools/docker
+docker compose stop && cp -Rp data/storyteller data/storyteller-v3 && docker compose up -d
+docker compose --profile v3 up -d
+STORYTELLER_URL=http://$(ipconfig getifaddr en0):8003 PUBLIC_HOST=$(ipconfig getifaddr en0) node setup.mjs
+```
+
+The provisioning scripts take `STORYTELLER_URL` for either server.
+
 ## Notes on the server
 
 This client is written against Storyteller `web-v2.14.21`, the latest stable
-tag, and is forward-looking about the rest: it probes for the endpoints the 3.x
-line adds and lights them up when they are present, so a newer server gains
-features without a client update. Settings shows which its server provides.
+tag, and verified to behave the same against the 3.0 beta line
+(`web-v3.0.0-beta.40`). It tells the two apart by feature, not by version
+string: `GET /api/v2/server/public` exists only on 3.x, while a self-built 3.x
+image reports its package version, which is still 2.14.21. Where they differ it
+adjusts. Covers come from 3.x's content-addressed image route rather than the
+cover route, which on 3.x only redirects. A status's label is shown where 3.x
+lets an admin rename one. A book with no status, which 3.x allows and does not
+advance, is shelved and advanced as 2.x would have. Settings › Advanced shows
+the server's version beside the capabilities it offers.
+
+The 3.x aligner also writes audio-only entries into read-along books — music,
+credits, a chapter that is only narration — which share a sentence's place in
+the text. Those are recognised from the book itself rather than the server,
+because books aligned by either generation sit side by side on a 3.x server.
 
 On 2.14.21, `GET /api/v2/books` takes no query parameters and returns the whole
 library in one array, including this user's reading position and status. That
