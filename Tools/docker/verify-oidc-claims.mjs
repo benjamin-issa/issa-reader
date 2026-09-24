@@ -11,9 +11,11 @@
 // grant as the fixture user is enough to see what a sign-in would carry.
 //
 // Keycloak only imports a realm it does not already have, so an edited realm
-// file needs the container recreated before this can see it:
+// file needs the container recreated before this can see it, and only that
+// container: without --no-deps, Compose run from a worktree recreates
+// Storyteller as well, on the worktree's empty data directory (README).
 //
-//   docker compose up -d --force-recreate keycloak
+//   docker compose up -d --no-deps --force-recreate keycloak
 //   PUBLIC_HOST=$(ipconfig getifaddr en0) node verify-oidc-claims.mjs
 
 const HOST = process.env.PUBLIC_HOST ?? "localhost"

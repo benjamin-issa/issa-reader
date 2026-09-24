@@ -123,9 +123,14 @@ scripts/release.sh --archive-only             # archive all three apps
 
 The realm in `Tools/docker/keycloak/realm-issa.json` is imported only when
 Keycloak does not already have it, so an edit to it takes
-`docker compose up -d --force-recreate keycloak` before anything can see it;
-`verify-oidc-claims.mjs` then says whether the tokens and userinfo carry
-`email_verified` and the reader's group. Two things about that file are easy to
+`docker compose up -d --no-deps --force-recreate keycloak` before anything can
+see it; `verify-oidc-claims.mjs` then says whether the tokens and userinfo
+carry `email_verified` and the reader's group. `--no-deps` because Keycloak
+depends on Storyteller: run from any checkout but the one that started the
+stack, a worktree say, Compose finds Storyteller's data mount changed and
+recreates it too, on that checkout's empty `data/storyteller`. Keycloak's own
+mount follows the checkout it is recreated from, so recreate it from the main
+one once the edit has landed. Two things about that file are easy to
 break. The `reader` user's `id` is pinned, because it becomes the `sub`
 Storyteller links the account by, and a fresh one on re-import gets the sign-in
 refused. And a client scope's `description` holds 255 characters: a longer one
