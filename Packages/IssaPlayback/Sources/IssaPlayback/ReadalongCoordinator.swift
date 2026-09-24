@@ -153,11 +153,33 @@ public final class ReadalongCoordinator {
             return
         }
 
-        if entry.fragmentID != activeFragmentID {
+        // Two questions, which used to be one: has the *entry* changed, and has
+        // the *fragment*? In a v2 book they are the same question. In a v3 book
+        // one sentence owns several entries in a row — the audio-only holes
+        // before and after it, the continuation of a sentence that runs into
+        // the next file — and every one names the sentence's fragment. Asking
+        // only about the fragment left `activeEntry` on the sentence while its
+        // after-hole played, and everything that asks where the audio is reads
+        // `activeEntry`: `currentAnchor` clamped the playhead back into the
+        // sentence, `skipBook` measured from it, and a file that ended in the
+        // hole advanced from the sentence, onto the hole, and replayed it for
+        // ever.
+        //
+        // The highlight and the page still move on the fragment alone — as
+        // the timeline scopes it, to its document. A hole names the sentence
+        // it hangs off, which is what v2 lit for those same seconds, having
+        // folded them into that sentence's clip; repainting it would change
+        // nothing anybody can see, and the reader counts a fragment change as
+        // narration arriving somewhere.
+        if entry != activeEntry {
             let previousDocument = activeEntry?.textHref
-            activeFragmentID = entry.fragmentID
+            let fragmentMoved = entry.fragmentID != activeFragmentID
+                || entry.textHref != previousDocument
             activeEntry = entry
-            onFragmentChange?(entry.fragmentID)
+            if fragmentMoved {
+                activeFragmentID = entry.fragmentID
+                onFragmentChange?(entry.fragmentID)
+            }
             if entry.textHref != previousDocument {
                 onChapterChange?(entry.textHref)
                 // Only a real boundary, not the first fragment of a session.
@@ -173,7 +195,13 @@ public final class ReadalongCoordinator {
     }
 
     private func advanceToNextFile() async {
-        guard let entry = activeEntry, let next = timeline.entry(after: entry) else {
+        // The next *entry*, whatever it is — not the next sentence. When a
+        // file runs out, what plays next is whatever audio the book has next:
+        // a hole, the continuation of the sentence just heard, or a whole
+        // audio chapter, which `entry(after:)` would step over in silence. At
+        // the end of the book there is nothing, and that is a pause, including
+        // when the book ends on a hole.
+        guard let entry = activeEntry, let next = timeline.entry(following: entry) else {
             player.pause()
             return
         }
@@ -181,8 +209,8 @@ public final class ReadalongCoordinator {
         guard await move(to: next) else { return }
         // A chapter that ran out, which is what the end-of-chapter timer is
         // waiting for. `advance(to:)` cannot see this one: `move(to:)` has
-        // already set `activeFragmentID`, so the clock's next tick finds its
-        // own boundary test false. A book with one audio file per chapter
+        // already set `activeEntry`, so the clock's next tick finds its own
+        // boundary test false. A book with one audio file per chapter
         // therefore never reported an ending at all, and a timer set at bedtime
         // played through the night.
         //
@@ -291,8 +319,8 @@ public final class ReadalongCoordinator {
         // sentence, paragraph and chapter command passes through.
         //
         // `advance(to:)` cannot do it for these: this method sets
-        // `activeFragmentID` before returning, so the clock's next tick finds
-        // its `entry.fragmentID != activeFragmentID` test already false, and by
+        // `activeEntry` before returning, so the clock's next tick finds its
+        // `entry != activeEntry` test already false, and by
         // the tick after that `previousDocument` is the new document. A seek
         // across a chapter therefore fired `onChapterChange` *never* — not
         // late — so the page did not turn and `SleepTimer.chapterDidEnd()` was
