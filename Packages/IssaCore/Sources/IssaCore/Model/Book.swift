@@ -393,6 +393,30 @@ public struct StoredPosition: Codable, Hashable, Sendable {
 
 // MARK: - Formats
 
+/// A 3.x cover: the content hash `/api/v2/images/{sha256}` serves it under.
+///
+/// Each format carries its own, because each format has its own art — the
+/// audiobook's is square. The server sends `width`, `height`, `blurhash` and
+/// `colors` beside the hash; synthesized decoding ignores them, since drawing a
+/// placeholder from them would be new functionality rather than parity.
+public struct CoverReference: Codable, Hashable, Sendable {
+    public var sha256: String
+
+    /// Whether this is 64 lowercase hex characters, which is all the server
+    /// ever writes.
+    ///
+    /// The value is interpolated into a URL path and, by the app, a cache file
+    /// name — the same exposure that makes the catalogue refuse a uuid that is
+    /// not a uuid (`LibraryService.refusingUnsafeIdentifiers`). A reference
+    /// that fails this is treated as absent, not repaired.
+    public var isUsable: Bool {
+        sha256.utf8.count == 64 && sha256.utf8.allSatisfy { byte in
+            (UInt8(ascii: "0") ... UInt8(ascii: "9")).contains(byte)
+                || (UInt8(ascii: "a") ... UInt8(ascii: "f")).contains(byte)
+        }
+    }
+}
+
 public struct EbookFormat: Codable, Hashable, Sendable {
     public var uuid: String
     public var filepath: String?
@@ -404,6 +428,8 @@ public struct EbookFormat: Codable, Hashable, Sendable {
     public var identifiers: [Identifier]
     public var createdAt: FlexibleDate?
     public var updatedAt: FlexibleDate?
+    /// 3.x only, and `null` when the format has no image. See `Book.coverReference(for:)`.
+    public var cover: CoverReference?
 }
 
 public struct AudiobookFormat: Codable, Hashable, Sendable {
@@ -417,6 +443,8 @@ public struct AudiobookFormat: Codable, Hashable, Sendable {
     public var identifiers: [Identifier]
     public var createdAt: FlexibleDate?
     public var updatedAt: FlexibleDate?
+    /// 3.x only: the square art. See `Book.coverReference(for:)`.
+    public var cover: CoverReference?
 }
 
 /// The aligned EPUB: text plus embedded audio plus SMIL media overlays.
@@ -438,6 +466,8 @@ public struct ReadaloudFormat: Codable, Hashable, Sendable {
     public var identifiers: [Identifier]
     public var createdAt: FlexibleDate?
     public var updatedAt: FlexibleDate?
+    /// 3.x only. See `Book.coverReference(for:)`.
+    public var cover: CoverReference?
 
     /// Only an `ALIGNED` readaloud has finished the pipeline; the rest are
     /// mid-flight or failed.
@@ -463,5 +493,24 @@ public extension Book {
     /// disagree about the length of one book.
     var narrationDuration: Double? {
         readaloud?.duration ?? audiobook?.duration
+    }
+
+    /// The 3.x cover for a shape, when the book carries a usable one.
+    ///
+    /// The same choice 3.x's own cover route makes and its web UI draws:
+    /// square is the audiobook's art; portrait is the ebook's, else the
+    /// read-along's — and an unusable ebook reference falls through to the
+    /// read-along's rather than ending the search.
+    ///
+    /// nil on 2.x, whose JSON has no `cover` keys, and on a row cached by
+    /// 1.2.0 until the next refresh: `LibraryStore` keeps a re-encoding of
+    /// this struct rather than the server's bytes, so a field this version
+    /// added is absent from every older row.
+    func coverReference(for shape: LibraryService.CoverShape) -> CoverReference? {
+        let candidates = switch shape {
+        case .square: [audiobook?.cover]
+        case .portrait: [ebook?.cover, readaloud?.cover]
+        }
+        return candidates.lazy.compactMap(\.self).first(where: \.isUsable)
     }
 }

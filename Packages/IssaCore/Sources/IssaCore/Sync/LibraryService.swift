@@ -1,13 +1,19 @@
 import Foundation
 
-/// Reads the catalogue.
+/// Reads the catalogue, and the covers that go with it.
 ///
 /// On the 2.14.21 baseline `GET /api/v2/books` takes no parameters and returns
 /// the whole library in one array, including this user's position and status.
 /// The client therefore fetches once and does all searching, filtering and
 /// shelf-building locally — which is faster than round-tripping and works
 /// offline. On a 3.x server the same data is available piecemeal, but there is
-/// no reason to prefer it.
+/// no reason to prefer it, and the one array is still served whole.
+///
+/// Covers are where the two generations part. 2.x serves them by book uuid;
+/// 3.x keeps them by content hash under `/api/v2/images`, names that hash in
+/// the book's own JSON, and answers the old uuid route with a redirect there.
+/// `coverData(for:shape:pixelWidth:pixelHeight:generation:fallback:)` takes
+/// the direct route whenever the book says where its cover is.
 public struct LibraryService: Sendable {
     private let client: APIClient
 
@@ -69,7 +75,7 @@ public struct LibraryService: Sendable {
         return book
     }
 
-    /// Storyteller keeps two covers per book and serves them from one route.
+    /// Storyteller keeps two covers per book: one for the text, one for the audio.
     public enum CoverShape: Sendable {
         /// The portrait ebook cover, for shelves and the book hero.
         case portrait
@@ -78,7 +84,14 @@ public struct LibraryService: Sendable {
         case square
     }
 
-    /// Fetches a cover, letting the server do the resizing.
+    /// Fetches a cover by book uuid, letting the server do the resizing.
+    ///
+    /// The 2.x route, and still the one to use when there is no `Book` to hand
+    /// — CarPlay can ask for a book the catalogue no longer holds. Prefer
+    /// `coverData(for:shape:pixelWidth:pixelHeight:generation:fallback:)`
+    /// wherever there is one: on 3.x this route is deprecated and answers
+    /// with a redirect, which `APIClient.getData` follows but a direct request
+    /// never needs.
     ///
     /// Asking for the size actually needed saves both the transfer and the
     /// decode: a 3 MB 2000px cover drawn into a 108pt grid cell is most of what
@@ -117,6 +130,61 @@ public struct LibraryService: Sendable {
                 pixelWidth: pixelWidth, pixelHeight: pixelHeight, version: version,
             )
         }
+    }
+
+    /// Fetches a book's cover by the route its server generation wants.
+    ///
+    /// In order:
+    ///
+    /// 1. The book names a usable cover for this shape: fetched straight from
+    ///    `/api/v2/images/{sha256}`. Chosen from the book's own data rather
+    ///    than from `generation`, so it is right before detection has finished
+    ///    and cannot be made wrong by it.
+    /// 2. A portrait was asked for, may fall back, and the book names only a
+    ///    square one: that, by the same route — the uuid route's
+    ///    portrait-to-square fallback, decided without a 404 round trip.
+    /// 3. The server is known to be 3.x and the book names none: there is no
+    ///    such cover, and `.notFound` says so without a request. The
+    ///    deprecated uuid route would only redirect to the same answer.
+    /// 4. Otherwise — 2.x, or a generation not yet detected — the uuid route,
+    ///    versioned by `updatedAt` exactly as the app has always asked for it.
+    ///    On a 3.x server this is the path a row cached by 1.2.0 takes until
+    ///    detection lands, which is why `getData` follows its redirect with
+    ///    the bearer intact.
+    ///
+    /// The images route is sent no `v=`. Its URL is the content's own hash, so
+    /// a replaced cover arrives under a new URL by construction, and the
+    /// server marks the response immutable. `s` is the longest edge wanted:
+    /// the server rounds it up to its next size bucket and fits the image
+    /// inside, never cropping, so `max(width, height)` asks for at least what
+    /// either dimension needs. Omitted at zero, which the server reads as the
+    /// original size.
+    public func coverData(
+        for book: Book,
+        shape: CoverShape = .portrait,
+        pixelWidth: Int? = nil,
+        pixelHeight: Int? = nil,
+        generation: ServerGeneration?,
+        fallback: Bool = true,
+    ) async throws -> Data {
+        let longestEdge = max(pixelWidth ?? 0, pixelHeight ?? 0)
+        if let reference = book.coverReference(for: shape) {
+            return try await imageData(reference, longestEdge: longestEdge)
+        }
+        if shape == .portrait, fallback, let square = book.coverReference(for: .square) {
+            return try await imageData(square, longestEdge: longestEdge)
+        }
+        if generation == .v3 { throw StorytellerError.notFound }
+        return try await coverData(
+            for: book.uuid, shape: shape,
+            pixelWidth: pixelWidth, pixelHeight: pixelHeight,
+            version: book.updatedAt?.value, fallback: fallback,
+        )
+    }
+
+    private func imageData(_ reference: CoverReference, longestEdge: Int) async throws -> Data {
+        let query = longestEdge > 0 ? [URLQueryItem(name: "s", value: String(longestEdge))] : []
+        return try await client.getData(Endpoint.V3.image(reference.sha256), query: query)
     }
 }
 
