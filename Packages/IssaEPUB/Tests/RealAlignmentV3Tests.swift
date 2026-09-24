@@ -46,6 +46,7 @@ struct RealAlignmentV3Tests {
 
         let following = try #require(timeline.entry(following: lastOfFirstFile))
         #expect(following.audioHref != firstFile, "the end of the file went back into the same file")
+        #expect(timeline.entry(followingFileOf: lastOfFirstFile) == following)
 
         let nextSentence = try #require(timeline.entry(after: lastOfFirstFile))
         #expect(!nextSentence.isAudioOnly)
@@ -78,6 +79,7 @@ struct RealAlignmentV3Tests {
         let last = try #require(entries.last)
         #expect(last.isAudioOnly)
         #expect(timeline.entry(following: last) == nil)
+        #expect(timeline.entry(followingFileOf: last) == nil)
     }
 
     @Test("every v3 entry is coherent",
@@ -96,6 +98,11 @@ struct RealAlignmentV3Tests {
                 // Forward, always: it only is when every entry, holes included,
                 // resolves to its own place rather than to its sentence's first.
                 #expect(timeline.entry(following: entry).map { $0.cumulativeEnd > entry.cumulativeEnd } ?? true)
+                // And the end of whichever file this entry is in goes forward,
+                // into another file.
+                #expect(timeline.entry(followingFileOf: entry).map {
+                    $0.cumulativeEnd > entry.cumulativeEnd && $0.audioHref != entry.audioHref
+                } ?? true)
             }
             // The server aligns by the sentence, so no entry is a word of one:
             // resolving and stepping are exactly what they were before words

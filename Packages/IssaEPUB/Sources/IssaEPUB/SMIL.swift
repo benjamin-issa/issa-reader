@@ -482,7 +482,9 @@ public struct SMILTimeline: Sendable {
         // nothing: clips are gapless within a file, so this only happens at the
         // very end — of the file's last run, in the rare case it has more than
         // one. For a run whose clips do not ascend, the very end is wherever
-        // its latest-ending clip ends, which need not be its last entry.
+        // its latest-ending clip ends, which need not be its last entry — so
+        // what plays when the file runs out is asked of the run, not of the
+        // entry: `entry(followingFileOf:)`.
         let lastRun = runs[runs.count - 1]
         let tail = nonAscendingRuns.contains(lastRun.lowerBound)
             ? latestEnding(in: lastRun) : lastRun.upperBound - 1
@@ -548,7 +550,7 @@ public struct SMILTimeline: Sendable {
     /// A different *sentence*, not a different fragment — see `sentenceKey`.
     ///
     /// Stepping by sentence is what this is for. The end of a file wants the
-    /// next audio instead — `entry(following:)`.
+    /// next audio instead — `entry(followingFileOf:)`.
     public func entry(after entry: SMILEntry) -> SMILEntry? {
         guard let index = index(of: entry) else { return nil }
         let key = sentenceKey(entry)
@@ -614,18 +616,51 @@ public struct SMILTimeline: Sendable {
         FragmentKey(document: entry.textHref, fragment: entry.sentenceID ?? entry.fragmentID)
     }
 
-    /// The entry after `entry` in the book, whatever kind it is.
+    /// The entry after `entry` in the book, whatever kind it is: positional,
+    /// the next one in `entries`, whichever file it is in.
     ///
-    /// What the end of an audio file needs, and deliberately not
-    /// `entry(after:)`: that one steps over holes and whole audio chapters,
-    /// which is right for a listener skipping a sentence and wrong for audio
-    /// that has simply run out — it would drop an interlude the book means to
-    /// play. The end-of-file advance used to call `entry(after:)` when that
-    /// meant this, and on a file ending in an after-hole it resolved the hole
-    /// to its sentence and was handed the hole back, for ever.
+    /// Not what the end of an audio file wants, though it used to be what
+    /// that asked: see `entry(followingFileOf:)`.
     public func entry(following entry: SMILEntry) -> SMILEntry? {
         guard let index = index(of: entry), index + 1 < entries.count else { return nil }
         return entries[index + 1]
+    }
+
+    /// The entry that plays when `entry`'s audio file runs out: the first
+    /// entry after the run of that file which holds `entry`. Nil at the end of
+    /// the book.
+    ///
+    /// What the end of an audio file needs, and deliberately neither of the
+    /// two steps above. `entry(after:)` steps over holes and whole audio
+    /// chapters, which is right for a listener skipping a sentence and wrong
+    /// for audio that has simply run out — it would drop an interlude the book
+    /// means to play; the end-of-file advance once called it, and on a file
+    /// ending in an after-hole it resolved the hole to its sentence and was
+    /// handed the hole back, for ever. `entry(following:)`, which replaced it,
+    /// is positional, and the entry active when a file runs out need not be
+    /// the last of its file: in a run whose clips do not ascend, the clip that
+    /// ends last — what `entry(inFile:at:)` answers past the end — can sit
+    /// anywhere in it. Its successor was another clip of the same file, so the
+    /// end of the file seeked back into that file, played it out, ended on the
+    /// same clip and seeked back again, for ever. The chapter never changed,
+    /// so an end-of-chapter sleep timer never fired.
+    ///
+    /// Runs are maximal stretches of one file, so the answer is always in
+    /// another file, and the advance always loads it. Where `entry` is the
+    /// last of its run, as the entry playing at the end of an ascending file
+    /// is, this is the same entry as `entry(following:)`.
+    ///
+    /// Not handled: a file the spine plays more than once, with other files
+    /// between, has a run for each. Past that file's end `entry(inFile:at:)`
+    /// answers from its *last* run, so the end of an earlier playing advances
+    /// from there, past everything in between. `entry(following:)` did the
+    /// same from the same active entry; this does not make it worse.
+    public func entry(followingFileOf entry: SMILEntry) -> SMILEntry? {
+        guard let index = index(of: entry),
+              let run = fileRanges[entries[index].audioHref]?.first(where: { $0.contains(index) }),
+              run.upperBound < entries.count
+        else { return nil }
+        return entries[run.upperBound]
     }
 
     /// The run of entries around `entry`, and where in that run it sits.

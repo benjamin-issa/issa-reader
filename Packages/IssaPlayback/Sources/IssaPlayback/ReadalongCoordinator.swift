@@ -203,13 +203,33 @@ public final class ReadalongCoordinator {
     }
 
     private func advanceToNextFile() async {
-        // The next *entry*, whatever it is — not the next sentence. When a
-        // file runs out, what plays next is whatever audio the book has next:
-        // a hole, the continuation of the sentence just heard, or a whole
-        // audio chapter, which `entry(after:)` would step over in silence. At
-        // the end of the book there is nothing, and that is a pause, including
-        // when the book ends on a hole.
-        guard let entry = activeEntry, let next = timeline.entry(following: entry) else {
+        // An ending that arrives while a move is in flight is not this file's:
+        // the listener has already gone somewhere else. `AudioPlayer.load`
+        // removes the old item's end observer, but a notification the old item
+        // posted just before is already queued on the main queue, and it runs
+        // at the move's first suspension — with `activeEntry` already naming
+        // the destination. Answering it advanced from *there*, past the rest
+        // of a file the listener had only just scrubbed into. Nothing is lost
+        // by dropping it: the move owns the playhead, and the file it loads
+        // posts its own ending when it runs out.
+        guard movesInFlight == 0 else { return }
+        // The first entry of the next file, whatever it is — not the next
+        // sentence. When a file runs out, what plays next is whatever audio
+        // the book has next: a hole, the continuation of the sentence just
+        // heard, or a whole audio chapter, which `entry(after:)` would step
+        // over in silence. Nor the next entry: in a file whose clips the
+        // aligner left out of order, the entry playing at its end need not be
+        // its last, and the entry after it was more of the same file — the
+        // advance seeked back into it and the file ended, and seeked back, for
+        // ever. At the end of the book there is nothing, and that is a pause,
+        // including when the book ends on a hole.
+        //
+        // For a file whose clips ascend the two answers are the same, with one
+        // exception: a last clip shorter than a tick of the screen-off clock,
+        // where `activeEntry` is still the one before it. The next entry
+        // replayed that sub-second clip once before moving on; the next file
+        // does not, and the clip has already been heard.
+        guard let entry = activeEntry, let next = timeline.entry(followingFileOf: entry) else {
             player.pause()
             return
         }

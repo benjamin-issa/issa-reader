@@ -56,6 +56,19 @@ struct RealAlignmentTests {
         // The server aligns by the sentence, so no entry is a word of one: the
         // timeline is exactly the one it was before words were read.
         #expect(timeline.entries.allSatisfy { $0.sentenceID == nil })
+
+        // Every track's clips ascend, so the entry playing when a track runs
+        // out is its last, and the next file's first entry is the next entry:
+        // the end of a file advances exactly as it did.
+        let entries = timeline.entries
+        let trackEnds = entries.indices.filter { index in
+            index == entries.count - 1 || entries[index + 1].audioHref != entries[index].audioHref
+        }
+        #expect(trackEnds.count > 1)
+        for index in trackEnds {
+            #expect(timeline.entry(followingFileOf: entries[index]) == timeline.entry(following: entries[index]),
+                    "at the end of \(entries[index].audioHref)")
+        }
     }
 
     @Test("clips are contiguous within each track",
