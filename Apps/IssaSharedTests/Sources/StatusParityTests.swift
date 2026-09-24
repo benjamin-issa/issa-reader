@@ -21,6 +21,8 @@ import Testing
 struct StatusParityTests {
     static let dracula = Catalogue.dracula
     static let bleakHouse = Catalogue.bleakHouse
+    /// On this device's shelf only; the server is never asked for it.
+    static let middlemarch = "33333333-3333-4333-8333-333333333333"
 
     /// The server's statuses, relabelled the way the 3.x fixture server is:
     /// the rule matches on `name`, so a label must not throw it off.
@@ -181,6 +183,55 @@ struct StatusParityTests {
         let sent = try JSONDecoder().decode(
             MutationDrain.StatusPayload.self, from: try #require(queued.last).payload)
         #expect(sent.status == Self.status(named: Status.readingName).uuid)
+    }
+
+    // MARK: - A cold launch without a connection
+
+    /// `statuses` comes with a refresh, so a cold launch with no connection
+    /// has none — and that is the launch the rule allows an undetected
+    /// generation for. The books already on the shelf name the server's
+    /// statuses, so one filed at the status wanted says which uuid to write.
+    @Test(
+        "with no statuses loaded, the ones the cached books carry are written",
+        arguments: [(progress: 0.2, status: Status.readingName), (progress: 0.99, status: Status.readName)]
+            as [(progress: Double, status: String)])
+    func coldLaunchFilesFromTheShelf(write: (progress: Double, status: String)) async throws {
+        let fixture = try await Self.fixture(generation: nil, books: [
+            SharedFixtures.book("Dracula", uuid: Self.dracula, progress: 0.1),
+            SharedFixtures.book("Bleak House", uuid: Self.bleakHouse, status: Status.readingName),
+            SharedFixtures.book("Middlemarch", uuid: Self.middlemarch, status: Status.readName),
+        ])
+        defer { fixture.tearDown() }
+        fixture.app.statuses = []
+
+        let accepted = await fixture.app.writePosition(
+            Self.locator(write.progress), timestamp: 10, for: Self.dracula, origin: .chosen)
+
+        #expect(accepted)
+        #expect(fixture.app.bookByUUID[Self.dracula]?.status?.name == write.status)
+        let queued = try await fixture.queued()
+        #expect(queued.map(\.kind) == [.position, .status])
+        let sent = try JSONDecoder().decode(
+            MutationDrain.StatusPayload.self, from: try #require(queued.last).payload)
+        // `SharedFixtures` gives each status its name as its uuid, which is
+        // what the cached books carry.
+        #expect(sent.status == write.status)
+    }
+
+    /// Nothing to go on is still nothing written: a status the shelf does not
+    /// name would be a guess, and the next write once statuses load files it.
+    @Test("with no statuses loaded and none on the shelf, nothing is written")
+    func coldLaunchWithAnUnfiledShelf() async throws {
+        let fixture = try await Self.fixture(
+            generation: nil,
+            books: [SharedFixtures.book("Dracula", uuid: Self.dracula, progress: 0.1)])
+        defer { fixture.tearDown() }
+        fixture.app.statuses = []
+
+        await fixture.app.writePosition(Self.locator(0.2), timestamp: 10, for: Self.dracula, origin: .chosen)
+
+        #expect(fixture.app.bookByUUID[Self.dracula]?.status == nil)
+        #expect(try await fixture.queued().map(\.kind) == [.position])
     }
 
     // MARK: - A refresh before the queue drains

@@ -3498,12 +3498,25 @@ public final class AppModel {
     /// leaves it to the server, which advances a book with a status itself.
     /// Nothing here writes a position, so it cannot come back through
     /// `writePosition`.
+    ///
+    /// The statuses the cached books carry stand in for `statuses` while that
+    /// is empty. It is filled only by a refresh and kept only in memory, so on
+    /// a cold launch without a connection — the case `StatusAdvance` allows an
+    /// undetected generation for — the rule found no "Reading" to write, and a
+    /// book finished offline stayed unfiled until it was next read online.
+    /// The built-in statuses are the server's own rows, with fixed names, and
+    /// every book filed under one names its uuid, so a cached book at
+    /// "Reading" says exactly which status to write. A book with no status is
+    /// only ever cached from a 3.x catalogue, so those rows are 3.x's too.
+    /// Where no cached book is at the status wanted, nothing is written, as
+    /// before.
     private func advanceStatusIfUnset(after locator: ReadiumLocator, for bookUUID: String) async {
         let generation = session?.capabilities.generation
+        let known = statuses.isEmpty ? books.compactMap(\.status) : statuses
         guard let book = bookByUUID[bookUUID],
               let next = StatusAdvance.statusToSet(
                   after: locator, current: book.status,
-                  generation: generation, statuses: statuses)
+                  generation: generation, statuses: known)
         else { return }
         IssaLog.info("status set after a position write", [
             "book": bookUUID,
