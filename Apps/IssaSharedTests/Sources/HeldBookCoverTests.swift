@@ -7,17 +7,21 @@ import Testing
 /// A cover asked for with a `Book` that predates the refresh still arrives.
 ///
 /// Detection answers a few requests after sign-in, before the first refresh
-/// replaces rows cached by 1.2.0, and those rows name no cover. The service
-/// answers a 3.x book that names none with `.notFound` and no request, so a
-/// book taken from them in that stretch — the one playback began with, the
-/// widget's, the one an open reader holds — had no art for as long as it was
-/// held: none of those is ever handed the refreshed book. The app asks for
-/// such a book by uuid, which 3.x redirects to the same image.
+/// replaces rows cached by 1.2.0, and those rows name no cover. A book taken
+/// from them in that stretch — the one playback began with, the widget's, the
+/// one an open reader holds — is held for as long as it plays or stays open,
+/// and none of those is ever handed the refreshed book. When the service
+/// answered a book naming no art with `.notFound` because the server was 3.x,
+/// that book had no art the whole time. It now decides from the book alone:
+/// one that names nothing is asked for by uuid, which 3.x redirects to the
+/// same image, and one that names any art keeps the answer it carries.
+///
+/// End to end through the widget, on a session detection has identified as
+/// 3.x, so these fail if the server's generation ever decides the route
+/// again.
 @Suite("Covers for a book held from before the refresh")
 @MainActor
 struct HeldBookCoverTests {
-    static let art = String(repeating: "a", count: 64)
-
     /// A row as 1.2.0 cached it from a 3.x server, or as a 2.x server sends it:
     /// every edition, no cover keys.
     static func unnamed(uuid: String = "d") -> Book {
@@ -31,41 +35,10 @@ struct HeldBookCoverTests {
         return book
     }
 
-    // MARK: - The rule
-
-    @Test("a 3.x book that names no cover is asked for by uuid")
-    func unnamedGoesByUUID() {
-        #expect(CoverCache.generation(toFetch: Self.unnamed(), detected: .v3) == nil)
-
-        // An unusable hash is not a cover the service would fetch, so it does
-        // not make the book one that names its art.
-        var malformed = Self.unnamed()
-        malformed.ebook?.cover = CoverReference(sha256: "ABC")
-        #expect(CoverCache.generation(toFetch: malformed, detected: .v3) == nil)
-    }
-
-    /// A book that names one shape came from a 3.x catalogue, so the service's
-    /// answer for the other — no such art, without a request — is the server's.
-    @Test("a 3.x book that names any cover keeps the service's own answer")
-    func namedKeepsTheGeneration() {
-        #expect(CoverCache.generation(toFetch: Self.namingEbookArt(Self.art), detected: .v3) == .v3)
-        var squareOnly = Self.unnamed()
-        squareOnly.audiobook?.cover = CoverReference(sha256: Self.art)
-        #expect(CoverCache.generation(toFetch: squareOnly, detected: .v3) == .v3)
-    }
-
-    @Test("a 2.x server, or one not yet detected, is passed through untouched")
-    func otherGenerationsPassThrough() {
-        #expect(CoverCache.generation(toFetch: Self.unnamed(), detected: .v2) == .v2)
-        #expect(CoverCache.generation(toFetch: Self.unnamed(), detected: nil) == nil)
-    }
-
-    // MARK: - Through the widget's fetch
-
     /// The widget's cover is the one surface whose fetch can be driven end to
     /// end from here: the publisher hands `widgetCover` the book it was given
     /// when reading or listening began, and asks with it again on every
-    /// publish, so without the rule the answer never changes.
+    /// publish, so a wrong answer for that book never changes.
     @Test("the widget fetches a held book's art by uuid on a 3.x server")
     func widgetFetchesAHeldBookByUUID() async throws {
         let uuid = UUID().uuidString.lowercased()
@@ -80,9 +53,9 @@ struct HeldBookCoverTests {
         #expect(CoverServer.requested(containing: uuid) == [Endpoint.cover(uuid)])
     }
 
-    /// And the rule takes nothing away from a book that names its art: that
-    /// is fetched by hash, and the square it names none for is not asked of
-    /// the uuid route at all.
+    /// And a book that names its art loses nothing: that is fetched by hash,
+    /// and the square it names none for is not asked of the uuid route at
+    /// all.
     @Test("the widget fetches a named cover by hash and nothing by uuid")
     func widgetFetchesANamedCoverByHash() async throws {
         let uuid = UUID().uuidString.lowercased()
@@ -100,7 +73,8 @@ struct HeldBookCoverTests {
     }
 
     /// A session the probe has identified as 3.x, as the app's is by the time
-    /// the stretch this suite is about begins.
+    /// the stretch this suite is about begins — the detection that once made
+    /// the difference, kept so these show it no longer does.
     static func v3Session() async throws -> Session {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [CoverServer.self]

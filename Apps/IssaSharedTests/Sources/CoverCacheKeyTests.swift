@@ -150,8 +150,7 @@ struct CoverCacheKeyTests {
         let client = APIClient(
             baseURL: URL(string: "http://\(host)")!, tokens: StaticToken(),
             session: URLSession(configuration: configuration))
-        _ = try? await LibraryService(client: client).coverData(
-            for: book, shape: shape, generation: nil, fallback: fallback)
+        _ = try? await LibraryService(client: client).coverData(for: book, shape: shape, fallback: fallback)
 
         let prefix = Endpoint.V3.image("")
         let images = ImageFetchRecorder.paths(on: host).filter { $0.hasPrefix(prefix) }

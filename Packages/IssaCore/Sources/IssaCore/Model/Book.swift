@@ -600,4 +600,21 @@ public extension Book {
         }
         return candidates.lazy.compactMap(\.self).first(where: \.isUsable)
     }
+
+    /// Whether the book names a usable cover for either shape.
+    ///
+    /// Proof the row came from a 3.x catalogue: 2.x JSON has no `cover` keys,
+    /// and a row cached by 1.2.0 lost them to the re-encoding. So a book that
+    /// names art for one shape and not the other already carries the server's
+    /// answer for the other — 3.x's uuid route chooses exactly as
+    /// `coverReference(for:)` does and 404s where that finds nothing — and
+    /// `LibraryService` gives that answer without asking. Decided from the
+    /// book alone, so it is as right for a row held from before the refresh as
+    /// for a fresh one, whatever detection has or has not said.
+    ///
+    /// An unusable hash names nothing. It is never fetched, so it cannot stand
+    /// for the server having spoken, and such a book is asked for by uuid.
+    var namesAnyCover: Bool {
+        coverReference(for: .portrait) != nil || coverReference(for: .square) != nil
+    }
 }

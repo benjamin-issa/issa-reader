@@ -12,8 +12,8 @@ import Foundation
 /// Covers are where the two generations part. 2.x serves them by book uuid;
 /// 3.x keeps them by content hash under `/api/v2/images`, names that hash in
 /// the book's own JSON, and answers the old uuid route with a redirect there.
-/// `coverData(for:shape:pixelWidth:pixelHeight:generation:fallback:)` takes
-/// the direct route whenever the book says where its cover is.
+/// `coverData(for:shape:pixelWidth:pixelHeight:fallback:)` takes the direct
+/// route whenever the book says where its cover is.
 public struct LibraryService: Sendable {
     private let client: APIClient
 
@@ -88,7 +88,7 @@ public struct LibraryService: Sendable {
     ///
     /// The 2.x route, and still the one to use when there is no `Book` to hand
     /// — CarPlay can ask for a book the catalogue no longer holds. Prefer
-    /// `coverData(for:shape:pixelWidth:pixelHeight:generation:fallback:)`
+    /// `coverData(for:shape:pixelWidth:pixelHeight:fallback:)`
     /// wherever there is one: on 3.x this route is deprecated and answers
     /// with a redirect, which `APIClient.getData` follows but a direct request
     /// never needs.
@@ -132,25 +132,34 @@ public struct LibraryService: Sendable {
         }
     }
 
-    /// Fetches a book's cover by the route its server generation wants.
+    /// Fetches a book's cover by the route the book itself says to take.
     ///
     /// In order:
     ///
     /// 1. The book names a usable cover for this shape — or, for a portrait
     ///    that may fall back, a square one: fetched straight from
-    ///    `/api/v2/images/{sha256}`. Chosen by `Book.coverReference(for:fallback:)`
-    ///    from the book's own data rather than from `generation`, so it is
-    ///    right before detection has finished and cannot be made wrong by it;
-    ///    and by the same function `CoverCache` names the file after, so the
-    ///    two cannot disagree about which image this is.
-    /// 2. The server is known to be 3.x and the book names none: there is no
-    ///    such cover, and `.notFound` says so without a request. The
-    ///    deprecated uuid route would only redirect to the same answer.
-    /// 3. Otherwise — 2.x, or a generation not yet detected — the uuid route,
-    ///    versioned by `updatedAt` exactly as the app has always asked for it.
-    ///    On a 3.x server this is the path a row cached by 1.2.0 takes until
-    ///    detection lands, which is why `getData` follows its redirect with
-    ///    the bearer intact.
+    ///    `/api/v2/images/{sha256}`. Chosen by `Book.coverReference(for:fallback:)`,
+    ///    the function `CoverCache` names the file after, so the two cannot
+    ///    disagree about which image this is.
+    /// 2. The book names art for some shape, but not this one: `.notFound`,
+    ///    without a request. Only a 3.x catalogue writes cover references, so
+    ///    the book's silence about this shape is the server's own answer, and
+    ///    the deprecated uuid route would only 404. See `Book.namesAnyCover`.
+    /// 3. The book names none: the uuid route, versioned by `updatedAt`
+    ///    exactly as the app has always asked for it. That is every book on
+    ///    2.x, asked for byte for byte as before. On 3.x it is a row cached by
+    ///    1.2.0, which 3.x redirects to the same image — hence `getData`
+    ///    following the redirect with the bearer intact — and a book that
+    ///    truly has no art, which costs the one request that 404s, as it did
+    ///    in 1.2.0.
+    ///
+    /// Nothing here asks which generation the server was detected as. That
+    /// says nothing about the `Book` in hand, and a book is often held from
+    /// before the refresh that brings its references — the one playback began
+    /// with, the widget's, an open reader's — and is never handed the
+    /// refreshed row. Answering such a book `.notFound` because the server is
+    /// 3.x kept the Lock Screen, CarPlay, the player and the widget blank for
+    /// the whole session.
     ///
     /// The images route is sent no `v=`. Its URL is the content's own hash, so
     /// a replaced cover arrives under a new URL by construction, and the
@@ -164,14 +173,13 @@ public struct LibraryService: Sendable {
         shape: CoverShape = .portrait,
         pixelWidth: Int? = nil,
         pixelHeight: Int? = nil,
-        generation: ServerGeneration?,
         fallback: Bool = true,
     ) async throws -> Data {
         let longestEdge = max(pixelWidth ?? 0, pixelHeight ?? 0)
         if let reference = book.coverReference(for: shape, fallback: fallback) {
             return try await imageData(reference, longestEdge: longestEdge)
         }
-        if generation == .v3 { throw StorytellerError.notFound }
+        if book.namesAnyCover { throw StorytellerError.notFound }
         return try await coverData(
             for: book.uuid, shape: shape,
             pixelWidth: pixelWidth, pixelHeight: pixelHeight,

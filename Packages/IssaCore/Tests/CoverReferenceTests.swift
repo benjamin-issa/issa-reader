@@ -3,7 +3,7 @@ import Testing
 
 @testable import IssaCore
 
-/// Which cover a book names for each shape.
+/// Which cover a book names for each shape, and whether it names any.
 ///
 /// `Book.coverReference(for:fallback:)` is the one place the choice is made:
 /// the fetch goes by it and the cache names its file by it. A mistake here is
@@ -108,5 +108,29 @@ struct CoverReferenceTests {
                 #expect(chosen(none, shape, fallback: fallback) == nil, "\(shape), fallback \(fallback)")
             }
         }
+    }
+
+    /// What decides between "no such art" and asking the uuid route: a book
+    /// naming art for one shape came from a 3.x catalogue, and one naming
+    /// none may be a row that predates the field.
+    @Test("a book names a cover when any edition names usable art")
+    func namesAnyCover() throws {
+        #expect(try !Self.book().namesAnyCover)
+        #expect(try Self.book(ebook: Self.ebookArt).namesAnyCover)
+        #expect(try Self.book(readaloud: Self.readaloudArt).namesAnyCover)
+        #expect(try Self.book(audiobook: Self.audiobookArt).namesAnyCover)
+        #expect(try Self.book(ebook: Self.ebookArt, readaloud: Self.readaloudArt, audiobook: Self.audiobookArt)
+            .namesAnyCover)
+    }
+
+    /// An unusable hash is never fetched, so it is no sign the server has
+    /// spoken about the book's art; a book naming only such hashes is asked
+    /// for by uuid like one that names none.
+    @Test("unusable art names no cover")
+    func unusableNamesNoCover() throws {
+        #expect(try !Self.book(ebook: Self.unusable).namesAnyCover)
+        #expect(try !Self.book(ebook: Self.unusable, readaloud: Self.unusable, audiobook: Self.unusable)
+            .namesAnyCover)
+        #expect(try Self.book(ebook: Self.unusable, audiobook: Self.audiobookArt).namesAnyCover)
     }
 }

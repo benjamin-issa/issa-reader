@@ -456,7 +456,7 @@ struct RedirectRewriteTests {
     }
 }
 
-@Suite("Choosing a book's cover route by what the book and the server say")
+@Suite("Choosing a book's cover route by what the book says")
 struct CoverRouteTests {
     private let uuid = "0f0e0d0c-0b0a-4908-8706-050403020100"
     private let portraitSHA = String(repeating: "ab", count: 32)
@@ -498,7 +498,7 @@ struct CoverRouteTests {
         let server = StubServer(covers: .redirectToImages)
 
         let data = try await service(for: server).coverData(
-            for: peter, pixelWidth: 600, generation: .v3)
+            for: peter, pixelWidth: 600)
 
         #expect(String(decoding: data, as: UTF8.self) == "image \(sha)")
         #expect(server.seenPaths == [Endpoint.V3.image(sha)])
@@ -512,8 +512,8 @@ struct CoverRouteTests {
         let cover = book(ebookCover: portraitSHA)
 
         _ = try await service(for: server).coverData(
-            for: cover, pixelWidth: 320, pixelHeight: 480, generation: .v3)
-        _ = try await service(for: server).coverData(for: cover, generation: .v3)
+            for: cover, pixelWidth: 320, pixelHeight: 480)
+        _ = try await service(for: server).coverData(for: cover)
 
         #expect(server.seen.map { $0.url?.query } == ["s=480", nil])
     }
@@ -523,7 +523,7 @@ struct CoverRouteTests {
         let server = StubServer(covers: .redirectToImages)
         _ = try await service(for: server).coverData(
             for: book(ebookCover: portraitSHA, audiobookCover: squareSHA),
-            shape: .square, pixelWidth: 240, generation: .v3)
+            shape: .square, pixelWidth: 240)
         #expect(server.seenPaths == [Endpoint.V3.image(squareSHA)])
     }
 
@@ -531,7 +531,7 @@ struct CoverRouteTests {
     func portraitFallsToReadaloud() async throws {
         let server = StubServer(covers: .redirectToImages)
         _ = try await service(for: server).coverData(
-            for: book(readaloudCover: readaloudSHA), generation: .v3)
+            for: book(readaloudCover: readaloudSHA))
         #expect(server.seenPaths == [Endpoint.V3.image(readaloudSHA)])
     }
 
@@ -541,69 +541,62 @@ struct CoverRouteTests {
     func portraitFallsBackToSquare() async throws {
         let server = StubServer(covers: .redirectToImages)
         _ = try await service(for: server).coverData(
-            for: book(audiobookCover: squareSHA), pixelWidth: 600, generation: .v3)
+            for: book(audiobookCover: squareSHA), pixelWidth: 600)
         #expect(server.seenPaths == [Endpoint.V3.image(squareSHA)])
     }
 
-    /// The widget turns the fallback off so it knows which shape it was given.
-    @Test("with the fallback off, a portrait with only square art is not found, unasked")
-    func noFallbackMeansNotFound() async throws {
+    /// Only a 3.x catalogue writes cover references, so a book that names art
+    /// for one shape came from one, and its silence about the other is the
+    /// server's answer: the uuid route could only 404. Decided from the book,
+    /// so it holds before detection has said anything — which is when the
+    /// request used to go out. The widget turns the fallback off to know which
+    /// shape it was given, which is how a portrait meets this with square art
+    /// in hand.
+    @Test("a book naming art for one shape is answered for the other without a request")
+    func namingOneShapeAnswersTheOtherWithoutARequest() async throws {
         let server = StubServer(covers: .redirectToImages)
         await #expect(throws: StorytellerError.notFound) {
             _ = try await service(for: server).coverData(
-                for: book(audiobookCover: squareSHA), generation: .v3, fallback: false)
+                for: book(audiobookCover: squareSHA), fallback: false)
+        }
+        await #expect(throws: StorytellerError.notFound) {
+            _ = try await service(for: server).coverData(
+                for: book(ebookCover: portraitSHA, readaloudCover: readaloudSHA), shape: .square)
         }
         #expect(server.seen.isEmpty)
     }
 
-    @Test("a 3.x book with no reference has no cover, and no request is made to find out")
-    func v3WithoutReferenceMakesNoRequest() async throws {
-        let server = StubServer(covers: .redirectToImages)
-        await #expect(throws: StorytellerError.notFound) {
-            _ = try await service(for: server).coverData(
-                for: book(), pixelWidth: 600, generation: .v3)
-        }
-        await #expect(throws: StorytellerError.notFound) {
-            _ = try await service(for: server).coverData(
-                for: book(), shape: .square, generation: .v3)
-        }
-        #expect(server.seen.isEmpty)
-    }
-
-    @Test("on 2.x a book without a reference takes the uuid route, versioned as before")
-    func v2UsesUUIDRoute() async throws {
-        let server = StubServer(covers: .served)
+    /// Every book on 2.x, and on 3.x a row cached by 1.2.0 — the upgrade
+    /// launch, and a book held from before the refresh that brings its
+    /// references. The uuid route, asked for exactly as before on either
+    /// server: 2.x serves the bytes, and 3.x redirects to the image and the
+    /// redirect is followed with the bearer.
+    @Test("a book that names no cover takes the uuid route, versioned as before, on either server")
+    func bookNamingNoCoverTakesTheUUIDRoute() async throws {
         let cover = book()
-        let data = try await service(for: server).coverData(
-            for: cover, pixelWidth: 600, generation: .v2)
-
-        #expect(String(decoding: data, as: UTF8.self) == "legacy cover")
-        #expect(server.seenPaths == [Endpoint.cover(uuid)])
-        let query = URLComponents(url: try #require(server.seen.first?.url), resolvingAgainstBaseURL: false)?
-            .queryItems ?? []
         let version = try #require(cover.updatedAt?.value)
-        #expect(query.contains(URLQueryItem(name: "w", value: "600")))
-        #expect(query.contains(URLQueryItem(
-            name: "v", value: String(Int(version.timeIntervalSince1970 * 1000)))))
-        #expect(!query.contains { $0.name == "s" })
-    }
+        let milliseconds = String(Int(version.timeIntervalSince1970 * 1000))
 
-    /// The upgrade launch: a row cached by 1.2.0 carries no reference, and the
-    /// probe has not answered yet. The uuid route is right on either server,
-    /// and on 3.x the redirect is followed with the bearer.
-    @Test("an undetected server takes the uuid route, and on 3.x its redirect still lands")
-    func undetectedUsesUUIDRoute() async throws {
         let v2 = StubServer(covers: .served)
-        _ = try await service(for: v2).coverData(for: book(), generation: nil)
+        let legacy = try await service(for: v2).coverData(for: cover, pixelWidth: 600)
+        #expect(String(decoding: legacy, as: UTF8.self) == "legacy cover")
         #expect(v2.seenPaths == [Endpoint.cover(uuid)])
+        #expect(v2.seen.first?.url?.query == "w=600&v=\(milliseconds)")
 
-        let v3 = StubServer(covers: .redirectToImages)
-        let data = try await service(for: v3).coverData(
-            for: book(), pixelWidth: 600, generation: nil)
-        #expect(String(decoding: data, as: UTF8.self) == "image \(StubServer.coverSHA)")
-        #expect(v3.seenPaths == [Endpoint.cover(uuid), Endpoint.V3.image(StubServer.coverSHA)])
+        for shape in [LibraryService.CoverShape.portrait, .square] {
+            let v3 = StubServer(covers: .redirectToImages)
+            let redirected = try await service(for: v3).coverData(for: cover, shape: shape, pixelWidth: 600)
+            #expect(String(decoding: redirected, as: UTF8.self) == "image \(StubServer.coverSHA)")
+            #expect(v3.seenPaths == [Endpoint.cover(uuid), Endpoint.V3.image(StubServer.coverSHA)])
+            #expect(v3.seen.first?.url?.query
+                == (shape == .square ? "audio=&" : "") + "w=600&v=\(milliseconds)")
+            #expect(v3.seen.last?.value(forHTTPHeaderField: "Authorization") == "Bearer reader-token")
+        }
     }
 
+    /// An unusable hash does not name a cover, so it neither picks a URL nor
+    /// makes the book one that names its art: it goes by uuid like a book that
+    /// names none — on 3.x, to whatever art the server does hold for it.
     @Test("a malformed sha is treated as absent and never reaches a URL")
     func unusableReferenceIsAbsent() async throws {
         let unusable = [
@@ -619,14 +612,12 @@ struct CoverRouteTests {
             #expect(cover.coverReference(for: .square) == nil)
 
             let v3 = StubServer(covers: .redirectToImages)
-            await #expect(throws: StorytellerError.notFound) {
-                _ = try await service(for: v3).coverData(for: cover, generation: .v3)
-            }
-            #expect(v3.seen.isEmpty)
+            _ = try await service(for: v3).coverData(for: cover)
+            #expect(v3.seenPaths == [Endpoint.cover(uuid), Endpoint.V3.image(StubServer.coverSHA)])
 
-            let undetected = StubServer(covers: .served)
-            _ = try await service(for: undetected).coverData(for: cover, generation: nil)
-            #expect(undetected.seenPaths == [Endpoint.cover(uuid)])
+            let v2 = StubServer(covers: .served)
+            _ = try await service(for: v2).coverData(for: cover)
+            #expect(v2.seenPaths == [Endpoint.cover(uuid)])
         }
     }
 
@@ -634,7 +625,7 @@ struct CoverRouteTests {
     func unusableEbookFallsThrough() async throws {
         let server = StubServer(covers: .redirectToImages)
         _ = try await service(for: server).coverData(
-            for: book(ebookCover: "not-a-sha", readaloudCover: readaloudSHA), generation: .v3)
+            for: book(ebookCover: "not-a-sha", readaloudCover: readaloudSHA))
         #expect(server.seenPaths == [Endpoint.V3.image(readaloudSHA)])
     }
 }

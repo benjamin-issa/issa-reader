@@ -341,11 +341,12 @@ public final class NowPlayingController {
         // art by content hash instead of through its redirecting uuid route.
         // This runs once per attach, and `attach` ignores the same book again,
         // so a book taken before the first refresh brought its references is
-        // never handed over twice; see `CoverCache.generation(toFetch:)`.
-        let server = CoverCache.generation(toFetch: book, detected: session.capabilities.generation)
+        // never handed over twice. The service decides from the book alone,
+        // so such a book is asked for by uuid, which 3.x redirects to the
+        // same art.
         Task { [weak self] in
             guard let data = try? await LibraryService(client: session.client)
-                .coverData(for: book, shape: .square, pixelWidth: 600, generation: server),
+                .coverData(for: book, shape: .square, pixelWidth: 600),
                 let image = PlatformImage(data: data) else { return }
             let size = image.size
             // A slow fetch for a previous book must not overwrite the current
