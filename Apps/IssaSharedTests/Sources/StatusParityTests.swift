@@ -75,13 +75,15 @@ struct StatusParityTests {
         }
     }
 
-    static func fixture(generation: ServerGeneration?, books: [Book]) async throws -> Fixture {
+    static func fixture(
+        generation: ServerGeneration?, books: [Book], mayWriteStatus: Bool = true,
+    ) async throws -> Fixture {
         let app = AppModel(keychain: InMemoryTokens(), notificationCentre: NotificationCenter())
         let directory = FileManager.default.temporaryDirectory
             .appending(path: "status-parity-\(UUID().uuidString)", directoryHint: .isDirectory)
         let store = try LibraryStore(serverKey: "status-parity", directory: directory)
         app.useStore(store)
-        app.session = try await session(as: generation)
+        app.session = try await session(as: generation, mayWriteStatus: mayWriteStatus)
         app.books = books
         app.rebuildDerived()
         app.statuses = statuses
@@ -94,9 +96,11 @@ struct StatusParityTests {
     /// after `/user` answers, so this signs in and waits for it to land. nil is
     /// a session that has not been told yet — the first launch after an
     /// upgrade, offline, which the rule deliberately still covers.
-    static func session(as generation: ServerGeneration?) async throws -> Session {
+    static func session(
+        as generation: ServerGeneration?, mayWriteStatus: Bool = true,
+    ) async throws -> Session {
         let port = switch generation {
-        case .v3: StubServer.v3Port
+        case .v3: mayWriteStatus ? StubServer.v3Port : StubServer.v3ReaderWithoutDownloadPort
         case .v2: StubServer.v2Port
         case nil: StubServer.undetectedPort
         }
@@ -118,6 +122,31 @@ struct StatusParityTests {
     }
 
     // MARK: - The advance
+
+    /// The status route asks for `bookDownload`, on 3.x as on 2.x; the
+    /// server's own rule never did. A reader without it would be refused on
+    /// every position write, so the app leaves the book as 3.x itself leaves
+    /// it — unfiled on the server, shelved here by its progress.
+    @Test("a reader the server does not let set statuses is not filed")
+    func noFilingWithoutPermission() async throws {
+        let fixture = try await Self.fixture(
+            generation: .v3,
+            books: [SharedFixtures.book("Dracula", uuid: Self.dracula, progress: 0.1)],
+            mayWriteStatus: false)
+        defer { fixture.tearDown() }
+        guard case .signedIn(let user)? = fixture.app.session?.state else {
+            Issue.record("the fixture never signed in")
+            return
+        }
+        try #require(user.permissions?.bookDownload == false)
+
+        let accepted = await fixture.app.writePosition(
+            Self.locator(0.5), timestamp: 10, for: Self.dracula, origin: .chosen)
+
+        #expect(accepted)
+        #expect(fixture.app.bookByUUID[Self.dracula]?.status == nil)
+        #expect(try await fixture.queued().map(\.kind) == [.position])
+    }
 
     /// The whole defect. A book with no status is read on this device; 2.x
     /// would have filed it, 3.x does not, so the app does — before detection
@@ -397,6 +426,9 @@ private final class StubServer: URLProtocol, @unchecked Sendable {
     static let undetectedPort = 1
     static let v2Port = 2
     static let v3Port = 3
+    /// A 3.x server whose reader may read and list books but not download
+    /// them, which is also the permission the status route asks for.
+    static let v3ReaderWithoutDownloadPort = 4
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -423,15 +455,18 @@ private final class StubServer: URLProtocol, @unchecked Sendable {
 
     private static func answer(_ path: String, port: Int) -> (Int, Data) {
         switch path {
+        case Endpoint.user where port == v3ReaderWithoutDownloadPort:
+            return (200, Data(#"{"id":"reader","permissions":{"bookRead":true,"bookList":true,"bookDownload":false}}"#.utf8))
         case Endpoint.user:
             return (200, Data(#"{"id":"reader"}"#.utf8))
         case Endpoint.V3.serverPublic:
             switch port {
-            case v3Port: return (200, Data(#"{"id":"server","capabilities":[]}"#.utf8))
+            case v3Port, v3ReaderWithoutDownloadPort:
+                return (200, Data(#"{"id":"server","capabilities":[]}"#.utf8))
             case v2Port: return (404, Data())
             default: return (503, Data())
             }
-        case Endpoint.V3.serverDetails where port == v3Port:
+        case Endpoint.V3.serverDetails where port == v3Port || port == v3ReaderWithoutDownloadPort:
             return (200, Data(#"{"version":"3.0.0-beta.40"}"#.utf8))
         case Endpoint.books:
             return (200, json(Catalogue.titles.keys.sorted().map(book)))

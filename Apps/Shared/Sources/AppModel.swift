@@ -735,7 +735,12 @@ public final class AppModel {
             // Asked before `known` is read rather than beside the ratings'
             // question below, so no suspension falls between reading `books`
             // and replacing it: a position recorded in that gap would be lost.
+            // An automatic filing still on its way into the queue counts as
+            // queued: `applyStatus` sets the book here before it queues the
+            // write, and a catalogue landing in between would put the server's
+            // empty status back over it. See `autoFilingsInFlight`.
             let pendingStatuses = await pendingStatusBookUUIDs()
+                .union(autoFilingsInFlight.keys)
 
             // Reconciled, not assigned: a refetch that predates a write still in
             // the queue carries a stale position, and `replaceCatalogue` below
@@ -3536,6 +3541,15 @@ public final class AppModel {
     /// Where no cached book is at the status wanted, nothing is written, as
     /// before.
     private func advanceStatusIfUnset(after locator: ReadiumLocator, for bookUUID: String) async {
+        // The server's own rule needs no permission; restoring it from here
+        // does. `PUT /books/{id}/status` is gated on `bookDownload` on 2.x and
+        // 3.x alike, so a reader without it was refused on every position
+        // write, and each refresh put the server's empty status back for the
+        // next write to try again. Only an explicit refusal stops it: a server
+        // that sends no permissions has not said no.
+        if case .signedIn(let user)? = session?.state, user.permissions?.bookDownload == false {
+            return
+        }
         // Only a book the rule filed asks the queue, so the common case never
         // leaves the main actor.
         var unfiledOnServer = false
@@ -3641,6 +3655,7 @@ public final class AppModel {
         // every appearance of the book screen, so it is the refresh most
         // likely to land before the queue drains.
         let statusPending = await pendingStatusBookUUIDs().contains(book.uuid)
+            || autoFilingsInFlight[book.uuid] != nil
         // Resolved *after* the await, not before it. The index used to be bound
         // in the same guard that then suspends on a network round trip, and
         // `books` can be replaced entirely during that suspension — signing out
