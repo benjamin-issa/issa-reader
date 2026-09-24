@@ -89,9 +89,21 @@ final class LiveServerTVTests: XCTestCase {
             record("library", false, "could not reach the Library tab")
             return
         }
-        let library = app.descendants(matching: .any)["screen.tvLibrary"]
-        let loaded = library.waitForExistence(timeout: 90)
-        record("library", loaded, loaded ? "the library is showing" : "the library never appeared")
+        // The books, not the screen: `screen.tvLibrary` is the scroll view
+        // itself, there before a single book has arrived — it is what
+        // `isLanded` has just seen — so waiting on it passed an empty shelf,
+        // and the thirty seconds below then outlived no covers at all.
+        //
+        // A poster is waited for instead, as any button on the screen: each
+        // one is a `NavigationLink`, and the shelf has no other control. Not
+        // by the identifiers the phone's test uses. The television's tree
+        // carries neither: the shelf's own `content.tvLibrary` takes the
+        // place of `rail.continueReading`, and the grid's `cell.book.` posters
+        // sit below the fold, where the lazy grid has not drawn them yet.
+        let poster = app.descendants(matching: .any)["screen.tvLibrary"]
+            .descendants(matching: .button).firstMatch
+        let loaded = poster.waitForExistence(timeout: 90)
+        record("library", loaded, loaded ? "the library shows its books" : "no book appeared on the shelf")
         Thread.sleep(forTimeInterval: 30)
         capture(app, "library")
         let survived = !signedOut(app)
