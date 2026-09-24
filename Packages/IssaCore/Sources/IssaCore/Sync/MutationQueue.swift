@@ -76,7 +76,8 @@ public actor MutationQueue {
 
     /// Claims the right to drain, waiting for it if someone else holds it.
     ///
-    /// For the exit paths — suspend, ⌘Q, the TV button — and nothing else.
+    /// For the exit paths — suspend, ⌘Q, the TV button — and for
+    /// `pauseDraining()`, which waits in the same line; nothing else.
     /// `beginDraining` declining is right for every ordinary caller: the rows
     /// it would have sent are already in flight and the next enqueue drains
     /// again. On the way out there is no next enqueue. The first version of
@@ -86,6 +87,12 @@ public actor MutationQueue {
     ///
     /// The lock is handed over directly rather than released and re-taken, so
     /// a waiter cannot lose it to a `beginDraining` that arrives in between.
+    ///
+    /// An exit path handed the lock with a pause already in line behind it
+    /// sends nothing: its drain yields before the first row as before any
+    /// other (`shouldYield`) and passes the lock straight on. Its rows stay
+    /// queued for the first drain after the pause. It takes ⌘Q or a suspend
+    /// during a sign-in, with a drain in flight ahead of both.
     func waitToDrain() async {
         if !isDraining {
             isDraining = true
@@ -140,9 +147,14 @@ public actor MutationQueue {
     /// app is about to empty the table, but emptying it is not enough on its
     /// own: a write already on its way into the queue could insert its row
     /// after the DELETE, where the arriving account's drain would find it and
-    /// send it under the new bearer. Retiring first puts every insert in one
-    /// order on this actor — one submitted before `retire()` lands before it
-    /// and so before the DELETE, and one submitted after is refused.
+    /// send it under the new bearer. Retiring first closes that. `enqueue`
+    /// reads the flag and writes its row in one turn on this actor, with no
+    /// suspension between, so an insert either ran before `retire()` — and
+    /// so before any DELETE the caller issues once `retire()` has returned —
+    /// or runs after it and is refused. Which of the two a write already on
+    /// its way in gets is not promised, because an actor is not strictly
+    /// first in, first out, and it does not need to be: either way nothing
+    /// lands after the DELETE, and a refused write was the departed account's.
     ///
     /// Only a flag. It never waits for the lock, so it is safe while a pause
     /// holds it, and it deletes nothing: the rows are the caller's to clear.
@@ -335,6 +347,12 @@ public struct MutationDrain: Sendable {
     }
 
     /// Attempts every pending write, oldest first.
+    ///
+    /// Stops before its next row, the first included, once someone is waiting
+    /// for the lock — an exit path or a pause — or the queue is retired
+    /// (`MutationQueue.shouldYield`). A call can therefore return with rows
+    /// still pending: they go with the next drain, or, on a retired queue,
+    /// with none.
     ///
     /// - Returns: how many were accepted.
     @discardableResult
