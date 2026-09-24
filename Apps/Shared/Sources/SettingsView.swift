@@ -131,6 +131,12 @@ struct AdvancedSettingsRows: View {
             // play, and why some rails are computed locally.
             Text("Server capabilities")
                 .overlineStyle()
+            // The generation as detected, with the version the server reports
+            // where it reports one — the first thing a self-hoster diagnosing
+            // "it behaves differently since I upgraded" needs to see. The
+            // wording is `displayVersion`'s, so every platform says the same.
+            LabeledContent("Server version", value: session.capabilities.displayVersion)
+                .accessibilityIdentifier("settings.serverVersion")
             capabilityRow("Home sections", session.capabilities.homeSections)
             capabilityRow("Shelves", session.capabilities.shelves)
             capabilityRow("Library facets", session.capabilities.libraryFacets)
