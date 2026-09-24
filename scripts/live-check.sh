@@ -173,9 +173,11 @@ def say(name, value):
 status = find(sys.argv[2])
 if status:
     s = status.get("status")
-    # What the pill shows as its value: the label where 3.x gives a
-    # non-empty one, the name otherwise, and None for no status at all.
-    label = ((s.get("label") or "").strip() or s.get("name")) if s else "None"
+    # What the pill shows as its value, as Status.displayName has it: the
+    # label as sent where 3.x gives one that is not blank, padding and all,
+    # the name otherwise, and None for no status at all.
+    raw = (s.get("label") or "") if s else ""
+    label = (raw if raw.strip() else s.get("name")) if s else "None"
     say("STATUS_BOOK", status["uuid"])
     say("STATUS_LABEL", label)
 read = find(sys.argv[3])
