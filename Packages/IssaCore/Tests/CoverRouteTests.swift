@@ -20,12 +20,23 @@ private final class StubServer: @unchecked Sendable {
         case redirectElsewhere
     }
 
+    /// Which requests 401, whatever they carry.
+    enum Refuses {
+        case nothing
+        /// Every request, on either host — a token the server rejects.
+        case everyRequest
+        /// Only the images route, even with the bearer on — so a 401 that
+        /// can only arrive after the cover route has redirected.
+        case imagesRoute
+        /// Only the other origin a redirect can send the request to.
+        case otherOrigin
+    }
+
     let host: String
     /// The proxy's prefix: requests outside it reach something else, a 404.
     let mount: String
     let covers: Covers
-    /// Every request 401s, whatever it carries — a token the server rejects.
-    let refusesEveryToken: Bool
+    let refuses: Refuses
     /// What the 3.x cover route redirects to.
     static let coverSHA = String(repeating: "c0", count: 32)
 
@@ -35,11 +46,11 @@ private final class StubServer: @unchecked Sendable {
     private static let registryLock = NSLock()
     nonisolated(unsafe) private static var registry: [String: StubServer] = [:]
 
-    init(mount: String = "", covers: Covers, refusesEveryToken: Bool = false) {
+    init(mount: String = "", covers: Covers, refuses: Refuses = .nothing) {
         host = "\(UUID().uuidString.lowercased()).storyteller.test"
         self.mount = mount
         self.covers = covers
-        self.refusesEveryToken = refusesEveryToken
+        self.refuses = refuses
         Self.registryLock.withLock {
             Self.registry[host] = self
             Self.registry[elsewhereHost] = self
@@ -79,8 +90,11 @@ private final class ServerLikeProtocol: URLProtocol {
         server.record(request)
         let authorized = request.value(forHTTPHeaderField: "Authorization")?.hasPrefix("Bearer ") == true
 
-        if server.refusesEveryToken { return respond(url, 401) }
-        if url.host() == server.elsewhereHost { return respond(url, 200, Data("elsewhere".utf8)) }
+        if server.refuses == .everyRequest { return respond(url, 401) }
+        if url.host() == server.elsewhereHost {
+            if server.refuses == .otherOrigin { return respond(url, 401) }
+            return respond(url, 200, Data("elsewhere".utf8))
+        }
 
         let path = url.path
         guard server.mount.isEmpty || path.hasPrefix(server.mount + "/") else {
@@ -104,7 +118,7 @@ private final class ServerLikeProtocol: URLProtocol {
             }
         }
         if inner.hasPrefix("/api/v2/images/") {
-            guard authorized else { return respond(url, 401) }
+            guard authorized, server.refuses != .imagesRoute else { return respond(url, 401) }
             return respond(url, 200, Data("image \(url.lastPathComponent)".utf8))
         }
         respond(url, 404)
@@ -172,17 +186,76 @@ struct CoverRedirectTests {
         #expect(await tokens.invalidations == 0)
     }
 
-    /// A cover that 401s cannot tell a dead token from a bearer shed on the
-    /// way, and one cover must never end a session.
-    @Test("a 401 on an asset is reported, and does not invalidate the token")
-    func assetUnauthorizedDoesNotInvalidate() async throws {
-        let server = StubServer(covers: .redirectToImages, refusesEveryToken: true)
+    /// Every 3.x cover a book names is fetched straight from the images route,
+    /// with no redirect, and that route checks the bearer before anything
+    /// else. Its 401 is the server refusing this client's own request — the
+    /// same verdict `/api/v2/user` gives — and ignoring it let a dead token go
+    /// unnoticed for as long as only covers were loading.
+    @Test("a 401 on an asset that was not redirected invalidates the token")
+    func directAssetUnauthorizedInvalidates() async throws {
+        let server = StubServer(covers: .redirectToImages, refuses: .everyRequest)
         let tokens = SpyTokens()
         let api = client(for: server, tokens: tokens)
 
         await #expect(throws: StorytellerError.notAuthenticated) {
             _ = try await api.getData(Endpoint.V3.image(StubServer.coverSHA))
         }
+        #expect(server.seenPaths == [Endpoint.V3.image(StubServer.coverSHA)])
+        #expect(await tokens.invalidations == 1)
+    }
+
+    /// A 401 at the end of a redirect answered URLSession's request, not this
+    /// client's, and cannot tell a dead token from a bearer shed on the way —
+    /// so one cover must never end a session through it. Here the bearer did
+    /// arrive on the second hop, which shows the 401 came after the redirect
+    /// rather than from a first hop the stub refused.
+    @Test("a 401 after a same-origin redirect is reported, and keeps the token")
+    func redirectedAssetUnauthorizedDoesNotInvalidate() async throws {
+        let server = StubServer(covers: .redirectToImages, refuses: .imagesRoute)
+        let tokens = SpyTokens()
+        let api = client(for: server, tokens: tokens)
+        let uuid = "0f0e0d0c-0b0a-4908-8706-050403020100"
+
+        await #expect(throws: StorytellerError.notAuthenticated) {
+            _ = try await api.getData(Endpoint.cover(uuid))
+        }
+        #expect(server.seenPaths == [Endpoint.cover(uuid), Endpoint.V3.image(StubServer.coverSHA)])
+        #expect(server.seen.last?.value(forHTTPHeaderField: "Authorization") == "Bearer reader-token")
+        #expect(await tokens.invalidations == 0)
+    }
+
+    /// The bearer never goes to another origin, so that origin's 401 says
+    /// nothing about it.
+    @Test("a 401 from another origin a redirect led to keeps the token")
+    func crossOriginUnauthorizedDoesNotInvalidate() async throws {
+        let server = StubServer(covers: .redirectElsewhere, refuses: .otherOrigin)
+        let tokens = SpyTokens()
+        let api = client(for: server, tokens: tokens)
+
+        await #expect(throws: StorytellerError.notAuthenticated) {
+            _ = try await api.getData(Endpoint.cover("0f0e0d0c-0b0a-4908-8706-050403020100"))
+        }
+        let hop = try #require(server.seen.last)
+        #expect(hop.url?.host() == server.elsewhereHost)
+        #expect(hop.value(forHTTPHeaderField: "Authorization") == nil)
+        #expect(await tokens.invalidations == 0)
+    }
+
+    /// A redirect re-rooted under the mount is still a redirect: the request
+    /// that 401s is the rewritten one.
+    @Test("a 401 after a redirect re-rooted under a mount keeps the token")
+    func mountedRedirectUnauthorizedDoesNotInvalidate() async throws {
+        let server = StubServer(mount: "/storyteller", covers: .redirectToImages, refuses: .imagesRoute)
+        let tokens = SpyTokens()
+        let api = client(for: server, tokens: tokens)
+
+        await #expect(throws: StorytellerError.notAuthenticated) {
+            _ = try await api.getData(Endpoint.cover("0f0e0d0c-0b0a-4908-8706-050403020100"))
+        }
+        #expect(server.seenPaths == [
+            "/storyteller/api/v2/books/0f0e0d0c-0b0a-4908-8706-050403020100/cover",
+            "/storyteller/api/v2/images/\(StubServer.coverSHA)",
+        ])
         #expect(await tokens.invalidations == 0)
     }
 
@@ -190,7 +263,7 @@ struct CoverRedirectTests {
     /// quietly widen: a JSON route's 401 is the server's verdict on the token.
     @Test("a 401 on a JSON route still invalidates the token")
     func apiUnauthorizedStillInvalidates() async throws {
-        let server = StubServer(covers: .redirectToImages, refusesEveryToken: true)
+        let server = StubServer(covers: .redirectToImages, refuses: .everyRequest)
         let tokens = SpyTokens()
         let api = client(for: server, tokens: tokens)
 

@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 /// How a redirected asset request is followed.
 ///
@@ -7,9 +8,12 @@ import Foundation
 /// route demands the same bearer the cover route accepted. URLSession follows
 /// the redirect but drops `Authorization` while doing it, even to the same
 /// origin: reproduced against a plain HTTP server, where `Origin` survived the
-/// hop and the bearer did not. The image route then 401s, and before 401s on
-/// assets stopped counting as proof of a dead token, that 401 signed the reader
-/// out.
+/// hop and the bearer did not. The image route then 401s, and in 1.2.0 that
+/// 401 signed the reader out. Re-attaching the bearer is half the answer; the
+/// other half is that a 401 at the end of a redirect is no verdict on the
+/// token — the request it answered was URLSession's, not this client's — so
+/// `RedirectFollower` counts the hops and `APIClient.getData` does not
+/// invalidate on a 401 from a redirected task.
 ///
 /// Pure, so each rule can be proved without a network; `RedirectFollower` is
 /// the delegate that applies it to a task.
@@ -124,18 +128,30 @@ enum RedirectRewrite {
     }
 }
 
-/// Applies `RedirectRewrite` to one task.
+/// Applies `RedirectRewrite` to one task, and remembers whether it had to.
 ///
 /// Handed to `URLSession.data(for:delegate:)` per task rather than set on the
 /// session: the session is shared with every JSON route and is usually
 /// `URLSession.shared`, which has no delegate to give, and only an asset fetch
-/// is redirected on purpose. Immutable, so it is `Sendable` without a lock —
-/// URLSession calls it on a queue of its own choosing.
+/// is redirected on purpose. One is made per request, so the count below is
+/// that request's alone.
 final class RedirectFollower: NSObject, URLSessionTaskDelegate, Sendable {
     let baseURL: URL
+    /// Behind a `Mutex`, not a plain `var`: URLSession calls the delegate on a
+    /// queue of its own choosing, and `APIClient` reads the count from its
+    /// actor once the task has finished.
+    private let hops = Mutex(0)
 
     init(baseURL: URL) {
         self.baseURL = baseURL
+    }
+
+    /// Whether the task was redirected at all — so whether the response it
+    /// ended on answered a request URLSession built rather than the one this
+    /// client did. `APIClient.failure(for:)` says why that decides what a 401
+    /// means.
+    var wasRedirected: Bool {
+        hops.withLock { $0 > 0 }
     }
 
     func urlSession(
@@ -145,6 +161,9 @@ final class RedirectFollower: NSObject, URLSessionTaskDelegate, Sendable {
         newRequest request: URLRequest,
         completionHandler: @escaping @Sendable (URLRequest?) -> Void,
     ) {
+        // Counted first: every call here is a hop, whether or not there is an
+        // original request to rewrite it from.
+        hops.withLock { $0 += 1 }
         // The task's own first request is the one this client built, bearer
         // and all; every later hop is URLSession's.
         guard let original = task.originalRequest else {
