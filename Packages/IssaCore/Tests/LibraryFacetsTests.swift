@@ -43,8 +43,8 @@ struct LibraryFacetsTests {
         #expect(facets.count(.reading) + facets.count(.toRead) + facets.count(.finished) == 5)
     }
 
-    /// `stage(of:)` files a book with no status, and any status it does not
-    /// recognise, as unstarted. The count has to agree with the filter, or the
+    /// `stage(of:)` files a book with no status and no progress, and any
+    /// status it does not recognise, as unstarted. The count has to agree with the filter, or the
     /// chip says 3 and the grid shows 5.
     @Test("a book with no status is counted where the filter puts it")
     func unknownStatusCountsAsToRead() {

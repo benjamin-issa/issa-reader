@@ -62,8 +62,10 @@ struct LibraryArrangementTests {
         #expect(sorted.map(\.title) == ["Read today", "Read yesterday", "Never opened"])
     }
 
-    /// Status names belong to the server — an admin can rename them — so the
-    /// shelves match loosely rather than against a fixed vocabulary.
+    /// Status names belong to the server, so the shelves match loosely rather
+    /// than against a fixed vocabulary. 2.14.21 ships only the three built-ins
+    /// and cannot rename them, so there the looseness is defensive; 3.x lets an
+    /// admin add statuses of their own, which is where it earns its keep.
     @Test("shelves match renamed statuses")
     func shelves() {
         let books = [

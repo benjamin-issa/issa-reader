@@ -25,11 +25,14 @@ enum FixtureLibrary {
         let author: String
         let progress: Double?
         let formats: [String]
-        /// The server's shelf name. Without one, `LibraryFilter.stage(of:)`
-        /// files a book as `.toRead` — it never consults position — so a
+        /// The server's shelf name. Before 1.3.0, `LibraryFilter.stage(of:)`
+        /// filed a book with none as `.toRead` whatever its position, so a
         /// fixture with no statuses put all six books on one shelf, the chips
         /// read "Reading 0 · To read 6 · Finished 0" beside a book at 99%, and
-        /// the Reading tab's "Also reading" block was empty at every width.
+        /// the Reading tab's "Also reading" block was empty at every width. It
+        /// now shelves a book with no status by its progress, as Storyteller
+        /// 3.x allows one; every book here still carries a status, so the
+        /// shelves are fixed by name and the sweep does not depend on that rule.
         var status: String? = nil
         /// Drives the Recently-added rail, which filters on a non-nil value and
         /// so never rendered at all.
