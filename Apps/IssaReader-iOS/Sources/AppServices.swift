@@ -188,10 +188,22 @@ final class AppServices {
 
         bridge.cover = { [app] bookUUID in
             guard let session = app.session else { return nil }
+            let service = LibraryService(client: session.client)
             // Square, and small: this is a list row in a car, not the Lock
             // Screen tile.
-            return try? await LibraryService(client: session.client)
-                .coverData(for: bookUUID, shape: .square, pixelWidth: 240)
+            //
+            // By the book wherever the catalogue has it, so a 3.x server is
+            // asked for the art by content hash rather than through its
+            // redirecting uuid route. The uuid route is kept for a row the
+            // catalogue no longer holds — the car's list can outlive a refresh
+            // that dropped the book — because a missing book is no reason to
+            // show a car no art at all.
+            guard let book = app.bookByUUID[bookUUID] else {
+                return try? await service.coverData(for: bookUUID, shape: .square, pixelWidth: 240)
+            }
+            return try? await service.coverData(
+                for: book, shape: .square, pixelWidth: 240,
+                generation: session.capabilities.generation)
         }
     }
 

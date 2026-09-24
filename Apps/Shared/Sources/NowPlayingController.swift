@@ -337,9 +337,12 @@ public final class NowPlayingController {
         guard let session else { return }
         artworkGeneration += 1
         let generation = artworkGeneration
+        // By the book rather than its uuid, so a 3.x server is asked for the
+        // art by content hash instead of through its redirecting uuid route.
+        let server = session.capabilities.generation
         Task { [weak self] in
             guard let data = try? await LibraryService(client: session.client)
-                .coverData(for: book.uuid, shape: .square, pixelWidth: 600),
+                .coverData(for: book, shape: .square, pixelWidth: 600, generation: server),
                 let image = PlatformImage(data: data) else { return }
             let size = image.size
             // A slow fetch for a previous book must not overwrite the current
