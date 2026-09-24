@@ -86,4 +86,45 @@ struct ReadalongWordGranularTests {
         #expect(subject.activeEntry == timeline.entries[4])
         #expect(subject.activeFragmentID == "ch01-s2-w0")
     }
+
+    /// Three sentences back, from the first word of the fourth, is the first.
+    /// Stepping by fragment, three steps were three words, and the press
+    /// landed on the last word of ch01-s1.
+    @Test("a paragraph back is three sentences back, not three words")
+    func previousParagraph() async throws {
+        let (subject, timeline, directory) = try Self.make()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let entries = timeline.entries
+
+        #expect(await subject.prepare(at: entries[7]))
+        await subject.perform(.previousParagraph, using: CommandMap())
+        #expect(subject.activeEntry == entries[0])
+    }
+
+    @Test("a paragraph forward is three sentences forward, over the after-hole")
+    func nextParagraph() async throws {
+        let (subject, timeline, directory) = try Self.make()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let entries = timeline.entries
+
+        #expect(await subject.prepare(at: entries[0]))
+        await subject.perform(.nextParagraph, using: CommandMap())
+        #expect(subject.activeEntry == entries[7])
+    }
+
+    @Test("next and previous sentence move a sentence, from its first word")
+    func sentenceSteps() async throws {
+        let (subject, timeline, directory) = try Self.make()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let entries = timeline.entries
+        let map = CommandMap()
+
+        #expect(await subject.prepare(at: entries[0]))
+        await subject.perform(.nextSentence, using: map)
+        #expect(subject.activeEntry == entries[2], "the next sentence, not the next word")
+
+        #expect(await subject.prepare(at: entries[3]))
+        await subject.perform(.previousSentence, using: map)
+        #expect(subject.activeEntry == entries[0], "the sentence before, from its first word")
+    }
 }

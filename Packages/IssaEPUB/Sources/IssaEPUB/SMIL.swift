@@ -89,8 +89,9 @@ public struct SMILEntry: Sendable, Hashable {
     /// so a sentence with a hole only after its words resolved to that hole,
     /// and one with no holes resolved to nothing. Tapping between two words —
     /// where the reader's markup still names the sentence — played the music
-    /// after the sentence, or fell back to whichever word was nearest.
-    /// `SMILTimeline` resolves a sentence's fragment through this field.
+    /// after the sentence, or fell back to whichever word was nearest. And
+    /// every word was a sentence of its own to "next sentence", so it stepped
+    /// by the word. `SMILTimeline` reads this field for both.
     ///
     /// Nil whenever it would say nothing `fragmentID` does not: every
     /// sentence par, every hole, every audio-chapter par. That is every entry
@@ -533,7 +534,7 @@ public struct SMILTimeline: Sendable {
     }
 
     /// The next sentence: the nearest entry after `entry` that has words and
-    /// names a different fragment.
+    /// belongs to a different sentence.
     ///
     /// Not simply the next entry. A v3 book gives one sentence a run of them —
     /// the holes before and after it, a continuation for each file it runs
@@ -544,15 +545,17 @@ public struct SMILTimeline: Sendable {
     /// continuation would restart nothing anybody asked for. In a v2 book every
     /// entry qualifies, and this is the next entry, as it always was.
     ///
+    /// A different *sentence*, not a different fragment — see `sentenceKey`.
+    ///
     /// Stepping by sentence is what this is for. The end of a file wants the
     /// next audio instead — `entry(following:)`.
     public func entry(after entry: SMILEntry) -> SMILEntry? {
         guard let index = index(of: entry) else { return nil }
-        let key = FragmentKey(entry)
+        let key = sentenceKey(entry)
         var next = index + 1
         while next < entries.count {
             let candidate = entries[next]
-            if !candidate.isAudioOnly, FragmentKey(candidate) != key { return candidate }
+            if !candidate.isAudioOnly, sentenceKey(candidate) != key { return candidate }
             next += 1
         }
         return nil
@@ -561,18 +564,19 @@ public struct SMILTimeline: Sendable {
     /// The previous sentence, from its beginning.
     ///
     /// The mirror of `entry(after:)`, with one step more: walking backwards,
-    /// the first entry of another sentence met is its *last*, and for a
-    /// sentence that runs across files that is a continuation. Landing there
-    /// started the previous sentence part-way through, so this returns the
-    /// first entry of that sentence that has words — its own par, which is
-    /// where v2's clip for it began once the hole in front is set aside.
+    /// the first entry of another sentence met is its *last* — a continuation,
+    /// for a sentence that runs across files, or its last word, in a book
+    /// aligned word by word. Landing there started the previous sentence
+    /// part-way through, so this returns the first entry of that sentence that
+    /// has words — its own par or its first word, which is where v2's clip for
+    /// it began once the hole in front is set aside.
     public func entry(before entry: SMILEntry) -> SMILEntry? {
         guard let index = index(of: entry) else { return nil }
-        let key = FragmentKey(entry)
+        let key = sentenceKey(entry)
         var previous = index - 1
         while previous >= 0 {
             let candidate = entries[previous]
-            if !candidate.isAudioOnly, FragmentKey(candidate) != key {
+            if !candidate.isAudioOnly, sentenceKey(candidate) != key {
                 return firstSpokenEntry(ofSentenceAt: previous)
             }
             previous -= 1
@@ -580,17 +584,34 @@ public struct SMILTimeline: Sendable {
         return nil
     }
 
-    /// The earliest entry with words in the same-fragment run that `index`
+    /// The earliest entry with words in the same-sentence run that `index`
     /// belongs to, looking back from it.
     private func firstSpokenEntry(ofSentenceAt index: Int) -> SMILEntry {
-        let key = FragmentKey(entries[index])
+        let key = sentenceKey(entries[index])
         var first = index
         var earlier = index - 1
-        while earlier >= 0, FragmentKey(entries[earlier]) == key {
+        while earlier >= 0, sentenceKey(entries[earlier]) == key {
             if !entries[earlier].isAudioOnly { first = earlier }
             earlier -= 1
         }
         return entries[first]
+    }
+
+    /// The sentence an entry belongs to, which is what the three calls above
+    /// step by.
+    ///
+    /// Its fragment's key, except for a word, which belongs to the sentence
+    /// its seq names. Stepping on the fragment treated every word of a
+    /// word-granular book as a sentence of its own: "next sentence" moved one
+    /// word, "previous sentence" landed on the last word of the sentence
+    /// before and played on into its after-hole, and a paragraph was three
+    /// words. For every entry a server writes `sentenceID` is nil and this is
+    /// `FragmentKey(entry)`, so those books step exactly as they did.
+    ///
+    /// Resolving and the highlight stay on the fragment: a word is still its
+    /// own place, and still what lights up.
+    private func sentenceKey(_ entry: SMILEntry) -> FragmentKey {
+        FragmentKey(document: entry.textHref, fragment: entry.sentenceID ?? entry.fragmentID)
     }
 
     /// The entry after `entry` in the book, whatever kind it is.
@@ -650,8 +671,10 @@ public struct SMILTimeline: Sendable {
 }
 
 extension SMILTimeline.FragmentKey {
-    /// The sentence an entry belongs to. In an extension so the memberwise
-    /// initialiser `resolve` builds keys with survives.
+    /// The fragment an entry names: its sentence, except for a word of a
+    /// word-granular book, whose sentence is `SMILTimeline.sentenceKey`'s. In
+    /// an extension so the memberwise initialiser `resolve` builds keys with
+    /// survives.
     init(_ entry: SMILEntry) {
         self.init(document: entry.textHref, fragment: entry.fragmentID)
     }

@@ -186,3 +186,85 @@ struct SMILSentenceKeyTests {
         #expect(rows.map(\.sentenceID) == [nil, nil])
     }
 }
+
+/// Next and previous sentence at word granularity step by the sentence the
+/// words belong to.
+///
+/// They stepped by fragment, and every word is a fragment of its own: "next
+/// sentence" moved one word, "previous sentence" landed on the last word of
+/// the sentence before and played on into its after-hole, and a paragraph was
+/// three words.
+@Suite("A word-granular book steps by the sentence, not the word")
+struct SMILSentenceStepTests {
+    typealias Markup = WordGranularMarkup
+
+    ///      0  ch01-s0     before-hole  0–6
+    ///      1  ch01-s0-w0               6–7
+    ///      2  ch01-s0-w1               7–8
+    ///      3  ch01-s0     after-hole   8–20
+    ///      4  ch01-s1-w0               0–2    track2
+    ///      5  ch01-s1-w1               2–5    track2
+    @Test("next sentence from any part of a sentence is the next sentence's first word")
+    func nextFromAnyPart() throws {
+        let timeline = try SMILWordGranularV3Tests.timeline()
+        let entries = timeline.entries
+        for index in 0 ... 3 {
+            #expect(timeline.entry(after: entries[index]) == entries[4], "from entry \(index)")
+        }
+        #expect(timeline.entry(after: entries[4]) == nil)
+        #expect(timeline.entry(after: entries[5]) == nil)
+    }
+
+    @Test("previous sentence from any word is the sentence before, from its first word")
+    func previousFromAnyWord() throws {
+        let timeline = try SMILWordGranularV3Tests.timeline()
+        let entries = timeline.entries
+        #expect(timeline.entry(before: entries[4]) == entries[1])
+        #expect(timeline.entry(before: entries[5]) == entries[1])
+        // Within the first sentence there is no sentence before.
+        for index in 0 ... 3 {
+            #expect(timeline.entry(before: entries[index]) == nil, "from entry \(index)")
+        }
+    }
+
+    ///      0  ch01-s0     before-hole  0–6
+    ///      1  ch01-s0-w0               6–7
+    ///      2  ch01-s0-w1               7–8
+    ///      3  ch01-s1-w0               8–9
+    ///      4  ch01-s1-w1               9–10
+    ///      5  ch01-s1     after-hole   10–20
+    ///      6  ch01-s2-w0               20–21
+    ///      7  ch01-s2-w1               21–22
+    @Test("a chain of sentences is walked a sentence at a time both ways")
+    func chain() throws {
+        let timeline = try Markup.timeline([
+            Markup.hole("ch01-s0", 0, 6),
+            Markup.sentence("ch01-s0", Markup.word("ch01-s0-w0", 6, 7), Markup.word("ch01-s0-w1", 7, 8)),
+            Markup.sentence("ch01-s1", Markup.word("ch01-s1-w0", 8, 9), Markup.word("ch01-s1-w1", 9, 10)),
+            Markup.hole("ch01-s1", 10, 20),
+            Markup.sentence("ch01-s2", Markup.word("ch01-s2-w0", 20, 21), Markup.word("ch01-s2-w1", 21, 22)),
+        ].joined(separator: "\n"))
+        let entries = timeline.entries
+        try #require(entries.map(\.fragmentID) == [
+            "ch01-s0", "ch01-s0-w0", "ch01-s0-w1", "ch01-s1-w0", "ch01-s1-w1", "ch01-s1",
+            "ch01-s2-w0", "ch01-s2-w1",
+        ])
+
+        var forward: [SMILEntry] = []
+        var cursor = entries[1]
+        while let next = timeline.entry(after: cursor) {
+            forward.append(next)
+            cursor = next
+        }
+        #expect(forward == [entries[3], entries[6]])
+
+        var backward: [SMILEntry] = []
+        cursor = entries[7]
+        while let previous = timeline.entry(before: cursor) {
+            backward.append(previous)
+            cursor = previous
+        }
+        #expect(backward == [entries[3], entries[1]], "each from its first word, the before-hole set aside")
+        #expect(timeline.entry(after: entries[5]) == entries[6], "from the after-hole")
+    }
+}
