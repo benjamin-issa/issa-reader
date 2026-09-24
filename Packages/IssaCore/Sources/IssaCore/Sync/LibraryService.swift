@@ -136,17 +136,17 @@ public struct LibraryService: Sendable {
     ///
     /// In order:
     ///
-    /// 1. The book names a usable cover for this shape: fetched straight from
-    ///    `/api/v2/images/{sha256}`. Chosen from the book's own data rather
-    ///    than from `generation`, so it is right before detection has finished
-    ///    and cannot be made wrong by it.
-    /// 2. A portrait was asked for, may fall back, and the book names only a
-    ///    square one: that, by the same route — the uuid route's
-    ///    portrait-to-square fallback, decided without a 404 round trip.
-    /// 3. The server is known to be 3.x and the book names none: there is no
+    /// 1. The book names a usable cover for this shape — or, for a portrait
+    ///    that may fall back, a square one: fetched straight from
+    ///    `/api/v2/images/{sha256}`. Chosen by `Book.coverReference(for:fallback:)`
+    ///    from the book's own data rather than from `generation`, so it is
+    ///    right before detection has finished and cannot be made wrong by it;
+    ///    and by the same function `CoverCache` names the file after, so the
+    ///    two cannot disagree about which image this is.
+    /// 2. The server is known to be 3.x and the book names none: there is no
     ///    such cover, and `.notFound` says so without a request. The
     ///    deprecated uuid route would only redirect to the same answer.
-    /// 4. Otherwise — 2.x, or a generation not yet detected — the uuid route,
+    /// 3. Otherwise — 2.x, or a generation not yet detected — the uuid route,
     ///    versioned by `updatedAt` exactly as the app has always asked for it.
     ///    On a 3.x server this is the path a row cached by 1.2.0 takes until
     ///    detection lands, which is why `getData` follows its redirect with
@@ -168,11 +168,8 @@ public struct LibraryService: Sendable {
         fallback: Bool = true,
     ) async throws -> Data {
         let longestEdge = max(pixelWidth ?? 0, pixelHeight ?? 0)
-        if let reference = book.coverReference(for: shape) {
+        if let reference = book.coverReference(for: shape, fallback: fallback) {
             return try await imageData(reference, longestEdge: longestEdge)
-        }
-        if shape == .portrait, fallback, let square = book.coverReference(for: .square) {
-            return try await imageData(square, longestEdge: longestEdge)
         }
         if generation == .v3 { throw StorytellerError.notFound }
         return try await coverData(

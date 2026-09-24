@@ -162,11 +162,11 @@ public final class CoverCache {
     /// book says which one that is: the content hash `/api/v2/images` serves
     /// it under, and the size asked for.
     ///
-    /// The order is `LibraryService.coverData(for:shape:…)`'s — the book's own
-    /// reference for the shape, then, for a portrait that may fall back, the
-    /// square one — and has to be. A key naming one image while the fetch
-    /// brings back another would file the wrong art under a name that looks
-    /// right for as long as the cache lasts.
+    /// Chosen by `Book.coverReference(for:fallback:)`, the function
+    /// `LibraryService.coverData(for:shape:…)` fetches by, and never by an
+    /// order written out here. A key naming one image while the fetch brings
+    /// back another would file the wrong art under a name that looks right
+    /// for as long as the cache lasts.
     ///
     /// Keyed by content rather than by book, so a portrait that falls back
     /// and the square asked for outright share one file, and a replaced cover
@@ -180,9 +180,7 @@ public final class CoverCache {
     nonisolated static func contentKey(
         for book: Book, shape: LibraryService.CoverShape, pixels: Int, fallback: Bool,
     ) -> String? {
-        let reference = book.coverReference(for: shape)
-            ?? (shape == .portrait && fallback ? book.coverReference(for: .square) : nil)
-        return reference.map { "sha-\($0.sha256)-\(pixels)" }
+        book.coverReference(for: shape, fallback: fallback).map { "sha-\($0.sha256)-\(pixels)" }
     }
 
     /// The generation to hand `LibraryService.coverData(for:shape:…)` for this

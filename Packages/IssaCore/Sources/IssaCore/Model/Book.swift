@@ -576,14 +576,27 @@ public extension Book {
     /// read-along's — and an unusable ebook reference falls through to the
     /// read-along's rather than ending the search.
     ///
+    /// The one place the order is written. `LibraryService.coverData(for:…)`
+    /// fetches by it and `CoverCache` names its files by it, and the two used
+    /// to spell it out separately: a key naming one image while the fetch
+    /// brought back another would file the wrong art under a name that looks
+    /// right for as long as the cache lasts.
+    ///
     /// nil on 2.x, whose JSON has no `cover` keys, and on a row cached by
     /// 1.2.0 until the next refresh: `LibraryStore` keeps a re-encoding of
     /// this struct rather than the server's bytes, so a field this version
     /// added is absent from every older row.
-    func coverReference(for shape: LibraryService.CoverShape) -> CoverReference? {
+    ///
+    /// - Parameter fallback: whether a portrait with no art of its own may be
+    ///   answered with the square art — the uuid route's portrait-to-square
+    ///   404 fallback, decided from the book instead of a round trip. Ignored
+    ///   for a square, which the uuid route never answers with a portrait.
+    func coverReference(
+        for shape: LibraryService.CoverShape, fallback: Bool = false,
+    ) -> CoverReference? {
         let candidates = switch shape {
         case .square: [audiobook?.cover]
-        case .portrait: [ebook?.cover, readaloud?.cover]
+        case .portrait: [ebook?.cover, readaloud?.cover] + (fallback ? [audiobook?.cover] : [])
         }
         return candidates.lazy.compactMap(\.self).first(where: \.isUsable)
     }

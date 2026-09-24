@@ -94,6 +94,17 @@ struct BookDecodingV3Tests {
         let emma = try book("Emma")
         #expect(emma.coverReference(for: .square) == nil, "no audiobook, no square art")
         #expect(emma.coverReference(for: .portrait) == emma.ebook?.cover)
+
+        // Falling back is the uuid route's answer to a portrait 404, so it
+        // changes nothing for a book with portrait art, and a square never
+        // falls back the other way.
+        #expect(peter.coverReference(for: .portrait, fallback: true) == peter.ebook?.cover)
+        #expect(emma.coverReference(for: .square, fallback: true) == nil)
+        var squareOnly = peter
+        squareOnly.ebook = nil
+        squareOnly.readaloud = nil
+        #expect(squareOnly.coverReference(for: .portrait) == nil)
+        #expect(squareOnly.coverReference(for: .portrait, fallback: true) == peter.audiobook?.cover)
     }
 
     /// 1.2.0 ignored the `cover` key, so a reshaped one must cost that cover
