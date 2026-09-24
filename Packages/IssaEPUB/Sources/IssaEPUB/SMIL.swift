@@ -79,6 +79,25 @@ public struct SMILEntry: Sendable, Hashable {
     /// dropped — are not kept, and neither is the par's own id: nothing in the
     /// reader acts on them.
     public let isAudioOnly: Bool
+    /// The sentence this entry is a word of, in a book aligned word by word:
+    /// the fragment the enclosing `text-range-small` seq names in its
+    /// `epub:textref`.
+    ///
+    /// Only the CLI aligns that finely, and it nests each sentence's word
+    /// pars inside a seq that names the sentence. Nothing else in the book
+    /// does: a word-granular sentence's own id is carried by its holes alone,
+    /// so a sentence with a hole only after its words resolved to that hole,
+    /// and one with no holes resolved to nothing. Tapping between two words —
+    /// where the reader's markup still names the sentence — played the music
+    /// after the sentence, or fell back to whichever word was nearest.
+    /// `SMILTimeline` resolves a sentence's fragment through this field.
+    ///
+    /// Nil whenever it would say nothing `fragmentID` does not: every
+    /// sentence par, every hole, every audio-chapter par. That is every entry
+    /// a 2.x server wrote and every entry a 3.x server writes — both align by
+    /// the sentence — so for any book a server aligned, the timeline is
+    /// exactly the one it was before this field existed.
+    public let sentenceID: String?
 
     public var duration: TimeInterval { max(0, end - start) }
 
@@ -95,6 +114,8 @@ public struct SMILEntry: Sendable, Hashable {
     ///
     /// `isAudioOnly` defaults to false because that is every entry a v2 book
     /// has, and every entry a hand-built narration has meant so far.
+    /// `sentenceID` defaults to nil for the same reason: only a word-granular
+    /// book has one.
     public init(
         fragmentID: String,
         textHref: String,
@@ -103,6 +124,7 @@ public struct SMILEntry: Sendable, Hashable {
         end: TimeInterval,
         cumulativeEnd: TimeInterval,
         isAudioOnly: Bool = false,
+        sentenceID: String? = nil,
     ) {
         self.fragmentID = fragmentID
         self.textHref = textHref
@@ -111,6 +133,7 @@ public struct SMILEntry: Sendable, Hashable {
         self.end = end
         self.cumulativeEnd = cumulativeEnd
         self.isAudioOnly = isAudioOnly
+        self.sentenceID = sentenceID
     }
 }
 
@@ -135,18 +158,27 @@ public struct SMILTimeline: Sendable {
     /// holes before and after it, and a continuation par for each further file
     /// it runs into — and every one of them names this key. They need not be
     /// neighbours: at word granularity the words between a sentence's holes
-    /// each name a key of their own.
+    /// each name a key of their own, and name the sentence only through
+    /// `SMILEntry.sentenceID`.
     struct FragmentKey: Hashable {
         let document: String
         let fragment: String
     }
 
-    /// Fragment to the first entry that names it.
+    /// Fragment to the first entry that names it, or that is a word of it.
     ///
     /// Exact about the document, and the first of the sentence's entries: for
     /// a v3 sentence with a hole in front, that is the hole. Tap and seek
     /// resolve here on purpose, because v2 started that sentence's clip at the
     /// same place — the hole's seconds were the front of it.
+    ///
+    /// A word claims its sentence as well as its own fragment, first claim
+    /// winning, so a word-granular sentence resolves to its before-hole when
+    /// it has one and otherwise to its first word. Its after-hole can never
+    /// win, because the words come before it. Answering with the first entry
+    /// that *named* the fragment handed a sentence with only an after-hole to
+    /// that hole — the tap played the music after the sentence — and a
+    /// sentence with no holes to nothing at all.
     private let indexByFragment: [FragmentKey: Int]
     /// The same by id alone, first occurrence winning, for a caller that has a
     /// tapped id and no document to scope it with. Best effort by construction
@@ -203,6 +235,14 @@ public struct SMILTimeline: Sendable {
             // First occurrence wins here, as it always did — but this map is now
             // only the fallback, not what navigation resolves through.
             if byIDOnly[entry.fragmentID] == nil { byIDOnly[entry.fragmentID] = i }
+            // And a word answers for its sentence, in the same loop so that
+            // "first" means first in the book, holes and words alike. See
+            // `indexByFragment`.
+            if let sentence = entry.sentenceID {
+                let sentenceKey = FragmentKey(document: entry.textHref, fragment: sentence)
+                if index[sentenceKey] == nil { index[sentenceKey] = i }
+                if byIDOnly[sentence] == nil { byIDOnly[sentence] = i }
+            }
         }
         indexByFragment = index
         firstIndexByFragmentID = byIDOnly
@@ -625,70 +665,97 @@ public enum SMILParser {
     /// fragment that is never actually spoken, so they are dropped.
     static let minimumMeaningfulDuration: TimeInterval = 0.005
 
-    /// Parses one SMIL document into entries.
+    /// One `par` as the document states it: before the timeline drops the
+    /// fillers and before anything is accumulated across the book.
+    ///
+    /// A struct rather than the tuple it was, because a tuple is relabelled at
+    /// every hop and a field added to it is silently dropped by any hop that
+    /// was not told — which is what a test's own relabelling would have done
+    /// to `sentenceID`.
+    public struct Row: Sendable, Equatable {
+        public let fragmentID: String
+        public let textHref: String
+        public let audioHref: String
+        public let start: TimeInterval
+        public let end: TimeInterval
+        public let isAudioOnly: Bool
+        /// See `SMILEntry.sentenceID`.
+        public let sentenceID: String?
+    }
+
+    /// Parses one SMIL document into rows.
     ///
     /// Handles the three nesting depths the format allows: the chapter `seq`,
     /// an optional `text-range-large` seq per block, an optional
     /// `text-range-small` seq per sentence, and finally `par` elements. A
     /// server-aligned book is always a flat list of sentence `par`s, but books
     /// aligned by the CLI can be word-granular.
-    public static func parse(
-        data: Data, overlayHref: String,
-    ) throws -> [(
-        fragmentID: String, textHref: String, audioHref: String,
-        start: TimeInterval, end: TimeInterval, isAudioOnly: Bool
-    )] {
+    ///
+    /// A `text-range-small` seq is the one level that says something the pars
+    /// inside it do not: which sentence they are the words of. Its textref is
+    /// carried down to them as `sentenceID`. The chapter seq and a
+    /// `text-range-large` seq pass through whatever is already being carried,
+    /// because their textrefs name a document or a block, not a sentence.
+    public static func parse(data: Data, overlayHref: String) throws -> [Row] {
         let root = try EPUBXML.parse(data)
-        var results: [(String, String, String, TimeInterval, TimeInterval, Bool)] = []
+        var results: [Row] = []
 
-        func walk(_ node: EPUBXMLNode) {
+        func walk(_ node: EPUBXMLNode, sentence: String?) {
             for child in node.children {
                 switch child.name {
                 case "par":
                     guard let textNode = child.firstChild("text"),
                           let src = textNode["src"],
                           let audioNode = child.firstChild("audio"),
-                          let audioSrc = audioNode["src"]
+                          let audioSrc = audioNode["src"],
+                          let fragment = fragmentID(in: src)
                     else { continue }
-
-                    let fragment = src.split(separator: "#", maxSplits: 1).dropFirst().first.map(String.init) ?? ""
-                    guard !fragment.isEmpty else { continue }
 
                     let start = SMILClock.seconds(from: audioNode["clipBegin"] ?? "") ?? 0
                     let end = SMILClock.seconds(from: audioNode["clipEnd"] ?? "") ?? start
 
-                    results.append((
-                        fragment,
-                        EPUBPackage.resolve(src, relativeTo: overlayHref),
-                        EPUBPackage.resolve(audioSrc, relativeTo: overlayHref),
-                        start,
-                        end,
-                        isAudioOnly(child),
+                    results.append(Row(
+                        fragmentID: fragment,
+                        textHref: EPUBPackage.resolve(src, relativeTo: overlayHref),
+                        audioHref: EPUBPackage.resolve(audioSrc, relativeTo: overlayHref),
+                        start: start,
+                        end: end,
+                        isAudioOnly: isAudioOnly(child),
+                        sentenceID: sentence == fragment ? nil : sentence,
                     ))
-                case "seq", "body":
-                    walk(child)
+                case "seq" where typeTokens(child).contains("text-range-small"):
+                    walk(child, sentence: (child["epub:textref"] ?? child["textref"]).flatMap(fragmentID(in:)))
                 default:
-                    walk(child)
+                    walk(child, sentence: sentence)
                 }
             }
         }
-        walk(root)
-        return results.map {
-            (fragmentID: $0.0, textHref: $0.1, audioHref: $0.2, start: $0.3, end: $0.4, isAudioOnly: $0.5)
-        }
+        walk(root, sentence: nil)
+        return results
+    }
+
+    /// The fragment a `src` or `textref` names, or nil when it names none.
+    private static func fragmentID(in reference: String) -> String? {
+        let fragment = reference.split(separator: "#", maxSplits: 1).dropFirst().first.map(String.init) ?? ""
+        return fragment.isEmpty ? nil : fragment
     }
 
     /// Whether a `par` is audio with no words: Storyteller 3 types its holes
     /// and audio-chapter pars `storyteller:audio-only`.
     ///
-    /// `epub:type` is a token list — the aligner's word-granular seqs carry
-    /// `"text-range-small storyteller:matched"` — so this splits rather than
-    /// compares. `EPUBXML` indexes a prefixed attribute under its local name
-    /// as well, and either spelling is read. A par with no type at all, which
-    /// is every par v2 wrote, has words.
+    /// A par with no type at all, which is every par v2 wrote, has words.
     static func isAudioOnly(_ par: EPUBXMLNode) -> Bool {
-        let declared = par["epub:type"] ?? par["type"] ?? ""
-        return declared.split(whereSeparator: \.isWhitespace).contains("storyteller:audio-only")
+        typeTokens(par).contains("storyteller:audio-only")
+    }
+
+    /// An element's `epub:type`, as the token list it is.
+    ///
+    /// The aligner's word-granular seqs carry
+    /// `"text-range-small storyteller:matched"`, so this splits rather than
+    /// compares. `EPUBXML` indexes a prefixed attribute under its local name
+    /// as well, and either spelling is read.
+    private static func typeTokens(_ node: EPUBXMLNode) -> [Substring] {
+        (node["epub:type"] ?? node["type"] ?? "").split(whereSeparator: \.isWhitespace)
     }
 
     /// Builds the whole-book timeline by walking the spine in order.
@@ -696,30 +763,42 @@ public enum SMILParser {
     /// Spine items with no overlay are skipped silently — a book may have
     /// narration for only some chapters, and the front matter usually has none.
     public static func timeline(for package: EPUBPackage) -> SMILTimeline {
-        var entries: [SMILEntry] = []
-        var cumulative: TimeInterval = 0
-
+        var rows: [Row] = []
         for item in package.spine {
             guard let overlayID = item.mediaOverlayID,
                   let overlay = package.manifest[overlayID],
                   let data = try? package.archive.read(overlay.href),
                   let parsed = try? parse(data: data, overlayHref: overlay.href)
             else { continue }
+            rows += parsed
+        }
+        return timeline(from: rows)
+    }
 
-            for row in parsed {
-                let duration = max(0, row.end - row.start)
-                guard duration >= minimumMeaningfulDuration else { continue }
-                cumulative += duration
-                entries.append(SMILEntry(
-                    fragmentID: row.fragmentID,
-                    textHref: row.textHref,
-                    audioHref: row.audioHref,
-                    start: row.start,
-                    end: row.end,
-                    cumulativeEnd: cumulative,
-                    isAudioOnly: row.isAudioOnly,
-                ))
-            }
+    /// The timeline for rows already parsed, in book order: the fillers
+    /// dropped and `cumulativeEnd` accumulated.
+    ///
+    /// Split out of `timeline(for:)` so a narration stated as SMIL markup — a
+    /// test's, with no EPUB around it — becomes exactly the timeline the app
+    /// would build from it, rather than one assembled by a second copy of this
+    /// loop that could disagree with it.
+    public static func timeline(from rows: [Row]) -> SMILTimeline {
+        var entries: [SMILEntry] = []
+        var cumulative: TimeInterval = 0
+        for row in rows {
+            let duration = max(0, row.end - row.start)
+            guard duration >= minimumMeaningfulDuration else { continue }
+            cumulative += duration
+            entries.append(SMILEntry(
+                fragmentID: row.fragmentID,
+                textHref: row.textHref,
+                audioHref: row.audioHref,
+                start: row.start,
+                end: row.end,
+                cumulativeEnd: cumulative,
+                isAudioOnly: row.isAudioOnly,
+                sentenceID: row.sentenceID,
+            ))
         }
         return SMILTimeline(entries: entries)
     }

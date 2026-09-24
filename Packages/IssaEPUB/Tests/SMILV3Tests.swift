@@ -214,9 +214,9 @@ struct SMILV3Tests {
         #expect(abs(interlude.duration - 330) < 0.000_1)
     }
 
-    /// Tap and seek keep the first entry for a fragment. For a sentence with a
-    /// hole in front that is the hole, which is where v2's clip for the same
-    /// sentence began.
+    /// Tap and seek resolve a fragment to the first of its sentence's
+    /// entries. For a sentence with a hole in front that is the hole, which is
+    /// where v2's clip for the same sentence began.
     @Test("a fragment still resolves to its first entry")
     func fragmentsResolveToTheirFirstEntry() throws {
         let timeline = try Self.timeline()
@@ -379,11 +379,8 @@ struct SMILWordGranularV3Tests {
     ///      4  ch01-s1-w0                track2  0–2
     ///      5  ch01-s1-w1                track2  2–5
     static func timeline() throws -> SMILTimeline {
-        let rows = try SMILParser.parse(
-            data: Data(chapterOne.utf8), overlayHref: "OEBPS/MediaOverlays/ch01.smil")
-        return narration(rows.map {
-            ($0.fragmentID, $0.textHref, $0.audioHref, $0.start, $0.end, $0.isAudioOnly)
-        })
+        SMILParser.timeline(from: try SMILParser.parse(
+            data: Data(chapterOne.utf8), overlayHref: "OEBPS/MediaOverlays/ch01.smil"))
     }
 
     @Test("the holes name the sentence and the words between them do not")
@@ -424,8 +421,9 @@ struct SMILWordGranularV3Tests {
         #expect(window.entries[window.currentIndex] == entries[3])
     }
 
-    /// Tap and seek are left as they were: the sentence's first entry is the
-    /// hole in front of it, which is where v2 began the same audio.
+    /// The sentence's first entry is the hole in front of it, ahead of its
+    /// words, and it is where v2 began the same audio. `SMILSentenceKeyTests`
+    /// has the sentences with no hole in front, which resolve to a word.
     @Test("the sentence's fragment still resolves to its first entry")
     func fragmentResolvesToTheBeforeHole() throws {
         let timeline = try Self.timeline()

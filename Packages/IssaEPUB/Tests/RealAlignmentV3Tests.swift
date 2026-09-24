@@ -97,6 +97,10 @@ struct RealAlignmentV3Tests {
                 // resolves to its own place rather than to its sentence's first.
                 #expect(timeline.entry(following: entry).map { $0.cumulativeEnd > entry.cumulativeEnd } ?? true)
             }
+            // The server aligns by the sentence, so no entry is a word of one:
+            // resolving and stepping are exactly what they were before words
+            // were read.
+            #expect(timeline.entries.allSatisfy { $0.sentenceID == nil }, "\(path) has a word-granular entry")
         }
     }
 }

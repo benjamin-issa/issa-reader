@@ -53,6 +53,9 @@ struct RealAlignmentTests {
             #expect(package.archive.contains(entry.audioHref), "missing audio \(entry.audioHref)")
             #expect(package.archive.contains(entry.textHref), "missing text \(entry.textHref)")
         }
+        // The server aligns by the sentence, so no entry is a word of one: the
+        // timeline is exactly the one it was before words were read.
+        #expect(timeline.entries.allSatisfy { $0.sentenceID == nil })
     }
 
     @Test("clips are contiguous within each track",
