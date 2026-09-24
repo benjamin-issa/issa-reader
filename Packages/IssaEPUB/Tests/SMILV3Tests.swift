@@ -280,6 +280,135 @@ struct SMILV3Tests {
     }
 }
 
+/// A narration stated row by row, `cumulativeEnd` accumulated exactly as
+/// `SMILParser.timeline(for:)` accumulates it.
+private func narration(
+    _ rows: [(fragment: String, text: String, audio: String,
+              start: TimeInterval, end: TimeInterval, audioOnly: Bool)],
+) -> SMILTimeline {
+    var cumulative: TimeInterval = 0
+    return SMILTimeline(entries: rows.map { row in
+        cumulative += row.end - row.start
+        return SMILEntry(
+            fragmentID: row.fragment, textHref: row.text, audioHref: row.audio,
+            start: row.start, end: row.end, cumulativeEnd: cumulative, isAudioOnly: row.audioOnly)
+    })
+}
+
+/// Storyteller 3 aligned at word granularity, which the CLI offers and
+/// `SMILParser.parse` reads.
+///
+/// The holes still name the *sentence* — `holePar` is handed the sentence's
+/// fragment either way — but the pars between them are words, each under an
+/// id of its own. So a sentence's before-hole and after-hole share a key with
+/// entries of another key in between, and nothing about the key says where in
+/// the book either of them is.
+///
+/// The markup is the aligner's shape for a track that is one sentence with
+/// music either side, a part title say: a before-hole where the file starts
+/// late, and an after-hole on the tail, which runs to the end of the file.
+@Suite("A word-granular v3 book")
+struct SMILWordGranularV3Tests {
+    static let chapterOne = """
+        <?xml version="1.0" encoding="utf-8"?>
+        <smil xmlns="http://www.w3.org/ns/SMIL" xmlns:epub="http://www.idpf.org/2007/ops" version="3.0" epub:prefix="storyteller: https://storyteller-platform.gitlab.io/storyteller/docs/vocabulary">
+          <body>
+            <seq id="ch01_overlay" epub:textref="../ch01.xhtml" epub:type="chapter">
+              <par id="ch01-s0-before0" epub:type="storyteller:audio-only">
+                <text src="../ch01.xhtml#ch01-s0"/>
+                <audio src="../Audio/track1.mp3" clipBegin="0.000s" clipEnd="6.000s"/>
+              </par>
+              <seq id="ch01-s0" epub:type="text-range-small storyteller:matched" epub:textref="../ch01.xhtml#ch01-s0">
+                <par id="ch01-s0-w0" epub:type="storyteller:matched">
+                  <text src="../ch01.xhtml#ch01-s0-w0"/>
+                  <audio src="../Audio/track1.mp3" clipBegin="6.000s" clipEnd="7.000s"/>
+                </par>
+                <par id="ch01-s0-w1" epub:type="storyteller:matched">
+                  <text src="../ch01.xhtml#ch01-s0-w1"/>
+                  <audio src="../Audio/track1.mp3" clipBegin="7.000s" clipEnd="8.000s"/>
+                </par>
+              </seq>
+              <par id="ch01-s0-after0" epub:type="storyteller:audio-only">
+                <text src="../ch01.xhtml#ch01-s0"/>
+                <audio src="../Audio/track1.mp3" clipBegin="8.000s" clipEnd="20.000s"/>
+              </par>
+              <seq id="ch01-s1" epub:type="text-range-small storyteller:matched" epub:textref="../ch01.xhtml#ch01-s1">
+                <par id="ch01-s1-w0" epub:type="storyteller:matched">
+                  <text src="../ch01.xhtml#ch01-s1-w0"/>
+                  <audio src="../Audio/track2.mp3" clipBegin="0.000s" clipEnd="2.000s"/>
+                </par>
+                <par id="ch01-s1-w1" epub:type="storyteller:matched">
+                  <text src="../ch01.xhtml#ch01-s1-w1"/>
+                  <audio src="../Audio/track2.mp3" clipBegin="2.000s" clipEnd="5.000s"/>
+                </par>
+              </seq>
+            </seq>
+          </body>
+        </smil>
+        """
+
+    ///      0  ch01-s0     before-hole   track1  0–6
+    ///      1  ch01-s0-w0                track1  6–7
+    ///      2  ch01-s0-w1                track1  7–8
+    ///      3  ch01-s0     after-hole    track1  8–20   to the end of the file
+    ///      4  ch01-s1-w0                track2  0–2
+    ///      5  ch01-s1-w1                track2  2–5
+    static func timeline() throws -> SMILTimeline {
+        let rows = try SMILParser.parse(
+            data: Data(chapterOne.utf8), overlayHref: "OEBPS/MediaOverlays/ch01.smil")
+        return narration(rows.map {
+            ($0.fragmentID, $0.textHref, $0.audioHref, $0.start, $0.end, $0.isAudioOnly)
+        })
+    }
+
+    @Test("the holes name the sentence and the words between them do not")
+    func layout() throws {
+        let entries = try Self.timeline().entries
+        #expect(entries.map(\.fragmentID) == [
+            "ch01-s0", "ch01-s0-w0", "ch01-s0-w1", "ch01-s0", "ch01-s1-w0", "ch01-s1-w1",
+        ])
+        #expect(entries.map(\.isAudioOnly) == [true, false, false, true, false, false])
+        #expect(Set(entries.map(\.textHref)) == ["OEBPS/ch01.xhtml"])
+    }
+
+    /// The loop again, one granularity down. Resolved through its key, the
+    /// after-hole was the before-hole, the entry following it the sentence's
+    /// first word, and a file that ended in the hole played the sentence and
+    /// the music after it for ever.
+    @Test("the entry following a file-ending after-hole is the next file's, not the sentence's first word")
+    func followingTheAfterHole() throws {
+        let timeline = try Self.timeline()
+        let entries = timeline.entries
+        #expect(timeline.entry(following: entries[3]) == entries[4])
+        #expect(timeline.entry(following: entries[0]) == entries[1])
+    }
+
+    @Test("next from the after-hole is the next sentence, not back to the start of this one")
+    func nextFromTheAfterHole() throws {
+        let timeline = try Self.timeline()
+        let entries = timeline.entries
+        #expect(timeline.entry(after: entries[3]) == entries[4])
+    }
+
+    @Test("the window around the after-hole is centred on the after-hole")
+    func windowAroundTheAfterHole() throws {
+        let timeline = try Self.timeline()
+        let entries = timeline.entries
+        let window = try #require(timeline.window(around: entries[3], before: 1, after: 1))
+        #expect(window.entries == [entries[2], entries[3], entries[4]])
+        #expect(window.entries[window.currentIndex] == entries[3])
+    }
+
+    /// Tap and seek are left as they were: the sentence's first entry is the
+    /// hole in front of it, which is where v2 began the same audio.
+    @Test("the sentence's fragment still resolves to its first entry")
+    func fragmentResolvesToTheBeforeHole() throws {
+        let timeline = try Self.timeline()
+        #expect(timeline.entry(forFragment: "ch01-s0", inDocument: "OEBPS/ch01.xhtml")
+            == timeline.entries[0])
+    }
+}
+
 /// `readalong.epub` is v2 output, and v2 books must behave exactly as they did
 /// before the timeline learned about v3.
 ///

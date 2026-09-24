@@ -229,3 +229,85 @@ struct ReadalongV3Tests {
         #expect(interlude.offset == 0)
     }
 }
+
+/// The read-along on the other shapes Storyteller 3 writes, which the
+/// generated fixture does not reach: word granularity, an audio chapter that
+/// opens in the middle of a text chapter's file, and a sentence whose
+/// after-holes run through three files. The timelines are stated by hand and
+/// played over the v3 fixture's own audio files, which is all the player
+/// needs of them.
+@MainActor
+@Suite("The read-along on the other shapes Storyteller 3 writes")
+struct ReadalongV3ShapesTests {
+    static let chapterOne = "OEBPS/ch01.xhtml", chapterTwo = "OEBPS/ch02.xhtml"
+    static let interlude = "OEBPS/storyteller-audio-1.xhtml"
+    static let track1 = "OEBPS/Audio/track1.mp3", track2 = "OEBPS/Audio/track2a.mp3"
+    static let bonus1 = "OEBPS/Audio/bonus1.mp3", bonus2 = "OEBPS/Audio/bonus2.mp3"
+
+    /// `cumulativeEnd` accumulated exactly as `SMILParser.timeline(for:)`
+    /// accumulates it.
+    static func narration(
+        _ rows: [(fragment: String, text: String, audio: String,
+                  start: TimeInterval, end: TimeInterval, audioOnly: Bool)],
+    ) -> SMILTimeline {
+        var cumulative: TimeInterval = 0
+        return SMILTimeline(entries: rows.map { row in
+            cumulative += row.end - row.start
+            return SMILEntry(
+                fragmentID: row.fragment, textHref: row.text, audioHref: row.audio,
+                start: row.start, end: row.end, cumulativeEnd: cumulative,
+                isAudioOnly: row.audioOnly)
+        })
+    }
+
+    static func make(_ timeline: SMILTimeline) throws -> (ReadalongCoordinator, URL) {
+        let (parsed, package) = try ReadalongV3Tests.timeline()
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appending(path: "issa-readalong-v3-shapes-\(UUID().uuidString)")
+        let files = try AudioExtraction.extractAudio(
+            from: package, timeline: parsed, bookID: "readalong-v3-shapes", into: directory,
+        )
+        return (ReadalongCoordinator(timeline: timeline, audioFiles: files), directory)
+    }
+
+    /// The loop, one granularity down. The holes name the sentence and the
+    /// words between them do not, so resolved through its key the after-hole
+    /// was the before-hole, and the end of the file moved to the sentence's
+    /// first word and played the sentence and its music again, for ever.
+    @Test("a word-granular file that ends in an after-hole advances to the next file")
+    func wordGranularFileEndingInAHole() async throws {
+        let timeline = Self.narration([
+            ("ch01-s0", Self.chapterOne, Self.track1, 0, 6, true),
+            ("ch01-s0-w0", Self.chapterOne, Self.track1, 6, 7, false),
+            ("ch01-s0-w1", Self.chapterOne, Self.track1, 7, 8, false),
+            ("ch01-s0", Self.chapterOne, Self.track1, 8, 20, true),
+            ("ch01-s1-w0", Self.chapterOne, Self.track2, 0, 2, false),
+            ("ch01-s1-w1", Self.chapterOne, Self.track2, 2, 5, false),
+        ])
+        let (subject, directory) = try Self.make(timeline)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let entries = timeline.entries
+
+        #expect(await subject.prepare(at: entries[2]))
+        let tick = try #require(subject.player.onTimeUpdate)
+        subject.player.onTimeUpdate = nil
+        var fragments: [String] = []
+        var endings = 0
+        subject.onFragmentChange = { fragments.append($0) }
+        subject.onChapterChangeObserved = { endings += 1 }
+
+        // From the last word into the music after it: the highlight goes back
+        // out to the whole sentence, as the hole names it.
+        tick(14)
+        #expect(subject.activeEntry == entries[3])
+        #expect(fragments == ["ch01-s0"])
+
+        subject.player.onFinishedFile?()
+        let advanced = await ReadalongV3Tests.waitUntil {
+            subject.activeEntry == entries[4] && subject.movesInFlight == 0
+        }
+        #expect(advanced, "the end of the file went back into the sentence")
+        #expect(subject.player.currentAudioHref == Self.track2)
+        #expect(endings == 0, "the same chapter carries on")
+    }
+}

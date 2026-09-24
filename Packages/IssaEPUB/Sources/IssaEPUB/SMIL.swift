@@ -131,9 +131,11 @@ public struct SMILTimeline: Sendable {
     /// advancing.
     ///
     /// A key names a *sentence*, not an entry. In a v2 book the two coincide.
-    /// In a v3 book one sentence can own several entries in a row — the
-    /// audio-only holes before and after it, and a continuation par for each
-    /// further file it runs into — and every one of them names this key.
+    /// In a v3 book one sentence can own several entries — the audio-only
+    /// holes before and after it, and a continuation par for each further file
+    /// it runs into — and every one of them names this key. They need not be
+    /// neighbours: at word granularity the words between a sentence's holes
+    /// each name a key of their own.
     struct FragmentKey: Hashable {
         let document: String
         let fragment: String
@@ -354,22 +356,40 @@ public struct SMILTimeline: Sendable {
     /// sentence several entries under one key — see `FragmentKey`. Resolving
     /// the key alone turned a sentence's after-hole back into the sentence, so
     /// the entry "after" the hole was the hole, and a file that ended in one
-    /// replayed it for ever. The key's entries sit in one contiguous run, so
-    /// this walks that run from its first entry to the one it was handed.
-    /// Entries in one timeline are distinct — `cumulativeEnd` strictly
-    /// increases — so equality finds exactly one.
+    /// replayed it for ever.
     ///
-    /// An entry built by hand that shares a key with this timeline but none
-    /// of its clips answers with the key's first entry, as it always did.
+    /// Nor can the key's entries be walked as a run from the first. In a
+    /// word-granular book the sentence's words, each under an id of its own,
+    /// sit between its before-hole and its after-hole, so a walk stopped at
+    /// the first word and answered with the before-hole: the entry following
+    /// a file-ending after-hole was the sentence's first word, and the same
+    /// loop came back one granularity down.
+    ///
+    /// So this finds the entry by where it ends. `cumulativeEnd` rises through
+    /// the timeline — `index(atBookTime:)` searches it the same way — and
+    /// strictly, since the parser keeps no clip shorter than five
+    /// milliseconds, so one binary search reaches the only entry that can be
+    /// this one, whatever its neighbours are called. A tie, which only a
+    /// timeline built by hand can hold, is walked.
+    ///
+    /// An entry built by hand that is not one of this timeline's answers with
+    /// the first entry for its key, as it always did.
     private func index(of entry: SMILEntry) -> Int? {
-        let key = FragmentKey(entry)
-        guard let first = indexByFragment[key] else { return nil }
-        var index = first
-        while index < entries.count, FragmentKey(entries[index]) == key {
-            if entries[index] == entry { return index }
-            index += 1
+        var low = 0
+        var high = entries.count
+        while low < high {
+            let mid = (low + high) / 2
+            if entries[mid].cumulativeEnd < entry.cumulativeEnd {
+                low = mid + 1
+            } else {
+                high = mid
+            }
         }
-        return first
+        while low < entries.count, entries[low].cumulativeEnd == entry.cumulativeEnd {
+            if entries[low] == entry { return low }
+            low += 1
+        }
+        return indexByFragment[FragmentKey(entry)]
     }
 
     /// Fraction of the book narrated, 0...1.
