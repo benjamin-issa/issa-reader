@@ -194,12 +194,17 @@ for row in "${SELECTED[@]}"; do
   # target would have run the unit suite on each simulator, copied no
   # screenshots and printed "ok". Restricting the run restores the check's
   # meaning, and stops the unit suite running once per device width.
+  #
+  # `-collect-test-diagnostics never`: without it Xcode 27 runs `simctl
+  # diagnose` once a session ends and waits on it indefinitely, so a sweep
+  # whose tests had all finished would never reach the next device.
   xcodebuild test-without-building \
       -xctestrun "$XCTESTRUN" \
       -only-testing:IssaLayoutUITests \
       -destination "platform=iOS Simulator,id=$CURRENT_UDID" \
       -resultBundlePath "$RESULT" \
       -parallel-testing-enabled NO \
+      -collect-test-diagnostics never \
       TEST_RUNNER_ISSA_SWEEP_DEVICE="$slug" \
       > "$WORK/$slug.log" 2>&1
   status=$?
