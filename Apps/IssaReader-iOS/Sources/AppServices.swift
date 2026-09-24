@@ -201,9 +201,13 @@ final class AppServices {
             guard let book = app.bookByUUID[bookUUID] else {
                 return try? await service.coverData(for: bookUUID, shape: .square, pixelWidth: 240)
             }
+            // Under the rule every other cover follows. A row asked for before
+            // the first refresh redraws when the catalogue changes, so it would
+            // recover without it; with it, the row has its art from the start
+            // rather than once the refresh lands.
             return try? await service.coverData(
                 for: book, shape: .square, pixelWidth: 240,
-                generation: session.capabilities.generation)
+                generation: CoverCache.generation(toFetch: book, detected: session.capabilities.generation))
         }
     }
 

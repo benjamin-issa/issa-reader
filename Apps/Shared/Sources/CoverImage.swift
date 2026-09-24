@@ -91,7 +91,9 @@ public final class CoverCache {
         }
 
         let service = LibraryService(client: session.client)
-        let generation = session.capabilities.generation
+        // The publisher hands over the book it was given when the reading or
+        // listening began, which may predate the refresh; see `generation(toFetch:)`.
+        let generation = Self.generation(toFetch: book, detected: session.capabilities.generation)
         // Try what the book wants, then the other one. A square request 404s
         // for a book with no audiobook edition, and portrait can be missing
         // too — either way the previous book's art must not be left in place.
@@ -183,6 +185,38 @@ public final class CoverCache {
         return reference.map { "sha-\($0.sha256)-\(pixels)" }
     }
 
+    /// The generation to hand `LibraryService.coverData(for:shape:…)` for this
+    /// book: the detected one, except for a 3.x book that names no cover at all.
+    ///
+    /// The service answers a 3.x book that names no art for a shape with
+    /// `.notFound` and no request, which is right for a book the 3.x catalogue
+    /// decoded and wrong for a row that merely predates the field — one cached
+    /// by 1.2.0, or before the server was upgraded. Detection answers a few
+    /// requests after sign-in, usually before the first refresh replaces those
+    /// rows, and a `Book` taken from them in between is held for as long as it
+    /// plays or stays open: `NowPlayingController.attach` ignores the same
+    /// book again, `ReaderModel.book` is a `let`, and the listening loop keeps
+    /// the book it started with for the mini player and the widget. None of them
+    /// is ever handed the reference the refresh brings, so the Lock Screen and
+    /// CarPlay tile, the player and the widget stayed blank for the whole
+    /// session; only a view over the catalogue recovered, when its key changed.
+    ///
+    /// So a book that names no usable cover for either shape is asked for by
+    /// uuid, which on 3.x redirects to the same image — the route every cover
+    /// took before detection existed. A 3.x book that truly has no art costs
+    /// the one request that 404s, as it did in 1.2.0. A book that names one
+    /// shape came from a 3.x catalogue, so its silence about the other is the
+    /// server's answer and keeps the service's shortcut.
+    nonisolated static func generation(
+        toFetch book: Book, detected: ServerGeneration?,
+    ) -> ServerGeneration? {
+        guard detected == .v3,
+              book.coverReference(for: .portrait) == nil,
+              book.coverReference(for: .square) == nil
+        else { return detected }
+        return nil
+    }
+
     /// `updatedAt` in epoch milliseconds, the same number the uuid route is
     /// versioned by.
     private nonisolated static func version(of book: Book) -> String {
@@ -210,7 +244,9 @@ public final class CoverCache {
         }
         if let existing = inFlight[key] { return await existing.value }
 
-        let generation = session.capabilities.generation
+        // The mini player and the player draw the book playback began with,
+        // which no refresh replaces; see `generation(toFetch:)`.
+        let generation = Self.generation(toFetch: book, detected: session.capabilities.generation)
         let task = Task<Image?, Never> { [diskDirectory] in
             let fileURL = diskDirectory.appending(path: "\(key).jpg")
 
