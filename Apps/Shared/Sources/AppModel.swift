@@ -567,6 +567,9 @@ public final class AppModel {
         downloadedOnDisk = []
         downloadedUUIDs = []
         statuses = []
+        // Book uuids as well, standing for status writes the `mutation` table
+        // held — and it has just been cleared.
+        autoFiledBookUUIDs = []
         ratings = [:]
         loadError = nil
         // Everything else keyed by a value the next account shares. The server
@@ -3126,12 +3129,24 @@ public final class AppModel {
 
     // MARK: - Per-user state
 
-    /// Moves a book to a shelf.
+    /// Moves a book to a shelf the reader chose.
+    ///
+    /// Takes the book out of `autoFiledBookUUIDs` before anything suspends, so
+    /// the rule in `advanceStatusIfUnset` never overrides a choice made by
+    /// hand. That includes one still waiting to drain: it replaces the rule's
+    /// own status in the queue, and the rule would otherwise go on asking as
+    /// if the server had none.
+    public func setStatus(_ status: Status, for book: Book) async {
+        autoFiledBookUUIDs.remove(book.uuid)
+        await applyStatus(status, to: book)
+    }
+
+    /// Moves a book to a shelf, whoever chose it.
     ///
     /// The local copy is updated first so the shelf changes under the finger,
     /// and rolled back if the server refuses — a status that silently reverts on
     /// the next refresh is worse than one that never appeared to change.
-    public func setStatus(_ status: Status, for book: Book) async {
+    private func applyStatus(_ status: Status, to book: Book) async {
         guard let session, let index = books.firstIndex(where: { $0.uuid == book.uuid }) else { return }
         books[index].status = status
         rebuildDerived()
@@ -3482,9 +3497,9 @@ public final class AppModel {
     /// still means to but cannot for a book with no status at all (see
     /// `StatusAdvance`), so a book read here stayed unfiled on the server and
     /// on every other client. Writing the status the server meant to restores
-    /// the rule. `setStatus` is the path a reader's own choice takes, so the
-    /// change shows at once, is persisted, and is queued behind the position
-    /// it follows — which is the order the server applied them in.
+    /// the rule. `applyStatus` is the path a reader's own choice takes too, so
+    /// the change shows at once, is persisted, and is queued behind the
+    /// position it follows — which is the order the server applied them in.
     ///
     /// Here rather than in the reader, because every position passes through
     /// `writePosition`: the reader's page turns and read-along, and the
@@ -3492,12 +3507,22 @@ public final class AppModel {
     /// The server's rule applied to all of them. A refused write never gets
     /// this far, as it never reached the server either.
     ///
-    /// Once per book. `setStatus` gives the book its status before it first
-    /// suspends, and the rule fires only for a book with none, so the next
-    /// write — or one already waiting on this one's drain — finds it filed and
-    /// leaves it to the server, which advances a book with a status itself.
-    /// Nothing here writes a position, so it cannot come back through
-    /// `writePosition`.
+    /// Until the server holds it, not just once. A book the rule filed is in
+    /// `autoFiledBookUUIDs`, and while its status is still queued the rule is
+    /// asked again as if the book had none, because on the server it has none
+    /// (see `autoFiledBookUUIDs`). Once that status has drained the book is
+    /// left to the server, which advances a book with a status itself. The
+    /// book goes into the set before `applyStatus` first suspends, so a write
+    /// that arrives while this one's status is still being sent re-evaluates
+    /// rather than taking the new status as the server's. Nothing here writes
+    /// a position, so it cannot come back through `writePosition`.
+    ///
+    /// Forward only, and so only on a change: no status, then Reading, then
+    /// Read. Asked as if the book had no status, a write at 50% after one at
+    /// 99% — a reader turning back to the opening — would ask for Reading, and
+    /// 2.x's rule never took a book back from Read. Nor is a status queued
+    /// again when it is the one the book already has, as every page turn
+    /// between 0% and 98% would otherwise do.
     ///
     /// The statuses the cached books carry stand in for `statuses` while that
     /// is empty. It is filled only by a refresh and kept only in memory, so on
@@ -3511,19 +3536,70 @@ public final class AppModel {
     /// Where no cached book is at the status wanted, nothing is written, as
     /// before.
     private func advanceStatusIfUnset(after locator: ReadiumLocator, for bookUUID: String) async {
+        // Only a book the rule filed asks the queue, so the common case never
+        // leaves the main actor.
+        var unfiledOnServer = false
+        if autoFiledBookUUIDs.contains(bookUUID) {
+            if await pendingStatusBookUUIDs().contains(bookUUID) {
+                // Asked again after the await: a status chosen by hand while
+                // the queue was read takes the book out, and stays the reader's.
+                unfiledOnServer = autoFiledBookUUIDs.contains(bookUUID)
+            } else {
+                autoFiledBookUUIDs.remove(bookUUID)
+            }
+        }
         let generation = session?.capabilities.generation
         let known = statuses.isEmpty ? books.compactMap(\.status) : statuses
         guard let book = bookByUUID[bookUUID],
               let next = StatusAdvance.statusToSet(
-                  after: locator, current: book.status,
-                  generation: generation, statuses: known)
+                  after: locator, current: unfiledOnServer ? nil : book.status,
+                  generation: generation, statuses: known),
+              Self.advanceRank(of: next) > Self.advanceRank(of: book.status)
         else { return }
         IssaLog.info("status set after a position write", [
             "book": bookUUID,
             "status": next.name,
             "generation": generation?.rawValue ?? "undetermined",
         ])
-        await setStatus(next, for: book)
+        autoFiledBookUUIDs.insert(bookUUID)
+        await applyStatus(next, to: book)
+    }
+
+    /// Books `advanceStatusIfUnset` filed, until their status is seen to have
+    /// left the queue.
+    ///
+    /// While that status is queued the server still has no status row for the
+    /// book, so it cannot advance it. The rule used to fire once and leave
+    /// the rest to the server, which is only right once the row exists: a book
+    /// started and finished before the queue drained — read offline, or while
+    /// the server kept refusing positions — drained as the 99% position, which
+    /// the server's UPDATE matched to nothing, and then the "Reading" PUT. It
+    /// ended at Reading everywhere, and stayed there until a later position
+    /// write that a finished book may never get. 2.x would have ended at Read.
+    ///
+    /// A second status replaces the first in the queue rather than following
+    /// it (`MutationQueue` keeps one status per book, the newest, in the first
+    /// one's place in the drain order), so the drain still sends the position
+    /// and then the status the book finished at.
+    ///
+    /// A status the reader chose takes the book out: see `setStatus`.
+    ///
+    /// Only in memory. After a relaunch a queued status still drains, and the
+    /// first position written online after that finds a row and is advanced
+    /// by the server itself, as on 2.x. A book finished offline across a
+    /// relaunch waits for that write, which is all this costs.
+    private var autoFiledBookUUIDs: Set<String> = []
+
+    /// How far along the rule's own statuses a book is: none, then Reading,
+    /// then Read. Anything else ranks with none, but only a book the rule
+    /// filed is ever compared here with a status of its own, and that status
+    /// is one of the two the rule writes.
+    private static func advanceRank(of status: Status?) -> Int {
+        switch status?.name {
+        case Status.readName: 2
+        case Status.readingName: 1
+        default: 0
+        }
     }
 
     /// Re-reads one book after something changed it server-side.

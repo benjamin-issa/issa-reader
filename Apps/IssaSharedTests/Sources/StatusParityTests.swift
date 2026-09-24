@@ -56,6 +56,20 @@ struct StatusParityTests {
             try await MutationQueue(store: store).pending()
         }
 
+        /// The queued status write, and the status it will send.
+        func queuedStatus() async throws -> (row: MutationQueue.Pending, status: String)? {
+            guard let row = try await queued().first(where: { $0.kind == .status }) else { return nil }
+            return (row, try JSONDecoder().decode(MutationDrain.StatusPayload.self, from: row.payload).status)
+        }
+
+        /// Empties the queue the way a drain does when the server takes every
+        /// write, row by row. The stub refuses every write, so this is how a
+        /// test gets past one.
+        func drainAccepted() async throws {
+            let queue = try MutationQueue(store: store)
+            for row in try await queue.pending() { try await queue.remove(row.id) }
+        }
+
         func tearDown() {
             try? FileManager.default.removeItem(at: directory)
         }
@@ -163,26 +177,103 @@ struct StatusParityTests {
         #expect(try await fixture.queued().map(\.kind) == [.position])
     }
 
-    /// Once, not on every write. After the first write files the book, the
-    /// server has a status row and advances it itself; a second status from
-    /// here would race the server to the same answer — and, queued, would
-    /// replace the first before it had even been sent.
-    @Test("a book the app has filed is not filed again")
-    func filedOnce() async throws {
+    /// Left to the server once it holds the status, and not before. After it
+    /// drains the server has a status row and advances the book itself; a
+    /// second status from here would race the server to the same answer.
+    @Test("a book whose status has reached the server is not filed again")
+    func filedOnceItHasDrained() async throws {
         let fixture = try await Self.fixture(
             generation: .v3,
             books: [SharedFixtures.book("Dracula", uuid: Self.dracula, progress: 0.1)])
         defer { fixture.tearDown() }
-
         await fixture.app.writePosition(Self.locator(0.2), timestamp: 10, for: Self.dracula, origin: .chosen)
+        #expect(try await fixture.queuedStatus()?.status == Self.status(named: Status.readingName).uuid)
+        try await fixture.drainAccepted()
+
         await fixture.app.writePosition(Self.locator(0.99), timestamp: 20, for: Self.dracula, origin: .chosen)
 
         #expect(fixture.app.bookByUUID[Self.dracula]?.status?.name == Status.readingName)
+        #expect(try await fixture.queued().map(\.kind) == [.position], "the server moves it to Read itself")
+    }
+
+    // MARK: - Before the server holds it
+
+    /// The whole of an offline session, or one the server refused positions
+    /// for. The first write files the book Reading; while that PUT waits the
+    /// server has no row to advance, so the 99% position that drains ahead of
+    /// it moves nothing there. Filed once and left to the server, the book
+    /// ended at Reading everywhere, where 2.x ended at Read.
+    @Test("a book finished before its status drains is filed Read, behind the position")
+    func finishedBeforeTheDrain() async throws {
+        let fixture = try await Self.fixture(
+            generation: .v3,
+            books: [SharedFixtures.book("Dracula", uuid: Self.dracula, progress: 0.1)])
+        defer { fixture.tearDown() }
+        await fixture.app.writePosition(Self.locator(0.2), timestamp: 10, for: Self.dracula, origin: .chosen)
+        #expect(try await fixture.queuedStatus()?.status == Self.status(named: Status.readingName).uuid)
+
+        await fixture.app.writePosition(Self.locator(0.99), timestamp: 20, for: Self.dracula, origin: .chosen)
+
+        #expect(fixture.app.bookByUUID[Self.dracula]?.status?.name == Status.readName)
+        // One of each. The queue keeps a book's newest status where its first
+        // one stood, so the drain still sends the position first.
         let queued = try await fixture.queued()
-        #expect(queued.map(\.kind) == [.position, .status])
-        let sent = try JSONDecoder().decode(
-            MutationDrain.StatusPayload.self, from: try #require(queued.last).payload)
-        #expect(sent.status == Self.status(named: Status.readingName).uuid)
+        try #require(queued.map(\.kind) == [.position, .status], "the status is sent after the position")
+        let position = try JSONDecoder().decode(MutationDrain.PositionPayload.self, from: queued[0].payload)
+        #expect(position.timestamp == 20)
+        #expect(try await fixture.queuedStatus()?.status == Self.status(named: Status.readName).uuid)
+        let persisted = try await fixture.store.allBooks().first { $0.uuid == Self.dracula }
+        #expect(persisted?.status?.name == Status.readName)
+    }
+
+    /// The reader's choice is theirs, even while the rule's own status is
+    /// still queued behind it: the choice replaced it there, and the rule
+    /// asking again as if the book had none would override it.
+    @Test(
+        "a status chosen by hand is not overridden by the rule",
+        arguments: [Status.toReadName, "Abandoned"])
+    func aChosenStatusStands(chosen: String) async throws {
+        let fixture = try await Self.fixture(
+            generation: .v3,
+            books: [SharedFixtures.book("Dracula", uuid: Self.dracula, progress: 0.1)])
+        defer { fixture.tearDown() }
+        await fixture.app.writePosition(Self.locator(0.2), timestamp: 10, for: Self.dracula, origin: .chosen)
+        #expect(try await fixture.queuedStatus()?.status == Self.status(named: Status.readingName).uuid)
+        let choice = Self.statuses.first { $0.name == chosen } ?? Status(uuid: "status-abandoned", name: chosen)
+        await fixture.app.setStatus(choice, for: try #require(fixture.app.bookByUUID[Self.dracula]))
+        let queuedChoice = try #require(await fixture.queuedStatus())
+        #expect(queuedChoice.status == choice.uuid)
+
+        await fixture.app.writePosition(Self.locator(0.99), timestamp: 20, for: Self.dracula, origin: .chosen)
+
+        #expect(fixture.app.bookByUUID[Self.dracula]?.status == choice)
+        let after = try #require(await fixture.queuedStatus())
+        #expect(after.row.id == queuedChoice.row.id, "nothing should have been queued after the choice")
+        #expect(after.status == choice.uuid)
+    }
+
+    /// Forward only, and only on a change. Asked as if the book had no
+    /// status, a write at 50% after one at 99% would ask for Reading; 2.x's
+    /// rule never took a book back from Read, and a write that asks for the
+    /// status already queued has nothing to send.
+    @Test("the rule never moves a book back, and never queues the status it has")
+    func forwardOnly() async throws {
+        let fixture = try await Self.fixture(
+            generation: .v3,
+            books: [SharedFixtures.book("Dracula", uuid: Self.dracula, progress: 0.1)])
+        defer { fixture.tearDown() }
+        await fixture.app.writePosition(Self.locator(0.99), timestamp: 10, for: Self.dracula, origin: .chosen)
+        let read = try #require(await fixture.queuedStatus())
+        #expect(read.status == Self.status(named: Status.readName).uuid)
+
+        await fixture.app.writePosition(Self.locator(0.5), timestamp: 20, for: Self.dracula, origin: .chosen)
+        #expect(fixture.app.bookByUUID[Self.dracula]?.status?.name == Status.readName, "turned back, not unread")
+        await fixture.app.writePosition(Self.locator(0.995), timestamp: 30, for: Self.dracula, origin: .chosen)
+
+        #expect(fixture.app.bookByUUID[Self.dracula]?.status?.name == Status.readName)
+        let after = try #require(await fixture.queuedStatus())
+        #expect(after.row.id == read.row.id, "nothing should have been queued after Read")
+        #expect(after.status == read.status)
     }
 
     // MARK: - A cold launch without a connection
