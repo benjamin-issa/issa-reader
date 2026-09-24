@@ -617,6 +617,22 @@ public final class AppModel {
         }
     }
 
+    /// Takes `store` as the catalogue and opens its write queue, as `connect`
+    /// does once it has chosen a server.
+    ///
+    /// For `StatusParityTests`, and internal for that reason alone. What they
+    /// assert is what reached the queue — a status written after a position,
+    /// a refresh that kept a queued status — and `connect` is the only other
+    /// way to get one, which builds its `Session` on `URLSession.shared`, a
+    /// background download session besides, and writes the last server into
+    /// the host app's defaults. Nothing in the app calls this; `connect`
+    /// keeps its own sequence, which interleaves the store with the account.
+    func useStore(_ store: LibraryStore) {
+        self.store = store
+        mutations = nil
+        ensureMutationQueue()
+    }
+
     private func enterLibrary() async {
         // Belt and braces: whichever way we got here, writes must be durable
         // before the library — and therefore the reader — is reachable.
@@ -713,12 +729,28 @@ public final class AppModel {
             let fetched = try await service.allBooks()
             let fetchedStatuses = (try? await service.statuses()) ?? statuses
             let fetchedRatings = (try? await service.myRatings()) ?? ratings
+            // Asked before `known` is read rather than beside the ratings'
+            // question below, so no suspension falls between reading `books`
+            // and replacing it: a position recorded in that gap would be lost.
+            let pendingStatuses = await pendingStatusBookUUIDs()
 
             // Reconciled, not assigned: a refetch that predates a write still in
             // the queue carries a stale position, and `replaceCatalogue` below
             // would then persist it for the next cold launch to read back.
+            //
+            // A status still in the queue is kept the same way, for the reason
+            // ratings are below. The catalogue is fetched before the queue
+            // drains, so a status set offline — by the reader, or after a
+            // position write on a book 3.x left with none — came back as the
+            // server's old one, the book changed shelves, and the drain then
+            // moved it back.
             let known = Dictionary(books.map { ($0.uuid, $0) }, uniquingKeysWith: { first, _ in first })
-            let merged = fetched.map { known[$0.uuid]?.reconciled(with: $0) ?? $0 }
+            let merged = fetched.map { fresh in
+                guard let mine = known[fresh.uuid] else { return fresh }
+                var book = mine.reconciled(with: fresh)
+                if pendingStatuses.contains(fresh.uuid) { book.status = mine.status }
+                return book
+            }
             books = merged
             reseedGuards(against: merged)
             rebuildDerived()
@@ -795,6 +827,20 @@ public final class AppModel {
         guard let mutations else { return [] }
         let rows = (try? await mutations.pending()) ?? []
         return Set(rows.filter { $0.kind == .rating }.map(\.bookUUID))
+    }
+
+    /// Books whose status is still waiting to reach the server.
+    ///
+    /// The same defence as `pendingRatingBookUUIDs`, for the same defect:
+    /// `reconciled(with:)` takes the server's status as given, so a refresh
+    /// landing before the queued PUT put the old status back and the book
+    /// flipped shelves twice. A status is written for the reader more often
+    /// now — after the first position on a book 3.x left with none — so the
+    /// flicker would otherwise follow every offline start of a new book.
+    private func pendingStatusBookUUIDs() async -> Set<String> {
+        guard let mutations else { return [] }
+        let rows = (try? await mutations.pending()) ?? []
+        return Set(rows.filter { $0.kind == .status }.map(\.bookUUID))
     }
 
     /// Records a write locally, then attempts it.
@@ -3425,7 +3471,46 @@ public final class AppModel {
             payload: MutationDrain.PositionPayload(locator: locator, timestamp: timestamp),
             supersedes: timestamp,
         )
+        await advanceStatusIfUnset(after: locator, for: bookUUID)
         return true
+    }
+
+    /// Files a book the way the server would have, where the server will not.
+    ///
+    /// 2.x moved a book to Reading, or to Read at 98%, whenever a position was
+    /// written for it, and the shelves on every device were built on that. 3.x
+    /// still means to but cannot for a book with no status at all (see
+    /// `StatusAdvance`), so a book read here stayed unfiled on the server and
+    /// on every other client. Writing the status the server meant to restores
+    /// the rule. `setStatus` is the path a reader's own choice takes, so the
+    /// change shows at once, is persisted, and is queued behind the position
+    /// it follows — which is the order the server applied them in.
+    ///
+    /// Here rather than in the reader, because every position passes through
+    /// `writePosition`: the reader's page turns and read-along, and the
+    /// audiobook's fifteen-second writer, which is also what a car drives.
+    /// The server's rule applied to all of them. A refused write never gets
+    /// this far, as it never reached the server either.
+    ///
+    /// Once per book. `setStatus` gives the book its status before it first
+    /// suspends, and the rule fires only for a book with none, so the next
+    /// write — or one already waiting on this one's drain — finds it filed and
+    /// leaves it to the server, which advances a book with a status itself.
+    /// Nothing here writes a position, so it cannot come back through
+    /// `writePosition`.
+    private func advanceStatusIfUnset(after locator: ReadiumLocator, for bookUUID: String) async {
+        let generation = session?.capabilities.generation
+        guard let book = bookByUUID[bookUUID],
+              let next = StatusAdvance.statusToSet(
+                  after: locator, current: book.status,
+                  generation: generation, statuses: statuses)
+        else { return }
+        IssaLog.info("status set after a position write", [
+            "book": bookUUID,
+            "status": next.name,
+            "generation": generation?.rawValue ?? "undetermined",
+        ])
+        await setStatus(next, for: book)
     }
 
     /// Re-reads one book after something changed it server-side.
@@ -3437,6 +3522,10 @@ public final class AppModel {
               books.contains(where: { $0.uuid == book.uuid }),
               let fresh = try? await LibraryService(client: session.client).book(book.uuid)
         else { return }
+        // A queued status is kept, as `refreshLibrary` keeps one. This runs on
+        // every appearance of the book screen, so it is the refresh most
+        // likely to land before the queue drains.
+        let statusPending = await pendingStatusBookUUIDs().contains(book.uuid)
         // Resolved *after* the await, not before it. The index used to be bound
         // in the same guard that then suspends on a network round trip, and
         // `books` can be replaced entirely during that suspension — signing out
@@ -3445,7 +3534,9 @@ public final class AppModel {
         // catalogue wrote this book's server data into whichever book had taken
         // its place, and then persisted that.
         guard let index = books.firstIndex(where: { $0.uuid == book.uuid }) else { return }
-        books[index] = books[index].reconciled(with: fresh)
+        var merged = books[index].reconciled(with: fresh)
+        if statusPending { merged.status = books[index].status }
+        books[index] = merged
         rebuildDerived()
     }
 }

@@ -670,6 +670,11 @@ public struct BookDetailView: View {
     }
 
     /// The shelf this book sits on, changeable in place.
+    ///
+    /// Every word a reader sees or hears here is `displayName`, the server's
+    /// label: a 3.x admin who renamed "Read" to "Finished" sees "Finished" in
+    /// the web app, and the same book saying "Read" here would look like a
+    /// different shelf. The glyph stays on `name`; see `symbol(for:)`.
     private var statusControl: some View {
         Menu {
             ForEach(app.statuses) { status in
@@ -677,9 +682,9 @@ public struct BookDetailView: View {
                     Task { await app.setStatus(status, for: book) }
                 } label: {
                     if status.uuid == book.status?.uuid {
-                        Label(status.name, systemImage: "checkmark")
+                        Label(status.displayName, systemImage: "checkmark")
                     } else {
-                        Text(status.name)
+                        Text(status.displayName)
                     }
                 }
             }
@@ -687,7 +692,7 @@ public struct BookDetailView: View {
             HStack(spacing: Metrics.spacing4) {
                 Image(systemName: Self.symbol(for: book.status?.name))
                     .font(.system(size: 11))
-                Text(book.status?.name ?? "Set status")
+                Text(book.status?.displayName ?? "Set status")
                     .font(Typography.caption)
                 Image(systemName: "chevron.up.chevron.down")
                     .font(.system(size: 8))
@@ -702,9 +707,12 @@ public struct BookDetailView: View {
         // The pill's own text is a bare shelf name; VoiceOver needs the verb.
         // The current shelf is the value, so it is not repeated in the label.
         .accessibilityLabel(book.status == nil ? "Set reading status" : "Change reading status")
-        .accessibilityValue(book.status?.name ?? "None")
+        .accessibilityValue(book.status?.displayName ?? "None")
     }
 
+    /// Takes the status's `name`, never its label. 3.x keeps the built-in
+    /// names fixed and puts any rewording in the label, so the name is what
+    /// still says which built-in a status is — "Finished" is still `Read`.
     static func symbol(for status: String?) -> String {
         switch status {
         case Status.readingName: "book"
