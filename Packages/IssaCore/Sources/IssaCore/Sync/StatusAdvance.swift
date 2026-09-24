@@ -26,9 +26,25 @@ import Foundation
 /// are exactly the ones 3.x will not advance.
 public enum StatusAdvance {
     /// The server's line between reading and read, inclusive on the read side.
-    /// Shared with `LibraryArrangement.stage(of:)`, which shelves a book with
-    /// no status the way the server would have filed it.
+    /// Drawn in one place, `builtInStatusName(after:)`.
     public static let finishedThreshold = 0.98
+
+    /// The built-in status the server's rule files a book under once a
+    /// position is written for it: "Read" at `finishedThreshold` or past it,
+    /// "Reading" anywhere short of it, the very start included. Any position
+    /// at all moves a book off "To read".
+    ///
+    /// One function for both halves of the rule. `statusToSet` writes its
+    /// answer for a book this device read, and `LibraryArrangement.stage(of:)`
+    /// shelves a book with no status by it. They used to read the progress
+    /// separately and disagreed at the start: the shelf kept a book at 0%, or
+    /// one whose locator carried no progression, on "To read", where the
+    /// write — and the server rule it restores — files it "Reading".
+    public static func builtInStatusName(after locator: ReadiumLocator) -> String {
+        // The server's own default for a locator with no progression.
+        (locator.locations?.totalProgression ?? 0) >= finishedThreshold
+            ? Status.readName : Status.readingName
+    }
 
     /// - Parameters:
     ///   - locator: the position just written.
@@ -46,9 +62,7 @@ public enum StatusAdvance {
         statuses: [Status],
     ) -> Status? {
         guard current == nil, generation != .v2 else { return nil }
-        // The server's own default for a locator with no progression.
-        let progression = locator.locations?.totalProgression ?? 0
-        let name = progression >= finishedThreshold ? Status.readName : Status.readingName
+        let name = builtInStatusName(after: locator)
         return statuses.first { $0.name == name }
     }
 }

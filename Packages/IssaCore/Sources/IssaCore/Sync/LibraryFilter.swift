@@ -176,6 +176,36 @@ public extension LibraryArrangement {
 
     /// Which of the three reading stages a book is in.
     ///
+    /// A book with a status is shelved by the status's name,
+    /// `stage(ofStatusNamed:)`.
+    ///
+    /// A book with *no* status is shelved where the server's own rule files a
+    /// book once a position is written for it. With no position it is
+    /// unstarted. With one — any one, 0% and a locator with no progression
+    /// included — it is shelved under the built-in status
+    /// `StatusAdvance.builtInStatusName(after:)` names: "Read" at 98% or more,
+    /// "Reading" short of that. That is the function `StatusAdvance` files a
+    /// book with, so the shelf cannot disagree with the write. It did while
+    /// the shelf read the progress itself: a book at 0% stayed on "To read"
+    /// here, where the server's rule and this device's write both put it on
+    /// "Reading".
+    ///
+    /// 2.x never sends a book without a status: it gives every book a status
+    /// row for every reader — adding a book writes one per user, adding a user
+    /// one per book, and a migration backfilled any gap. 3.x does send one,
+    /// and never moves it — its position write updates a status row the book
+    /// does not have — so a book read to the end in the web reader would
+    /// otherwise sit on "To read" forever. This files it where 2.x would have.
+    /// Display only: nothing is written back; `StatusAdvance` does that for
+    /// positions this device writes.
+    static func stage(of book: Book) -> Stage {
+        if let status = book.status { return stage(ofStatusNamed: status.name) }
+        guard let locator = book.position?.locator else { return .toRead }
+        return stage(ofStatusNamed: StatusAdvance.builtInStatusName(after: locator))
+    }
+
+    /// Which of the three reading stages a status of this name is.
+    ///
     /// This matches the status name loosely rather than against a fixed
     /// vocabulary. 2.14.21 ships exactly the three built-ins, with no API to
     /// add or rename one, so there the looseness is only defensive; 3.x lets an
@@ -185,25 +215,8 @@ public extension LibraryArrangement {
     /// done. It reads `name`, never `label`: 3.x fixes the built-in names and
     /// puts an admin's wording in the label, so "Read" relabelled "Finished" is
     /// still named "Read".
-    ///
-    /// A book with *no* status is filed by its progress, with the server's own
-    /// thresholds: at 98% or more it is finished, past the start it is being
-    /// read, otherwise it is unstarted. 2.x never sends one without a status:
-    /// it gives every book a status row for every reader — adding a book
-    /// writes one per user, adding a user one per book, and a migration
-    /// backfilled any gap. 3.x does send one, and never moves it — its
-    /// position write updates a status row the book does not have — so a book
-    /// read to the end in the web reader would otherwise sit on "To read"
-    /// forever. This files it where 2.x would have. Display only: nothing is
-    /// written back; `StatusAdvance` does that for positions this device
-    /// writes.
-    static func stage(of book: Book) -> Stage {
-        guard let status = book.status else {
-            let progress = book.progress ?? 0
-            if progress >= StatusAdvance.finishedThreshold { return .finished }
-            return progress > 0 ? .reading : .toRead
-        }
-        let name = status.name.lowercased()
+    static func stage(ofStatusNamed statusName: String) -> Stage {
+        let name = statusName.lowercased()
         guard !name.isEmpty else { return .toRead }
         // Whole words for the short ones, substrings only for the phrases.
         // "Abandoned" contains "done", so a reader who abandoned a book found

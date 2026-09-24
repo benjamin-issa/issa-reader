@@ -7,8 +7,8 @@ import Testing
 ///
 /// 2.x never sent one: it gives every book a status row for every reader. 3.x
 /// sends them and never moves them, so a book read to the end elsewhere would
-/// sit on "To read" for good. The shelf reads its progress instead, by the
-/// server's own thresholds.
+/// sit on "To read" for good. The shelf files it where the server's own rule
+/// would once a position exists, by the server's own thresholds.
 @Suite("Shelving a book with no status")
 struct NullStatusStageTests {
     /// Decoded, like every other fixture: the model has no public initialiser.
@@ -37,10 +37,14 @@ struct NullStatusStageTests {
         return try! JSONDecoder().decode(Book.self, from: data)
     }
 
-    @Test("no status and no progress is unstarted")
+    /// Unstarted means no position, not no progress. The server's rule moves
+    /// a book off "To read" on any position write, 0% included, and so does
+    /// the write `StatusAdvance` makes here; the shelf used to keep a book at
+    /// zero on "To read" and disagree with both.
+    @Test("no status and no position is unstarted; a position at zero is not")
     func noProgress() {
         #expect(LibraryArrangement.stage(of: book("Unopened")) == .toRead)
-        #expect(LibraryArrangement.stage(of: book("At zero", progress: 0)) == .toRead)
+        #expect(LibraryArrangement.stage(of: book("At zero", progress: 0)) == .reading)
     }
 
     @Test("no status with some progress is being read")

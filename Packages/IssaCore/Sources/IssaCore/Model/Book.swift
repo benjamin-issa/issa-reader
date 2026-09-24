@@ -68,7 +68,8 @@ public struct Book: Codable, Hashable, Sendable, Identifiable {
     /// that state: its position write updates a status row, and a book with no
     /// status has no row to update. `StatusAdvance` is the client doing what
     /// the server meant to; `LibraryArrangement.stage(of:)` shelves such a book
-    /// by its progress in the meantime.
+    /// where that rule would file it in the meantime — unstarted with no
+    /// position, "Reading" with any position short of 98%, "Read" past it.
     public var status: Status?
     /// Per-user reading position. Present only when authenticated, and `nil`
     /// until the book has been opened at least once.
