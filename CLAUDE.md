@@ -39,6 +39,25 @@ below again against the new tag. How to bring both up is in the README, under
    server's label; reading a page saves a position (and, on 3.x, files a book
    that had no status); a read-along plays across the end of an audio file.
    Record which server each check ran against.
+
+   On iPhone and iPad these run without the screen. `scripts/live-check.sh
+   <server> <label>` installs the app fresh on a simulator (`--device` names
+   one; the iPhone 17 Pro by default), pairs it by device code, drives every
+   check above through `Apps/IssaLiveUITests`, then asks the server whether
+   the position arrived and, on 3.x, whether the book was filed. Its
+   `.build/live-check/<label>/summary.txt` has a PASS or FAIL per check and
+   is the record. Run it once per server per device, with `--audio` for the
+   read-along (it plays through the speakers, so ask first) and `--fresh` to
+   make the pairing a real one rather than a token the simulator kept.
+
+   On Apple TV, `--platform tvos` runs `Apps/IssaLiveTVUITests` on the Apple
+   TV 4K simulator, moving by the remote: the pairing, the library, the
+   session surviving the covers and Settings' server version. A status
+   label, a page read and the read-along sit behind the poster grid and the
+   read-along screen, so on the television those three still need the
+   screen. The Mac needs the screen for all of it: a signed Debug build,
+   signed in through the browser and checked by hand.
+
 4. **The layout sweep** (`scripts/layout-sweep.sh`), which uses the built-in
    fixture rather than a server.
 
