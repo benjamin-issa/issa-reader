@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 #
-# Live checks: item 3 of the release rule in CLAUDE.md, on an iPhone or iPad
-# simulator, against one running Storyteller.
+# Live checks: item 3 of the release rule in CLAUDE.md, on an iPhone, iPad or
+# Apple TV simulator, against one running Storyteller.
 #
 #   scripts/live-check.sh http://<lan-address>:8001 v2-iphone
 #   scripts/live-check.sh http://<lan-address>:8003 v3-ipad --device "iPad Pro 11-inch (M5)"
 #   scripts/live-check.sh <server> <label> --fresh    # reset the keychain, so it pairs for real
 #   scripts/live-check.sh <server> <label> --audio    # also a read-along, out of the speakers
+#   scripts/live-check.sh <server> <label> --platform tvos    # the television's subset
 #
 # Signs the real app in by device code, then checks what a reader would see:
 # the library, the session outliving the covers, Settings › Advanced's server
@@ -32,22 +33,29 @@
 #   LIVE_READ_TITLE       a book opened and read (on 3.x its status is cleared first)
 #   LIVE_READALONG_TITLE  a read-along whose first audio file ends in a gap
 #
-# Mac and tvOS are not covered: see CLAUDE.md.
+# With --platform tvos it runs Apps/IssaLiveTVUITests on an Apple TV simulator
+# instead, moving by XCUIRemote: the pairing, the library, the session and
+# Settings' server version. A status label, a page read and a read-along sit
+# behind the poster grid and the read-along screen, where reaching one given
+# book is a walk through focus, so on the television those stay with the
+# screen. The Mac is not covered at all: see CLAUDE.md.
 
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 ROOT="$PWD"
 
-usage() { sed -n '6,9p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '6,10p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 SERVER=""
 LABEL=""
-DEVICE="iPhone 17 Pro"
+DEVICE=""
+PLATFORM=ios
 AUDIO=0
 FRESH=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --device) [ $# -ge 2 ] || usage; DEVICE="$2"; shift ;;
+    --platform) [ $# -ge 2 ] || usage; PLATFORM="$2"; shift ;;
     --audio) AUDIO=1 ;;
     --fresh) FRESH=1 ;;
     --*) usage ;;
@@ -63,6 +71,21 @@ done
 case "$SERVER" in
   http://*|https://*) ;;
   *) echo "error: the server must be a URL, such as http://<address>:8003" >&2; exit 2 ;;
+esac
+
+# What differs by platform: the runtime to find the simulator in, the scheme
+# and test target, and where the app keeps its log (`StorageRoot`: Caches on
+# tvOS, Application Support elsewhere). BOOKS says whether this platform's
+# test reads books, which decides the book lookups and the API checks.
+case "$PLATFORM" in
+  ios)
+    RUNTIME=iOS; SIMULATOR="iOS Simulator"; SCHEME=IssaReader-iOS; TESTS=IssaLiveUITests
+    STORAGE="Library/Application Support"; BOOKS=1; DEVICE="${DEVICE:-iPhone 17 Pro}" ;;
+  tvos)
+    RUNTIME=tvOS; SIMULATOR="tvOS Simulator"; SCHEME=IssaReader-tvOS; TESTS=IssaLiveTVUITests
+    STORAGE="Library/Caches"; BOOKS=0; DEVICE="${DEVICE:-Apple TV 4K (3rd generation)}"
+    [ "$AUDIO" = 0 ] || { echo "error: --audio is iPhone and iPad only" >&2; exit 2; } ;;
+  *) usage ;;
 esac
 
 STATUS_TITLE="${LIVE_STATUS_TITLE:-Moby Dick; Or, The Whale}"
@@ -160,18 +183,20 @@ if readalong and (readalong.get("readaloud") or {}).get("status") == "ALIGNED":
     say("READALONG_BOOK", readalong["uuid"])
 PY
 STATUS_BOOK="" STATUS_LABEL="" READ_BOOK="" READ_BEFORE=0 READALONG_BOOK=""
-. "$OUT/books.env"
-[ -n "$STATUS_BOOK" ] || echo "  no \"$STATUS_TITLE\" on this server: its status will not be checked"
-[ -n "$READ_BOOK" ] || { echo "error: no \"$READ_TITLE\" on this server (set LIVE_READ_TITLE)" >&2; exit 1; }
-if [ "$AUDIO" = 1 ] && [ -z "$READALONG_BOOK" ]; then
-  echo "error: --audio, but no aligned \"$READALONG_TITLE\" on this server (set LIVE_READALONG_TITLE)" >&2
-  exit 1
+if [ "$BOOKS" = 1 ]; then
+  . "$OUT/books.env"
+  [ -n "$STATUS_BOOK" ] || echo "  no \"$STATUS_TITLE\" on this server: its status will not be checked"
+  [ -n "$READ_BOOK" ] || { echo "error: no \"$READ_TITLE\" on this server (set LIVE_READ_TITLE)" >&2; exit 1; }
+  if [ "$AUDIO" = 1 ] && [ -z "$READALONG_BOOK" ]; then
+    echo "error: --audio, but no aligned \"$READALONG_TITLE\" on this server (set LIVE_READALONG_TITLE)" >&2
+    exit 1
+  fi
 fi
 
 # On 3.x a book can have no status, and reading it files it as Reading. That
 # happens once per book, so the book is put back to no status first; without
 # this the check would pass on a status an earlier run set.
-if [ "$GENERATION" = v3 ]; then
+if [ "$BOOKS" = 1 ] && [ "$GENERATION" = v3 ]; then
   api -X PUT -H "Content-Type: application/json" -d '{"status":null}' \
       "$SERVER/api/v2/books/$READ_BOOK/status" >/dev/null \
     || { echo "error: could not clear the status of \"$READ_TITLE\"" >&2; exit 1; }
@@ -179,19 +204,20 @@ fi
 
 # ── The simulator ─────────────────────────────────────────────────────────
 
-# By name, on the newest iOS runtime that has one, so nothing machine-specific
-# is written down. A name that matches nothing lists what there is.
+# By name, on the newest runtime of the platform that has one, so nothing
+# machine-specific is written down. A name that matches nothing lists what
+# there is.
 UDID=$(xcrun simctl list devices available -j | python3 -c '
 import json, re, sys
 found = []
 for runtime, devices in json.load(sys.stdin)["devices"].items():
-    m = re.search(r"iOS-([0-9]+)-([0-9]+)", runtime)
+    m = re.search(r"\." + sys.argv[2] + r"-([0-9]+)-([0-9]+)$", runtime)
     if m:
         found += [((int(m.group(1)), int(m.group(2))), d["udid"]) for d in devices if d["name"] == sys.argv[1]]
-print(max(found)[1] if found else "")' "$DEVICE")
+print(max(found)[1] if found else "")' "$DEVICE" "$RUNTIME")
 if [ -z "$UDID" ]; then
-  echo "error: no available iOS simulator named \"$DEVICE\". These are:" >&2
-  xcrun simctl list devices available | grep -E '^ +(iPhone|iPad)' >&2 || true
+  echo "error: no available $RUNTIME simulator named \"$DEVICE\". These are:" >&2
+  xcrun simctl list devices available "$RUNTIME" >&2 || true
   exit 1
 fi
 echo "▸ $DEVICE"
@@ -221,7 +247,7 @@ trap stop_approver EXIT INT TERM
 APPROVER=$!
 
 xcodegen generate >/dev/null
-echo "▸ building and running IssaLiveUITests (log: $OUT/xcodebuild.log)"
+echo "▸ building and running $TESTS (log: $OUT/xcodebuild.log)"
 AUDIO_FLAG=""
 if [ "$AUDIO" = 1 ]; then AUDIO_FLAG=1; fi
 set +e
@@ -241,11 +267,11 @@ TEST_RUNNER_E2E_READALONG_BOOK="$READALONG_BOOK" \
 TEST_RUNNER_E2E_AUDIO="$AUDIO_FLAG" \
 xcodebuild test \
     -project IssaReader.xcodeproj \
-    -scheme IssaReader-iOS \
+    -scheme "$SCHEME" \
     -configuration Debug \
-    -destination "platform=iOS Simulator,id=$UDID" \
+    -destination "platform=$SIMULATOR,id=$UDID" \
     -derivedDataPath "$DERIVED" \
-    -only-testing:IssaLiveUITests \
+    -only-testing:"$TESTS" \
     -parallel-testing-enabled NO \
     -collect-test-diagnostics never \
     -resultBundlePath "$OUT/result.xcresult" \
@@ -285,30 +311,32 @@ fi
 
 # What only the server can say. The position is compared by its timestamp,
 # which the client sets when it writes one.
-api "$SERVER/api/v2/books" > "$OUT/books-after.json"
-python3 - "$OUT/books-after.json" "$READ_BOOK" > "$OUT/read-after.txt" <<'PY'
+if [ "$BOOKS" = 1 ]; then
+  api "$SERVER/api/v2/books" > "$OUT/books-after.json"
+  python3 - "$OUT/books-after.json" "$READ_BOOK" > "$OUT/read-after.txt" <<'PY'
 import json, sys
 book = next(b for b in json.load(open(sys.argv[1])) if b["uuid"] == sys.argv[2])
 status = (book.get("status") or {}).get("name") or "none"
 print((book.get("position") or {}).get("timestamp") or 0, status)
 PY
-read -r READ_AFTER READ_STATUS < "$OUT/read-after.txt"
-if [ "$READ_AFTER" -gt "$READ_BEFORE" ]; then
-  pass "position: \"$READ_TITLE\" has a newer position on the server ($READ_BEFORE -> $READ_AFTER)"
-else
-  fail "position: \"$READ_TITLE\" has no newer position on the server ($READ_BEFORE -> $READ_AFTER)"
-fi
-if [ "$GENERATION" = v3 ]; then
-  if [ "$READ_STATUS" = Reading ]; then
-    pass "filed: \"$READ_TITLE\" went from no status to Reading"
+  read -r READ_AFTER READ_STATUS < "$OUT/read-after.txt"
+  if [ "$READ_AFTER" -gt "$READ_BEFORE" ]; then
+    pass "position: \"$READ_TITLE\" has a newer position on the server ($READ_BEFORE -> $READ_AFTER)"
   else
-    fail "filed: \"$READ_TITLE\" had no status and is now \"$READ_STATUS\", not Reading"
+    fail "position: \"$READ_TITLE\" has no newer position on the server ($READ_BEFORE -> $READ_AFTER)"
+  fi
+  if [ "$GENERATION" = v3 ]; then
+    if [ "$READ_STATUS" = Reading ]; then
+      pass "filed: \"$READ_TITLE\" went from no status to Reading"
+    else
+      fail "filed: \"$READ_TITLE\" had no status and is now \"$READ_STATUS\", not Reading"
+    fi
   fi
 fi
 
 # A second witness for the version row: what the app logged when it probed.
 DATA=$(xcrun simctl get_app_container "$UDID" "$BUNDLE_ID" data 2>/dev/null) || DATA=""
-LOG="$DATA/Library/Application Support/Logs/current.log"
+LOG="$DATA/$STORAGE/Logs/current.log"
 if [ -n "$DATA" ] && [ -f "$LOG" ]; then
   cp "$LOG" "$OUT/current.log"
   python3 - "$OUT/current.log" > "$OUT/detected.txt" <<'PY'

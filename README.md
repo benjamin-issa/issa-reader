@@ -161,7 +161,9 @@ the position arrived and, on 3.x, whether the book was filed. `--audio` adds a
 read-along crossing the end of an audio file, out of the speakers; `--fresh`
 clears the simulator's keychain, so the pairing is a real one rather than a
 remembered token. The verdicts, screenshots and the app's log land in
-`.build/live-check/<label>/`.
+`.build/live-check/<label>/`. `--platform tvos` runs the television's share on
+the Apple TV simulator, by remote: the pairing, the library, the session and
+the server version.
 
 ## Notes on the server
 

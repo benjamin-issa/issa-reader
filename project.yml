@@ -169,6 +169,24 @@ targets:
         # iPhone and iPad, since the live checks run on both.
         TARGETED_DEVICE_FAMILY: "1,2"
 
+  # The television's share of the live checks, driven by XCUIRemote: the
+  # pairing, the library, the session and the server version. Skips unless
+  # scripts/live-check.sh --platform tvos has set it up. It needs no scheme
+  # entry: the tvOS scheme is the one xcodebuild makes for the app, and that
+  # takes in a UI-test target hosted by the app, so -only-testing finds it.
+  IssaLiveTVUITests:
+    type: bundle.ui-testing
+    platform: tvOS
+    sources:
+      - path: Apps/IssaLiveTVUITests/Sources
+    dependencies:
+      - target: IssaReader-tvOS
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: "$(ISSA_BUNDLE_ID).livetvuitests"
+        TEST_TARGET_NAME: IssaReader-tvOS
+        GENERATE_INFOPLIST_FILE: YES
+
   IssaWidgets:
     type: app-extension
     platform: iOS
