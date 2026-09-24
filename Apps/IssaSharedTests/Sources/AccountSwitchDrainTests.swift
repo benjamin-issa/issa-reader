@@ -15,7 +15,8 @@ import Testing
 /// a slow request resumed into the arriving account's library — same server,
 /// same book uuids — and filed that account's copy of the book from the
 /// departing account's place in it. And a refresh held the same way put the
-/// departing account's catalogue on the arriving account's screen.
+/// departing account's catalogue on the arriving account's screen, or, when
+/// it failed, the departing account's error.
 ///
 /// Through `AppModel.adopt(token:)`, `drainPendingWrites`, `writePosition` and
 /// the two refreshes, against a real store and queue and a server that tells
@@ -232,6 +233,38 @@ struct AccountSwitchDrainTests {
         #expect(fixture.app.bookByUUID[Self.first]?.title == "First, for reader-B",
                 "A's catalogue replaced B's on screen")
     }
+
+    /// Finding #4, for a refresh that fails. Reader A's library refresh is
+    /// still waiting on the server when reader B, whose library is empty,
+    /// signs in; then A's request times out. Only the answer was fenced, so
+    /// the failure still reported itself to whoever was signed in by then:
+    /// B's empty library read as one that could not be loaded, with A's
+    /// error, and stayed that way until B tried again.
+    @Test("a refresh that fails after the switch does not tell the arriving account its library could not load")
+    func aRefreshThatFailsAfterTheSwitchSaysNothingToTheArrivingAccount() async throws {
+        let fixture = try await Self.fixture()
+        defer { Self.tearDown(fixture) }
+        BearerServer.emptyArrivingLibrary()
+        BearerServer.failDepartingCatalogue()
+        BearerServer.hold(.departingCatalogue)
+        let refreshing = Task { await fixture.app.refreshLibrary() }
+        await settle { BearerServer.held(.departingCatalogue) == 1 }
+        try #require(BearerServer.held(.departingCatalogue) == 1, "A's refresh has to be in flight")
+
+        await fixture.app.adopt(token: "token-B")
+        try #require(Self.reader(of: fixture.app.session) == "reader-B")
+        #expect(fixture.app.books.isEmpty, "B's empty library has to have landed for this to mean anything")
+        #expect(fixture.app.loadError == nil)
+
+        BearerServer.release(.departingCatalogue)
+        await refreshing.value
+
+        #expect(BearerServer.log.contains {
+            $0.moment == .answered && $0.path == Endpoint.books && $0.bearer == "token-A"
+        }, "A's refresh has to have been answered, with its failure")
+        #expect(fixture.app.loadError == nil, "A's failed refresh told B their library could not be loaded")
+        #expect(fixture.app.books.isEmpty)
+    }
 }
 
 /// Holds the first status write that reaches `AppModel.beforeQueueingStatus`
@@ -261,14 +294,18 @@ private final class SeamHold {
 /// `token-A` is reader A and `token-B` reader B; anything else is refused.
 /// Both are served the same two books, unfiled, as a server serves one
 /// library to every reader — titled for the reader asking, so a test can tell
-/// whose answer landed. Positions and statuses are accepted.
+/// whose answer landed — unless a test empties reader B's. Positions and
+/// statuses are accepted.
 ///
 /// Three kinds of request can be held until released: the first position
 /// write, so a drain can be caught mid-request; reader B's identity call, so
 /// the moment B's token is installed can be kept open; and reader A's
 /// catalogue reads, so a refresh can be caught in flight. A held request is
 /// answered later from another queue rather than by blocking `startLoading`,
-/// which would hold up every other request the session makes.
+/// which would hold up every other request the session makes. Reader A's
+/// catalogue reads can also be made to time out, which fails them as the
+/// transport would: a 401 would have the client invalidate the token, which
+/// by then is B's.
 private final class BearerServer: URLProtocol, @unchecked Sendable {
     static let first = "11111111-1111-4111-8111-111111111111"
     static let second = "22222222-2222-4222-8222-222222222222"
@@ -293,6 +330,8 @@ private final class BearerServer: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) private static var held: [Hold: [@Sendable () -> Void]] = [:]
     nonisolated(unsafe) private static var heldCounts: [Hold: Int] = [:]
     nonisolated(unsafe) private static var positionsSeen = 0
+    nonisolated(unsafe) private static var departingCatalogueTimesOut = false
+    nonisolated(unsafe) private static var arrivingLibraryIsEmpty = false
 
     static func reset() {
         release(.firstPosition)
@@ -302,10 +341,18 @@ private final class BearerServer: URLProtocol, @unchecked Sendable {
             entries = []
             positionsSeen = 0
             heldCounts = [:]
+            departingCatalogueTimesOut = false
+            arrivingLibraryIsEmpty = false
         }
     }
 
     static func clearLog() { lock.withLock { entries = [] } }
+
+    /// Fails reader A's catalogue reads from now on, as a timed-out request.
+    static func failDepartingCatalogue() { lock.withLock { departingCatalogueTimesOut = true } }
+
+    /// Serves reader B an empty library from now on.
+    static func emptyArrivingLibrary() { lock.withLock { arrivingLibraryIsEmpty = true } }
 
     static func hold(_ hold: Hold) { lock.withLock { _ = holding.insert(hold) } }
 
@@ -343,10 +390,17 @@ private final class BearerServer: URLProtocol, @unchecked Sendable {
         let bearer = request.value(forHTTPHeaderField: "Authorization")
             .map { $0.replacingOccurrences(of: "Bearer ", with: "") }
         let path = url.path
+        let departingRead = method == "GET" && bearer == "token-A"
+            && (path == Endpoint.books || [Self.first, Self.second].map(Endpoint.book).contains(path))
         let (status, body) = Self.answer(method: method, path: path, bearer: bearer)
+        let timesOut = departingRead && Self.lock.withLock { Self.departingCatalogueTimesOut }
         let answer: @Sendable () -> Void = { [self] in
             Self.lock.withLock {
                 Self.entries.append(Entry(moment: .answered, method: method, path: path, bearer: bearer))
+            }
+            guard !timesOut else {
+                client?.urlProtocol(self, didFailWithError: URLError(.timedOut))
+                return
             }
             let response = HTTPURLResponse(
                 url: url, statusCode: status,
@@ -363,8 +417,7 @@ private final class BearerServer: URLProtocol, @unchecked Sendable {
                 hold = Self.positionsSeen == 1 ? .firstPosition : nil
             } else if path == Endpoint.user, bearer == "token-B" {
                 hold = .arrivingIdentity
-            } else if method == "GET", bearer == "token-A",
-                      path == Endpoint.books || [Self.first, Self.second].map(Endpoint.book).contains(path) {
+            } else if departingRead {
                 hold = .departingCatalogue
             } else {
                 hold = nil
@@ -394,6 +447,9 @@ private final class BearerServer: URLProtocol, @unchecked Sendable {
         case ("GET", Endpoint.V3.serverDetails):
             return (200, Data(#"{"version":"3.0.0-beta.40"}"#.utf8))
         case ("GET", Endpoint.books):
+            if reader == "reader-B", lock.withLock({ arrivingLibraryIsEmpty }) {
+                return (200, json([Any]()))
+            }
             return (200, json([book(first, "First", for: reader), book(second, "Second", for: reader)]))
         case ("GET", Endpoint.book(first)):
             return (200, json(book(first, "First", for: reader)))

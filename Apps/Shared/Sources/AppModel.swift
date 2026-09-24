@@ -871,7 +871,17 @@ public final class AppModel {
         } catch {
             IssaLog.failure("library refresh", error, ["server": serverAddress])
             // A failed refresh is not an empty library when something is cached.
-            if books.isEmpty, let cached = try? await store?.allBooks(), !cached.isEmpty {
+            let cached = books.isEmpty ? ((try? await store?.allBooks()) ?? []) : []
+            // Nothing for an account that has since arrived, as the answer
+            // above publishes nothing to it. Only the answer was fenced: a
+            // departing account's refresh that timed out after the switch
+            // reported its failure on the arriving account's screen, so an
+            // empty library there read as one that could not be loaded, with
+            // the departed account's error, until the reader tried again.
+            // After the cache read, the one suspension here, so a switch
+            // during it cannot have the departing account's cache published.
+            guard catalogueGeneration == generation else { return }
+            if !cached.isEmpty {
                 books = cached
                 rebuildDerived()
             }
