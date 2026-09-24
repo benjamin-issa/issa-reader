@@ -33,7 +33,9 @@
 #   LIVE_STATUS_TITLE     a book whose status label is checked
 #   LIVE_READ_TITLE       a book opened and read (on 3.x its status is cleared first)
 #   LIVE_READALONG_TITLE  a read-along whose first narrated chapter is its first
-#                         audio file, under 75 s long and ending in a gap
+#                         audio file, ending in a gap
+#   LIVE_READALONG_SECONDS  how long the read-along plays; default 75, which
+#                         must outlast that first audio file
 #
 # With --platform tvos it runs Apps/IssaLiveTVUITests on an Apple TV simulator
 # instead, moving by XCUIRemote: the pairing, the library, the session and
@@ -296,6 +298,7 @@ TEST_RUNNER_E2E_STATUS_LABEL="$STATUS_LABEL" \
 TEST_RUNNER_E2E_READ_BOOK="$READ_BOOK" \
 TEST_RUNNER_E2E_READALONG_BOOK="$READALONG_BOOK" \
 TEST_RUNNER_E2E_AUDIO="$AUDIO_FLAG" \
+TEST_RUNNER_E2E_READALONG_SECONDS="${LIVE_READALONG_SECONDS:-75}" \
 xcodebuild test \
     -project IssaReader.xcodeproj \
     -scheme "$SCHEME" \
@@ -327,7 +330,7 @@ RAN=$(xcrun xcresulttool get test-results summary --path "$OUT/result.xcresult" 
 if [ "${RAN:-0}" -eq 0 ]; then
   fail "test did not run: see $OUT/xcodebuild.log"
 elif [ "$TEST_STATUS" != 0 ]; then
-  fail "test: xcodebuild exit $TEST_STATUS; a failure not among the checks below is in $OUT/xcodebuild.log"
+  fail "test: xcodebuild exit $TEST_STATUS; a failed check is listed below, and a failure outside the checks is in $OUT/xcodebuild.log"
 else
   pass "test ran: xcodebuild exit 0"
 fi
