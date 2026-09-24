@@ -1,8 +1,15 @@
 # Local test stack for Issa Reader development.
 #
-# Storyteller is pinned to the latest STABLE tag (web-v2.14.21). Do not move this
-# to :latest — that tracks the 3.0.0 experimental line, which is not what the
-# client targets.
+# The client supports two server generations and is verified against both:
+#
+#   storyteller     web-v2.14.21, the latest stable tag, on :8001. Started by a
+#                   plain `docker compose up -d`.
+#   storyteller-v3  web-v3.0.0-beta.40, on :8003. Opt-in, with
+#                   `docker compose --profile v3 up -d`.
+#
+# Both are pinned to exact tags. Do not move either to :latest, :web-v2 or a
+# moving beta tag: :latest will jump to 3.x when it goes stable, and the client
+# is only claimed to work against the versions named here.
 #
 # Keycloak provides a real third-party OIDC provider so the server-driven sign-in
 # flow can be exercised end to end.
@@ -53,4 +60,32 @@ services:
     network_mode: "service:storyteller"
     depends_on:
       - storyteller
+    restart: unless-stopped
+
+  # Storyteller 3 beta, beside the stable server rather than instead of it.
+  #
+  # Pinned to the exact beta the client was verified against — not
+  # :web-v3.0.0-beta, which moves with every beta, and not :beta, which is an
+  # old 2.x image. It has its own network namespace because it listens on 8001
+  # and 9000 just as the stable server does inside the namespace Keycloak
+  # shares; it reaches Keycloak through PUBLIC_HOST:8080 instead, so PUBLIC_HOST
+  # must be the LAN address (the same "one host" rule as the README's).
+  #
+  # Its data directory must be a COPY of ./data/storyteller, never the same
+  # one. v3's migrations are one-way, and the stable server cannot open the
+  # result. First boot writes a safety backup to /data/backups and refuses to
+  # start if it cannot. Migration 112 encrypts the OIDC client secret with a key
+  # derived from STORYTELLER_SECRET_KEY, so the copy is bound to the key it
+  # first boots with: never rotate it afterwards.
+  storyteller-v3:
+    image: registry.gitlab.com/storyteller-platform/storyteller:web-v3.0.0-beta.40
+    container_name: issa-storyteller-v3
+    profiles: ["v3"]
+    environment:
+      - STORYTELLER_SECRET_KEY=${STORYTELLER_SECRET_KEY}
+      - AUTH_URL=http://${PUBLIC_HOST:-localhost}:8003/api/v2/auth
+    volumes:
+      - ./data/storyteller-v3:/data:rw
+    ports:
+      - "8003:8001"
     restart: unless-stopped

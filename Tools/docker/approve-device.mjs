@@ -20,7 +20,9 @@ const page = await browser.newPage()
 try {
   await page.goto(`${BASE}/login`, { waitUntil: "domcontentloaded" })
   if (MODE === "oidc") {
-    await page.click('button:has-text("Continue with Keycloak")')
+    // 2.x labels the button "Continue with Keycloak"; 3.x shows only the
+    // provider's name beside an "Or continue with" caption.
+    await page.getByRole("button", { name: /keycloak/i }).first().click()
     await page.waitForURL(/\/realms\/issa\/protocol\/openid-connect\/auth/, { timeout: 30000 })
     await page.fill("#username", OIDC_USER.username)
     await page.fill("#password", OIDC_USER.password)

@@ -46,8 +46,11 @@ async function approveInBrowser(url) {
 
     if (MODE === "oidc") {
       // The login page renders one submit button per configured provider BEFORE
-      // the credentials form, so target it by its label, never by type.
-      await page.click('button:has-text("Continue with Keycloak")')
+      // the credentials form, so target it by its label, never by type. 2.x
+      // labels it "Continue with Keycloak"; 3.x prints "Or continue with" as a
+      // separate caption and the button carries only the provider's name, so
+      // match the name, not the phrase.
+      await page.getByRole("button", { name: /keycloak/i }).first().click()
       await page.waitForURL(/\/realms\/issa\/protocol\/openid-connect\/auth/, { timeout: 30_000 })
       log("redirected to Keycloak")
       await page.fill("#username", OIDC_USER.username)
