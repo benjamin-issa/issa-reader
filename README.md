@@ -117,8 +117,19 @@ parsed" — and the LAN address is the only one a phone or Apple TV can reach.
 
 ```bash
 node Tools/docker/verify-device-flow.mjs      # full sign-in round trip
+node Tools/docker/verify-oidc-claims.mjs      # the claims Keycloak issues
 scripts/release.sh --archive-only             # archive all three apps
 ```
+
+The realm in `Tools/docker/keycloak/realm-issa.json` is imported only when
+Keycloak does not already have it, so an edit to it takes
+`docker compose up -d --force-recreate keycloak` before anything can see it;
+`verify-oidc-claims.mjs` then says whether the tokens and userinfo carry
+`email_verified` and the reader's group. Two things about that file are easy to
+break. The `reader` user's `id` is pinned, because it becomes the `sub`
+Storyteller links the account by, and a fresh one on re-import gets the sign-in
+refused. And a client scope's `description` holds 255 characters: a longer one
+stops Keycloak starting at all.
 
 A Storyteller 3 beta can run beside it, on port 8003, for checking the client
 against both generations. It needs its own **copy** of the library: 3.x

@@ -58,6 +58,7 @@
   ],
   "users": [
     {
+      "id": "f35dab2b-6020-40df-8cbb-b60c4f49fcff",
       "username": "reader",
       "email": "reader@issa.test",
       "firstName": "Test",
@@ -159,7 +160,7 @@
     },
     {
       "name": "email",
-      "description": "Email address",
+      "description": "Email and email_verified. The second is a property mapper, as in Keycloak's own default email scope: emailVerified is a user property, not a user-profile attribute, so an attribute mapper finds nothing by that name and silently issues no claim.",
       "protocol": "openid-connect",
       "attributes": {
         "include.in.token.scope": "true",
@@ -182,7 +183,7 @@
         {
           "name": "email verified",
           "protocol": "openid-connect",
-          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "protocolMapper": "oidc-usermodel-property-mapper",
           "config": {
             "user.attribute": "emailVerified",
             "claim.name": "email_verified",
