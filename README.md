@@ -145,6 +145,24 @@ STORYTELLER_URL=http://$(ipconfig getifaddr en0):8003 PUBLIC_HOST=$(ipconfig get
 
 The provisioning scripts take `STORYTELLER_URL` for either server.
 
+With a server up, `scripts/live-check.sh` runs the release rule's live checks
+(CLAUDE.md) on an iPhone or iPad simulator:
+
+```bash
+scripts/live-check.sh http://$(ipconfig getifaddr en0):8003 v3-iphone
+scripts/live-check.sh http://$(ipconfig getifaddr en0):8001 v2-ipad --device "iPad Pro 11-inch (M5)"
+```
+
+It installs the app afresh and signs it in by device code, approving the code
+through `approve-device.mjs` as the fixture admin. `Apps/IssaLiveUITests` then
+drives the real app through the library, Settings › Advanced's server version,
+a book's status label and a page read, and the script asks the server whether
+the position arrived and, on 3.x, whether the book was filed. `--audio` adds a
+read-along crossing the end of an audio file, out of the speakers; `--fresh`
+clears the simulator's keychain, so the pairing is a real one rather than a
+remembered token. The verdicts, screenshots and the app's log land in
+`.build/live-check/<label>/`.
+
 ## Notes on the server
 
 This client is written against Storyteller `web-v2.14.21`, the latest stable

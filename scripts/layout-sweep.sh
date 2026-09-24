@@ -193,7 +193,8 @@ for row in "${SELECTED[@]}"; do
   # ran" check below could never fire again — a scheme that dropped the UI
   # target would have run the unit suite on each simulator, copied no
   # screenshots and printed "ok". Restricting the run restores the check's
-  # meaning, and stops the unit suite running once per device width.
+  # meaning, and stops the unit suite running once per device width. It also
+  # keeps out IssaLiveUITests, which is in the same scheme and would only skip.
   #
   # `-collect-test-diagnostics never`: without it Xcode 27 runs `simctl
   # diagnose` once a session ends and waits on it indefinitely, so a sweep

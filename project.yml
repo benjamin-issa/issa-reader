@@ -148,6 +148,27 @@ targets:
         # an iPad destination, and the sweep runs on both.
         TARGETED_DEVICE_FAMILY: "1,2"
 
+  # The release rule's live checks, against a running Storyteller. A target of
+  # its own, not a class in IssaLayoutUITests: the sweep runs that whole
+  # target on every width, and this needs a server, a pairing and minutes of
+  # waiting. It skips unless scripts/live-check.sh has set it up.
+  IssaLiveUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: Apps/IssaLiveUITests/Sources
+    dependencies:
+      - target: IssaReader-iOS
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: "$(ISSA_BUNDLE_ID).liveuitests"
+        # As for IssaLayoutUITests: XcodeGen does not write it, and without it
+        # there is no host app to launch.
+        TEST_TARGET_NAME: IssaReader-iOS
+        GENERATE_INFOPLIST_FILE: YES
+        # iPhone and iPad, since the live checks run on both.
+        TARGETED_DEVICE_FAMILY: "1,2"
+
   IssaWidgets:
     type: app-extension
     platform: iOS
@@ -274,6 +295,7 @@ schemes:
         IssaReader-iOS: all
         IssaLayoutUITests: [test]
         IssaSharedTests: [test]
+        IssaLiveUITests: [test]
     run:
       config: Debug
     test:
@@ -282,11 +304,15 @@ schemes:
       # one result bundle and race the fixture's URLProtocol registration.
       parallelizable: false
       targets:
-        # Both, and listed explicitly. A target missing from here runs zero
-        # tests while the build still succeeds — the failure this block exists
-        # to prevent.
+        # Every one, and listed explicitly. A target missing from here runs
+        # zero tests while the build still succeeds — the failure this block
+        # exists to prevent — and cannot be picked out with -only-testing.
+        # IssaLiveUITests is here for that reason: it skips unless
+        # scripts/live-check.sh points it at a server, so a plain test run of
+        # the scheme stays offline.
         - IssaSharedTests
         - IssaLayoutUITests
+        - IssaLiveUITests
     profile:
       config: Release
     analyze:
