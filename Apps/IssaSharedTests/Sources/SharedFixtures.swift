@@ -90,15 +90,23 @@ struct SharedTestBundleTests {
 
     /// The classifier the sweep's fixture is built against. A status decides
     /// the shelf whenever there is one; only a book with none — which 3.x
-    /// sends and never advances — is filed by its progress, at the server's
-    /// own thresholds, where 2.x would have put it.
-    @Test("a status decides the shelf, and progress decides only when there is none")
-    func statusNotProgressDecidesTheShelf() {
+    /// sends and never advances — is filed by its position, where the
+    /// server's rule files a book once a position is written for it and 2.x
+    /// would have put it: any position at all is past "To read", 0% included,
+    /// and 98% is "Read".
+    @Test("a status decides the shelf, and the position decides only when there is none")
+    func statusNotPositionDecidesTheShelf() {
         let finishedUnlabelled = SharedFixtures.book("Dracula", progress: 0.99)
         #expect(LibraryArrangement.stage(of: finishedUnlabelled) == .finished)
 
-        let unstartedUnlabelled = SharedFixtures.book("Dracula", progress: 0)
-        #expect(LibraryArrangement.stage(of: unstartedUnlabelled) == .toRead)
+        // Opened and not yet moved. The shelf used to keep this on "To read",
+        // where the rule — the server's, and this device's write that stands
+        // in for it on 3.x — files it "Reading".
+        let openedUnlabelled = SharedFixtures.book("Dracula", progress: 0)
+        #expect(LibraryArrangement.stage(of: openedUnlabelled) == .reading)
+
+        let unopenedUnlabelled = SharedFixtures.book("Dracula")
+        #expect(LibraryArrangement.stage(of: unopenedUnlabelled) == .toRead)
 
         let midwayUnlabelled = SharedFixtures.book("Dracula", progress: 0.4)
         #expect(LibraryArrangement.stage(of: midwayUnlabelled) == .reading)
