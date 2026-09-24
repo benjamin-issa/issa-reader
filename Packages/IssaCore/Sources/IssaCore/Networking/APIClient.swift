@@ -102,14 +102,26 @@ public actor APIClient {
 
     /// Returns the raw status without throwing, for capability probing.
     public func probeStatus(_ path: String) async -> Int {
+        await probeResponse(path)?.status ?? -1
+    }
+
+    /// The status and body, for a probe that has to read what came back.
+    ///
+    /// Never throws and never invalidates the token: a probe asks whether a
+    /// route exists, and no answer to that question — not even a 401 from a
+    /// proxy in front of it — says anything about the reader's session.
+    ///
+    /// - Returns: nil when nothing answered at all, which a caller must keep
+    ///   distinct from any status: "no server reached" decides nothing.
+    public func probeResponse(_ path: String) async -> (status: Int, data: Data)? {
         var req = request(path, method: "GET")
         if let token = await tokens.currentToken() {
             req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
-        guard let (_, response) = try? await session.data(for: req),
+        guard let (data, response) = try? await session.data(for: req),
               let http = response as? HTTPURLResponse
-        else { return -1 }
-        return http.statusCode
+        else { return nil }
+        return (http.statusCode, data)
     }
 
     // MARK: - Plumbing

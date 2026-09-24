@@ -163,14 +163,23 @@ public final class Session {
         state = .failed("Couldn't reach your server. Check that you're on the same network as your server.")
     }
 
-    /// Establishes which optional 3.x endpoints this server has.
+    /// Establishes which generation of Storyteller this is, and which optional
+    /// 3.x endpoints it has.
     ///
-    /// Storyteller 2.14.21 answers 404 for all of them; the client derives the
-    /// same information locally from the full catalogue, so a missing endpoint
-    /// costs no functionality. Probed once per sign-in and cached on the session.
+    /// The generation comes from `/server/public`, by feature: a 3.x server
+    /// answers it with its identity, 2.14.21 answers 404, and anything else —
+    /// no answer, a 5xx, a proxy's HTML page with a 200 on it — leaves the
+    /// generation undetermined rather than guessed. On 3.x, `/server/details`
+    /// then supplies the version string, for display only: a self-built image
+    /// reports "2.14.21" there, so it cannot be what decides.
+    ///
+    /// 2.14.21 answers 404 for the five feature routes too; the client derives
+    /// the same information locally from the full catalogue, so a missing
+    /// endpoint costs no functionality. Probed once per sign-in and held on
+    /// the session.
     static func probeCapabilities(using client: APIClient) async -> ServerCapabilities {
         var caps = ServerCapabilities()
-        async let discovery = client.probeStatus(Endpoint.V3.serverPublic)
+        async let discovery = client.probeResponse(Endpoint.V3.serverPublic)
         async let home = client.probeStatus(Endpoint.V3.homeSections)
         async let shelves = client.probeStatus(Endpoint.V3.shelves)
         async let sidebar = client.probeStatus(Endpoint.V3.sidebar)
@@ -178,12 +187,57 @@ public final class Session {
         async let nextUp = client.probeStatus(Endpoint.V3.nextUp)
 
         func present(_ status: Int) -> Bool { (200 ..< 300).contains(status) }
-        caps.serverDiscovery = present(await discovery)
+        caps.generation = generation(fromPublicProbe: await discovery)
+        caps.serverDiscovery = caps.generation == .v3
         caps.homeSections = present(await home)
         caps.shelves = present(await shelves)
         caps.sidebar = present(await sidebar)
         caps.libraryFacets = present(await facets)
         caps.nextUp = present(await nextUp)
+
+        if caps.generation == .v3,
+           let details = await client.probeResponse(Endpoint.V3.serverDetails),
+           present(details.status)
+        {
+            caps.reportedVersion = try? JSONDecoder().decode(ServerDetails.self, from: details.data).version
+        }
+
+        IssaLog.info("server detected", [
+            "generation": caps.generation?.rawValue ?? "undetermined",
+            "version": caps.reportedVersion ?? "unreported",
+        ])
         return caps
+    }
+
+    /// What one `/server/public` answer says about the generation.
+    ///
+    /// A 2xx counts only if it is shaped like Storyteller's identity: a
+    /// reverse proxy that serves its own sign-in page with a 200 for every
+    /// unknown path would otherwise make every 2.x server behind it "3.x".
+    nonisolated static func generation(
+        fromPublicProbe probe: (status: Int, data: Data)?,
+    ) -> ServerGeneration? {
+        guard let probe else { return nil }
+        switch probe.status {
+        case 200 ..< 300:
+            return (try? JSONDecoder().decode(ServerPublic.self, from: probe.data)) != nil ? .v3 : nil
+        case 404:
+            return .v2
+        default:
+            return nil
+        }
+    }
+
+    /// The two fields that make a `/server/public` answer Storyteller's.
+    /// `publicUrl` and `publicKey` come too; nothing here needs them.
+    private struct ServerPublic: Decodable {
+        let id: String
+        let capabilities: [String]
+    }
+
+    /// `/server/details` carries name, icon and capabilities as well; only the
+    /// version is shown, and anything more would be new functionality.
+    private struct ServerDetails: Decodable {
+        let version: String
     }
 }

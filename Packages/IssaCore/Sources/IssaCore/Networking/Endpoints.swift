@@ -62,7 +62,11 @@ public enum Endpoint {
 
     // 3.x-only routes, used only when ServerCapabilities says they exist.
     public enum V3 {
+        /// Unauthenticated, and the route generation detection keys on: it
+        /// answers on every 3.x server and 404s on 2.x.
         public static let serverPublic = "/api/v2/server/public"
+        /// Any signed-in user; the only place a server states its version.
+        public static let serverDetails = "/api/v2/server/details"
         public static let homeSections = "/api/v2/home/sections"
         public static let shelves = "/api/v2/shelves"
         public static let sidebar = "/api/v2/sidebar"
