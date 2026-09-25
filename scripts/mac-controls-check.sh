@@ -34,7 +34,7 @@
 #       Now Playing      the speed pull-down, titled like "1.5×"
 # A window counts as showing the library header when it is titled with a
 # shelf and has the count line ("12 books", "1 result") in it, and a book
-# when the inspector's Read button is; its edition menus are expected once the
+# when the book detail's container is; its edition menus are expected once the
 # Manage downloads section's text is showing. What was and was not looked at is
 # written out as coverage, so a run that checked nothing cannot pass for one
 # that checked everything. A window whose contents could not be read fails
@@ -85,8 +85,8 @@ command -v python3 >/dev/null || { echo "error: python3 not found" >&2; exit 1; 
 # C is every pop-up and pull-down button, named by its AXDescription or
 # AXTitle. B is a button or checkbox labelled "Reverse order". T marks what a
 # window is showing: the library's count line, the Manage downloads section's
-# text, or "#book-detail" for the inspector's Read button (AXIdentifier
-# `action.read`). E is a window whose tree could not be read. An attribute
+# text, or "#book-detail" for the book detail's container (AXIdentifier
+# `content.bookDetail`). E is a window whose tree could not be read. An attribute
 # SwiftUI leaves unset reads as empty, never as a failure.
 #
 # To a file, not through `$(...)`: macOS's bash 3.2 misparses a here-document
@@ -150,6 +150,10 @@ for (i, w) in ((windowsRef as? [AXUIElement]) ?? []).enumerated() {
         visited += 1
         let role = string(e, kAXRoleAttribute)
         let desc = string(e, kAXDescriptionAttribute), title = string(e, kAXTitleAttribute)
+        // The book detail's own container: there for every book, where the
+        // Read button is not — an audiobook with no edition to read has none,
+        // and keyed on it the detail went unchecked and the run still passed.
+        if string(e, kAXIdentifierAttribute) == "content.bookDetail" { print("T\t\(wi)\t#book-detail") }
         switch role {
         case "AXPopUpButton", "AXMenuButton":
             let images = (children(e) ?? []).filter { string($0, kAXRoleAttribute) == "AXImage" }
@@ -159,9 +163,6 @@ for (i, w) in ((windowsRef as? [AXUIElement]) ?? []).enumerated() {
             if [desc, title, string(e, kAXHelpAttribute)].contains("Reverse order") {
                 print("B\t\(wi)\t\(role)\t\(desc)\t\(title)\t\(string(e, kAXValueAttribute))\t\(size(e))")
             }
-            // The book detail's Read button: the one mark the inspector
-            // carries whichever of its sections are open.
-            if string(e, kAXIdentifierAttribute) == "action.read" { print("T\t\(wi)\t#book-detail") }
         case "AXStaticText":
             let v = string(e, kAXValueAttribute).isEmpty ? desc : string(e, kAXValueAttribute)
             let range = NSRange(v.startIndex..., in: v)

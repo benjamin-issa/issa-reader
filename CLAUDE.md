@@ -61,7 +61,9 @@ below again against the new tag. How to bring both up is in the README, under
    all of it: a signed Debug build, paired by device code (approved with
    `approve-device.mjs`, as the script does) and checked by hand.
    `scripts/mac-controls-check.sh <label>` then reads the running app's
-   windows through System Events and fails if any pop-up or pull-down is
+   windows through the Accessibility API (the terminal running it needs
+   Accessibility access in System Settings › Privacy & Security) and fails if
+   any pop-up or pull-down is
    taller than a standard control or one a window should have is missing,
    writing `.build/mac-check/<label>.txt` as the record.
 
