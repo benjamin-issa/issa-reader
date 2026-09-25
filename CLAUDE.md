@@ -60,6 +60,10 @@ below again against the new tag. How to bring both up is in the README, under
    television those two still need the screen. The Mac needs the screen for
    all of it: a signed Debug build, paired by device code (approved with
    `approve-device.mjs`, as the script does) and checked by hand.
+   `scripts/mac-controls-check.sh <label>` then reads the running app's
+   windows through System Events and fails if any pop-up or pull-down is
+   taller than a standard control or one a window should have is missing,
+   writing `.build/mac-check/<label>.txt` as the record.
 
 4. **The layout sweep** (`scripts/layout-sweep.sh`), which uses the built-in
    fixture rather than a server.
