@@ -691,7 +691,12 @@ public struct BookDetailView: View {
         // book's own uuid, not nil, so it matches in both. Choosing it does
         // nothing (see `statusSelection`), and there is deliberately no item
         // that clears a status: the phone has none either.
-        Picker("Reading status", selection: statusSelection) {
+        // The title is the spoken label. `.labelsHidden()` keeps it off the
+        // screen but not out of VoiceOver, and a separate `accessibilityLabel`
+        // is appended to it rather than replacing it: the pop-up read out as
+        // "Reading status, Change reading status".
+        Picker(book.status == nil ? "Set reading status" : "Change reading status",
+               selection: statusSelection) {
             if !app.statuses.contains(where: { $0.uuid == book.status?.uuid }) {
                 Text(book.status?.displayName ?? "Set status").tag(book.status?.uuid)
             }
@@ -706,7 +711,6 @@ public struct BookDetailView: View {
         // it is given, and a pop-up left flexible would take the whole row.
         .fixedSize()
         .disabled(app.statuses.isEmpty)
-        .accessibilityLabel(book.status == nil ? "Set reading status" : "Change reading status")
         .accessibilityValue(book.status?.displayName ?? "None")
         #else
         Menu {
