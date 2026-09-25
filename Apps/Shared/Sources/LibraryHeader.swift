@@ -174,13 +174,17 @@ struct LibraryHeader: View {
                 .font(Typography.caption.monospacedDigit())
                 .foregroundStyle(Palette.inkTertiary)
                 #if os(macOS)
-                // One line, at its own width, and first to be given room.
-                // Beside the Mac's rigid tags and sort controls this was the
-                // only child of the row that would give way, so with the book
-                // column open in a 900pt window the row squeezed it down to a
-                // letter's width and "1 result" wrapped one letter per line.
+                // One line, and first to be given room. Beside the Mac's rigid
+                // tags and sort controls this was the only child of the row
+                // that would give way, so with the book column open in a 900pt
+                // window the row squeezed it down to a letter's width and
+                // "1 result" wrapped one letter per line. With priority it
+                // keeps its full width whenever it fits, and truncates when the
+                // column is narrower than the count and the controls together.
+                // Not `fixedSize`: that made the count rigid as well, and a
+                // long one ("12 of 300 books") then pushed the controls out
+                // past the column's edge instead.
                 .lineLimit(1)
-                .fixedSize()
                 .layoutPriority(1)
                 #endif
             Spacer()
