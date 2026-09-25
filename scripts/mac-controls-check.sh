@@ -36,7 +36,9 @@
 # shelf and has the count line ("12 books", "1 result") in it, and a book
 # when its Manage downloads heading is. What was and was not looked at is
 # written out as coverage, so a run that checked nothing cannot pass for one
-# that checked everything.
+# that checked everything. A window whose contents System Events could not
+# read fails the run: it would otherwise count as a window showing nothing
+# expected, and the library window, the largest, is the likeliest to fail.
 #
 # A chevron image inside a control is reported but not asserted. SwiftUI may
 # flatten a label's images out of the tree, so not finding one proves nothing.
@@ -79,9 +81,11 @@ command -v python3 >/dev/null || { echo "error: python3 not found" >&2; exit 1; 
 #   C  <window>  <role>  <description>  <title>  <value>  <width>  <height>  <image children>
 #   B  <window>  <role>  <description>  <title>  <value>  <width>  <height>
 #   T  <window>  <static text>
+#   E  <window>  <why its contents could not be read>
 # C is every pop-up and pull-down button. B is a button or checkbox named
 # "Reverse order". T is a static text that marks what a window is showing:
 # the library's count line or the book detail's Manage downloads section.
+# E is a window whose `entire contents` raised, which a large tree can do.
 # Every attribute read is in its own `try`: SwiftUI leaves some unset, and one
 # missing description must not lose the rest of the window.
 #
@@ -158,6 +162,8 @@ on run argv
 				set els to {}
 				try
 					set els to entire contents of w
+				on error errMsg number errNum
+					set end of out to "E" & tab & wi & tab & my clean(errMsg) & " (" & errNum & ")"
 				end try
 				repeat with ei from 1 to count of els
 					set el to item ei of els
@@ -231,7 +237,7 @@ for line in open(raw_path, encoding="utf-8"):
         procs, bundle = int(f[1] or 0), (f[2] if len(f) > 2 else "")
     elif kind == "W":
         windows[f[1]] = dict(title=f[2], ident=f[3] if len(f) > 3 else "",
-                             controls=[], toggles=[], texts=[])
+                             controls=[], toggles=[], texts=[], errors=[])
     elif kind in ("C", "B") and f[1] in windows:
         f += [""] * (9 - len(f))
         item = dict(role=f[2], desc=f[3], title=f[4], value=f[5], width=f[6], height=f[7],
@@ -239,6 +245,8 @@ for line in open(raw_path, encoding="utf-8"):
         windows[f[1]]["controls" if kind == "C" else "toggles"].append(item)
     elif kind == "T" and f[1] in windows:
         windows[f[1]]["texts"].append(f[2])
+    elif kind == "E" and f[1] in windows:
+        windows[f[1]]["errors"].append(f[2] if len(f) > 2 and f[2] else "no reason given")
 
 results, notes, coverage, listing = [], [], [], []
 seen = set()
@@ -301,6 +309,12 @@ if procs == 1:
         for t in w["toggles"]:
             listing.append("  %s" % describe(t))
 
+        # A window that could not be read shows no count line and no Manage
+        # downloads, so below it would pass as one showing nothing expected.
+        for e in w["errors"]:
+            verdict(False, "%s: could not read its contents (%s), so nothing in it was checked"
+                    % (where, e))
+
         # Every pop-up and pull-down, whatever window it is in.
         for c in w["controls"]:
             h = height(c)
@@ -334,7 +348,8 @@ if procs == 1:
             showing.append("Now Playing")
             expect(where, "speed pull-down", find(w["controls"], r"\d+(\.\d+)?×"))
         seen.update(showing)
-        coverage.append("%s: %s" % (where, ", ".join(showing) if showing else
+        coverage.append("%s: %s" % (where, "could not be read" if w["errors"] else
+                                    ", ".join(showing) if showing else
                                     "no expected controls, height rule only"))
 
     all_controls = [c for w in windows.values() for c in w["controls"]]
