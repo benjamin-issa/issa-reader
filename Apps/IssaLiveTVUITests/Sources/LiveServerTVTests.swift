@@ -10,10 +10,12 @@ import XCTest
 /// and checks the server afterwards. Without `E2E_SERVER` the test skips.
 ///
 /// Everything here moves by `XCUIRemote`, because that is the only way into a
-/// tvOS app: nothing is tapped, focus is moved and selected. What the phone's
-/// test also checks — a status label, a page read, a read-along — sits behind
-/// a poster grid and the read-along screen, where getting to one given book is
-/// a walk through focus rather than a query, so those stay with the screen.
+/// tvOS app: nothing is tapped, focus is moved and selected. Of what the
+/// phone's test also checks, the status label has no counterpart here — a
+/// book opens straight into the read-along screen, which shows none — and a
+/// page read and a read-along sit behind a poster grid and that screen, where
+/// getting to one given book is a walk through focus rather than a query, so
+/// those stay with the screen.
 // `@MainActor` for the reason `LayoutSweepTests` gives: XCUITest's API is main
 // actor isolated and this project builds with strict concurrency complete.
 @MainActor

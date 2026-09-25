@@ -39,10 +39,11 @@
 #
 # With --platform tvos it runs Apps/IssaLiveTVUITests on an Apple TV simulator
 # instead, moving by XCUIRemote: the pairing, the library, the session and
-# Settings' server version. A status label, a page read and a read-along sit
-# behind the poster grid and the read-along screen, where reaching one given
-# book is a walk through focus, so on the television those stay with the
-# screen. The Mac is not covered at all: see CLAUDE.md.
+# Settings' server version. The television shows no status label — a book
+# opens straight into the read-along screen, which has none — and a page read
+# and a read-along sit behind that screen, where reaching one given book is a
+# walk through focus, so on the television those two stay with the screen.
+# The Mac is not covered at all: see CLAUDE.md.
 
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."

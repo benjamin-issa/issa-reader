@@ -53,11 +53,13 @@ below again against the new tag. How to bring both up is in the README, under
 
    On Apple TV, `--platform tvos` runs `Apps/IssaLiveTVUITests` on the Apple
    TV 4K simulator, moving by the remote: the pairing, the library, the
-   session surviving the covers and Settings' server version. A status
-   label, a page read and the read-along sit behind the poster grid and the
-   read-along screen, so on the television those three still need the
-   screen. The Mac needs the screen for all of it: a signed Debug build,
-   signed in through the browser and checked by hand.
+   session surviving the covers and Settings' server version. The
+   television shows no status label at all — a book opens straight into
+   the read-along screen, which has none — so that check does not apply
+   there. A page read and the read-along sit behind that screen, so on the
+   television those two still need the screen. The Mac needs the screen for
+   all of it: a signed Debug build, paired by device code (approved with
+   `approve-device.mjs`, as the script does) and checked by hand.
 
 4. **The layout sweep** (`scripts/layout-sweep.sh`), which uses the built-in
    fixture rather than a server.
