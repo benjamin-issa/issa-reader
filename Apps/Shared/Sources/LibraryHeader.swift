@@ -93,6 +93,29 @@ struct LibraryHeader: View {
     private var tagsChip: some View {
         @Bindable var app = app
         let selected = app.arrangement.tags
+        #if os(macOS)
+        // A system pull-down, not the chip. On the Mac a `Menu` is an AppKit
+        // pull-down button, which draws its own bezel and indicator around
+        // whatever label it is handed — so the chip's capsule and chevron
+        // came out as a second button inside the first, with two arrows. The
+        // label is bare text and the system draws the rest. Each tag is a
+        // `Toggle`, which the menu shows as a checkmarked item: this is a
+        // many-of choice, and a checkmark is how the Mac says so.
+        return Menu {
+            if !selected.isEmpty {
+                Button("Clear tags") { app.arrangement.tags = [] }
+                Divider()
+            }
+            ForEach(app.facets.tagCounts.prefix(12), id: \.name) { tag in
+                Toggle("\(tag.name) (\(tag.count))", isOn: tagBinding(tag.name))
+            }
+        } label: {
+            Text(selected.isEmpty ? "Tags" : "Tags · \(selected.count)")
+        }
+        .controlSize(.small)
+        .help("Filter by tag")
+        .accessibilityLabel(selected.isEmpty ? "Filter by tag" : "\(selected.count) tags selected")
+        #else
         return Menu {
             if !selected.isEmpty {
                 Button("Clear tags") { app.arrangement.tags = [] }
@@ -121,6 +144,25 @@ struct LibraryHeader: View {
             )
         }
         .accessibilityLabel(selected.isEmpty ? "Filter by tag" : "\(selected.count) tags selected")
+        #endif
+    }
+    #endif
+
+    #if os(macOS)
+    /// One tag's checkmark in the Mac's pull-down.
+    ///
+    /// Setting it makes the same cut the phone's tag button does, through the
+    /// same call: a tag is a cut through the grid, so picking one opens the
+    /// grid, and the shelf the reader is on stays the shelf.
+    private func tagBinding(_ name: String) -> Binding<Bool> {
+        Binding(
+            get: { app.arrangement.tags.contains(name) },
+            set: { isOn in
+                var tags = app.arrangement.tags
+                if isOn { tags.insert(name) } else { tags.remove(name) }
+                app.showAllBooks(shelf: app.arrangement.shelf, tags: tags)
+            },
+        )
     }
     #endif
 
@@ -170,6 +212,35 @@ struct LibraryHeader: View {
     #if !os(tvOS)
     private var sortMenu: some View {
         @Bindable var app = app
+        #if os(macOS)
+        // The capsule above is the phone's. Handed to a Mac `Menu`, it sat
+        // inside the pull-down's own bezel with a second chevron beside its
+        // first, as the tags menu did. The Mac says the same things with two
+        // standard controls: a pop-up button, whose title is the current sort
+        // — so it is still legible without opening anything — and a toggle
+        // for the direction, since a pop-up holds one choice and this row
+        // has two. Unlabelled on screen, where the pop-up's title says what
+        // it is; VoiceOver hears "Sort by" and the sort as its value.
+        return HStack(spacing: Metrics.spacing4) {
+            Picker("Sort by", selection: $app.arrangement.sort) {
+                ForEach(LibraryArrangement.Sort.allCases) { sort in
+                    Text(sort.title).tag(sort)
+                }
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+            .help("Changes how your library is ordered")
+            .accessibilityHint("Changes how your library is ordered")
+            Toggle(isOn: $app.arrangement.ascending) {
+                Label("Reverse order", systemImage: "arrow.up.arrow.down")
+            }
+            .toggleStyle(.button)
+            .labelStyle(.iconOnly)
+            .help("Reverse order")
+            .accessibilityLabel("Reverse order")
+        }
+        .controlSize(.small)
+        #else
         return Menu {
             Picker("Sort by", selection: $app.arrangement.sort) {
                 ForEach(LibraryArrangement.Sort.allCases) { sort in
@@ -199,6 +270,7 @@ struct LibraryHeader: View {
         }
         .accessibilityLabel("Sort by \(app.arrangement.sort.title)")
         .accessibilityHint("Changes how your library is ordered")
+        #endif
     }
     #endif
 }
@@ -269,8 +341,10 @@ struct ShelfChip: View {
 
 #endif
 
-/// The capsule both a chip and the tags menu wear, so they cannot drift.
-/// Shared with the Mac, whose only chip is the tags menu.
+/// The capsule both a chip and the phone's tags menu wear, so they cannot
+/// drift. The Mac's tags menu does not wear it: a Mac `Menu` draws its own
+/// bezel and chevron around its label, so there the label is bare text (see
+/// `LibraryHeader.tagsChip`).
 struct ChipLabel: View {
     let title: String
     let count: Int?

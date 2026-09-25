@@ -268,13 +268,26 @@ public struct PlayerView: View {
                 }
             }
         } label: {
+            #if os(macOS)
+            // Plain text. The Mac's pull-down draws its own bezel and
+            // indicator around the label, so the capsule came out as a second
+            // button inside the first. A pull-down rather than a pop-up: ⌘]
+            // and ⌘[ step by a quarter and clamp without snapping to the
+            // ladder, so 2.25× is a rate this can be showing, and a pop-up can
+            // only title itself with one of its own items.
+            Text(Self.rateText(Double(coordinator?.player.rate ?? Float(settings.playbackRate))))
+            #else
             Text(Self.rateText(Double(coordinator?.player.rate ?? Float(settings.playbackRate))))
                 .font(Typography.subhead)
                 .padding(.horizontal, Metrics.spacing12)
                 .padding(.vertical, Metrics.spacing8)
                 .background(Palette.surface, in: Capsule())
                 .foregroundStyle(Palette.ink)
+            #endif
         }
+        #if os(macOS)
+        .help("Playback speed")
+        #endif
         .disabled(coordinator == nil)
     }
 

@@ -676,6 +676,38 @@ public struct BookDetailView: View {
     /// the web app, and the same book saying "Read" here would look like a
     /// different shelf. The glyph stays on `name`; see `symbol(for:)`.
     private var statusControl: some View {
+        #if os(macOS)
+        // A pop-up button, not the pill. A Mac `Menu` draws its own bezel and
+        // indicator around its label, so the pill's capsule and chevrons came
+        // out as a second control inside the first. A book has one status, so
+        // this is a one-of choice, and a pop-up is the Mac's control for that:
+        // its title is the current status and its menu checks it.
+        //
+        // The first row is there only while the selection matches no status,
+        // because a pop-up whose selection matches none of its items shows a
+        // blank title. Storyteller 3 lets a book have no status, and a status
+        // the list has not loaded yet is the same case. Tagged with the
+        // book's own uuid, not nil, so it matches in both. Choosing it does
+        // nothing (see `statusSelection`), and there is deliberately no item
+        // that clears a status: the phone has none either.
+        Picker("Reading status", selection: statusSelection) {
+            if !app.statuses.contains(where: { $0.uuid == book.status?.uuid }) {
+                Text(book.status?.displayName ?? "Set status").tag(book.status?.uuid)
+            }
+            ForEach(app.statuses) { status in
+                Text(status.displayName).tag(Optional(status.uuid))
+            }
+        }
+        .pickerStyle(.menu)
+        .labelsHidden()
+        .controlSize(.small)
+        // On the control rather than inside a label: `FlowRow` measures what
+        // it is given, and a pop-up left flexible would take the whole row.
+        .fixedSize()
+        .disabled(app.statuses.isEmpty)
+        .accessibilityLabel(book.status == nil ? "Set reading status" : "Change reading status")
+        .accessibilityValue(book.status?.displayName ?? "None")
+        #else
         Menu {
             ForEach(app.statuses) { status in
                 Button {
@@ -708,7 +740,25 @@ public struct BookDetailView: View {
         // The current shelf is the value, so it is not repeated in the label.
         .accessibilityLabel(book.status == nil ? "Set reading status" : "Change reading status")
         .accessibilityValue(book.status?.displayName ?? "None")
+        #endif
     }
+
+    #if os(macOS)
+    /// The Mac pop-up's selection: the uuid of the book's status.
+    ///
+    /// Setting it files the book through the same call the phone's menu
+    /// makes. A uuid that names no loaded status — the placeholder row — is
+    /// ignored rather than written, so choosing "Set status" changes nothing.
+    private var statusSelection: Binding<String?> {
+        Binding(
+            get: { book.status?.uuid },
+            set: { uuid in
+                guard let status = app.statuses.first(where: { $0.uuid == uuid }) else { return }
+                Task { await app.setStatus(status, for: book) }
+            },
+        )
+    }
+    #endif
 
     /// Takes the status's `name`, never its label. 3.x keeps the built-in
     /// names fixed and puts any rewording in the label, so the name is what
@@ -925,6 +975,13 @@ public struct BookDetailView: View {
                 }
             }
         } label: {
+            #if os(macOS)
+            // The bare glyph. The Mac's pull-down draws its own bezel and
+            // indicator around the label and is clicked, not tapped, so the
+            // 44pt touch frame and the tint below only built a second button
+            // inside the first. The tooltip names the edition the icon doesn't.
+            Image(systemName: "ellipsis.circle")
+            #else
             Image(systemName: "ellipsis.circle")
                 .font(.system(size: 17))
                 .foregroundStyle(Palette.tangerine)
@@ -932,7 +989,12 @@ public struct BookDetailView: View {
                 // this the tap target was the glyph's 17pt bounds.
                 .frame(width: 44, height: 44)
                 .contentShape(Rectangle())
+            #endif
         }
+        #if os(macOS)
+        .controlSize(.small)
+        .help("\(format.displayName) options")
+        #endif
         .accessibilityLabel("\(format.displayName) options")
         #endif
     }
