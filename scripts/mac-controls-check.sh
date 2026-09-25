@@ -16,9 +16,9 @@
 # windows to be checked showing: the library on a shelf, a book in the
 # inspector with Manage downloads open (for the edition menus), and Now
 # Playing. It reads each "Issa Reader" window's accessibility tree through
-# System Events, which needs no focus, so it leaves the screen alone. The
-# terminal running it needs Accessibility access (System Settings › Privacy &
-# Security › Accessibility).
+# the Accessibility API (a short Swift program it runs with `swift`), which
+# needs no focus, so it leaves the screen alone. The terminal running it needs
+# Accessibility access (System Settings › Privacy & Security › Accessibility).
 #
 # It lists every pop-up and pull-down button with its name, value and size,
 # and fails when:
@@ -34,11 +34,11 @@
 #       Now Playing      the speed pull-down, titled like "1.5×"
 # A window counts as showing the library header when it is titled with a
 # shelf and has the count line ("12 books", "1 result") in it, and a book
-# when its Manage downloads heading is. What was and was not looked at is
+# when the inspector's Read button is; its edition menus are expected once the
+# Manage downloads section's text is showing. What was and was not looked at is
 # written out as coverage, so a run that checked nothing cannot pass for one
-# that checked everything. A window whose contents System Events could not
-# read fails the run: it would otherwise count as a window showing nothing
-# expected, and the library window, the largest, is the likeliest to fail.
+# that checked everything. A window whose contents could not be read fails
+# the run: it would otherwise count as a window showing nothing expected.
 #
 # A chevron image inside a control is reported but not asserted. SwiftUI may
 # flatten a label's images out of the tree, so not finding one proves nothing.
@@ -72,7 +72,7 @@ RAW="$OUT/$LABEL.raw.tsv"
 mkdir -p "$OUT"
 rm -f "$REPORT"
 
-command -v osascript >/dev/null || { echo "error: osascript not found; this runs on a Mac" >&2; exit 1; }
+command -v swift >/dev/null || { echo "error: swift not found; this runs on a Mac with Xcode" >&2; exit 1; }
 command -v python3 >/dev/null || { echo "error: python3 not found" >&2; exit 1; }
 
 # The dump. One tab-separated record per line:
@@ -82,141 +82,112 @@ command -v python3 >/dev/null || { echo "error: python3 not found" >&2; exit 1; 
 #   B  <window>  <role>  <description>  <title>  <value>  <width>  <height>
 #   T  <window>  <static text>
 #   E  <window>  <why its contents could not be read>
-# C is every pop-up and pull-down button. B is a button or checkbox named
-# "Reverse order". T is a static text that marks what a window is showing:
-# the library's count line or the book detail's Manage downloads section.
-# E is a window whose `entire contents` raised, which a large tree can do.
-# Every attribute read is in its own `try`: SwiftUI leaves some unset, and one
-# missing description must not lose the rest of the window.
+# C is every pop-up and pull-down button, named by its AXDescription or
+# AXTitle. B is a button or checkbox labelled "Reverse order". T marks what a
+# window is showing: the library's count line, the Manage downloads section's
+# text, or "#book-detail" for the inspector's Read button (AXIdentifier
+# `action.read`). E is a window whose tree could not be read. An attribute
+# SwiftUI leaves unset reads as empty, never as a failure.
 #
 # To a file, not through `$(...)`: macOS's bash 3.2 misparses a here-document
 # inside a command substitution.
 if [ -n "${MAC_CHECK_DUMP:-}" ]; then
   [ -f "$MAC_CHECK_DUMP" ] || { echo "error: no dump at $MAC_CHECK_DUMP" >&2; exit 2; }
   [ "$MAC_CHECK_DUMP" -ef "$RAW" ] || cp "$MAC_CHECK_DUMP" "$RAW"
-elif ! osascript - "$APP" > "$RAW" 2> "$OUT/$LABEL.osascript.err" <<'OSA'
-on clean(v)
-	if v is missing value then return ""
-	try
-		set s to v as text
-	on error
-		return ""
-	end try
-	-- A tab or line break inside a name would split its record.
-	set saved to AppleScript's text item delimiters
-	set AppleScript's text item delimiters to {tab, return, linefeed}
-	set parts to text items of s
-	set AppleScript's text item delimiters to " "
-	set s to parts as text
-	set AppleScript's text item delimiters to saved
-	return s
-end clean
+else
+  # Through the Accessibility API itself, not System Events. System Events
+  # answers `description` with the role ("pop up button") and cannot see the
+  # AXDescription SwiftUI gives a pop-up or a button-style toggle, so every
+  # label this check matches on was invisible to it. The API is what VoiceOver
+  # reads, which is the point of matching on labels at all.
+  cat > "$OUT/$LABEL.ax.swift" <<'SWIFT'
+import AppKit
+import ApplicationServices
 
-on sizeOf(el)
-	tell application "System Events"
-		try
-			set sz to size of el
-			return ((item 1 of sz) as integer as text) & tab & ((item 2 of sz) as integer as text)
-		on error
-			return "?" & tab & "?"
-		end try
-	end tell
-end sizeOf
+let appName = CommandLine.arguments[1]
+func clean(_ s: String) -> String {
+    s.replacingOccurrences(of: "\t", with: " ").replacingOccurrences(of: "\n", with: " ")
+        .replacingOccurrences(of: "\r", with: " ")
+}
+func string(_ e: AXUIElement, _ a: String) -> String {
+    var v: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(e, a as CFString, &v) == .success, let v else { return "" }
+    if let s = v as? String { return clean(s) }
+    if let n = v as? NSNumber { return n.stringValue }
+    return ""
+}
+func size(_ e: AXUIElement) -> String {
+    var v: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(e, kAXSizeAttribute as CFString, &v) == .success,
+          let v, CFGetTypeID(v) == AXValueGetTypeID() else { return "?\t?" }
+    var s = CGSize.zero
+    AXValueGetValue(v as! AXValue, .cgSize, &s)
+    return "\(Int(s.width.rounded()))\t\(Int(s.height.rounded()))"
+}
+func children(_ e: AXUIElement) -> [AXUIElement]? {
+    var v: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(e, kAXChildrenAttribute as CFString, &v) == .success else { return nil }
+    return (v as? [AXUIElement]) ?? []
+}
 
-on field(el, what)
-	tell application "System Events"
-		try
-			if what is "description" then return my clean(description of el)
-			if what is "title" then return my clean(title of el)
-			if what is "value" then return my clean(value of el)
-		end try
-	end tell
-	return ""
-end field
-
-on run argv
-	set appName to item 1 of argv
-	set out to {}
-	with timeout of 600 seconds
-		tell application "System Events"
-			set procs to (every process whose name is appName)
-			if (count of procs) is 0 then return "P" & tab & "0" & tab & ""
-			set p to item 1 of procs
-			set bundlePath to ""
-			try
-				set bundlePath to POSIX path of (application file of p)
-			end try
-			set end of out to "P" & tab & ((count of procs) as text) & tab & bundlePath
-			set wins to windows of p
-			repeat with wi from 1 to count of wins
-				set w to item wi of wins
-				set wt to ""
-				try
-					set wt to my clean(name of w)
-				end try
-				set wid to ""
-				try
-					set wid to my clean(value of attribute "AXIdentifier" of w)
-				end try
-				set end of out to "W" & tab & wi & tab & wt & tab & wid
-				set els to {}
-				try
-					set els to entire contents of w
-				on error errMsg number errNum
-					set end of out to "E" & tab & wi & tab & my clean(errMsg) & " (" & errNum & ")"
-				end try
-				repeat with ei from 1 to count of els
-					set el to item ei of els
-					set r to ""
-					try
-						set r to role of el
-					end try
-					if r is "AXPopUpButton" or r is "AXMenuButton" then
-						set ims to ""
-						try
-							repeat with im in (images of el)
-								set ims to ims & my field(im, "description") & ";"
-							end repeat
-						end try
-						set end of out to "C" & tab & wi & tab & r & tab & my field(el, "description") & tab & my field(el, "title") & tab & my field(el, "value") & tab & my sizeOf(el) & tab & ims
-					else if r is "AXButton" or r is "AXCheckBox" or r is "AXToggle" then
-						set d to my field(el, "description")
-						set t to my field(el, "title")
-						if d is "Reverse order" or t is "Reverse order" then
-							set end of out to "B" & tab & wi & tab & r & tab & d & tab & t & tab & my field(el, "value") & tab & my sizeOf(el)
-						end if
-					else if r is "AXStaticText" then
-						set v to my field(el, "value")
-						if v is "" then set v to my field(el, "description")
-						if v is "Manage downloads" or v starts with "Books download automatically" then
-							set end of out to "T" & tab & wi & tab & v
-						else if v is not "" and "0123456789" contains (character 1 of v) then
-							if v ends with " book" or v ends with " books" or v ends with " result" or v ends with " results" then
-								set end of out to "T" & tab & wi & tab & v
-							end if
-						end if
-					end if
-				end repeat
-			end repeat
-		end tell
-	end timeout
-	set AppleScript's text item delimiters to linefeed
-	set text_ to out as text
-	set AppleScript's text item delimiters to ""
-	return text_
-end run
-OSA
-then
-  cat "$OUT/$LABEL.osascript.err" >&2
-  if grep -qiE 'assistive|not allowed|-1719|-25211|-1743' "$OUT/$LABEL.osascript.err"; then
-    echo "error: System Events may not read another app's controls from this terminal." >&2
-    echo "       Grant it Accessibility (System Settings › Privacy & Security › Accessibility)." >&2
-  else
-    echo "error: reading $APP's windows through System Events failed (above)" >&2
+let apps = NSWorkspace.shared.runningApplications.filter { $0.localizedName == appName }
+print("P\t\(apps.count)\t\(apps.first?.bundleURL?.path ?? "")")
+guard let app = apps.first else { exit(0) }
+guard AXIsProcessTrusted() else {
+    FileHandle.standardError.write("not allowed: this terminal has no Accessibility access\n".data(using: .utf8)!)
+    exit(3)
+}
+let countLine = try! NSRegularExpression(pattern: #"^\d+ (books?|results?)$|^\d+ of \d+ books?$"#)
+var windowsRef: CFTypeRef?
+AXUIElementCopyAttributeValue(AXUIElementCreateApplication(app.processIdentifier),
+                              kAXWindowsAttribute as CFString, &windowsRef)
+for (i, w) in ((windowsRef as? [AXUIElement]) ?? []).enumerated() {
+    let wi = i + 1
+    print("W\t\(wi)\t\(string(w, kAXTitleAttribute))\t\(string(w, kAXIdentifierAttribute))")
+    guard var stack = children(w) else { print("E\t\(wi)\tits children could not be read"); continue }
+    var visited = 0
+    while let e = stack.popLast(), visited < 20_000 {
+        visited += 1
+        let role = string(e, kAXRoleAttribute)
+        let desc = string(e, kAXDescriptionAttribute), title = string(e, kAXTitleAttribute)
+        switch role {
+        case "AXPopUpButton", "AXMenuButton":
+            let images = (children(e) ?? []).filter { string($0, kAXRoleAttribute) == "AXImage" }
+                .map { string($0, kAXDescriptionAttribute) }.joined(separator: ";")
+            print("C\t\(wi)\t\(role)\t\(desc)\t\(title)\t\(string(e, kAXValueAttribute))\t\(size(e))\t\(images)")
+        case "AXButton", "AXCheckBox":
+            if [desc, title, string(e, kAXHelpAttribute)].contains("Reverse order") {
+                print("B\t\(wi)\t\(role)\t\(desc)\t\(title)\t\(string(e, kAXValueAttribute))\t\(size(e))")
+            }
+            // The book detail's Read button: the one mark the inspector
+            // carries whichever of its sections are open.
+            if string(e, kAXIdentifierAttribute) == "action.read" { print("T\t\(wi)\t#book-detail") }
+        case "AXStaticText":
+            let v = string(e, kAXValueAttribute).isEmpty ? desc : string(e, kAXValueAttribute)
+            let range = NSRange(v.startIndex..., in: v)
+            if v.hasPrefix("Books download automatically")
+                || countLine.firstMatch(in: v, range: range) != nil {
+                print("T\t\(wi)\t\(v)")
+            }
+        default: break
+        }
+        stack.append(contentsOf: children(e) ?? [])
+    }
+    if visited >= 20_000 { print("E\t\(wi)\tover 20000 elements; stopped walking") }
+}
+SWIFT
+  if ! swift "$OUT/$LABEL.ax.swift" "$APP" > "$RAW" 2> "$OUT/$LABEL.ax.err"; then
+    cat "$OUT/$LABEL.ax.err" >&2
+    if grep -q 'not allowed' "$OUT/$LABEL.ax.err"; then
+      echo "error: this terminal may not read another app's controls." >&2
+      echo "       Grant it Accessibility (System Settings › Privacy & Security › Accessibility)." >&2
+    else
+      echo "error: reading $APP's windows through the Accessibility API failed (above)" >&2
+    fi
+    exit 1
   fi
-  exit 1
+  rm -f "$OUT/$LABEL.ax.swift" "$OUT/$LABEL.ax.err"
 fi
-rm -f "$OUT/$LABEL.osascript.err"
 
 # The verdicts, from the dump. Python rather than awk for the regular
 # expressions, and a here-document into a plain command for the same bash 3.2
@@ -334,7 +305,7 @@ if procs == 1:
             expect(where, "tags pull-down", find(w["controls"], r"Filter by tag|\d+ tags? selected"))
             expect(where, "sort pop-up", find(w["controls"], r"Sort by"))
             expect(where, "Reverse order toggle", find(w["toggles"], r"Reverse order"))
-        if "manage downloads" in texts:
+        if "#book-detail" in w["texts"]:
             showing.append("book detail")
             expect(where, "reading status pop-up",
                    find(w["controls"], r"(Set|Change) reading status"))
@@ -344,7 +315,9 @@ if procs == 1:
             else:
                 notes.append("%s: Manage downloads is closed, so the edition menus were not"
                              " checked" % where)
-        if w["title"] == "Now Playing" or "NowPlaying" in w["ident"]:
+        # By title alone: every window's identifier is its SwiftUI type, and
+        # the library's names `NowPlayingController` in its environment.
+        if w["title"] == "Now Playing":
             showing.append("Now Playing")
             expect(where, "speed pull-down", find(w["controls"], r"\d+(\.\d+)?×"))
         seen.update(showing)
