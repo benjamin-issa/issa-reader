@@ -173,6 +173,16 @@ struct LibraryHeader: View {
             Text(countText)
                 .font(Typography.caption.monospacedDigit())
                 .foregroundStyle(Palette.inkTertiary)
+                #if os(macOS)
+                // One line, at its own width, and first to be given room.
+                // Beside the Mac's rigid tags and sort controls this was the
+                // only child of the row that would give way, so with the book
+                // column open in a 900pt window the row squeezed it down to a
+                // letter's width and "1 result" wrapped one letter per line.
+                .lineLimit(1)
+                .fixedSize()
+                .layoutPriority(1)
+                #endif
             Spacer()
             // The Mac has no chip row, and a tag rail's "See all" narrows the
             // grid by a tag. Without this the reader would be left looking at
