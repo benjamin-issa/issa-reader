@@ -214,11 +214,13 @@ struct LibraryHeader: View {
         return "\(displayedCount) book\(displayedCount == 1 ? "" : "s")"
     }
 
-    /// A control, not a caption: a bordered, tinted capsule with a sort glyph,
-    /// the current sort's name and a disclosure chevron, so it reads as
-    /// something you press rather than a note about how the grid is ordered.
-    /// The current sort is still legible without opening anything, which was the
-    /// original point of labelling it.
+    /// A control, not a caption, so it reads as something you press rather
+    /// than a note about how the grid is ordered. On the phone that is a
+    /// bordered, tinted capsule with a sort glyph, the current sort's name and
+    /// a disclosure chevron; on the Mac, a pop-up titled with the current sort
+    /// beside a Reverse-order toggle (see the branch below). The current sort
+    /// is still legible without opening anything, which was the original
+    /// point of labelling it.
     #if !os(tvOS)
     private var sortMenu: some View {
         @Bindable var app = app

@@ -674,7 +674,8 @@ public struct BookDetailView: View {
     /// Every word a reader sees or hears here is `displayName`, the server's
     /// label: a 3.x admin who renamed "Read" to "Finished" sees "Finished" in
     /// the web app, and the same book saying "Read" here would look like a
-    /// different shelf. The glyph stays on `name`; see `symbol(for:)`.
+    /// different shelf. On the phone the pill's glyph stays on `name`; see
+    /// `symbol(for:)`. The Mac's pop-up has no glyph and shows the label alone.
     private var statusControl: some View {
         #if os(macOS)
         // A pop-up button, not the pill. A Mac `Menu` draws its own bezel and
