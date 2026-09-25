@@ -49,10 +49,15 @@
 # reading the app, which is how the verdicts are tested without one running.
 
 set -euo pipefail
+# Both taken before the `cd` to the root: `$0` and a relative MAC_CHECK_DUMP
+# are paths from wherever the script was run, and from the root they name
+# nothing, or the wrong file.
+SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+case "${MAC_CHECK_DUMP:-}" in "" | /*) ;; *) MAC_CHECK_DUMP="$PWD/$MAC_CHECK_DUMP" ;; esac
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 ROOT="$PWD"
 
-usage() { sed -n '6,7p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '6,7p' "$SELF" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 [ $# -eq 1 ] || usage
 LABEL="$1"
