@@ -810,6 +810,27 @@ struct ReadalongCoordinatorTests {
                 "and the page turned, rather than being lost to a mid-move sample")
     }
 
+    /// An extracted file that has gone from disk since — the book removed, the
+    /// extraction torn. The map still names it, so the move went ahead, the
+    /// load reported success and `play(from:)` pressed play over silence.
+    @Test("a sentence whose file will not open does not start playing")
+    func aFileThatWillNotOpenDoesNotPlay() async throws {
+        let (timeline, _) = try ReadalongLookupTests.timeline()
+        let missing = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appending(path: "issa-missing-narration-\(UUID().uuidString).mp3")
+        let files = Dictionary(uniqueKeysWithValues: Set(timeline.entries.map(\.audioHref)).map {
+            ($0, missing)
+        })
+        let subject = ReadalongCoordinator(timeline: timeline, audioFiles: files)
+        subject.player.onTimeUpdate = nil
+        let first = try #require(timeline.entries.first)
+
+        let played = await subject.play(from: first)
+
+        #expect(played == false, "a file that would not open was reported as played")
+        #expect(subject.player.isPlaying == false)
+    }
+
     /// Two moves in a burst, the second into the file the first is opening: a
     /// held remote button, a sentence tapped while the next file loads.
     ///

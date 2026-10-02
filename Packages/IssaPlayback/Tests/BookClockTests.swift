@@ -33,7 +33,9 @@ struct BookClockTests {
     func coordinator(_ manifest: AudiobookManifest) -> AudiobookCoordinator {
         AudiobookCoordinator(
             manifest: manifest,
-            source: .local(URL(fileURLWithPath: "/dev/null")),
+            // Real, silent audio: `/dev/null` will not open, which a load now
+            // reports as the failure it is. See `SilentAudio`.
+            source: .local(SilentAudio.url),
         )
     }
 

@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import IssaCore
 import Observation
 
 /// Plays a book's narration.
@@ -322,6 +323,15 @@ public final class AudioPlayer {
         /// A later load replaced the item while this one was awaiting
         /// AVFoundation, and owns everything now.
         case superseded
+        /// The file would not open: its duration could not be loaded. The
+        /// player has paused, so nothing claims to be playing over silence.
+        ///
+        /// A missing file, a chunk deleted from disk under a paused book, a
+        /// streamed track whose request failed or whose token expired. Every
+        /// one of these used to come back as success, with `isPlaying` left
+        /// true and every surface drawing a pause glyph over silence while the
+        /// sleep timer counted down.
+        case failed
     }
 
     /// Loads an audio file, local or streamed, and says what became of it.
@@ -366,17 +376,39 @@ public final class AudioPlayer {
         let playerItem = AVPlayerItem(asset: asset)
         playerItem.audioTimePitchAlgorithm = .timeDomain
 
-        observers.removeEndObserver()
+        observers.removeItemObservers()
         observers.end = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime, object: playerItem, queue: .main,
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.onFinishedFile?() }
+        }
+        // The two ways an item says it has stopped for good rather than reached
+        // its end: it never became playable, or it stopped part-way — a stream
+        // that lost its network, a file that went from under it. Neither was
+        // observed, so the player went on claiming to play.
+        observers.failedToEnd = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemFailedToPlayToEndTime, object: playerItem, queue: .main,
+        ) { [weak self] note in
+            let reason = (note.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? any Error)
+                .map { String(describing: $0) } ?? "unknown"
+            MainActor.assumeIsolated { self?.itemDidFail(generation: item, reason: reason) }
+        }
+        observers.status = playerItem.observe(\.status, options: [.new]) { [weak self] observed, _ in
+            guard observed.status == .failed else { return }
+            let reason = observed.error.map { String(describing: $0) } ?? "unknown"
+            Task { @MainActor [weak self] in self?.itemDidFail(generation: item, reason: reason) }
         }
 
         // Stopped explicitly before the item changes hands, rather than trusting
         // the queue to drop its rate when it empties: the new item must not
         // start until it has been placed — see `placementPending`.
         player.rate = 0
+        // A seek still waiting on the outgoing item is released before the
+        // item goes. Measured: a seek pending on an item that has failed is
+        // never called back, and removing the item does not change that — the
+        // coordinator's in-flight counter around it would never come down, and
+        // the clock would be ignored for the rest of the session.
+        player.currentItem?.cancelPendingSeeks()
         player.removeAllItems()
         player.insert(playerItem, after: nil)
         // Both asked for at once: the tracks are wanted for the gain tap, and
@@ -399,7 +431,14 @@ public final class AudioPlayer {
             whileLoadingAsset = nil
             await hook()
         }
-        let loadedDuration = try? await loadingDuration
+        let loadedDuration: CMTime?
+        var failure: (any Error)?
+        do {
+            loadedDuration = try await loadingDuration
+        } catch {
+            loadedDuration = nil
+            failure = error
+        }
         let loadedTracks = try? await loadingTracks
         guard item == itemGeneration else { return .superseded }
         // Item-scoped, so written even when a seek has since taken the
@@ -417,15 +456,26 @@ public final class AudioPlayer {
         playerItem.audioMix = gainTap.makeAudioMix(for: audioTracks)
         tapCarriesGain = playerItem.audioMix != nil
         applyPlayerVolume()
+        // A file that will not open is not a place to be. Stopped here, before
+        // anything is told it landed: `isPlaying` is what the transport, the
+        // sleep timer and the widget all read.
+        if let failure {
+            itemDidFail(generation: item, reason: String(describing: failure))
+            return .failed
+        }
         // Playhead-scoped from here on. A seek made while this load was
         // opening its file — a scrub, the next sentence tapped, a held remote
         // button — has already put the playhead where the listener asked, and
         // restored the rate; seeking back to this load's own offset now is the
         // write that lost it.
+        // The item can also fail without its duration throwing: the status
+        // observer above stands it down, and nothing past here can place it.
+        guard failedItem != item else { return .failed }
         guard playhead == playheadGeneration else { return .overtaken }
         if offset > 0 {
             guard await seekPlayhead(offset, generation: playhead) else {
-                return item == itemGeneration ? .overtaken : .superseded
+                guard item == itemGeneration else { return .superseded }
+                return failedItem == item ? .failed : .overtaken
             }
         } else {
             // Replacing the queue item drops AVPlayer's rate to 0, and a seek is
@@ -508,6 +558,28 @@ public final class AudioPlayer {
         notifyRateObservers(0)
     }
 
+    /// An item that stopped for good: paused, its seeks released, and logged.
+    ///
+    /// Only for the item the player still holds — a failure reported for one a
+    /// later load replaced is about audio nobody is listening to.
+    func itemDidFail(generation: Int, reason: String) {
+        // Once per item: the duration load throwing and the status turning
+        // `.failed` are usually the same failure, reported twice.
+        guard generation == itemGeneration, failedItem != generation else { return }
+        failedItem = generation
+        placementPending = false
+        player.currentItem?.cancelPendingSeeks()
+        if isPlaying { pause() }
+        IssaLog.warning("audio would not play", [
+            "href": currentAudioHref ?? "", "error": reason,
+        ])
+    }
+
+    /// The item `itemDidFail` last stood down, so it does so once.
+    private var failedItem: Int?
+    /// The current item's generation, for tests that report a failure on it.
+    var itemGenerationForTests: Int { itemGeneration }
+
     public func togglePlayPause() {
         isPlaying ? pause() : play()
     }
@@ -533,6 +605,15 @@ public final class AudioPlayer {
     /// - Returns: whether this seek still owned the playhead when it landed.
     @discardableResult
     func seekPlayhead(_ seconds: TimeInterval, generation: Int) async -> Bool {
+        // Not asked of an item that has failed: AVFoundation never calls such
+        // a seek back — measured — and whoever awaits it would wait for good.
+        // There is nowhere in that item to go.
+        if let current = player.currentItem, current.status == .failed {
+            itemDidFail(
+                generation: itemGeneration,
+                reason: current.error.map { String(describing: $0) } ?? "unknown")
+            return false
+        }
         let target = Self.cmTime(forSeconds: seconds)
         // Exact seeking: a read-along highlight lands on the wrong sentence if
         // the player rounds to the nearest keyframe.
@@ -590,6 +671,8 @@ public final class AudioPlayer {
 private final class ObserverTokens: @unchecked Sendable {
     var time: Any?
     var end: (any NSObjectProtocol)?
+    var failedToEnd: (any NSObjectProtocol)?
+    var status: NSKeyValueObservation?
     var interruption: (any NSObjectProtocol)?
     var route: (any NSObjectProtocol)?
 
@@ -598,14 +681,19 @@ private final class ObserverTokens: @unchecked Sendable {
         time = nil
     }
 
-    func removeEndObserver() {
+    /// Everything observed on the current item.
+    func removeItemObservers() {
         if let end { NotificationCenter.default.removeObserver(end) }
         end = nil
+        if let failedToEnd { NotificationCenter.default.removeObserver(failedToEnd) }
+        failedToEnd = nil
+        status?.invalidate()
+        status = nil
     }
 
     func tearDown(player: AVPlayer) {
         removeTimeObserver(from: player)
-        removeEndObserver()
+        removeItemObservers()
         for token in [interruption, route].compactMap({ $0 }) {
             NotificationCenter.default.removeObserver(token)
         }

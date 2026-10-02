@@ -2,7 +2,9 @@ import Foundation
 
 /// A real audio file with nothing in it, for suites that drive a real
 /// `AudioPlayer` and need its loads to succeed, but are about the clock, not
-/// the sound. `/dev/null` is not one: AVFoundation cannot open it.
+/// the sound. `/dev/null` is not one: AVFoundation cannot open it, and a load
+/// of it reports `.failed` — the suites that used it only worked while a file
+/// that would not open was reported as loaded.
 ///
 /// Thirty minutes, because the offsets these suites seek to run up to a
 /// track's full length — 1,599 seconds into a 1,600-second track — and a seek

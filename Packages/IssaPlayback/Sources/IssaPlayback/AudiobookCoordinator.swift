@@ -729,6 +729,14 @@ public final class AudiobookCoordinator {
             // The player's own count of loads says the same thing the guard
             // above does; every load it sees comes from here.
             return .superseded
+        case .failed:
+            // The file is there by name and will not open: a chunk deleted from
+            // disk, a stream whose request failed. The same refusal as a track
+            // with no file at all, said in the one word that reaches a listener
+            // — this used to come back `.landed`, and the caller then pressed
+            // play on silence.
+            player.pause()
+            return .unplayable
         case .loaded:
             // Restated rather than trusted: the player's periodic observer
             // writes `bookTime` on every tick without consulting the counter —

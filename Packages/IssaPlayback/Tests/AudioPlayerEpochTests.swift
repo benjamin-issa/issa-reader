@@ -27,6 +27,49 @@ struct AudioPlayerEpochTests {
         #expect(player.currentTime.isFinite)
     }
 
+    // MARK: - A file that will not play
+
+    /// A file AVFoundation cannot open: the shape a `.files` chunk deleted from
+    /// disk has, and a streamed track whose request failed.
+    static func missingFile() -> URL {
+        URL(fileURLWithPath: NSTemporaryDirectory())
+            .appending(path: "issa-missing-\(UUID().uuidString).mp3")
+    }
+
+    /// The player was told to play, the next file would not open, and it said
+    /// nothing: `load` reported success, `isPlaying` stayed true, and every
+    /// surface drew a pause glyph over silence while the sleep timer counted.
+    @Test("a file that will not open stops the player rather than playing silence")
+    func aFileThatWillNotOpenStopsThePlayer() async {
+        let player = AudioPlayer()
+        player.play()
+
+        let outcome = await player.load(url: Self.missingFile(), href: "missing.mp3", startAt: 30)
+
+        #expect(outcome == .failed)
+        #expect(player.isPlaying == false, "a player holding nothing it can play claimed to be playing")
+        #expect(player.engineRate == 0)
+    }
+
+    /// A failure reported for an item a later load has already replaced is
+    /// about audio nobody is listening to.
+    @Test("a failure reported for a replaced item stops nothing")
+    func aStaleFailureStopsNothing() async {
+        let player = AudioPlayer()
+        await player.load(url: SilentAudio.url, href: "older.wav")
+        let olderItem = player.itemGenerationForTests
+        await player.load(url: SilentAudio.url, href: "newer.wav")
+        player.play()
+
+        player.itemDidFail(generation: olderItem, reason: "test")
+        #expect(player.isPlaying, "the item playing now did not fail")
+
+        // And the item playing now failing does stop it — the path the status
+        // observer and the failed-to-play notification both take.
+        player.itemDidFail(generation: player.itemGenerationForTests, reason: "test")
+        #expect(player.isPlaying == false)
+    }
+
     // MARK: - Which call owns the playhead
 
     /// A seek into the file a load is still opening. The load used to wake up,

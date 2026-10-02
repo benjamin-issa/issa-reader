@@ -323,7 +323,9 @@ public final class ReadalongCoordinator {
     static let endOfEntryMargin: TimeInterval = 2.0 / 600
 
     /// Moves the playhead and the highlight without touching whether audio is
-    /// playing. False when the entry's audio file is missing and nothing moved.
+    /// playing. False when the entry's audio file is missing and nothing moved,
+    /// or is there and would not open, in which case the highlight has moved
+    /// and the player has stopped.
     ///
     /// Split out of `play(from:)` because `seek(toBookProgress:)` is a protocol
     /// requirement with a neutral contract — the audiobook implementation moves
@@ -411,7 +413,13 @@ public final class ReadalongCoordinator {
             // left the audio at the first target while the highlight named the
             // second. Nothing here needs undoing — this move published before
             // the await, and the newer one published after it.
-            await player.load(url: destination, href: entry.audioHref, startAt: entry.start + within)
+            //
+            // A file that will not open is a refusal, as a missing one is: the
+            // player has already stopped, and saying `true` here sent
+            // `play(from:)` on to press play over silence.
+            let outcome = await player.load(
+                url: destination, href: entry.audioHref, startAt: entry.start + within)
+            if outcome == .failed { return false }
         } else {
             await player.seek(to: entry.start + within)
         }

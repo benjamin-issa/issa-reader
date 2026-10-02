@@ -29,22 +29,13 @@ struct ChapterClockTests {
         )
     }
 
-    /// Every track pointed at an unplayable file.
+    /// Every track pointed at a real, silent file.
     ///
     /// `.files` is the source under test, so the tests have to use it even where
     /// the audio is beside the point — `.local` would prove nothing about a
-    /// per-track lookup. `/dev/null` is what `BookClockTests` already drives a
-    /// real `AudioPlayer` with.
-    static func nowhere(_ manifest: AudiobookManifest) -> [String: URL] {
-        Dictionary(
-            uniqueKeysWithValues: manifest.readingOrder.map {
-                ($0.href, URL(fileURLWithPath: "/dev/null"))
-            },
-        )
-    }
-
-    /// Every track pointed at a real, silent file, for a test that needs the
-    /// engine to actually go where it is sent.
+    /// per-track lookup. These pointed at `/dev/null` until a file that will not
+    /// open became a load that fails, which is what it always was; see
+    /// `SilentAudio`.
     static func silence(_ manifest: AudiobookManifest) -> [String: URL] {
         Dictionary(uniqueKeysWithValues: manifest.readingOrder.map { ($0.href, SilentAudio.url) })
     }
@@ -56,7 +47,7 @@ struct ChapterClockTests {
     ) -> AudiobookCoordinator {
         AudiobookCoordinator(
             manifest: manifest,
-            source: .files(files ?? nowhere(manifest)),
+            source: .files(files ?? silence(manifest)),
             chapters: chapters,
         )
     }
@@ -273,7 +264,7 @@ struct ChapterClockTests {
         // The tick the periodic observer delivers mid-seek, stated rather than
         // raced. Enqueuing a task and trusting the seek to suspend was the old
         // shape, and it did not merely flake: when the seek does not suspend —
-        // which is the normal case here, because these tracks never load — the
+        // which it did not, when these tracks were files that never load — the
         // tick landed *after* the scrub, `syncChapter`'s `guard index !=
         // chapterIndex` returned, and this test passed having proved nothing.
         // `landedInFlight` is what makes that impossible now.
@@ -317,8 +308,8 @@ struct ChapterClockTests {
         // delivered from inside the seek rather than raced against it.
         //
         // This was a task that yielded until `seeksInFlight` came up. That
-        // waited for ever: these tracks point at /dev/null, so the player's
-        // item never becomes ready, `AVPlayer` answers the seek immediately on
+        // waited for ever: these tracks pointed at /dev/null, so the player's
+        // item never became ready, `AVPlayer` answers the seek immediately on
         // the calling thread, and an `await` whose continuation has already
         // been resumed never yields the actor. The task first ran when the body
         // suspended to read its value — by which time the counter was back down.
@@ -874,6 +865,20 @@ struct ChapterClockTests {
         _ = Self.detachClock(subject)
 
         #expect(await subject.seek(toBookTime: 150) == .unplayable)
+        // And a chunk that is there by name and will not open: a file deleted
+        // from disk under a paused book. It came back `.landed`, and the
+        // resume pressed play on silence.
+        let manifest = Self.manifest(trackCount: 3, each: 100)
+        let missing = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appending(path: "issa-missing-chunk-\(UUID().uuidString).mp3")
+        let gone = Self.coordinator(manifest, files: Dictionary(
+            uniqueKeysWithValues: manifest.readingOrder.map { ($0.href, missing) }))
+        _ = Self.detachClock(gone)
+        gone.player.play()
+        #expect(await gone.seek(toBookTime: 150) == .unplayable)
+        #expect(gone.player.isPlaying == false, "a book whose audio will not open claimed to be playing")
+        await gone.start(atProgress: 0)
+        #expect(gone.player.isPlaying == false, "and a start does not press play on it")
         // And a book with nothing playable in it at all names no track to try.
         let empty = Self.coordinator(Self.manifest(trackCount: 0, each: 100))
         #expect(await empty.seek(toBookTime: 0) == .unplayable)
