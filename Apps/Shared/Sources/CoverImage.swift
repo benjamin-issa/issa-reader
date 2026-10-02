@@ -372,6 +372,12 @@ public struct CoverImage: View {
             Text(initial)
                 .font(Typography.serif(34, weight: .medium))
                 .foregroundStyle(Palette.ink.opacity(0.55))
+                // The ramp follows Dynamic Type, and at the accessibility
+                // sizes a 34-point letter outgrew a small cover and was cut
+                // off; it shrinks to fit instead.
+                .lineLimit(1)
+                .minimumScaleFactor(0.2)
+                .padding(2)
         }
     }
 

@@ -49,6 +49,13 @@ public struct LocalBooksScreen: View {
     @State private var dropCount = 0
     /// Which row's swipe is open, so opening one closes the other.
     @State private var openRow: String?
+    /// The window's undo manager, so Edit › Undo (⌘Z) takes a removal back.
+    @Environment(\.undoManager) private var undoManager
+    #if !os(macOS)
+    /// The row a hardware keyboard is on (iPad): arrows move it, Return opens
+    /// it, ⌘⌫ removes it and ⌘I shows its Book info (3a).
+    @FocusState private var focusedRow: String?
+    #endif
 
     public init(placement: Placement) {
         self.placement = placement
@@ -374,6 +381,22 @@ public struct LocalBooksScreen: View {
                 }
                 .id(book.uuid)
                 .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: Metrics.radiusMedium))
+                // Activate only: the row is a thing to move to and open, not to
+                // edit. The default interactions claim the row's own keys and
+                // drags as well, which took the swipe's drag and ⌘⌫ from it.
+                .focusable(true, interactions: .activate)
+                .focused($focusedRow, equals: book.uuid)
+                .onKeyPress(.return) {
+                    tap(book)
+                    return .handled
+                }
+                // ⌘⌫ on the row the keyboard is on, as well as the shortcut
+                // below for when no row has the keyboard yet.
+                .onKeyPress(keys: [.delete], phases: .down) { press in
+                    guard press.modifiers.contains(.command) else { return .ignored }
+                    remove([book.uuid])
+                    return .handled
+                }
                 .onTapGesture { tap(book) }
                 .contextMenu { menu(for: book) }
                 .accessibilityAction(named: "Book Info") { info = book }
@@ -381,6 +404,26 @@ public struct LocalBooksScreen: View {
                 .accessibilityAction { tap(book) }
             }
         }
+        .background { keyboardCommands }
+    }
+
+    /// ⌘⌫ and ⌘I for the row the keyboard is on, as the design's iPad
+    /// keyboard has them (3a). Invisible buttons, because a shortcut needs a
+    /// control to belong to and the row's own menu already shows both.
+    private var keyboardCommands: some View {
+        Group {
+            Button("Remove from this \(LocalDevice.noun)") {
+                if let uuid = focusedRow ?? library.books.first?.uuid { remove([uuid]) }
+            }
+            .keyboardShortcut(.delete, modifiers: .command)
+            Button("Book Info") {
+                if let uuid = focusedRow ?? library.books.first?.uuid { info = library.book(uuid) }
+            }
+            .keyboardShortcut("i", modifiers: .command)
+        }
+        .opacity(0)
+        .frame(width: 0, height: 0)
+        .accessibilityHidden(true)
     }
 
     @ViewBuilder
@@ -446,6 +489,8 @@ public struct LocalBooksScreen: View {
         }
         ToolbarItem(placement: .topBarTrailing) {
             Button { choose() } label: { Label("Add a book from Files", systemImage: "plus") }
+                // ⌘O on a hardware keyboard, as File › Add Book… is on the Mac.
+                .keyboardShortcut("o", modifiers: .command)
                 .tint(Palette.ink)
                 .accessibilityIdentifier("button.addLocalBook")
         }
@@ -530,7 +575,7 @@ public struct LocalBooksScreen: View {
     private func remove(_ uuids: [String]) {
         guard !uuids.isEmpty else { return }
         openRow = nil
-        withAnimation(.snappy(duration: 0.25)) { library.remove(uuids) }
+        withAnimation(.snappy(duration: 0.25)) { library.remove(uuids, undoManager: undoManager) }
         #if os(macOS)
         selection.subtract(uuids)
         #endif
@@ -659,6 +704,9 @@ struct LocalBookRow: View {
                 noticeStrip(notice)
             }
         }
+        // The full width of the column at every text size: stacked, at the
+        // accessibility sizes, the card otherwise shrank to its widest line.
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(Metrics.spacing12)
         .background(Palette.surface, in: RoundedRectangle(cornerRadius: Metrics.radiusMedium))
         .overlay(
@@ -968,6 +1016,12 @@ struct LocalImportRow: View {
         .overlay(RoundedRectangle(cornerRadius: Metrics.radiusMedium).strokeBorder(Palette.border, lineWidth: 1))
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("localImport.row")
+        #if os(macOS)
+        // Esc stops the import row the keyboard is on (3d). Focusable for
+        // exactly that: Tab reaches it, and Esc then means this file.
+        .focusable(item.isUnfinished)
+        .onExitCommand { if item.isUnfinished { onCancel() } }
+        #endif
     }
 
     private var isAdded: Bool { if case .added = item.stage { true } else { false } }

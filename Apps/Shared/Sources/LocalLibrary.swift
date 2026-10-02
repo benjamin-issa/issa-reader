@@ -147,6 +147,10 @@ public final class LocalLibrary: ReaderPersistence {
 
     public func book(_ uuid: String) -> Book? { books.first { $0.uuid == uuid } }
 
+    /// Whether the list has anything on it at all: a book, a book waiting for
+    /// its file, or a file on its way in.
+    public var hasAnything: Bool { !books.isEmpty || !missingFiles.isEmpty || !imports.isEmpty }
+
     /// What each book takes on this device, by uuid: its copy, its cover, and
     /// the narration and face extracted from it, which are this library's to
     /// remove. A walk of the disk, so the list asks off the main actor.
@@ -426,7 +430,10 @@ public final class LocalLibrary: ReaderPersistence {
 
     /// Takes books off the list at once, and off the device once the undo
     /// window closes. Whatever is reading or narrating them stops now.
-    public func remove(_ uuids: [String]) {
+    /// - Parameter undoManager: the window's, so Edit › Undo (⌘Z) takes the
+    ///   removal back while its toast is up, as the toast's Undo does (5 Spec,
+    ///   §7 and 3c: "Edit › Undo ⌘Z also restores it").
+    public func remove(_ uuids: [String], undoManager: UndoManager? = nil) {
         let leaving = books.filter { uuids.contains($0.uuid) }
         guard !leaving.isEmpty else { return }
         // One at a time, like the server's downloads: a second removal carries
@@ -436,6 +443,14 @@ public final class LocalLibrary: ReaderPersistence {
         books.removeAll { uuids.contains($0.uuid) }
         pendingRemoval = PendingRemoval(books: leaving)
         IssaLog.info("local book removal pending", ["books": String(leaving.count)])
+        if let undoManager {
+            let removed = leaving.map(\.uuid)
+            undoManager.registerUndo(withTarget: self) { library in
+                MainActor.assumeIsolated { library.undoRemoval(of: removed) }
+            }
+            undoManager.setActionName(
+                leaving.count == 1 ? "Remove \(leaving[0].title)" : "Remove \(leaving.count) Books")
+        }
         let window = undoWindow
         removalTask = Task { [weak self] in
             try? await Task.sleep(for: window)
@@ -446,6 +461,13 @@ public final class LocalLibrary: ReaderPersistence {
 
     /// Puts the books back, with their place, highlights and bookmarks.
     /// Playback that stopped stays stopped.
+    /// Takes back this removal and no other: an undo registered for a removal
+    /// a later one has since carried out finds nothing to do.
+    public func undoRemoval(of uuids: [String]) {
+        guard pendingRemoval?.books.map(\.uuid) == uuids else { return }
+        undoRemoval()
+    }
+
     public func undoRemoval() {
         guard let pending = pendingRemoval else { return }
         removalTask?.cancel()

@@ -40,5 +40,31 @@ public final class LocalBooksRoute {
     }
 
     public func open(_ uuid: String) { openBook = OpenBook(uuid: uuid) }
+
+    /// The library has loaded, at launch.
+    ///
+    /// The design's rule (5 Spec, §3): "With no server connected and at least
+    /// one book here, the list is the app's root" — and 4a: "the app opens on
+    /// the list (or sign-in, if the list is empty)". So a launch that finds the
+    /// list empty opens on sign-in, whatever was remembered. Within a session
+    /// the list stays, empty state and all, once the reader has removed the
+    /// last book (2c).
+    public func libraryLoaded(hasBooks: Bool) {
+        if !hasBooks { showsListSignedOut = false }
+    }
+
+    /// The app's phase moved. Signed in, the list is a row in Settings from
+    /// then on; signed out, the books are where the app opens if there are any
+    /// (4a), and the sign-in form if there are none.
+    public func phaseChanged(from old: AppModel.Phase, to new: AppModel.Phase, hasBooks: Bool) {
+        switch new {
+        case .ready:
+            showsListSignedOut = false
+        case .chooseServer where old == .ready:
+            showsListSignedOut = hasBooks
+        default:
+            break
+        }
+    }
 }
 #endif

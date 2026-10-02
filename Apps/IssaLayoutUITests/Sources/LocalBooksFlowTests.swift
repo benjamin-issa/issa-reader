@@ -94,4 +94,36 @@ final class LocalBooksFlowTests: XCTestCase {
         Thread.sleep(forTimeInterval: 8)
         XCTAssertTrue(row(in: app).exists, "the removal fired after it was taken back")
     }
+
+    /// The hardware keyboard the design gives the list on iPad (3a): ⌘I opens
+    /// Book info for the row the keyboard is on (the first, before any has
+    /// been moved to), and ⌘Z takes a removal back through the window's undo
+    /// manager while its toast is up. (⌘⌫, sent by XCUITest, never reached the
+    /// app on the simulator; it is a hand check.)
+    func testHardwareKeyboard() {
+        let app = launch()
+        let link = app.buttons["link.readFromFiles"].firstMatch
+        XCTAssertTrue(link.waitForExistence(timeout: 30), "no quiet link to the books from Files")
+        Thread.sleep(forTimeInterval: 3)
+        link.tap()
+        XCTAssertTrue(row(in: app).waitForExistence(timeout: 15), "the planted book is not on the list")
+
+        app.typeKey("i", modifierFlags: .command)
+        XCTAssertTrue(app.descendants(matching: .any)["screen.localBookInfo"].waitForExistence(timeout: 10),
+                      "⌘I did not open Book info")
+        app.buttons["Done"].firstMatch.tap()
+        XCTAssertTrue(row(in: app).waitForExistence(timeout: 10))
+        Thread.sleep(forTimeInterval: 1)
+
+        let undo = app.buttons["Undo"].firstMatch
+        for _ in 0..<2 where !undo.exists {
+            swipeToRemove(row(in: app), in: app)
+            _ = undo.waitForExistence(timeout: 5)
+        }
+        XCTAssertTrue(undo.exists, "the removal offered no undo")
+        XCTAssertFalse(row(in: app).exists)
+
+        app.typeKey("z", modifierFlags: .command)
+        XCTAssertTrue(row(in: app).waitForExistence(timeout: 5), "⌘Z did not take the removal back")
+    }
 }

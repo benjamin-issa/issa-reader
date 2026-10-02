@@ -104,27 +104,12 @@ struct RootView: View {
                     .environment(localRoute)
             }
         }
-        // A later launch with no books left opens on sign-in, not on an empty
-        // list: the list is the root only while there is something on it.
-        // Within a session the list stays, empty state and all, once the
-        // reader has removed the last one.
+        // When the list is the root: the rule is `LocalBooksRoute`'s.
         .onChange(of: local.isLoaded, initial: true) { _, loaded in
-            if loaded, local.books.isEmpty, local.missingFiles.isEmpty, local.imports.isEmpty {
-                localRoute.showsListSignedOut = false
-            }
+            if loaded { localRoute.libraryLoaded(hasBooks: local.hasAnything) }
         }
         .onChange(of: app.phase) { old, new in
-            switch new {
-            case .ready:
-                // Signed in: the list is a row in Settings from here on.
-                localRoute.showsListSignedOut = false
-            case .chooseServer where old == .ready:
-                // Signed out with books on the device: they are where the app
-                // opens, rather than a form (Settings and Book info, 4a).
-                localRoute.showsListSignedOut = !local.books.isEmpty
-            default:
-                break
-            }
+            localRoute.phaseChanged(from: old, to: new, hasBooks: local.hasAnything)
         }
         // The session is restored by `AppServices.start()`, so that a car
         // connecting to a never-foregrounded app finds one.
