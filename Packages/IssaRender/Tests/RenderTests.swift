@@ -687,6 +687,50 @@ struct NamedEntityTests {
         #expect(try parse(input) == expected)
     }
 
+    /// The forty-eight HTML 4.01 names the renderer's own table lacked. Any one
+    /// of them failed the parse under the HTML5 DOCTYPE, so the chapter would
+    /// not open and search and the Ask index skipped it.
+    @Test("the names the old table lacked", arguments: [
+        ("alefsym", 8501), ("and", 8743), ("ang", 8736), ("asymp", 8776), ("circ", 710),
+        ("cong", 8773), ("crarr", 8629), ("dArr", 8659), ("empty", 8709), ("exist", 8707),
+        ("forall", 8704), ("hArr", 8660), ("image", 8465), ("isin", 8712), ("lArr", 8656),
+        ("lang", 9001), ("lceil", 8968), ("lfloor", 8970), ("nabla", 8711), ("ni", 8715),
+        ("notin", 8713), ("nsub", 8836), ("oplus", 8853), ("or", 8744), ("otimes", 8855),
+        ("part", 8706), ("perp", 8869), ("piv", 982), ("prod", 8719), ("prop", 8733),
+        ("rArr", 8658), ("rang", 9002), ("rceil", 8969), ("real", 8476), ("rfloor", 8971),
+        ("sdot", 8901), ("sim", 8764), ("sub", 8834), ("sube", 8838), ("sum", 8721),
+        ("sup", 8835), ("supe", 8839), ("there4", 8756), ("thetasym", 977), ("tilde", 732),
+        ("uArr", 8657), ("upsih", 978), ("weierp", 8472),
+    ])
+    func formerlyMissing(_ name: String, _ code: Int) throws {
+        let expected = String(try #require(Unicode.Scalar(UInt32(code))))
+        #expect(try parse("a &\(name); b") == "a \(expected) b")
+    }
+
+    /// And all of HTML 4.01, in one chapter: the renderer reads IssaEPUB's
+    /// table now rather than keeping a shorter one of its own.
+    @Test("every HTML 4.01 name opens")
+    func everyName() throws {
+        let table = EPUBXML.htmlNamedEntities.sorted { $0.key < $1.key }
+        #expect(table.count == 248)
+        // One chapter, each name between bars, compared name by name in
+        // scalars so a failure says which one.
+        let body = table.map { "&\($0.key);" }.joined(separator: "|")
+        // Split in scalars, not characters: a bar followed by `&zwj;` is one
+        // grapheme, and would not split.
+        let parts = try parse(body).unicodeScalars
+            .split(separator: "|", omittingEmptySubsequences: false)
+        try #require(parts.count == table.count)
+        for ((name, code), part) in zip(table, parts) {
+            let scalar = try #require(Unicode.Scalar(UInt32(code)))
+            // A lone space-like entity is collapsed to a space, as HTML would.
+            let expected = HTMLContentParser.collapseWhitespace(String(scalar))
+            #expect(
+                Array(part) == Array(expected.unicodeScalars),
+                "&\(name); gave \(part.map { String($0.value, radix: 16) })")
+        }
+    }
+
     @Test("the five XML predefined entities are left to the parser")
     func predefinedStillWork() throws {
         #expect(try parse("a &amp; b &lt; c") == "a & b < c")
