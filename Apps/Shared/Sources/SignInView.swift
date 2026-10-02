@@ -71,6 +71,15 @@ public struct SignInView: View {
         app.session?.serverURL ?? AppModel.normalizeServerURL(app.serverAddress)
     }
 
+    /// Whether the address in the field would be spoken to in the clear.
+    ///
+    /// A bare address counts: it is tried over HTTPS first, but what
+    /// `normalize` makes of it — and what a LAN server answers on — is plain
+    /// HTTP, and the field's own hint suggests exactly that form.
+    static func isCleartext(typed address: String) -> Bool {
+        AppModel.normalizeServerURL(address)?.scheme?.lowercased() == "http"
+    }
+
     private var serverLabel: String {
         serverURL?.absoluteString ?? app.serverAddress
     }
@@ -215,7 +224,13 @@ public struct SignInView: View {
                 // while the address that causes it is being typed. It is about
                 // the connection, not the route: both ways in send the same
                 // credential to the same server over the same wire.
-                if serverURL?.scheme?.lowercased() == "http" {
+                //
+                // From the field, not from `serverURL`. That is the session's
+                // or the stored server's, so while a new address was typed
+                // the line described the previous one: no warning for a fresh
+                // `http://` address, and a red one under an `https://` address
+                // typed over a stored LAN server.
+                if Self.isCleartext(typed: address) {
                     Text("Not encrypted — this server is on http://.")
                         .font(Typography.footnote)
                         .foregroundStyle(Palette.alert)
