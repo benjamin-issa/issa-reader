@@ -303,6 +303,29 @@ struct FragmentNestingTests {
         #expect(secondAttribute == "pg-header-s1")
     }
 
+    /// The image case returned before the id bookkeeping, so a contents entry
+    /// or an overlay addressed to `<img id>` resolved to nothing.
+    @Test("an id on an image itself is a place in the chapter")
+    func imageIDIsRecorded() throws {
+        let plate = PlatformImage.solid(width: 40, height: 40)
+        let html = Data("""
+        <html xmlns="http://www.w3.org/1999/xhtml"><body>
+        <p>Before.</p><img id="plate-3" src="p.png" alt="A plate"/><p>After.</p>
+        </body></html>
+        """.utf8)
+        let result = try HTMLContentParser(style: ReaderStyle(), loadImage: { _ in plate })
+            .parse(xhtml: html, baseHref: "c.xhtml")
+        let range = try #require(result.fragmentRanges["plate-3"])
+        let string = result.text.string as NSString
+        #expect(string.substring(with: range).hasPrefix("\u{FFFC}"))
+        #expect(
+            result.text.attribute(.issaFragmentID, at: range.location, effectiveRange: nil)
+                as? String == "plate-3")
+        // And nothing else moved: the paragraphs either side are as they were.
+        #expect(!string.substring(with: range).contains("Before"))
+        #expect(!string.substring(with: range).contains("After"))
+    }
+
     @Test("an outer id still covers text no inner span claims")
     func outerIDFillsGaps() throws {
         let html = Data("""

@@ -260,6 +260,11 @@ public struct HTMLContentParser {
         case "img", "image":
             complexity.imageCount += 1
             appendImage(node: node, to: output, context: child)
+            // Not a bare `return`: an id on the image itself — a contents
+            // entry's `#plate-3`, a hand-made overlay's `<par>` — is as much a
+            // place in the chapter as one on a sentence, and returning before
+            // the bookkeeping below left it pointing nowhere.
+            recordFragment(of: node, from: start, in: output, ranges: &ranges)
             return
 
         case "svg":
@@ -335,35 +340,41 @@ public struct HTMLContentParser {
             appendParagraphBreak(to: output, context: child)
         }
 
-        // Record the range this element occupies, so a SMIL fragment id maps to
-        // exact characters.
-        //
-        // The attribute is applied only where none is set yet. Children are
-        // rendered first, so this keeps the innermost id — which is the one the
-        // media overlay references. Overwriting blindly would let an outer
-        // wrapper's id replace every sentence span inside it, and the highlight
-        // would then cover a whole chapter instead of one sentence.
-        if let id = node["id"], output.length > start {
-            let range = NSRange(location: start, length: output.length - start)
-            ranges[id] = range
-            // Collect first, then apply: mutating an attributed string while
-            // enumerating it is undefined and silently skips ranges.
-            var unclaimed: [NSRange] = []
-            output.enumerateAttribute(.issaFragmentID, in: range) { existing, subrange, _ in
-                if existing == nil { unclaimed.append(subrange) }
-            }
-            for subrange in unclaimed {
-                output.addAttribute(.issaFragmentID, value: id, range: subrange)
-            }
+        recordFragment(of: node, from: start, in: output, ranges: &ranges)
+    }
+
+    /// Records the range an element occupies, so a SMIL fragment id maps to
+    /// exact characters.
+    ///
+    /// The attribute is applied only where none is set yet. Children are
+    /// rendered first, so this keeps the innermost id — which is the one the
+    /// media overlay references. Overwriting blindly would let an outer
+    /// wrapper's id replace every sentence span inside it, and the highlight
+    /// would then cover a whole chapter instead of one sentence.
+    private func recordFragment(
+        of node: EPUBXMLNode, from start: Int, in output: NSMutableAttributedString,
+        ranges: inout [String: NSRange],
+    ) {
+        guard let id = node["id"], output.length > start else { return }
+        let range = NSRange(location: start, length: output.length - start)
+        ranges[id] = range
+        // Collect first, then apply: mutating an attributed string while
+        // enumerating it is undefined and silently skips ranges.
+        var unclaimed: [NSRange] = []
+        output.enumerateAttribute(.issaFragmentID, in: range) { existing, subrange, _ in
+            if existing == nil { unclaimed.append(subrange) }
+        }
+        for subrange in unclaimed {
+            output.addAttribute(.issaFragmentID, value: id, range: subrange)
         }
     }
 
     /// Reserves space for an illustration and records where to draw it.
     ///
-    /// A U+FFFC object-replacement character carries an attachment whose bounds
-    /// give the image its place in the flow. The renderer draws the picture
-    /// itself from the recorded href, so no text view or attachment view
-    /// provider is involved.
+    /// A U+FFFC object-replacement character carries an `ImageAttachment`
+    /// whose bounds give the image its place in the flow and whose image is
+    /// what TextKit draws there; `.issaImageHref` only names where it came
+    /// from.
     private func appendImage(
         node: EPUBXMLNode, to output: NSMutableAttributedString, context: Context,
     ) {
