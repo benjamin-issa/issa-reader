@@ -211,23 +211,30 @@ public actor MutationQueue {
                 return false
             }
             // The replacement inherits the failures and the age of what it
-            // replaces. With a fresh count and a fresh timestamp on every
-            // collapse, a position the server kept refusing was re-queued
-            // every page turn as a brand-new item: it could never reach the
-            // abandon limit, and it sat at the back of the drain order while
-            // everything behind it waited on it forever.
+            // replaces. With a fresh count on every collapse, a position the
+            // server kept refusing was re-queued every page turn as a
+            // brand-new item and could never reach the abandon limit.
+            //
+            // Its place in the drain is its own, though. `updatedAt` is now,
+            // and the drain sends in that order — the order the reader made
+            // the writes in. Going by `createdAt`, which the collapse keeps,
+            // a status chosen between two offline page turns was sent after
+            // the second: the server's own rule ran on the position before
+            // the reader's choice arrived, and the book ended on a different
+            // status than it would have with a connection.
+            let now = Date().timeIntervalSince1970
             let attempts = existing?["attempts"] as Int? ?? 0
-            let createdAt = existing?["createdAt"] as Double? ?? Date().timeIntervalSince1970
+            let createdAt = existing?["createdAt"] as Double? ?? now
             try db.execute(
                 sql: "DELETE FROM mutation WHERE bookUUID = ? AND kind = ?",
                 arguments: [bookUUID, kind.rawValue],
             )
             try db.execute(
                 sql: """
-                    INSERT INTO mutation (bookUUID, kind, payload, createdAt, attempts, ordering)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    INSERT INTO mutation (bookUUID, kind, payload, createdAt, updatedAt, attempts, ordering)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
-                arguments: [bookUUID, kind.rawValue, payload, createdAt, attempts, ordering],
+                arguments: [bookUUID, kind.rawValue, payload, createdAt, now, attempts, ordering],
             )
             return true
         }
@@ -267,9 +274,31 @@ public actor MutationQueue {
         }
     }
 
+    /// Inserts a row with the statement 1.3.0 used, which names no
+    /// `updatedAt`. Tests only: it stands for an older build writing to this
+    /// file after a downgrade, which is the one way such a row arises.
+    func enqueueAsOlderBuildForTesting(
+        _ kind: Kind, bookUUID: String, payload: Data, createdAt: Double,
+    ) throws {
+        try dbQueue.write { db in
+            try db.execute(
+                sql: """
+                    INSERT INTO mutation (bookUUID, kind, payload, createdAt, attempts, ordering)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                arguments: [bookUUID, kind.rawValue, payload, createdAt, 0, nil])
+        }
+    }
+
+    /// Everything waiting, in the order to send it: when each write was last
+    /// made, oldest first. A row an older build wrote after a downgrade has no
+    /// `updatedAt`, and its queued time stands in; `id`, which only grows,
+    /// settles a tie in the order the rows went in.
     public func pending() throws -> [Pending] {
         try dbQueue.read { db in
-            try Row.fetchAll(db, sql: "SELECT * FROM mutation ORDER BY createdAt ASC").compactMap { row in
+            try Row.fetchAll(
+                db, sql: "SELECT * FROM mutation ORDER BY COALESCE(updatedAt, createdAt) ASC, id ASC",
+            ).compactMap { row in
                 guard let kind = Kind(rawValue: row["kind"] as String) else { return nil }
                 return Pending(
                     id: row["id"],

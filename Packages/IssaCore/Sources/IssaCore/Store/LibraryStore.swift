@@ -252,6 +252,23 @@ public actor LibraryStore {
             }
         }
 
+        // When each queued write was last made, which is the order the drain
+        // sends in. It went by `createdAt`, which a collapse keeps: a position
+        // read on after a status was chosen kept its place ahead of that
+        // status, and the server applied the two in the opposite order to the
+        // reader. See `MutationQueue.enqueue`.
+        //
+        // Additive, so an older build still reads and writes the table: the
+        // column is nullable, that build's insert names no such column, and
+        // `pending()` takes `createdAt` for a row without one. Older rows are
+        // backfilled the same way, which keeps them in the order they had.
+        migrator.registerMigration("v9-mutation-updated-at") { db in
+            try db.alter(table: "mutation") { t in
+                t.add(column: "updatedAt", .double)
+            }
+            try db.execute(sql: "UPDATE mutation SET updatedAt = createdAt")
+        }
+
         return migrator
     }
 

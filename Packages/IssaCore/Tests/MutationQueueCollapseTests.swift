@@ -32,7 +32,7 @@ struct MutationQueueCollapseTests {
         #expect(pending.count == 1)
         #expect(pending.first?.attempts == 3)
         #expect(pending.first?.payload == Data("2".utf8), "the newer payload still wins")
-        #expect(pending.first?.createdAt == first.createdAt, "and it keeps its place in the drain order")
+        #expect(pending.first?.createdAt == first.createdAt, "and the age of the write it replaced")
     }
 
     @Test("the inherited count still reaches the abandon limit")
@@ -73,6 +73,46 @@ struct MutationQueueCollapseTests {
         try await queue.enqueue(.status, bookUUID: "b", payload: Data("{}".utf8))
         let item = try #require(await queue.pending().first)
         #expect(item.attempts == 0)
+    }
+
+    /// Offline: a page read, "To read" chosen, then read on. Online the server
+    /// applied those in that order and ended on Reading. The second position
+    /// replaced the first and kept its queued time, and the drain went by
+    /// queued time, so the position went first and the status after it: the
+    /// server's own rule ran before the reader's choice arrived, and it ended
+    /// on To read.
+    @Test("a write replaced after a later one is sent after it")
+    func aReplacedWriteGoesBehindTheOnesBeforeIt() async throws {
+        let (queue, directory) = try makeQueue()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        try await queue.enqueue(.position, bookUUID: "b", payload: Data("page".utf8), supersedes: 1)
+        try await queue.enqueue(.status, bookUUID: "b", payload: Data("to read".utf8))
+        try await queue.enqueue(.position, bookUUID: "b", payload: Data("read on".utf8), supersedes: 3)
+
+        let pending = try await queue.pending()
+        #expect(pending.map(\.kind) == [.status, .position],
+                "the status was chosen before the reader read on, so it goes first")
+        #expect(pending.last?.payload == Data("read on".utf8))
+    }
+
+    /// A row an older build wrote has no `updatedAt`: it runs on the same file
+    /// after a downgrade, and knows nothing of the column. Its queued time
+    /// stands in, so it still takes its place in the order rather than
+    /// failing to insert or sorting to one end.
+    @Test("a row an older build wrote is ordered by when it was queued")
+    func anOlderBuildsRowKeepsItsPlace() async throws {
+        let (queue, directory) = try makeQueue()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let now = Date().timeIntervalSince1970
+        try await queue.enqueueAsOlderBuildForTesting(
+            .status, bookUUID: "early", payload: Data("{}".utf8), createdAt: now - 60)
+        try await queue.enqueue(.status, bookUUID: "current", payload: Data("{}".utf8))
+        try await queue.enqueueAsOlderBuildForTesting(
+            .status, bookUUID: "late", payload: Data("{}".utf8), createdAt: now + 60)
+
+        #expect(try await queue.pending().map(\.bookUUID) == ["early", "current", "late"])
     }
 }
 
