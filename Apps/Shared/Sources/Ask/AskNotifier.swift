@@ -209,6 +209,15 @@ final class AskNotificationDelegate: NSObject, UNUserNotificationCenterDelegate 
     /// with `openWindow`, which focuses the window already open for that value.
     nonisolated static let bringReaderForward = Notification.Name("issa.ask.bringReaderForward")
 
+    /// "Open this book from the reader's files", with its uuid under
+    /// `AskNotifier.bookUUIDKey`.
+    ///
+    /// A local book is not in `app.books`, so `requestBook` — which waits for
+    /// the book to turn up in the server's catalogue — would hold the request
+    /// for ever. Its reader is presented by the local route instead: the
+    /// iPhone and iPad root's cover, the Mac's LocalReader window.
+    nonisolated static let openLocalBook = Notification.Name("issa.ask.openLocalBook")
+
     /// Nothing on screen while the app is in front.
     ///
     /// The reader can already see the pill say "Answer ready"; a banner over the
@@ -254,7 +263,12 @@ final class AskNotificationDelegate: NSObject, UNUserNotificationCenterDelegate 
         // `onChange(of:initial:)` for exactly that reason, which is
         // what makes setting the request before the book safe.
         coordinator.reopenRequest = uuid
-        if Self.needsBookRequest(for: uuid, visibleReader: app.visibleReaderUUID) {
+        let needsBook = Self.needsBookRequest(for: uuid, visibleReader: app.visibleReaderUUID)
+        if needsBook, app.localBookUUIDs().contains(uuid) {
+            // The same rule for a book from the reader's files, routed to
+            // where those books open rather than to the server's library.
+            centre.post(name: Self.openLocalBook, object: nil, userInfo: [AskNotifier.bookUUIDKey: uuid])
+        } else if needsBook {
             app.requestBook(uuid, .read)
         } else {
             // The request was also what brought the Mac's window for this

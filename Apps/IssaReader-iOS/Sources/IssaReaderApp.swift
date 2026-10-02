@@ -88,6 +88,13 @@ struct RootView: View {
             }
         }
         .environment(localRoute)
+        // An answer's notification tapped for a book from the reader's files:
+        // its reader is this window's cover, not a screen in the library.
+        .onReceive(NotificationCenter.default.publisher(for: AskNotificationDelegate.openLocalBook)) { note in
+            guard let uuid = note.userInfo?[AskNotifier.bookUUIDKey] as? String,
+                  local.book(uuid) != nil else { return }
+            localRoute.open(uuid)
+        }
         // Above the phase switch, so a session expiring mid-chapter swaps the
         // screen underneath the book rather than the book itself, and per
         // window, so an iPad's other window is left alone.

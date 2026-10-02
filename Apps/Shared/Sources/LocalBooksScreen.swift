@@ -178,6 +178,12 @@ public struct LocalBooksScreen: View {
         .onReceive(NotificationCenter.default.publisher(for: ReaderCommand.player.notification)) { _ in
             openWindow(id: "NowPlaying")
         }
+        // An answer tapped for one of these books when the library window is
+        // not open: this window opens the book's own.
+        .onReceive(NotificationCenter.default.publisher(for: AskNotificationDelegate.openLocalBook)) { note in
+            guard let uuid = note.userInfo?[AskNotifier.bookUUIDKey] as? String else { return }
+            openWindow(id: "LocalReader", value: uuid)
+        }
     }
 
     private var macList: some View {

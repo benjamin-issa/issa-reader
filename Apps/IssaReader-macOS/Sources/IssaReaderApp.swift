@@ -299,6 +299,7 @@ struct ReaderWindow: View {
 struct LocalReaderWindow: View {
     let bookID: String?
     @Environment(LocalLibrary.self) private var local
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         if !local.isLoaded {
@@ -306,6 +307,13 @@ struct LocalReaderWindow: View {
         } else if let bookID, let book = local.book(bookID), !local.missingFiles.contains(bookID) {
             ReaderScreen(localBook: book)
                 .navigationTitle(book.title)
+                // An answer tapped for this book while it is the reader on
+                // screen: this window comes forward, as `ReaderWindow` does.
+                .onReceive(NotificationCenter.default.publisher(
+                    for: AskNotificationDelegate.bringReaderForward)) { note in
+                    guard note.userInfo?[AskNotifier.bookUUIDKey] as? String == bookID else { return }
+                    openWindow(id: "LocalReader", value: bookID)
+                }
         } else {
             ContentUnavailableView(
                 "Book not on this Mac",
@@ -389,6 +397,11 @@ struct MacRootView: View {
         // window that is already open just brings it forward.
         .onReceive(NotificationCenter.default.publisher(for: ReaderCommand.player.notification)) { _ in
             openWindow(id: "NowPlaying")
+        }
+        // An answer tapped for a book from the reader's files: its own window.
+        .onReceive(NotificationCenter.default.publisher(for: AskNotificationDelegate.openLocalBook)) { note in
+            guard let uuid = note.userInfo?[AskNotifier.bookUUIDKey] as? String else { return }
+            openWindow(id: "LocalReader", value: uuid)
         }
         // File › Add Book…: the list window takes the request (and opens the
         // picker) once it is up, so all this has to do is bring it up.
