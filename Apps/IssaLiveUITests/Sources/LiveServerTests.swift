@@ -210,8 +210,11 @@ final class LiveServerTests: XCTestCase {
     /// treats `issareader://book/<uuid>` as "carry on reading" and opens the
     /// reader, and opening a book is exactly what could change its status.
     private func statusLabel(_ app: XCUIApplication) {
+        // A check that did not run is a FAIL, never a PASS: this line used to
+        // read "PASS skipped", and the summary is the release record. The
+        // script refuses to start without the book; this is the second lock.
         guard let expected = setting("E2E_STATUS_LABEL"), let title = setting("E2E_STATUS_TITLE") else {
-            record("statusLabel", true, "skipped: no status book given")
+            record("statusLabel", false, "not run: no status book given")
             return
         }
         selectTab("Library", in: app)
@@ -256,7 +259,7 @@ final class LiveServerTests: XCTestCase {
     /// screen says they finished.
     private func readAPage(_ app: XCUIApplication) {
         guard let book = setting("E2E_READ_BOOK") else {
-            record("readerOpened", true, "skipped: no book to read given")
+            record("readerOpened", false, "not run: no book to read given")
             return
         }
         guard openReader(app, book: book) else {

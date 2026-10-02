@@ -229,7 +229,9 @@ PY
 STATUS_BOOK="" STATUS_LABEL="" READ_BOOK="" READ_BEFORE=0 READALONG_BOOK=""
 if [ "$BOOKS" = 1 ]; then
   . "$OUT/books.env"
-  [ -n "$STATUS_BOOK" ] || echo "  no \"$STATUS_TITLE\" on this server: its status will not be checked"
+  # A refusal, not a note: the status label is one of the release rule's
+  # checks, and a run without its book recorded it as PASS.
+  [ -n "$STATUS_BOOK" ] || die "no \"$STATUS_TITLE\" on this server, so its status label cannot be checked (set LIVE_STATUS_TITLE)"
   [ -n "$READ_BOOK" ] || die "no \"$READ_TITLE\" on this server (set LIVE_READ_TITLE)"
   if [ "$AUDIO" = 1 ] && [ -z "$READALONG_BOOK" ]; then
     die "--audio, but no aligned \"$READALONG_TITLE\" on this server (set LIVE_READALONG_TITLE)"
