@@ -21,8 +21,12 @@
 # is one device, and the trap means a failure still cleans up.
 
 set -euo pipefail
+# Before the `cd`, so usage can find this file from wherever it was run.
+SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 ROOT="$PWD"
+
+usage() { sed -n '6,10p' "$SELF" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 RUNTIME="com.apple.CoreSimulator.SimRuntime.iOS-27-0"
 SCHEME="IssaReader-iOS"
@@ -89,7 +93,11 @@ for arg in "$@"; do
         | python3 -c 'import json,sys;d=json.load(sys.stdin)["devices"];[print(x["udid"]) for v in d.values() for x in v if x["name"].startswith("issa-sweep-")]' \
         | while read -r udid; do echo "  deleting $udid"; xcrun simctl delete "$udid"; done
       exit 0 ;;
-    --*) ;;
+    -h|--help) usage ;;
+    # An option this does not know is an error, not a no-op: `--keep-device`
+    # used to fall through to the defaults and delete every device the run
+    # made, the opposite of what was asked, without a word.
+    -*) echo "error: unknown option $arg" >&2; usage ;;
     *) WANTED="$arg"; MODE=named ;;
   esac
 done
