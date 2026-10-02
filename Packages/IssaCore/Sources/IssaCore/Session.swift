@@ -29,6 +29,7 @@ public final class Session {
     public let serverURL: URL
     public let client: APIClient
     private let tokens: TokenStore
+    private let logoutTimeout: Duration
 
     /// The same token the API client uses, for the background download session,
     /// which builds its own requests rather than going through APIClient.
@@ -38,11 +39,16 @@ public final class Session {
     ///   server. The same seam `LibraryStore` has for its directory and
     ///   `DownloadManager` for its destination — without one, the states this
     ///   type exists to distinguish can only be reached by running the app.
+    /// - Parameter logoutTimeout: how long sign-out waits for the server to
+    ///   revoke the token before going on without it. A seam for the same
+    ///   reason: a test cannot wait five seconds per case.
     public init(
         serverURL: URL,
         keychain: any TokenPersisting,
         session: URLSession = .shared,
+        logoutTimeout: Duration = .seconds(5),
     ) {
+        self.logoutTimeout = logoutTimeout
         self.serverURL = serverURL
         let store = TokenStore(serverKey: serverURL.absoluteString, keychain: keychain)
         tokens = store
@@ -51,8 +57,18 @@ public final class Session {
         Task { [weak self] in
             await store.setInvalidationHandler { [weak self] in
                 Task { @MainActor in
-                    guard let self, case .signedIn = self.state else { return }
-                    self.state = .expired
+                    guard let self else { return }
+                    // `.failed` too: a restore that could not reach the server
+                    // leaves the session there with the token still in use,
+                    // and nothing re-runs the identity call. A 401 then is the
+                    // same lapse as one while signed in — left in `.failed`,
+                    // the token was gone and nothing ever said so.
+                    switch self.state {
+                    case .signedIn, .failed:
+                        self.state = .expired
+                    case .signedOut, .signingIn, .expired:
+                        return
+                    }
                 }
             }
         }
@@ -64,9 +80,19 @@ public final class Session {
     /// validity is established by calling the API, never by arithmetic.
     public func adopt(token: String) async {
         state = .signingIn
-        await tokens.set(token)
+        // A token the device would not keep is a sign-in that ends at the
+        // next launch, back at the form with nothing saying why. Said now,
+        // and before the identity call: there is no point asking who a token
+        // belongs to when it is not going to be kept.
+        guard await tokens.set(token) else {
+            IssaLog.error("sign-in token could not be saved", ["server": serverURL.absoluteString])
+            state = .failed(Self.unsavedTokenMessage)
+            return
+        }
         await loadIdentity()
     }
+
+    static let unsavedTokenMessage = "Your sign-in couldn't be saved on this device. Try again."
 
     /// Whether a credential is stored for this server at all.
     ///
@@ -96,9 +122,47 @@ public final class Session {
         // without revoking it leaves a working credential behind on a device
         // the reader may be signing out of precisely because they lost it.
         // Best effort: no network must ever trap someone in a signed-in state.
-        _ = try? await client.post(Endpoint.logout, body: [String: String]())
-        await tokens.invalidate()
+        await revokeOnServer()
+        if !(await tokens.forget()) {
+            // Signed out all the same — the reader asked to be — but a
+            // credential may still be on disk, and the next launch would
+            // restore it. The log is the only place that can say so.
+            IssaLog.error("sign-out could not delete the stored token", [
+                "server": serverURL.absoluteString,
+            ])
+        }
         state = .signedOut
+    }
+
+    /// The logout POST, bounded by `logoutTimeout`.
+    ///
+    /// Unbounded, it waited out URLSession's sixty seconds against a server
+    /// that does not answer — one switched off, or at a LAN address while the
+    /// reader is on cellular, where a SYN gets no reply at all — and the
+    /// reader stayed signed in, library open, for all of it. On the timeout
+    /// the request is cancelled and sign-out goes on locally. `/logout` is a
+    /// route 2.14.21 and every 3.x serve.
+    private func revokeOnServer() async {
+        let client = client
+        let timeout = logoutTimeout
+        let finished = await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                _ = try? await client.post(Endpoint.logout, body: [String: String]())
+                return true
+            }
+            group.addTask {
+                try? await Task.sleep(for: timeout)
+                return false
+            }
+            let first = await group.next() ?? false
+            group.cancelAll()
+            return first
+        }
+        if !finished {
+            IssaLog.warning("logout not answered in time; signing out locally", [
+                "timeout": String(describing: timeout),
+            ])
+        }
     }
 
     /// How many times to ask for the identity before giving up.
