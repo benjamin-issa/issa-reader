@@ -239,7 +239,14 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
         } else {
             typeface = fallback.typeface
         }
-        fontSize = try container.decodeIfPresent(CGFloat.self, forKey: .fontSize) ?? fallback.fontSize
+        // `try?` on every field, these five included: a value of the wrong
+        // type — `"fontSize": "18"`, `"tapToPlay": "yes"` — costs that field
+        // its default, not every preference the reader has. And the two
+        // lengths are bounded, because nothing downstream is: a stored
+        // `1e300` laid every page out at that size and trapped the Text size
+        // stepper's label on every open of the sheet.
+        fontSize = Self.decodeLength(from: container, key: .fontSize, in: Self.fontSizeRange)
+            ?? fallback.fontSize
         lineSpacing = Self.decodeCase(LineSpacing.self, from: container, key: .lineSpacing)
             ?? fallback.lineSpacing
         theme = Self.decodeCase(ReaderTheme.self, from: container, key: .theme) ?? fallback.theme
@@ -254,15 +261,17 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
         } else {
             justification = fallback.justification
         }
-        pageMargin = try container.decodeIfPresent(CGFloat.self, forKey: .pageMargin) ?? fallback.pageMargin
+        pageMargin = Self.decodeLength(from: container, key: .pageMargin, in: Self.pageMarginRange)
+            ?? fallback.pageMargin
         highlightGranularity = Self.decodeCase(
             HighlightGranularity.self, from: container, key: .highlightGranularity)
             ?? fallback.highlightGranularity
-        followNarration = try container.decodeIfPresent(
-            Bool.self, forKey: .followNarration) ?? fallback.followNarration
-        turnPagesMidSentence = try container.decodeIfPresent(
-            Bool.self, forKey: .turnPagesMidSentence) ?? fallback.turnPagesMidSentence
-        tapToPlay = try container.decodeIfPresent(Bool.self, forKey: .tapToPlay) ?? fallback.tapToPlay
+        followNarration = (try? container.decodeIfPresent(
+            Bool.self, forKey: .followNarration)) ?? fallback.followNarration
+        turnPagesMidSentence = (try? container.decodeIfPresent(
+            Bool.self, forKey: .turnPagesMidSentence)) ?? fallback.turnPagesMidSentence
+        tapToPlay = (try? container.decodeIfPresent(Bool.self, forKey: .tapToPlay))
+            ?? fallback.tapToPlay
         progressDisplay = Self.decodeCase(
             ProgressDisplay.self, from: container, key: .progressDisplay) ?? fallback.progressDisplay
         highlighters = Self.decodeHighlighters(from: container)
@@ -338,6 +347,30 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
     /// been corrupted, would fail the whole decode and reset every preference.
     /// A value this build does not understand should cost that one setting,
     /// not all of them.
+    /// The text sizes a stored setting may hold. Wider than the Text size
+    /// stepper's 12...32 and the television's fixed 40, so no size anyone
+    /// chose is moved; narrow enough that a page always has a line on it.
+    public static let fontSizeRange: ClosedRange<CGFloat> = 8 ... 96
+
+    /// The page margins a stored setting may hold.
+    public static let pageMarginRange: ClosedRange<CGFloat> = 0 ... 200
+
+    /// A stored length, bounded to `range`, or `nil` when there is none to
+    /// use — absent, of the wrong type, or not a finite number.
+    static func clampedLength(_ value: CGFloat?, to range: ClosedRange<CGFloat>) -> CGFloat? {
+        guard let value, value.isFinite else { return nil }
+        return min(max(value, range.lowerBound), range.upperBound)
+    }
+
+    private static func decodeLength(
+        from container: KeyedDecodingContainer<CodingKeys>,
+        key: CodingKeys,
+        in range: ClosedRange<CGFloat>,
+    ) -> CGFloat? {
+        // `try?` flattens the doubly-optional result, as in `decodeCase`.
+        clampedLength(try? container.decodeIfPresent(CGFloat.self, forKey: key), to: range)
+    }
+
     private static func decodeCase<T: RawRepresentable & Decodable>(
         _ type: T.Type,
         from container: KeyedDecodingContainer<CodingKeys>,

@@ -68,6 +68,57 @@ struct ReaderStyleMigrationTests {
         #expect(style.highlighters == [:])
     }
 
+    /// Five fields read with a bare `try`, so one value of the wrong type threw
+    /// the whole blob away and `PlaybackSettings` reset every preference.
+    @Test("a field of the wrong type costs that field, not the blob", arguments: [
+        ("fontSize", #""18""#),
+        ("pageMargin", #""wide""#),
+        ("followNarration", #""yes""#),
+        ("turnPagesMidSentence", #""no""#),
+        ("tapToPlay", "{}"),
+    ])
+    func wrongTypeIsForgiven(_ key: String, _ damaged: String) throws {
+        // Every other field set away from its default, so a reset shows.
+        var fields = [
+            #""theme": "night""#, #""lineSpacing": "roomy""#, #""fontSize": 22"#,
+            #""pageMargin": 32"#, #""followNarration": false"#,
+            #""turnPagesMidSentence": true"#, #""tapToPlay": false"#,
+        ].filter { !$0.hasPrefix("\"\(key)\"") }
+        fields.append("\"\(key)\": \(damaged)")
+        let blob = "{" + fields.joined(separator: ", ") + "}"
+        let style = try JSONDecoder().decode(ReaderStyle.self, from: Data(blob.utf8))
+        #expect(style.theme == .night)
+        #expect(style.lineSpacing == .roomy)
+        let fallback = ReaderStyle()
+        #expect(style.fontSize == (key == "fontSize" ? fallback.fontSize : 22))
+        #expect(style.pageMargin == (key == "pageMargin" ? fallback.pageMargin : 32))
+        #expect(style.followNarration == (key == "followNarration" ? fallback.followNarration : false))
+        #expect(style.turnPagesMidSentence
+            == (key == "turnPagesMidSentence" ? fallback.turnPagesMidSentence : true))
+        #expect(style.tapToPlay == (key == "tapToPlay" ? fallback.tapToPlay : false))
+    }
+
+    /// Nothing downstream bounds these: the page lays out at whatever size it
+    /// is given, and the Text size stepper's label does `Int(size)`, which
+    /// traps on anything past `Int.max`.
+    @Test("an absurd size or margin is brought into range")
+    func lengthsAreClamped() throws {
+        let huge = try JSONDecoder().decode(
+            ReaderStyle.self, from: Data(#"{"fontSize": 1e300, "pageMargin": 1e300}"#.utf8))
+        #expect(huge.fontSize == ReaderStyle.fontSizeRange.upperBound)
+        #expect(huge.pageMargin == ReaderStyle.pageMarginRange.upperBound)
+        let tiny = try JSONDecoder().decode(
+            ReaderStyle.self, from: Data(#"{"fontSize": -4, "pageMargin": -50}"#.utf8))
+        #expect(tiny.fontSize == ReaderStyle.fontSizeRange.lowerBound)
+        #expect(tiny.pageMargin == 0)
+        // Every size the app can set is inside the range and left exactly.
+        for size: CGFloat in [12, 18, 32, 40] {
+            #expect(ReaderStyle.clampedLength(size, to: ReaderStyle.fontSizeRange) == size)
+        }
+        #expect(ReaderStyle.clampedLength(.infinity, to: ReaderStyle.fontSizeRange) == nil)
+        #expect(ReaderStyle.clampedLength(.nan, to: ReaderStyle.fontSizeRange) == nil)
+    }
+
     @Test("an empty object decodes to the defaults rather than throwing")
     func emptyObject() throws {
         let style = try JSONDecoder().decode(ReaderStyle.self, from: Data("{}".utf8))

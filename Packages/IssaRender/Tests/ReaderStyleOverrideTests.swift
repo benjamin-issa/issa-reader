@@ -67,6 +67,112 @@ struct ReaderStyleOverrideTests {
         let data = try JSONEncoder().encode(override)
         #expect(try JSONDecoder().decode(ReaderStyleOverride.self, from: data) == override)
     }
+
+    /// The per-book switch before it had three positions. A book set ragged
+    /// was a deliberate act, so it stays ragged rather than following the book.
+    @Test("a stored justified switch becomes the matching justification")
+    func legacyJustifiedDecodes() throws {
+        func decode(_ json: String) throws -> ReaderStyleOverride {
+            try JSONDecoder().decode(ReaderStyleOverride.self, from: Data(json.utf8))
+        }
+        #expect(try decode(#"{"justified": false}"#).justification == .never)
+        #expect(try decode(#"{"justified": true}"#).justification == .always)
+        #expect(try decode(#"{"justified": false, "fontSize": 19}"#).fontSize == 19)
+        #expect(try decode(#"{"fontSize": 19}"#).justification == nil)
+    }
+
+    @Test("an absurd per-book size is brought into range, not trusted")
+    func overrideSizeIsClamped() throws {
+        let decoded = try JSONDecoder().decode(
+            ReaderStyleOverride.self, from: Data(#"{"fontSize": 1e300}"#.utf8))
+        #expect(decoded.fontSize == ReaderStyle.fontSizeRange.upperBound)
+        let ordinary = try JSONDecoder().decode(
+            ReaderStyleOverride.self, from: Data(#"{"fontSize": 21}"#.utf8))
+        #expect(ordinary.fontSize == 21)
+    }
+}
+
+/// `ReaderStyleOverride` exactly as 1.1.1 shipped it: synthesised `Codable`,
+/// and a two-position `justified` switch. Copied verbatim but for its name and
+/// the `ReaderStyle` methods it extended, so the test can be the older build.
+private struct ReaderStyleOverride111: Sendable, Hashable, Codable {
+    public var typeface: ReaderStyle.Typeface?
+    public var fontSize: CGFloat?
+    public var lineSpacing: ReaderStyle.LineSpacing?
+    public var justified: Bool?
+
+    public init(
+        typeface: ReaderStyle.Typeface? = nil,
+        fontSize: CGFloat? = nil,
+        lineSpacing: ReaderStyle.LineSpacing? = nil,
+        justified: Bool? = nil,
+    ) {
+        self.typeface = typeface
+        self.fontSize = fontSize
+        self.lineSpacing = lineSpacing
+        self.justified = justified
+    }
+
+    /// Whether this book has anything of its own left.
+    ///
+    /// An override that overrides nothing is deleted rather than stored, so
+    /// "use my defaults" leaves no trace to go stale.
+    public var isEmpty: Bool {
+        typeface == nil && fontSize == nil && lineSpacing == nil && justified == nil
+    }
+}
+
+/// A reader who moves back a build must not lose a book's justification: the
+/// older build reads only `justified`, and the first time it saves any book's
+/// typography it writes the whole map back without the newer key.
+@Suite("Per-book typography survives a step back to 1.1.1")
+struct ReaderStyleOverrideDowngradeTests {
+    @Test("the map this build writes round-trips through 1.1.1's struct")
+    func roundTripThroughTheOldBuild() throws {
+        let written: [String: ReaderStyleOverride] = [
+            "ragged": ReaderStyleOverride(justification: .never),
+            "justified": ReaderStyleOverride(justification: .always),
+            "follows": ReaderStyleOverride(fontSize: 20, justification: .followBook),
+            "size-and-justified": ReaderStyleOverride(fontSize: 21, justification: .always),
+            "face": ReaderStyleOverride(typeface: .custom("Some Face")),
+        ]
+        let blob = try JSONEncoder().encode(written)
+
+        // What 1.1.1 sees: a switch, set or unset.
+        let old = try JSONDecoder().decode([String: ReaderStyleOverride111].self, from: blob)
+        #expect(old["ragged"]?.justified == false)
+        #expect(old["justified"]?.justified == true)
+        #expect(old["follows"]?.justified == nil, "following the book is not a thing it can say")
+        #expect(old["size-and-justified"]?.justified == true)
+        #expect(old["size-and-justified"]?.fontSize == 21)
+        #expect(old["face"]?.justified == nil)
+        #expect(old["ragged"]?.isEmpty == false, "not an empty husk the sheet would hide")
+
+        // 1.1.1 saves the map — any book's change does — and this build reads
+        // it back: the newer key is gone, and the switch carries it.
+        let rewritten = try JSONEncoder().encode(old)
+        let back = try JSONDecoder().decode([String: ReaderStyleOverride].self, from: rewritten)
+        #expect(back["ragged"]?.justification == .never)
+        #expect(back["justified"]?.justification == .always)
+        #expect(back["size-and-justified"] == written["size-and-justified"])
+        #expect(back["face"] == written["face"])
+        #expect(back["follows"]?.fontSize == 20)
+    }
+
+    @Test("this build writes the switch only where it means something")
+    func legacyKeyOnlyWhereExpressible() throws {
+        func legacy(_ justification: ReaderStyle.Justification?) throws -> Any? {
+            let data = try JSONEncoder().encode(
+                ReaderStyleOverride(fontSize: 20, justification: justification))
+            let object = try #require(
+                try JSONSerialization.jsonObject(with: data) as? [String: Any])
+            return object["justified"]
+        }
+        #expect(try legacy(.always) as? Bool == true)
+        #expect(try legacy(.never) as? Bool == false)
+        #expect(try legacy(.followBook) == nil)
+        #expect(try legacy(nil) == nil)
+    }
 }
 
 /// `typeface` replaced `fontFamily`, and the settings blob on a reader's device

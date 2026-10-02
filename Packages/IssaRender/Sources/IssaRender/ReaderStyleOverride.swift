@@ -44,7 +44,11 @@ public struct ReaderStyleOverride: Sendable, Hashable, Codable {
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         typeface = try? container.decodeIfPresent(ReaderStyle.Typeface.self, forKey: .typeface)
-        fontSize = try? container.decodeIfPresent(CGFloat.self, forKey: .fontSize)
+        // Bounded like the global size, for the same reason: a stored `1e300`
+        // reached the page and the Text size stepper's label unchecked.
+        fontSize = ReaderStyle.clampedLength(
+            try? container.decodeIfPresent(CGFloat.self, forKey: .fontSize),
+            to: ReaderStyle.fontSizeRange)
         lineSpacing = try? container.decodeIfPresent(
             ReaderStyle.LineSpacing.self, forKey: .lineSpacing)
         // `justification` replaced `justified`, and reads the old key the same
@@ -67,6 +71,21 @@ public struct ReaderStyleOverride: Sendable, Hashable, Codable {
         try container.encodeIfPresent(fontSize, forKey: .fontSize)
         try container.encodeIfPresent(lineSpacing, forKey: .lineSpacing)
         try container.encodeIfPresent(justification, forKey: .justification)
+        // The key this replaced, written as well, as `ReaderStyle` does for
+        // the global setting. The build before the three-position setting
+        // reads only `justified`; without it a reader who moves back a build
+        // sees their per-book justification as unset, and the first time that
+        // build saves any book's typography the whole map is written back
+        // without it, so moving up again finds it gone for good. `.always`
+        // and `.never` are a switch's two positions and round-trip exactly
+        // (the decoder above reads a legacy `false` as `.never`); following
+        // the book is a thing that build cannot do, so it is left unsaid
+        // there, which is what it would have written itself.
+        switch justification {
+        case .always?: try container.encode(true, forKey: .justified)
+        case .never?: try container.encode(false, forKey: .justified)
+        case .followBook?, nil: break
+        }
     }
 
     /// Whether this book has anything of its own left.
