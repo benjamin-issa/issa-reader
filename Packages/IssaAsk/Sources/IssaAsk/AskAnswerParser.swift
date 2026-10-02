@@ -141,15 +141,40 @@ public enum AskAnswerParser {
     public static func parse(_ raw: String) -> AskAnswer {
         let (body, citations) = splitSources(raw)
         let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
-        let notYet = isNotYet(trimmed)
+        let prose = withoutSentinel(trimmed)
+        guard prose.isEmpty, !trimmed.isEmpty else {
+            // Prose, with any sentinel sentence taken out of it. The sentinel
+            // followed by an answer is the hedge a 3B model writes — "The story
+            // hasn't revealed that yet. However, …" — and the answer after it
+            // is an answer like any other: it goes to the vetting pass, which
+            // a refusal skips, and is shown only if every name in it is one
+            // the reader has met.
+            return AskAnswer(text: prose, citations: citations, notYetRevealed: false)
+        }
+        // Nothing but the sentinel. A refusal even when a model typed it, so
+        // there is no generated prose under it to disclose, and no citations:
+        // excerpts under "the story hasn't revealed that yet" would be proof
+        // offered of an absence — and the model cites them under its refusal
+        // often enough that they cannot be passed through.
         return AskAnswer(
-            text: trimmed,
-            citations: citations,
-            notYetRevealed: notYet,
-            // The sentinel is a refusal even when a model typed it: there is no
-            // generated prose under it to disclose.
-            origin: notYet ? .withheld : .model,
+            text: notYetSentinel, citations: [], notYetRevealed: true, origin: .withheld,
         )
+    }
+
+    /// The text with every sentence that is exactly the sentinel removed.
+    ///
+    /// Sentence by sentence, because the sentinel is a whole sentence and the
+    /// hedge puts it either side of an answer. A sentence that merely
+    /// *contains* it — "The story hasn't revealed that yet, but Alice meets the
+    /// Duchess." — is prose and is kept whole: that is an answer, and it is
+    /// what the vetting pass is for.
+    static func withoutSentinel(_ text: String) -> String {
+        guard !text.isEmpty else { return text }
+        let string = text as NSString
+        let sentences = SentenceSplitter.ranges(in: text).map { string.substring(with: $0) }
+        let kept = sentences.filter { !isNotYet($0) }
+        guard kept.count != sentences.count else { return text }
+        return kept.joined().trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     // MARK: - Resolving citations
@@ -414,25 +439,33 @@ public enum AskAnswerParser {
         return ordinals
     }
 
-    /// Whether the answer is the "not yet" sentinel.
+    /// Whether this text is the "not yet" sentinel, and nothing else.
     ///
     /// Compared on letters only. The model reliably produces the sentence and
     /// unreliably produces its punctuation — a straight apostrophe for a curly
     /// one, a full stop dropped, "has not" for "hasn't" — and a strict match
     /// would show that as an ordinary answer, losing the one state the reader
     /// most needs to see.
+    ///
+    /// **Equal, not contained.** This was a substring test, so an answer that
+    /// merely *included* the sentence — "The story hasn't revealed that yet.
+    /// However, Alice is later guided by the Cheshire Cat" — was a refusal
+    /// that kept its prose and its citations, and the vetting pass skips a
+    /// refusal: the spoiler was shown in full, with excerpts under it and no
+    /// disclosure. `parse` now takes the sentinel sentence out and treats what
+    /// is left as the answer it is.
     static func isNotYet(_ text: String) -> Bool {
         let needle = letters(notYetSentinel)
         let haystack = letters(text)
         guard !haystack.isEmpty else { return false }
-        if haystack.contains(needle) { return true }
+        if haystack == needle { return true }
         // "has not" where the sentinel says "hasn't". Compared with the spaces
         // taken out as well, because the contraction the model expanded also
         // added a word boundary that was not there before.
         let expanded = needle
             .replacingOccurrences(of: " ", with: "")
             .replacingOccurrences(of: "hasnt", with: "hasnot")
-        return haystack.replacingOccurrences(of: " ", with: "").contains(expanded)
+        return haystack.replacingOccurrences(of: " ", with: "") == expanded
     }
 
     static func letters(_ text: String) -> String {

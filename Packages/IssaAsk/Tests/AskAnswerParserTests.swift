@@ -215,6 +215,56 @@ struct AskAnswerParserTests {
         #expect(!AskAnswerParser.parse("").notYetRevealed)
     }
 
+    /// The hedge a 3B model writes: the sentinel, then the answer anyway. As a
+    /// substring match this was a refusal that kept its prose and its
+    /// citations — and the engine's vetting skips refusals, so the prose was
+    /// never checked for names the reader has not met.
+    @Test("the sentinel followed by prose is prose, with the sentinel taken out")
+    func sentinelThenProseIsProse() {
+        let parsed = AskAnswerParser.parse("""
+        The story hasn't revealed that yet. However, Alice is later guided by the \
+        Cheshire Cat, who grins and vanishes.
+        Sources: 1
+        """)
+        #expect(!parsed.notYetRevealed)
+        #expect(parsed.origin == .model)
+        #expect(parsed.text
+            == "However, Alice is later guided by the Cheshire Cat, who grins and vanishes.")
+        #expect(parsed.citations == [1])
+
+        // Wherever the sentence falls, and however it is punctuated.
+        let after = AskAnswerParser.parse(
+            "Alice falls down a hole. The story has not revealed that yet",
+        )
+        #expect(!after.notYetRevealed)
+        #expect(after.text == "Alice falls down a hole.")
+
+        // A clause, not a sentence, is not the sentinel at all: the whole of it
+        // is prose, and it goes to the vetting as it stands.
+        let clause = AskAnswerParser.parse(
+            "The story hasn't revealed that yet, but Alice meets the Duchess.",
+        )
+        #expect(!clause.notYetRevealed)
+        #expect(clause.text == "The story hasn't revealed that yet, but Alice meets the Duchess.")
+    }
+
+    /// A refusal shows no excerpts. "The story hasn't revealed that yet" with
+    /// sources under it is proof offered of an absence.
+    @Test("the bare sentinel carries no citations, even when the model wrote some")
+    func sentinelDropsItsCitations() {
+        let parsed = AskAnswerParser.parse("The story hasn't revealed that yet.\nSources: 1, 2")
+        #expect(parsed.notYetRevealed)
+        #expect(parsed.origin == .withheld)
+        #expect(parsed.text == AskAnswerParser.notYetSentinel)
+        #expect(parsed.citations.isEmpty)
+        // Twice over is still only the sentinel.
+        let twice = AskAnswerParser.parse(
+            "The story hasn't revealed that yet. The story hasn't revealed that yet.",
+        )
+        #expect(twice.notYetRevealed)
+        #expect(twice.citations.isEmpty)
+    }
+
     // MARK: - Streaming
 
     @Test("a half-typed Sources line never reaches the screen")

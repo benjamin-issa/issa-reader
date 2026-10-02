@@ -563,6 +563,55 @@ struct AskEngineTests {
         #expect(answer.origin == .withheld)
     }
 
+    /// The hedge: the sentinel, then the answer anyway. As a substring match the
+    /// parser called this a refusal, the vetting pass skips refusals, and the
+    /// Cat went to the reader whole — with its excerpts under it.
+    @Test("the sentinel followed by a spoiler is still vetted, and withheld with no sources")
+    func sentinelThenSpoilerIsWithheld() async throws {
+        let (store, source, directory) = try await AskFixture.preparedStore()
+        defer { AskFixture.remove(directory) }
+        let model = ScriptedAnswerModel(turns: [
+            .answer("The story hasn't revealed that yet. However, Alice is later guided by the Cheshire Cat, who grins and vanishes.\nSources: 1, 2"),
+        ])
+        let engine = AskEngine(model: model, store: store)
+
+        let (events, failure) = await Self.drain(engine.ask(
+            question: "What did Alice follow down the hole?", source: source,
+            boundary: try AskFixture.endOf(spine: AskFixture.Spine.chapterI),
+        ))
+        #expect(failure == nil)
+        #expect(await model.received.count == 1)
+        let answer = try #require(Self.answer(events))
+        #expect(answer.notYetRevealed)
+        #expect(answer.text == AskAnswerParser.notYetSentinel)
+        #expect(!answer.text.contains("Cheshire"))
+        #expect(answer.citations.isEmpty)
+        #expect(answer.sources.isEmpty)
+        #expect(answer.origin == .withheld)
+    }
+
+    /// The bare sentinel with a footer under it: a refusal, and one that shows
+    /// no excerpts — `notYet`'s own branch has always promised that, and the
+    /// model's typed refusal broke it.
+    @Test("the model's own refusal shows no sources even when it cited some")
+    func modelRefusalShowsNoSources() async throws {
+        let (store, source, directory) = try await AskFixture.preparedStore()
+        defer { AskFixture.remove(directory) }
+        let model = ScriptedAnswerModel(turns: [
+            .answer("The story hasn't revealed that yet.\nSources: 1, 2"),
+        ])
+        let engine = AskEngine(model: model, store: store)
+
+        let (events, _) = await Self.drain(engine.ask(
+            question: "What did Alice follow down the hole?", source: source,
+            boundary: try AskFixture.endOf(spine: AskFixture.Spine.chapterI),
+        ))
+        let answer = try #require(Self.answer(events))
+        #expect(answer.notYetRevealed)
+        #expect(answer.sources.isEmpty)
+        #expect(answer.origin == .withheld)
+    }
+
     /// The same answer past the chapter that introduces the Cat is ordinary
     /// prose. Without this the guard could be passing by refusing everything.
     @Test("the same answer stands once the book has introduced the name")
