@@ -212,19 +212,38 @@ final class AskNotificationDelegate: NSObject, UNUserNotificationCenterDelegate 
         let uuid = response.notification.request.content
             .userInfo[AskNotifier.bookUUIDKey] as? String
         Task { @MainActor in
-            if let uuid {
-                // The sheet first, then the book, and the order matters in the
-                // opposite direction to what it used to say. The reader screen
-                // does *not* read this the moment it appears: it is built after
-                // both of these lines have run, so the value is already in
-                // place and there is no change to observe. Its handler is
-                // `onChange(of:initial:)` for exactly that reason, which is
-                // what makes setting the request before the book safe.
-                coordinator.reopenRequest = uuid
-                app.requestBook(uuid, .read)
-            }
+            if let uuid { open(bookUUID: uuid) }
             handler()
         }
+    }
+
+    /// What a tap asks for: the answer's sheet, and the book under it.
+    func open(bookUUID uuid: String) {
+        // The sheet first, then the book, and the order matters in the
+        // opposite direction to what it used to say. The reader screen
+        // does *not* read this the moment it appears: it is built after
+        // both of these lines have run, so the value is already in
+        // place and there is no change to observe. Its handler is
+        // `onChange(of:initial:)` for exactly that reason, which is
+        // what makes setting the request before the book safe.
+        coordinator.reopenRequest = uuid
+        if Self.needsBookRequest(for: uuid, visibleReader: app.visibleReaderUUID) {
+            app.requestBook(uuid, .read)
+        }
+    }
+
+    /// Whether a tap has to ask for the book as well as for its answer.
+    ///
+    /// Not when that book's reader is already up: it takes the tap through
+    /// `reopenRequest` and opens the answer itself, so a request for the book
+    /// has nothing left to do — and on the Mac it did not stay harmless. The
+    /// library window consumes whatever request is waiting as it appears, so a
+    /// tap answered by the only window open, a reader, left one behind, and the
+    /// next time the library window was shown it opened the book again,
+    /// unasked. The iPhone's root already dropped a request for the book on
+    /// screen; this is the same rule, decided before anything is armed.
+    nonisolated static func needsBookRequest(for uuid: String, visibleReader: String?) -> Bool {
+        visibleReader != uuid
     }
 }
 #endif
