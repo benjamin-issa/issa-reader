@@ -2402,14 +2402,6 @@ struct ExtractionSlot {
 // MARK: - The publisher's font
 
 extension ReaderModel {
-    /// Finds the face this book asks to be set in, and makes it usable.
-    ///
-    /// Extracted rather than read in place: `CTFontManagerRegisterFontsForURL`
-    /// wants a file, and the font is a member of a zip. It lands in the app's
-    /// own font directory under the book's uuid, so two books shipping
-    /// different files both called "Minion Pro" cannot collide — registration
-    /// is process-wide, and the second would otherwise render in the first's
-    /// face.
     /// Every stylesheet the book declares, parsed, keyed by archive path.
     ///
     /// Read whole rather than lazily: a book has two or three sheets and they
@@ -2429,6 +2421,14 @@ extension ReaderModel {
         return sheets
     }
 
+    /// Finds the face this book asks to be set in, and makes it usable.
+    ///
+    /// Extracted rather than read in place: `CTFontManagerRegisterFontsForURL`
+    /// wants a file, and the font is a member of a zip. It lands in the app's
+    /// own font directory under the book's uuid, so two books shipping
+    /// different files both called "Minion Pro" cannot collide — registration
+    /// is process-wide, and the second would otherwise render in the first's
+    /// face.
     func resolvePublisherFont(in package: EPUBPackage) {
         let resolution = EPUBFontResolver.resolve(in: package)
         publisherFont = resolution
