@@ -198,6 +198,45 @@ public final class AudioPlayer {
         #endif
     }
 
+    /// Stops, and gives the audio route back so whatever this interrupted can
+    /// carry on.
+    ///
+    /// For the ends of listening — the book running out, the sleep timer
+    /// expiring — and for nothing else. The session is non-mixable, so going
+    /// active stopped the listener's music, and nothing ever went inactive:
+    /// without `.notifyOthersOnDeactivation` the app that was interrupted is
+    /// never told it may resume. An ordinary pause keeps the route, as Apple's
+    /// own players do, and the hand-off from the car to the reader must too —
+    /// the book is still being listened to there.
+    public func endSession() {
+        pause()
+        sessionsEnded += 1
+        #if os(iOS) || os(tvOS)
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        #endif
+    }
+
+    /// How many times `endSession` has run, for tests: the deactivation itself
+    /// is a no-op off a device.
+    private(set) var sessionsEnded = 0
+
+    /// Called when a rate is *chosen* through `choose(rate:)` — a bound speed
+    /// control — so it can be remembered as the listener's speed.
+    public var onRateChosen: ((Float) -> Void)?
+
+    /// Sets the rate as the listener's own choice.
+    ///
+    /// `rate` is also written by things that are not a choice — restoring the
+    /// saved speed when a book opens, the hand-off carrying it across — so
+    /// persisting from `rate`'s observer would write back what was just read.
+    /// The bound speed-up and speed-down actions used to set `rate` and nothing
+    /// else, so a speed picked from a steering-wheel or headphone button was
+    /// lost at the next book, the next launch, and the car-to-reader hand-off.
+    public func choose(rate chosen: Float) {
+        rate = chosen
+        onRateChosen?(rate)
+    }
+
     /// Handles the two things that stop audio without the app asking.
     ///
     /// A phone call interrupts; the system says when it is over and whether it

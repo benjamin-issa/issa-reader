@@ -237,7 +237,9 @@ public final class ReadalongCoordinator {
         // replayed that sub-second clip once before moving on; the next file
         // does not, and the clip has already been heard.
         guard let entry = activeEntry, let next = timeline.entry(followingFileOf: entry) else {
-            player.pause()
+            // The end of the book: stopped, and the audio route given back so
+            // whatever the narration interrupted can resume.
+            player.endSession()
             return
         }
         let endedDocument = entry.textHref
@@ -530,10 +532,12 @@ public final class ReadalongCoordinator {
             await moveChapter(forward: true)
         case .previousChapter:
             await moveChapter(forward: false)
+        // Chosen, not merely set, so the speed is remembered — see
+        // `AudioPlayer.choose(rate:)`.
         case .speedUp:
-            player.rate = Float(PlaybackRate.clamped(Double(player.rate) + PlaybackRate.step))
+            player.choose(rate: Float(PlaybackRate.clamped(Double(player.rate) + PlaybackRate.step)))
         case .speedDown:
-            player.rate = Float(PlaybackRate.clamped(Double(player.rate) - PlaybackRate.step))
+            player.choose(rate: Float(PlaybackRate.clamped(Double(player.rate) - PlaybackRate.step)))
         // Discrete on purpose, never a toggle: the system sends these when it
         // has already decided which one it means, and its idea of the state —
         // the published rate — can lag `isPlaying` through a stall.

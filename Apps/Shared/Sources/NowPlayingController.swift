@@ -181,9 +181,12 @@ public final class NowPlayingController {
         }
 
         // The timer pauses playback and fades the last seconds rather than
-        // cutting off mid-word.
+        // cutting off mid-word — and, being the end of listening for the
+        // night, gives the audio route back, so whatever the book interrupted
+        // is told it may resume. A pause alone kept the session active with
+        // nothing playing.
         let timer = SleepTimer(
-            onExpire: { [weak coordinator] in coordinator?.player.pause() },
+            onExpire: { [weak coordinator] in coordinator?.player.endSession() },
             fade: { [weak coordinator] level in coordinator?.player.volume = level },
         )
         // A duration timer counts time spent *listening*, not wall-clock time.
@@ -217,6 +220,14 @@ public final class NowPlayingController {
         // Publish the moment anything changes, rather than waiting up to five
         // seconds for the poll — a lock screen that lags a play tap looks broken.
         coordinator.player.setRateObserver(for: self) { [weak self] _ in self?.publish() }
+        // A speed chosen from a bound control — a wheel, headphone or CarPlay
+        // button mapped to speed up or down — is the listener's speed, the same
+        // as one picked from a menu or the lock screen. It used to change the
+        // player and nothing else, so the next book, the next launch and the
+        // car-to-reader hand-off all went back to the saved one.
+        coordinator.player.onRateChosen = { [weak self] rate in
+            self?.settings?.playbackRate = Double(rate)
+        }
 
         // A sleep timer set before the engine changed hands, carried across.
         //

@@ -616,10 +616,12 @@ public final class AudiobookCoordinator {
             await skip(by: map.skipForwardInterval)
         case .previousSentence, .previousParagraph:
             await skip(by: -map.skipBackwardInterval)
+        // Chosen, not merely set, so the speed is remembered — see
+        // `AudioPlayer.choose(rate:)`.
         case .speedUp:
-            player.rate = Float(PlaybackRate.clamped(Double(player.rate) + PlaybackRate.step))
+            player.choose(rate: Float(PlaybackRate.clamped(Double(player.rate) + PlaybackRate.step)))
         case .speedDown:
-            player.rate = Float(PlaybackRate.clamped(Double(player.rate) - PlaybackRate.step))
+            player.choose(rate: Float(PlaybackRate.clamped(Double(player.rate) - PlaybackRate.step)))
         // Discrete on purpose, never a toggle: the system sends these when it
         // has already decided which one it means, and its idea of the state —
         // the published rate — can lag `isPlaying` through a stall.
@@ -636,7 +638,9 @@ public final class AudiobookCoordinator {
 
     private func advance() async {
         guard trackIndex + 1 < tracks.count else {
-            player.pause()
+            // The end of the book: stopped, and the audio route given back so
+            // whatever the book interrupted can resume.
+            player.endSession()
             return
         }
         let before = chapterIndex
