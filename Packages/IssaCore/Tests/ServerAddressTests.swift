@@ -114,10 +114,10 @@ struct ServerAddressTests {
 
     @Test("an explicit http:// is not treated as a downgrade")
     func explicitHTTPIsNotADowngrade() throws {
-        let url = try #require(URL(string: "http://192.168.68.125:8001"))
-        #expect(!ServerAddress.isCleartextFallback(url, forTyped: "http://192.168.68.125:8001"))
-        #expect(ServerAddress.addressToStore(for: "http://192.168.68.125:8001", connectedTo: url)
-            == "http://192.168.68.125:8001")
+        let url = try #require(URL(string: "http://192.168.1.10:8001"))
+        #expect(!ServerAddress.isCleartextFallback(url, forTyped: "http://192.168.1.10:8001"))
+        #expect(ServerAddress.addressToStore(for: "http://192.168.1.10:8001", connectedTo: url)
+            == "http://192.168.1.10:8001")
     }
 }
 
