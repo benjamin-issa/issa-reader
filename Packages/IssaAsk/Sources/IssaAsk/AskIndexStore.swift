@@ -598,10 +598,17 @@ public actor AskIndexStore {
     /// is given the chance.
     ///
     /// One indexed lookup per word, and a question has three or four at most.
-    /// Truncation is not applied: a word that occurs only in the unread half of
-    /// the straddling passage is vanishingly rare, and counting it as met is the
-    /// conservative direction — it lets the question through to retrieval, which
-    /// is itself bounded.
+    ///
+    /// **The passage the reader is standing in counts only up to where they
+    /// stand.** It once counted whole, on the argument that a word found only
+    /// in its unread tail was rare and that "met" was the conservative answer
+    /// for a question. It is not conservative for an *answer*: `AskEngine`
+    /// vets the model's prose through this same probe, and there "met" releases
+    /// the answer — so a character introduced in the next sentence of the
+    /// paragraph on screen, which retrieval had cut away from the model, was
+    /// waved through when the model named them from memory. So a word whose
+    /// only match before the boundary is that one passage is checked again
+    /// against the part of it that has been read.
     /// - Parameter bookUUID: which book to probe. No index for it means every
     ///   word is unmet — the conservative direction, and the opposite of the
     ///   one the other retrieval methods take: unknown means unmet means refuse.
@@ -620,15 +627,31 @@ public actor AskIndexStore {
             // parsed and planned the same statement once per candidate — and
             // the answer-side guard now offers it more candidates than it used
             // to, because the sentence-opener exemption became conditional.
-            let statement = try db.cachedStatement(sql: """
+            // Passages read to their end: `end <= offset` is exactly the
+            // passages `truncated` leaves whole.
+            let whole = try db.cachedStatement(sql: """
                 SELECT 1
                 FROM passage
                 JOIN passage_fts ON passage_fts.rowid = passage.rowid
                 WHERE passage_fts MATCH :pattern
                   AND (passage.spineIndex < :spine
-                       OR (passage.spineIndex = :spine AND passage.start < :offset))
+                       OR (passage.spineIndex = :spine AND passage.end <= :offset))
                 LIMIT 1
                 """)
+            // The one passage the boundary falls inside, if it matches at all.
+            let straddling = try db.cachedStatement(sql: """
+                SELECT passage.spineIndex, passage.ordinal, passage.start, passage.end,
+                       passage.words, passage.text, 0.0 AS score
+                FROM passage
+                JOIN passage_fts ON passage_fts.rowid = passage.rowid
+                WHERE passage_fts MATCH :pattern
+                  AND passage.spineIndex = :spine
+                  AND passage.start < :offset AND passage.end > :offset
+                LIMIT 1
+                """)
+            let arguments: (FTS5Pattern) -> StatementArguments = { pattern in
+                ["pattern": pattern, "spine": boundary.spineIndex, "offset": boundary.charOffset]
+            }
             return try words.filter { word in
                 // `FTSQuery.all`, not `FTS5Pattern(matchingAnyTokenIn:)`, which
                 // probed "jean'luc" as `jean OR luc` and called the name met
@@ -636,13 +659,36 @@ public actor AskIndexStore {
                 // straight past the spoiler guard. Quoted, it is a phrase, and
                 // only the whole name counts as met.
                 guard let pattern = FTSQuery.all([word]) else { return false }
-                let found = try Int.fetchOne(statement, arguments: [
-                    "pattern": pattern, "spine": boundary.spineIndex,
-                    "offset": boundary.charOffset,
-                ])
-                return found == nil
+                if try Int.fetchOne(whole, arguments: arguments(pattern)) != nil { return false }
+                guard let row = try Row.fetchOne(straddling, arguments: arguments(pattern)),
+                      let read = truncated(row, at: boundary)
+                else { return true }
+                return !Self.contains(phrase: word, in: read.passage.text)
             }
         }
+    }
+
+    /// Whether `phrase` occurs in `text` the way the FTS index would find it.
+    ///
+    /// The index's tokeniser, restated: `unicode61` with diacritics removed
+    /// splits on everything that is not a letter or a digit and folds case, and
+    /// a quoted pattern is a phrase — its tokens, adjacent and in order. So
+    /// "jean'luc" is met by "Jean-Luc" and not by "Jean" alone, exactly as the
+    /// SQL probe above decides it for a passage read to its end.
+    static func contains(phrase: String, in text: String) -> Bool {
+        let needle = ftsTokens(phrase)
+        guard !needle.isEmpty else { return false }
+        let haystack = ftsTokens(text)
+        guard haystack.count >= needle.count else { return false }
+        return (0 ... haystack.count - needle.count).contains { start in
+            haystack[start ..< start + needle.count].elementsEqual(needle)
+        }
+    }
+
+    static func ftsTokens(_ text: String) -> [String] {
+        text.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: nil)
+            .split { !$0.isLetter && !$0.isNumber }
+            .map { $0.lowercased() }
     }
 
     /// The people this book has introduced before the boundary, most mentioned

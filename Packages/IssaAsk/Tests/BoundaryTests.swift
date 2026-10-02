@@ -152,6 +152,44 @@ struct BoundaryTests {
         #expect(later.isEmpty)
     }
 
+    /// The paragraph on screen counts only as far as the reader has got.
+    ///
+    /// The answer side of the guard probes through here, and "met" releases an
+    /// answer — so a name only in the unread tail of the passage the reader is
+    /// standing in, which retrieval cut away from the model, passed when the
+    /// model named it from memory.
+    @Test("a name only in the unread tail of the passage on screen is unmet")
+    func unreadTailIsNotMet() async throws {
+        let opening = "Ryn waited by the gate while the others argued about the road."
+        let (store, _, end, directory) = try AskFixture.syntheticStore(chapters: [[
+            "\(opening) Then Dask arrived from the hills with a lantern and a dog.",
+        ]])
+        defer { AskFixture.remove(directory) }
+        let midway = ReadingBoundary(
+            spineIndex: 0, charOffset: (opening as NSString).length,
+        )
+
+        let early = try await store.unmetWords(
+            ["dask", "ryn", "lantern"], in: AskFixture.bookUUID, before: midway,
+        )
+        #expect(early == ["dask", "lantern"])
+
+        // Once the reader has read the sentence, it is met like any other.
+        let later = try await store.unmetWords(
+            ["dask", "ryn", "lantern"], in: AskFixture.bookUUID, before: end,
+        )
+        #expect(later.isEmpty)
+    }
+
+    @Test("a phrase is matched the way the index tokenises it")
+    func phraseMatchesTheIndex() {
+        #expect(AskIndexStore.contains(phrase: "jean'luc", in: "Captain Jean-Luc stood."))
+        #expect(!AskIndexStore.contains(phrase: "jean'luc", in: "Captain Jean stood by Luc."))
+        #expect(AskIndexStore.contains(phrase: "alice", in: "Alice’s sister read."))
+        #expect(AskIndexStore.contains(phrase: "zoe", in: "Zoë laughed."))
+        #expect(!AskIndexStore.contains(phrase: "rab", in: "The Rabbit ran."))
+    }
+
     @Test("the name table hides a character the reader has not met")
     func namesAreBounded() async throws {
         let (store, _, directory) = try await AskFixture.preparedStore()
