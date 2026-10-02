@@ -89,4 +89,38 @@ struct StageParityTests {
         #expect(LibraryArrangement.stage(ofStatusNamed: "Abandoned") == .toRead)
         #expect(LibraryArrangement.stage(ofStatusNamed: "") == .toRead)
     }
+
+    /// 3.x lets an admin name statuses as they like, and the bare word "read"
+    /// filed every one that contained it as finished: a book marked "Read
+    /// later" or "Not read" sat on the Finished shelf and left Up next, and a
+    /// re-read left Reading. What the words around it say decides.
+    @Test(
+        "an admin's own status is shelved by what its words say",
+        arguments: [
+            ("Read later", .toRead), ("Read next", .toRead), ("Not read", .toRead),
+            ("Never read", .toRead), ("Not yet read", .toRead), ("Unread", .toRead),
+            ("Un-read", .toRead), ("Want to read", .toRead), ("Up next", .toRead),
+            ("Not started", .toRead), ("Did not finish", .toRead), ("Not finished", .toRead),
+            ("DNF", .toRead), ("Abandoned", .toRead), ("Reference", .toRead),
+            ("Re-read", .reading), ("Reread", .reading), ("Re-reading", .reading),
+            ("Half read", .reading), ("Half-read", .reading), ("Partially read", .reading),
+            ("In progress", .reading), ("Currently Reading", .reading),
+            ("Already read", .finished), ("Finished", .finished), ("Finished reading", .finished),
+            ("Done", .finished), ("Done reading", .finished), ("Completed", .finished),
+        ] as [(String, LibraryArrangement.Stage)])
+    func byWording(name: String, stage: LibraryArrangement.Stage) {
+        #expect(LibraryArrangement.stage(ofStatusNamed: name) == stage, "\"\(name)\"")
+    }
+
+    /// The three statuses 2.x ships — and that 3.x keeps as names under any
+    /// label — must not move, whatever happens to the wording rules.
+    @Test(
+        "the built-in statuses stay where they are, in any case",
+        arguments: [
+            (Status.toReadName, .toRead), (Status.readingName, .reading), (Status.readName, .finished),
+            ("TO READ", .toRead), ("reading", .reading), ("READ", .finished),
+        ] as [(String, LibraryArrangement.Stage)])
+    func builtIns(name: String, stage: LibraryArrangement.Stage) {
+        #expect(LibraryArrangement.stage(ofStatusNamed: name) == stage, "\"\(name)\"")
+    }
 }

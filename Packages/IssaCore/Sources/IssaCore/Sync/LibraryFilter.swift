@@ -210,28 +210,57 @@ public extension LibraryArrangement {
     /// vocabulary. 2.14.21 ships exactly the three built-ins, with no API to
     /// add or rename one, so there the looseness is only defensive; 3.x lets an
     /// admin add statuses of their own, which it files by their wording where
-    /// that says a stage. Order matters: "Currently Reading" contains "read",
-    /// so testing for finished first would file every book in progress as
-    /// done. It reads `name`, never `label`: 3.x fixes the built-in names and
-    /// puts an admin's wording in the label, so "Read" relabelled "Finished" is
-    /// still named "Read".
+    /// that says a stage. It reads `name`, never `label`: 3.x fixes the
+    /// built-in names and puts an admin's wording in the label, so "Read"
+    /// relabelled "Finished" is still named "Read".
+    ///
+    /// The bare word "read" says finished only when nothing beside it says
+    /// otherwise. It used to say it whatever surrounded it, so "Read later",
+    /// "Not read" and "Re-read" all filed books under Finished, off Up next
+    /// and Reading. In order:
+    ///
+    /// 1. Put off or turned around — "To read", "Read later", "Up next", "Not
+    ///    read", "Never finished", "Unread", "Did not finish": to read.
+    /// 2. Again or in part — "Re-read", "Half read", "Partially read": reading.
+    /// 3. Said to be over — "Finished", "Finished reading", "Done",
+    ///    "Completed": finished, ahead of the "reading" in the longer ones.
+    /// 4. "Reading", "Currently reading", "In progress": reading.
+    /// 5. "Read" with nothing to qualify it — "Read", "Already read": finished.
+    ///
+    /// Anything else ("Abandoned", "Reference", "DNF") is none of the three,
+    /// and unstarted is the least wrong place for it.
     static func stage(ofStatusNamed statusName: String) -> Stage {
         let name = statusName.lowercased()
         guard !name.isEmpty else { return .toRead }
         // Whole words for the short ones, substrings only for the phrases.
         // "Abandoned" contains "done", so a reader who abandoned a book found
-        // it filed under Finished.
+        // it filed under Finished. Split on anything not a letter, so "Re-read"
+        // and "Half-read" are two words each.
         let words = Set(name.split { !$0.isLetter }.map(String.init))
-        if words.contains("reading") || name.contains("in progress") { return .reading }
-        if name.contains("to read") || words.contains("unread")
-            || words.contains("want") || name.contains("not started") { return .toRead }
-        if words.contains("read") || words.contains("finished") || words.contains("done") {
-            return .finished
-        }
-        // An entirely custom status ("Abandoned", "Reference") is not one of
-        // the three; treating it as unstarted is the least wrong answer.
+        let says: (String) -> Bool = { words.contains($0) }
+
+        let putOff = name.contains("to read") || name.contains("not started")
+            || says("later") || says("next") || says("want")
+        let turnedAround = says("not") || says("never") || says("un")
+            || words.contains { $0.hasPrefix("un") && Self.stageWords.contains(String($0.dropFirst(2))) }
+        if putOff || turnedAround { return .toRead }
+
+        let readWords = says("read") || says("reading")
+        let again = (says("re") && readWords) || says("reread") || says("rereading") || (says("again") && readWords)
+        let inPart = says("half") || says("partially") || says("partly")
+        if again || inPart { return .reading }
+
+        if says("finished") || says("done") || says("completed") || says("complete") { return .finished }
+        if says("reading") || name.contains("in progress") { return .reading }
+        if says("read") { return .finished }
         return .toRead
     }
+
+    /// What follows "un" in a status that turns a stage around: "Unread",
+    /// "Unfinished", "Unstarted".
+    private static let stageWords: Set<String> = [
+        "read", "reading", "finished", "started", "done", "completed",
+    ]
 
     private func sorted(_ books: [Book]) -> [Book] {
         let ordered: [Book]
