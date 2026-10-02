@@ -207,13 +207,21 @@ struct CommandMapTests {
         #expect(map.usesTrackCommands(on: .headphones))
     }
 
+    /// A binding the migration *would* move, chosen on purpose: the wheel's
+    /// "next" on the phone set to next chapter, which is its legacy value and
+    /// which `migrated` strips back to nothing. The tap control this used to
+    /// bind was not on its legacy value, so it survived whether or not the
+    /// version gate ran, and the gate went untested.
     @Test("a map already on the current version is not migrated again")
     func doesNotRemigrate() throws {
         var map = CommandMap()
-        map.bind(.nextChapter, to: .tapForward, on: .phone)
+        map.bind(.nextChapter, to: .wheelNext, on: .phone)
+        #expect(CommandMap.migrated(map.bindings)[.phone]?[.wheelNext] == nil,
+                "the binding has to be one a migration would remove, or this proves nothing")
         let decoded = try JSONDecoder().decode(
             CommandMap.self, from: JSONEncoder().encode(map))
-        #expect(decoded.action(for: .tapForward, on: .phone) == .nextChapter)
+        #expect(decoded.action(for: .wheelNext, on: .phone) == .nextChapter,
+                "a reader's own wheel binding was stripped on relaunch")
     }
 }
 
@@ -345,11 +353,17 @@ struct RemoteCommandRegistrationTests {
 
     /// Leaves no enabled commands behind for a later test — or a later run — to
     /// trip over.
+    ///
+    /// The skip pair too: they are enabled in a fresh process and nothing else
+    /// ever turns them off, so without this the assertions that `activate()`
+    /// enables them held whether or not it did.
     static func reset() {
         let remote = RemoteCommandCenter()
         remote.tearDown()
         center.nextTrackCommand.isEnabled = false
         center.previousTrackCommand.isEnabled = false
+        center.skipForwardCommand.isEnabled = false
+        center.skipBackwardCommand.isEnabled = false
     }
 
     @Test("by default the system draws the skip buttons, not the track buttons")
@@ -492,7 +506,9 @@ struct ReadalongCoordinatorTests {
 
         await subject.play(from: entries[index])
         // Take the clock, then drive exactly one tick by hand.
-        let tick = subject.player.onTimeUpdate
+        // Required, not optional: an absent clock made the tick below a no-op,
+        // and every assertion after it held on the untouched state.
+        let tick = try #require(subject.player.onTimeUpdate)
         subject.player.onTimeUpdate = nil
         subject.player.rate = 0
         var fragments: [String] = []
@@ -502,7 +518,7 @@ struct ReadalongCoordinatorTests {
         subject.onChapterChange = { chapters.append($0) }
         subject.onChapterChangeObserved = { endings += 1 }
 
-        tick?(entries[index].start - 0.0005)
+        tick(entries[index].start - 0.0005)
 
         #expect(subject.activeEntry?.fragmentID == entries[index].fragmentID)
         #expect(fragments.isEmpty, "the highlight moved backwards")

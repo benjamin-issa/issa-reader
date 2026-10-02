@@ -59,10 +59,14 @@ struct ChapterClockTests {
     /// of zero — `BookClockTests` documents the same hazard — which would
     /// overwrite the sample under test between the call and the assertion, and
     /// make a chapter announcement look like it had been withdrawn.
-    static func detachClock(_ subject: AudiobookCoordinator) -> (TimeInterval) -> Void {
-        let tick = subject.player.onTimeUpdate
+    ///
+    /// Required, not defaulted: a missing hook used to come back as a closure
+    /// that did nothing, and every sample a test then delivered was silently
+    /// dropped while its assertions held on the untouched state.
+    static func detachClock(_ subject: AudiobookCoordinator) throws -> (TimeInterval) -> Void {
+        let tick = try #require(subject.player.onTimeUpdate, "the coordinator installs no clock")
         subject.player.onTimeUpdate = nil
-        return tick ?? { _ in }
+        return tick
     }
 
     /// Waits for work that hops through a `Task` — `onFinishedFile` does.
@@ -98,7 +102,7 @@ struct ChapterClockTests {
         let (built, directory) = try Self.fixture()
         defer { try? FileManager.default.removeItem(at: directory) }
         let subject = Self.coordinator(built.manifest, files: built.files)
-        _ = Self.detachClock(subject)
+        _ = try Self.detachClock(subject)
 
         let first = try #require(built.manifest.playableTracks.first?.duration)
         await subject.seek(toBookTime: first + 1)
@@ -115,10 +119,10 @@ struct ChapterClockTests {
     /// play — would leave the coordinator claiming a track it never reached,
     /// with the fifteen-second writer persisting progress through silence.
     @Test("a missing chunk file refuses the load and stops cleanly")
-    func aMissingChunkFileRefusesTheLoadAndStopsCleanly() async {
+    func aMissingChunkFileRefusesTheLoadAndStopsCleanly() async throws {
         let subject = AudiobookCoordinator(
             manifest: Self.manifest(trackCount: 3, each: 100), source: .files([:]))
-        _ = Self.detachClock(subject)
+        _ = try Self.detachClock(subject)
 
         await subject.start(atProgress: 0)
 
@@ -140,7 +144,7 @@ struct ChapterClockTests {
     /// of minutes; telling the timer that was a chapter ended the book at the
     /// next chunk, which is nowhere a listener would have chosen to stop.
     @Test("the sleep timer hook fires at a chapter boundary, not a chunk boundary")
-    func theSleepTimerHookFiresAtAChapterBoundaryNotAChunkBoundary() async {
+    func theSleepTimerHookFiresAtAChapterBoundaryNotAChunkBoundary() async throws {
         let subject = Self.coordinator(
             Self.manifest(trackCount: 3, each: 100),
             chapters: [
@@ -153,7 +157,7 @@ struct ChapterClockTests {
 
         await subject.seek(toBookTime: 99)
         subject.player.play()
-        _ = Self.detachClock(subject)
+        _ = try Self.detachClock(subject)
         // A load publishes when it *finishes*; `trackIndex` moves before it
         // awaits, so waiting on that would read the chapter mid-load.
         var loads = 0
@@ -178,7 +182,7 @@ struct ChapterClockTests {
     /// under the listener with no file boundary anywhere near it, so the clock
     /// is the only thing that can notice.
     @Test("a mid-chunk chapter boundary is observed from the clock")
-    func aMidChunkChapterBoundaryIsObservedFromTheClock() async {
+    func aMidChunkChapterBoundaryIsObservedFromTheClock() async throws {
         let subject = Self.coordinator(
             Self.manifest(trackCount: 3, each: 100),
             chapters: [
@@ -190,7 +194,7 @@ struct ChapterClockTests {
         subject.onChapterChangeObserved = { observed += 1 }
 
         await subject.seek(toBookTime: 40)
-        let tick = Self.detachClock(subject)
+        let tick = try Self.detachClock(subject)
         #expect(subject.chapterIndex == 0)
 
         tick(52)
@@ -211,13 +215,13 @@ struct ChapterClockTests {
     /// file's chapter from that arithmetic names a chapter before a word of it
     /// has been spoken.
     @Test("a tick past a short stated duration does not announce the next file's chapter")
-    func aTickPastAShortStatedDurationDoesNotAnnounceTheNextFilesChapter() async {
+    func aTickPastAShortStatedDurationDoesNotAnnounceTheNextFilesChapter() async throws {
         let subject = Self.coordinator(Self.manifest(trackCount: 3, each: 1_000))
         var observed = 0
         subject.onChapterChangeObserved = { observed += 1 }
 
         await subject.seek(toBookTime: 0)
-        let tick = Self.detachClock(subject)
+        let tick = try Self.detachClock(subject)
 
         tick(1_005)
         #expect(subject.chapterIndex == 0, "still inside chunk one, whatever the clock says")
@@ -242,7 +246,7 @@ struct ChapterClockTests {
     /// the tick claims the crossing. `NowPlayingController` hands that to
     /// `SleepTimer.chapterDidEnd()`, and the book pauses mid-skip.
     @Test("a scrub across a chapter boundary never reaches the sleep timer")
-    func aScrubAcrossAChapterBoundaryIsNotAChapterEnding() async {
+    func aScrubAcrossAChapterBoundaryIsNotAChapterEnding() async throws {
         let subject = Self.coordinator(
             Self.manifest(trackCount: 3, each: 100),
             chapters: [
@@ -254,7 +258,7 @@ struct ChapterClockTests {
         // absolutely rather than through `skip(by:)`, which reads a book clock
         // the real player's first tick may already have written zero over.
         await subject.seek(toBookTime: 40)
-        let tick = Self.detachClock(subject)
+        let tick = try Self.detachClock(subject)
 
         var observed = 0
         var announced: [Int] = []
@@ -290,7 +294,7 @@ struct ChapterClockTests {
     /// as an advance and hands the sleep timer an "end of chapter" one tick
     /// late, in the middle of the same deliberate skip.
     @Test("a stale sample delivered mid-seek does not end a chapter one tick late")
-    func aStaleSampleMidSeekDoesNotEndAChapterLate() async {
+    func aStaleSampleMidSeekDoesNotEndAChapterLate() async throws {
         let subject = Self.coordinator(
             Self.manifest(trackCount: 3, each: 100),
             chapters: [
@@ -299,7 +303,7 @@ struct ChapterClockTests {
             ],
         )
         await subject.seek(toBookTime: 40)
-        let tick = Self.detachClock(subject)
+        let tick = try Self.detachClock(subject)
 
         var observed = 0
         subject.onChapterChangeObserved = { observed += 1 }
@@ -357,7 +361,7 @@ struct ChapterClockTests {
                 AudiobookChapter(title: "Three", trackIndex: 0, offset: 5),
             ],
         )
-        _ = Self.detachClock(subject)
+        _ = try Self.detachClock(subject)
 
         // The two sound ones kept, not one chapter per track for the whole
         // book: forty good boundaries are not worth losing to one bad one.
@@ -389,7 +393,7 @@ struct ChapterClockTests {
                 AudiobookChapter(title: "B", trackIndex: 1, offset: 30),
             ],
         )
-        _ = Self.detachClock(subject)
+        _ = try Self.detachClock(subject)
 
         var span = try #require(subject.chapterSpan)
         #expect(span.start == 0)
@@ -408,7 +412,7 @@ struct ChapterClockTests {
     /// track's start is the end of the *previous* chapter when a chapter begins
     /// mid-chunk.
     @Test("playing a chapter lands on its start inside its chunk")
-    func playChapterLandsOnTheChapterStartInsideItsChunk() async {
+    func playChapterLandsOnTheChapterStartInsideItsChunk() async throws {
         let subject = Self.coordinator(
             Self.manifest(trackCount: 3, each: 100),
             chapters: [
@@ -416,7 +420,7 @@ struct ChapterClockTests {
                 AudiobookChapter(title: "B", trackIndex: 1, offset: 30),
             ],
         )
-        _ = Self.detachClock(subject)
+        _ = try Self.detachClock(subject)
 
         await subject.play(chapter: 1)
 
@@ -431,7 +435,7 @@ struct ChapterClockTests {
     /// already thirty seconds into its *file* the moment it starts, so the
     /// player's own clock would restart a chapter nobody had heard yet.
     @Test("previous chapter restarts a mid-chunk chapter before leaving it")
-    func previousChapterRestartsAMidChunkChapter() async {
+    func previousChapterRestartsAMidChunkChapter() async throws {
         let subject = Self.coordinator(
             Self.manifest(trackCount: 3, each: 100),
             chapters: [
@@ -439,7 +443,7 @@ struct ChapterClockTests {
                 AudiobookChapter(title: "B", trackIndex: 1, offset: 30),
             ],
         )
-        let tick = Self.detachClock(subject)
+        let tick = try Self.detachClock(subject)
 
         await subject.play(chapter: 1)
         _ = subject.consumeSteering()
@@ -471,9 +475,9 @@ struct ChapterClockTests {
     /// nothing here could see it; `AudiobookManifestLocateTests` states the
     /// arithmetic on its own.
     @Test("previous restarts the chapter, not the chunk before it, on fractional durations")
-    func previousRestartsTheChapterNotTheChunkBeforeIt() async {
+    func previousRestartsTheChapterNotTheChunkBeforeIt() async throws {
         let subject = Self.coordinator(Self.manifest(trackCount: 4, each: 100.1))
-        _ = Self.detachClock(subject)
+        _ = try Self.detachClock(subject)
 
         // Ten seconds into the last chapter, which is well past the three that
         // decide between restarting this one and moving back a whole chapter.
@@ -498,13 +502,13 @@ struct ChapterClockTests {
     /// signal the end-of-chapter sleep timer waits for. A listener who tapped
     /// "previous" to hear a paragraph again had the book stop on them instead.
     @Test("the chunk a restart did not fall back into never reports an ending")
-    func aRestartDoesNotStrandTheListenerAtTheEndOfTheChunkBefore() async {
+    func aRestartDoesNotStrandTheListenerAtTheEndOfTheChunkBefore() async throws {
         let subject = Self.coordinator(Self.manifest(trackCount: 4, each: 100.1))
         var observed = 0
         subject.onChapterChangeObserved = { observed += 1 }
 
         await subject.seek(toBookTime: 310)
-        let tick = Self.detachClock(subject)
+        let tick = try Self.detachClock(subject)
 
         await subject.previousChapter()
         subject.player.play()
@@ -534,9 +538,9 @@ struct ChapterClockTests {
     /// same contract for `nextChapter()`, which guards before it delegates and
     /// so needed no change.
     @Test("a chapter the book does not have is not the listener naming a place")
-    func aChapterOutOfRangeIsNotSteering() async {
+    func aChapterOutOfRangeIsNotSteering() async throws {
         let subject = Self.coordinator(Self.manifest(trackCount: 3, each: 100))
-        _ = Self.detachClock(subject)
+        _ = try Self.detachClock(subject)
 
         await subject.play(chapter: 99)
 
@@ -549,10 +553,10 @@ struct ChapterClockTests {
     /// not a load — a half-deleted extraction, or a download removed while the
     /// book sat paused — and `.files` is every downloaded read-along.
     @Test("a chapter whose chunk is missing is not the listener naming a place")
-    func aRefusedLoadIsNotSteering() async {
+    func aRefusedLoadIsNotSteering() async throws {
         let subject = AudiobookCoordinator(
             manifest: Self.manifest(trackCount: 3, each: 100), source: .files([:]))
-        _ = Self.detachClock(subject)
+        _ = try Self.detachClock(subject)
 
         await subject.play(chapter: 0)
 
@@ -567,9 +571,9 @@ struct ChapterClockTests {
     /// installed and still on the lock screen — a start that produced no audio
     /// does not take itself off — so the skip button is genuinely reachable.
     @Test("a skip with no clock behind it is not the listener naming a place")
-    func aRefusedSkipIsNotSteering() async {
+    func aRefusedSkipIsNotSteering() async throws {
         let subject = Self.coordinator(Self.manifest(trackCount: 0, each: 100))
-        let tick = Self.detachClock(subject)
+        let tick = try Self.detachClock(subject)
         // The sample the guard was written for, delivered first: the
         // coordinator's own clock hook refuses a non-finite time, so a NaN can
         // no longer reach the book clock from here and the missing duration is
@@ -587,9 +591,9 @@ struct ChapterClockTests {
     /// written back as a chosen position — and the refusal must not be reported
     /// as a place the listener named either.
     @Test("a scrub to nowhere is not the listener naming a place")
-    func aRefusedProgressSeekIsNotSteering() async {
+    func aRefusedProgressSeekIsNotSteering() async throws {
         let subject = Self.coordinator(Self.manifest(trackCount: 3, each: 100))
-        _ = Self.detachClock(subject)
+        _ = try Self.detachClock(subject)
 
         await subject.seek(toProgress: .nan)
 
@@ -603,7 +607,7 @@ struct ChapterClockTests {
     /// report a scrub at all, and a deliberate restart would be written back as
     /// ordinary forward progress for the guard to refuse.
     @Test("a move that lands is still the listener naming a place")
-    func aLandedMoveIsStillSteering() async {
+    func aLandedMoveIsStillSteering() async throws {
         let subject = Self.coordinator(
             Self.manifest(trackCount: 3, each: 100),
             chapters: [
@@ -611,7 +615,7 @@ struct ChapterClockTests {
                 AudiobookChapter(title: "B", trackIndex: 1, offset: 30),
             ],
         )
-        _ = Self.detachClock(subject)
+        _ = try Self.detachClock(subject)
 
         await subject.seek(toProgress: 0.5)
         #expect(subject.consumeSteering(), "a scrub of the whole book")
@@ -638,7 +642,7 @@ struct ChapterClockTests {
     /// Stated sequentially rather than raced, because the two calls need no
     /// overlap to prove it: the latch simply outlives the start.
     @Test("a start does not spend a latch it did not set")
-    func aStartDoesNotSpendALatchItDidNotSet() async {
+    func aStartDoesNotSpendALatchItDidNotSet() async throws {
         let subject = Self.coordinator(
             Self.manifest(trackCount: 3, each: 100),
             chapters: [
@@ -646,7 +650,7 @@ struct ChapterClockTests {
                 AudiobookChapter(title: "B", trackIndex: 1, offset: 30),
             ],
         )
-        _ = Self.detachClock(subject)
+        _ = try Self.detachClock(subject)
 
         await subject.play(chapter: 1)
         await subject.start(atProgress: 0)
@@ -668,7 +672,7 @@ struct ChapterClockTests {
     /// `aScrubAcrossAChapterBoundaryIsNotAChapterEnding` deliver their racing
     /// samples through.
     @Test("the second of two overlapping scrubs announces its own chapter")
-    func theSecondOfTwoOverlappingScrubsAnnouncesItsOwnChapter() async {
+    func theSecondOfTwoOverlappingScrubsAnnouncesItsOwnChapter() async throws {
         let subject = Self.coordinator(
             Self.manifest(trackCount: 3, each: 100),
             chapters: [
@@ -679,7 +683,7 @@ struct ChapterClockTests {
         // Both scrubs below stay inside chunk one, so both take the branch that
         // loads nothing — the one `seeksInFlight` was added for.
         await subject.seek(toBookTime: 10)
-        let tick = Self.detachClock(subject)
+        let tick = try Self.detachClock(subject)
 
         var observed = 0
         var announced: [Int] = []
@@ -729,7 +733,7 @@ struct ChapterClockTests {
                 AudiobookChapter(title: "C", trackIndex: 2, offset: 40),
             ],
         )
-        _ = Self.detachClock(subject)
+        _ = try Self.detachClock(subject)
         var announced: [Int] = []
 
         await subject.play(chapter: 2)
@@ -772,7 +776,7 @@ struct ChapterClockTests {
     /// destination as the first — so a listener who tapped twice moved one
     /// chapter and a listener who held the wheel button moved none at all.
     @Test("two chapter taps inside one load advance two chapters")
-    func twoChapterTapsInsideOneLoadAdvanceTwoChapters() async {
+    func twoChapterTapsInsideOneLoadAdvanceTwoChapters() async throws {
         let subject = Self.coordinator(
             Self.manifest(trackCount: 3, each: 100),
             chapters: [
@@ -781,7 +785,7 @@ struct ChapterClockTests {
                 AudiobookChapter(title: "C", trackIndex: 2, offset: 40),
             ],
         )
-        _ = Self.detachClock(subject)
+        _ = try Self.detachClock(subject)
 
         // Enqueued back to back on the main actor, so the second runs at the
         // first one's suspension — a burst of two remote commands, which is what
@@ -812,9 +816,9 @@ struct ChapterClockTests {
     /// it runs at the first one's suspension inside AVFoundation — which is
     /// exactly the window supersession lives in.
     @Test("a load a newer one overtook is not a load that would not play")
-    func aSupersededLoadIsNotARefusal() async {
+    func aSupersededLoadIsNotARefusal() async throws {
         let subject = Self.coordinator(Self.manifest(trackCount: 3, each: 100))
-        _ = Self.detachClock(subject)
+        _ = try Self.detachClock(subject)
 
         let newer = Task { @MainActor in await subject.seek(toBookTime: 250) }
         let overtaken = await subject.seek(toBookTime: 150)
@@ -838,11 +842,11 @@ struct ChapterClockTests {
     /// Enqueued before the load begins, so it runs at the load's suspension
     /// inside AVFoundation, as `aSupersededLoadIsNotARefusal` arranges its own.
     @Test("a same-track scrub made during a load keeps the clock it set")
-    func aSameTrackScrubDuringALoadKeepsItsClock() async {
+    func aSameTrackScrubDuringALoadKeepsItsClock() async throws {
         let manifest = Self.manifest(trackCount: 3, each: 100)
         // Real audio, so the engine goes where each seek sends it.
         let subject = Self.coordinator(manifest, files: Self.silence(manifest))
-        _ = Self.detachClock(subject)
+        _ = try Self.detachClock(subject)
 
         let scrub = Task { @MainActor in await subject.seek(toBookTime: 130) }
         _ = await subject.seek(toBookTime: 150)
@@ -859,10 +863,10 @@ struct ChapterClockTests {
     /// place with no audio behind it still refuses, and says so in the one word
     /// that reaches a listener.
     @Test("a place with no audio behind it is still unplayable, not superseded")
-    func aMissingChunkIsUnplayable() async {
+    func aMissingChunkIsUnplayable() async throws {
         let subject = AudiobookCoordinator(
             manifest: Self.manifest(trackCount: 3, each: 100), source: .files([:]))
-        _ = Self.detachClock(subject)
+        _ = try Self.detachClock(subject)
 
         #expect(await subject.seek(toBookTime: 150) == .unplayable)
         // And a chunk that is there by name and will not open: a file deleted
@@ -873,7 +877,7 @@ struct ChapterClockTests {
             .appending(path: "issa-missing-chunk-\(UUID().uuidString).mp3")
         let gone = Self.coordinator(manifest, files: Dictionary(
             uniqueKeysWithValues: manifest.readingOrder.map { ($0.href, missing) }))
-        _ = Self.detachClock(gone)
+        _ = try Self.detachClock(gone)
         gone.player.play()
         #expect(await gone.seek(toBookTime: 150) == .unplayable)
         #expect(gone.player.isPlaying == false, "a book whose audio will not open claimed to be playing")
@@ -890,7 +894,7 @@ struct ChapterClockTests {
     @Test("without chapters, every track is a chapter")
     func withoutChaptersEveryTrackIsAChapter() async throws {
         let subject = Self.coordinator(Self.manifest(trackCount: 3, each: 100))
-        _ = Self.detachClock(subject)
+        _ = try Self.detachClock(subject)
 
         #expect(subject.chapters.map(\.title) == ["Track 1", "Track 2", "Track 3"])
 

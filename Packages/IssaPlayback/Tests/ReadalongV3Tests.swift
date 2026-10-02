@@ -250,13 +250,23 @@ struct ReadalongV3ShapesTests {
         _ rows: [(fragment: String, text: String, audio: String,
                   start: TimeInterval, end: TimeInterval, audioOnly: Bool)],
     ) -> SMILTimeline {
+        narration(rows.map { ($0.fragment, $0.text, $0.audio, $0.start, $0.end, $0.audioOnly, nil) })
+    }
+
+    /// The same, with the sentence each row is a word of — what the parser
+    /// writes into `SMILEntry.sentenceID` for a word-granular book, and nil for
+    /// every other row, as there.
+    static func narration(
+        _ rows: [(fragment: String, text: String, audio: String,
+                  start: TimeInterval, end: TimeInterval, audioOnly: Bool, sentence: String?)],
+    ) -> SMILTimeline {
         var cumulative: TimeInterval = 0
         return SMILTimeline(entries: rows.map { row in
             cumulative += row.end - row.start
             return SMILEntry(
                 fragmentID: row.fragment, textHref: row.text, audioHref: row.audio,
                 start: row.start, end: row.end, cumulativeEnd: cumulative,
-                isAudioOnly: row.audioOnly)
+                isAudioOnly: row.audioOnly, sentenceID: row.sentence)
         })
     }
 
@@ -276,14 +286,19 @@ struct ReadalongV3ShapesTests {
     /// first word and played the sentence and its music again, for ever.
     @Test("a word-granular file that ends in an after-hole advances to the next file")
     func wordGranularFileEndingInAHole() async throws {
+        // Each word carries its sentence, as the parser writes it for a
+        // `text-range-small` seq; the holes name the sentence itself and carry
+        // none. Without the sentence these were not the shape a real
+        // word-granular book has.
         let timeline = Self.narration([
-            ("ch01-s0", Self.chapterOne, Self.track1, 0, 6, true),
-            ("ch01-s0-w0", Self.chapterOne, Self.track1, 6, 7, false),
-            ("ch01-s0-w1", Self.chapterOne, Self.track1, 7, 8, false),
-            ("ch01-s0", Self.chapterOne, Self.track1, 8, 20, true),
-            ("ch01-s1-w0", Self.chapterOne, Self.track2, 0, 2, false),
-            ("ch01-s1-w1", Self.chapterOne, Self.track2, 2, 5, false),
+            ("ch01-s0", Self.chapterOne, Self.track1, 0, 6, true, nil),
+            ("ch01-s0-w0", Self.chapterOne, Self.track1, 6, 7, false, "ch01-s0"),
+            ("ch01-s0-w1", Self.chapterOne, Self.track1, 7, 8, false, "ch01-s0"),
+            ("ch01-s0", Self.chapterOne, Self.track1, 8, 20, true, nil),
+            ("ch01-s1-w0", Self.chapterOne, Self.track2, 0, 2, false, "ch01-s1"),
+            ("ch01-s1-w1", Self.chapterOne, Self.track2, 2, 5, false, "ch01-s1"),
         ])
+        try #require(timeline.entries[1].sentenceID == "ch01-s0")
         let (subject, directory) = try Self.make(timeline)
         defer { try? FileManager.default.removeItem(at: directory) }
         let entries = timeline.entries

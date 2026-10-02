@@ -111,13 +111,26 @@ struct BookClockTests {
         #expect(subject.trackIndex == 2, "should be in the previous track")
     }
 
+    /// Through the clock, which is the only path that can put `bookTime`
+    /// outside the book: a seek goes through `locate`, which clamps its input,
+    /// so seeking to -500 and to ten million proved nothing about the clamp in
+    /// `progress`. A tick past the last track's stated duration — a duration is
+    /// an estimate, and the file runs on — and a negative one do reach it.
     @Test("progress is clamped to 0...1 even for an out-of-range clock")
-    func progressStaysInRange() async {
+    func progressStaysInRange() async throws {
         let subject = coordinator(manifest())
-        await subject.seek(toBookTime: -500)
-        #expect(subject.progress >= 0)
+        let tick = try #require(subject.player.onTimeUpdate)
+        subject.player.onTimeUpdate = nil
+
         await subject.seek(toBookTime: 10_000_000)
-        #expect(subject.progress <= 1)
+        tick(1_612.5)
+        #expect(subject.bookTime > subject.totalDuration, "the clock has to be past the end to test the clamp")
+        #expect(subject.progress == 1)
+
+        await subject.seek(toBookTime: 0)
+        tick(-5)
+        #expect(subject.bookTime < 0, "the clock has to be before the start to test the clamp")
+        #expect(subject.progress == 0)
     }
 
     /// The end of the last track is not somewhere to land.
