@@ -383,6 +383,10 @@ public struct MutationDrain: Sendable {
     /// still pending: they go with the next drain, or, on a retired queue,
     /// with none.
     ///
+    /// A row refused with a 404 or a 403 is dropped only once the same drain
+    /// has seen Storyteller itself answer; until then it stays queued. See
+    /// `settle(_:sent:askingTheServer:)`.
+    ///
     /// - Returns: how many were accepted.
     @discardableResult
     /// - Parameter waitingForInFlight: wait for a drain already running rather
@@ -411,12 +415,21 @@ public struct MutationDrain: Sendable {
     private func drainHoldingTheLock() async -> Int {
         guard let pending = try? await queue.pending(), !pending.isEmpty else { return 0 }
         var sent = 0
+        // Rows refused with a 404 or a 403, held until this drain knows who
+        // refused them. See `settle(_:sent:askingTheServer:)`.
+        var refused: [(item: MutationQueue.Pending, error: StorytellerError)] = []
+        // Whether the loop reached the end of its rows, rather than stopping
+        // at a broken connection, a 401 or someone waiting for the lock.
+        var reachedTheEnd = true
 
         for item in pending {
             // Before every row, not once: a pause taken mid-drain waits for
             // the request in flight, not for everything behind it, and a
             // queue retired mid-drain sends nothing more.
-            guard await !queue.shouldYield else { break }
+            guard await !queue.shouldYield else {
+                reachedTheEnd = false
+                break
+            }
             do {
                 try await send(item)
                 try? await queue.remove(item.id)
@@ -424,9 +437,9 @@ public struct MutationDrain: Sendable {
             } catch StorytellerError.positionConflict {
                 // The server has something newer. Ours is obsolete, not failed.
                 //
-                // Logged, because this and the non-retryable branch below are
-                // the only two places a write is thrown away, and they were the
-                // only two that said nothing — so a server that refused every
+                // Logged, because this and the refusals below are where a
+                // write is thrown away on the server's word, and they were the
+                // only ones that said nothing — so a server that refused every
                 // position looked exactly like a client that never sent one.
                 IssaLog.info("mutation superseded by server", [
                     "kind": String(describing: item.kind), "book": item.bookUUID,
@@ -441,12 +454,22 @@ public struct MutationDrain: Sendable {
                 // an expired token from silently emptying the entire backlog in
                 // one pass — the removal below has no `break`, so before this
                 // case existed the first 401 deleted everything behind it too.
+                reachedTheEnd = false
                 break
+            } catch let error as StorytellerError where error == .notFound || error == .forbidden {
+                // Most likely about this item — the book was deleted
+                // server-side, or a permission was revoked for it — so the
+                // rest of the queue still deserves its turn. But only most
+                // likely: `APIClient` maps a 404 or a 403 from *whatever*
+                // answered, and a reverse proxy whose Storyteller is down, or
+                // a path prefix that has changed, answers every route that
+                // way. Deleted on the spot, one drain emptied the whole
+                // offline backlog against it. Held until the drain is done.
+                refused.append((item, error))
             } catch let error as StorytellerError where !error.isRetryable {
-                // A refusal specific to this item that will not change on
-                // retry — the book was deleted server-side, or a permission was
-                // revoked for it. Genuinely per-item, unlike the auth case
-                // above, so the rest of the queue still deserves its turn.
+                // A refusal that will not change on retry and that no front
+                // door produces for every route — a payload the server would
+                // not take. Genuinely per-item, so the rest still goes.
                 //
                 // A discarded write is worth a line even when discarding is
                 // correct: this is where a rejected locator shape would go, and
@@ -466,18 +489,73 @@ public struct MutationDrain: Sendable {
                 // of the queue.
                 if countsTowardAbandonment(error),
                    (try? await queue.recordFailure(item.id)) == true {
-                    // The third and last place a write is thrown away, and
-                    // until this line the only one that said nothing.
+                    // The one place a write is thrown away on this client's
+                    // own judgement, and until this line it said nothing.
                     IssaLog.failure("sync mutation abandoned", error, [
                         "kind": String(describing: item.kind), "book": item.bookUUID,
                     ])
                 }
                 // Stop on the first genuine failure: the connection is probably
                 // gone, and hammering the rest achieves nothing.
+                reachedTheEnd = false
                 break
             }
         }
+        if !refused.isEmpty {
+            await settle(refused, sent: sent, askingTheServer: reachedTheEnd)
+        }
         return sent
+    }
+
+    /// Drops the rows this drain held as refused, once it knows Storyteller
+    /// refused them; otherwise keeps them for the next drain.
+    ///
+    /// The proof is Storyteller answering in this same drain: a row it took,
+    /// or — when every row was refused — one `GET /api/v2/user` that reads as
+    /// a user, which every version this client supports serves, 2.14.21
+    /// included. A front door answers that route as it answers the rest, with
+    /// a 404, a 403 or a page of its own, so its refusals stay queued and go
+    /// again once it lets Storyteller through. A refusal Storyteller made is
+    /// its verdict on the row, and the row goes as it always did — or a write
+    /// for a deleted book would be sent on every drain for ever.
+    ///
+    /// - Parameter askingTheServer: false when the drain stopped short — at a
+    ///   broken connection, which the question would only meet again, or with
+    ///   someone waiting for the lock, who should wait for no more requests
+    ///   than the one in flight.
+    private func settle(
+        _ refused: [(item: MutationQueue.Pending, error: StorytellerError)],
+        sent: Int, askingTheServer: Bool,
+    ) async {
+        var storytellerAnswered = sent > 0
+        if !storytellerAnswered, askingTheServer, await !queue.shouldYield {
+            storytellerAnswered = await storytellerAnswers()
+        }
+        guard storytellerAnswered else {
+            IssaLog.warning("sync refusals kept: nothing showed Storyteller made them", [
+                "count": String(refused.count),
+                "error": String(describing: refused[0].error),
+            ])
+            return
+        }
+        for (item, error) in refused {
+            IssaLog.failure("sync mutation discarded", error, [
+                "kind": String(describing: item.kind), "book": item.bookUUID,
+            ])
+            try? await queue.remove(item.id)
+        }
+    }
+
+    /// Whether Storyteller itself is what answers this client's requests.
+    ///
+    /// A probe, not a request: it never throws and never touches the token,
+    /// because a 401 here — from a proxy or from Storyteller — says nothing the
+    /// refusals did not, and must not sign the reader out on the way.
+    private func storytellerAnswers() async -> Bool {
+        guard let (status, data) = await client.probeResponse(Endpoint.user),
+              (200 ..< 300).contains(status)
+        else { return false }
+        return (try? JSONDecoder().decode(User.self, from: data)) != nil
     }
 
     private func send(_ item: MutationQueue.Pending) async throws {
