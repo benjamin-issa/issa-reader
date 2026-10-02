@@ -558,9 +558,11 @@ public final class AppModel {
     ///
     /// Every route that learns an identity asks it here, before anything of
     /// the account's is shown or sent: `adopt`, for a token just handed over;
-    /// `resumeStoredSession`, for one read back from the keychain. A route
-    /// that skipped it walked the arriving account into the departed one's
-    /// library, which is what the restore path did until it asked as well.
+    /// `resumeStoredSession`, for one read back from the keychain; and a
+    /// refresh that re-identifies a session whose identity call had failed
+    /// (`reidentifyIfFailed`). A route that skipped it walked the arriving
+    /// account into the departed one's library, which is what the restore
+    /// path did until it asked as well.
     ///
     /// For a token that arrives through the browser route it is also the only
     /// binding there is. The callback carries no `state` and no nonce, and
@@ -863,15 +865,25 @@ public final class AppModel {
         // Belt and braces: whichever way we got here, writes must be durable
         // before the library — and therefore the reader — is reachable.
         ensureMutationQueue()
-        // Annotations are kept per account. The store is per server, and a
-        // second reader signing into the same server on a shared device used
-        // to be shown the first one's highlights and quoted excerpts.
+        await recordSignedInAccount()
+        phase = .ready
+        await refreshLibrary()
+    }
+
+    /// Names the signed-in account to the store, and remembers it as the
+    /// account this server was last signed in as.
+    ///
+    /// Annotations are kept per account. The store is per server, and a
+    /// second reader signing into the same server on a shared device used to
+    /// be shown the first one's highlights and quoted excerpts. And the
+    /// remembered account is what the next identity is compared with
+    /// (`accountResolved`), so it has to be recorded wherever one is learnt:
+    /// on the way into the library, and by a refresh that re-identified.
+    private func recordSignedInAccount() async {
         if let session, case let .signedIn(user) = session.state {
             try? await store?.setAccount(user.id)
             UserDefaults.standard.set(user.id, forKey: Self.accountKey(for: session.serverURL))
         }
-        phase = .ready
-        await refreshLibrary()
     }
 
     /// Bumped whenever the catalogue stops belonging to this account.
@@ -942,6 +954,10 @@ public final class AppModel {
         guard let session else { return }
         isLoadingLibrary = true
         defer { isLoadingLibrary = false }
+        // Whose session this is, if the last time the server was asked it gave
+        // no answer. Before the fence below, which belongs to the account the
+        // answer names.
+        guard await reidentifyIfFailed(session) else { return }
         // Whose catalogue this is, and what this device has written that the
         // answer may not include — both taken before the request is sent.
         //
@@ -1056,6 +1072,92 @@ public final class AppModel {
                 rebuildDerived()
             }
             loadError = books.isEmpty ? Self.message(for: error) : nil
+        }
+    }
+
+    /// The re-identify in flight, which a refresh arriving meanwhile waits for
+    /// rather than asking again.
+    private var reidentifying: Task<Void, Never>?
+
+    /// Asks the server again whose token this is, when the last time it was
+    /// asked got no answer — and says whether the refresh should go on.
+    ///
+    /// A `.failed` session is one whose identity call never came back: a cold
+    /// launch offline, a server briefly down. Nothing asked again. The
+    /// capabilities are probed only once an identity answers, so the session
+    /// spent the rest of its life on the baseline — Settings hid its server
+    /// version and its account, and the rule's permission guard failed open —
+    /// however well its refreshes went once the network was back. And whose
+    /// library a refresh fetched into and drained from was never confirmed: a
+    /// token left by an adopt whose identity call failed is the arriving
+    /// account's, and the refresh merged its catalogue into the departed
+    /// account's and posted that account's queued writes with it.
+    ///
+    /// Asked as the restore asks it, draining paused around the identity call
+    /// and the hand-over after it. In a task of its own rather than the
+    /// refresh's, so a refresh cancelled part-way — a pull to refresh whose
+    /// screen went away — cannot strand the session half signed in: an
+    /// identity call that sees its task cancelled leaves the state where it
+    /// was, which here would be `.signingIn` for good.
+    ///
+    /// Only `GET /api/v2/user`, which every server generation this app talks
+    /// to serves, and the probes `Session` already makes on an identity that
+    /// answers.
+    ///
+    /// - Returns: false when there is nothing to fetch for — the server, just
+    ///   asked, refused the token, which `phase` now says, or the session was
+    ///   replaced while it was being asked about. A session that was not asked
+    ///   about, whatever its state, and one still without an answer refresh as
+    ///   they always have.
+    private func reidentifyIfFailed(_ session: Session) async -> Bool {
+        if let reidentifying {
+            await reidentifying.value
+        } else if case .failed = session.state {
+            let asking = Task { await reidentify(session) }
+            reidentifying = asking
+            await asking.value
+            reidentifying = nil
+        } else {
+            return true
+        }
+        guard self.session === session else { return false }
+        switch session.state {
+        case .expired, .signedOut: return false
+        case .signedIn, .signingIn, .failed: return true
+        }
+    }
+
+    /// The identity call, the hand-over and what follows from the answer.
+    private func reidentify(_ session: Session) async {
+        let paused = mutations
+        await paused?.pauseDraining()
+        await session.restore()
+        let state = session.state
+        // Only for the session still in use. One replaced while this was
+        // asked — signed out, or left for another server — has already been
+        // handed over from, and has nothing here to hand over to.
+        if self.session === session, case let .signedIn(user) = state {
+            await accountResolved(user, on: session.serverURL)
+        }
+        await paused?.resumeDraining()
+        guard self.session === session else { return }
+        switch state {
+        case .signedIn:
+            // What `enterLibrary` does for a session that signs in, which this
+            // one never had done: a hand-over above retired the queue, and the
+            // account the server has now named is the one to remember.
+            ensureMutationQueue()
+            await recordSignedInAccount()
+        case .expired, .signedOut:
+            // The server refused the token, or there was none left to ask
+            // with. Fetching with it would fail the same way, and the notice
+            // that keeps the server and makes signing in again one tap is the
+            // honest screen.
+            phase = .expired
+            loadError = nil
+        case .failed, .signingIn:
+            // Still no answer: nothing is known that was not known before.
+            break
         }
     }
 
