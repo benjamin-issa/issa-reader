@@ -388,13 +388,50 @@ public final class AppModel {
         refreshDownloadedSet()
         Task { [weak self] in await self?.downloads?.reattach() }
 
+        await resumeStoredSession()
+    }
+
+    /// Restores the token stored for this server, and decides where that
+    /// leaves the reader.
+    ///
+    /// The tail of `connect`, and internal so `IssaSharedTests` can reach it:
+    /// `connect` itself builds its `Session` on `URLSession.shared`, a
+    /// background download session besides, and writes the last server into
+    /// the host app's defaults (see `useStore`).
+    ///
+    /// A stored token is no better known than one the browser has just handed
+    /// over. The keychain holds whichever token was installed last, and the
+    /// one an adopt installs is installed before the identity call says whose
+    /// it is — so an adopt whose identity call failed left the arriving
+    /// account's token under the departed account's name, and so did a kill
+    /// between the two. This path then walked straight into the library: the
+    /// departed account's cached shelf, ratings and statuses were shown and
+    /// persisted as the arriving one's, and its undrained writes were posted
+    /// with the arriving one's bearer. The hand-over `adopt` makes was never
+    /// asked here at all. Now both ask it, the same way.
+    func resumeStoredSession() async {
+        guard let session else { return }
         if phase != .ready { phase = .signingIn }
+        // Paused across the identity call for `adopt`'s reason: until the
+        // server has said whose token this is, nothing queued may go out with
+        // it. A drain the reachability hook or a position write would start
+        // meanwhile declines rather than sending the departed account's rows,
+        // and the hand-over below retires the queue that holds them.
+        let paused = mutations
+        await paused?.pauseDraining()
         await session.restore()
+        // Read once, as in `adopt`: the hand-over suspends, and the branch
+        // taken below has to be the one it acted on.
+        let state = session.state
+        if case let .signedIn(user) = state {
+            await accountResolved(user, on: session.serverURL)
+        }
+        await paused?.resumeDraining()
         // The same handling as adopt(). Fixing only that one left this path —
         // the one that runs on every cold launch — dropping the reason on the
         // floor and stranding phase at .signingIn, which renders as the blank
         // sign-in form: exactly the bug adopt() was fixed for.
-        switch session.state {
+        switch state {
         case .signedIn:
             await enterLibrary()
         case let .failed(reason):
@@ -448,7 +485,7 @@ public final class AppModel {
         // be the one it acted on.
         let state = session.state
         if case let .signedIn(user) = state {
-            await handOverIfTheAccountChanged(to: user, on: session.serverURL)
+            await accountResolved(user, on: session.serverURL)
         }
         // Before `enterLibrary`, whose refresh drains what the same account
         // left queued. The queue the pause was taken on, whichever it is now:
@@ -481,17 +518,25 @@ public final class AppModel {
         }
     }
 
-    /// The only binding available on a token that arrives through the browser
-    /// route: is the identity it resolves to the identity this server was last
-    /// signed in as?
+    /// What happens once the server has said whose token this is: is the
+    /// identity it resolves to the identity this server was last signed in
+    /// as?
     ///
-    /// The callback carries no `state` and no nonce, and cannot — the server
-    /// echoes nothing back, so there is nothing to bind at the moment it
-    /// arrives. `ASWebAuthenticationSession` intercepts its callback scheme only
-    /// from navigations inside its own web view, so over https there is no way
-    /// in; over http, which this app still permits by decision, an on-path
-    /// attacker can inject `302 Location: storyteller://x?token=…` into the
-    /// login chain. This check does not prevent that. It bounds it.
+    /// Every route that learns an identity asks it here, before anything of
+    /// the account's is shown or sent: `adopt`, for a token just handed over;
+    /// `resumeStoredSession`, for one read back from the keychain. A route
+    /// that skipped it walked the arriving account into the departed one's
+    /// library, which is what the restore path did until it asked as well.
+    ///
+    /// For a token that arrives through the browser route it is also the only
+    /// binding there is. The callback carries no `state` and no nonce, and
+    /// cannot — the server echoes nothing back, so there is nothing to bind at
+    /// the moment it arrives. `ASWebAuthenticationSession` intercepts its
+    /// callback scheme only from navigations inside its own web view, so over
+    /// https there is no way in; over http, which this app still permits by
+    /// decision, an on-path attacker can inject
+    /// `302 Location: storyteller://x?token=…` into the login chain. This
+    /// check does not prevent that. It bounds it.
     ///
     /// A mismatch is **not** refused. A second reader on a household iPad is
     /// entirely legitimate, and from here it is indistinguishable from an
@@ -502,13 +547,13 @@ public final class AppModel {
     /// so the arriving reader was shown the departing one's shelf until the
     /// first refresh returned, and the departing one's undrained writes were
     /// posted under the arriving one's token.
-    private func handOverIfTheAccountChanged(to user: User, on server: URL) async {
+    private func accountResolved(_ user: User, on server: URL) async {
         let previous = UserDefaults.standard.string(forKey: Self.accountKey(for: server))
         guard let previous, previous != user.id else { return }
         // Ids and the server, never the token. Worth a warning rather than an
         // info: on a shared device this is an ordinary hand-over, and on an
         // unencrypted network it is the only trace an injected token leaves.
-        IssaLog.warning("adopted token resolves to a different account", [
+        IssaLog.warning("token resolves to a different account", [
             "server": server.absoluteString,
             "from": previous,
             "to": user.id,
