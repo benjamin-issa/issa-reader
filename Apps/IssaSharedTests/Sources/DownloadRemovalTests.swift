@@ -62,10 +62,15 @@ struct DownloadRemovalTests {
     /// `AskCoordinator.remove` hands the deletion to the store's actor and the
     /// font sweep is synchronous, so an assertion about the index has to wait
     /// for the hop rather than for the call to return.
+    ///
+    /// - Parameter limit: how long to give it. A test asserting that something
+    ///   did *not* happen waits the whole of it, so it asks for less.
     private static func eventually(
+        within limit: Duration = .seconds(5),
         _ condition: @escaping @Sendable () async -> Bool,
     ) async -> Bool {
-        for _ in 0 ..< 200 {
+        let deadline = ContinuousClock.now + limit
+        while ContinuousClock.now < deadline {
             if await condition() { return true }
             try? await Task.sleep(for: .milliseconds(25))
         }
@@ -126,6 +131,11 @@ struct DownloadRemovalTests {
             excerpt: "Listen to them, the children of the night.",
         ))
 
+        // The model's store. Without it `app.store` was nil, a deletion of the
+        // annotations through it was a no-op, and the assertion below read a
+        // store nothing under test could reach — it could not fail.
+        app.useStore(store)
+
         app.removeDownload(book, format: .ebook)
 
         #expect(!Self.exists(file))
@@ -133,8 +143,13 @@ struct DownloadRemovalTests {
         #expect(app.books.first?.position?.timestamp == 99)
         let progression = app.bookByUUID[uuid]?.progress
         #expect(progression != nil && abs(progression! - 0.42) < 0.0001)
-        let kept = try await store.annotations(for: uuid)
-        #expect(kept.count == 1, "annotations are the reader's, not the download's")
+        // Watched for a while rather than read once. A deletion would be a hop
+        // to the store's actor, which a read straight after the removal can
+        // land ahead of.
+        let lost = await Self.eventually(within: .milliseconds(500)) {
+            ((try? await store.annotations(for: uuid))?.count ?? 0) != 1
+        }
+        #expect(!lost, "annotations are the reader's, not the download's")
     }
 
     // MARK: - Nothing may be playing out of a file being deleted
