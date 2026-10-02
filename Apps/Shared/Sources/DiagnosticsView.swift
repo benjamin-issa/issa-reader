@@ -32,8 +32,19 @@ struct DiagnosticsView: View {
 
             // Said before anything is shared, not after: what the file contains
             // is the reader's decision to make.
+            #if os(tvOS)
+            // Nothing to export with. tvOS has no share sheet and no
+            // pasteboard — `Clipboard.copy` is empty there — so the copy
+            // button this section used to offer did nothing at all when
+            // pressed. Saying so is better than a control that does nothing.
+            Section {
+                Text("Apple TV can't share or copy the log, so it can only be read here. The most recent entries are below.")
+                    .font(Typography.footnote)
+                    .foregroundStyle(Palette.inkSecondary)
+            }
+            .listRowBackground(Palette.surface)
+            #else
             SettingsSection(note: "The file names your server and the books you opened. Sign-in codes and access tokens are never recorded.") {
-                #if os(iOS) || os(macOS)
                 if let exported {
                     ShareLink(item: exported) {
                         Label("Export logs", systemImage: "square.and.arrow.up")
@@ -42,7 +53,6 @@ struct DiagnosticsView: View {
                     Label("Export logs", systemImage: "square.and.arrow.up")
                         .foregroundStyle(Palette.inkQuaternary)
                 }
-                #endif
                 Button {
                     Clipboard.copy(IssaLog.export())
                 } label: {
@@ -50,6 +60,7 @@ struct DiagnosticsView: View {
                 }
             }
             .listRowBackground(Palette.surface)
+            #endif
 
             Section {
                 Text(preview.isEmpty ? "Nothing recorded yet." : preview)
