@@ -46,10 +46,14 @@
 # The Mac is not covered at all: see CLAUDE.md.
 
 set -euo pipefail
+# Taken before the `cd` to the root: `$0` is a path from wherever the script
+# was run, and from the root a relative one names nothing, so usage printed
+# only sed's complaint (as mac-controls-check.sh already learned).
+SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 ROOT="$PWD"
 
-usage() { sed -n '6,10p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '6,10p' "$SELF" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 SERVER=""
 LABEL=""
