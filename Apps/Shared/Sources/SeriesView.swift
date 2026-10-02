@@ -36,6 +36,8 @@ struct SeriesView: View {
         .accessibilityIdentifier("screen.series")
         .background(Palette.paper)
         .navigationTitle(name)
+        // A book's menu here does not offer the way to this series.
+        .bookRoutes(place: .series(name))
         .overlay {
             if series == nil {
                 PalettePlaceholder(

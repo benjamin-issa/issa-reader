@@ -8,7 +8,8 @@ import SwiftUI
 /// of the downloads list is an edit to this file and to nothing else. The
 /// Reading tab shows four rows and a link to the rest; the Downloads screen
 /// shows every row plus the transfers still arriving. Both get the same row,
-/// the same menu and the same removal.
+/// the same menu — the book's own (`.bookMenu`), with this row's removal last —
+/// and the same removal.
 ///
 /// **Nothing here starts a download.** This is a management surface: it lists
 /// what a reader has already chosen to keep and lets them stop keeping it. A
@@ -231,13 +232,17 @@ struct DownloadsSection: View {
 
     #if os(tvOS)
     /// A shelf of posters, like every other shelf on the television. Hold
-    /// Select for the menu; a press opens the book, which is what a press does
-    /// everywhere else here and is why the menu does not repeat it.
+    /// Select for the book's menu, whose last item removes this edition; a
+    /// press opens the book, which is what a press does everywhere else here
+    /// and is why the menu does not repeat it.
     private var posterRail: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(alignment: .top, spacing: Metrics.spacing12) {
                 ForEach(visibleItems) { item in
-                    BookLink(book: item.book, session: app.session) {
+                    BookLink(
+                        book: item.book, session: app.session,
+                        focusEdition: item.format, onRemoveFocused: { remove(item) },
+                    ) {
                         VStack(alignment: .leading, spacing: Metrics.spacing4) {
                             CoverImage(book: item.book, session: app.session)
                                 .frame(width: 220)
@@ -252,9 +257,6 @@ struct DownloadsSection: View {
                                 .lineLimit(2)
                                 .frame(width: 220, alignment: .leading)
                         }
-                    }
-                    .contextMenu {
-                        removeButton(item)
                     }
                 }
             }
@@ -281,18 +283,20 @@ struct DownloadsSection: View {
         ) {
             row(item)
         }
-        .contextMenu { rowMenu(item) }
+        .bookMenu(item.book, focusEdition: item.format, onRemoveFocused: { remove(item) })
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilityLabel(item))
         .accessibilityAction(named: "Open") { open(item.book) }
+        .bookDetailsAccessibilityAction(item.book)
         .accessibilityAction(named: "Remove download") { remove(item) }
         #else
         row(item)
             .contentShape(Rectangle())
             .onTapGesture { select(item.book) }
-            .contextMenu { rowMenu(item) }
+            .bookMenu(item.book, focusEdition: item.format, onRemoveFocused: { remove(item) })
             .accessibilityElement(children: .combine)
             .accessibilityLabel(accessibilityLabel(item))
+            .bookDetailsAccessibilityAction(item.book)
             .accessibilityAction(named: "Remove download") { remove(item) }
         #endif
     }
@@ -350,33 +354,6 @@ struct DownloadsSection: View {
         #endif
     }
     #endif
-
-    /// The hold menu, and on the Mac the right-click menu. Modelled on
-    /// `BookDetailView.editionMenu`: the destructive item last, with `role`
-    /// rather than a red tint, so every platform draws it the way it draws
-    /// deletion.
-    @ViewBuilder
-    private func rowMenu(_ item: DownloadsInventory.DownloadedItem) -> some View {
-        #if os(macOS)
-        Button("Open in reader", systemImage: "book") { open(item.book) }
-        #else
-        Button("Open", systemImage: "book") { open(item.book) }
-        #endif
-        removeButton(item)
-    }
-
-    @ViewBuilder
-    private func removeButton(_ item: DownloadsInventory.DownloadedItem) -> some View {
-        let button = Button("Remove download", systemImage: "trash", role: .destructive) {
-            remove(item)
-        }
-        #if os(macOS)
-        // ⌫ beside the item, which is what a Mac reader will try first.
-        button.keyboardShortcut(.delete, modifiers: [])
-        #else
-        button
-        #endif
-    }
 
     // MARK: - Transfers
 

@@ -33,7 +33,7 @@ public struct ReadingView: View {
                     alsoReading
                 }
                 if !home.upNext.isEmpty {
-                    BookRail(title: "Up next · To read", books: home.upNext, coverWidth: 64) {
+                    BookRail(title: "Up next · To read", books: home.upNext, coverWidth: Self.upNextCoverWidth) {
                         showLibrary(.toRead)
                     }
                 }
@@ -51,6 +51,7 @@ public struct ReadingView: View {
         // On the scroll view, not inside its content: a toast that scrolls
         // away from the reader it is addressed to is not a toast.
         .downloadRemovalToast()
+        .bookRoutes(place: .shelf)
         .refreshable { await app.refreshLibrary() }
         .overlay {
             if app.books.isEmpty, app.isLoadingLibrary {
@@ -83,6 +84,15 @@ public struct ReadingView: View {
             }
         }
     }
+
+    /// The queue's covers are smaller than a Browse rail's, so the tab stays
+    /// about the book being read. Not on a television, where the rail's own
+    /// ten-foot width applies: 64 points there is a postage stamp across a room.
+    #if os(tvOS)
+    private static let upNextCoverWidth: CGFloat = 220
+    #else
+    private static let upNextCoverWidth: CGFloat = 64
+    #endif
 
     private func resumeLabel(for book: Book) -> String {
         guard let progress = book.progress, progress > 0 else { return "Resume \(book.title)" }

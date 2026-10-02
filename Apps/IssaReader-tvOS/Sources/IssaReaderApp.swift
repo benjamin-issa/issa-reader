@@ -117,7 +117,9 @@ struct TVRootView: View {
                 }
             }
             Tab("Settings", systemImage: "gearshape", value: TVTab.settings) {
-                NavigationStack { SettingsView() }
+                // Downloads & storage lists posters that push a `Book`, and a
+                // stack with no destination for one makes them do nothing.
+                NavigationStack { SettingsView().tvBookDestination(session: app.session) }
             }
         }
     }

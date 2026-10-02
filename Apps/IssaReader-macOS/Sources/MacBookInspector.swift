@@ -20,8 +20,9 @@ import SwiftUI
 /// No navigation stack of its own, deliberately. It had one so the detail's
 /// series link could push, and on macOS 27 that stack re-vended the window's
 /// toolbar on every layout pass until AppKit raised and the app died on the
-/// second cover clicked. The series link now asks the window to push instead:
-/// `MacBookSelection.pushedSeries`, answered by the library's own stack.
+/// second cover clicked. Its series and tag links now ask the window to push
+/// instead: `MacBookSelection.pushed`, answered by the library's own stack —
+/// the same request a book's menu makes for "Go to Series" and "More by".
 struct MacBookInspector: View {
     @Environment(AppModel.self) private var app
     let bookID: String?

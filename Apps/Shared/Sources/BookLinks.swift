@@ -24,17 +24,39 @@ public final class MacBookSelection {
     /// the only way back was clicking a cover again.
     public private(set) var lastShownBookID: String?
 
-    /// A series the inspector has asked the window to show.
+    /// A page the inspector, or a book's menu, has asked the window to show.
+    public enum Pushed: Hashable, Identifiable, Sendable {
+        case series(String)
+        case author(String)
+        case tag(String)
+
+        public var id: Self { self }
+    }
+
+    /// The page the window's content column should push.
     ///
     /// The inspector has no navigation stack of its own. It used to: on
     /// macOS 27 a stack inside the inspector column re-vends the window's
     /// toolbar on every layout pass, AppKit counts the passes, and the app
     /// dies with "more Update Constraints in Window passes than there are
     /// views in the window" the second time a cover is clicked. So a series
-    /// link in the inspector sets this, and the window's own stack — which
-    /// exists precisely because the rails and the detail both push a series —
-    /// does the pushing.
-    public var pushedSeries: String?
+    /// or tag link in the inspector — and "Go to Series" or "More by" in a
+    /// book's menu, which has no stack to push onto either — sets this, and
+    /// the window's own stack, which exists precisely because the rails and
+    /// the detail both push pages, does the pushing.
+    public var pushed: Pushed?
+
+    /// The series half of `pushed`, for the callers that only push a series.
+    ///
+    /// Reading it gives nil while an author or a tag is pushed; writing nil
+    /// clears whatever is pushed, which is what popping the series page means.
+    public var pushedSeries: String? {
+        get {
+            if case let .series(name) = pushed { return name }
+            return nil
+        }
+        set { pushed = newValue.map(Pushed.series) }
+    }
 
     public init() {}
 }
@@ -46,61 +68,86 @@ public final class MacBookSelection {
 /// with a double-click that opens the reader — the label left to the caller so
 /// a rail cover, a grid cell and a row can share them. Signed out, the label is
 /// inert.
+///
+/// Signed in, every one carries the book's menu (`.bookMenu`), which is how a
+/// rail, a grid and the television's posters all get it without each
+/// remembering to.
 struct BookLink<Label: View>: View {
     let book: Book
     let session: Session?
+    /// The edition a Downloads poster stands for; see `BookMenu.Inputs`.
+    var focusEdition: BookContentService.Format?
+    var onRemoveFocused: (() -> Void)?
     @ViewBuilder let label: () -> Label
     #if os(macOS)
     @Environment(\.openWindow) private var openWindow
     @Environment(MacBookSelection.self) private var selection: MacBookSelection?
     #endif
 
+    init(
+        book: Book, session: Session?,
+        focusEdition: BookContentService.Format? = nil,
+        onRemoveFocused: (() -> Void)? = nil,
+        @ViewBuilder label: @escaping () -> Label,
+    ) {
+        self.book = book
+        self.session = session
+        self.focusEdition = focusEdition
+        self.onRemoveFocused = onRemoveFocused
+        self.label = label
+    }
+
     var body: some View {
         if session != nil {
-            #if os(macOS)
-            Button {
-                // Selecting, where there is an inspector to select into.
-                // Without one — a window that has none — a click still opens
-                // the book, which is what the Mac did before the inspector
-                // existed.
-                // Animated for the same reason the toggle is: the first click
-                // of a session opens the column, and a panel that appears
-                // between two frames reads as a glitch.
-                if let selection {
-                    withAnimation(.snappy(duration: 0.2)) { selection.bookID = book.uuid }
-                } else {
-                    openReader()
-                }
-            } label: {
-                label()
-            }
-            .buttonStyle(.plain)
-            // Double-click still opens the book, because that is what a Mac
-            // user expects of a cover and what this app taught them.
-            // Simultaneous, so the single click is not held back waiting to see
-            // whether a second one arrives.
-            .simultaneousGesture(TapGesture(count: 2).onEnded { openReader() })
-            .accessibilityAction(named: "Open in reader") { openReader() }
-            #elseif os(tvOS)
-            // Value-based, so the television declares once — in `TVRootView` —
-            // that a book opens the read-along screen. Pushing a destination
-            // inline here would mean the shared code naming a view that only
-            // the tvOS target has.
-            NavigationLink(value: book) {
-                label()
-            }
-            .buttonStyle(.plain)
-            #else
-            NavigationLink {
-                BookDetailView(book: book)
-            } label: {
-                label()
-            }
-            .buttonStyle(.plain)
-            #endif
+            link.bookMenu(book, focusEdition: focusEdition, onRemoveFocused: onRemoveFocused)
         } else {
             label()
         }
+    }
+
+    @ViewBuilder
+    private var link: some View {
+        #if os(macOS)
+        Button {
+            // Selecting, where there is an inspector to select into.
+            // Without one — a window that has none — a click still opens
+            // the book, which is what the Mac did before the inspector
+            // existed.
+            // Animated for the same reason the toggle is: the first click
+            // of a session opens the column, and a panel that appears
+            // between two frames reads as a glitch.
+            if let selection {
+                withAnimation(.snappy(duration: 0.2)) { selection.bookID = book.uuid }
+            } else {
+                openReader()
+            }
+        } label: {
+            label()
+        }
+        .buttonStyle(.plain)
+        // Double-click still opens the book, because that is what a Mac
+        // user expects of a cover and what this app taught them.
+        // Simultaneous, so the single click is not held back waiting to see
+        // whether a second one arrives.
+        .simultaneousGesture(TapGesture(count: 2).onEnded { openReader() })
+        .accessibilityAction(named: "Open in reader") { openReader() }
+        #elseif os(tvOS)
+        // Value-based, so the television declares once — in `TVRootView` —
+        // that a book opens the read-along screen. Pushing a destination
+        // inline here would mean the shared code naming a view that only
+        // the tvOS target has.
+        NavigationLink(value: book) {
+            label()
+        }
+        .buttonStyle(.plain)
+        #else
+        NavigationLink {
+            BookDetailView(book: book)
+        } label: {
+            label()
+        }
+        .buttonStyle(.plain)
+        #endif
     }
 
     #if os(macOS)
@@ -116,6 +163,10 @@ struct BookLink<Label: View>: View {
 /// `LibraryTabs.openPendingBook` turns into the reader at the saved position —
 /// the path the Continue card, the widget and Handoff all take — and the Reader
 /// window on the Mac, which is already resume-first.
+///
+/// A tap resumes, so the book's own page is the menu's "View details" — and,
+/// for VoiceOver, an action of the same name on the row, which reaches it
+/// without the menu.
 struct ResumeLink<Label: View>: View {
     @Environment(AppModel.self) private var app
     let book: Book
@@ -127,30 +178,37 @@ struct ResumeLink<Label: View>: View {
 
     var body: some View {
         if session != nil {
-            #if os(tvOS)
-            // A push, not a resume request. `requestBook` sets a pending book
-            // that the iOS root view consumes to drive its navigation path;
-            // nothing on the television reads it, so pressing this did
-            // precisely nothing. The shelf's route is the one that works here.
-            NavigationLink(value: book) {
-                label()
-            }
-            .buttonStyle(.plain)
-            #else
-            Button {
-                #if os(macOS)
-                openWindow(id: "Reader", value: book.uuid)
-                #else
-                app.requestBook(book.uuid, .read)
-                #endif
-            } label: {
-                label()
-            }
-            .buttonStyle(.plain)
-            #endif
+            link
+                .bookMenu(book)
+                .bookDetailsAccessibilityAction(book)
         } else {
             label()
         }
+    }
+
+    @ViewBuilder
+    private var link: some View {
+        #if os(tvOS)
+        // A push, not a resume request. `requestBook` sets a pending book
+        // that the iOS root view consumes to drive its navigation path;
+        // nothing on the television reads it, so pressing this did
+        // precisely nothing. The shelf's route is the one that works here.
+        NavigationLink(value: book) {
+            label()
+        }
+        .buttonStyle(.plain)
+        #else
+        Button {
+            #if os(macOS)
+            openWindow(id: "Reader", value: book.uuid)
+            #else
+            app.requestBook(book.uuid, .read)
+            #endif
+        } label: {
+            label()
+        }
+        .buttonStyle(.plain)
+        #endif
     }
 }
 
@@ -159,9 +217,6 @@ struct ResumeLink<Label: View>: View {
 /// Library's Browse screen and the Reading tab's queue, so they cannot drift.
 struct BookRail: View {
     @Environment(AppModel.self) private var app
-    #if os(macOS)
-    @Environment(MacBookSelection.self) private var selection: MacBookSelection?
-    #endif
     let title: String
     let books: [Book]
     /// An 84-point cover is a postage stamp across a room. `Metrics.scale` is 2
@@ -171,6 +226,12 @@ struct BookRail: View {
     #else
     var coverWidth: CGFloat = 84
     #endif
+    /// The series this rail is, when it is one: the book page's rail of the
+    /// rest of a series. Its covers then carry their number in it.
+    ///
+    /// Before `seeAll`, so a caller handing "See all" over as a trailing
+    /// closure still binds it.
+    var series: String?
     var seeAll: (() -> Void)?
 
     var body: some View {
@@ -196,26 +257,27 @@ struct BookRail: View {
                             VStack(alignment: .leading, spacing: Metrics.spacing4) {
                                 CoverImage(book: book, session: app.session)
                                     .frame(width: coverWidth)
-                                    // No series numeral here, deliberately. A
-                                    // rail is a cut of the library — recently
-                                    // added, tagged, still being read — not a
-                                    // series, so a numeral on one of its covers
+                                    // A numeral only when the rail is a series.
+                                    // Most rails are a cut of the library —
+                                    // recently added, tagged, still being read
+                                    // — and a numeral on one of their covers
                                     // counts something the row is not about.
-                                    // The series screen is where that question
-                                    // is being asked; see `SeriesMark`.
-                                    //
-                                    // The same ring the grid draws. A rail
-                                    // cover opens the inspector too, and
-                                    // without it the reader loses track of
-                                    // which cover the column is describing.
-                                    #if os(macOS)
-                                    .overlay {
-                                        if selection?.bookID == book.uuid {
-                                            RoundedRectangle(cornerRadius: Metrics.radiusSmall)
-                                                .strokeBorder(Palette.tangerine, lineWidth: 3)
-                                        }
+                                    // The book page's series rail is about
+                                    // exactly that, so there the covers say
+                                    // which of the series they are, by the
+                                    // rail's series rather than each book's
+                                    // own first one: an omnibus numbered in
+                                    // its own series first still shows where
+                                    // it sits in this one. See `SeriesMark`.
+                                    .overlay(alignment: .topLeading) {
+                                        SeriesMark(membership: series.flatMap(book.membership(inSeries:)))
                                     }
-                                    #endif
+                                    // The same ring the grid draws, over the
+                                    // badge. A rail cover opens the inspector
+                                    // too, and without it the reader loses
+                                    // track of which cover the column is
+                                    // describing.
+                                    .overlay { MacSelectionRing(bookID: book.uuid) }
                                 Text(book.title)
                                     .font(Typography.caption)
                                     .foregroundStyle(Palette.ink)

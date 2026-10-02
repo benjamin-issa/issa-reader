@@ -10,6 +10,7 @@ public struct LibraryView: View {
     @Environment(AppModel.self) private var app
     @State private var search = ""
     @State private var results: [Book] = []
+    private let navigator = LibraryNavigator.shared
 
     public init() {}
 
@@ -106,6 +107,14 @@ public struct LibraryView: View {
         // it, so the strip behind the tab bar's glass accessory was the host's
         // own white — the one place in the app where that showed.
         .background(Palette.paper.ignoresSafeArea())
+        .bookRoutes(place: .shelf)
+        // An author page's "Show in Library" is a search: the library has no
+        // author filter, and its search already looks through authors.
+        .onChange(of: navigator.pendingSearch, initial: true) { _, pending in
+            guard let pending else { return }
+            search = pending
+            navigator.pendingSearch = nil
+        }
         #if !os(iOS)
         // The Mac keeps its toolbar search — the sidebar is already its shelf
         // control — and tvOS renders TVLibraryView, so this only has to compile.
@@ -286,6 +295,9 @@ struct TVPosterItem: View {
                 // layout space reserved for both.
                 .buttonStyle(.card)
                 .focused($focused)
+                // On the button, which is what takes focus: hold Select on the
+                // poster the remote is on.
+                .bookMenu(book)
             } else {
                 cell.coverBlock
             }
@@ -362,21 +374,12 @@ public struct BookCell: View {
                     // both the second of a series and a read-along shows both
                     // rather than one on top of the other.
                     .overlay(alignment: .topLeading) {
-                        SeriesMark(membership: series.flatMap { name in
-                            book.series.first { $0.name == name }
-                        })
+                        SeriesMark(membership: series.flatMap(book.membership(inSeries:)))
                     }
                     // The Mac's selection ring: a click selects into the
                     // inspector rather than opening a window, so the cover has
                     // to say which book the column is describing.
-                    #if os(macOS)
-                    .overlay {
-                        if selection?.bookID == book.uuid {
-                            RoundedRectangle(cornerRadius: Metrics.radiusSmall)
-                                .strokeBorder(Palette.tangerine, lineWidth: 3)
-                        }
-                    }
-                    #endif
+                    .overlay { MacSelectionRing(bookID: book.uuid) }
                 if let progress = book.progress, progress > 0 {
                     ProgressBar(value: progress)
                         .padding(Metrics.spacing4)
@@ -439,9 +442,10 @@ public struct BookCell: View {
 /// cover size there is room for a digit and not for a sentence. Only for a book
 /// the server actually numbered; an unnumbered membership has no number to draw.
 ///
-/// Drawn on a series screen and nowhere else. It used to be on every cover in
-/// the app, and a numeral among books with no series in common reads as a badge
-/// on an arbitrary book rather than as its place in anything.
+/// Drawn on a series screen and the book page's series rail, and nowhere else.
+/// It used to be on every cover in the app, and a numeral among books with no
+/// series in common reads as a badge on an arbitrary book rather than as its
+/// place in anything.
 struct SeriesMark: View {
     let membership: SeriesMembership?
 
@@ -451,6 +455,28 @@ struct SeriesMark: View {
                 .padding(Metrics.spacing4)
                 .accessibilityLabel("\(SeriesText.position(position)) in \(series.name)")
         }
+    }
+}
+
+/// The Mac's mark on the cover the inspector is describing; nothing elsewhere.
+///
+/// Its own view, reading the selection itself, so a cover drawn outside its
+/// cell — the tag page's accessibility-size rows reuse `BookCell.coverBlock` —
+/// still finds the selection in the environment rather than asking a cell that
+/// was never placed in a view tree for it.
+struct MacSelectionRing: View {
+    let bookID: String
+    #if os(macOS)
+    @Environment(MacBookSelection.self) private var selection: MacBookSelection?
+    #endif
+
+    var body: some View {
+        #if os(macOS)
+        if selection?.bookID == bookID {
+            RoundedRectangle(cornerRadius: Metrics.radiusSmall)
+                .strokeBorder(Palette.tangerine, lineWidth: 3)
+        }
+        #endif
     }
 }
 
@@ -498,10 +524,11 @@ public struct ProgressBar: View {
 /// app's most prominent control now opens a book to read rather than describing
 /// one. VoiceOver reads the two as separate elements.
 ///
-/// The Mac keeps opening its own Reader window, which is already resume-first,
-/// and its grid has no detail route to add a chevron for; the signed-out
-/// placeholder stays inert. tvOS renders `TVLibraryView`, whose poster Continue
-/// already pushes straight into the reader, so this card is an iOS concern.
+/// The Mac keeps opening its own Reader window, which is already resume-first;
+/// its route to the book's page is the card's menu, "View details", which
+/// selects the book into the inspector. The signed-out placeholder stays
+/// inert. tvOS renders `TVLibraryView`, whose poster Continue already pushes
+/// straight into the reader, so this card is an iOS concern.
 struct ContinueCardLink: View {
     @Environment(AppModel.self) private var app
     let book: Book
@@ -519,6 +546,9 @@ struct ContinueCardLink: View {
                 ContinueCard(book: book, session: session)
             }
             .buttonStyle(.plain)
+            // The Mac's only way from this card to the book's page: "View
+            // details" selects it into the inspector.
+            .bookMenu(book)
             #elseif os(tvOS)
             // See `ResumeLink`: the television has no consumer for a pending
             // book, so the card has to push like everything else does here. It
@@ -528,6 +558,7 @@ struct ContinueCardLink: View {
                 ContinueCard(book: book, session: session)
             }
             .buttonStyle(.plain)
+            .bookMenu(book)
             .accessibilityIdentifier("card.continue")
             #else
             ContinueCard(book: book, session: session) {
@@ -535,6 +566,7 @@ struct ContinueCardLink: View {
                 // on open when the file is absent (item 02).
                 app.requestBook(book.uuid, .read)
             }
+            .bookMenu(book)
             // Exists only once the library has arrived and something is in
             // progress, which is what the layout sweep waits on: the Reading
             // tab renders its empty state first, and measuring that instead of
