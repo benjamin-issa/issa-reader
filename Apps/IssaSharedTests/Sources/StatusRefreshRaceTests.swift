@@ -324,6 +324,48 @@ struct StatusRefreshRaceTests {
         let stored = try await fixture.store.allBooks().first { $0.uuid == Self.dracula }
         #expect(stored?.status == Self.read, "the overruled status's save landed last and was left there")
     }
+
+    /// The same, with the order the store takes the two saves in decided by
+    /// the test rather than by the runtime.
+    ///
+    /// The test above reaches it through priorities, and settles only on a
+    /// flag raised before the occupying save has reached the store, so a run
+    /// that dispatches the two saves first-come-first-served — the older
+    /// first — passes whether or not the overruled write saves again. Here
+    /// the older write is held between its save and its queueing, the newer
+    /// one runs to the queue, and the older save then lands on top of it,
+    /// which is the order the priorities produce. Released, the older write
+    /// has to put the newer status back.
+    @Test("an overruled status whose save landed after the newer one's is saved over again")
+    func anOverruledStatusSavedLastIsSavedOver() async throws {
+        let fixture = try Self.fixture(books: [
+            SharedFixtures.book("Dracula (cached)", uuid: Self.dracula, progress: 0.1),
+        ])
+        let hold = SeamHold()
+        defer {
+            hold.release()
+            fixture.tearDown()
+        }
+        fixture.app.beforeQueueingStatus = { _ in await hold.arrive() }
+        let dracula = try #require(fixture.app.bookByUUID[Self.dracula])
+
+        let overruled = Task { await fixture.app.setStatus(Self.reading, for: dracula) }
+        await settle { hold.arrivals == 1 }
+        try #require(hold.arrivals == 1, "the older write has to be between its save and its row")
+        await fixture.app.setStatus(Self.read, for: dracula)
+        try #require(hold.arrivals == 2, "the newer write has to have gone past the seam")
+        // The older write's save, landing last.
+        var late = try #require(fixture.app.bookByUUID[Self.dracula])
+        late.status = Self.reading
+        try await fixture.store.upsert(late)
+        hold.release()
+        await overruled.value
+
+        #expect(fixture.app.bookByUUID[Self.dracula]?.status == Self.read)
+        #expect(try await fixture.queuedStatus()?.status == Self.read.uuid)
+        let stored = try await fixture.store.allBooks().first { $0.uuid == Self.dracula }
+        #expect(stored?.status == Self.read, "the overruled status's save landed last and was left there")
+    }
 }
 
 /// A flag the test raises from inside a task, to know it has started.
