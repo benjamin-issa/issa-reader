@@ -108,6 +108,13 @@ struct BookListPage: View {
                 .accessibilityIdentifier("content.\(subject.identifier)")
                 .padding(.horizontal, Metrics.screenMargin)
                 .padding(.bottom, Metrics.screenMargin)
+            } else {
+                // Inside the scroll view, so pull to refresh still works, and
+                // the size of what is visible of it: an empty scroll view
+                // collapses to its content, and the message came out as a
+                // column of one word per line on a ground with no paper.
+                emptyState
+                    .containerRelativeFrame([.horizontal, .vertical])
             }
         }
         .onScrollGeometryChange(for: CGFloat.self) { geometry in
@@ -137,9 +144,6 @@ struct BookListPage: View {
             }
         }
         #endif
-        .overlay {
-            if staged.isEmpty { emptyState }
-        }
         .refreshable { await app.refreshLibrary() }
         .bookRoutes(place: subject.place)
     }
