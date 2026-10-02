@@ -176,11 +176,20 @@ struct AskNotifier: AskNotifying {
 final class AskNotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
     private let coordinator: AskCoordinator
     private let app: AppModel
+    private let centre: NotificationCenter
 
-    init(coordinator: AskCoordinator, app: AppModel) {
+    /// - Parameter centre: where `bringReaderForward` is posted. Injectable so
+    ///   a test can watch for it without hearing every other suite's taps.
+    init(coordinator: AskCoordinator, app: AppModel, centre: NotificationCenter = .default) {
         self.coordinator = coordinator
         self.app = app
+        self.centre = centre
     }
+
+    /// "Bring this book's reader window to the front", with the book's uuid
+    /// under `AskNotifier.bookUUIDKey`. The Mac's reader window answers it
+    /// with `openWindow`, which focuses the window already open for that value.
+    nonisolated static let bringReaderForward = Notification.Name("issa.ask.bringReaderForward")
 
     /// Nothing on screen while the app is in front.
     ///
@@ -229,6 +238,17 @@ final class AskNotificationDelegate: NSObject, UNUserNotificationCenterDelegate 
         coordinator.reopenRequest = uuid
         if Self.needsBookRequest(for: uuid, visibleReader: app.visibleReaderUUID) {
             app.requestBook(uuid, .read)
+        } else {
+            // The request was also what brought the Mac's window for this
+            // book to the front — the library window turned it into
+            // `openWindow` — and the reader should still see the book they
+            // tapped come forward. Posted rather than stored: whichever window
+            // is listening acts on it now, and nothing is left for a window
+            // that appears later to act on again. Nothing listens on the
+            // iPhone, whose reader is the screen.
+            centre.post(
+                name: Self.bringReaderForward, object: nil,
+                userInfo: [AskNotifier.bookUUIDKey: uuid])
         }
     }
 

@@ -18,7 +18,9 @@ import Testing
 struct AskNotificationTapTests {
     private static let bookUUID = "22222222-2222-4222-8222-222222222222"
 
-    private static func delegate() -> (AskNotificationDelegate, AskCoordinator, AppModel, String) {
+    private static func delegate(
+        centre: NotificationCenter = NotificationCenter(),
+    ) -> (AskNotificationDelegate, AskCoordinator, AppModel, String) {
         let (defaults, suite) = SharedFixtures.scratchDefaults()
         let coordinator = AskCoordinator(
             store: AskIndexStore(directory: URL.temporaryDirectory
@@ -28,7 +30,30 @@ struct AskNotificationTapTests {
             centre: NotificationCenter(),
         )
         let app = AppModel(keychain: TapNoTokens(), notificationCentre: NotificationCenter())
-        return (AskNotificationDelegate(coordinator: coordinator, app: app), coordinator, app, suite)
+        return (AskNotificationDelegate(coordinator: coordinator, app: app, centre: centre),
+                coordinator, app, suite)
+    }
+
+    /// Every `bringReaderForward` posted on one centre, by the book it named.
+    @MainActor
+    private final class Forwards {
+        private(set) var books: [String?] = []
+        private var token: (any NSObjectProtocol)?
+
+        init(_ centre: NotificationCenter) {
+            // Delivered synchronously on the posting thread, so what the tap
+            // posted is here by the time `open` returns — no wait needed.
+            token = centre.addObserver(
+                forName: AskNotificationDelegate.bringReaderForward, object: nil, queue: nil,
+            ) { [weak self] note in
+                let book = note.userInfo?[AskNotifier.bookUUIDKey] as? String
+                MainActor.assumeIsolated { self?.books.append(book) }
+            }
+        }
+
+        func stop(_ centre: NotificationCenter) {
+            if let token { centre.removeObserver(token) }
+        }
     }
 
     @Test("a tap for the book already being read asks only its reader")
@@ -43,6 +68,41 @@ struct AskNotificationTapTests {
         #expect(coordinator.reopenRequest == Self.bookUUID, "the reader on screen opens the answer")
         #expect(app.pendingBook == nil,
                 "a request left waiting opens the book again when the Mac's library window next appears")
+    }
+
+    /// Without the request, nothing brought the Mac's reader window to the
+    /// front any more — the request was what reached `openWindow`. The window
+    /// is asked for directly instead, by a post that nothing keeps.
+    @Test("a tap for the book already being read asks its window to come forward, once")
+    func readerOnScreenIsBroughtForward() {
+        let centre = NotificationCenter()
+        let forwards = Forwards(centre)
+        defer { forwards.stop(centre) }
+        let (delegate, _, app, suite) = Self.delegate(centre: centre)
+        defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
+        app.setReaderVisible(Self.bookUUID, true)
+        defer { app.setReaderVisible(Self.bookUUID, false) }
+
+        delegate.open(bookUUID: Self.bookUUID)
+
+        #expect(forwards.books == [Self.bookUUID])
+        #expect(app.pendingBook == nil, "bringing the window forward must not leave a request behind")
+    }
+
+    @Test("a tap for a book not on screen goes by the request, not by a forward")
+    func otherBookIsNotForwarded() {
+        let centre = NotificationCenter()
+        let forwards = Forwards(centre)
+        defer { forwards.stop(centre) }
+        let (delegate, _, app, suite) = Self.delegate(centre: centre)
+        defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
+        app.setReaderVisible("some-other-book", true)
+        defer { app.setReaderVisible("some-other-book", false) }
+
+        delegate.open(bookUUID: Self.bookUUID)
+
+        #expect(forwards.books.isEmpty)
+        #expect(app.pendingBook?.uuid == Self.bookUUID)
     }
 
     @Test("a tap for a book not on screen still opens it")
