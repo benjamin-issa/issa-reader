@@ -15,7 +15,8 @@ import WidgetKit
 /// What state there is lives **in the snapshot on disk**, not in this object.
 /// An in-memory record of which cover had been fetched did not survive a cold
 /// launch, could not be reconciled with a file another launch had written, and
-/// gave every question two possible answers.
+/// gave every question two possible answers. The one exception is a record of
+/// the last cover *attempt*, which leaves nothing on disk when it fails.
 @MainActor
 final class CurrentBookPublisher {
     static let shared = CurrentBookPublisher()
@@ -39,11 +40,39 @@ final class CurrentBookPublisher {
     private var playingSince: Date?
     /// Rejects a cover fetch that was overtaken while it was in flight.
     private var coverGeneration = 0
+    /// The last book a cover was asked for, and when.
+    ///
+    /// The one piece of state kept in memory, because it records an attempt
+    /// rather than a result: a cover that could not be fetched — offline, or
+    /// a book whose art 404s in both shapes — leaves nothing on disk to say
+    /// it was tried. Without it every publish asked again, and every publish
+    /// rewrote the snapshot and reloaded the widget to make room for the
+    /// answer, so a reader narrating offline spent the widget's daily reload
+    /// budget in minutes. Losing it at a cold launch costs one retry.
+    private var coverAttempt: CoverAttempt?
+
+    struct CoverAttempt: Equatable {
+        let bookID: String
+        let at: Date
+    }
+
+    /// What one publish should do.
+    struct Plan: Equatable {
+        /// Write the snapshot and reload the widget.
+        var write: Bool
+        /// Ask for the cover.
+        var fetchCover: Bool
+    }
 
     /// How long a silent owner keeps its claim.
     private static let ownershipLapse: TimeInterval = 90
     /// The smallest move in whole-book progress worth a snapshot write.
     private static let progressWorthWriting = 0.002
+    /// How long a cover that could not be fetched is left before it is asked
+    /// for again. Long enough that a reader narrating offline costs a request
+    /// every few minutes rather than every page; short enough that the art
+    /// arrives soon after the network does.
+    static let coverRetry: TimeInterval = 10 * 60
 
     private init() {}
 
@@ -76,37 +105,67 @@ final class CurrentBookPublisher {
         // What is on disk right now, which may be the previous book's.
         let coverMatches = existing?.coverBookID == book.uuid
         let usableChapter = Self.usableChapter(chapter, title: book.title)
+        let plan = Self.plan(
+            existing: existing, bookID: book.uuid, chapter: usableChapter,
+            progress: progress, isPlaying: isPlaying,
+            lastAttempt: coverAttempt, now: .now)
 
-        // Written, and the widget reloaded, only when something it draws has
-        // moved. Every caller publishes on its own clock — the reader on each
-        // debounced save, two seconds apart while narrating; the listening
-        // loop every fifteen seconds — and each publish used to be a read, a
-        // rewrite and a reload request against a per-widget daily budget
-        // counted in tens. A fifth of a percent is under a page of a novel.
-        if let existing, existing.bookID == book.uuid, existing.chapter == usableChapter,
-           existing.isPlaying == isPlaying, coverMatches,
-           abs(existing.progress - progress) < Self.progressWorthWriting {
-            return
+        if plan.write {
+            CurrentBookSnapshotStore.write(CurrentBookSnapshot(
+                bookID: book.uuid,
+                title: book.title,
+                author: book.byline,
+                chapter: usableChapter,
+                progress: progress,
+                remaining: remaining.flatMap { $0.isFinite ? $0 : nil },
+                isPlaying: isPlaying,
+                coverBookID: coverMatches ? book.uuid : nil,
+                coverIsSquare: coverMatches ? (existing?.coverIsSquare ?? false) : false,
+            ))
+            reload()
         }
 
-        CurrentBookSnapshotStore.write(CurrentBookSnapshot(
-            bookID: book.uuid,
-            title: book.title,
-            author: book.byline,
-            chapter: usableChapter,
-            progress: progress,
-            remaining: remaining.flatMap { $0.isFinite ? $0 : nil },
-            isPlaying: isPlaying,
-            coverBookID: coverMatches ? book.uuid : nil,
-            coverIsSquare: coverMatches ? (existing?.coverIsSquare ?? false) : false,
-        ))
-        reload()
+        if plan.fetchCover {
+            // Recorded before the answer, so a publish made while the fetch is
+            // in flight does not start a second one. A book with no session —
+            // nothing to ask — counts as tried, for the same reason.
+            coverAttempt = CoverAttempt(bookID: book.uuid, at: .now)
+            fetchCover(for: book, session: session)
+        }
+    }
 
-        // Keyed on the book alone. Keying on the shape as well never converged:
-        // when square art does not exist the fetch falls back to portrait, so
-        // "landed != wanted" stayed true and every publish re-ran a doomed
-        // request — hundreds an hour, each with its own widget reload.
-        if !coverMatches { fetchCover(for: book, session: session) }
+    /// The publish decision, apart from the files it reads and writes.
+    ///
+    /// Written, and the widget reloaded, only when something it draws has
+    /// moved. Every caller publishes on its own clock — the reader on each
+    /// debounced save, two seconds apart while narrating; the listening loop
+    /// every fifteen seconds — and each publish used to be a read, a rewrite
+    /// and a reload request against a per-widget daily budget counted in
+    /// tens. A fifth of a percent is under a page of a novel.
+    ///
+    /// The cover is not one of those things. It used to be — a snapshot
+    /// whose cover had not landed counted as changed — and a cover that could
+    /// not be fetched then never landed, so every publish rewrote, reloaded
+    /// and asked again. The fetch that succeeds stamps the snapshot and
+    /// reloads the widget itself; one that fails has nothing to draw.
+    ///
+    /// Keyed on the book alone, not the shape as well. Keying on the shape
+    /// never converged: when square art does not exist the fetch falls back
+    /// to portrait, so "landed != wanted" stayed true and every publish
+    /// re-ran a doomed request — hundreds an hour, each with its own reload.
+    static func plan(
+        existing: CurrentBookSnapshot?, bookID: String, chapter: String?,
+        progress: Double, isPlaying: Bool, lastAttempt: CoverAttempt?, now: Date,
+    ) -> Plan {
+        let unchanged = existing.map {
+            $0.bookID == bookID && $0.chapter == chapter && $0.isPlaying == isPlaying
+                && abs($0.progress - progress) < progressWorthWriting
+        } ?? false
+        let coverMatches = existing?.coverBookID == bookID
+        let triedRecently = lastAttempt.map {
+            $0.bookID == bookID && now.timeIntervalSince($0.at) < coverRetry
+        } ?? false
+        return Plan(write: !unchanged, fetchCover: !coverMatches && !triedRecently)
     }
 
     /// A chapter that is only the book's title again, or blank, is not a
@@ -158,6 +217,7 @@ final class CurrentBookPublisher {
         owner = nil
         playingSince = nil
         coverGeneration += 1
+        coverAttempt = nil
         suspended = true
         CurrentBookSnapshotStore.clear()
         reload()
