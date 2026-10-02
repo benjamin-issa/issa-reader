@@ -287,6 +287,9 @@ public final class AppModel {
             if phase == .launching { phase = .chooseServer }
             return
         }
+        // Before anything below is replaced, while `session` still says which
+        // server the state in memory came from.
+        await prepareForServer(url)
         // The RESOLVED address, not the raw text. Everything downstream —
         // the device flow, audiobook streaming, the expired notice — re-derives
         // a URL from `serverAddress`, and re-deriving from a bare hostname
@@ -389,6 +392,37 @@ public final class AppModel {
         Task { [weak self] in await self?.downloads?.reattach() }
 
         await resumeStoredSession()
+    }
+
+    /// Leaves the previous server's account behind, when `connect` is moving
+    /// to a different server.
+    ///
+    /// The head of `connect`, and internal for the reason `resumeStoredSession`
+    /// is. A connect to another server replaced the session, the store and the
+    /// queue, and kept everything else: the catalogue, the statuses, the
+    /// ratings (unless the new store had some of its own), the high-water
+    /// marks and the record of unsent writes all stayed, and nothing moved the
+    /// fence. The first sign-in there found no account recorded for the new
+    /// server, so the hand-over had nothing to compare, and the library opened
+    /// on the old server's catalogue — Continue card, ratings and all — until
+    /// a refresh answered; one that failed left it standing with no error. And
+    /// on a copy of the old server, which hands out the same uuids, the
+    /// refresh kept the old server's newer positions and saved them into the
+    /// new server's store.
+    ///
+    /// Only when there was a server before and this is a different one, by
+    /// the key its store and its account are filed under. A first connect has
+    /// nothing to leave — and clearing the widget and Spotlight at every
+    /// launch would be a fault of its own — and a connect to the same server,
+    /// signing in again after an expiry, is the same library.
+    func prepareForServer(_ url: URL) async {
+        guard let current = session,
+              current.serverURL.absoluteString != url.absoluteString
+        else { return }
+        IssaLog.info("leaving server", [
+            "from": current.serverURL.absoluteString, "to": url.absoluteString,
+        ])
+        await leaveAccount(.serverSwitch, nowPlaying: nowPlayingController)
     }
 
     /// Restores the token stored for this server, and decides where that
@@ -558,7 +592,7 @@ public final class AppModel {
             "from": previous,
             "to": user.id,
         ])
-        await clearAccountScopedState(nowPlaying: nowPlayingController)
+        await leaveAccount(.accountSwitch, nowPlaying: nowPlayingController)
     }
 
     /// Signs out and leaves nothing behind.
@@ -572,7 +606,7 @@ public final class AppModel {
         // gone would delete a file belonging to whoever signs in next.
         commitPendingRemoval()
         await session?.signOut()
-        await clearAccountScopedState(nowPlaying: nowPlaying)
+        await leaveAccount(.signOut, nowPlaying: nowPlaying)
 
         // What only a sign-out lets go of. A switch between accounts on this
         // same server keeps all three: the store file is per server, the
@@ -595,24 +629,52 @@ public final class AppModel {
         phase = .chooseServer
     }
 
-    /// Everything held in memory, on the lock screen or on the device that
-    /// belongs to the account being left — and to no other.
+    /// Why an account's state is being let go of, for `leaveAccount`.
     ///
-    /// Shared by `signOut` and by an account *switch*: adopting a token whose
-    /// identity is not the one this server was last signed in as. The two
-    /// differ only in what they keep, and agree completely on what has to go,
-    /// so they are one method rather than two lists. A second list written
+    /// The three agree on almost everything and differ only in what outlives
+    /// the exit. A sign-out and a switch between accounts on one server both
+    /// empty the account's rows from the store and tell the objects keeping
+    /// per-book state of their own — reader styles, volume trims, question
+    /// indexes — to forget it. A server switch does neither: the store file
+    /// is that server's, and its account has not signed out — its token is
+    /// still in the keychain, so going back to that server opens its library
+    /// from the store, as any launch does.
+    private enum AccountExit {
+        /// The reader signed out.
+        case signOut
+        /// A token resolved to an account other than the one this server was
+        /// last signed in as.
+        case accountSwitch
+        /// `connect` is moving to a different server.
+        case serverSwitch
+    }
+
+    /// Lets go of everything held in memory, on the lock screen or on the
+    /// device that belongs to the account being left — and to no other.
+    ///
+    /// One method for every way out, because the ways out differ only in what
+    /// they keep and agree completely on what has to go. A second list written
     /// later would be missing fields, and every field missing from it is one
-    /// account's data shown to another.
-    private func clearAccountScopedState(nowPlaying: NowPlayingController?) async {
-        // First, before anything suspends. This is the fence every detached
-        // catalogue write checks, and it sat after two awaits — the server
-        // sign-out and the store's DELETE — so a refresh resuming in that
-        // window captured the old generation, passed every guard, and wrote
-        // the departed account's catalogue back over the DELETE.
+    /// account's data shown to another. What an exit keeps is said in the
+    /// step it is kept from (`AccountExit`).
+    ///
+    /// The steps run in order, and the order is part of the contract: the
+    /// fence first, before anything suspends; then whatever could still make a
+    /// sound; then memory, all of it before the first await; and only then the
+    /// queue, the store and the rest of the device. Anything belonging to the
+    /// device rather than to an account, and so meant to survive this, is
+    /// exempted inside the step that would otherwise take it — not by a
+    /// caller working around the whole.
+    private func leaveAccount(_ exit: AccountExit, nowPlaying: NowPlayingController?) async {
+        // 1. The fence. First, before anything suspends: this is what every
+        // detached catalogue write checks, and it sat after two awaits — the
+        // server sign-out and the store's DELETE — so a refresh resuming in
+        // that window captured the old generation, passed every guard, and
+        // wrote the departed account's catalogue back over the DELETE.
         catalogueGeneration += 1
-        // Stop the audio, and stop anything listening for it, before the
-        // stopping itself is announced.
+
+        // 2. Anything audible. Stop the audio, and stop anything listening for
+        // it, before the stopping itself is announced.
         //
         // Order matters twice over. `pause()` notifies its rate observers
         // synchronously, so pausing first republished the ex-account's book to
@@ -625,29 +687,15 @@ public final class AppModel {
         // And the open book, which since it outlives its screen would otherwise
         // keep narrating the departed account's library out loud.
         releaseAllReaders()
-        // The departed account's queue is retired and put out of reach before
-        // its table is emptied. Emptying the `mutation` table was said to be
-        // what kept the departed account's undrained writes from going out
-        // under the arriving account's token, and alone it was not: a write
-        // already on its way into the queue could insert its row after the
-        // DELETE, for the next drain to find and send with the new bearer, and
-        // a drain caught mid-backlog went on sending rows it had read before
-        // the DELETE. A retired queue refuses the one and stops the other
-        // before its next row (`MutationQueue.retire`), and with `mutations`
-        // nil nothing written while this suspends is queued at all. A request
-        // already on the wire when a sign-in began was waited for by `adopt`'s
-        // pause; `signOut` has invalidated the token before this runs, so a
-        // drain there gets a 401 and stops.
-        let retiring = mutations
-        mutations = nil
-        await retiring?.retire()
-        // The catalogue belongs to the account, so it goes with it. Annotations
-        // do not: they are device-local and this is their only copy.
-        try? await store?.clearAccountData()
-        // The high-water marks go too. They are keyed by book uuid, and the
-        // same server hands the same uuids to a different account — so without
-        // this, account A's finished book refuses every derived write account B
-        // makes against it.
+
+        // 3. Memory, all of it before anything below suspends, so nothing
+        // that runs in those suspensions finds half an account. Every write
+        // that could resume into it is behind the fence above.
+        //
+        // The high-water marks. They are keyed by book uuid, and the same
+        // server hands the same uuids to a different account — so without
+        // this, account A's finished book refuses every derived write account
+        // B makes against it.
         positionGuards = [:]
         // And what has already been said about them, or the first refusal the
         // next account meets would be swallowed as a repeat of a departed one.
@@ -660,7 +708,7 @@ public final class AppModel {
         downloadedUUIDs = []
         statuses = []
         // Book uuids as well, standing for status writes the `mutation` table
-        // held — and it has just been cleared.
+        // held — and it is cleared below.
         autoFiledBookUUIDs = []
         // And the record of this device's status and rating writes, keyed by
         // the same uuids: left in place, the next account's first refresh kept
@@ -672,15 +720,55 @@ public final class AppModel {
         loadError = nil
         // Everything else keyed by a value the next account shares. The server
         // hands the same book uuids to a different reader, which is why
-        // positionGuards is cleared two lines up — and `pendingBook` is a book
-        // uuid, so a widget tap left unconsumed would open in the next
-        // account's library.
+        // positionGuards is cleared above — and `pendingBook` is a book uuid,
+        // so a widget tap left unconsumed would open in the next account's
+        // library.
         pendingBook = nil
         readerRequest = nil
         visibleReaderUUID = nil
         listeningError = nil
-        notificationCentre.post(name: PlaybackSettings.signOutNotification, object: nil)
 
+        // 4. The write queue, retired and put out of reach before its table is
+        // emptied. Emptying the `mutation` table was said to be what kept the
+        // departed account's undrained writes from going out under the
+        // arriving account's token, and alone it was not: a write already on
+        // its way into the queue could insert its row after the DELETE, for
+        // the next drain to find and send with the new bearer, and a drain
+        // caught mid-backlog went on sending rows it had read before the
+        // DELETE. A retired queue refuses the one and stops the other before
+        // its next row (`MutationQueue.retire`), and with `mutations` nil
+        // nothing written while this suspends is queued at all. A request
+        // already on the wire when a sign-in began was waited for by the
+        // pause the identity call is made under; `signOut` has invalidated the
+        // token before this runs, so a drain there gets a 401 and stops.
+        let retiring = mutations
+        mutations = nil
+        await retiring?.retire()
+
+        // 5. The store's copy of the account. The catalogue belongs to the
+        // account, so it goes with it. Annotations do not: they are
+        // device-local and this is their only copy.
+        //
+        // Not on a server switch. That file is the server's being left, and
+        // its rows are its account's — queued writes included, which go with
+        // the first drain when the reader comes back to it.
+        if exit != .serverSwitch {
+            try? await store?.clearAccountData()
+        }
+
+        // 6. What the rest of the app keeps per book. Reader styles, volume
+        // trims and question indexes are keyed by book uuid like everything
+        // above, and the objects holding them are not this model's to reach
+        // into — hence a notification rather than a call.
+        //
+        // Not on a server switch, for the reason the store is kept: that
+        // account has not gone anywhere.
+        if exit != .serverSwitch {
+            notificationCentre.post(name: PlaybackSettings.signOutNotification, object: nil)
+        }
+
+        // 7. Transfers, covers, the widget and Spotlight.
+        //
         // The account's transfers go with it. The manager itself stays: its
         // background session owns its identifier for the life of the process,
         // and tearing it down here made the session the next sign-in built
@@ -1283,7 +1371,7 @@ public final class AppModel {
     /// resume, and no transport control anywhere that could put it right.
     ///
     /// The same two lines sign-out uses, for the same reason — see
-    /// `clearAccountScopedState` — and both are needed: an audiobook plays
+    /// `leaveAccount` — and both are needed: an audiobook plays
     /// through `listening`, a read-along through the reader's own coordinator,
     /// and a removal cannot know which the listener chose.
     ///
