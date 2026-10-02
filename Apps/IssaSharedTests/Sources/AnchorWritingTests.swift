@@ -102,6 +102,76 @@ struct AnchorWritingTests {
         #expect(anchors.count == 1)
         #expect(anchors.last?.audioHref.isEmpty == false, "and it names the file it narrated")
     }
+
+    /// F02#1. The voice paused in chapter two and the reader read on — here,
+    /// back to chapter one, which is the same thing to the anchor: a page the
+    /// paused sentence is not on. Every accepted save used to re-stamp that
+    /// sentence with the current time, so the anchor was always a beat newer
+    /// than the position it sat beside, `ListeningResume` took it over the
+    /// reader's own place, and the car started at the pause.
+    @Test("a paused voice off the page being saved leaves the anchor alone")
+    func aPausedVoiceOffThePageWritesNoAnchor() async throws {
+        let model = ReaderModel(
+            book: SharedFixtures.book("Fixture", uuid: Self.uuid), session: try Self.session())
+        let directory = try await Self.narrating(model)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        #expect(model.readalong?.player.isPlaying == false, "the voice has to be paused")
+        let anchors = AnchorCapture()
+        let positions = PositionCapture()
+        model.recordAudioAnchor = { anchors.record($0) }
+        model.enqueuePosition = { locator, _, _ in
+            positions.record(locator)
+            return true
+        }
+
+        await model.go(toChapter: 0)
+        await model.saveProgress()
+
+        #expect(positions.last?.href == "OEBPS/ch01.xhtml", "the reader's page was saved")
+        #expect(anchors.count == 0, "and the paused sentence in chapter two was not stamped beside it")
+    }
+
+    /// The other half of the rule, so the fix cannot be "only when it is on
+    /// the page": a voice that is still talking is where the listener is,
+    /// whatever page the reader has turned to, and the car must start there.
+    @Test("a playing voice still writes its anchor from a page it is not on")
+    func aPlayingVoiceOffThePageStillWritesItsAnchor() async throws {
+        let model = ReaderModel(
+            book: SharedFixtures.book("Fixture", uuid: Self.uuid), session: try Self.session())
+        model.package = try EPUBPackage.open(url: Self.fixtureURL())
+        let package = try #require(model.package)
+        let timeline = SMILParser.timeline(for: package)
+        await model.resize(to: CGSize(width: 340, height: 560))
+        await model.go(toChapter: 0)
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appending(path: "issa-anchor-writing-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let files = try AudioExtraction.extractAudio(
+            from: package, timeline: timeline, bookID: "anchor-writing", into: directory)
+        model.attachNarration(timeline: timeline, audioFiles: files)
+        let entry = try #require(timeline.firstEntry(inDocument: Self.chapterTwo))
+        let anchors = AnchorCapture()
+        model.recordAudioAnchor = { anchors.record($0) }
+        model.enqueuePosition = { _, _, _ in true }
+
+        // Nothing between the play and the save's own reading of the clock
+        // suspends, so the fixture's tenth of a second of audio cannot end
+        // underneath the assertion.
+        #expect(await model.resumeNarration(at: entry, playing: true))
+        await model.go(toChapter: 0)
+        #expect(model.readalong?.player.isPlaying == true, "the voice has to be talking")
+        await model.saveProgress()
+
+        #expect(anchors.count == 1)
+        #expect(anchors.last?.audioHref == entry.audioHref, "the sentence being spoken, not the page")
+    }
+}
+
+/// The locators a save handed over.
+@MainActor
+private final class PositionCapture {
+    private(set) var last: ReadiumLocator?
+    func record(_ locator: ReadiumLocator) { last = locator }
 }
 
 /// What a cancelled listening writer must not still do.

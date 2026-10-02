@@ -1232,9 +1232,19 @@ public final class ReaderModel {
 
     /// Whether the voice is speaking a sentence on the page being shown.
     private var narrationIsOnVisiblePage: Bool {
-        guard let entry = readalong?.activeEntry, let layout else { return false }
-        guard entry.textHref == currentSpineHref else { return false }
-        return layout.page(containingFragment: entry.fragmentID)?.index == pageIndex
+        guard let layout, let page = currentPage, let href = currentSpineHref else { return false }
+        return narrationIsOn(page: page, of: layout, inDocument: href)
+    }
+
+    /// Whether the sentence the voice is on — playing or paused — is on a given
+    /// page of a given chapter.
+    ///
+    /// Taking the page rather than reading `pageIndex`, because `saveProgress`
+    /// asks about the page it captured before it suspends, and the reader may
+    /// have turned it since.
+    private func narrationIsOn(page: RenderedPage, of layout: ChapterLayout, inDocument href: String) -> Bool {
+        guard let entry = readalong?.activeEntry, entry.textHref == href else { return false }
+        return layout.page(containingFragment: entry.fragmentID)?.index == page.index
     }
 
     /// Turns the page, and takes the voice with it.
@@ -2108,6 +2118,11 @@ public final class ReaderModel {
             ),
             text: LocatorAnchoring.quote(from: layout.attributedText.string, at: offset),
         )
+        // Decided now, against the page being saved, rather than after the
+        // write below: the reader can turn the page while it is in flight, and
+        // the anchor has to be judged against the place this save is about.
+        let narrationBelongsToSave = isPlaying
+            || narrationIsOn(page: page, of: layout, inDocument: href)
         // Recorded locally first: a chapter read with no signal must not be
         // lost, and the drain collapses a run of page turns to one write.
         let timestamp = ProgressService.now()
@@ -2125,10 +2140,11 @@ public final class ReaderModel {
         // was never at, or the book of an account that had left.
         if accepted { publishSnapshot(progress: overall) }
 
-        // The anchor, whenever narration has actually played. The locator above
-        // is a fraction of the *text*; this is a file and an offset, which is
-        // the only thing the audiobook engine can act on — and the whole reason
-        // switching to the car mid-book can now land on the same sentence.
+        // The anchor, while the narration is part of where the reader is. The
+        // locator above is a fraction of the *text*; this is a file and an
+        // offset, which is the only thing the audiobook engine can act on — and
+        // the whole reason switching to the car mid-book can now land on the
+        // same sentence.
         //
         // Only when the position was accepted, exactly as the audiobook's
         // fifteen-second writer has it. The anchor is the *more* durable half —
@@ -2139,7 +2155,16 @@ public final class ReaderModel {
         // reports success, and releases the hold on the way past. This half of
         // the rule was written for the listening writer and never given to the
         // reader's twin.
-        if accepted, let anchor = readalong?.currentAnchor {
+        //
+        // And only while the voice is playing, or paused on this very page.
+        // `currentAnchor` is the sentence the voice last reached, and a pause
+        // keeps it — so a reader who paused at a fifth of the way through and
+        // read on silently to seven tenths re-stamped that fifth with the
+        // current time on every page turn. The anchor was always a beat newer
+        // than the position, `ListeningResume`'s age rung could never set it
+        // aside, and the car started at the paused sentence and then wrote the
+        // reader's place over with it.
+        if accepted, narrationBelongsToSave, let anchor = readalong?.currentAnchor {
             await recordAudioAnchor?(anchor)
         }
     }
