@@ -65,6 +65,21 @@ public enum CustomFonts {
             return known
         }
         guard isReadable(url) else { return nil }
+        // Read before registering — CoreText answers from the file alone —
+        // so a file it cannot name is never registered at all.
+        guard let family = familyName(in: url) else { return nil }
+        // A copy of a family the app already ships is answered with the
+        // bundled family and not registered. Registered beside the bundled
+        // files, which copy CoreText handed back for that family name became
+        // unstable for the rest of the session: a book embedding a subsetted
+        // or older Literata could set its emphasis, or its whole body, in
+        // every *other* book. Not recorded either, so `families()` never
+        // offers it under "Your fonts" — it is already among the app's own.
+        if let bundled = IssaFonts.allFaces.first(where: {
+            $0.family.caseInsensitiveCompare(family) == .orderedSame
+        }) {
+            return bundled.family
+        }
 
         var error: Unmanaged<CFError>?
         let added = CTFontManagerRegisterFontsForURL(url as CFURL, .process, &error)
@@ -72,7 +87,6 @@ public enum CustomFonts {
            CFErrorGetCode(cfError) != CTFontManagerError.alreadyRegistered.rawValue {
             return nil
         }
-        guard let family = familyName(in: url) else { return nil }
         registered[url] = family
         if imported { importedURLs.insert(url) }
         return family

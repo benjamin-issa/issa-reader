@@ -53,6 +53,73 @@ struct CustomFontsTests {
         return destination
     }
 
+    /// A family the app does not ship, made from one it does.
+    ///
+    /// A copy of a bundled family is answered with the bundled family and
+    /// never registered, so a test about registering a face needs one that is
+    /// not bundled — and this target ships no fonts of its own. Literata's
+    /// name table spells its family in UTF-16BE; overwriting that with another
+    /// eight-letter name gives CoreText a face of a family nothing else in the
+    /// process has, PostScript name included.
+    ///
+    /// Each test names its own family: the registry is process-wide and an
+    /// imported URL stays listed after its test, so two tests sharing a family
+    /// would see each other's.
+    private func unbundledFont(into directory: URL, as name: String, family: String) throws -> URL {
+        func utf16BE(_ text: String) -> [UInt8] { text.utf16.flatMap { [UInt8($0 >> 8), UInt8($0 & 0xFF)] } }
+        try #require(family.utf16.count == "Literata".utf16.count, "the name table is patched in place")
+        let from = utf16BE("Literata"), to = utf16BE(family)
+        var bytes = [UInt8](try Data(contentsOf: Self.fonts.appendingPathComponent("Literata-Regular.ttf")))
+        var index = 0
+        var replaced = 0
+        while index + from.count <= bytes.count {
+            if bytes[index] == from[0], Array(bytes[index ..< index + from.count]) == from {
+                bytes.replaceSubrange(index ..< index + from.count, with: to)
+                replaced += 1
+                index += from.count
+            } else {
+                index += 1
+            }
+        }
+        #expect(replaced > 0, "Literata's name table no longer spells its family in UTF-16BE")
+        let destination = directory.appendingPathComponent(name)
+        try Data(bytes).write(to: destination)
+        return destination
+    }
+
+    /// Whether CoreText has a face registered from this very file.
+    private static func isRegistered(_ url: URL, family: String) -> Bool {
+        let wanted = CTFontDescriptorCreateWithAttributes(
+            [kCTFontFamilyNameAttribute: family] as CFDictionary)
+        let matches = CTFontDescriptorCreateMatchingFontDescriptors(wanted, nil) as? [CTFontDescriptor] ?? []
+        return matches.contains {
+            (CTFontDescriptorCopyAttribute($0, kCTFontURLAttribute) as? URL)?.standardizedFileURL
+                == url.standardizedFileURL
+        }
+    }
+
+    /// A book's (or an import's) copy of a family the app already bundles.
+    /// Registered beside the bundled files, it made which copy CoreText hands
+    /// back for `.bundled("Literata")` unstable for the rest of the session —
+    /// in every other book, too.
+    @Test("a copy of a bundled family registers nothing and answers with the bundled family")
+    func bundledFamilyIsNotRegisteredAgain() throws {
+        CustomFonts.testRegistryLock.lock()
+        defer { CustomFonts.testRegistryLock.unlock() }
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        defer { unregisterFonts(under: directory) }
+        let book = try copyFont("Literata-Regular.ttf", into: directory, as: "fonts_Body.ttf")
+        let imported = try copyFont("Lexend-Regular.ttf", into: directory)
+
+        #expect(CustomFonts.register(book) == "Literata")
+        #expect(!Self.isRegistered(book, family: "Literata"), "the book's copy was registered")
+        #expect(CustomFonts.register(imported, imported: true) == "Lexend")
+        #expect(!Self.isRegistered(imported, family: "Lexend"), "the imported copy was registered")
+        // Nor is it offered under "Your fonts": it is already under "Reading".
+        #expect(!CustomFonts.families().contains("Lexend"))
+    }
+
     @Test("an imported face registers and is listed")
     func importedFaceIsListed() throws {
         // Held across the whole test — acquired first so its release defer runs
@@ -63,9 +130,11 @@ struct CustomFontsTests {
         let directory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         defer { unregisterFonts(under: directory) }
-        let url = try copyFont("Literata-Regular.ttf", into: directory)
+        let url = try unbundledFont(into: directory, as: "Imported-Regular.ttf", family: "Imported")
 
         let family = try #require(CustomFonts.register(url, imported: true))
+        #expect(family == "Imported")
+        #expect(Self.isRegistered(url, family: family))
         #expect(CustomFonts.families().contains(family))
     }
 
@@ -82,7 +151,7 @@ struct CustomFontsTests {
         // The shape ReaderModel writes: <fonts>/<book-uuid>/<member name>.
         let bookDirectory = directory.appendingPathComponent("book-uuid", isDirectory: true)
         try FileManager.default.createDirectory(at: bookDirectory, withIntermediateDirectories: true)
-        let url = try copyFont("Lexend-Regular.ttf", into: bookDirectory, as: "body.ttf")
+        let url = try unbundledFont(into: bookDirectory, as: "body.ttf", family: "Embedded")
 
         // Usable in the book that shipped it…
         let family = try #require(CustomFonts.register(url))
@@ -100,7 +169,7 @@ struct CustomFontsTests {
         let directory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         defer { unregisterFonts(under: directory) }
-        let url = try copyFont("OpenDyslexic-Regular.otf", into: directory)
+        let url = try unbundledFont(into: directory, as: "Mine.ttf", family: "Launched")
         // A book's sub-directory must not leak into the listing through the
         // launch pass; `registerAll` is shallow on purpose.
         let bookDirectory = directory.appendingPathComponent("book-uuid", isDirectory: true)
@@ -130,7 +199,7 @@ struct CustomFontsTests {
         let directory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         defer { unregisterFonts(under: directory) }
-        let url = try copyFont("SourceSerif4-Regular.ttf", into: directory)
+        let url = try unbundledFont(into: directory, as: "Mine.ttf", family: "Upgraded")
 
         let family = try #require(CustomFonts.register(url))
         #expect(!CustomFonts.families().contains(family))
@@ -174,12 +243,14 @@ struct CustomFontsTests {
 
         let extracted = CustomFonts.extractedDirectory(bookUUID: "book-uuid", in: root)
         try FileManager.default.createDirectory(at: extracted, withIntermediateDirectories: true)
-        let face = try copyFont("Literata-Regular.ttf", into: extracted, as: "body.ttf")
-        #expect(CustomFonts.register(face) != nil)
+        let face = try unbundledFont(into: extracted, as: "body.ttf", family: "Bookface")
+        #expect(CustomFonts.register(face) == "Bookface")
+        #expect(Self.isRegistered(face, family: "Bookface"))
 
         CustomFonts.removeExtracted(bookUUID: "book-uuid", in: root)
 
         #expect(!FileManager.default.fileExists(atPath: extracted.path))
+        #expect(!Self.isRegistered(face, family: "Bookface"))
     }
 
     /// The half that must **not** happen. A face the reader imported sits at
