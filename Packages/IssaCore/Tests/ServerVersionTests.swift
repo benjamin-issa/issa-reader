@@ -25,6 +25,12 @@ private final class ProbeStub: URLProtocol {
     /// 2.x, where only some feature routes exist — to prove each flag is read
     /// from its own route rather than all from one.
     static let someFeatures = "features.storyteller.test"
+    /// A 3.x beta from before `/server/public` existed (beta.20 and earlier):
+    /// the identity routes 404, but home, shelves and the sidebar answer.
+    static let earlyV3 = "early-v3.storyteller.test"
+    /// `/server/public` 404s and only the shelves route answers — any one of
+    /// the three 3.x-only routes is enough to say this is not 2.x.
+    static let shelvesOnly = "shelves-only.storyteller.test"
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -70,6 +76,11 @@ private final class ProbeStub: URLProtocol {
         case someFeatures:
             let present = [Endpoint.V3.homeSections, Endpoint.V3.libraryFacets]
             return present.contains(path) ? (200, Data("[]".utf8)) : (404, Data())
+        case earlyV3:
+            let present = [Endpoint.V3.homeSections, Endpoint.V3.shelves, Endpoint.V3.sidebar]
+            return present.contains(path) ? (200, Data("[]".utf8)) : (404, Data())
+        case shelvesOnly:
+            return path == Endpoint.V3.shelves ? (200, Data("[]".utf8)) : (404, Data())
         default:
             return (404, Data())
         }
@@ -177,7 +188,29 @@ struct ServerVersionTests {
         #expect(!some.shelves)
         #expect(!some.sidebar)
         #expect(!some.nextUp)
-        #expect(some.generation == .v2, "the public route 404s on this one")
+        // The public route 404s on this one, but home answers, and 2.x has
+        // no home route: a 404 there is not 2.14.21's 404.
+        #expect(some.generation == nil)
+    }
+
+    /// 3.x betas up to beta.20 have no `/server/public` at all, so it 404s
+    /// exactly as on 2.14.21 — but home, shelves and the sidebar answer, which
+    /// they never do on 2.x. Filed as `.v2`, such a server never had a
+    /// null-status book filed; left undetermined, it does.
+    @Test("a 3.x beta from before /server/public is not taken for 2.x")
+    func earlyV3IsNotV2() async {
+        let caps = await probe(ProbeStub.earlyV3)
+        #expect(caps.generation == nil)
+        #expect(!caps.serverDiscovery)
+        #expect(caps.displayVersion == "Not detected")
+        #expect(caps.homeSections && caps.shelves && caps.sidebar)
+    }
+
+    @Test("any one of home, shelves or the sidebar answering rules out 2.x")
+    func oneThreeXRouteIsEnough() async {
+        let caps = await probe(ProbeStub.shelvesOnly)
+        #expect(caps.generation == nil)
+        #expect(caps.shelves && !caps.homeSections && !caps.sidebar)
     }
 
     @Test("every display string, including the ones no probe above produces")
@@ -206,6 +239,9 @@ struct ServerVersionTests {
         let identity = try BookDecodingTests.fixture("v3/server-public")
         #expect(Session.generation(fromPublicProbe: (200, identity)) == .v3)
         #expect(Session.generation(fromPublicProbe: (404, Data())) == .v2)
+        #expect(Session.generation(fromPublicProbe: (404, Data()), threeXRoutesAnswer: false) == .v2)
+        #expect(Session.generation(fromPublicProbe: (404, Data()), threeXRoutesAnswer: true) == nil)
+        #expect(Session.generation(fromPublicProbe: (200, identity), threeXRoutesAnswer: true) == .v3)
         #expect(Session.generation(fromPublicProbe: nil) == nil)
         #expect(Session.generation(fromPublicProbe: (200, Data("{}".utf8))) == nil)
         #expect(Session.generation(fromPublicProbe: (401, identity)) == nil)

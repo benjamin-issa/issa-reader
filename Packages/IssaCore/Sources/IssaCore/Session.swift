@@ -167,7 +167,9 @@ public final class Session {
     /// 3.x endpoints it has.
     ///
     /// The generation comes from `/server/public`, by feature: a 3.x server
-    /// answers it with its identity, 2.14.21 answers 404, and anything else —
+    /// answers it with its identity, 2.14.21 answers 404 (and so do 3.x
+    /// betas before beta.21, which the home, shelves and sidebar probes tell
+    /// apart — see `generation(fromPublicProbe:threeXRoutesAnswer:)`), and anything else —
     /// no answer, a 5xx, a proxy's HTML page with a 200 on it — leaves the
     /// generation undetermined rather than guessed. On 3.x, `/server/details`
     /// then supplies the version string, for display only: a self-built image
@@ -187,13 +189,15 @@ public final class Session {
         async let nextUp = client.probeStatus(Endpoint.V3.nextUp)
 
         func present(_ status: Int) -> Bool { (200 ..< 300).contains(status) }
-        caps.generation = generation(fromPublicProbe: await discovery)
-        caps.serverDiscovery = caps.generation == .v3
         caps.homeSections = present(await home)
         caps.shelves = present(await shelves)
         caps.sidebar = present(await sidebar)
         caps.libraryFacets = present(await facets)
         caps.nextUp = present(await nextUp)
+        caps.generation = generation(
+            fromPublicProbe: await discovery,
+            threeXRoutesAnswer: caps.homeSections || caps.shelves || caps.sidebar)
+        caps.serverDiscovery = caps.generation == .v3
 
         if caps.generation == .v3,
            let details = await client.probeResponse(Endpoint.V3.serverDetails),
@@ -214,15 +218,25 @@ public final class Session {
     /// A 2xx counts only if it is shaped like Storyteller's identity: a
     /// reverse proxy that serves its own sign-in page with a 200 for every
     /// unknown path would otherwise make every 2.x server behind it "3.x".
+    ///
+    /// A 404 counts as 2.x only when nothing else says otherwise. 3.x betas
+    /// up to beta.20 have no `/server/public` either, and 404 it just as
+    /// 2.14.21 does — but they answer home, shelves and the sidebar, which
+    /// no 2.x serves. Filed as `.v2`, such a server never had a null-status
+    /// book filed; undetermined, it does, which is what nil is for.
+    ///
+    /// - Parameter threeXRoutesAnswer: whether any of home, shelves or the
+    ///   sidebar answered 2xx.
     nonisolated static func generation(
         fromPublicProbe probe: (status: Int, data: Data)?,
+        threeXRoutesAnswer: Bool = false,
     ) -> ServerGeneration? {
         guard let probe else { return nil }
         switch probe.status {
         case 200 ..< 300:
             return (try? JSONDecoder().decode(ServerPublic.self, from: probe.data)) != nil ? .v3 : nil
         case 404:
-            return .v2
+            return threeXRoutesAnswer ? nil : .v2
         default:
             return nil
         }
