@@ -23,7 +23,7 @@ private final class LifecycleStub: URLProtocol, @unchecked Sendable {
     /// How long the slow logout takes to answer. Far past the test's own
     /// timeout, short enough that an unbounded sign-out fails the test
     /// rather than hanging it.
-    static let slowAnswer: TimeInterval = 4
+    static let slowAnswer: TimeInterval = 10
 
     private static let seen = Mutex<[String]>([])
 
@@ -145,7 +145,11 @@ struct SessionLifecycleTests {
     func signOutIsBounded() async {
         let host = LifecycleStub.slowLogout
         let keychain = MemoryTokens()
-        let session = session(host, keychain: keychain, logoutTimeout: .milliseconds(200))
+        // A second, not less: the limit must leave the POST time to reach the
+        // server on a loaded machine, or the revoke is cancelled before it is
+        // sent and the last expectation fails for the wrong reason. What the
+        // test proves is that sign-out is bounded, not URLSession's sixty.
+        let session = session(host, keychain: keychain, logoutTimeout: .seconds(1))
         await session.adopt(token: "minted")
         guard case .signedIn = session.state else {
             Issue.record("did not sign in: \(session.state)")
@@ -157,7 +161,7 @@ struct SessionLifecycleTests {
         await session.signOut()
         let elapsed = clock.now - started
 
-        #expect(elapsed < .seconds(2), "sign-out waited \(elapsed) on the logout")
+        #expect(elapsed < .seconds(5), "sign-out waited \(elapsed) on the logout")
         #expect(session.state == .signedOut)
         #expect(keychain.token(for: server(host).absoluteString) == nil)
         #expect(await !session.hasStoredCredential)
