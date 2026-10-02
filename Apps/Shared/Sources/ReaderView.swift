@@ -38,14 +38,29 @@ import UIKit
 public struct ReaderScreen: View {
     @Environment(AppModel.self) private var app
     @Environment(PlaybackSettings.self) private var settings
+    #if !os(tvOS)
+    /// The library a book from the reader's files keeps its writes in. Absent
+    /// on the television, which has no local books.
+    @Environment(LocalLibrary.self) private var local: LocalLibrary?
+    #endif
     @State private var model: ReaderModel?
     private let book: Book
-    private let session: Session
+    /// The server's session, or nil for a book from the reader's files.
+    private let session: Session?
 
     public init(book: Book, session: Session) {
         self.book = book
         self.session = session
     }
+
+    #if !os(tvOS)
+    /// A book the reader added from their own files: its writes go to the
+    /// local library, and nothing about it to any server.
+    public init(localBook book: Book) {
+        self.book = book
+        session = nil
+    }
+    #endif
 
     public var body: some View {
         ZStack {
@@ -57,8 +72,17 @@ public struct ReaderScreen: View {
             }
         }
         .onAppear {
-            if model == nil { model = app.reader(for: book, session: session) }
+            guard model == nil else { return }
+            if let session {
+                model = app.reader(for: book, session: session)
+            } else {
+                #if !os(tvOS)
+                if let local { model = app.reader(for: book, persistence: local) }
+                #endif
+            }
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("screen.reader")
     }
 }
 

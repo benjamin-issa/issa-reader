@@ -253,6 +253,15 @@ enum LocalDevice {
         "Apple TV"
         #endif
     }
+
+    /// The device's own glyph, for the Settings row.
+    static var symbol: String {
+        switch noun {
+        case "iPad": "ipad"
+        case "Mac": "laptopcomputer"
+        default: "iphone"
+        }
+    }
 }
 
 /// Byte counts as the copy deck writes them: "1.2 GB", "640 MB".

@@ -24,6 +24,8 @@ enum LocalImportFixture {
     ) -> URL? {
         guard let flag = arguments.firstIndex(of: argument), arguments.indices.contains(flag + 1)
         else { return nil }
+        // A bare name is a file in the app's own `tmp/`, where the sweep
+        // plants it; nothing else is accepted.
         let name = (arguments[flag + 1] as NSString).lastPathComponent
         let url = directory.appending(path: name)
         return FileManager.default.fileExists(atPath: url.path) ? url : nil

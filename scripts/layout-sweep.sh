@@ -198,6 +198,11 @@ for row in "${SELECTED[@]}"; do
     cp "$WORK/readalong.epub" \
        "$DATA/Library/Application Support/Books/$FIXTURE_READALONG_UUID-$format.epub"
   done
+  # And a copy for the books-from-Files screens (LocalBooksFlowTests,
+  # LayoutSweepTests.testLocalBooksScreen), which the app adds at launch under
+  # -IssaUITestFixtureLocalImport: the system picker cannot be driven.
+  mkdir -p "$DATA/tmp"
+  cp "$WORK/readalong.epub" "$DATA/tmp/local-import.epub"
 
   RESULT="$WORK/$slug.xcresult"
   rm -rf "$RESULT"

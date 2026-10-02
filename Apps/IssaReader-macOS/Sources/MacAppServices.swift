@@ -44,6 +44,10 @@ final class MacAppServices {
     /// Above every window, because a Mac reader has several books open and an
     /// answer must outlive the window that asked for it.
     let ask = AskCoordinator()
+    /// The books the reader added from their own files, one library for every
+    /// window: the list window, each book's reader window, and the account's
+    /// exit, which keeps these books.
+    let local = LocalLibrary()
 
     /// Held because `UNUserNotificationCenter` keeps its delegate weakly, and a
     /// delegate nobody owns is a notification tap that does nothing.
@@ -93,6 +97,16 @@ final class MacAppServices {
         let delegate = AskNotificationDelegate(coordinator: ask, app: app)
         askNotifications = delegate
         UNUserNotificationCenter.current().delegate = delegate
+
+        // The local library, handed to whatever keeps state per book — the
+        // same wiring as the phone's (`AppServices.connectLocalBooks`).
+        app.localBookUUIDs = { [local] in local.uuids }
+        local.onRemove = { [app] uuid in app.releaseLocalBook(uuid) }
+        local.onForget = { [ask, settings] uuid in
+            ask.remove(bookUUID: uuid)
+            settings.forgetBook(uuid)
+        }
+        Task { [local] in await local.load() }
 
         // Nothing else moves `phase` to `.expired`, and the device-grant token
         // goes stale on every install eventually.

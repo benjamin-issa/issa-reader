@@ -1,6 +1,6 @@
 # Privacy Policy — Issa Reader
 
-**Effective 6 September 2026.**
+**Effective 2 October 2026.**
 
 ## The short version
 
@@ -12,6 +12,9 @@ server you or somebody you know runs. Your books, your reading position and your
 sign-in all travel between your device and *that* server. The developer of Issa
 Reader operates no server, receives no copy of any of it, and has no technical
 means of obtaining it.
+
+Issa Reader can also open EPUB books you choose from your own files, with no
+server at all. Those books, and your place in them, stay on your device.
 
 The rest of this document says exactly what that means, because Apple's
 [App Store Review Guideline 5.1.1(i)](https://developer.apple.com/app-store/review/guidelines/#privacy)
@@ -76,9 +79,16 @@ described in the next section.
   book, holding that book's own words so the app can search what you have
   already read. It is built on your device the first time you ask a question
   about that book, is excluded from iCloud backup, and is deleted when you
-  delete the download or sign out. Your questions and the answers are never
-  written down: they exist while the sheet is open and are gone when you close
-  it.
+  delete the download, remove a book you added from your files, or sign out
+  (books from your server). Your questions and the answers are never written
+  down: they exist while the sheet is open and are gone when you close it.
+- **Books you add from your files** — a copy of each EPUB you choose, its cover
+  and any narration extracted from it, kept in the app's own container and
+  excluded from iCloud backup (the original stays where you chose it from). Your
+  reading position, highlights and bookmarks for these books are kept in the
+  app's local database, which is backed up like the rest of it. Removing a book
+  deletes the copy, its position and its highlights; the original file is not
+  touched. Signing out of a server does not remove them.
 
 Deleting the app deletes all of the above.
 
@@ -98,6 +108,10 @@ reading so you can continue on another of your Apple devices. This is carried by
 Apple between devices signed into your Apple Account, is governed by
 [Apple's Privacy Policy](https://www.apple.com/legal/privacy/), and can be turned
 off in system settings. The developer receives nothing from it.
+
+**Books you add from your files are never sent anywhere** — not to your server,
+not to Handoff, Spotlight or the widget. They are read from the copy on your
+device, and nothing about them leaves it.
 
 **"Ask AI about this book" sends nothing at all.** It is answered by Apple's
 Foundation Models framework — the on-device model behind Apple Intelligence —
@@ -145,6 +159,8 @@ can:
 - sign out in **Settings**, which discards the stored token and, at your option,
   the books you have downloaded;
 - delete individual downloads under **Downloads & storage**;
+- remove a book you added from your files under **On this iPhone** (**On this
+  iPad**, **Books on This Mac**);
 - delete the app, which removes the entire container — token, cache, downloads,
   preferences, widget snapshot and log;
 - the diagnostics log discards itself after six hours regardless.

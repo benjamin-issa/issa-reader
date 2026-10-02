@@ -148,6 +148,12 @@ public struct SettingsView: View {
 /// same rows rather than two lists that drift.
 struct AdvancedSettingsRows: View {
     @Environment(AppModel.self) private var app
+    #if !os(tvOS)
+    @Environment(LocalLibrary.self) private var localLibrary: LocalLibrary?
+    #endif
+    #if os(macOS)
+    @Environment(\.openWindow) private var openWindow
+    #endif
 
     var body: some View {
         if let session = app.session, case .signedIn = session.state {
@@ -169,11 +175,45 @@ struct AdvancedSettingsRows: View {
                 .font(Typography.footnote)
                 .foregroundStyle(Palette.inkTertiary)
         }
+        #if !os(tvOS)
+        localBooksRow
+        #endif
         NavigationLink { DiagnosticsView() } label: {
             Label("Export logs", systemImage: "doc.text.magnifyingglass")
                         .labelStyle(.gapped)
         }
     }
+
+    #if !os(tvOS)
+    /// The way to the books added from Files while a server is signed in.
+    ///
+    /// Always here, also at zero books, so a signed-in reader can add one
+    /// without signing out; the count is shown only when there is one. Its
+    /// sentence says where those books live and that they stay out of Library.
+    @ViewBuilder
+    private var localBooksRow: some View {
+        if let localLibrary {
+            #if os(macOS)
+            Button("Books on This Mac…") { openWindow(id: "LocalBooks") }
+                .accessibilityIdentifier("settings.localBooks")
+            #else
+            NavigationLink { LocalBooksScreen(placement: .pushed) } label: {
+                LabeledContent {
+                    if !localLibrary.books.isEmpty {
+                        Text("\(localLibrary.books.count)").monospacedDigit()
+                    }
+                } label: {
+                    Label(LocalBooksCopy.listTitle, systemImage: LocalDevice.symbol).labelStyle(.gapped)
+                }
+            }
+            .accessibilityIdentifier("settings.localBooks")
+            #endif
+            Text("Books you add from \(LocalBooksCopy.originalsPlace) stay on this \(LocalDevice.noun). They aren’t sent to your server and don’t appear in Library.")
+                .font(Typography.footnote)
+                .foregroundStyle(Palette.inkTertiary)
+        }
+    }
+    #endif
 
     private func capabilityRow(_ name: String, _ available: Bool) -> some View {
         LabeledContent(name) {

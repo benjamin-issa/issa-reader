@@ -49,7 +49,9 @@ public struct NowPlayingSheet: View {
                 // the transport because the player is a fixed stack that
                 // already fills a phone.
                 #if os(iOS)
-                if let book = app.playbackBook, book.hasText, app.session != nil {
+                // A book from the reader's files needs no session: it is read
+                // from the device.
+                if let book = app.playbackBook, book.hasText, app.session != nil || book.isLocal {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button { showsReader = true } label: {
                             Label("Read along", systemImage: "book")
@@ -65,8 +67,12 @@ public struct NowPlayingSheet: View {
         // item, and the item disappears the moment `playbackBook` changes.
         #if os(iOS)
         .fullScreenCover(isPresented: $showsReader) {
-            if let book = app.playbackBook, let session = app.session {
-                ReaderScreen(book: book, session: session)
+            if let book = app.playbackBook {
+                if book.isLocal {
+                    ReaderScreen(localBook: book)
+                } else if let session = app.session {
+                    ReaderScreen(book: book, session: session)
+                }
             }
         }
         #endif

@@ -29,6 +29,10 @@ final class AppServices {
     /// `ReaderModel` the moment its screen goes away and an answer has to
     /// outlive that — including all the way into the background.
     let ask = AskCoordinator()
+    /// The books the reader added from their own files, for the whole process
+    /// like `ask`: every window's list and reader, and an account's exit, use
+    /// this one.
+    let local = LocalLibrary()
 
     /// Held because `UNUserNotificationCenter` keeps its delegate weakly, and a
     /// delegate nobody owns is a notification tap that does nothing.
@@ -90,8 +94,28 @@ final class AppServices {
         let delegate = AskNotificationDelegate(coordinator: ask, app: app)
         askNotifications = delegate
         UNUserNotificationCenter.current().delegate = delegate
+        connectLocalBooks()
         connectCarPlay()
         app.startRestore()
+    }
+
+    /// Hands the local library to the objects that keep state per book: an
+    /// account's exit keeps these books' (`AppModel.localBookUUIDs`), a book
+    /// leaving the list lets its reader go at once, and one that is gone for
+    /// good takes its question index, reader style and level with it.
+    private func connectLocalBooks() {
+        app.localBookUUIDs = { [local] in local.uuids }
+        local.onRemove = { [app] uuid in app.releaseLocalBook(uuid) }
+        local.onForget = { [ask, settings] uuid in
+            ask.remove(bookUUID: uuid)
+            settings.forgetBook(uuid)
+        }
+        Task { [local] in
+            await local.load()
+            #if ISSA_UITEST_FIXTURE
+            LocalImportFixture.importIfRequested(into: local)
+            #endif
+        }
     }
 
     /// Hands CarPlay the things it cannot reach on its own: the library,

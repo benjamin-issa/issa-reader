@@ -27,6 +27,7 @@ struct IssaReaderMacApp: App {
                 .environment(services.settings)
                 .environment(services.nowPlaying)
                 .environment(services.ask)
+                .environment(services.local)
                 // Idempotent, and belt-and-braces: the delegate has normally
                 // run by now, but a scene that somehow arrives first must not
                 // find an unstarted app.
@@ -37,7 +38,7 @@ struct IssaReaderMacApp: App {
         .commands {
             IssaCommands(
                 app: services.app, settings: services.settings,
-                nowPlaying: services.nowPlaying)
+                nowPlaying: services.nowPlaying, local: services.local)
         }
 
         // A book opens in its own window, which is what a Mac reader should do:
@@ -53,10 +54,42 @@ struct IssaReaderMacApp: App {
                 .environment(services.settings)
                 .environment(services.nowPlaying)
                 .environment(services.ask)
+                .environment(services.local)
                 // No `.task` of its own. It used to repeat the Now Playing
                 // wiring, which is the app's and is done once in
                 // `MacAppServices.start()` — `NowPlayingController.configure`
                 // documents what a scene calling it per window cost.
+                .tint(Palette.tangerine)
+                .frame(minWidth: 520, minHeight: 640)
+        }
+        .defaultSize(width: 760, height: 900)
+
+        // The books the reader added from their own files, in a window of
+        // their own, reached from the sign-in link, Settings › Advanced and
+        // File › Add Book…. Kept out of the Window menu: the feature is
+        // deliberately quiet, and a reader who never looks never sees it.
+        Window("Books on This Mac", id: "LocalBooks") {
+            LocalBooksScreen(placement: .window)
+                .environment(services.app)
+                .environment(services.settings)
+                .environment(services.nowPlaying)
+                .environment(services.ask)
+                .environment(services.local)
+                .tint(Palette.tangerine)
+                .frame(minWidth: 480, minHeight: 420)
+        }
+        .defaultSize(width: 720, height: 640)
+        .commandsRemoved()
+
+        // A book from the reader's files, in its own window like any other,
+        // restorable by uuid.
+        WindowGroup(id: "LocalReader", for: String.self) { $bookID in
+            LocalReaderWindow(bookID: bookID)
+                .environment(services.app)
+                .environment(services.settings)
+                .environment(services.nowPlaying)
+                .environment(services.ask)
+                .environment(services.local)
                 .tint(Palette.tangerine)
                 .frame(minWidth: 520, minHeight: 640)
         }
@@ -70,6 +103,7 @@ struct IssaReaderMacApp: App {
         // is off so a relaunch does not restore an empty one.
         UtilityWindow("Now Playing", id: "NowPlaying") {
             NowPlayingPanel()
+                .environment(services.local)
                 .environment(services.app)
                 .environment(services.settings)
                 .environment(services.nowPlaying)
@@ -88,6 +122,7 @@ struct IssaReaderMacApp: App {
         // ⌘, — the one place a Mac user looks for preferences.
         Settings {
             MacSettingsView()
+                .environment(services.local)
                 .environment(services.app)
                 .environment(services.settings)
                 .environment(services.nowPlaying)
@@ -112,10 +147,18 @@ struct IssaCommands: Commands {
     let app: AppModel
     let settings: PlaybackSettings
     let nowPlaying: NowPlayingController
+    let local: LocalLibrary
 
     var body: some Commands {
-        // Nothing here creates documents, so an enabled New menu would be a lie.
-        CommandGroup(replacing: .newItem) {}
+        // Nothing here creates documents, so an enabled New menu would be a
+        // lie. Add Book… takes its place once the books from Files have been
+        // looked at — never for a server reader who has not.
+        CommandGroup(replacing: .newItem) {
+            if local.wasShown || !local.books.isEmpty {
+                Button("Add Book…") { local.requestAdd() }
+                    .keyboardShortcut("o", modifiers: .command)
+            }
+        }
 
         CommandGroup(after: .toolbar) {
             Button("Refresh Library") { Task { await app.refreshLibrary() } }
@@ -248,9 +291,35 @@ struct ReaderWindow: View {
     }
 }
 
+/// A book from the reader's files, by uuid, so the system can restore the window
+/// after a relaunch without holding a model.
+///
+/// Waits for the library to load before deciding anything: a restored window
+/// that answered before `load()` would say a book was not here when it was.
+struct LocalReaderWindow: View {
+    let bookID: String?
+    @Environment(LocalLibrary.self) private var local
+
+    var body: some View {
+        if !local.isLoaded {
+            Palette.paper.ignoresSafeArea()
+        } else if let bookID, let book = local.book(bookID), !local.missingFiles.contains(bookID) {
+            ReaderScreen(localBook: book)
+                .navigationTitle(book.title)
+        } else {
+            ContentUnavailableView(
+                "Book not on this Mac",
+                systemImage: "book.closed",
+                description: Text("It was removed, or its file is no longer here. Add it again from Books on This Mac."),
+            )
+        }
+    }
+}
+
 /// A real Mac layout: source list on the left, content on the right.
 struct MacRootView: View {
     @Environment(AppModel.self) private var app
+    @Environment(LocalLibrary.self) private var local
     @Environment(\.openWindow) private var openWindow
     @State private var selection: Destination? = .shelf(.all)
     /// Which book the inspector is showing. A cover's click writes it; the
@@ -320,6 +389,11 @@ struct MacRootView: View {
         // window that is already open just brings it forward.
         .onReceive(NotificationCenter.default.publisher(for: ReaderCommand.player.notification)) { _ in
             openWindow(id: "NowPlaying")
+        }
+        // File › Add Book…: the list window takes the request (and opens the
+        // picker) once it is up, so all this has to do is bring it up.
+        .onChange(of: local.addRequested) { _, requested in
+            if requested { openWindow(id: "LocalBooks") }
         }
         // The Mac declared the `issareader` scheme in its Info.plist and then
         // handled nothing: a widget, Spotlight or Handoff link brought the app

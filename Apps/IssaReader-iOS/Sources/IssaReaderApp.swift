@@ -20,6 +20,7 @@ struct IssaReaderApp: App {
                 .environment(services.settings)
                 .environment(services.nowPlaying)
                 .environment(services.ask)
+                .environment(services.local)
                 // Idempotent, and belt-and-braces: the delegate has normally
                 // run by now, but a scene that somehow arrives first must not
                 // find an unstarted app.
@@ -48,7 +49,10 @@ struct IssaReaderApp: App {
 
 struct RootView: View {
     @Environment(AppModel.self) private var app
+    @Environment(LocalLibrary.self) private var local
     @Environment(\.scenePhase) private var scenePhase
+    /// This window's place in the local books' flow; see `LocalBooksRoute`.
+    @State private var localRoute = LocalBooksRoute()
 
     var body: some View {
         content
@@ -68,10 +72,51 @@ struct RootView: View {
                 // colour. A returning reader never sees the sign-in form flash
                 // past on the way to their shelf.
                 Palette.paper.ignoresSafeArea()
-            case .chooseServer, .signingIn, .expired:
+            case .chooseServer, .signingIn:
+                // A reader with no server who has used the link lands on their
+                // books, on this launch and every later one, until they choose
+                // to connect.
+                if localRoute.showsListSignedOut {
+                    NavigationStack { LocalBooksScreen(placement: .standalone) }
+                } else {
+                    SignInView()
+                }
+            case .expired:
                 SignInView()
             case .ready:
                 LibraryTabs()
+            }
+        }
+        .environment(localRoute)
+        // Above the phase switch, so a session expiring mid-chapter swaps the
+        // screen underneath the book rather than the book itself, and per
+        // window, so an iPad's other window is left alone.
+        .fullScreenCover(item: $localRoute.openBook) { open in
+            if let book = local.book(open.uuid) {
+                ReaderScreen(localBook: book)
+                    .environment(localRoute)
+            }
+        }
+        // A later launch with no books left opens on sign-in, not on an empty
+        // list: the list is the root only while there is something on it.
+        // Within a session the list stays, empty state and all, once the
+        // reader has removed the last one.
+        .onChange(of: local.isLoaded, initial: true) { _, loaded in
+            if loaded, local.books.isEmpty, local.missingFiles.isEmpty, local.imports.isEmpty {
+                localRoute.showsListSignedOut = false
+            }
+        }
+        .onChange(of: app.phase) { old, new in
+            switch new {
+            case .ready:
+                // Signed in: the list is a row in Settings from here on.
+                localRoute.showsListSignedOut = false
+            case .chooseServer where old == .ready:
+                // Signed out with books on the device: they are where the app
+                // opens, rather than a form (Settings and Book info, 4a).
+                localRoute.showsListSignedOut = !local.books.isEmpty
+            default:
+                break
             }
         }
         // The session is restored by `AppServices.start()`, so that a car
@@ -90,6 +135,50 @@ struct RootView: View {
         // which also explains why `.inactive` counts as foreground.
         .onChange(of: scenePhase, initial: true) { _, phase in
             app.setForeground(SceneForeground.isAnyForeground(asking: phase))
+            // Signed in, `LibraryTabs` flushes on its own way out. Signed out,
+            // a book from the reader's files can still be open — and its last
+            // page turn is still two seconds of debounce from being kept.
+            // And an answer about it may still be on its way.
+            guard app.phase != .ready else { return }
+            if phase == .background {
+                SuspendFlush.run(app)
+                AppServices.shared.ask.appDidEnterBackground()
+            } else if phase == .active {
+                AppServices.shared.ask.appDidBecomeActive()
+            }
+        }
+    }
+}
+
+/// Saves the open books and sends the backlog while the app is suspended.
+///
+/// Inside a background task, because the point is the network call: without
+/// one the system suspends the process the moment the frame is committed and
+/// the POST never leaves. The expiration handler must end the assertion, or
+/// iOS kills the app for holding it too long.
+@MainActor
+enum SuspendFlush {
+    static func run(_ app: AppModel) {
+        // A box, not a captured `var`. The expiration handler and the Task both
+        // closed over one boxed local and are not mutually exclusive: on a slow
+        // network iOS ran the handler at ~30s, it ended the real assertion and
+        // zeroed the identifier, and the Task then called endBackgroundTask on
+        // `.invalid`. In the reverse race the handler ended `.invalid` and the
+        // real assertion was never ended, which is what iOS kills the app for —
+        // the outcome the comment above says this exists to prevent.
+        let assertion = BackgroundAssertion()
+        assertion.begin(name: "issa.flushPosition")
+
+        Task {
+            // Not gated on the assertion. `beginBackgroundTask` returns
+            // `.invalid` when background execution is unavailable — Background
+            // App Refresh off, Low Power Mode — and returning there skipped
+            // `flushOpenReaders()` altogether, including the on-device
+            // `saveProgress()` for every open reader. The network half is what
+            // needs the assertion; the local save needs nothing and is the part
+            // that must not be lost.
+            await app.flushOpenReaders()
+            assertion.end()
         }
     }
 }
@@ -301,27 +390,7 @@ struct LibraryTabs: View {
     /// and the POST never leaves. The expiration handler must end the
     /// assertion, or iOS kills the app for holding it too long.
     private func flushOnSuspend() {
-        // A box, not a captured `var`. The expiration handler and the Task both
-        // closed over one boxed local and are not mutually exclusive: on a slow
-        // network iOS ran the handler at ~30s, it ended the real assertion and
-        // zeroed the identifier, and the Task then called endBackgroundTask on
-        // `.invalid`. In the reverse race the handler ended `.invalid` and the
-        // real assertion was never ended, which is what iOS kills the app for —
-        // the outcome the comment above says this exists to prevent.
-        let assertion = BackgroundAssertion()
-        assertion.begin(name: "issa.flushPosition")
-
-        Task {
-            // Not gated on the assertion. `beginBackgroundTask` returns
-            // `.invalid` when background execution is unavailable — Background
-            // App Refresh off, Low Power Mode — and returning there skipped
-            // `flushOpenReaders()` altogether, including the on-device
-            // `saveProgress()` for every open reader. The network half is what
-            // needs the assertion; the local save needs nothing and is the part
-            // that must not be lost.
-            await app.flushOpenReaders()
-            assertion.end()
-        }
+        SuspendFlush.run(app)
     }
 
     private var miniPlayer: some View {

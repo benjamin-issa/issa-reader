@@ -34,6 +34,16 @@ public final class LocalLibrary: ReaderPersistence {
     public private(set) var imports: [LocalImport] = []
     /// A removal the reader can still take back.
     public private(set) var pendingRemoval: PendingRemoval?
+    /// Set by File › Add Book… and the Mac's sign-in link, and taken by the
+    /// list window, which opens the picker: the request can arrive before the
+    /// window does, and is waiting for it when it opens.
+    public var addRequested = false
+    /// Whether the list has been shown this session, which is when the Mac's
+    /// File menu gains Add Book… — never for a reader who has not looked.
+    public private(set) var wasShown = false
+
+    public func requestAdd() { addRequested = true }
+    public func noteShown() { if !wasShown { wasShown = true } }
     /// The book an import found already here, for the "already on this
     /// iPhone" toast and the outline on its row. Cleared by `clearDuplicate`.
     public private(set) var duplicate: Book?
@@ -137,16 +147,16 @@ public final class LocalLibrary: ReaderPersistence {
 
     public func book(_ uuid: String) -> Book? { books.first { $0.uuid == uuid } }
 
-    /// The bytes the books' copies take on this device: the list's storage
-    /// line. The narration extracted from them is counted too, since it is
-    /// this library's to remove.
-    public func bytesOnDevice() -> Int64 {
-        books.reduce(0) { total, book in
-            total + Self.size(of: files(for: book.uuid).folder)
-        }
+    /// What each book takes on this device, by uuid: its copy, its cover, and
+    /// the narration and face extracted from it, which are this library's to
+    /// remove. A walk of the disk, so the list asks off the main actor.
+    public nonisolated static func sizes(of uuids: [String], root: URL) -> [String: Int64] {
+        Dictionary(uniqueKeysWithValues: uuids.map {
+            ($0, size(of: LocalBookFiles(bookUUID: $0, root: root).folder))
+        })
     }
 
-    static func size(of folder: URL) -> Int64 {
+    nonisolated static func size(of folder: URL) -> Int64 {
         guard let walker = FileManager.default.enumerator(
             at: folder, includingPropertiesForKeys: [.totalFileAllocatedSizeKey, .fileSizeKey])
         else { return 0 }

@@ -108,7 +108,11 @@ final class LayoutSweepTests: XCTestCase {
         // UserDefaults, which consults the argument domain first, so an empty
         // one puts the app on the sign-in form with no stub server involved.
         let app = XCUIApplication()
-        app.launchArguments = ["-IssaUITestFixture", "-issa.lastServer", ""]
+        // And not the books-from-Files list, which a reader who has used its
+        // link lands on instead: an earlier test on this device may have.
+        app.launchArguments = [
+            "-IssaUITestFixture", "-issa.lastServer", "", "-issa.local.showsListSignedOut", "NO",
+        ]
         app.launch()
 
         XCTAssertTrue(app.otherElements["screen.signIn"].waitForExistence(timeout: 30))
@@ -124,6 +128,60 @@ final class LayoutSweepTests: XCTestCase {
         // point is that there is one.
         assertScrollContentFits(root, reference)
         capture(app, "signIn")
+    }
+
+    // MARK: - Books from the reader's files
+
+    /// The local list, populated and then empty.
+    ///
+    /// Signed out, with the book `scripts/layout-sweep.sh` plants in the app's
+    /// `tmp/` added at launch (`-IssaUITestFixtureLocalImport`) — the picker is
+    /// the system's and cannot be driven. Then the book is removed and, once
+    /// the undo window has closed, the empty state is measured on the same
+    /// screen. No margin assertion, as on sign-in: on iPad the list is a
+    /// centred 640-point column, not a shelf at the screen margin.
+    func testLocalBooksScreen() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-IssaUITestFixture", "-issa.lastServer", "",
+            "-IssaUITestFixtureLocalImport", "local-import.epub",
+            // From sign-in, whatever an earlier run on this device left: the
+            // argument domain is read before the stored choice.
+            "-issa.local.showsListSignedOut", "NO",
+        ]
+        app.launch()
+        XCTAssertTrue(app.otherElements["screen.signIn"].waitForExistence(timeout: 30))
+        // The planted book is added as the app starts; give it the moment.
+        let link = app.buttons["link.readFromFiles"].firstMatch
+        XCTAssertTrue(link.waitForExistence(timeout: 10), "no link to the books from Files")
+        Thread.sleep(forTimeInterval: 3)
+        link.tap()
+
+        let list = app.descendants(matching: .any)["screen.localBooks"]
+        XCTAssertTrue(list.waitForExistence(timeout: 15), "the link did not open the local list")
+        let row = app.descendants(matching: .any)["localBook.row"].firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 15), "the planted book was not added")
+        let reference = try LayoutReference.read(from: app)
+        let root = try app.snapshot()
+        recordReference(reference)
+        assertHorizontallyContained(root, reference, screen: "localBooks")
+        assertScrollContentFits(root, reference)
+        capture(app, "localBooks")
+
+        // The card's frame slides with the swipe, so the revealed Remove is
+        // tapped where its trailing edge was.
+        let frame = row.frame
+        row.swipeLeft(velocity: .slow)
+        app.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: frame.maxX - 24, dy: frame.midY))
+            .tap()
+        XCTAssertTrue(app.descendants(matching: .any)["localBooks.empty"].waitForExistence(timeout: 15))
+        // Past the undo window, so the toast is not in the picture.
+        Thread.sleep(forTimeInterval: 8)
+        let empty = try app.snapshot()
+        assertHorizontallyContained(empty, reference, screen: "localBooksEmpty")
+        assertScrollContentFits(empty, reference)
+        capture(app, "localBooksEmpty")
     }
 
     // MARK: - Signed in

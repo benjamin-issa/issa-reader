@@ -36,6 +36,14 @@ public struct SignInView: View {
     }
 
     @Environment(AppModel.self) private var app
+    /// The books the reader added from their own files, and this window's way
+    /// to them: the foot link's whole business.
+    @Environment(LocalLibrary.self) private var localLibrary: LocalLibrary?
+    @Environment(LocalBooksRoute.self) private var localRoute: LocalBooksRoute?
+    #if os(macOS)
+    @Environment(\.openWindow) private var openWindow
+    #endif
+    @State private var choosingLocalBooks = false
     @State private var route: Route = .address
     @State private var address: String = ""
     @State private var connecting = false
@@ -57,6 +65,15 @@ public struct SignInView: View {
         }
         .accessibilityIdentifier("screen.signIn")
         .onAppear { if address.isEmpty { address = app.serverAddress } }
+        .fileImporter(
+            isPresented: $choosingLocalBooks, allowedContentTypes: [.epub], allowsMultipleSelection: true,
+        ) { result in
+            // Cancelling the picker leaves the reader here; choosing books
+            // makes the list this window's root, with their rows on it.
+            guard case let .success(urls) = result, !urls.isEmpty else { return }
+            localLibrary?.importBooks(urls)
+            localRoute?.showsListSignedOut = true
+        }
     }
 
     private var isAtAddress: Bool {
@@ -159,6 +176,7 @@ public struct SignInView: View {
                     .foregroundStyle(.white)
             }
             .buttonStyle(.plain)
+            localBooksLink
         }
     }
 
@@ -256,8 +274,63 @@ public struct SignInView: View {
 
             primaryAction
             separator
-            deviceCodeLink
+            // The two quiet links touch: two 44-point targets, one above the
+            // other, neither competing with the button.
+            VStack(spacing: 0) {
+                deviceCodeLink
+                localBooksLink
+            }
         }
+    }
+
+    /// The only way in for someone without a server: read a book from their
+    /// own files on this device.
+    ///
+    /// The same quiet link as the device code's, and enabled whatever the
+    /// address field says — it has nothing to do with a server. With no books
+    /// yet it opens the picker at once; with some, it opens the list.
+    @ViewBuilder
+    private var localBooksLink: some View {
+        if localLibrary != nil {
+            Button(action: openLocalBooks) {
+                Text("Read a book from your files")
+                    .font(Typography.subhead.weight(.medium))
+                    .foregroundStyle(Palette.inkTertiary)
+                    .underline(true, color: Palette.borderStrong)
+                    .frame(maxWidth: .infinity, minHeight: Self.quietLinkHeight)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Read a book from your files")
+            .accessibilityHint(
+                "Opens \(LocalBooksCopy.originalsPlace) to choose an EPUB to read on this \(LocalDevice.noun) without a server.")
+            .accessibilityIdentifier("link.readFromFiles")
+        }
+    }
+
+    /// 44 points on touch; a 28-point row on the Mac, where the link takes
+    /// Tab focus and the system draws the ring.
+    private static var quietLinkHeight: CGFloat {
+        #if os(macOS)
+        28
+        #else
+        44
+        #endif
+    }
+
+    private func openLocalBooks() {
+        guard let localLibrary else { return }
+        let hasBooks = !localLibrary.books.isEmpty
+        #if os(macOS)
+        openWindow(id: "LocalBooks")
+        if !hasBooks { localLibrary.requestAdd() }
+        #else
+        if hasBooks {
+            localRoute?.showsListSignedOut = true
+        } else {
+            choosingLocalBooks = true
+        }
+        #endif
     }
 
     /// The one way in the design puts forward.
