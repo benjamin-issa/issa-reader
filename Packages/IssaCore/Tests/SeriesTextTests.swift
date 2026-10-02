@@ -109,6 +109,53 @@ struct SeriesTextTests {
             == "Gothic Horror · Book 1.5 of 2")
     }
 
+    /// A series the library holds part of, books at these positions.
+    private func held(_ name: String, at positions: [Double?]) -> SeriesGroup {
+        SeriesGroup(name: name, books: positions.enumerated().map { index, position in
+            book("\(name) \(index)", series: [(name: name, position: position)])
+        })
+    }
+
+    /// The book screen passed the number of books the library holds as the
+    /// count, so holding books 2 and 3 of a series read "Book 2 of 2" beside a
+    /// "Book 3" the same library holds. The count is said only where nothing
+    /// held contradicts it: the positions held are exactly 1 to N.
+    @Test("a series states its length only when the books held are exactly the first N")
+    func statedCountNeedsTheWholeRun() {
+        #expect(held("Gothic", at: [1, 2]).statedCount == 2)
+        #expect(held("Gothic", at: [3, 1, 2]).statedCount == 3, "in any order")
+        #expect(held("Gothic", at: [2, 3]).statedCount == nil, "no book 1")
+        #expect(held("Gothic", at: [1, 2, 5]).statedCount == nil, "a gap")
+        #expect(held("Gothic", at: [1, 1.5, 2]).statedCount == nil, "a novella is not a numbered book")
+        #expect(held("Gothic", at: [1, 1]).statedCount == nil, "two at one place")
+        #expect(held("Gothic", at: [1, nil]).statedCount == nil, "an unnumbered book")
+    }
+
+    @Test(
+        "the book screen says 'of N' only beside the run it holds from one",
+        arguments: [
+            ([2, 3] as [Double], [] as [String]),
+            ([1, 2], ["Gothic Horror · Book 1 of 2", "Gothic Horror · Book 2 of 2"]),
+            ([1, 2, 5], []),
+        ])
+    func bookScreenLabel(positions: [Double], wholeRun: [String]) {
+        let group = held("Gothic Horror", at: positions)
+        let labels = group.books.map { SeriesText.label(for: $0.series[0], in: group) }
+        if wholeRun.isEmpty {
+            #expect(labels.allSatisfy { !$0.contains(" of ") }, "\(labels)")
+            #expect(labels.first == "Gothic Horror · Book \(SeriesText.ordinal(positions[0]))")
+        } else {
+            #expect(labels == wholeRun)
+        }
+    }
+
+    /// A book alone in its series has no group, and so no count.
+    @Test("a book with no group is labelled without a count")
+    func noGroup() {
+        let alone = book("Alone", series: [(name: "Gothic Horror", position: 2)])
+        #expect(SeriesText.label(for: alone.series[0], in: nil) == "Gothic Horror · Book 2")
+    }
+
     @Test("the numeral does not follow the device's locale")
     func theNumeralIsFixed() {
         // The words around it are English; a comma decimal among them would be

@@ -19,6 +19,23 @@ public struct SeriesGroup: Sendable, Hashable, Identifiable {
     public func position(of book: Book) -> Double? {
         book.series.first { $0.name == name }?.position
     }
+
+    /// How long the series can be said to be: the number of books held,
+    /// when their positions are exactly 1 to that number, and nil otherwise.
+    ///
+    /// The server numbers a book within its series but never says how many
+    /// there are, so "of N" can only be what the library holds — and the book
+    /// screen said it whatever the positions were: holding books 2 and 3 read
+    /// "Book 2 of 2" beside a "Book 3" the same library holds. With the whole
+    /// run from one, no book held contradicts it. A novella at 1.5, two books
+    /// at one place, or one with no number at all, and it is not said.
+    public var statedCount: Int? {
+        let held = books.compactMap(position(of:)).sorted()
+        guard !held.isEmpty, held.count == books.count,
+              held == (1 ... held.count).map(Double.init)
+        else { return nil }
+        return held.count
+    }
 }
 
 /// The rails the Library's Browse screen and the Reading tab show, derived from

@@ -72,4 +72,14 @@ public enum SeriesText {
         if let count, count > 1, Double(count) >= position { text += " of \(count)" }
         return text
     }
+
+    /// The book screen's line for one of a book's series, counted from the
+    /// part of that series the library holds, if it holds more than the book.
+    ///
+    /// The count is the group's `statedCount`, not how many books it holds:
+    /// passing that number said "Book 2 of 2" beside a "Book 3" the library
+    /// also holds.
+    public static func label(for membership: SeriesMembership, in group: SeriesGroup?) -> String {
+        label(name: membership.name, position: membership.position, count: group?.statedCount)
+    }
 }
