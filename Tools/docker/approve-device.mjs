@@ -29,16 +29,22 @@ const userCode = process.argv[2]
 const LEGACY = /^\s*approve device\s*$/i
 const FIND = /^\s*find request\s*$/i
 const APPROVE = /^\s*approve\s*$/i
-// What a page that refused the code says. Checked as well as the success
-// text, so a page that says both is not taken for a success.
-const REFUSED = /invalid|expired|not found|no (such|matching|pending) request|could not|couldn't|unable|denied|error/i
-const APPROVED = /approved|authori[sz]ed|success|you can (now )?(close|return)|device (is )?(now )?(connected|signed in)/i
+// What the page says once the approval took. Every server tested so far —
+// 2.14.21, 2.14.23, beta.40 and beta.46 — says "This device is approved.
+// Return to the app to finish pairing."; a code that matched nothing leaves
+// the form's instructions in place (up to beta.40) or says "No pairing request
+// matches that code" (beta.41 on). The refusals are checked as well, so a page
+// that says both is not taken for a success.
+const APPROVED = /\bdevice (is )?approved\b/i
+const REFUSED = /no pairing request matches|invalid|expired|not found|could not|couldn't|unable to|denied/i
 
 if (!userCode) { console.error("usage: node approve-device.mjs <USER-CODE>"); process.exit(1) }
 
 const browser = await chromium.launch()
 const page = await browser.newPage()
-const bodyText = async () => ((await page.textContent("body")) ?? "").replace(/\s+/g, " ").trim()
+// What the page shows, not its source: `textContent` also returns the text
+// of the <style> elements Storyteller's pages inline.
+const bodyText = async () => ((await page.innerText("body")) ?? "").replace(/\s+/g, " ").trim()
 try {
   await page.goto(`${BASE}/login`, { waitUntil: "domcontentloaded" })
   if (MODE === "oidc") {

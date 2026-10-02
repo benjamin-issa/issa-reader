@@ -87,7 +87,8 @@ async function approveInBrowser(url) {
     }
     await approve.first().click()
     await page.waitForTimeout(1500)
-    log("after approval:", (await page.textContent("body")).replace(/\s+/g, " ").trim().slice(0, 160))
+    // innerText, not textContent, which also returns the pages' inline styles.
+    log("after approval:", (await page.innerText("body")).replace(/\s+/g, " ").trim().slice(0, 160))
     await page.screenshot({ path: "/tmp/device-approval.png" })
   } finally {
     await browser.close()
