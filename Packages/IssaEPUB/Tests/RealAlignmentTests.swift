@@ -6,9 +6,13 @@ import Testing
 /// Runs against a readaloud EPUB produced by a real Storyteller alignment.
 ///
 /// The synthetic fixture proves the parser handles the format as documented;
-/// this proves it handles what the server actually emits. The file is large
+/// this proves it handles what the server actually emits. The book is
+/// Barrie's *Peter and Wendy*, aligned by `web-v2.14.21`. The file is large
 /// (~79 MB for five hours of narration, since the aligner embeds the audio), so
-/// it is not committed. Produce one with:
+/// it is not committed: it is kept in the local stack's store, one folder per
+/// server tag, at `Tools/docker/data/real-alignment/web-v2.14.21/pw2.epub` —
+/// `web-v2.14.23/` holds the same file — and copied to `/tmp/pw2.epub` for a
+/// run. Produce a fresh one with:
 ///
 ///   cd Tools/docker && PUBLIC_HOST=$(ipconfig getifaddr en0) node setup.mjs
 ///   # import a book with audio, POST /api/v2/books/{id}/process, then
