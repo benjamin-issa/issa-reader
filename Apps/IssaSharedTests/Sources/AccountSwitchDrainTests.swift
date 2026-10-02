@@ -265,6 +265,109 @@ struct AccountSwitchDrainTests {
         #expect(fixture.app.loadError == nil, "A's failed refresh told B their library could not be loaded")
         #expect(fixture.app.books.isEmpty)
     }
+
+    /// The record of a write in flight goes with its account. Reader A's
+    /// status write is caught half done when reader B signs in, and gives up
+    /// on resuming without taking its count down — by design, since the count
+    /// is no longer its account's to touch. So the switch has to have dropped
+    /// the record already: left behind, it said for the rest of the session
+    /// that a status for the book was still on its way, and every refresh of
+    /// B's kept B's own status over the server's.
+    ///
+    /// Pins `localWrites.removeAll()` in the exit, which nothing else did:
+    /// the test above passes without it, on the fence and the store's DELETE
+    /// alone.
+    @Test("an account switch forgets the departing account's writes in flight")
+    func theSwitchForgetsTheDepartingWritesInFlight() async throws {
+        let fixture = try await Self.fixture()
+        let hold = SeamHold()
+        defer {
+            hold.release()
+            Self.tearDown(fixture)
+        }
+        fixture.app.beforeQueueingStatus = { _ in await hold.arrive() }
+
+        let writing = Task {
+            await fixture.app.writePosition(
+                StatusParityTests.locator(0.5), timestamp: 10, for: Self.first, origin: .chosen)
+        }
+        await settle { hold.arrivals == 1 }
+        try #require(hold.arrivals == 1, "A's write has to be filing the book")
+
+        await fixture.app.adopt(token: "token-B")
+        try #require(Self.reader(of: fixture.app.session) == "reader-B")
+        hold.release()
+        _ = await writing.value
+
+        // Reader B files the book on the server — on another device, say —
+        // and B's next refresh has to show it.
+        BearerServer.fileArrivingFirst()
+        await fixture.app.refreshLibrary()
+
+        #expect(fixture.app.bookByUUID[Self.first]?.status?.name == Status.readingName,
+                "B's refresh kept B's own status for a write of A's that will never be sent")
+    }
+
+    /// The departing account's queue is retired by the switch, not merely
+    /// dropped. A write already holding it — one that passed every check
+    /// before the switch began — would otherwise put its row in the table
+    /// after the DELETE, for the arriving account's drain to send with its
+    /// own token.
+    ///
+    /// Pins the retire in the exit: the pause before the identity call is
+    /// what stops a drain mid-backlog, so the other tests here pass without
+    /// it.
+    @Test("the departing account's queue is retired by the switch")
+    func theSwitchRetiresTheDepartingQueue() async throws {
+        let fixture = try await Self.fixture()
+        defer { Self.tearDown(fixture) }
+        let departing = try #require(fixture.app.currentMutationQueue)
+
+        await fixture.app.adopt(token: "token-B")
+        try #require(Self.reader(of: fixture.app.session) == "reader-B")
+
+        #expect(fixture.app.currentMutationQueue !== departing)
+        await #expect(throws: MutationQueue.Retired.self, "the departing queue still took rows") {
+            try await departing.enqueue(
+                .position, bookUUID: Self.first,
+                payload: JSONEncoder().encode(Self.position(0.9)), supersedes: 11)
+        }
+        await fixture.app.drainPendingWrites(waitingForInFlight: true)
+        #expect(BearerServer.sent(.post).allSatisfy { $0.bearer != "token-B" },
+                "A's write went out with B's token")
+    }
+
+    /// A reconnect builds a new queue over the store it opens and retires the
+    /// one it replaces. Reader A's drain is mid-request on the old queue with
+    /// a second row behind it when the reconnect lands: retired, it stops
+    /// before that row, which is left for the new queue to send. Not retired,
+    /// it went on draining a table the new queue drains too, under a lock the
+    /// new queue does not share.
+    @Test("a drain on the queue a reconnect replaced stops before its next row")
+    func aReconnectStopsTheReplacedQueuesDrain() async throws {
+        let fixture = try await Self.fixture()
+        defer { Self.tearDown(fixture) }
+        BearerServer.hold(.firstPosition)
+        let queue = try MutationQueue(store: fixture.store)
+        for (book, progress) in [(Self.first, 0.2), (Self.second, 0.3)] {
+            try await queue.enqueue(
+                .position, bookUUID: book,
+                payload: JSONEncoder().encode(Self.position(progress)), supersedes: 10)
+        }
+        let replaced = try #require(fixture.app.currentMutationQueue)
+        let draining = Task { await fixture.app.drainPendingWrites() }
+        await settle { BearerServer.sent(.post).count == 1 }
+        try #require(BearerServer.sent(.post).count == 1, "the old queue's drain has to be mid-request")
+
+        await fixture.app.reopenMutationQueue()
+        #expect(fixture.app.currentMutationQueue !== replaced)
+        BearerServer.release(.firstPosition)
+        await draining.value
+
+        #expect(BearerServer.sent(.post).count == 1,
+                "the replaced queue's drain went on sending after the reconnect")
+        #expect(try await fixture.queued().count == 1, "the row it stopped before is the new queue's to send")
+    }
 }
 
 /// Holds the first status write that reaches `AppModel.beforeQueueingStatus`
@@ -332,6 +435,7 @@ private final class BearerServer: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) private static var positionsSeen = 0
     nonisolated(unsafe) private static var departingCatalogueTimesOut = false
     nonisolated(unsafe) private static var arrivingLibraryIsEmpty = false
+    nonisolated(unsafe) private static var arrivingFirstIsFiled = false
 
     static func reset() {
         release(.firstPosition)
@@ -343,6 +447,7 @@ private final class BearerServer: URLProtocol, @unchecked Sendable {
             heldCounts = [:]
             departingCatalogueTimesOut = false
             arrivingLibraryIsEmpty = false
+            arrivingFirstIsFiled = false
         }
     }
 
@@ -353,6 +458,10 @@ private final class BearerServer: URLProtocol, @unchecked Sendable {
 
     /// Serves reader B an empty library from now on.
     static func emptyArrivingLibrary() { lock.withLock { arrivingLibraryIsEmpty = true } }
+
+    /// Serves reader B's copy of the first book on the Reading shelf from now
+    /// on, as a status set on another device would leave it.
+    static func fileArrivingFirst() { lock.withLock { arrivingFirstIsFiled = true } }
 
     static func hold(_ hold: Hold) { lock.withLock { _ = holding.insert(hold) } }
 
@@ -450,9 +559,9 @@ private final class BearerServer: URLProtocol, @unchecked Sendable {
             if reader == "reader-B", lock.withLock({ arrivingLibraryIsEmpty }) {
                 return (200, json([Any]()))
             }
-            return (200, json([book(first, "First", for: reader), book(second, "Second", for: reader)]))
+            return (200, json([firstBook(for: reader), book(second, "Second", for: reader)]))
         case ("GET", Endpoint.book(first)):
-            return (200, json(book(first, "First", for: reader)))
+            return (200, json(firstBook(for: reader)))
         case ("GET", Endpoint.book(second)):
             return (200, json(book(second, "Second", for: reader)))
         case ("GET", Endpoint.statuses):
@@ -469,14 +578,23 @@ private final class BearerServer: URLProtocol, @unchecked Sendable {
         }
     }
 
-    private static func book(_ uuid: String, _ title: String, for reader: String) -> [String: Any] {
+    private static func book(
+        _ uuid: String, _ title: String, for reader: String, filed: Bool = false,
+    ) -> [String: Any] {
         [
             "uuid": uuid, "title": "\(title), for \(reader)",
             "authors": [], "narrators": [], "creators": [], "collections": [],
             "identifiers": [], "tags": [], "series": [],
-            "status": NSNull(),
+            "status": filed
+                ? (["uuid": "status-reading", "name": Status.readingName] as Any)
+                : (NSNull() as Any),
             "ebook": ["uuid": "e", "filepath": "e.epub", "identifiers": []],
         ]
+    }
+
+    private static func firstBook(for reader: String) -> [String: Any] {
+        book(first, "First", for: reader,
+             filed: reader == "reader-B" && lock.withLock { arrivingFirstIsFiled })
     }
 
     private static func json(_ object: Any) -> Data {

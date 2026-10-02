@@ -326,26 +326,7 @@ public final class AppModel {
         }
         // A session again means the widget may be written again.
         CurrentBookPublisher.shared.resume()
-        // The store was just reassigned, and the queue wraps the store's
-        // database file — captured at construction, never re-read. Keeping the
-        // old queue across a reconnect meant a corrected address wrote every
-        // position into the previous server's file while the catalogue lived
-        // in the new one — and rows left behind there could later drain into
-        // the wrong account. Rebuilding over the same file is cheap.
-        let replaced = mutations
-        mutations = nil
-        // The queue belongs with the store, not with the credential. It used to
-        // sit inside the `hasCredential` branch below, which meant a first-time
-        // sign-in — where `connect` runs *before* the device flow hands over a
-        // token — spent its whole session with `mutations` nil, and `enqueue`
-        // silently dropped every position, status and rating write. It looked
-        // fine, because the in-memory book still moved; only the server knew.
-        ensureMutationQueue()
-        // And the old one retired, once the new one is in place so no write
-        // finds neither. A drain it was running kept sending from a table the
-        // new queue now drains too, under a lock the new queue does not share;
-        // retired, it stops before its next row. Its rows stay where they are.
-        await replaced?.retire()
+        await reopenMutationQueue()
         // Only for someone who is actually signed in. Showing the cached shelf
         // on the strength of the database alone meant signing out left the
         // entire library readable: the token went, the rows did not, and the
@@ -830,6 +811,40 @@ public final class AppModel {
         // downloads empties the set itself, once they have gone (`signOut`).
         refreshDownloadedSet()
     }
+
+    /// Builds the write queue over the store `connect` has just opened, and
+    /// retires the one it replaces.
+    ///
+    /// Internal so `IssaSharedTests` can reach it: it is `connect`'s, which
+    /// the tests cannot run (see `resumeStoredSession`).
+    func reopenMutationQueue() async {
+        // The store was just reassigned, and the queue wraps the store's
+        // database file — captured at construction, never re-read. Keeping the
+        // old queue across a reconnect meant a corrected address wrote every
+        // position into the previous server's file while the catalogue lived
+        // in the new one — and rows left behind there could later drain into
+        // the wrong account. Rebuilding over the same file is cheap.
+        let replaced = mutations
+        mutations = nil
+        // The queue belongs with the store, not with the credential. It used to
+        // sit inside `connect`'s `hasCredential` branch, which meant a
+        // first-time sign-in — where `connect` runs *before* the device flow
+        // hands over a token — spent its whole session with `mutations` nil,
+        // and `enqueue` silently dropped every position, status and rating
+        // write. It looked fine, because the in-memory book still moved; only
+        // the server knew.
+        ensureMutationQueue()
+        // And the old one retired, once the new one is in place so no write
+        // finds neither. A drain it was running kept sending from a table the
+        // new queue now drains too, under a lock the new queue does not share;
+        // retired, it stops before its next row. Its rows stay where they are.
+        await replaced?.retire()
+    }
+
+    /// The write queue in use, for `IssaSharedTests`: whether the queue a
+    /// switch or a reconnect replaced was retired is a fact about that queue,
+    /// and nothing outside the model holds one to ask.
+    var currentMutationQueue: MutationQueue? { mutations }
 
     /// Opens the durable write queue, if it is not open already.
     ///
