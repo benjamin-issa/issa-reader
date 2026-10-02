@@ -176,10 +176,53 @@ public final class ReaderModel {
     }
 
     public let book: Book
-    private let session: Session
 
-    /// Exposed so the player sheet can load cover art through the same client.
-    public var readerSession: Session { session }
+    /// Where the book comes from, and so where what the reader writes goes.
+    ///
+    /// Not "Origin": `PositionOrigin` is the other kind of where-from, about a
+    /// position rather than a book, and the two meet in `saveProgress`.
+    public enum Source {
+        /// A book from the signed-in server: downloaded through
+        /// `BookContentService`, its place fetched from and written to the
+        /// server through the app's queue.
+        case server(Session)
+        /// A book the reader added from their own files: read from its folder,
+        /// its place kept on this device by a `ReaderPersistence`, and nothing
+        /// about it sent anywhere.
+        case local(LocalBookFiles)
+    }
+
+    public let source: Source
+
+    /// The server's session for a server book; nil for a book from the
+    /// reader's own files, which has no server to ask anything of. Exposed so
+    /// the player sheet can load cover art through the same client.
+    public var readerSession: Session? {
+        if case let .server(session) = source { session } else { nil }
+    }
+
+    /// Whether this is a book the reader added from their own files.
+    public var isLocal: Bool {
+        if case .local = source { true } else { false }
+    }
+
+    /// Whether this book may appear outside the app: the widget's snapshot
+    /// and Handoff. A book from the reader's files never does — PRIVACY.md
+    /// promises they are never sent anywhere, and Handoff is a send.
+    public var publishesToSystem: Bool { !isLocal }
+
+    /// The EPUB this model opened, once `open` has found it: the download for a
+    /// server book, the copy in its folder for a local one. What Ask indexes.
+    public private(set) var fileURL: URL?
+
+    /// Where a book from the reader's files keeps its place. A server book's
+    /// is fetched from the server instead, so this is nil for one.
+    public var loadStoredPosition: (() async -> StoredPosition?)?
+
+    /// The highlights and bookmarks made in earlier sessions, from whichever
+    /// store this book's marks are kept in. Installed by `AppModel` with the
+    /// other hooks.
+    public var loadStoredAnnotations: (() async -> [Annotation])?
     private var pageSize: CGSize = .zero
     /// The debounce timer. Cancelled freely on every change: it is only a wait.
     private var saveTask: Task<Void, Never>?
@@ -262,10 +305,14 @@ public final class ReaderModel {
     /// When the oldest unwritten change happened, for the debounce ceiling.
     private var firstUnsavedChangeAt: Date?
 
-    public init(book: Book, session: Session, style: ReaderStyle = ReaderStyle()) {
+    public init(book: Book, source: Source, style: ReaderStyle = ReaderStyle()) {
         self.book = book
-        self.session = session
+        self.source = source
         self.style = style
+    }
+
+    public convenience init(book: Book, session: Session, style: ReaderStyle = ReaderStyle()) {
+        self.init(book: book, source: .server(session), style: style)
     }
 
     /// The href of the spine item currently loaded, when there is one.
@@ -382,37 +429,44 @@ public final class ReaderModel {
         return layout.pages[pageIndex]
     }
 
+    /// What a book from the reader's files says when its copy has gone — a
+    /// device restored from a backup brings back the record and not the file.
+    static let localFileMissing =
+        "This book's file is no longer on this device. Add it again to keep reading — your place and highlights are kept."
+
     public func open(pageSize: CGSize) async {
         self.pageSize = pageSize
-        let content = BookContentService(client: session.client, cacheDirectory: booksDirectory)
-        guard let format = content.preferredReadingFormat(for: book) else {
-            phase = .failed("This book has no readable edition on the server.")
-            return
-        }
-
-        // Through the model where there is one, so opening a book whose
-        // edition is inside its undo window goes down the download path — which
-        // takes the removal back — rather than reading a file about to go.
-        let alreadyOnDisk = downloadHost?.isDownloaded(book, format: format)
-            ?? content.isDownloaded(book, format: format)
-        phase = alreadyOnDisk ? .loading("Opening…") : .downloading(received: 0, total: 0)
-        do {
-            let url: URL
-            if alreadyOnDisk {
-                url = content.localURL(for: book, format: format)
-            } else if let app = downloadHost {
-                url = try await app.downloadAndWait(book, format: format) { [weak self] written, total in
-                    self?.phase = .downloading(received: written, total: total)
-                }
-            } else {
-                url = try await content.ensureDownloaded(book, format: format)
+        // Which edition, for a server book; a local book has the one file.
+        let format: BookContentService.Format?
+        switch source {
+        case let .server(session):
+            let content = BookContentService(client: session.client, cacheDirectory: booksDirectory)
+            guard let preferred = content.preferredReadingFormat(for: book) else {
+                phase = .failed("This book has no readable edition on the server.")
+                return
             }
+            format = preferred
+        case let .local(files):
+            format = nil
+            guard FileManager.default.fileExists(atPath: files.epub.path) else {
+                IssaLog.warning("local book file missing", ["book": book.uuid])
+                phase = .failed(Self.localFileMissing)
+                return
+            }
+        }
+        do {
+            let url = try await resolveFile(format: format)
             let package = try EPUBPackage.open(url: url)
             self.package = package
+            fileURL = url
             // A book the server calls ALIGNED can still carry no overlays, so
             // narration is offered only when the timeline actually has entries.
+            // And a book from the reader's files narrates only when its import
+            // found every file of its audio playable here (`hasReadalong`): one
+            // added as text, whose overlay names Opus, say, reads as text.
             let timeline = SMILParser.timeline(for: package)
-            self.timeline = timeline.isEmpty ? nil : timeline
+            let narrates = !isLocal || book.hasReadalong
+            self.timeline = timeline.isEmpty || !narrates ? nil : timeline
 
             // Before the first parse, so a book set in its own face is set in
             // it from the first page rather than re-flowing into it.
@@ -448,22 +502,7 @@ public final class ReaderModel {
             // the server's answer then predates the one held locally. Adopting
             // the server's copy verbatim landed the reader back there, and the
             // first page turn saved that older place over the real one.
-            let stored: StoredPosition?
-            do {
-                let server = try await ProgressService(client: session.client).current(for: book.uuid)
-                if let mine = book.position,
-                   server.map({ mine.timestamp > $0.timestamp }) ?? true {
-                    stored = mine
-                } else {
-                    stored = server
-                }
-            } catch {
-                stored = book.position
-                IssaLog.failure("stored position fetch", error, [
-                    "book": book.title,
-                    "fallback": book.position == nil ? "none" : "local",
-                ])
-            }
+            let stored = await resolveStoredPosition()
             // The catch above is deliberately broad, and a cancelled fetch
             // throws `URLError.cancelled`, which the `CancellationError` catch
             // below would not match anyway. Checked explicitly, here and
@@ -564,7 +603,15 @@ public final class ReaderModel {
                 return
             }
             try Task.checkCancellation()
-            try await prepareNarration(package: package)
+            if self.timeline == nil, !timeline.isEmpty {
+                // A local book whose import found narration this device cannot
+                // play, and added it as text.
+                IssaLog.info("narration unavailable", [
+                    "book": book.title, "reason": "notPlayableHere",
+                ])
+            } else {
+                try await prepareNarration(package: package)
+            }
             phase = .ready
             // Spelled out rather than inline: enough of these and the type
             // checker gives up on the literal.
@@ -596,7 +643,10 @@ public final class ReaderModel {
             //
             // Only when there is none: an anchor written by actual playback
             // knows more than one inferred from a restored page.
-            if let fragment = restoredSentenceID,
+            // Only for a book that narrates here: a local book added as text has
+            // an overlay this device will never play, and an anchor into it
+            // would be a place on a clock nothing runs.
+            if let fragment = restoredSentenceID, self.timeline != nil,
                let entry = timeline.entry(
                    forFragment: fragment, inDocument: package.spine[chapterIndex].href),
                await loadAudioAnchor?() == nil
@@ -618,17 +668,98 @@ public final class ReaderModel {
             // picks the wait back up, so leave the phase exactly as it is.
             return
         } catch {
-            IssaLog.failure("open book", error,
-                            ["book": book.title, "format": String(describing: format)])
-            // Distinguish "the file never arrived" from "the server is down".
-            // Both used to render as "Couldn't reach your server", which sent
-            // people looking at their network for a book that simply had not
-            // finished downloading.
-            let onDisk = BookContentService(client: session.client, cacheDirectory: booksDirectory)
-                .isDownloaded(book, format: format)
-            phase = .failed(onDisk
-                ? "Couldn't open this book. " + AppModel.message(for: error)
-                : "This book hasn't finished downloading. " + AppModel.message(for: error))
+            IssaLog.failure("open book", error, [
+                "book": book.title,
+                "format": format.map { String(describing: $0) } ?? "local",
+            ])
+            switch source {
+            case let .server(session):
+                guard let format else { return }
+                // Distinguish "the file never arrived" from "the server is down".
+                // Both used to render as "Couldn't reach your server", which sent
+                // people looking at their network for a book that simply had not
+                // finished downloading.
+                let onDisk = BookContentService(client: session.client, cacheDirectory: booksDirectory)
+                    .isDownloaded(book, format: format)
+                phase = .failed(onDisk
+                    ? "Couldn't open this book. " + AppModel.message(for: error)
+                    : "This book hasn't finished downloading. " + AppModel.message(for: error))
+            case .local:
+                // No server and no download in the story: the copy is here and
+                // would not open, and a hint about the network would mislead.
+                phase = .failed("Couldn't open this book. Its file may be damaged.")
+            }
+        }
+    }
+
+    /// The EPUB to open: for a server book the download — fetched first when it
+    /// is not on the device — and for a local book its copy.
+    private func resolveFile(format: BookContentService.Format?) async throws -> URL {
+        switch source {
+        case let .local(files):
+            return files.epub
+        case let .server(session):
+            // `open` never calls this for a server book without one.
+            guard let format else { throw CancellationError() }
+            let content = BookContentService(client: session.client, cacheDirectory: booksDirectory)
+            // Through the model where there is one, so opening a book whose
+            // edition is inside its undo window goes down the download path —
+            // which takes the removal back — rather than reading a file about
+            // to go.
+            let alreadyOnDisk = downloadHost?.isDownloaded(book, format: format)
+                ?? content.isDownloaded(book, format: format)
+            phase = alreadyOnDisk ? .loading("Opening…") : .downloading(received: 0, total: 0)
+            if alreadyOnDisk {
+                return content.localURL(for: book, format: format)
+            } else if let app = downloadHost {
+                return try await app.downloadAndWait(book, format: format) { [weak self] written, total in
+                    self?.phase = .downloading(received: written, total: total)
+                }
+            } else {
+                return try await content.ensureDownloaded(book, format: format)
+            }
+        }
+    }
+
+    /// Where the reader was, for the open to land on.
+    ///
+    /// A server book asks the server, reconciled against the copy held here; a
+    /// book from the reader's files asks the device store that keeps its
+    /// place, and has no server to ask.
+    private func resolveStoredPosition() async -> StoredPosition? {
+        switch source {
+        case .local:
+            return await loadStoredPosition?() ?? book.position
+        case let .server(session):
+            // With a local fallback, because `try?` swallows a dropped
+            // connection as readily as a real absence, and the consequence was
+            // silently landing at the front of the book — over the reader's
+            // real position, which the very next page turn then saved. The app
+            // already holds this book's last locator in memory and on disk;
+            // needing the network to find your own place is not a contract
+            // worth keeping.
+            //
+            // Reconciled by timestamp even when the fetch succeeds, the same
+            // way `Book.reconciled(with:)` merges a catalogue refetch: a newer
+            // position can still be sitting undrained in the mutation queue —
+            // a chapter read offline, force-quit before the queue ran — and
+            // the server's answer then predates the one held locally. Adopting
+            // the server's copy verbatim landed the reader back there, and the
+            // first page turn saved that older place over the real one.
+            do {
+                let server = try await ProgressService(client: session.client).current(for: book.uuid)
+                if let mine = book.position,
+                   server.map({ mine.timestamp > $0.timestamp }) ?? true {
+                    return mine
+                }
+                return server
+            } catch {
+                IssaLog.failure("stored position fetch", error, [
+                    "book": book.title,
+                    "fallback": book.position == nil ? "none" : "local",
+                ])
+                return book.position
+            }
         }
     }
 
@@ -640,7 +771,8 @@ public final class ReaderModel {
 
     /// Stops an in-progress download and closes the book.
     public func cancelDownload() {
-        guard let format = BookContentService.preferredReadingFormat(for: book) else { return }
+        // A local book has nothing to download.
+        guard !isLocal, let format = BookContentService.preferredReadingFormat(for: book) else { return }
         downloadHost?.downloads?.cancel(.init(bookUUID: book.uuid, format: format))
         phase = .failed("Download cancelled.")
     }
@@ -812,8 +944,12 @@ public final class ReaderModel {
         // extraction reads its *own* task's cancellation between chunks — the
         // default `AudioExtraction.extractAudio` documents — so cancelling this
         // handle is what stops it, and nothing else can.
+        // A local book's narration goes in its own folder, so removing the
+        // book — one folder — takes it, and no sweep of `Audio/` can.
+        let directory: URL? = if case let .local(files) = source { files.narration } else { nil }
         let extraction = Task.detached(priority: .userInitiated) {
-            try? AudioExtraction.extractAudio(from: package, timeline: timeline, bookID: bookID)
+            try? AudioExtraction.extractAudio(
+                from: package, timeline: timeline, bookID: bookID, into: directory)
         }
         narrationExtraction.hold(extraction)
         let files = await extraction.value
@@ -2316,9 +2452,13 @@ public final class ReaderModel {
         let accepted: Bool
         if let enqueuePosition {
             accepted = await enqueuePosition(locator, timestamp, positionOrigin)
-        } else {
+        } else if case let .server(session) = source {
             accepted = (try? await ProgressService(client: session.client)
                 .save(locator, for: book.uuid, timestamp: timestamp)) != nil
+        } else {
+            // A local book with nowhere to keep its place: refused, so nothing
+            // below records an anchor for a position that went nowhere.
+            accepted = false
         }
         // Only a position that was actually taken reaches the widget. A
         // refused one — or one with no account left to take it, which is what
@@ -2361,6 +2501,9 @@ public final class ReaderModel {
     /// The publisher decides whether anything moved enough to be worth the
     /// widget's reload budget; this just hands it the current state.
     private func publishSnapshot(progress: Double) {
+        // The widget is outside the app, and a book from the reader's files
+        // never leaves it. `CurrentBookPublisher` refuses one as well.
+        guard publishesToSystem else { return }
         let remaining = book.narrationDuration.map { $0 * (1 - progress) }
         // One publisher for the whole app: the cover latch, the ownership rule
         // and the reload all live there, because two surfaces writing one file
@@ -2462,8 +2605,13 @@ extension ReaderModel {
             }
             return
         }
-        guard let directory = CustomFonts.prepareExtractedDirectory(bookUUID: book.uuid)
-        else { style.publisherFamily = nil; return }
+        // A local book's face goes in its own folder, for the reason its
+        // narration does; a server book's in `Fonts/<uuid>/`.
+        let prepared = switch source {
+        case .server: CustomFonts.prepareExtractedDirectory(bookUUID: book.uuid)
+        case let .local(files): CustomFonts.prepareExtractedDirectory(at: files.fonts)
+        }
+        guard let directory = prepared else { style.publisherFamily = nil; return }
 
         // Every member of the family, not only the one the page is set in.
         // CoreText never synthesises an oblique — `withItalicTrait()` returns

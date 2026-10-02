@@ -317,7 +317,9 @@ public struct ReaderView: View {
         }
         #if os(iOS) || os(macOS)
         // Handoff: the same book, at the same place, on the Mac or the iPad.
-        .userActivity(BookActivity.type) { activity in
+        // Not for a book from the reader's own files, which is never sent
+        // anywhere — and the other device could not open it anyway.
+        .userActivity(BookActivity.type, isActive: model.publishesToSystem) { activity in
             let made = BookActivity.make(book: model.book, progress: model.bookProgress)
             activity.title = made.title
             activity.userInfo = made.userInfo
@@ -943,7 +945,9 @@ public struct ReaderView: View {
         // Land on the page being spoken, if the book carried on while the
         // reader was elsewhere in the app.
         .task { await model.syncToNarration() }
-        .task { model.loadAnnotations(await app.annotations(for: model.book.uuid)) }
+        // From whichever store this book's marks are kept in: the server's
+        // for a server book, the device's for one from the reader's files.
+        .task { model.loadAnnotations(await model.loadStoredAnnotations?() ?? []) }
         #if os(macOS)
         // Menu commands arrive as notifications; only the frontmost reader
         // window is active, so only it responds. Each one routes through

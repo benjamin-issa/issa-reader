@@ -69,13 +69,13 @@ extension ReaderModel {
     /// The package is handed over rather than re-opened: it is a value over an
     /// archive that is nothing but a central directory in memory, and re-opening
     /// costs a second read of the whole EPUB's directory for no gain.
+    ///
+    /// `fileURL` is the file `open` actually read — the download a server book
+    /// came down as, the copy in a local book's folder — so the two kinds of
+    /// book are indexed from the same answer to "which file is this".
     func askSource() -> BookSource? {
-        guard let package,
-              let format = BookContentService.preferredReadingFormat(for: book)
-        else { return nil }
-        let url = BookContentService(client: readerSession.client)
-            .localURL(for: book, format: format)
-        return BookSource(bookUUID: book.uuid, fileURL: url, package: package)
+        guard let package, let fileURL else { return nil }
+        return BookSource(bookUUID: book.uuid, fileURL: fileURL, package: package)
     }
 
     /// Opens the book at a cited excerpt, with the excerpt left selected.

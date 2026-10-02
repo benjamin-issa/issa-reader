@@ -19,6 +19,16 @@ protocol AskNotifying: Sendable {
     @MainActor func postAnswerReady(job: AskJob) async
     func removeDelivered(bookUUID: String) async
     func removeAllDelivered() async
+    /// Every book's but `kept`'s: sign-out on a device that also holds books
+    /// the reader added from their own files, whose answers are the device's.
+    func removeAllDelivered(keeping kept: Set<String>) async
+}
+
+extension AskNotifying {
+    /// A notifier with nothing finer to offer removes them all.
+    func removeAllDelivered(keeping kept: Set<String>) async {
+        await removeAllDelivered()
+    }
 }
 
 /// Telling a reader their answer is ready, when they are not looking at it.
@@ -143,9 +153,17 @@ struct AskNotifier: AskNotifying {
     /// posts nothing else today, and a later notification that has nothing to do
     /// with asking should not be swept away by a purge of the Ask indexes.
     func removeAllDelivered() async {
+        await removeAllDelivered(keeping: [])
+    }
+
+    func removeAllDelivered(keeping kept: Set<String>) async {
         let centre = centre()
+        let keptThreads = Set(kept.map(Self.thread(for:)))
         let identifiers = await centre.deliveredNotifications()
-            .filter { $0.request.content.threadIdentifier.hasPrefix("issa.ask.") }
+            .filter {
+                let thread = $0.request.content.threadIdentifier
+                return thread.hasPrefix("issa.ask.") && !keptThreads.contains(thread)
+            }
             .map(\.request.identifier)
         guard !identifiers.isEmpty else { return }
         centre.removeDeliveredNotifications(withIdentifiers: identifiers)

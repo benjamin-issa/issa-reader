@@ -248,6 +248,26 @@ public final class CoverCache {
         return result
     }
 
+    /// The cover of a book from the reader's own files: the `cover.jpg` cut
+    /// from it at import, decoded to the size drawn. From memory or the disk
+    /// only — never a request — and nil for a book that had no cover, which
+    /// draws the letter tile.
+    public func localImage(
+        for book: Book, maxPixel: CGFloat = 600, root: URL? = nil,
+    ) async -> Image? {
+        guard book.localCopy?.hasCover == true else { return nil }
+        let key = "local-\(book.uuid)-\(Int(maxPixel))"
+        if let hit = memory[key] {
+            markUsed(key)
+            return hit
+        }
+        let file = LocalBookFiles(bookUUID: book.uuid, root: root).cover
+        let data = await Task.detached(priority: .utility) { try? Data(contentsOf: file) }.value
+        guard let data, let image = await Self.downsample(data, maxPixel: maxPixel) else { return nil }
+        store(image, at: key)
+        return image
+    }
+
     /// Decodes straight to the size we will draw, so a 2000px cover never
     /// occupies memory at full resolution.
     private nonisolated static func downsample(_ data: Data, maxPixel: CGFloat) async -> Image? {
@@ -318,6 +338,14 @@ public struct CoverImage: View {
         // the book or its art — and where the two books share the very same
         // art, what is on screen is already right.
         .task(id: CoverCache.imageKey(for: book, shape: shape)) {
+            // A book from the reader's own files has its cover on the disk, cut
+            // at import, and no server to ask: its uuid is not one any server
+            // has, and asking would send it somewhere it must not go.
+            if book.isLocal {
+                let local = await CoverCache.shared.localImage(for: book)
+                if !Task.isCancelled { image = local }
+                return
+            }
             guard let session else { return }
             let fetched = await CoverCache.shared.image(for: book, session: session, shape: shape)
             // The cache's await cannot be cancelled mid-flight, so a load

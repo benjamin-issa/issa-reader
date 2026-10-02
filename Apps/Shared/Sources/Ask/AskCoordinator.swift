@@ -111,8 +111,10 @@ final class AskCoordinator {
         // `AppModel` either and there is nothing to call it directly.
         signOutObserver.token = centre.addObserver(
             forName: PlaybackSettings.signOutNotification, object: nil, queue: .main,
-        ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.purgeAll() }
+        ) { [weak self] notification in
+            // The device's own books keep theirs: they are not the account's.
+            let kept = PlaybackSettings.keptBookUUIDs(in: notification)
+            MainActor.assumeIsolated { self?.purgeAll(keeping: kept) }
         }
     }
 
@@ -460,17 +462,27 @@ final class AskCoordinator {
 
     /// Every index, on sign-out or when downloads are deleted with the account.
     func purgeAll() {
-        for job in jobs.values { job.task?.cancel() }
-        jobs.removeAll()
-        prepared.removeAll()
-        for task in preparing.values { task.cancel() }
-        preparing.removeAll()
-        reopenRequest = nil
-        releaseAssertion()
+        purgeAll(keeping: [])
+    }
+
+    /// Every index but those of `kept`: the books the reader added from their
+    /// own files, which belong to the device and outlive the account. Their
+    /// jobs, warm-ups and delivered answers are left as they are.
+    func purgeAll(keeping kept: Set<String>) {
+        for (uuid, job) in jobs where !kept.contains(uuid) { job.task?.cancel() }
+        jobs = jobs.filter { kept.contains($0.key) }
+        prepared = prepared.filter { kept.contains($0) }
+        for (uuid, task) in preparing where !kept.contains(uuid) { task.cancel() }
+        preparing = preparing.filter { kept.contains($0.key) }
+        if let request = reopenRequest, !kept.contains(request) { reopenRequest = nil }
+        // Only when nothing kept is still answering: the assertion is what lets
+        // a question finish in the background.
+        if jobs.isEmpty { releaseAssertion() }
         // Including anything already on the lock screen: the account's data is
-        // going, and a banner about one of its answers is that data.
-        if let notifier { Task { await notifier.removeAllDelivered() } }
-        Task { [store] in await store.removeAll() }
+        // going, and a banner about one of its answers is that data. A kept
+        // book's banner is the device's, and stays.
+        if let notifier { Task { await notifier.removeAllDelivered(keeping: kept) } }
+        Task { [store] in await store.removeAll(keeping: kept) }
     }
 }
 

@@ -29,6 +29,9 @@ public final class NowPlayingController {
     /// Cover art for the Lock Screen, CarPlay and AirPlay receivers.
     private var artwork: MPMediaItemArtwork?
     private var session: Session?
+    /// The cover on disk, for a book from the reader's own files: there is no
+    /// server to fetch one from, and the one cut at import is the art.
+    private var artworkFile: URL?
 
     private let remote = RemoteCommandCenter()
     private var settings: PlaybackSettings?
@@ -143,6 +146,7 @@ public final class NowPlayingController {
         coordinator: (any PlaybackDriving)?,
         book: Book?,
         session: Session? = nil,
+        artworkFile: URL? = nil,
         chapterTitle: @escaping () -> String? = { nil },
     ) {
         // Identity for the engine, uuid for the book: the `Book` value is
@@ -167,6 +171,7 @@ public final class NowPlayingController {
         self.coordinator = coordinator
         self.book = book
         self.session = session
+        self.artworkFile = artworkFile
         currentChapterTitle = chapterTitle
         refreshTask?.cancel()
         artwork = nil
@@ -345,6 +350,10 @@ public final class NowPlayingController {
     /// Storyteller keeps two covers; the square one is the right shape for a
     /// Now Playing tile, where the portrait ebook cover would be letterboxed.
     private func loadArtwork(for book: Book) {
+        if let artworkFile {
+            loadArtwork(from: artworkFile)
+            return
+        }
         guard let session else { return }
         artworkGeneration += 1
         let generation = artworkGeneration
@@ -363,6 +372,22 @@ public final class NowPlayingController {
             // A slow fetch for a previous book must not overwrite the current
             // one — the lock screen and CarPlay would show this book's title
             // over that book's jacket until the next attach.
+            guard let self, self.artworkGeneration == generation else { return }
+            self.artwork = Self.artwork(from: image, size: size)
+            self.publish()
+        }
+    }
+
+    /// The cover cut from a local book at import, read off the disk. Never a
+    /// request: a book from the reader's files has no server, and its uuid
+    /// means nothing to one.
+    private func loadArtwork(from file: URL) {
+        artworkGeneration += 1
+        let generation = artworkGeneration
+        Task { [weak self] in
+            let data = await Task.detached(priority: .utility) { try? Data(contentsOf: file) }.value
+            guard let data, let image = PlatformImage(data: data) else { return }
+            let size = image.size
             guard let self, self.artworkGeneration == generation else { return }
             self.artwork = Self.artwork(from: image, size: size)
             self.publish()

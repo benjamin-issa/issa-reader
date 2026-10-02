@@ -615,14 +615,20 @@ public final class AppModel {
         if !keepDownloads {
             // Through StorageRoot, or "delete my downloads" would look at
             // Application Support on an Apple TV and delete nothing.
+            //
+            // By name, these two and nothing else: `Local/`, where the books
+            // the reader added from their own files keep their copies, their
+            // narration and their faces, is the device's and stays.
             for folder in ["Books", "Audio"] {
-                try? FileManager.default.removeItem(at: StorageRoot.directory(folder))
+                try? FileManager.default.removeItem(
+                    at: storageRoot.appending(path: folder, directoryHint: .isDirectory))
             }
             // The publisher faces those downloads left behind. Not `Fonts/`
             // itself: a face the reader imported lives at its root, this is
             // the only copy of it, and it belongs to them the way their
             // annotations do rather than to the account that is leaving.
-            CustomFonts.removeAllExtracted()
+            CustomFonts.removeAllExtracted(
+                in: storageRoot.appending(path: "Fonts", directoryHint: .isDirectory))
             // The exit read the set back from the disk a moment ago. The
             // directories have gone since, and everything a sweep would
             // release went with them — the extracted narration, the
@@ -671,6 +677,12 @@ public final class AppModel {
     /// device rather than to an account, and so meant to survive this, is
     /// exempted inside the step that would otherwise take it — not by a
     /// caller working around the whole.
+    ///
+    /// The books the reader added from their own files are the device's. Each
+    /// step that would take one says so: their readers, their narration and the
+    /// lock screen it holds, the reader on screen, and — through the
+    /// notification's kept set — their styles, levels and question indexes.
+    /// Their store, folders and positions were never the account's to reach.
     private func leaveAccount(_ exit: AccountExit, nowPlaying: NowPlayingController?) async {
         // 1. The fence. First, before anything suspends: this is what every
         // detached catalogue write checks, and it sat after two awaits — the
@@ -711,10 +723,19 @@ public final class AppModel {
         // it holds the coordinator strongly, so without this its refresh loop
         // kept the signed-out account's book on the lock screen and its Play
         // button resumed it.
-        stopListening(nowPlaying: nowPlaying)
+        //
+        // Not a book from the reader's own files that is narrating: it is the
+        // device's, it goes on playing, and the lock screen is its. Listening
+        // and narration are exclusive (`narrationDidStart` stops the one for the
+        // other), so the slot `stopListening` empties is empty then, and only
+        // its unconditional detach of Now Playing would orphan the local book's
+        // lock-screen controls — so that is the part held back.
+        let narratingLocal = narratingBookUUID.flatMap { readers[$0] }?.isLocal == true
+        stopListening(nowPlaying: narratingLocal ? nil : nowPlaying)
         // And the open book, which since it outlives its screen would otherwise
-        // keep narrating the departed account's library out loud.
-        releaseAllReaders()
+        // keep narrating the departed account's library out loud. Only the
+        // account's books: see `releaseServerReaders`.
+        releaseServerReaders()
 
         // 5. Memory, all of it before anything below suspends, so nothing
         // that runs in those suspensions finds half an account. Every write
@@ -758,7 +779,11 @@ public final class AppModel {
         // library.
         pendingBook = nil
         readerRequest = nil
-        visibleReaderUUID = nil
+        // Unless the reader on screen is a book from the reader's own files,
+        // which is still on screen and still the device's after this.
+        if let visible = visibleReaderUUID, readers[visible]?.isLocal != true {
+            visibleReaderUUID = nil
+        }
         listeningError = nil
 
         // 6. The write queue, retired and put out of reach before its table is
@@ -796,8 +821,14 @@ public final class AppModel {
         //
         // Not on a server switch, for the reason the store is kept: that
         // account has not gone anywhere.
+        //
+        // Carrying the device's own books, which the observers keep: those in
+        // the reader's local library, and any local reader still open.
         if exit != .serverSwitch {
-            notificationCentre.post(name: PlaybackSettings.signOutNotification, object: nil)
+            let kept = localBookUUIDs().union(readers.values.filter(\.isLocal).map(\.book.uuid))
+            notificationCentre.post(
+                name: PlaybackSettings.signOutNotification, object: nil,
+                userInfo: [PlaybackSettings.keptBookUUIDsKey: kept])
         }
 
         // 9. Transfers, covers, the widget and Spotlight.
@@ -2494,6 +2525,21 @@ public final class AppModel {
     weak var ask: AskCoordinator?
     #endif
 
+    /// The books the reader added from their own files, by uuid.
+    ///
+    /// Handed over at launch by whoever owns the `LocalLibrary`, as `ask` is,
+    /// and asked only when an account leaves: those books are the device's, and
+    /// the per-book state the rest of the app keeps for them — styles, volume
+    /// trims, question indexes — is told to keep theirs. Empty until then.
+    @ObservationIgnored var localBookUUIDs: () -> Set<String> = { [] }
+
+    /// The folder "Sign out and delete downloads" deletes from: `StorageRoot`.
+    ///
+    /// A seam for the one test that has to run that sign-out for real — that a
+    /// book from the reader's files survives it — without deleting the host
+    /// app's own downloads under every suite running beside it.
+    @ObservationIgnored var storageRoot: URL = StorageRoot.url
+
     /// Whatever is playing, of either kind. Nil when nothing is.
     public var playback: (any PlaybackDriving)? {
         if let listening { return listening }
@@ -2549,8 +2595,81 @@ public final class AppModel {
         model.loadAudioAnchor = { [weak self] in
             try? await self?.store?.audioAnchor(forBook: bookUUID)
         }
+        model.loadStoredAnnotations = { [weak self] in
+            await self?.annotations(for: bookUUID) ?? []
+        }
         model.onSaveAnnotation = { [weak self] in self?.save($0) }
         model.onDeleteAnnotation = { [weak self] in self?.delete($0) }
+        installSharedHooks(on: model)
+        readers[bookUUID] = model
+        return model
+    }
+
+    /// The model for a book the reader added from their own files.
+    ///
+    /// The twin of `reader(for:session:)`, and kept in the same `readers` so
+    /// everything that walks open books — the quit flush, narration's
+    /// exclusivity, the lock screen, the screen-awake hold — treats the two
+    /// kinds alike. What differs is where the book's writes go: to
+    /// `persistence`, the device's own store, through its own position guard,
+    /// and never to the server's queue, store or catalogue. There is no
+    /// download host, because there is nothing to download.
+    ///
+    /// The hooks capture `persistence` weakly, as the server's capture `self`.
+    public func reader(for book: Book, persistence: any ReaderPersistence) -> ReaderModel {
+        if let existing = readers[book.uuid] { return existing }
+
+        let model = ReaderModel(book: book, source: .local(persistence.files(for: book.uuid)))
+        let bookUUID = book.uuid
+        model.enqueuePosition = { [weak persistence] locator, timestamp, origin in
+            await persistence?.writePosition(
+                locator, timestamp: timestamp, origin: origin, for: bookUUID) ?? false
+        }
+        model.recordAudioAnchor = { [weak persistence] anchor in
+            await persistence?.recordAudioAnchor(anchor, for: bookUUID)
+        }
+        model.loadAudioAnchor = { [weak persistence] in
+            await persistence?.audioAnchor(for: bookUUID)
+        }
+        model.loadStoredPosition = { [weak persistence] in
+            await persistence?.storedPosition(for: bookUUID)
+        }
+        model.loadStoredAnnotations = { [weak persistence] in
+            await persistence?.annotations(for: bookUUID) ?? []
+        }
+        model.onSaveAnnotation = { [weak persistence] in persistence?.save($0) }
+        model.onDeleteAnnotation = { [weak persistence] in persistence?.delete($0) }
+        installSharedHooks(on: model)
+        readers[bookUUID] = model
+        persistence.didOpen(bookUUID)
+        return model
+    }
+
+    /// Lets go of a book from the reader's own files that is being removed.
+    ///
+    /// Before its folder goes: narration is stopped if this book is the one
+    /// playing — the lock screen with it — its extraction revoked so it cannot
+    /// put the folder back, its pending save dropped so it cannot write the
+    /// place back, and the model released whatever its screen is doing. A
+    /// screen still showing it finds the model no longer registered and the
+    /// file gone, which is the state removal leaves.
+    public func releaseLocalBook(_ bookUUID: String) {
+        // Forgotten first: `stopNarration` lets go of a model whose screen
+        // closed while it narrated with one last save, and a save is the one
+        // thing a book being removed must not do.
+        closedWhileNarrating.remove(bookUUID)
+        if narratingBookUUID == bookUUID { stopNarration() }
+        guard let model = readers.removeValue(forKey: bookUUID) else { return }
+        model.cancelNarrationExtraction()
+        model.cancelPendingSave()
+        model.readalong?.player.pause()
+        if visibleReaderUUID == bookUUID { visibleReaderUUID = nil }
+    }
+
+    /// The hooks every open book gets whatever it came from: which reader is
+    /// on screen, and the narration it may start.
+    private func installSharedHooks(on model: ReaderModel) {
+        let bookUUID = model.book.uuid
         model.onVisibilityChanged = { [weak self] visible in
             self?.setReaderVisible(bookUUID, visible)
         }
@@ -2584,8 +2703,6 @@ public final class AppModel {
             // a book to when `readerVisible` fired.
             self?.considerListeningHandoff(trigger: .readerReady)
         }
-        readers[bookUUID] = model
-        return model
     }
 
     /// Lets one book's reader go once its own screen has left it and it is not
@@ -2652,19 +2769,27 @@ public final class AppModel {
     /// written.
     @ObservationIgnored var logFlush: @Sendable () async -> Void = { await IssaLog.flush() }
 
-    /// Releases every open reader and stops whichever is narrating. Every open
-    /// book belongs to the account being left, unlike the per-window release
+    /// Releases every open reader of the account being left, and stops
+    /// narration if one of them is narrating — unlike the per-window release
     /// above, which only ever concerns the one book that closed.
-    private func releaseAllReaders() {
+    ///
+    /// Not a book from the reader's own files. It belongs to the device, not to
+    /// the account, and goes on as it was: still registered, still narrating,
+    /// its pending save still to run into the device's store.
+    private func releaseServerReaders() {
+        let departing = Set(readers.filter { !$0.value.isLocal }.keys)
         // Dropped before narration stops: sign-out must not schedule one last
         // position save for the account being left.
-        closedWhileNarrating.removeAll()
-        stopNarration()
+        closedWhileNarrating.subtract(departing)
+        if let narrating = narratingBookUUID, departing.contains(narrating) {
+            stopNarration()
+        }
         // Nor run one already scheduled. The screen holds the model beyond
         // this, so a debounced save two seconds out still fired — with no
         // queue to take it, and until recently straight into the widget.
-        for model in readers.values { model.cancelPendingSave() }
-        readers.removeAll()
+        for uuid in departing {
+            readers.removeValue(forKey: uuid)?.cancelPendingSave()
+        }
     }
 
     /// Silences narration and gives up the lock screen, if it held it.
@@ -2712,10 +2837,15 @@ public final class AppModel {
         }
         if listening != nil { stopListening(nowPlaying: nil) }
         narratingBookUUID = bookUUID
+        // A local book's art is the cover cut at import, read off the disk: it
+        // has no session, and no server would know it.
+        let artworkFile: URL? = if case let .local(files) = model.source,
+                                   model.book.localCopy?.hasCover == true { files.cover } else { nil }
         nowPlayingController?.attach(
             coordinator: coordinator,
             book: model.book,
             session: model.readerSession,
+            artworkFile: artworkFile,
             // Weak: the controller outlives the screen deliberately, and holding
             // the reader through it would keep a whole book alive after the app
             // had let go of it.

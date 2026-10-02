@@ -97,6 +97,11 @@ final class CurrentBookPublisher {
         isPlaying: Bool,
         as candidate: Owner,
     ) {
+        // A book from the reader's own files never reaches the widget, which
+        // is outside the app: PRIVACY.md promises those books are sent
+        // nowhere. `ReaderModel` does not publish one either; this is the
+        // second lock, for any caller that forgets.
+        guard !book.isLocal else { return }
         guard !suspended, progress.isFinite, mayPublish(candidate) else { return }
         owner = candidate
         playingSince = isPlaying ? .now : nil

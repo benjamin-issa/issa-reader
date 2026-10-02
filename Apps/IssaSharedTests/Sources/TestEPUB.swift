@@ -33,7 +33,14 @@ enum TestEPUB {
     ///
     /// - Parameter audio: the bytes of the one audio file the overlays point
     ///   at; needed whenever a chapter is narrated.
-    static func data(title: String = "A Test Book", chapters: [Chapter], audio: Data? = nil) -> Data {
+    /// - Parameter audioMediaType: what the manifest declares that file to be.
+    /// - Parameter metadata: further `<metadata>` children, as markup.
+    /// - Parameter extras: further archive members — a DRM licence, say.
+    static func data(
+        title: String = "A Test Book", chapters: [Chapter], audio: Data? = nil,
+        audioMediaType: String = "audio/wav", metadata: String = "",
+        extras: [(String, Data)] = [],
+    ) -> Data {
         let container = """
         <?xml version="1.0" encoding="utf-8"?>
         <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
@@ -50,7 +57,7 @@ enum TestEPUB {
                 + "media-type=\"application/smil+xml\"/>"
         }
         if audio != nil {
-            manifest += "\n<item id=\"narration\" href=\"narration.wav\" media-type=\"audio/wav\"/>"
+            manifest += "\n<item id=\"narration\" href=\"narration.wav\" media-type=\"\(audioMediaType)\"/>"
         }
         let spine = chapters.map { "<itemref idref=\"\($0.id)\"/>" }.joined()
         let opf = """
@@ -59,6 +66,7 @@ enum TestEPUB {
         <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
         <dc:identifier id="uid">urn:uuid:issa-test-epub</dc:identifier>
         <dc:title>\(title)</dc:title><dc:language>en</dc:language>
+        \(metadata)
         </metadata>
         <manifest>
         <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
@@ -115,6 +123,7 @@ enum TestEPUB {
         }
         var members = files.map { ($0.0, Data($0.1.utf8)) }
         if let audio { members.append((audioHref, audio)) }
+        members += extras
         return zip(members)
     }
 

@@ -88,6 +88,21 @@ public final class PlaybackSettings {
     /// process, which is the half-fix that keeps the leak.
     public static let signOutNotification = Notification.Name("issa.playbackSettings.signOut")
 
+    /// The `userInfo` key under which a sign-out names the books it does not
+    /// take: a `Set<String>` of book uuids.
+    ///
+    /// The books the reader added from their own files. They belong to the
+    /// device rather than to the account leaving, so their reader styles,
+    /// volume trims and question indexes outlive it. A notification without
+    /// the key keeps nothing, as before.
+    public nonisolated static let keptBookUUIDsKey = "issa.keptBookUUIDs"
+
+    /// The kept set a sign-out carries, read out where it is received so only
+    /// a `Set<String>` crosses into the main actor.
+    nonisolated static func keptBookUUIDs(in notification: Notification) -> Set<String> {
+        notification.userInfo?[keptBookUUIDsKey] as? Set<String> ?? []
+    }
+
     private static let commandMapKey = "issa.commandMap"
     private static let readerStyleKey = "issa.readerStyle"
     private static let bookStylesKey = "issa.bookStyles"
@@ -187,10 +202,13 @@ public final class PlaybackSettings {
         // the initialiser has finished.
         signOutObserver.token = centre.addObserver(
             forName: Self.signOutNotification, object: nil, queue: .main,
-        ) { [weak self] _ in
+        ) { [weak self] notification in
+            let kept = Self.keptBookUUIDs(in: notification)
             MainActor.assumeIsolated {
-                self?.bookStyles = [:]
-                self?.bookVolumeTrims = [:]
+                // Everything but the device's own books, which are not the
+                // account's to take (`keptBookUUIDsKey`).
+                self?.bookStyles = self?.bookStyles.filter { kept.contains($0.key) } ?? [:]
+                self?.bookVolumeTrims = self?.bookVolumeTrims.filter { kept.contains($0.key) } ?? [:]
                 // The old key as well. It is per-book state keyed by a book
                 // uuid, which is the whole reason this hook exists, and leaving
                 // the previous account's levels in a key a shipped build still
@@ -281,6 +299,13 @@ public final class PlaybackSettings {
 
     /// How far this book departs from the recorded level, in decibels. Zero for
     /// every book nobody has trimmed, which is nearly all of them.
+    /// Forgets one book's style and level, for a book the reader removed from
+    /// this device: nothing keyed by its uuid should outlive it.
+    public func forgetBook(_ bookUUID: String) {
+        if bookStyles[bookUUID] != nil { bookStyles[bookUUID] = nil }
+        if bookVolumeTrims[bookUUID] != nil { bookVolumeTrims[bookUUID] = nil }
+    }
+
     public func volumeTrim(for bookUUID: String) -> Int {
         bookVolumeTrims[bookUUID] ?? 0
     }
