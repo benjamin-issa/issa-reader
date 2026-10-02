@@ -220,6 +220,7 @@ struct IssaCommands: Commands {
 struct ReaderWindow: View {
     let bookID: String?
     @Environment(AppModel.self) private var app
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         if let bookID,
@@ -227,6 +228,16 @@ struct ReaderWindow: View {
            let session = app.session {
             ReaderScreen(book: book, session: session)
                 .navigationTitle(book.title)
+                // An answer's notification tapped for this book, while it is
+                // the reader on screen: the tap asks for the window, not the
+                // book, so no request is left for the library window to open
+                // again later. `openWindow` with this window's own value
+                // focuses it rather than opening a second one.
+                .onReceive(NotificationCenter.default.publisher(
+                    for: AskNotificationDelegate.bringReaderForward)) { note in
+                    guard note.userInfo?[AskNotifier.bookUUIDKey] as? String == bookID else { return }
+                    openWindow(id: "Reader", value: bookID)
+                }
         } else {
             ContentUnavailableView(
                 "Book unavailable",
