@@ -4341,6 +4341,15 @@ public final class AppModel {
         guard let index = books.firstIndex(where: { $0.uuid == book.uuid }) else { return }
         books[index] = books[index].reconciled(
             with: fresh, keepingStatus: keepsLocal(.status, book.uuid, given: fence))
+        // And the guards re-seeded from the answer, as the library refresh
+        // re-seeds them. A newer, lower position from another device is taken
+        // here — restarting the book there — and the guard this process held
+        // for that clock kept its old mark: every fifteen-second write from
+        // the restarted place was refused, and nothing was saved anywhere
+        // until the listener scrubbed. This is the refresh the book screen
+        // runs on every appearance, so it is the one that sees the restart
+        // first; the library refresh may not run for days.
+        reseedGuards(against: [books[index]])
         rebuildDerived()
     }
 }
