@@ -99,7 +99,7 @@ public struct BookDetailView: View {
                         .textSelection(.enabled)
                         #endif
                 }
-                if !book.tags.isEmpty { tags }
+                if !book.distinctTags.isEmpty { tags }
                 facts
                 // Editions are a fetch-a-file detail, not a reading choice, so
                 // they sit one disclosure down (item 03) rather than competing
@@ -123,6 +123,9 @@ public struct BookDetailView: View {
         }
         .accessibilityIdentifier("screen.bookDetail")
         .background(Palette.paper)
+        // A menu on one of this page's rail covers pushes on top of this
+        // page, and does not offer the way back to it.
+        .bookRoutes(place: .book(initialBook.uuid))
         // Omitted in the inspector, not emptied. There the detail is a sibling
         // of the library's navigation stack rather than a screen inside it, so
         // this preference reached the split view's detail column and won the
@@ -333,12 +336,12 @@ public struct BookDetailView: View {
     ///
     /// A link into the enclosing stack everywhere but the Mac's inspector,
     /// which has no stack: there it asks the window to push instead, for the
-    /// reason `MacBookSelection.pushedSeries` gives.
+    /// reason `MacBookSelection.pushed` gives.
     @ViewBuilder
     private func seriesLink(to name: String, @ViewBuilder label: () -> some View) -> some View {
         #if os(macOS)
         if layout == .inspector, let selection {
-            Button { selection.pushedSeries = name } label: { label() }
+            Button { selection.pushed = .series(name) } label: { label() }
         } else {
             NavigationLink { SeriesView(name: name) } label: { label() }
         }
@@ -836,21 +839,80 @@ public struct BookDetailView: View {
             .foregroundStyle(Palette.inkSecondary)
     }
 
+    /// The book's tags, each once, the ones shared with another book leading
+    /// to that tag's page.
+    ///
+    /// A tag on this book alone stays a plain label: its page would hold this
+    /// book and nothing else. A linked chip is the same quiet capsule with the
+    /// series line's tangerine chevron after the name — the mark that already
+    /// means "goes somewhere in the app" two inches up — so it reads as
+    /// tappable without shouting.
+    ///
+    /// On a touch screen every chip sits in a 44-point frame with no gap
+    /// between rows, so the rows pitch at the tap floor and the capsules keep
+    /// their size; the Mac's inspector is clicked, not tapped, and keeps the
+    /// capsules 8 points apart.
     private var tags: some View {
-        VStack(alignment: .leading, spacing: Metrics.spacing8) {
+        let tags = book.distinctTags
+        let byTag = app.booksByTag
+        let firstLinked = Self.firstLinkedTagID(tags, booksByTag: byTag)
+        return VStack(alignment: .leading, spacing: Self.tagRowSpacing) {
             Text("Tags").overlineStyle()
-            FlowRow(spacing: Metrics.spacing8) {
-                ForEach(book.tags) { tag in
-                    Text(tag.name)
-                        .font(Typography.caption)
-                        .padding(.horizontal, Metrics.spacing8)
-                        .padding(.vertical, 4)
-                        .background(Palette.surface, in: Capsule())
-                        .overlay(Capsule().strokeBorder(Palette.border, lineWidth: 1))
-                        .foregroundStyle(Palette.inkSecondary)
+            FlowRow(spacing: Metrics.spacing8, lineSpacing: Self.tagRowSpacing) {
+                ForEach(tags) { tag in
+                    if Self.isLinked(tag.name, booksByTag: byTag) {
+                        tagLink(to: tag.name)
+                            .accessibilityIdentifier(tag.id == firstLinked ? "bookDetail.tag" : "")
+                    } else {
+                        TagChip(name: tag.name, isLinked: false, isPressed: false)
+                    }
                 }
             }
         }
+    }
+
+    #if os(macOS)
+    private static let tagRowSpacing: CGFloat = Metrics.spacing8
+    #else
+    private static let tagRowSpacing: CGFloat = 0
+    #endif
+
+    /// Whether a tag is shared widely enough to have a page: the floor the
+    /// Browse screen's tag rails use. Never on a television, which has no tag
+    /// page to go to.
+    static func isLinked(_ name: String, booksByTag: [String: [Book]]) -> Bool {
+        #if os(tvOS)
+        false
+        #else
+        (booksByTag[name]?.count ?? 0) >= LibraryRails.minimumBooksPerTag
+        #endif
+    }
+
+    /// The first linked chip, which carries the identifier — the trick the
+    /// series line plays, for the same reason: a query for it must find one
+    /// element.
+    static func firstLinkedTagID(_ tags: [Tag], booksByTag: [String: [Book]]) -> Tag.ID? {
+        tags.first { isLinked($0.name, booksByTag: booksByTag) }?.id
+    }
+
+    /// Opens a tag's page: pushed on the phone, and on the Mac asked of the
+    /// window, as the series line is.
+    @ViewBuilder
+    private func tagLink(to name: String) -> some View {
+        Group {
+            #if os(macOS)
+            if layout == .inspector, let selection {
+                Button { selection.pushed = .tag(name) } label: { Text(name) }
+            } else {
+                NavigationLink { TagView(name: name) } label: { Text(name) }
+            }
+            #else
+            NavigationLink { TagView(name: name) } label: { Text(name) }
+            #endif
+        }
+        .buttonStyle(TagChipStyle(name: name))
+        .accessibilityLabel(name)
+        .accessibilityHint("Shows all books with this tag.")
     }
 
     /// Editions and their download state, one disclosure down (items 02 & 03).
@@ -1166,7 +1228,8 @@ public struct BookDetailView: View {
                let siblings = app.rails.series.first(where: { $0.name == series.name })?
                    .books.filter({ $0.uuid != book.uuid }),
                !siblings.isEmpty {
-                rail("The \(series.name)", books: siblings)
+                // Named, so these covers carry their number in this series.
+                rail("The \(series.name)", books: siblings, series: series.name)
             }
             if let author = book.authors.first,
                let others = byAuthor[author.name]?.filter({ $0.uuid != book.uuid }),
@@ -1181,8 +1244,56 @@ public struct BookDetailView: View {
         }
     }
 
-    private func rail(_ title: String, books: [Book]) -> some View {
-        BookRail(title: title, books: books)
+    private func rail(_ title: String, books: [Book], series: String? = nil) -> some View {
+        BookRail(title: title, books: books, series: series)
+    }
+}
+
+/// A tag on a book's page: the quiet capsule, and for a tag with a page of its
+/// own, the chevron after the name.
+struct TagChip: View {
+    let name: String
+    let isLinked: Bool
+    let isPressed: Bool
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    var body: some View {
+        HStack(spacing: Metrics.spacing4) {
+            Text(name)
+                .font(Typography.caption)
+                .foregroundStyle(Palette.inkSecondary)
+                // A name longer than the row wraps at the largest sizes rather
+                // than losing its end; otherwise one line, as a chip is.
+                .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
+                .truncationMode(.tail)
+                .fixedSize(horizontal: false, vertical: true)
+            if isLinked {
+                Image(systemName: "chevron.forward")
+                    .font(.system(size: 7, weight: .semibold))
+                    .foregroundStyle(Palette.tangerine)
+                    .accessibilityHidden(true)
+            }
+        }
+        .padding(.horizontal, Metrics.spacing8)
+        .padding(.vertical, 4)
+        .background(isPressed ? Palette.borderStrong.opacity(0.4) : Palette.surface, in: Capsule())
+        .overlay(Capsule().strokeBorder(Palette.border, lineWidth: 1))
+        #if !os(macOS)
+        // The tap floor, around the capsule rather than inside it, and the
+        // whole of it the target.
+        .frame(minHeight: 44)
+        .contentShape(Rectangle())
+        #endif
+    }
+}
+
+/// A linked chip's look, pressed included: the capsule's fill goes to the
+/// strong border at 40% under the finger.
+private struct TagChipStyle: ButtonStyle {
+    let name: String
+
+    func makeBody(configuration: Configuration) -> some View {
+        TagChip(name: name, isLinked: true, isPressed: configuration.isPressed)
     }
 }
 
@@ -1190,15 +1301,30 @@ public struct BookDetailView: View {
 /// a fixed grid would leave ragged gaps between short and long names.
 struct FlowRow: Layout {
     var spacing: CGFloat = 8
+    /// Between rows, when it differs from the gap between items: the tag chips
+    /// carry their own 44-point frames on a touch screen, so their rows sit
+    /// flush.
+    var lineSpacing: CGFloat?
+
+    private var rowGap: CGFloat { lineSpacing ?? spacing }
+
+    /// A child at its ideal size, or at the row's width when that is wider:
+    /// one long tag name wraps inside its chip rather than running off the
+    /// edge of the screen.
+    private func size(of subview: LayoutSubview, within width: CGFloat) -> CGSize {
+        let ideal = subview.sizeThatFits(.unspecified)
+        guard width.isFinite, ideal.width > width else { return ideal }
+        return subview.sizeThatFits(ProposedViewSize(width: width, height: nil))
+    }
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         let width = proposal.width ?? .infinity
         var x: CGFloat = 0, y: CGFloat = 0, lineHeight: CGFloat = 0
         for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
+            let size = size(of: subview, within: width)
             if x + size.width > width, x > 0 {
                 x = 0
-                y += lineHeight + spacing
+                y += lineHeight + rowGap
                 lineHeight = 0
             }
             x += size.width + spacing
@@ -1210,10 +1336,10 @@ struct FlowRow: Layout {
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         var x = bounds.minX, y = bounds.minY, lineHeight: CGFloat = 0
         for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
+            let size = size(of: subview, within: bounds.width)
             if x + size.width > bounds.maxX, x > bounds.minX {
                 x = bounds.minX
-                y += lineHeight + spacing
+                y += lineHeight + rowGap
                 lineHeight = 0
             }
             subview.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))

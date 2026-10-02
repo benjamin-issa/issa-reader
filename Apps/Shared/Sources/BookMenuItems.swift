@@ -302,7 +302,14 @@ struct BookActions: DynamicProperty {
         // window forward rather than opening a duplicate.
         openWindow(id: "Reader", value: book.uuid)
         #elseif os(iOS)
-        app.requestBook(book.uuid, .read)
+        // The book's page, pushed on top of this screen, opening the reader as
+        // it appears: Back from the reader lands on the book and then here.
+        // The deep-link inbox would have done the same by emptying the tab.
+        if let router, app.requestReader(for: book) {
+            router.route = .details(book)
+        } else {
+            app.requestBook(book.uuid, .read)
+        }
         #endif
     }
 
@@ -364,9 +371,11 @@ struct BookActions: DynamicProperty {
         case .save, .retry:
             Task {
                 guard !(await app.download(book, format: action.format)) else { return }
+                // The Wi-Fi rule's reason, kept against the job for the book
+                // page's edition row. The menu has closed, so it is said here.
                 router?.alert = BookAlert(
                     title: "Not downloaded yet",
-                    message: app.loadError ?? "The download could not start.")
+                    message: app.downloadRefusals[job] ?? "The download could not start.")
             }
         case .pause:
             app.downloads?.pause(job)

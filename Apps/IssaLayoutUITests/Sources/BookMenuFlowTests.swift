@@ -16,9 +16,9 @@ final class BookMenuFlowTests: XCTestCase {
         continueAfterFailure = false
     }
 
-    private func launch() -> XCUIApplication {
+    private func launch(_ extraArguments: [String] = []) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments = ["-IssaUITestFixture"]
+        app.launchArguments = ["-IssaUITestFixture"] + extraArguments
         app.launch()
         XCTAssertTrue(
             app.descendants(matching: .any)["card.continue"].waitForExistence(timeout: 120),
@@ -111,5 +111,41 @@ final class BookMenuFlowTests: XCTestCase {
                       "the row's menu lost its removal")
         viewDetails(app)
         assertBookPage(showing: "Dracula", in: app)
+    }
+
+    /// A removal from the library grid, which lists no downloads of its own:
+    /// the undo has to be offered on the tab the reader is on, and has to work.
+    func testGridRemovalOffersUndoOnTheLibraryTab() {
+        // The flat grid, not Browse: `libraryMode` is read from UserDefaults,
+        // and the argument domain comes first.
+        let app = launch(["-issa.library.mode", "all"])
+        let library = app.tabBars.buttons["Library"].exists
+            ? app.tabBars.buttons["Library"] : app.buttons["Library"].firstMatch
+        library.tap()
+
+        let search = app.textFields["Title, author, narrator, series, tag"]
+        XCTAssertTrue(search.waitForExistence(timeout: 15), "no library search field")
+        search.tap()
+        search.typeText("Dracula\n")
+        let cell = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "cell.book.", "Dracula"))
+            .firstMatch
+        XCTAssertTrue(cell.waitForExistence(timeout: 15), "no Dracula cell in the grid")
+        openMenu(on: cell, in: app)
+
+        let remove = app.buttons["Remove download"].firstMatch
+        XCTAssertTrue(remove.waitForExistence(timeout: 10), "the menu offered no removal for a downloaded book")
+        remove.tap()
+
+        let undo = app.buttons["Undo"].firstMatch
+        XCTAssertTrue(undo.waitForExistence(timeout: 5), "the Library tab offered no undo")
+        XCTAssertTrue(undo.isHittable, "the undo is there but under something")
+        undo.tap()
+        XCTAssertTrue(undo.waitForNonExistence(timeout: 5), "Undo did not take the toast down")
+
+        // And the book is still downloaded: its menu offers the removal again.
+        openMenu(on: cell, in: app)
+        XCTAssertTrue(app.buttons["Remove download"].firstMatch.waitForExistence(timeout: 10),
+                      "the undone removal happened anyway")
     }
 }

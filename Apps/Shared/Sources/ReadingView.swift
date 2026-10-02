@@ -48,9 +48,8 @@ public struct ReadingView: View {
         }
         .accessibilityIdentifier("screen.reading")
         .background(Palette.paper)
-        // On the scroll view, not inside its content: a toast that scrolls
-        // away from the reader it is addressed to is not a toast.
-        .downloadRemovalToast()
+        // The undo toast is the tab's, not this screen's: see
+        // `downloadRemovalToast`.
         .bookRoutes(place: .shelf)
         .refreshable { await app.refreshLibrary() }
         .overlay {

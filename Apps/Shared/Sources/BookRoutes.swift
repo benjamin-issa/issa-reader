@@ -112,7 +112,9 @@ private struct BookRoutes: ViewModifier {
 /// or, on the Mac, the All books shelf — and only the platform's root view can
 /// switch tabs or empty a stack it did not build. So the page asks here and the
 /// root answers, the way a deep link asks `AppModel` and `openPendingBook`
-/// answers. One for the process, as `AppModel` is one for the process.
+/// answers: by rebuilding the library's stack from its root, since most pages
+/// are pushed by `NavigationLink(destination:)` and no path holds them. One
+/// for the process, as `AppModel` is one for the process.
 @MainActor
 @Observable
 final class LibraryNavigator {

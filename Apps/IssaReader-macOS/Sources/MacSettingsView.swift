@@ -22,6 +22,10 @@ struct MacSettingsView: View {
                 .tabItem { Label("Advanced", systemImage: "wrench.and.screwdriver") }
         }
         .background(Palette.paper)
+        // The window's own undo toast: the Downloads tab's rows and their
+        // menus remove downloads here, where the library window's toast
+        // cannot be seen. See `downloadRemovalToast`.
+        .downloadRemovalToast()
     }
 }
 

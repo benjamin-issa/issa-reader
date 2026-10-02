@@ -110,6 +110,10 @@ struct LibraryTabs: View {
     /// almost always to carry on. Library stays first in the bar.
     @State private var selectedTab = Destination.reading
     @State private var showsPlayer = false
+    /// Bumped to rebuild the Library tab's stack from its root. Emptying the
+    /// path is not enough: most screens are pushed by
+    /// `NavigationLink(destination:)` and never appear in it.
+    @State private var libraryStackGeneration = 0
 
     /// No Playing tab. There used to be one, and the mini player was removed
     /// while it was showing so the same transport was not on screen twice —
@@ -169,6 +173,13 @@ struct LibraryTabs: View {
         }
     }
 
+    /// The Library tab with nothing pushed on it.
+    private func showLibraryRoot() {
+        selectedTab = .library
+        libraryPath = NavigationPath()
+        libraryStackGeneration &+= 1
+    }
+
     /// What the Reading tab does when it points at the Library: the flat grid
     /// on a shelf, or, with no shelf, just the tab.
     private func showLibrary(_ shelf: LibraryArrangement.Shelf?) {
@@ -189,7 +200,12 @@ struct LibraryTabs: View {
                             BookDetailView(book: book)
                         }
                 }
+                .id(libraryStackGeneration)
                 .background(AccessoryBandReservation(height: reservedBand))
+                // Per tab, on the stack: a book's menu can remove a download
+                // from any screen in it, and the undo has to be where the
+                // reader is. See `downloadRemovalToast`.
+                .downloadRemovalToast()
             }
 
             Tab("Reading", systemImage: "bookmark", value: Destination.reading) {
@@ -201,6 +217,7 @@ struct LibraryTabs: View {
                         }
                 }
                 .background(AccessoryBandReservation(height: reservedBand))
+                .downloadRemovalToast()
             }
 
             Tab("Settings", systemImage: "gearshape", value: Destination.settings) {
@@ -208,6 +225,7 @@ struct LibraryTabs: View {
                     SettingsView().navigationTitle("Settings")
                 }
                 .background(AccessoryBandReservation(height: reservedBand))
+                .downloadRemovalToast()
             }
         }
     }
@@ -333,6 +351,9 @@ struct LibraryTabs: View {
         // the book to exist rather than dropping the request on the floor.
         .onChange(of: app.pendingBook) { openPendingBook() }
         .onChange(of: app.books) { openPendingBook() }
+        // "Show in Library" on a tag or author page: the Library tab, at its
+        // root, where the page has already set the filter or the search.
+        .onChange(of: LibraryNavigator.shared.showRequests) { showLibraryRoot() }
         // Indexed off the main path: a large library should not delay the
         // first frame to make itself searchable. Keyed on the same version the
         // index compares, not on the count: a title corrected on the server,

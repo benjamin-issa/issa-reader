@@ -54,7 +54,11 @@ public struct DownloadsView: View {
         }
         .paperListBackground()
         .navigationTitle("Downloads")
-        .downloadRemovalToast()
+        // The undo toast belongs to the container this screen is shown in —
+        // a tab's stack, the Mac's window, its Settings window — so that a
+        // removal made from a book's menu anywhere is offered back the same
+        // way. See `downloadRemovalToast`.
+        .bookRoutes(place: .shelf)
         // Rows appear and disappear as transfers finish, so the totals have to
         // follow rather than being read once when the screen opened — and
         // `.task(id:)` rather than a `.task` plus an `.onChange` spawning its

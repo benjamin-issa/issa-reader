@@ -46,18 +46,6 @@ public final class MacBookSelection {
     /// the detail both push pages, does the pushing.
     public var pushed: Pushed?
 
-    /// The series half of `pushed`, for the callers that only push a series.
-    ///
-    /// Reading it gives nil while an author or a tag is pushed; writing nil
-    /// clears whatever is pushed, which is what popping the series page means.
-    public var pushedSeries: String? {
-        get {
-            if case let .series(name) = pushed { return name }
-            return nil
-        }
-        set { pushed = newValue.map(Pushed.series) }
-    }
-
     public init() {}
 }
 

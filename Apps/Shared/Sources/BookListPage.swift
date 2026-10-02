@@ -13,8 +13,10 @@ struct TagView: View {
     let name: String
 
     var body: some View {
-        BookListPage(subject: .tag(name), books: app.books.filter { book in
-            book.tags.contains { $0.name == name }
+        // The memoised grouping for which books, each resolved through the
+        // index a position moves, so progress and recency stay live.
+        BookListPage(subject: .tag(name), books: (app.booksByTag[name] ?? []).map {
+            app.bookByUUID[$0.uuid] ?? $0
         })
     }
 }
@@ -26,8 +28,8 @@ struct AuthorView: View {
     let name: String
 
     var body: some View {
-        BookListPage(subject: .author(name), books: app.books.filter { book in
-            book.authors.contains { $0.name == name }
+        BookListPage(subject: .author(name), books: (app.booksByAuthor[name] ?? []).map {
+            app.bookByUUID[$0.uuid] ?? $0
         })
     }
 }
@@ -73,9 +75,6 @@ struct BookListPage: View {
     }
 
     @Environment(AppModel.self) private var app
-    #if os(macOS)
-    @Environment(MacBookSelection.self) private var selection: MacBookSelection?
-    #endif
     let subject: Subject
     let books: [Book]
 
@@ -173,9 +172,9 @@ struct BookListPage: View {
     }
 
     /// The library's own grid, filtered here rather than rebuilt: every sort
-    /// and shelf the grid has is then one tap away. On the Mac this pops the
-    /// page back to the shelf; on the phone the root answers the request by
-    /// going to the Library tab.
+    /// and shelf the grid has is then one tap away. The platform's root
+    /// answers the request: the Library tab at its root on the phone, the
+    /// All books grid on the Mac.
     private func showInLibrary() {
         switch subject {
         case let .tag(name):
@@ -185,9 +184,6 @@ struct BookListPage: View {
             app.showAllBooks(shelf: .all)
             LibraryNavigator.shared.showLibrary(search: name)
         }
-        #if os(macOS)
-        selection?.pushed = nil
-        #endif
     }
 }
 

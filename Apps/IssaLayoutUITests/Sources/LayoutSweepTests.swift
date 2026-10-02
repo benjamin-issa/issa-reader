@@ -141,6 +141,16 @@ final class LayoutSweepTests: XCTestCase {
         selectTab("Library", in: app)
         try check(app, screen: "library", root: "screen.library", content: nil)
 
+        // A rail that is not a series numbers nothing. Dracula and its sequel
+        // are both recent arrivals in the fixture, and before the badge was
+        // confined to the series rail a "2" sat on the sequel here.
+        let recent = app.descendants(matching: .any)["rail.recently-added"]
+        XCTAssertTrue(recent.waitForExistence(timeout: 15), "no Recently added rail on Browse")
+        XCTAssertEqual(
+            recent.descendants(matching: .any)
+                .matching(NSPredicate(format: "label CONTAINS %@", " in Gothic Horror")).count,
+            0, "a cut of the library numbered its covers as a series")
+
         // The Library tab opens on Browse — rails, not a grid — so the flat
         // shelf has to be asked for. `libraryMode` is persisted through
         // UserDefaults, which reads the argument domain first.
@@ -199,6 +209,26 @@ final class LayoutSweepTests: XCTestCase {
             .firstMatch
         XCTAssertTrue(seriesBook.waitForExistence(timeout: 15), "no series book to open")
         seriesBook.tap()
+
+        // The rest of Dracula's series, on its page, numbered in it: the one
+        // rail whose covers answer "which one of these".
+        let seriesRail = shelf.descendants(matching: .any)["rail.the-gothic-horror"]
+        XCTAssertTrue(seriesRail.waitForExistence(timeout: 15), "no series rail on Dracula's page")
+        XCTAssertTrue(
+            seriesRail.descendants(matching: .any)
+                .matching(NSPredicate(format: "label CONTAINS %@", "Book 2 in Gothic Horror"))
+                .firstMatch.exists,
+            "the series rail's covers carry no number")
+
+        // A tag on every fixture book links to its page, which lays out all
+        // six of them.
+        let tagLink = shelf.descendants(matching: .any)["bookDetail.tag"]
+        XCTAssertTrue(tagLink.waitForExistence(timeout: 15), "no linked tag on Dracula's page")
+        tagLink.tap()
+        try check(shelf, screen: "tag", root: "screen.tag", content: "content.tag")
+        XCTAssertEqual(bookCells(in: shelf).count, 6, "the tag page lost some of its books")
+        shelf.navigationBars.buttons.firstMatch.tap()
+
         let seriesLink = shelf.descendants(matching: .any)["bookDetail.series"]
         XCTAssertTrue(seriesLink.waitForExistence(timeout: 15), "no series link in the hero")
         seriesLink.tap()
@@ -213,6 +243,21 @@ final class LayoutSweepTests: XCTestCase {
         let reference = try LayoutReference.read(from: shelf)
         assertHorizontallyContained(try shelf.snapshot(), reference, screen: "settings")
         capture(shelf, "settings")
+    }
+
+    /// Every book cell's identifier on the screen, scrolling to find them: the
+    /// grid is lazy, so a cell below the fold does not exist until it is near.
+    private func bookCells(in app: XCUIApplication) -> Set<String> {
+        let query = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "cell.book."))
+        var seen = Set(query.allElementsBoundByIndex.map(\.identifier))
+        for _ in 0 ..< 8 {
+            app.scrollViews.firstMatch.swipeUp(velocity: .slow)
+            let now = Set(query.allElementsBoundByIndex.map(\.identifier))
+            if now.isSubset(of: seen) { break }
+            seen.formUnion(now)
+        }
+        return seen
     }
 
     // MARK: - The reader

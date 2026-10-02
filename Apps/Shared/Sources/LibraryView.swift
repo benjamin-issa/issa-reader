@@ -109,9 +109,12 @@ public struct LibraryView: View {
         .background(Palette.paper.ignoresSafeArea())
         .bookRoutes(place: .shelf)
         // An author page's "Show in Library" is a search: the library has no
-        // author filter, and its search already looks through authors.
-        .onChange(of: navigator.pendingSearch, initial: true) { _, pending in
-            guard let pending else { return }
+        // author filter, and its search already looks through authors. Taken
+        // as the view appears, because the request rebuilds the library's
+        // stack (`LibraryNavigator`): a view that took it on change was the
+        // old one, about to be replaced by one with an empty field.
+        .task {
+            guard let pending = navigator.pendingSearch else { return }
             search = pending
             navigator.pendingSearch = nil
         }

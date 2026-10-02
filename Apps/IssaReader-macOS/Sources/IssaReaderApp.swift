@@ -245,6 +245,15 @@ struct MacRootView: View {
     /// Which book the inspector is showing. A cover's click writes it; the
     /// shared cells read it to mark themselves selected.
     @State private var inspected = MacBookSelection()
+    /// Bumped to rebuild the content column's stack from its root, for a
+    /// "Show in Library" asked for while already on All books.
+    @State private var stackGeneration = 0
+
+    /// What the content column's stack is rebuilt on.
+    private struct StackIdentity: Hashable {
+        let selection: Destination?
+        let generation: Int
+    }
 
     /// The sidebar's entries. Shelves come from the same definition the phone
     /// filters by, so the two never drift apart.
@@ -440,17 +449,23 @@ struct MacRootView: View {
                     }
                 }
                 .navigationTitle((selection ?? .shelf(.all)).title)
-                // The inspector's series link lands here: it has no stack of
-                // its own any more (see `MacBookSelection.pushedSeries`), so
-                // it asks, and this is the stack that answers.
-                .navigationDestination(item: $inspected.pushedSeries) { name in
-                    SeriesView(name: name)
+                // The inspector's series and tag links land here, and a book
+                // menu's Go to Series and More by: none of them has a stack of
+                // its own (see `MacBookSelection.pushed`), so they ask, and
+                // this is the stack that answers.
+                .navigationDestination(item: $inspected.pushed) { page in
+                    switch page {
+                    case let .series(name): SeriesView(name: name)
+                    case let .author(name): AuthorView(name: name)
+                    case let .tag(name): TagView(name: name)
+                    }
                 }
             }
             // A fresh stack per sidebar row, so a series pushed under Library
             // does not survive a switch to Downloads. These links are closures,
-            // not a path, so nothing else can pop them.
-            .id(selection)
+            // not a path, so nothing else can pop them — which is also how
+            // "Show in Library" gets back to the grid.
+            .id(StackIdentity(selection: selection, generation: stackGeneration))
             if showsInspector.wrappedValue {
                 Divider()
                 // The inspector's old ideal width, and it governs — which it
@@ -475,14 +490,26 @@ struct MacRootView: View {
                     .transition(.move(edge: .trailing))
             }
             }
+            // The window's undo toast, over the content column and the
+            // inspector alike: a book's menu, or the inspector's edition
+            // menu, can remove a download from either. See
+            // `downloadRemovalToast`.
+            .downloadRemovalToast()
         }
         .environment(inspected)
-        // The stack that answers `pushedSeries` is rebuilt by `.id(selection)`
+        // The stack that answers `pushed` is rebuilt by `.id(selection)`
         // above, and rebuilding is not popping — so a series pushed under
         // Library was still asked for when the reader clicked Downloads, and
         // the fresh stack pushed it straight over the downloads list. The
         // request belongs to the row it was made from.
-        .onChange(of: selection) { _, _ in inspected.pushedSeries = nil }
+        .onChange(of: selection) { _, _ in inspected.pushed = nil }
+        // "Show in Library" from a tag or author page: the All books grid,
+        // with the filter or search the page has already set.
+        .onChange(of: LibraryNavigator.shared.showRequests) {
+            inspected.pushed = nil
+            selection = .shelf(.all)
+            stackGeneration &+= 1
+        }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Toggle(isOn: showsInspector) {
