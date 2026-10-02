@@ -868,7 +868,7 @@ struct InflateHonestyTests {
         #expect(Inflate.maximumEntrySize < 4_000_000_000)
     }
 
-    private static func deflate(_ data: Data) -> Data? {
+    static func deflate(_ data: Data) -> Data? {
         let room = data.count + 1024
         var out = Data(count: room)
         let written: Int = out.withUnsafeMutableBytes { dst in
@@ -928,5 +928,312 @@ struct DuplicateRecordTests {
         let chapter = try archive.read("OEBPS/ch1.xhtml")
         #expect(String(decoding: chapter, as: UTF8.self) == Self.chapter)
         #expect(archive.paths.count == 2, "one key for the duplicate pair, plus the chapter")
+    }
+}
+
+/// A small EPUB built from bytes, for the suites below that need a whole
+/// package rather than one entry.
+private enum TinyBook {
+    static let container = """
+    <?xml version="1.0"?>
+    <container version="1.0"><rootfiles>
+    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+    </rootfiles></container>
+    """
+
+    /// `nav` and `ncx` are added to the manifest only when given.
+    static func archive(
+        chapters: [ZIPBytes.Entry], nav: String? = nil, ncx: String? = nil,
+    ) throws -> EPUBArchive {
+        let ids = chapters.indices.map { "c\($0)" }
+        let items = zip(ids, chapters).map { id, chapter in
+            "<item id=\"\(id)\" href=\"\(chapter.name.dropFirst("OEBPS/".count))\" "
+                + "media-type=\"application/xhtml+xml\"/>"
+        }
+        let navItem = nav == nil ? "" :
+            "<item id=\"nav\" href=\"nav.xhtml\" media-type=\"application/xhtml+xml\" properties=\"nav\"/>"
+        let ncxItem = ncx == nil ? "" :
+            "<item id=\"ncx\" href=\"toc.ncx\" media-type=\"application/x-dtbncx+xml\"/>"
+        let opf = """
+        <?xml version="1.0"?>
+        <package version="3.0">
+        <metadata><title>Tiny</title></metadata>
+        <manifest>
+        \(navItem)
+        \(ncxItem)
+        \(items.joined(separator: "\n"))
+        </manifest>
+        <spine>\(ids.map { "<itemref idref=\"\($0)\"/>" }.joined())</spine>
+        </package>
+        """
+        var entries: [ZIPBytes.Entry] = [
+            .init(name: "mimetype", payload: Data("application/epub+zip".utf8)),
+            .init(name: "META-INF/container.xml", payload: Data(container.utf8)),
+            .init(name: "OEBPS/content.opf", payload: Data(opf.utf8)),
+        ]
+        if let nav { entries.append(.init(name: "OEBPS/nav.xhtml", payload: Data(nav.utf8))) }
+        if let ncx { entries.append(.init(name: "OEBPS/toc.ncx", payload: Data(ncx.utf8))) }
+        return try EPUBArchive(data: ZIPBytes.archive(entries + chapters))
+    }
+
+    /// A stored chapter of exactly `size` bytes.
+    static func chapter(_ name: String, size: Int = 400) -> ZIPBytes.Entry {
+        let body = "<html><body><p>Prose.</p></body></html>"
+        let padding = String(repeating: " ", count: max(0, size - body.utf8.count))
+        return .init(name: "OEBPS/\(name).xhtml", payload: Data((body + padding).utf8))
+    }
+}
+
+/// A central directory that lies about an entry's size.
+///
+/// The guard against the lie ran only when the entry was *read*, but
+/// `size(of:)` handed the raw claim to `spineWeights` the moment the package
+/// opened — so one ten-byte member declaring four gigabytes made every real
+/// chapter's share of the book round to nothing, and the reader sat at 0%
+/// from the first page to the last.
+@Suite("A declared size the entry cannot have")
+struct DeclaredSizeTests {
+    @Test("a stored entry's size is its own, never the directory's claim")
+    func storedLieIsUnknown() throws {
+        let archive = try EPUBArchive(data: ZIPBytes.archive([
+            .init(name: "liar.xhtml", payload: Data("ten bytes!".utf8), declaredUncompressedSize: 0xFFFF_FFFE),
+            .init(name: "honest.xhtml", payload: Data("ten bytes!".utf8)),
+        ]))
+        #expect(archive.size(of: "liar.xhtml") == nil)
+        #expect(archive.size(of: "honest.xhtml") == 10)
+        #expect(throws: EPUBError.self) { try archive.read("liar.xhtml") }
+    }
+
+    @Test("a deflated entry's claim beyond what deflate can reach is unknown")
+    func deflatedLieIsUnknown() throws {
+        let archive = try EPUBArchive(data: ZIPBytes.archive([
+            .init(name: "bomb.xhtml", payload: InflateBoundsTests.helloDeflated,
+                  method: 8, declaredUncompressedSize: 0xFFFF_FFFE),
+            .init(name: "hello.xhtml", payload: InflateBoundsTests.helloDeflated,
+                  method: 8, declaredUncompressedSize: 5),
+        ]))
+        #expect(archive.size(of: "bomb.xhtml") == nil)
+        #expect(archive.size(of: "hello.xhtml") == 5)
+    }
+
+    @Test("one lying chapter cannot pin the book's progress at zero")
+    func spineWeightsSurviveALie() throws {
+        var liar = TinyBook.chapter("c1")
+        liar.declaredUncompressedSize = 0xFFFF_FFFE
+        let package = try EPUBPackage.open(archive: TinyBook.archive(chapters: [
+            TinyBook.chapter("c0"), liar, TinyBook.chapter("c2"),
+        ]))
+        #expect(package.spineWeights == [400, 0, 400])
+        // The third chapter starts halfway through the book's real text.
+        #expect(abs(package.bookProgress(spineIndex: 2, within: 0) - 0.5) < 0.001)
+    }
+}
+
+/// A contents list is XHTML too, and it carries `&nbsp;` as often as a
+/// chapter does. The navigation document and the NCX were parsed with no
+/// entity substitution at all, so one `&nbsp;` in a title failed the parse and
+/// the book opened with no contents.
+@Suite("Named entities in the contents")
+struct NavigationEntityTests {
+    @Test("a nav document with HTML entities still yields its contents")
+    func navWithEntities() throws {
+        let nav = """
+        <?xml version="1.0"?>
+        <!DOCTYPE html>
+        <html xmlns:epub="http://www.idpf.org/2007/ops"><body>
+        <nav epub:type="toc"><ol>
+        <li><a href="c0.xhtml">Chapter&nbsp;One</a></li>
+        <li><a href="c1.xhtml">&there4; &mdash; Two</a></li>
+        </ol></nav>
+        </body></html>
+        """
+        let package = try EPUBPackage.open(archive: TinyBook.archive(
+            chapters: [TinyBook.chapter("c0"), TinyBook.chapter("c1")], nav: nav))
+        #expect(package.navigation.map(\.title) == ["Chapter\u{00A0}One", "\u{2234} \u{2014} Two"])
+    }
+
+    @Test("an NCX with HTML entities still yields its contents")
+    func ncxWithEntities() throws {
+        let ncx = """
+        <?xml version="1.0"?>
+        <ncx version="2005-1"><navMap>
+        <navPoint id="n1"><navLabel><text>Down&nbsp;the Rabbit&#8209;Hole</text></navLabel>\
+        <content src="c0.xhtml"/></navPoint>
+        </navMap></ncx>
+        """
+        let package = try EPUBPackage.open(archive: TinyBook.archive(
+            chapters: [TinyBook.chapter("c0")], ncx: ncx))
+        #expect(package.navigation.map(\.title) == ["Down\u{00A0}the Rabbit\u{2011}Hole"])
+    }
+
+    /// The renderer's table stopped at two hundred names; these are the
+    /// forty-eight it lacked, every one of which failed a chapter's parse.
+    static let missingFromTheRenderer = """
+    alefsym and ang asymp circ cong crarr dArr empty exist forall hArr image isin lArr lang lceil \
+    lfloor nabla ni notin nsub oplus or otimes part perp piv prod prop rArr rang rceil real rfloor \
+    sdot sim sub sube sum sup supe there4 thetasym tilde uArr upsih weierp
+    """.split(separator: " ").map(String.init)
+
+    @Test("the table is the whole of HTML 4.01 less what XML predefines")
+    func tableIsComplete() {
+        let table = EPUBXML.htmlNamedEntities
+        #expect(table.count == 252 - 4)
+        for name in ["amp", "lt", "gt", "quot"] { #expect(table[name] == nil) }
+        #expect(Self.missingFromTheRenderer.count == 48)
+        for name in Self.missingFromTheRenderer { #expect(table[name] != nil, "&\(name); is missing") }
+        #expect(table["nbsp"] == 0xA0)
+        #expect(table["asymp"] == 0x2248)
+        #expect(table["thetasym"] == 977)
+        #expect(table["lang"] == 9001)
+    }
+
+    @Test("every name in the table parses, and only with substitution")
+    func everyNameParses() throws {
+        for (name, code) in EPUBXML.htmlNamedEntities {
+            let data = Data("<p>a &\(name); b</p>".utf8)
+            #expect(throws: EPUBError.self, "&\(name); parsed with no substitution") {
+                try EPUBXML.parse(data, substitutingHTMLEntities: false)
+            }
+            let root = try EPUBXML.parse(data, substitutingHTMLEntities: true)
+            let scalar = try #require(Unicode.Scalar(code))
+            #expect(root.text == "a \(Character(scalar)) b", "&\(name);")
+        }
+    }
+
+    @Test("what is not a named entity is left for the parser")
+    func leavesTheRestAlone() {
+        let text = "Tom &amp; Jerry &#8212; &#x2026; &lt;b&gt; &apos; &bogus; & &nbsp"
+        let substituted = EPUBXML.substitutingHTMLEntities(in: Data(text.utf8))
+        #expect(String(decoding: substituted, as: UTF8.self) == text)
+    }
+}
+
+/// Members too big to hold in memory.
+///
+/// `read` inflates an entry whole and so caps it at `Inflate.maximumEntrySize`;
+/// narration audio past that cap cost a book its narration outright.
+/// `extract(_:to:)` streams to disk instead, under the same honesty checks.
+@Suite("Streaming an entry to disk")
+struct StreamingExtractTests {
+    static let text = String(repeating: "Alice was beginning to get very tired of sitting by her sister. ", count: 5000)
+
+    func directory() throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("StreamingExtractTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    func archive() throws -> EPUBArchive {
+        let original = Data(Self.text.utf8)
+        let deflated = try #require(InflateHonestyTests.deflate(original))
+        return try EPUBArchive(data: ZIPBytes.archive([
+            .init(name: "OEBPS/Audio/track.mp3", payload: deflated, method: 8,
+                  declaredUncompressedSize: UInt32(original.count)),
+            .init(name: "OEBPS/Audio/stored.mp3", payload: original),
+            .init(name: "unknown.bin", payload: deflated, method: 8, declaredUncompressedSize: 0),
+            .init(name: "understated.bin", payload: deflated, method: 8, declaredUncompressedSize: 16),
+            .init(name: "bomb.bin", payload: InflateBoundsTests.helloDeflated, method: 8,
+                  declaredUncompressedSize: 0xFFFF_FFFE),
+            .init(name: "empty.css", payload: Data([0x03, 0x00]), method: 8, declaredUncompressedSize: 0),
+            .init(name: "liar.bin", payload: Data("ten bytes!".utf8), declaredUncompressedSize: 11),
+        ]))
+    }
+
+    /// The point of it: past the in-memory cap, `read` refuses and `extract`
+    /// still delivers every byte.
+    @Test("a member past read's cap is refused by read and written whole by extract")
+    func pastTheCap() throws {
+        let archive = try archive()
+        let original = Data(Self.text.utf8)
+        let cap = 64 * 1024
+        #expect(original.count > cap)
+        #expect(throws: EPUBError.self) { try archive.read("OEBPS/Audio/track.mp3", maximumSize: cap) }
+
+        let folder = try directory()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let destination = folder.appendingPathComponent("track.mp3")
+        // A slice far smaller than the entry, so the loop really loops.
+        try archive.extract("OEBPS/Audio/track.mp3", to: destination, ceiling: .max, sliceSize: 4096)
+        #expect(try Data(contentsOf: destination) == original)
+        // And the public entry point agrees.
+        try archive.extract("OEBPS/Audio/track.mp3", to: destination)
+        #expect(try Data(contentsOf: destination) == original)
+        #expect(!FileManager.default.fileExists(atPath: destination.path + ".partial"))
+    }
+
+    @Test("a stored member is copied out in slices")
+    func storedInSlices() throws {
+        let archive = try archive()
+        let folder = try directory()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let destination = folder.appendingPathComponent("stored.mp3")
+        try archive.extract("OEBPS/Audio/stored.mp3", to: destination, ceiling: .max, sliceSize: 1000)
+        #expect(try Data(contentsOf: destination) == Data(Self.text.utf8))
+    }
+
+    @Test("an undeclared size still streams, and an empty member is an empty file")
+    func unknownAndEmpty() throws {
+        let archive = try archive()
+        let folder = try directory()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let unknown = folder.appendingPathComponent("unknown.bin")
+        try archive.extract("unknown.bin", to: unknown, ceiling: .max, sliceSize: 4096)
+        #expect(try Data(contentsOf: unknown) == Data(Self.text.utf8))
+        let empty = folder.appendingPathComponent("empty.css")
+        try archive.extract("empty.css", to: empty)
+        #expect(try Data(contentsOf: empty).isEmpty)
+    }
+
+    /// Every refusal leaves nothing behind: not the destination, and not the
+    /// half-written `.partial` a caller might later mistake for it.
+    @Test("a lying entry is refused and leaves no file", arguments: [
+        "understated.bin", "bomb.bin", "liar.bin",
+    ])
+    func refusals(_ name: String) throws {
+        let archive = try archive()
+        let folder = try directory()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let destination = folder.appendingPathComponent(name)
+        #expect(throws: EPUBError.self) {
+            try archive.extract(name, to: destination, ceiling: .max, sliceSize: 4096)
+        }
+        #expect(!FileManager.default.fileExists(atPath: destination.path))
+        #expect(!FileManager.default.fileExists(atPath: destination.path + ".partial"))
+    }
+
+    @Test("the ceiling is enforced on a size the stream did not declare")
+    func ceilingWithoutADeclaredSize() throws {
+        let archive = try archive()
+        let folder = try directory()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let destination = folder.appendingPathComponent("unknown.bin")
+        #expect(throws: EPUBError.self) {
+            try archive.extract("unknown.bin", to: destination, ceiling: 100_000, sliceSize: 4096)
+        }
+        #expect(!FileManager.default.fileExists(atPath: destination.path + ".partial"))
+    }
+
+    @Test("a failed extraction does not destroy the file already there")
+    func failureKeepsThePrevious() throws {
+        let archive = try archive()
+        let folder = try directory()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let destination = folder.appendingPathComponent("track.mp3")
+        try Data("previous".utf8).write(to: destination)
+        #expect(throws: EPUBError.self) { try archive.extract("bomb.bin", to: destination) }
+        #expect(try Data(contentsOf: destination) == Data("previous".utf8))
+        // A successful one replaces it.
+        try archive.extract("OEBPS/Audio/track.mp3", to: destination)
+        #expect(try Data(contentsOf: destination) == Data(Self.text.utf8))
+    }
+
+    @Test("an entry that is not there is a missing resource")
+    func missing() throws {
+        let folder = try directory()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        #expect(throws: EPUBError.missingResource("nope.mp3")) {
+            try archive().extract("nope.mp3", to: folder.appendingPathComponent("nope.mp3"))
+        }
     }
 }

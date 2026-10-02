@@ -148,10 +148,14 @@ public extension EPUBPackage {
         // Read here rather than inside each parse: the contents and the
         // landmarks are two `<nav>` elements of one document, and inflating and
         // parsing that document twice to read one of each buys nothing.
+        // With HTML entities substituted, as a chapter's are: the nav document
+        // is XHTML an author wrote, and one `&nbsp;` in a title failed the
+        // parse and left the book with no contents.
         let navigationDocument = manifest.values
             .first { $0.properties.contains("nav") }
             .flatMap { item in
-                (try? EPUBXML.parse(archive.read(item.href))).map { (document: $0, href: item.href) }
+                (try? EPUBXML.parse(archive.read(item.href), substitutingHTMLEntities: true))
+                    .map { (document: $0, href: item.href) }
             }
         let navigation = (try? parseNavigation(
             archive: archive, manifest: manifest, navigationDocument: navigationDocument,
@@ -333,7 +337,8 @@ public extension EPUBPackage {
             }
         }
         if let ncx = manifest.values.first(where: { $0.mediaType == ncxMediaType }) {
-            let document = try EPUBXML.parse(archive.read(ncx.href))
+            // Substituted for the same reason as the nav document above.
+            let document = try EPUBXML.parse(archive.read(ncx.href), substitutingHTMLEntities: true)
             return document.descendants("navPoint").compactMap { point in
                 guard let label = point.descendants("text").first?.trimmedText,
                       let href = point.descendants("content").first?["src"] else { return nil }
