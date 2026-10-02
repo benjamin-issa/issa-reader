@@ -56,7 +56,7 @@ struct DownloadManagerTests {
 struct DownloadInterruptionTests {
     func manager() -> DownloadManager {
         DownloadManager(
-            baseURL: URL(string: "http://example.test")!,
+            baseURL: unreachableServer,
             tokens: StubTokens(),
             identifier: "test.\(UUID().uuidString)",
             fenceStore: nil,
@@ -170,7 +170,7 @@ struct DownloadInterruptionTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let books = root.appending(path: "Books", directoryHint: .isDirectory)
         let subject = DownloadManager(
-            baseURL: URL(string: "http://example.test")!,
+            baseURL: unreachableServer,
             tokens: StubTokens(),
             identifier: "test.\(UUID().uuidString)",
             fenceStore: nil,
@@ -269,7 +269,7 @@ struct DownloadInterruptionTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let books = root.appending(path: "Books", directoryHint: .isDirectory)
         let subject = DownloadManager(
-            baseURL: URL(string: "http://example.test")!,
+            baseURL: unreachableServer,
             tokens: StubTokens(),
             identifier: "test.\(UUID().uuidString)",
             fenceStore: nil,
@@ -466,7 +466,7 @@ struct CancelBeforeStartTests {
     func cancelDuringTokenFetchStopsTheTask() async {
         let tokens = GatedTokens()
         let manager = DownloadManager(
-            baseURL: URL(string: "http://example.test")!,
+            baseURL: unreachableServer,
             tokens: tokens,
             identifier: "test.\(UUID().uuidString)",
             fenceStore: nil,
@@ -502,7 +502,7 @@ struct CancelBeforeStartTests {
     func shutDownDuringTokenFetchDoesNotCreateATask() async {
         let tokens = GatedTokens()
         let manager = DownloadManager(
-            baseURL: URL(string: "http://example.test")!,
+            baseURL: unreachableServer,
             tokens: tokens,
             identifier: "test.\(UUID().uuidString)",
             fenceStore: nil,
@@ -525,18 +525,20 @@ struct CancelBeforeStartTests {
     /// server and credential a request is built with are the new ones.
     @Test("reconfiguring a manager keeps it usable")
     func reconfigureKeepsTheManager() async {
+        // Two addresses from the same unrouted documentation block, so the
+        // real task this starts waits rather than failing under the test.
         let manager = DownloadManager(
-            baseURL: URL(string: "http://old.test")!,
+            baseURL: unreachableServer,
             tokens: StubTokens(),
             identifier: "test.\(UUID().uuidString)",
             fenceStore: nil,
             destinationFor: { _ in URL(fileURLWithPath: "/dev/null") },
         )
-        manager.reconfigure(baseURL: URL(string: "http://new.test")!, tokens: StubTokens())
+        manager.reconfigure(baseURL: URL(string: "http://192.0.2.2")!, tokens: StubTokens())
         let job = DownloadManager.Job(bookUUID: "b", format: .ebook)
         await manager.start(job)
         #expect(manager.state(for: job) == .queued)
-        #expect(manager.request(for: job)?.url?.host() == "new.test")
+        #expect(manager.request(for: job)?.url?.host() == "192.0.2.2")
         await manager.shutDown()
     }
 
@@ -550,7 +552,7 @@ struct CancelBeforeStartTests {
     @Test("stopping for a sign-out leaves the manager able to download again")
     func stopThenReconfigureStillDownloads() async {
         let manager = DownloadManager(
-            baseURL: URL(string: "http://first.test")!,
+            baseURL: unreachableServer,
             tokens: StubTokens(),
             identifier: "test.\(UUID().uuidString)",
             fenceStore: nil,
@@ -567,10 +569,10 @@ struct CancelBeforeStartTests {
         #expect(manager.pending.isEmpty)
 
         // Sign in as someone else: same manager, same session, new server.
-        manager.reconfigure(baseURL: URL(string: "http://second.test")!, tokens: StubTokens())
+        manager.reconfigure(baseURL: URL(string: "http://192.0.2.2")!, tokens: StubTokens())
         await manager.start(job)
         #expect(manager.state(for: job) == .queued)
-        #expect(manager.request(for: job)?.url?.host() == "second.test")
+        #expect(manager.request(for: job)?.url?.host() == "192.0.2.2")
         await manager.shutDown()
     }
 
@@ -580,7 +582,7 @@ struct CancelBeforeStartTests {
     func cancelAfterTaskExistsIsUnaffected() async {
         let tokens = GatedTokens()
         let manager = DownloadManager(
-            baseURL: URL(string: "http://example.test")!,
+            baseURL: unreachableServer,
             tokens: tokens,
             identifier: "test.\(UUID().uuidString)",
             fenceStore: nil,
@@ -605,7 +607,7 @@ struct CancelBeforeStartTests {
         let tokens = GatedTokens()
         await tokens.release()
         let manager = DownloadManager(
-            baseURL: URL(string: "http://example.test")!,
+            baseURL: unreachableServer,
             tokens: tokens,
             identifier: "test.\(UUID().uuidString)",
             fenceStore: nil,
