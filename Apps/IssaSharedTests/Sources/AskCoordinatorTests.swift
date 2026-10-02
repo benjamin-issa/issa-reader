@@ -326,6 +326,39 @@ struct AskCoordinatorTests {
         await Self.settle(job)
     }
 
+    // MARK: - Getting ready
+
+    /// A warm-up that failed was remembered as done, so no later opening of the
+    /// sheet tried again and every question built the index itself.
+    @Test("a warm-up that failed is tried again the next time the sheet opens")
+    func failedWarmUpIsNotRemembered() async throws {
+        // A file where the index directory should be: the build cannot create
+        // it, so the first warm-up fails.
+        let blocked = URL.temporaryDirectory
+            .appending(path: "issa-ask-blocked-\(UUID().uuidString)")
+        try Data("not a directory".utf8).write(to: blocked)
+        defer { try? FileManager.default.removeItem(at: blocked) }
+        let (defaults, suite) = SharedFixtures.scratchDefaults()
+        defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
+        let store = AskIndexStore(directory: blocked)
+        let coordinator = AskCoordinator(
+            store: store, model: ScriptedAnswerModel(), notifier: nil, defaults: defaults,
+        )
+        let source = try Self.source()
+
+        coordinator.prepare(source: source)
+        await coordinator.warmUp(for: source.bookUUID)?.value
+        #expect(!(await store.isPrepared(source: source)))
+
+        // Whatever was in the way is gone; the next opening warms up for real.
+        try FileManager.default.removeItem(at: blocked)
+        coordinator.prepare(source: source)
+        let retry = coordinator.warmUp(for: source.bookUUID)
+        #expect(retry != nil, "the failed warm-up must not count as done")
+        await retry?.value
+        #expect(await store.isPrepared(source: source))
+    }
+
     // MARK: - The setting
 
     @Test("the Ask switch is off until it is turned on, and survives a relaunch")

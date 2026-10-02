@@ -140,13 +140,22 @@ final class AskCoordinator {
             // sheet that opens onto an error before the reader has typed a word
             // is worse than one that quietly retries when they do. The question
             // itself builds the index again and reports properly.
-            _ = try? await preparer.prepareIndex(source: source)
+            let built = (try? await preparer.prepareIndex(source: source)) != nil
             await preparer.prewarm()
             guard !Task.isCancelled else { return }
-            prepared.insert(uuid)
             preparing[uuid] = nil
+            // Only a warm-up that worked is remembered. A failed one was put in
+            // `prepared` all the same, so the guard above turned every later
+            // opening of the sheet away for the rest of the session — no
+            // warm-up was ever tried again, and each question paid for the
+            // whole build itself.
+            if built { prepared.insert(uuid) }
         }
     }
+
+    /// The warm-up in flight for this book, if there is one — for a test to
+    /// wait on, as `suggestions(for:)` does.
+    func warmUp(for bookUUID: String) -> Task<Void, Never>? { preparing[bookUUID] }
 
     /// The reader is looking at this book's answer again, so the banner that
     /// was standing in for it has done its job.

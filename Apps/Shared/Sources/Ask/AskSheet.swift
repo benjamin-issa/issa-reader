@@ -101,7 +101,13 @@ struct AskSheet: View {
             alignment: .topLeading,
         )
         .background(Palette.paper)
-        .task {
+        // Keyed on whether the book has finished opening. The sparkle opens
+        // this sheet while the book is still laying out, when there is no file
+        // to warm up from, and a bare `.task` ran once, found nothing, and was
+        // never run again: no warm-up for that book at all, so the reader's
+        // question built the index itself — and a warm-up started by the next
+        // opening raced it over the same file.
+        .task(id: model.package != nil) {
             // Availability can have changed since the app launched — the reader
             // may have been to Settings and turned Apple Intelligence on — and
             // this is the moment the copy has to be right.

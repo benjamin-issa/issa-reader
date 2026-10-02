@@ -105,27 +105,81 @@ public actor AskIndexStore {
         source: BookSource,
         progress: (@Sendable (AskPhase) -> Void)? = nil,
     ) async throws -> Bool {
-        let url = indexURL(for: source.bookUUID)
+        let uuid = source.bookUUID
+        let url = indexURL(for: uuid)
         let key = source.indexKey
 
-        // `try?`, matching `isPrepared` twelve lines down. A bare `try` threw
-        // straight past the repair three lines below — and `queue(for:)` had
-        // already cached the handle to the broken file, so the next attempt read
-        // the same broken index and failed identically, for ever. A zero-length
-        // `.sqlite` is the case: SQLite opens it happily as an empty database
-        // and `storedKey` then throws "no such table: meta".
-        if let queue = try? queue(for: source.bookUUID),
-           (try? Self.storedKey(in: queue)) == key {
-            return false
+        while true {
+            // `try?`, matching `isPrepared` below. A bare `try` threw straight
+            // past the repair — and `queue(for:)` had already cached the handle
+            // to the broken file, so the next attempt read the same broken
+            // index and failed identically, for ever. A zero-length `.sqlite`
+            // is the case: SQLite opens it happily as an empty database and
+            // `storedKey` then throws "no such table: meta".
+            if let queue = try? queue(for: uuid), (try? Self.storedKey(in: queue)) == key {
+                return false
+            }
+            // One build per book at a time. Two name the same
+            // `<uuid>.building.sqlite`, and this actor is reentrant at every
+            // chapter: the second unlinked the first's open file, and whichever
+            // finished first renamed the *other's* half-written file over the
+            // index — so a question was answered from a fraction of the book —
+            // or found its own gone and failed. The sheet's warm-up and a
+            // question's own build meet exactly like that when the sheet is
+            // opened while the book is still laying out. So a second caller
+            // waits for the build in flight and then looks again: the index it
+            // finds is the one it wanted, or that build failed or was
+            // cancelled and this one runs.
+            guard building[uuid] != nil else { break }
+            try await waitForBuild(of: uuid)
         }
 
-        // Stale, corrupt or absent — all three are the same repair.
-        open[source.bookUUID] = nil
+        // Stale, corrupt or absent — all three are the same repair. Claimed
+        // before the first suspension, so nothing can slip in between the
+        // check above and the build.
+        open[uuid] = nil
+        building[uuid] = [:]
+        defer { finishBuild(of: uuid) }
         try await build(source: source, key: key, destination: url, progress: progress)
         // Opened here so a question asked immediately afterwards finds a handle
         // rather than silently retrieving nothing.
         _ = try queue(for: source.bookUUID)
         return true
+    }
+
+    /// Books with a build in flight, and whoever is waiting for it to end.
+    ///
+    /// The build belongs to the caller that started it, so its cancellation is
+    /// still that caller's to make; a waiter only learns that it ended.
+    private var building: [String: [UUID: CheckedContinuation<Void, Never>]] = [:]
+
+    /// Suspends until this book's build in flight ends, however it ends.
+    ///
+    /// Cancellable: a waiter whose own task is cancelled stops waiting at once
+    /// and throws, rather than sitting out somebody else's build.
+    private func waitForBuild(of uuid: String) async throws {
+        let ticket = UUID()
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                // Already over, or already cancelled: no reason to wait.
+                guard building[uuid] != nil, !Task.isCancelled else {
+                    continuation.resume()
+                    return
+                }
+                building[uuid]?[ticket] = continuation
+            }
+        } onCancel: {
+            Task { await self.stopWaiting(ticket, for: uuid) }
+        }
+        try Task.checkCancellation()
+    }
+
+    private func stopWaiting(_ ticket: UUID, for uuid: String) {
+        building[uuid]?.removeValue(forKey: ticket)?.resume()
+    }
+
+    private func finishBuild(of uuid: String) {
+        for waiter in (building.removeValue(forKey: uuid) ?? [:]).values { waiter.resume() }
     }
 
     /// Whether a usable, current index already exists — the question the sheet

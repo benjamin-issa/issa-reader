@@ -451,6 +451,63 @@ struct AskIndexStoreTests {
         #expect(!prepared)
     }
 
+    // MARK: - Two builds at once
+
+    /// The sheet's warm-up and a question's own build for the same book, at
+    /// the same time — which is what opening the sheet while the book is still
+    /// laying out produces. Both named `<uuid>.building.sqlite` and the actor is
+    /// reentrant at every chapter, so the second unlinked the first's file and
+    /// whichever finished first published the *other's* half-written one, or
+    /// found its own gone and failed the question with "Couldn't read this
+    /// book".
+    @Test("two builds of one book at once both succeed, and the index is whole")
+    func concurrentBuildsShareOne() async throws {
+        let directory = try AskFixture.temporaryDirectory()
+        defer { AskFixture.remove(directory) }
+        let store = AskIndexStore(directory: directory)
+        let source = try AskFixture.source()
+
+        async let first = store.prepare(source: source)
+        async let second = store.prepare(source: source)
+        let built = try await [first, second]
+        // One build ran; the other waited for it and found it current.
+        #expect(built.filter { $0 }.count == 1)
+        #expect(await store.isPrepared(source: source))
+
+        // Whole: the same passages a build on its own writes.
+        let (_, _, reference) = try await AskFixture.preparedStore()
+        defer { AskFixture.remove(reference) }
+        let url = store.indexURL(for: AskFixture.bookUUID)
+        let referenceURL = AskIndexStore.indexURL(in: reference, bookUUID: AskFixture.bookUUID)
+        #expect(try Self.passageCount(at: url) == Self.passageCount(at: referenceURL))
+        #expect(try Self.passageCount(at: url) > 0)
+        #expect(!FileManager.default.fileExists(
+            atPath: AskIndexStore.buildingURL(for: url).path,
+        ))
+    }
+
+    /// A waiter whose own build-in-flight was cancelled builds for itself.
+    @Test("a build that waited on a cancelled one still builds")
+    func waiterBuildsAfterACancelledBuild() async throws {
+        let directory = try AskFixture.temporaryDirectory()
+        defer { AskFixture.remove(directory) }
+        let store = AskIndexStore(directory: directory)
+        let source = try AskFixture.source()
+
+        let cancelled = Task { try await store.prepare(source: source) }
+        let waiter = Task { try await store.prepare(source: source) }
+        cancelled.cancel()
+        _ = try? await cancelled.value
+        _ = try await waiter.value
+        #expect(await store.isPrepared(source: source))
+    }
+
+    static func passageCount(at url: URL) throws -> Int {
+        let queue = try AskIndexStore.openQueue(at: url)
+        defer { try? queue.close() }
+        return try queue.read { try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM passage") ?? 0 }
+    }
+
     // MARK: - Naming
 
     @Test("a uuid that is not a uuid cannot choose the path")
