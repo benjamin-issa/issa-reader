@@ -66,15 +66,28 @@ public enum AudioExtraction {
         // the next. A `Set`'s order changes from launch to launch.
         let hrefs = Set(timeline.entries.map(\.audioHref)).sorted()
         return try locks.lock(for: base).withLock {
-            try extract(hrefs: hrefs, read: package.archive.read, into: base, isCancelled: isCancelled)
+            // Streamed to disk a slice at a time, never read whole. The
+            // archive's in-memory read refuses a member that inflates past
+            // 256 MB, which lost a book cut into few, long audio files its
+            // narration outright, and held every other file whole in memory
+            // on its way to the disk.
+            try extract(
+                hrefs: hrefs, write: { try package.archive.extract($0, to: $1) },
+                into: base, isCancelled: isCancelled)
         }
     }
 
-    /// The extraction itself, over a list of archive hrefs and a way to read
-    /// one. Internal so a test can state a layout no fixture book has.
+    /// The extraction itself, over a list of archive hrefs and a way to write
+    /// one to a file. Internal so a test can state a layout no fixture book
+    /// has.
+    ///
+    /// - Parameter write: puts the member at an href into a file, whole or not
+    ///   at all — `EPUBArchive.extract(_:to:)` writes beside the destination
+    ///   and renames, so a failure never leaves a truncated file that the
+    ///   `fileExists` check below would take for a finished one next time.
     static func extract(
         hrefs: [String],
-        read: (String) throws -> Data,
+        write: (String, URL) throws -> Void,
         into base: URL,
         isCancelled: () -> Bool,
     ) throws -> [String: URL] {
@@ -139,8 +152,7 @@ public enum AudioExtraction {
             guard !isCancelled() else { throw CancellationError() }
             let destination = base.appending(path: Self.filename(for: href))
             if !FileManager.default.fileExists(atPath: destination.path) {
-                let data = try read(href)
-                try data.write(to: destination, options: .atomic)
+                try write(href, destination)
             }
             result[href] = destination
         }

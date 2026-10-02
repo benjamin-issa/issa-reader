@@ -148,6 +148,35 @@ struct AudioExtractionTests {
         #expect(finished.wait(timeout: .now() + 10) == .success, "book X's extraction never finished")
     }
 
+    /// Narration was read into memory whole and then written out, and the
+    /// archive's whole-in-memory read refuses any member that inflates past
+    /// 256 MB — so a long book cut into few, large audio files lost its
+    /// narration outright, and a smaller one cost its whole size in memory per
+    /// file. Streamed to disk a slice at a time, a member of any honest size
+    /// extracts.
+    ///
+    /// 257 MB of silence, which deflates to a few hundred kilobytes: past the
+    /// in-memory cap, and cheap to build.
+    @Test("an audio member too large to hold in memory still extracts")
+    func aMemberPastTheInMemoryCapExtracts() throws {
+        let size = 257 * 1024 * 1024
+        let data = InTestEPUB.readalong(audio: try InTestEPUB.deflatedZeros("OEBPS/Audio/big.mp3", count: size))
+        let package = try EPUBPackage.open(archive: EPUBArchive(data: data))
+        let timeline = SMILTimeline(entries: [
+            SMILEntry(fragmentID: "s0", textHref: "OEBPS/ch01.xhtml", audioHref: "OEBPS/Audio/big.mp3",
+                      start: 0, end: 5, cumulativeEnd: 5),
+        ])
+        let directory = Self.scratch()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let files = try AudioExtraction.extractAudio(
+            from: package, timeline: timeline, bookID: "big", into: directory)
+
+        let url = try #require(files["OEBPS/Audio/big.mp3"])
+        let written = try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int
+        #expect(written == size)
+    }
+
     /// The default, and every caller in the app relies on it: both of them run
     /// inside `Task.detached`, and nothing passes a closure of its own. An
     /// extraction on a live task must extract.

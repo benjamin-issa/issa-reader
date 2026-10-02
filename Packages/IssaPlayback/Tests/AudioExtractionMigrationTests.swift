@@ -69,7 +69,7 @@ struct AudioExtractionMigrationTests {
         let hrefs = ["intro.mp3", "Audio/intro.mp3"]
 
         let files = try AudioExtraction.extract(
-            hrefs: hrefs, read: { Data("bytes of \($0)".utf8) }, into: directory, isCancelled: { false })
+            hrefs: hrefs, write: { try Data("bytes of \($0)".utf8).write(to: $1) }, into: directory, isCancelled: { false })
 
         for href in hrefs {
             let url = try #require(files[href])
@@ -89,7 +89,7 @@ struct AudioExtractionMigrationTests {
         try Data("bytes of Audio/intro.mp3".utf8).write(to: directory.appending(path: "intro.mp3"))
 
         let files = try AudioExtraction.extract(
-            hrefs: ["intro.mp3", "Audio/intro.mp3"], read: { Data("bytes of \($0)".utf8) },
+            hrefs: ["intro.mp3", "Audio/intro.mp3"], write: { try Data("bytes of \($0)".utf8).write(to: $1) },
             into: directory, isCancelled: { false })
 
         let root = try #require(files["intro.mp3"])
