@@ -185,9 +185,12 @@ public struct HTMLContentParser {
         var listDepth = 0
         var isPreformatted = false
         var alignment: NSTextAlignment?
-        /// How far the first line of a paragraph is pushed in, past whatever
-        /// indent a blockquote or list already applies.
-        var firstLineIndent: CGFloat = 0
+        /// How far the book asked for the first line of a paragraph to be
+        /// pushed in, past whatever indent a blockquote or list already
+        /// applies. The request rather than a number of points: a percentage
+        /// is of the column, and the column changes when the window does — see
+        /// `ChapterLayout.reindent(forColumnWidth:)`.
+        var textIndent: EPUBStyleSheet.Length?
         var underlined = false
     }
 
@@ -290,7 +293,13 @@ public struct HTMLContentParser {
         // `<strong>` amount to here. An `<em>` *inside* a class-styled
         // paragraph is unaffected — the class is the paragraph's, and the
         // emphasis is inherited down to it through `child`.
-        if !context.sheet.isEmpty {
+        //
+        // An inline `style=` counts on its own. Asking only whether the sheet
+        // had rules made identical markup render styled in one book and plain
+        // in another, depending on whether anything unrelated in its CSS
+        // happened to parse — and the books formatted chiefly by `style=`
+        // (word-processor conversions) are the ones whose sheets say least.
+        if !context.sheet.isEmpty || node["style"] != nil {
             let asked = context.sheet.declarations(
                 tag: node.name, classes: node["class"], identifier: node["id"],
                 inlineStyle: node["style"])
@@ -314,8 +323,7 @@ public struct HTMLContentParser {
                     ?? child.alignment
             }
             if let indent = asked.textIndent {
-                child.firstLineIndent = indent.points(
-                    columnWidth: columnWidth, fontSize: context.style.fontSize)
+                child.textIndent = indent
             }
         }
 
@@ -395,6 +403,10 @@ public struct HTMLContentParser {
 
         var attributes = attributes(for: context)
         attributes[.attachment] = attachment
+        // A plate is centred with no indent of its own (below), so it must not
+        // be re-indented when the column changes either.
+        attributes[.issaIndentFraction] = nil
+        attributes[.issaIndentPoints] = nil
         attributes[.issaImageHref] = href
         // Alt text is the only thing a reader using VoiceOver gets from a
         // picture. Dropping it at parse time left an object-replacement
@@ -490,15 +502,29 @@ public struct HTMLContentParser {
         // `headIndent`, so a book's own indent is added to the quoting indent
         // rather than replacing it. Until a book could ask for one these two
         // were always equal, which is why no book has ever had an indented
-        // first line. A hanging indent is clamped: a negative one draws outside
-        // the column and is clipped.
-        paragraph.firstLineHeadIndent = indent + max(0, context.firstLineIndent)
+        // first line.
+        let requested = context.textIndent?.points(
+            columnWidth: columnWidth, fontSize: context.style.fontSize) ?? 0
+        paragraph.firstLineHeadIndent = indent
+            + Self.firstLineIndent(requested, columnWidth: columnWidth)
 
         var attributes: [NSAttributedString.Key: Any] = [
             .font: font,
             .foregroundColor: context.style.textColor,
             .paragraphStyle: paragraph,
         ]
+        // What the indent was asked as, so a new column width can be honoured
+        // without parsing the chapter again. A percentage is resolved afresh
+        // against the new column; an `em` indent keeps its size but is bounded
+        // again by the new column's half.
+        switch context.textIndent {
+        case let .fraction(fraction)? where fraction > 0 && fraction.isFinite:
+            attributes[.issaIndentFraction] = fraction
+        case .ems? where requested > 0 && requested.isFinite:
+            attributes[.issaIndentPoints] = Double(requested)
+        default:
+            break
+        }
         if context.underlined {
             attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
         }
@@ -522,8 +548,27 @@ public struct HTMLContentParser {
         case .center: .center
         case .right: .right
         case .left: justification == .always ? .justified : .left
-        case .justify: justification == .never ? nil : .justified
+        // `.natural`, not `nil`, under `.never`: `nil` means "nothing to say"
+        // and lets the paragraph inherit its parent's alignment, so a justified
+        // paragraph inside a centred title page came out centred line by line.
+        case .justify: justification == .never ? .natural : .justified
         }
+    }
+
+    /// The first-line indent a paragraph is given, in points past any quoting
+    /// indent, for the indent it asked for.
+    ///
+    /// The one place this is decided, for the parse and for
+    /// `ChapterLayout.reindent(forColumnWidth:)` alike. Bounded at half the
+    /// column because an indent as wide as the column pushes the paragraph's
+    /// whole first line into a zero-width fragment at the right edge, where it
+    /// is clipped — `text-indent: 100%`, `25em` on a phone, or `1e400em`,
+    /// which parses to infinity. Never negative: a hanging indent draws
+    /// outside the column and is clipped too.
+    static func firstLineIndent(_ requested: CGFloat, columnWidth: CGFloat) -> CGFloat {
+        guard requested.isFinite, requested > 0 else { return 0 }
+        let half = columnWidth.isFinite ? max(columnWidth, 0) / 2 : 0
+        return min(requested, half)
     }
 
     // MARK: - Text handling

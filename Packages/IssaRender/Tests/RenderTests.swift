@@ -981,6 +981,48 @@ struct StyledChapterTests {
         }
     }
 
+    /// `.never` used to answer `nil` for a justified paragraph, which means
+    /// "nothing to say" — so the paragraph inherited a centred parent's
+    /// alignment and a body paragraph on a title page was centred line by line.
+    @Test("under Never, justification nested in a centred element is natural", arguments: [
+        "center", "right",
+    ])
+    func neverInsideCentred(_ outer: String) throws {
+        let result = try parse(
+            "<body><div class=\"c\"><p class=\"j\">Body text.</p></div></body>",
+            css: ".c {text-align: \(outer)} .j {text-align: justify}",
+            style: ReaderStyle(justification: .never))
+        #expect(try paragraphStyle(result, at: 0).alignment == .natural)
+    }
+
+    /// Inline `style=` used to be read only when the chapter's sheet had at
+    /// least one rule, so the same markup rendered styled in one book and plain
+    /// in another. Both shapes the reader hands the parser: no loader at all,
+    /// and a loader whose sheets have nothing in them (`@page` only, margins
+    /// only — what a word-processor export links).
+    @Test("an inline style is honoured when the book has no stylesheet rules", arguments: [
+        false, true,
+    ])
+    func inlineStyleWithoutRules(_ withEmptySheet: Bool) throws {
+        let empty = EPUBStyleSheet()
+        let head = withEmptySheet
+            ? "<head><link rel=\"stylesheet\" type=\"text/css\" href=\"style.css\"/></head>" : ""
+        let html = Data("""
+        <html xmlns="http://www.w3.org/1999/xhtml">\(head)<body>
+        <p style="text-align:center">Centred.</p><p>Plain <span style="font-style:italic">slanted</span> text.</p>
+        </body></html>
+        """.utf8)
+        let result = try HTMLContentParser(
+            style: ReaderStyle(),
+            loadStyleSheet: withEmptySheet ? { _ in empty } : nil,
+        ).parse(xhtml: html, baseHref: "c.xhtml")
+        #expect(try paragraphStyle(result, at: 0).alignment == .center)
+        let slanted = (result.text.string as NSString).range(of: "slanted")
+        #expect(isItalic(try font(result, at: slanted.location)))
+        let plain = (result.text.string as NSString).range(of: "Plain")
+        #expect(!isItalic(try font(result, at: plain.location)))
+    }
+
     @Test("a book's font-size sizes the type without making a heading of it")
     func relativeSize() throws {
         let plain = try parse("<body><p>Plain.</p></body>", css: "")
