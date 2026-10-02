@@ -120,6 +120,16 @@ struct CustomFontsTests {
         #expect(!CustomFonts.families().contains("Lexend"))
     }
 
+    /// The picker's half: it asks this of every family it would list under
+    /// "Your fonts", whatever case the family arrived in.
+    @Test("a bundled family is recognised in any case, and spelled the app's way")
+    func bundledFamilyLookup() {
+        #expect(CustomFonts.bundledFamily(matching: "literata") == "Literata")
+        #expect(CustomFonts.bundledFamily(matching: "OPENDYSLEXIC") == "OpenDyslexic")
+        #expect(CustomFonts.bundledFamily(matching: "Source Serif 4") == "Source Serif 4")
+        #expect(CustomFonts.bundledFamily(matching: "Imported") == nil)
+    }
+
     @Test("an imported face registers and is listed")
     func importedFaceIsListed() throws {
         // Held across the whole test — acquired first so its release defer runs

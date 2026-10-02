@@ -75,10 +75,8 @@ public enum CustomFonts {
         // or older Literata could set its emphasis, or its whole body, in
         // every *other* book. Not recorded either, so `families()` never
         // offers it under "Your fonts" — it is already among the app's own.
-        if let bundled = IssaFonts.allFaces.first(where: {
-            $0.family.caseInsensitiveCompare(family) == .orderedSame
-        }) {
-            return bundled.family
+        if let bundled = bundledFamily(matching: family) {
+            return bundled
         }
 
         var error: Unmanaged<CFError>?
@@ -90,6 +88,18 @@ public enum CustomFonts {
         registered[url] = family
         if imported { importedURLs.insert(url) }
         return family
+    }
+
+    /// The family the app ships under this name, if it ships one — spelled
+    /// the way the app spells it, whatever case `family` arrived in.
+    ///
+    /// Public for the typeface picker, which must not offer one of these under
+    /// "Your fonts": the family is already listed among the app's own, and
+    /// choosing it there named a face as the reader's that is not theirs.
+    public static func bundledFamily(matching family: String) -> String? {
+        IssaFonts.allFaces.first {
+            $0.family.caseInsensitiveCompare(family) == .orderedSame
+        }?.family
     }
 
     /// Reads the family name out of the file, rather than trusting its name.
