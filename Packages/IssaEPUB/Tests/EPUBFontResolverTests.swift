@@ -206,6 +206,21 @@ struct EmbeddedFamilyTests {
         #expect(chosen.path == "OEBPS/font_rsrc14H.otf")
     }
 
+    /// CSS keywords are case-insensitive. `font-weight` was lowercased before
+    /// it was read and `font-style` was not, so `Italic` read as upright — and
+    /// declared first, the italic file became the face the page is set in.
+    @Test("a capitalised font-style is still read as italic")
+    func capitalisedStyle() throws {
+        let faces = EPUBFontResolver.fontFaces(in: """
+        @font-face { font-family: Body; font-style: Italic; src: url(Body-It.otf) }
+        @font-face { font-family: Body; font-style: OBLIQUE; src: url(Body-Ob.otf) }
+        @font-face { font-family: Body; font-style: normal; src: url(Body.otf) }
+        """, relativeTo: "OEBPS/style.css")
+        #expect(faces.map(\.isItalic) == [true, true, false])
+        let chosen = try #require(EPUBFontResolver.upright(among: faces))
+        #expect(chosen.path == "OEBPS/Body.otf")
+    }
+
     @Test("a family with only an italic is still better than no face at all")
     func onlyItalic() throws {
         let faces = EPUBFontResolver.fontFaces(

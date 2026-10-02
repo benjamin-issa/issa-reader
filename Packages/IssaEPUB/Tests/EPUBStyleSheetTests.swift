@@ -258,4 +258,96 @@ struct EPUBStyleSheetTests {
         #expect(sheet("/* unterminated").isEmpty)
         #expect(!sheet(".a {font-style: italic} .b {").isEmpty)
     }
+
+    // MARK: - Braceless at-rules
+
+    /// `@charset`, `@import` and `@namespace` end at a `;`, not a block. Their
+    /// text used to glue itself onto the next rule's selector, which then
+    /// matched nothing — one rule lost per run of them, and on the sheets every
+    /// Gutenberg book ships, the one lost is the `body` rule.
+    @Test("an @charset line does not cost the body rule after it")
+    func charsetKeepsTheBodyRule() {
+        let sheet = sheet("""
+        @charset "UTF-8";
+        body { text-align: justify; text-indent: 1.5em }
+        p.x {font-style: italic}
+        """)
+        let body = sheet.declarations(tag: "body", classes: nil, identifier: nil)
+        #expect(body.alignment == .justify)
+        #expect(body.textIndent == .ems(1.5))
+        #expect(sheet.declarations(tag: "p", classes: "x", identifier: nil).italic == true)
+    }
+
+    @Test("an @import or @namespace line does not cost the rule after it")
+    func importAndNamespaceKeepTheirNeighbours() {
+        #expect(sheet("@import url(x.css);\n.c {font-style: italic}")
+            .declarations(tag: "p", classes: "c", identifier: nil).italic == true)
+        let sheet = sheet("""
+        @namespace h "http://www.w3.org/1999/xhtml";
+        @charset "utf-8";
+        .c {font-style: italic}
+        .e {font-weight: bold}
+        """)
+        #expect(sheet.declarations(tag: "p", classes: "c", identifier: nil).italic == true)
+        #expect(sheet.declarations(tag: "p", classes: "e", identifier: nil).bold == true)
+    }
+
+    // MARK: - Zero, whatever its unit
+
+    /// A zero is a zero in any unit. Only `0` and `0em` used to read as one, so
+    /// `p.first {text-indent: 0pt}` beneath `p {text-indent: 1.5em}` came back
+    /// `nil` — and a `nil` merges as "no opinion", leaving the 1.5em the book
+    /// was cancelling.
+    @Test("a zero indent cancels an inherited one whatever unit it is written in")
+    func zeroInAnyUnit() {
+        for zero in ["0pt", "0px", "0in", "0cm", "0.0", "0.00em", "-0", "0%", "0"] {
+            let sheet = sheet("p {text-indent: 1.5em} p.first {text-indent: \(zero)}")
+            #expect(
+                sheet.declarations(tag: "p", classes: "first", identifier: nil).textIndent
+                    == .fraction(0),
+                "text-indent: \(zero) should cancel the indent")
+        }
+        // An absolute non-zero length is still refused, and a zero size is
+        // still not a size.
+        #expect(sheet("p {text-indent: 12pt}")
+            .declarations(tag: "p", classes: nil, identifier: nil).textIndent == nil)
+        #expect(sheet("p {font-size: 0pt}")
+            .declarations(tag: "p", classes: nil, identifier: nil).fontScale == nil)
+        #expect(EPUBStyleSheet.length("0.5em") == .ems(0.5))
+        #expect(EPUBStyleSheet.length("0auto") == nil)
+    }
+
+    // MARK: - !important
+
+    /// `!important` used to ride along into the value, so `italic !important`
+    /// was neither `italic` nor `normal` and read as no opinion at all — the
+    /// shipped bug this type exists to fix, on any sheet that uses it.
+    @Test("a declaration marked !important is still read")
+    func importantIsHonoured() {
+        let sheet = sheet("""
+        .a {font-style: italic !important}
+        .b {text-align: justify!important}
+        .c {font-weight: bold ! IMPORTANT}
+        .d {text-indent: 1.5em !important}
+        .e {font-size: 1.2em !important}
+        .f {font-family: Minion, serif !important}
+        """)
+        #expect(sheet.declarations(tag: "p", classes: "a", identifier: nil).italic == true)
+        #expect(sheet.declarations(tag: "p", classes: "b", identifier: nil).alignment == .justify)
+        #expect(sheet.declarations(tag: "p", classes: "c", identifier: nil).bold == true)
+        #expect(sheet.declarations(tag: "p", classes: "d", identifier: nil).textIndent == .ems(1.5))
+        #expect(sheet.declarations(tag: "p", classes: "e", identifier: nil).fontScale == 1.2)
+        #expect(sheet.declarations(tag: "p", classes: "f", identifier: nil).families == ["minion", "serif"])
+        // Inline styles go through the same reader.
+        #expect(EPUBStyleSheet().declarations(
+            tag: "p", classes: nil, identifier: nil,
+            inlineStyle: "font-style: italic !important").italic == true)
+    }
+
+    /// The renderer skips the whole cascade for an empty sheet, so a sheet
+    /// whose only honoured rules were `!important` lost all of them.
+    @Test("a sheet of only !important rules is not empty")
+    func importantOnlySheetIsNotEmpty() {
+        #expect(!sheet(".a {font-style: italic !important}").isEmpty)
+    }
 }

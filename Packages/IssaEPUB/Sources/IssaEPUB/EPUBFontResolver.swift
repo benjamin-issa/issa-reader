@@ -152,8 +152,11 @@ public enum EPUBFontResolver {
                 // strips a fragment but not a query, and publishers ship
                 // `url('fonts/Charis.otf?#iefix')`.
                 path: EPUBPackage.resolve(withoutQuery(source), relativeTo: sheet),
-                isItalic: (value(of: "font-style", in: block) ?? "").contains("italic")
-                    || (value(of: "font-style", in: block) ?? "").contains("oblique"),
+                // Lowercased like the weight below: CSS keywords are
+                // case-insensitive, and `Italic` read as upright made the
+                // italic file the face the page was set in.
+                isItalic: (value(of: "font-style", in: block) ?? "").lowercased().contains("italic")
+                    || (value(of: "font-style", in: block) ?? "").lowercased().contains("oblique"),
                 isBold: EPUBStyleSheet.isBold(
                     (value(of: "font-weight", in: block) ?? "").trimmingCharacters(
                         in: .whitespacesAndNewlines).lowercased()) ?? false,

@@ -139,7 +139,15 @@ public struct EPUBStyleSheet: Sendable, Equatable {
         let text = Self.stripComments(css)
         var index = text.startIndex
         while let open = text[index...].firstIndex(of: "{") {
-            let selectors = String(text[index ..< open])
+            var selectors = String(text[index ..< open])
+            // A `;` out here ends a braceless at-rule — `@charset`, `@import`,
+            // `@namespace` — and everything up to it belongs to that rule, not
+            // to the selector after it. Left glued on, `@charset "UTF-8";
+            // body` matched nothing and silently cost the sheet its body rule:
+            // the reset `EPUBFontResolver.blocks` already makes.
+            if let semicolon = selectors.lastIndex(of: ";") {
+                selectors = String(selectors[selectors.index(after: semicolon)...])
+            }
             guard let close = Self.endOfBlock(in: text, from: text.index(after: open)) else { return }
             let body = String(text[text.index(after: open) ..< close])
             // An at-rule — `@media`, `@supports`, `@font-face`, `@page`. Its
@@ -283,7 +291,8 @@ public struct EPUBStyleSheet: Sendable, Equatable {
             let parts = statement.split(separator: ":", maxSplits: 1)
             guard parts.count == 2 else { continue }
             let property = parts[0].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            let value = parts[1].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let value = Self.withoutImportant(
+                parts[1].trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
             guard !value.isEmpty else { continue }
             switch property {
             case "font-style":
@@ -330,6 +339,22 @@ public struct EPUBStyleSheet: Sendable, Equatable {
         return declarations
     }
 
+    /// A lowercased value with any trailing `!important` taken off.
+    ///
+    /// Left on, it rode into every comparison below: `italic !important` was
+    /// neither `italic` nor `normal`, `1.5em !important` had no unit, and the
+    /// declaration read as no opinion at all — the shipped upright-italics bug
+    /// again, on any sheet that uses it. Its *precedence* is not honoured; the
+    /// declaration simply takes its place in the ordinary cascade, which is
+    /// right for every book seen so far and far better than dropping it.
+    static func withoutImportant(_ value: String) -> String {
+        guard let bang = value.lastIndex(of: "!"),
+              value[value.index(after: bang)...].trimmingCharacters(in: .whitespacesAndNewlines)
+                  == "important"
+        else { return value }
+        return value[..<bang].trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     /// Whether a `font-weight` asks for a heavier face.
     ///
     /// 600 is where CSS puts semibold, and a reading face that has one member
@@ -345,8 +370,15 @@ public struct EPUBStyleSheet: Sendable, Equatable {
     /// A length, in the two forms that can be resolved without a layout engine.
     ///
     /// `pt`, `px`, `cm` and friends return `nil` deliberately: see `Length`.
+    /// A zero is the exception, in any unit and any spelling: `0pt` means the
+    /// same as `0`, and reading it as no opinion left an inherited `1.5em`
+    /// indent on the very paragraph that was cancelling it.
     static func length(_ value: String) -> Length? {
-        if value == "0" { return .fraction(0) }
+        let number = value.prefix { $0.isNumber || $0 == "." || $0 == "-" || $0 == "+" }
+        let unit = value.dropFirst(number.count)
+        if let zero = Double(number), zero == 0, unit.isEmpty || lengthUnits.contains(String(unit)) {
+            return .fraction(0)
+        }
         if value.hasSuffix("%") {
             return Double(value.dropLast()).map { .fraction($0 / 100) }
         }
@@ -358,6 +390,12 @@ public struct EPUBStyleSheet: Sendable, Equatable {
         }
         return nil
     }
+
+    /// The CSS length units, for recognising a zero written in any of them.
+    static let lengthUnits: Set<String> = [
+        "%", "em", "rem", "ex", "ch", "px", "pt", "pc", "in", "cm", "mm", "q",
+        "vw", "vh", "vmin", "vmax",
+    ]
 
     // MARK: - Shared text handling
 
