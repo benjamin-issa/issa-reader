@@ -31,6 +31,17 @@ struct SeriesView: View {
                     }
                 }
                 .padding(Metrics.spacing16)
+            } else {
+                // In the scroll view and the size of what is visible of it.
+                // As an overlay on a scroll view with nothing in it, the
+                // message was laid out in the empty view's own width — a word
+                // per line — over a ground the empty view never painted.
+                PalettePlaceholder(
+                    symbol: "books.vertical",
+                    title: "Series unavailable",
+                    message: "These books are no longer in your library.",
+                )
+                .containerRelativeFrame([.horizontal, .vertical])
             }
         }
         .accessibilityIdentifier("screen.series")
@@ -38,15 +49,6 @@ struct SeriesView: View {
         .navigationTitle(name)
         // A book's menu here does not offer the way to this series.
         .bookRoutes(place: .series(name))
-        .overlay {
-            if series == nil {
-                PalettePlaceholder(
-                    symbol: "books.vertical",
-                    title: "Series unavailable",
-                    message: "These books are no longer in your library.",
-                )
-            }
-        }
     }
 }
 
