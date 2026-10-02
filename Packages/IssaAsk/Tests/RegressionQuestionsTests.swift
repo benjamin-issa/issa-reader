@@ -59,6 +59,10 @@ struct RegressionRun {
         // book that fails to index cannot leave one behind.
         (store, source, directory) = try await book.preparedStore()
         model = SystemAnswerModel()
+        // The engine `AskCoordinator.ask` builds, but for the process's
+        // turnstile, which only orders questions. Until 1.4.0 the app also
+        // registered a search tool this suite never had, so the suite had
+        // never measured what a reader was answered with.
         engine = AskEngine(model: model, store: store)
     }
 

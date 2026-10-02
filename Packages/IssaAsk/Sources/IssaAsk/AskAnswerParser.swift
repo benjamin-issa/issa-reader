@@ -9,10 +9,10 @@ public struct AskSource: Sendable, Hashable, Identifiable {
     /// Where this excerpt came in the ranker's own sort, lowest first — the
     /// `PassageRanker.Ranked.priority` the prompt was packed from.
     ///
-    /// Optional because the `searchBook` tool numbers excerpts the ranker never
-    /// scored: they are in the prompt because the model asked for them, and
-    /// there is no rank to report. Those sort last rather than first, so an
-    /// unranked excerpt never displaces one the retrieval chose.
+    /// Optional because a source built without a ranking — by hand in a test,
+    /// or from a map that does not name its passage — has no rank to report.
+    /// Those sort last rather than first, so an unranked excerpt never
+    /// displaces one the retrieval chose.
     public var priority: Int?
     public var id: Int { ordinal }
 
@@ -95,8 +95,8 @@ public struct AskAnswer: Sendable, Hashable {
     public var origin: Origin
     /// The excerpts the citations actually name, in the order they were cited.
     ///
-    /// Resolved once, where the numbering is still in scope: the prompt's own
-    /// excerpts and whatever the `searchBook` tool added to them. An answer
+    /// Resolved once, where the numbering is still in scope: the excerpts of
+    /// the prompt that survived the context-window retries. An answer
     /// nothing composed — the sentinel, and the vetting pass's refusal — carries
     /// none, because there is nothing to show proof of.
     public var sources: [AskSource]
@@ -189,10 +189,9 @@ public enum AskAnswerParser {
     /// paragraph entirely.
     ///
     /// - Parameter priorities: each excerpt's place in the ranker's sort, by
-    ///   passage rather than by ordinal — the ordinal is the prompt's numbering
-    ///   and the tool continues it, while the passage is the thing that was
-    ///   ranked. An excerpt missing from the map carries no priority, which is
-    ///   what a tool excerpt is.
+    ///   passage rather than by ordinal — the ordinal is the prompt's
+    ///   numbering, which a retry changes, while the passage is the thing that
+    ///   was ranked. An excerpt missing from the map carries no priority.
     public static func sources(
         for citations: [Int], among shown: [Int: Passage], priorities: [Passage: Int] = [:],
     ) -> [AskSource] {
@@ -207,8 +206,8 @@ public enum AskAnswerParser {
     /// show.
     ///
     /// Separate from `parse` because the numbering is not known there: the
-    /// excerpts are numbered by the prompt builder, continued by the
-    /// `searchBook` tool, and only the engine holds both halves.
+    /// excerpts are numbered by the prompt builder, per attempt, and only the
+    /// engine knows which attempt survived.
     public static func resolving(
         _ answer: AskAnswer, among shown: [Int: Passage], priorities: [Passage: Int] = [:],
     ) -> AskAnswer {

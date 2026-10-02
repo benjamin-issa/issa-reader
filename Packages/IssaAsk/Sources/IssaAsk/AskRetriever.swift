@@ -4,12 +4,6 @@ import IssaCore
 
 /// Everything between a reader's question and the excerpts the model is shown.
 ///
-/// One type rather than two, because there were two: the engine had its own
-/// retrieval and `SearchBookTool` called `QueryTerms.extract` with no known
-/// names at all, so the model's own follow-up searches could not recognise a
-/// name the book had invented. They now differ in exactly one thing — the tool
-/// may not answer a question outright — and that is a constructor argument.
-///
 /// The shape is "FTS narrows, sentences decide". The store returns a bounded,
 /// book-ordered set of passages that must contain the subject; `EvidenceFinder`
 /// splits only those and keeps the sentences that say something; the kinship
@@ -95,12 +89,10 @@ public struct AskRetriever: Sendable {
     /// answered from a different one than its first.
     private let bookUUID: String
     private let boundary: ReadingBoundary
-    /// Whether the deterministic kinship table may answer without the model.
-    /// False for the tool: the model has already been called, and handing it a
-    /// finished sentence in place of excerpts is not a search result.
+    /// Whether the deterministic kinship table may answer without the model —
+    /// `AskEngine.usesKinshipFastPath`, the kill switch for that table.
     private let allowsFastPath: Bool
-    /// How many of the passages just read to add behind what the search
-    /// found. Zero for the tool, whose search results are only search results.
+    /// How many of the passages just read to add behind what the search found.
     private let recencyPassages: Int
 
     public init(
@@ -108,13 +100,13 @@ public struct AskRetriever: Sendable {
         bookUUID: String,
         boundary: ReadingBoundary,
         allowsFastPath: Bool = true,
-        recencyPassages: Int? = nil,
+        recencyPassages: Int = Limits.recencyPassages,
     ) {
         self.store = store
         self.bookUUID = bookUUID
         self.boundary = boundary
         self.allowsFastPath = allowsFastPath
-        self.recencyPassages = recencyPassages ?? (allowsFastPath ? Limits.recencyPassages : 0)
+        self.recencyPassages = recencyPassages
     }
 
     // MARK: - Asking

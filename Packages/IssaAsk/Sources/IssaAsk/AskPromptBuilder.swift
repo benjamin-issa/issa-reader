@@ -73,7 +73,7 @@ public enum AskPromptBuilder {
         /// cost of being wrong is a full retry, several seconds each.
         public static let margin = 256
         /// The ceiling on passages at the window this was measured on, and the
-        /// number `passageCeiling(contextSize:hasTool:)` grows from — to at
+        /// number `passageCeiling(contextSize:)` grows from — to at
         /// most twice this, so a bigger window in a later OS does not silently
         /// start sending a quarter of the book.
         ///
@@ -83,32 +83,26 @@ public enum AskPromptBuilder {
         /// un-does itself, so at 1,800 the set was trimmed back to about twelve
         /// before the real tokeniser was ever consulted — and the count would
         /// have shipped inert.
-        public static let passageCeiling = 3_000
-        /// Lower with a tool registered: its schema is in the window, and its
-        /// output has to fit in what remains when it is called.
         ///
-        /// The app always registers the search tool, so this is the only
-        /// ceiling a reader actually meets. At it, with two searches, the
-        /// window comes to roughly 3,900 of 4,096 — it fits, with little to
-        /// spare, and a book of long paragraphs can still overflow into a
-        /// `.tooMuchContext` retry. If that shows up, the levers are
-        /// `SearchBookTool.tokenCap` and its call limit, in that order.
-        public static let passageCeilingWithTool = 2_400
-        /// The window both ceilings were measured against: the on-device
+        /// It is the ceiling a reader meets now. There was a lower one, 2,400,
+        /// for prompts that also carried the `searchBook` tool's schema; the
+        /// tool went in 1.4.0, when the 27 model was measured never calling it.
+        public static let passageCeiling = 3_000
+        /// The window the ceiling was measured against: the on-device
         /// model's 4,096 tokens, which every device running 26 reports.
         public static let tunedContextSize = 4_096
         /// The ceiling for a window this size.
         ///
-        /// Exactly `passageCeiling` or `passageCeilingWithTool` at 4,096, so a
-        /// 26 device packs the prompt it packed yesterday, and every token past
+        /// Exactly `passageCeiling` at 4,096, so a 26 device packs the prompt
+        /// the measurements were made with, and every token past
         /// that goes to passages — up to twice the tuned ceiling. The cap is
         /// deliberate: the excerpt count grows with this number
         /// (`AskRetriever.Limits.excerpts(for:)`), twenty excerpts is the most
         /// any trial has scored, and past thirty nobody has measured whether
         /// more is better. A smaller window than 4,096 is not shrunk here; the
         /// subtraction in `build` already handles that.
-        public static func passageCeiling(contextSize: Int, hasTool: Bool) -> Int {
-            let tuned = hasTool ? passageCeilingWithTool : passageCeiling
+        public static func passageCeiling(contextSize: Int) -> Int {
+            let tuned = passageCeiling
             let extra = max(0, contextSize - tunedContextSize)
             return min(tuned * 2, tuned + extra)
         }
@@ -154,16 +148,13 @@ public enum AskPromptBuilder {
     ///     position alone drops the passages nearest the reader — which on a
     ///     recap is the chapter they have just closed, and on "who is X" is
     ///     every sentence after the first six.
-    ///   - hasTool: whether a `searchBook` tool is registered, which lowers the
-    ///     ceiling to leave room for its schema and its output.
     public static func build(
         question: String,
         ranked: [PassageRanker.Ranked],
         contextSize: Int,
-        hasTool: Bool,
         tokenCount: TokenCounter,
     ) async -> Built {
-        let ceiling = Budget.passageCeiling(contextSize: contextSize, hasTool: hasTool)
+        let ceiling = Budget.passageCeiling(contextSize: contextSize)
         let instructionTokens = (try? await tokenCount(instructions))
             ?? estimatedTokens(instructions)
         let emptyFrame = frame(question: question, excerpts: "")

@@ -143,12 +143,12 @@ struct AskAnswerParserTests {
         // sentence's excerpt in front of the first's.
         #expect(AskSource.best(sources, limit: 3).map(\.priority) == [2, 1, 0])
 
-        // An excerpt the ranker never scored — the `searchBook` tool's — sorts
-        // behind every excerpt that has a rank rather than in front of them.
+        // An excerpt the ranker never scored sorts behind every excerpt that
+        // has a rank rather than in front of them.
         // Cited first, so its position cannot be what saves the ranked five.
-        let withTool = [Self.source(6, priority: nil)] + sources
-        #expect(AskSource.best(withTool, limit: 3).map(\.ordinal) == [3, 4, 5])
-        #expect(AskSource.best(withTool, limit: 5).map(\.ordinal) == [1, 2, 3, 4, 5])
+        let withUnranked = [Self.source(6, priority: nil)] + sources
+        #expect(AskSource.best(withUnranked, limit: 3).map(\.ordinal) == [3, 4, 5])
+        #expect(AskSource.best(withUnranked, limit: 5).map(\.ordinal) == [1, 2, 3, 4, 5])
 
         // Nothing to choose between: the input, untouched.
         let two = Array(sources.prefix(2))
@@ -174,7 +174,7 @@ struct AskAnswerParserTests {
         )
         #expect(answer.sources.map(\.priority) == [0, 2])
         // A passage the ranker never saw carries nothing rather than a zero,
-        // which would make a tool excerpt the strongest thing in the row.
+        // which would make an unranked excerpt the strongest thing in the row.
         let unranked = AskAnswerParser.resolving(
             AskAnswer(text: "She fell.", citations: [2], notYetRevealed: false),
             among: shown,

@@ -19,16 +19,6 @@ import AppKit
 @Observable
 @MainActor
 final class AskCoordinator {
-    /// The kill switch for the model's own `searchBook` tool.
-    ///
-    /// A constant rather than a preference: the choice is whether the 3B model
-    /// may refine the app's search, and the honest concern is that it is only
-    /// moderately reliable at deciding when to — and each round trip is another
-    /// three to six seconds on a phone. If the measurement goes against it,
-    /// this is the one line that changes, and the pipeline is otherwise
-    /// identical with and without it.
-    static let usesSearchTool = true
-
     /// Remembers that the reader has been asked about notifications once, so
     /// they are never asked twice for the same thing.
     static let askedForNotificationsKey = "issa.askNotificationsAsked"
@@ -55,7 +45,7 @@ final class AskCoordinator {
     /// nothing to deserve. It is passed to **both** construction sites below.
     private let turnstile = AskTurnstile()
     /// For index building, prewarming and chips — everything that has no
-    /// boundary of its own, so it needs no tool.
+    /// boundary of its own.
     private let preparer: AskEngine
 
     private let defaults: UserDefaults
@@ -235,15 +225,9 @@ final class AskCoordinator {
         // `<uuid>.building.sqlite`.
         let preparation = preparing[uuid]
 
-        // Built per question because the tool captures the boundary, which is
-        // what makes it unable to reach past it whatever the model asks for.
-        var tools: [any AskTool] = []
-        #if canImport(FoundationModels)
-        if Self.usesSearchTool {
-            tools = [SearchBookTool(store: store, bookUUID: uuid, boundary: boundary)]
-        }
-        #endif
-        let engine = AskEngine(model: model, store: store, tools: tools, turnstile: turnstile)
+        // Exactly the engine `RegressionRun` asks the real model with, but for
+        // the process's one turnstile — so the suite measures what ships.
+        let engine = AskEngine(model: model, store: store, turnstile: turnstile)
 
         job.task = Task { [weak self] in
             // Costs nothing when the sheet's build has already finished, and

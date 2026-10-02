@@ -53,7 +53,7 @@ public struct Passage: Sendable, Hashable {
 /// The unit is a paragraph, because that is what a novel is written in and what
 /// answers a question without stranding half a sentence. The limits below are
 /// the compromise: small enough that six of them fit in the budget with room
-/// for instructions, an answer and a tool round trip; large enough that a
+/// for instructions and an answer; large enough that a
 /// passage still says who is speaking and where they are.
 ///
 /// Ranges tile the chapter with no gaps. That is not tidiness — the boundary
@@ -64,7 +64,7 @@ public enum PassageChunker {
     /// asserts against the shipped constants rather than its own copy of them.
     public enum Limits {
         /// What a passage aims for. Roughly 120 tokens: six of those is 720,
-        /// which leaves the budget room for framing, a tool schema and a reply.
+        /// which leaves the budget room for framing and a reply.
         public static let targetWords = 90
         /// Above this a paragraph is split at a sentence boundary.
         public static let maximumWords = 140

@@ -226,19 +226,6 @@ struct FailureTableTests {
     }
 
     @available(iOS 27.0, macOS 27.0, visionOS 27.0, *)
-    @Test("a tool's failure is judged by what was under it")
-    func toolCallUnwraps() {
-        let inner = LanguageModelError.timeout(.init(debugDescription: "test"))
-        let wrapped = LanguageModelSession.ToolCallError(
-            tool: FailureTableTests.Probe(), underlyingError: inner)
-        #expect(SystemAnswerModel.failure(for: wrapped) == .timedOut)
-    }
-
-    /// The 26 table, still reachable from a 26 device: the same cases the
-    /// original switch mapped, mapped the same way.
-    @available(iOS, deprecated: 27.0)
-    @available(macOS, deprecated: 27.0)
-    @available(visionOS, deprecated: 27.0)
     @Test("the 26 table survived the move")
     func legacyTable() {
         typealias Legacy = LanguageModelSession.GenerationError
@@ -265,14 +252,6 @@ struct FailureTableTests {
         let sentence = AskFailure.timedOut.message(deviceNoun: "Mac")
         #expect(sentence.contains("Try again"))
         #expect(!sentence.lowercased().contains("busy"))
-    }
-
-    /// The smallest possible tool, so a `ToolCallError` can be built.
-    struct Probe: Tool {
-        let name = "probe"
-        let description = "A tool that exists so an error can name it."
-        @Generable struct Arguments { var query: String }
-        func call(arguments: Arguments) async throws -> String { "" }
     }
 }
 #endif

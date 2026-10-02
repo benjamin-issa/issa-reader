@@ -4,7 +4,7 @@ import Foundation
 ///
 /// It ships in the library rather than living in the test target on purpose.
 /// The spoiler defence — the boundary, the trimming, the short-circuit, the
-/// context retry, the serialising, the tool cap — is the part of this feature
+/// context retry, the serialising — is the part of this feature
 /// that has to be *proved*, and none of it can be proved against a real 3B
 /// model whose output is not a function of its input. Everything the engine
 /// does is therefore asserted against this, and the real model is checked
@@ -50,7 +50,6 @@ public actor ScriptedAnswerModel: AnswerModel {
     public struct Received: Sendable, Hashable {
         public var instructions: String
         public var prompt: String
-        public var toolNames: [String]
         public var options: AskGenerationOptions
     }
 
@@ -104,7 +103,6 @@ public actor ScriptedAnswerModel: AnswerModel {
     public nonisolated func answer(
         instructions: String,
         prompt: String,
-        tools: [any AskTool],
         options: AskGenerationOptions,
     ) -> AsyncThrowingStream<String, any Error> {
         AsyncThrowingStream { continuation in
@@ -113,7 +111,6 @@ public actor ScriptedAnswerModel: AnswerModel {
                     Received(
                         instructions: instructions,
                         prompt: prompt,
-                        toolNames: tools.map(\.name),
                         options: options,
                     ),
                     into: continuation,

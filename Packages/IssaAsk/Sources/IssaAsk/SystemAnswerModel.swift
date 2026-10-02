@@ -110,16 +110,13 @@ public struct SystemAnswerModel: AnswerModel {
     public func answer(
         instructions: String,
         prompt: String,
-        tools: [any AskTool],
         options: AskGenerationOptions,
     ) -> AsyncThrowingStream<String, any Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
                     let session = LanguageModelSession(
-                        model: model,
-                        tools: tools.compactMap { $0 as? any Tool },
-                        instructions: instructions,
+                        model: model, instructions: instructions,
                     )
                     let snapshots = session.streamResponse(
                         to: prompt,
@@ -215,9 +212,6 @@ public struct SystemAnswerModel: AnswerModel {
     /// passages and then with two, and only a failure that survives both
     /// reaches the reader.
     static func failure(for error: any Error) -> AskFailure {
-        if let call = error as? LanguageModelSession.ToolCallError {
-            return failure(for: call.underlyingError)
-        }
         if #available(iOS 27.0, macOS 27.0, visionOS 27.0, *),
            let current = currentFailure(for: error) {
             return current

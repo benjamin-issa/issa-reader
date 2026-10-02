@@ -9,8 +9,7 @@ import IssaCore
 /// a SQL clause in `AskIndexStore` that cannot be persuaded to return a passage
 /// from later in the book, and this actor's job is to never route around it.
 ///
-/// An `actor` because the index handle and the tools' per-generation state need
-/// one owner. Serialising the model is *not* one of its jobs and never could
+/// An `actor` because the index handle needs one owner. Serialising the model is *not* one of its jobs and never could
 /// be: `AskCoordinator` builds a fresh engine per question, so the turnstile
 /// that used to live here served an audience of one, and two books meant two
 /// concurrent generations. It is `AskTurnstile` now — one per process, passed
@@ -29,7 +28,6 @@ public actor AskEngine {
     /// download goes, and there must be exactly one of these per process:
     /// two would open the same SQLite file twice.
     public nonisolated let store: AskIndexStore
-    private let tools: [any AskTool]
     private let turnstile: AskTurnstile
     /// This engine's answer to `usesNucleusSampling`, defaulted from the kill
     /// switch below.
@@ -41,14 +39,13 @@ public actor AskEngine {
     /// `false` — including from the test written to prove the seed works.
     private let usesNucleusSampling: Bool
 
-    /// - Parameter tools: the `searchBook` tool, or nothing.
+    /// There is no `tools` parameter any more. A `searchBook` tool shipped
+    /// behind a kill switch, and the 1.4.0 Ask review measured it: handed the
+    /// excerpts first, the 27 model called it 0 times in 180 asks, while its
+    /// schema cost half a second before the first word in every one. A model
+    /// left to search on its own did worse than the app's retrieval. So the
+    /// engine asks once, with what the app found.
     ///
-    ///   It is a constructor argument rather than a constant so it can be
-    ///   switched off with one flag: the 3B model is only moderately reliable at
-    ///   deciding when to search, and every round trip is another three to six
-    ///   seconds on a phone. If the measurement goes against it, this is the
-    ///   line that changes — and the engine is otherwise identical with and
-    ///   without it, which is what makes the comparison worth anything.
     /// - Parameter turnstile: the process's one turn at the on-device model.
     ///   Defaulted so a test that only cares about one question writes nothing,
     ///   and so an engine on its own behaves exactly as it did; the app passes
@@ -62,13 +59,11 @@ public actor AskEngine {
     public init(
         model: any AnswerModel,
         store: AskIndexStore,
-        tools: [any AskTool] = [],
         turnstile: AskTurnstile = AskTurnstile(),
         usesNucleusSampling: Bool = AskEngine.usesNucleusSampling,
     ) {
         self.model = model
         self.store = store
-        self.tools = tools
         self.turnstile = turnstile
         self.usesNucleusSampling = usesNucleusSampling
     }
@@ -339,7 +334,7 @@ public actor AskEngine {
     /// the strongest three with.
     ///
     /// Keyed by passage rather than by ordinal, because the ordinal belongs to
-    /// the prompt's numbering — which the `searchBook` tool continues — while
+    /// the prompt's numbering — which a context-window retry renumbers — while
     /// the priority belongs to the passage that was ranked. `uniquingKeysWith:
     /// min`: the kinship path can rank one passage twice, once as the window
     /// holding the kin sentence and once as context, and the better of the two
@@ -506,29 +501,17 @@ public actor AskEngine {
                     question: question,
                     ranked: attempt,
                     contextSize: self.model.contextSize,
-                    hasTool: !self.tools.isEmpty,
                     tokenCount: { [model = self.model] text in
                         try await model.tokenCount(for: text)
                     },
                 )
-                for tool in self.tools {
-                    await tool.beginGeneration(numberingFrom: built.passages.count + 1)
-                }
-
                 do {
                     let answer = try await self.stream(built, options: options, into: continuation)
                     // Resolved here, inside the attempt that survived: the retry
                     // loop means the prompt whose numbering the citations refer
                     // to is whichever one did not throw `.tooMuchContext`, and
                     // the two before it were built from more passages.
-                    var shown = Self.numbered(built.passages)
-                    for tool in self.tools {
-                        // The tool's excerpts continue the prompt's numbering,
-                        // so they never collide; merged last regardless, because
-                        // a collision would mean the tool numbered over the
-                        // prompt and the tool's copy is what the model saw last.
-                        shown.merge(await tool.passagesShown()) { _, fromTool in fromTool }
-                    }
+                    let shown = Self.numbered(built.passages)
                     // From this attempt's ranking, not the whole retrieval: the
                     // numbering the citations refer to is this prompt's, and a
                     // passage the retry dropped is not in it to be shown.
@@ -577,7 +560,6 @@ public actor AskEngine {
         let snapshots = model.answer(
             instructions: AskPromptBuilder.instructions,
             prompt: built.prompt,
-            tools: tools,
             options: options,
         )
         for try await snapshot in snapshots {
@@ -589,8 +571,9 @@ public actor AskEngine {
             // the 27 model has shown — so it replaces what came before.
             //
             // This once appended a snapshot that did not start with the text
-            // before it, on the theory that a tool round trip could restart the
-            // stream as a fresh segment. No stream was ever seen doing that, and
+            // before it, on the theory that a tool round trip (there was a
+            // search tool then) could restart the stream as a fresh segment.
+            // No stream was ever seen doing that, and
             // the guess cost more than it bought. `hasPrefix` compares
             // `Character`s, so a snapshot whose next token extended the last
             // grapheme — a combining accent, an emoji modifier, the second half
