@@ -161,8 +161,16 @@ public struct QueryTerms: Sendable, Hashable {
     ///
     /// Capitalisation rather than `NLTagger` alone, because the names readers
     /// ask about are the invented ones — "Cheshire", "Bilbo", "Meursault" — and
-    /// a general-purpose tagger knows none of them. The first word of the
-    /// question is skipped: every question starts with a capital.
+    /// a general-purpose tagger knows none of them.
+    ///
+    /// The first word is skipped only when it is a word a question opens with
+    /// anyway — "Who", "Did", "Tell" — and checked like any other otherwise.
+    /// It was skipped unconditionally, on the ground that every question starts
+    /// with a capital, while the answer side exempts every word the question
+    /// contains on the ground that this side has ruled on it. Together that
+    /// was a hole exactly the shape of a bare-name question: "Cheshire Cat?"
+    /// at the end of Chapter I probed only `cat` (met: Dinah), and an answer
+    /// describing the Cat was shown because its name was in the question.
     ///
     /// Some ordinary words will be caught by this ("Is Alice British?"), and
     /// the cost of that is a "the story hasn't revealed that yet" for a question
@@ -181,9 +189,10 @@ public struct QueryTerms: Sendable, Hashable {
         let present = Set(tokens(in: question).map(strippingPossessive))
         var candidates = Set(names.flatMap { tokens(in: $0).map(strippingPossessive) })
             .filter(present.contains)
-        for (index, word) in question.split(separator: " ").enumerated() where index > 0 {
+        for (index, word) in question.split(separator: " ").enumerated() {
             let bare = word.trimmingCharacters(in: CharacterSet.letters.inverted)
             guard let initial = bare.first, initial.isUppercase, bare.count > 2 else { continue }
+            if index == 0, opensAQuestion(bare) { continue }
             guard !capitalisedNonNames.contains(bare.lowercased()) else { continue }
             // Possessive-stripped, or "Ryn's" is checked against the index as
             // `ryn's` — a word no book contains as one token, so the spoiler
@@ -262,6 +271,31 @@ public struct QueryTerms: Sendable, Hashable {
         "eventually", "suddenly", "immediately", "still", "here", "there",
         "everywhere", "somewhere", "anywhere", "nowhere", "together", "yes",
         "well", "why", "how", "let", "there's", "it's", "that's", "here's",
+    ]
+
+    /// Whether a question's first word is one it would capitalise anyway.
+    ///
+    /// `sentenceOpeners` — the closed-class words the answer side already
+    /// exempts at the start of a sentence — and the imperatives a reader opens
+    /// a request with, which would otherwise be probed as names and refuse
+    /// "Describe the garden." in any book that never says "describe".
+    /// Contractions are read through their stem, so "Who's" is "who".
+    static func opensAQuestion(_ word: String) -> Bool {
+        guard let token = tokens(in: word).first else { return false }
+        let stem = strippingPossessive(token)
+        return sentenceOpeners.contains(token) || sentenceOpeners.contains(stem)
+            || questionImperatives.contains(stem)
+    }
+
+    /// The verbs a request to the book opens with. Imperatives only: nothing
+    /// here could be anybody's name, which is the bar `sentenceOpeners` sets
+    /// too.
+    static let questionImperatives: Set<String> = [
+        "tell", "describe", "explain", "summarise", "summarize", "recap",
+        "remind", "give", "list", "show", "compare", "define", "identify",
+        "outline", "recount", "say", "talk", "remember", "recall", "help",
+        "name", "find", "please", "whats", "whos", "wheres", "hows", "whys", "wait",
+        "okay",
     ]
 
     /// Words that are capitalised in ordinary prose without naming anybody.

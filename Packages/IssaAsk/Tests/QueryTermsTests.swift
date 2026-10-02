@@ -118,6 +118,25 @@ struct QueryTermsTests {
         #expect(QueryTerms.extract(from: "What has happened so far?").nameCandidates.isEmpty)
     }
 
+    /// A bare-name question has the name first. The first word was skipped
+    /// unconditionally, and the answer side exempts every word the question
+    /// contains, so "Cheshire Cat?" at the end of Chapter I probed only `cat`
+    /// — met, through Dinah — and the model's description of the Cat went to
+    /// the reader.
+    @Test("a name the question opens with is checked like any other")
+    func firstWordNameIsACandidate() {
+        #expect(QueryTerms.extract(from: "Cheshire Cat?").nameCandidates == ["cat", "cheshire"])
+        #expect(QueryTerms.extract(from: "Bilbo?").nameCandidates == ["bilbo"])
+        #expect(QueryTerms.extract(from: "Mordor is where?").nameCandidates == ["mordor"])
+        // The words a question opens with anyway are still not names.
+        #expect(QueryTerms.extract(from: "Who is Alice?").nameCandidates == ["alice"])
+        #expect(QueryTerms.extract(from: "Does Alice cry?").nameCandidates == ["alice"])
+        #expect(QueryTerms.extract(from: "Who's Dinah?").nameCandidates == ["dinah"])
+        #expect(QueryTerms.extract(from: "Describe the garden.").nameCandidates.isEmpty)
+        #expect(QueryTerms.extract(from: "Tell me about the Duchess.").nameCandidates
+            == ["duchess"])
+    }
+
     @Test("structural capitals are not mistaken for characters")
     func ignoresCapitalisedNonNames() {
         // "Who is Chapter?" is not a question anyone asks, and treating it as a
