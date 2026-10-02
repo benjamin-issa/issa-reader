@@ -329,15 +329,23 @@ public actor LibraryStore {
 
     /// Drops the account's catalogue, leaving the reader's own annotations.
     ///
-    /// Called on sign-out. Books and queued writes belong to the account and
-    /// must not outlive it; highlights and bookmarks are device-local and are
-    /// the only copy there is, so deleting those would be data loss rather
-    /// than cleanup.
+    /// Called on sign-out and on an account switch. Books, queued writes,
+    /// ratings and audio anchors belong to the account and must not outlive
+    /// it; highlights and bookmarks are device-local and are the only copy
+    /// there is, so deleting those would be data loss rather than cleanup.
+    ///
+    /// The anchors were left behind. They are keyed by book uuid alone, this
+    /// file outlives the account, and the next reader on the same server is
+    /// handed the same uuids — so one reader's place in an audiobook became
+    /// the next one's starting point, resumed as exact and written to the
+    /// arriving account by the first tick of playback. Being newer, it also
+    /// refused every anchor the arriving reader wrote until one passed it.
     public func clearAccountData() async throws {
         try await dbQueue.write { db in
             try db.execute(sql: "DELETE FROM book")
             try db.execute(sql: "DELETE FROM mutation")
             try db.execute(sql: "DELETE FROM rating")
+            try db.execute(sql: "DELETE FROM audioAnchor")
         }
     }
 
