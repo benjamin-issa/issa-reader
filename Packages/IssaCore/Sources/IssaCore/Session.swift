@@ -30,6 +30,14 @@ public final class Session {
     public let client: APIClient
     private let tokens: TokenStore
     private let logoutTimeout: Duration
+    /// The transport, kept for the logout, which is sent through a client
+    /// of its own (see `revokeOnServer(_:)`).
+    private let transport: URLSession
+
+    /// A hold seam: awaited by the revoke just before its request is handed
+    /// to the transport, so a test can start it after the deadline has passed
+    /// — the race a loaded machine produces — on purpose rather than by luck.
+    var logoutWillSend: (@Sendable () async -> Void)?
 
     /// The same token the API client uses, for the background download session,
     /// which builds its own requests rather than going through APIClient.
@@ -49,6 +57,7 @@ public final class Session {
         logoutTimeout: Duration = .seconds(5),
     ) {
         self.logoutTimeout = logoutTimeout
+        transport = session
         self.serverURL = serverURL
         let store = TokenStore(serverKey: serverURL.absoluteString, keychain: keychain)
         tokens = store
@@ -117,13 +126,25 @@ public final class Session {
     }
 
     public func signOut() async {
-        // Tell the server first, while the token still works. A token minted
+        // Tell the server, with the token it is to revoke. A token minted
         // through /token/app lasts thirty-five years; dropping it locally
         // without revoking it leaves a working credential behind on a device
         // the reader may be signing out of precisely because they lost it.
         // Best effort: no network must ever trap someone in a signed-in state.
-        await revokeOnServer()
-        if !(await tokens.forget()) {
+        //
+        // The token is read before it is forgotten and travels with the
+        // request, so the revoke is authorised whenever it is sent — even
+        // after this method has returned.
+        let token = await tokens.currentToken()
+        let forgotten = await tokens.forget()
+        if let token {
+            await revokeOnServer(token)
+        } else {
+            // A 401 already dropped it: the server refused that token, so
+            // there is nothing left to revoke.
+            IssaLog.info("no token held at sign-out; nothing to revoke")
+        }
+        if !forgotten {
             // Signed out all the same — the reader asked to be — but a
             // credential may still be on disk, and the next launch would
             // restore it. The log is the only place that can say so.
@@ -140,26 +161,36 @@ public final class Session {
     /// that does not answer — one switched off, or at a LAN address while the
     /// reader is on cellular, where a SYN gets no reply at all — and the
     /// reader stayed signed in, library open, for all of it. On the timeout
-    /// the request is cancelled and sign-out goes on locally. `/logout` is a
-    /// route 2.14.21 and every 3.x serve.
-    private func revokeOnServer() async {
-        let client = client
+    /// sign-out goes on locally and the revoke goes on without it.
+    ///
+    /// The revoke is never cancelled. It used to be — the loser of a task
+    /// group's race — and on a loaded machine the deadline could pass before
+    /// the request had even reached URLSession, so it was cancelled unsent and
+    /// the server never revoked a token that lasts thirty-five years. It now
+    /// runs in a task of its own, carrying the token it revokes through a
+    /// client of its own: `forget()` has emptied the store by the time it may
+    /// be sent, and a 401 on it must not reach the store either. `/logout` is
+    /// a route 2.14.21 and every 3.x serve.
+    private func revokeOnServer(_ token: String) async {
+        let revoker = APIClient(
+            baseURL: serverURL, tokens: RevokedToken(token: token), session: transport)
+        let hold = logoutWillSend
         let timeout = logoutTimeout
-        let finished = await withTaskGroup(of: Bool.self) { group in
-            group.addTask {
-                _ = try? await client.post(Endpoint.logout, body: [String: String]())
-                return true
+        let finished = await LogoutWait.run(for: timeout) {
+            await hold?()
+            // Nothing cancels this task. Were anything to, the revoke would
+            // be lost — and whether URLSession still sends a request from a
+            // cancelled task is a race it sometimes wins, which is how the
+            // task-group version passed alone and failed under load. Decided
+            // here instead, every time, and said.
+            guard !Task.isCancelled else {
+                IssaLog.error("logout cancelled before it was sent; the token was not revoked")
+                return
             }
-            group.addTask {
-                try? await Task.sleep(for: timeout)
-                return false
-            }
-            let first = await group.next() ?? false
-            group.cancelAll()
-            return first
+            _ = try? await revoker.post(Endpoint.logout, body: [String: String]())
         }
         if !finished {
-            IssaLog.warning("logout not answered in time; signing out locally", [
+            IssaLog.warning("logout not answered in time; signing out locally, revoke still running", [
                 "timeout": String(describing: timeout),
             ])
         }
@@ -317,5 +348,61 @@ public final class Session {
     /// version is shown, and anything more would be new functionality.
     private struct ServerDetails: Decodable {
         let version: String
+    }
+}
+
+/// The one token a sign-out revokes, held apart from the store it has
+/// already been dropped from. A 401 on the revoke changes nothing: the token
+/// is being let go of either way.
+private struct RevokedToken: TokenProviding {
+    let token: String
+    func currentToken() async -> String? { token }
+    func invalidate() async {}
+}
+
+/// Waits for some work, or for a deadline, whichever comes first — and never
+/// cancels the work.
+///
+/// The work runs in a task of its own and goes on after the wait ends. A
+/// task group cannot do this: it waits for every child, so the loser has to
+/// be cancelled, and a cancelled request is one that was never sent. The
+/// app's `BoundedWait` (SpotlightIndex.swift) is the same shape; IssaCore
+/// cannot import the app.
+private enum LogoutWait {
+    /// - Returns: whether the work finished before the deadline.
+    static func run(
+        for limit: Duration, _ work: @escaping @Sendable () async -> Void,
+    ) async -> Bool {
+        let once = Once()
+        return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            once.hold(continuation)
+            let timer = Task.detached {
+                try? await Task.sleep(for: limit)
+                once.resume(returning: false)
+            }
+            Task.detached {
+                await work()
+                once.resume(returning: true)
+                timer.cancel()
+            }
+        }
+    }
+
+    /// Resumes a continuation exactly once, whichever side gets there first.
+    private final class Once: @unchecked Sendable {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<Bool, Never>?
+
+        func hold(_ continuation: CheckedContinuation<Bool, Never>) {
+            lock.withLock { self.continuation = continuation }
+        }
+
+        func resume(returning value: Bool) {
+            let waiting = lock.withLock { () -> CheckedContinuation<Bool, Never>? in
+                defer { continuation = nil }
+                return continuation
+            }
+            waiting?.resume(returning: value)
+        }
     }
 }

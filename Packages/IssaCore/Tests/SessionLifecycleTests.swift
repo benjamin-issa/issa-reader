@@ -27,8 +27,18 @@ private final class LifecycleStub: URLProtocol, @unchecked Sendable {
 
     private static let seen = Mutex<[String]>([])
 
+    /// The same requests, each with the `Authorization` it carried.
+    private static let authorised = Mutex<[String]>([])
+
     static func requests(to host: String) -> [String] {
         seen.withLock { $0.filter { $0.hasPrefix(host + " ") } }
+    }
+
+    /// "METHOD path | Authorization" for every request to `host`.
+    static func authorisations(to host: String) -> [String] {
+        authorised.withLock {
+            $0.filter { $0.hasPrefix(host + " ") }.map { String($0.dropFirst(host.count + 1)) }
+        }
     }
 
     /// The slow logout's pending answer, cancelled when the task is.
@@ -45,6 +55,8 @@ private final class LifecycleStub: URLProtocol, @unchecked Sendable {
         }
         let path = url.path
         Self.seen.withLock { $0.append("\(host) \(request.httpMethod ?? "GET") \(path)") }
+        let bearer = request.value(forHTTPHeaderField: "Authorization") ?? "none"
+        Self.authorised.withLock { $0.append("\(host) \(request.httpMethod ?? "GET") \(path) | \(bearer)") }
 
         switch (host, path) {
         case (Self.unreachableIdentity, Endpoint.user):
@@ -74,6 +86,26 @@ private final class LifecycleStub: URLProtocol, @unchecked Sendable {
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: body)
         client?.urlProtocolDidFinishLoading(self)
+    }
+}
+
+/// A hold seam the test opens: everything waiting on it resumes together.
+/// Deliberately deaf to cancellation: a revoke cancelled while held comes
+/// out of the hold still cancelled, as one the deadline overtook on a loaded
+/// machine did.
+private actor Gate {
+    private var isOpen = false
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        guard !isOpen else { return }
+        await withCheckedContinuation { waiting.append($0) }
+    }
+
+    func open() {
+        isOpen = true
+        for continuation in waiting { continuation.resume() }
+        waiting = []
     }
 }
 
@@ -165,8 +197,48 @@ struct SessionLifecycleTests {
         #expect(session.state == .signedOut)
         #expect(keychain.token(for: server(host).absoluteString) == nil)
         #expect(await !session.hasStoredCredential)
-        #expect(LifecycleStub.requests(to: host).contains("\(host) POST \(Endpoint.logout)"),
-                "the revoke was still attempted")
+        // The revoke is not cancelled by the deadline, so on a loaded machine
+        // it may reach the server after sign-out has returned.
+        #expect(await eventually(within: .seconds(5)) {
+            LifecycleStub.requests(to: host).contains("\(host) POST \(Endpoint.logout)")
+        }, "the revoke was still attempted")
+    }
+
+    /// The race a loaded machine runs by chance, run on purpose: the revoke
+    /// is held until sign-out has returned, past its deadline. It must still
+    /// go out — a sign-out that drops it leaves a thirty-five-year token
+    /// working on the server — and carry the token it revokes, which the
+    /// store no longer holds by then.
+    @Test("a revoke that starts after the deadline is still sent, with the token it revokes")
+    func lateRevokeIsSentAuthorised() async {
+        let host = "held-logout.lifecycle.test"
+        let keychain = MemoryTokens()
+        let session = session(host, keychain: keychain, logoutTimeout: .milliseconds(100))
+        await session.adopt(token: "minted")
+        guard case .signedIn = session.state else {
+            Issue.record("did not sign in: \(session.state)")
+            return
+        }
+        let gate = Gate()
+        session.logoutWillSend = { await gate.wait() }
+
+        let clock = ContinuousClock()
+        let started = clock.now
+        await session.signOut()
+        let elapsed = clock.now - started
+
+        #expect(elapsed < .seconds(5), "sign-out waited \(elapsed) on the held revoke")
+        #expect(session.state == .signedOut)
+        #expect(await !session.hasStoredCredential)
+        #expect(!LifecycleStub.requests(to: host).contains("\(host) POST \(Endpoint.logout)"),
+                "held: nothing sent yet")
+
+        await gate.open()
+
+        let revoke = "POST \(Endpoint.logout) | Bearer minted"
+        #expect(await eventually(within: .seconds(5)) {
+            LifecycleStub.authorisations(to: host).contains(revoke)
+        }, "sent: \(LifecycleStub.authorisations(to: host))")
     }
 
     @Test("a logout that answers in time is still awaited before the token goes")
