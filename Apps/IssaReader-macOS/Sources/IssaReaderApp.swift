@@ -319,6 +319,14 @@ struct MacRootView: View {
         // re-fire, and consuming clears the request, so this settles.
         .onChange(of: app.pendingBook) { openPendingBook() }
         .onChange(of: app.books) { openPendingBook() }
+        // And once as the window appears, because a request can be waiting
+        // before there is any library window to change: an Ask notification
+        // tapped while only a reader window was open arms one. Neither
+        // `onChange` fires for a value that was already there, so the request
+        // sat until the next change to `books` — a position saved in another
+        // book — and opened its reader then, unasked. iOS has had this `.task`
+        // all along.
+        .task { openPendingBook() }
     }
 
     /// Opens whatever a link, a Handoff or a Spotlight hit asked for.
