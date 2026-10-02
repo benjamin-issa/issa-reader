@@ -76,7 +76,9 @@ struct RegressionRun {
         var citations: [Int]
         var notYetRevealed: Bool
         var modelCalled: Bool
-        /// Nil when the fixture has no expectation, or the sentinel came back.
+        /// Nil when the fixture has no expectation. See
+        /// `AskQuestionFixture.containsExpected(in:)` for why the sentinel is
+        /// not a pass.
         var containsExpected: Bool?
         var leaked: [String]
         /// Names the answer introduced that the read part of the book had not.
@@ -170,9 +172,7 @@ struct RegressionRun {
             // `.thinking` is yielded only when the model is about to be asked,
             // so it is the observable form of "was the model called".
             modelCalled: phases.contains(.thinking),
-            containsExpected: fixture.answerContainsAny.isEmpty || found.notYetRevealed
-                ? nil
-                : fixture.answerContainsAny.contains { lowered.range(of: $0) != nil },
+            containsExpected: fixture.containsExpected(in: found),
             leaked: fixture.answerExcludes.filter { lowered.contains($0) },
             newNames: newNames,
             answerWords: found.text.split(whereSeparator: \.isWhitespace).count,

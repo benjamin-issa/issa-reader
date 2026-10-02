@@ -79,6 +79,24 @@ struct AskQuestionFixture: Decodable, Sendable {
     /// Whether the answer may introduce a proper noun the question did not.
     var allowsNewNames: Bool
 
+    /// Whether the answer names one of `answerContainsAny`; nil when the
+    /// fixture pins no wording.
+    ///
+    /// **The sentinel is a failure here, not a pass.** It was nil — "either is
+    /// acceptable" — so a prompt or a guard that refused every answerable
+    /// question still scored every fixture: the model was called, the refusal
+    /// contains none of the excluded words, and the new-names check skips a
+    /// refusal. A fixture with an expected answer is one the reader has read
+    /// far enough to be told; "the story hasn't revealed that yet" is the
+    /// wrong answer to it. A fixture where a refusal is right says so with
+    /// `notYet`.
+    func containsExpected(in answer: AskAnswer) -> Bool? {
+        guard !answerContainsAny.isEmpty else { return nil }
+        guard !answer.notYetRevealed else { return false }
+        let lowered = answer.text.lowercased()
+        return answerContainsAny.contains { lowered.range(of: $0) != nil }
+    }
+
     static func all(_ resource: String = "Fixtures/questions-alice") throws
         -> [AskQuestionFixture] {
         let url = try #require(Bundle.module.url(forResource: resource, withExtension: "json"))
@@ -101,5 +119,39 @@ struct AskQuestionFixture: Decodable, Sendable {
 
     func boundary(in book: AskBook) throws -> ReadingBoundary {
         try book.endOf(spine: spine)
+    }
+}
+
+/// The regression suite's checks, without the model: what it counts as a pass
+/// has to be right before what the model says can mean anything.
+struct AskQuestionFixtureTests {
+    static func fixture(expecting words: [String]) -> AskQuestionFixture {
+        AskQuestionFixture(
+            name: "test", question: "Who is the author's father?", spine: 2, kind: "general",
+            evidenceContains: [], evidenceExcludes: [], answerContainsAny: words,
+            answerExcludes: [], notYet: nil, modelCalled: true, kinshipNames: nil,
+            allowsNewNames: true,
+        )
+    }
+
+    @Test("a refusal fails a question the reader has read far enough to be answered")
+    func refusalFailsAnAnswerableFixture() {
+        let refusal = AskAnswer(
+            text: AskAnswerParser.notYetSentinel, citations: [], notYetRevealed: true,
+            origin: .withheld,
+        )
+        #expect(Self.fixture(expecting: ["josiah"]).containsExpected(in: refusal) == false)
+        // A fixture that pins no wording is still indifferent to it.
+        #expect(Self.fixture(expecting: []).containsExpected(in: refusal) == nil)
+    }
+
+    @Test("an answer is judged by its words")
+    func answersAreJudgedByTheirWords() {
+        let named = AskAnswer(text: "His father was Josiah Franklin.", citations: [1],
+                              notYetRevealed: false)
+        let unnamed = AskAnswer(text: "His father was a tradesman.", citations: [1],
+                                notYetRevealed: false)
+        #expect(Self.fixture(expecting: ["josiah"]).containsExpected(in: named) == true)
+        #expect(Self.fixture(expecting: ["josiah"]).containsExpected(in: unnamed) == false)
     }
 }
