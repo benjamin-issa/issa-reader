@@ -136,6 +136,11 @@ Storyteller links the account by, and a fresh one on re-import gets the sign-in
 refused. And a client scope's `description` holds 255 characters: a longer one
 stops Keycloak starting at all.
 
+Keycloak runs in the `storyteller` container's network namespace, so
+recreating `storyteller` (after moving its pin, say) leaves Keycloak on a
+namespace that no longer exists, with nothing on :8080 and no error. Follow
+it with `docker compose up -d --force-recreate --no-deps keycloak`.
+
 A Storyteller 3 beta can run beside it, on port 8003, for checking the client
 against both generations. It needs its own **copy** of the library: 3.x
 migrates the database one way, the stable server cannot open the result, and
