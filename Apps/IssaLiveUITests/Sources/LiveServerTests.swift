@@ -252,11 +252,16 @@ final class LiveServerTests: XCTestCase {
 
     /// Opens a book, turns three pages, and waits for the position to leave.
     ///
-    /// Only the reader's arrival is judged here. Whether the position reached
-    /// the server — and, on 3.x, whether it filed a book that had no status —
-    /// is the script's to check over the API afterwards: two seconds of
-    /// debounce and a queue drain happen after the last tap, and nothing on
-    /// screen says they finished.
+    /// The turn is judged here, by the page itself: its accessibility label is
+    /// the page's text and its value "Page N of M in <chapter>"
+    /// (`PageAccessibility`), read before the taps and after. Recording PASS
+    /// on the taps alone said "turned three pages" for a reader whose
+    /// right-edge tap did nothing. Whether the position reached the server —
+    /// and, on 3.x, whether it filed a book that had no status — is the
+    /// script's to check over the API afterwards: two seconds of debounce and
+    /// a queue drain happen after the last tap, and nothing on screen says
+    /// they finished. The script puts the book at its start first, so three
+    /// pages forward always has somewhere to go.
     private func readAPage(_ app: XCUIApplication) {
         guard let book = setting("E2E_READ_BOOK") else {
             record("readerOpened", false, "not run: no book to read given")
@@ -266,15 +271,39 @@ final class LiveServerTests: XCTestCase {
             record("readerOpened", false, "the reader never opened \(book)")
             return
         }
+        let page = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "value BEGINSWITH %@", "Page "))
+            .firstMatch
+        guard page.waitForExistence(timeout: 30) else {
+            capture(app, "reader")
+            record("readerOpened", false, "the reader opened \(book) but drew no page")
+            return
+        }
+        let before = pageReading(page)
         capture(app, "reader")
         for _ in 0 ..< 3 {
             // The right edge turns forward; the middle would toggle the bars.
             app.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
             Thread.sleep(forTimeInterval: 1.5)
         }
+        let after = page.exists ? pageReading(page) : nil
         Thread.sleep(forTimeInterval: 15)
         capture(app, "reader-turned")
-        record("readerOpened", true, "opened and turned three pages")
+        guard let after else {
+            record("readerOpened", false, "the page went away while turning")
+            return
+        }
+        let turned = after != before
+        record("readerOpened", turned, turned
+            ? "turned from \"\(before.value)\" to \"\(after.value)\""
+            : "three taps on the right edge left the page at \"\(before.value)\"")
+    }
+
+    /// The page's text and its place, together: either changing is a turn.
+    /// The place alone can repeat across chapters ("Page 1 of 1"), and the
+    /// text alone can be empty on a picture page.
+    private func pageReading(_ page: XCUIElement) -> (label: String, value: String) {
+        (page.label, page.value as? String ?? "")
     }
 
     /// Plays a read-along past the end of its first audio file.

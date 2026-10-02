@@ -221,7 +221,6 @@ if status:
 read = find(sys.argv[3])
 if read:
     say("READ_BOOK", read["uuid"])
-    say("READ_BEFORE", str((read.get("position") or {}).get("timestamp") or 0))
 readalong = find(sys.argv[4])
 if readalong and (readalong.get("readaloud") or {}).get("status") == "ALIGNED":
     say("READALONG_BOOK", readalong["uuid"])
@@ -238,6 +237,50 @@ if [ "$BOOKS" = 1 ]; then
   fi
 fi
 
+# The book to read is put back at its start, as a position newer than any
+# the server holds, so the page turns are judged from a known place. Every
+# run used to open it where the last one left it and turn three pages on;
+# once that reached the end of the book, a tap that moved nothing still
+# saved, with a new timestamp, and the timestamp was all the verdict read.
+#
+# The start is the first item of the reading order: the server's own
+# manifest where it serves one, else the spine of the book's EPUB, which is
+# what the app itself reads.
+if [ "$BOOKS" = 1 ]; then
+  rm -f "$OUT/read-manifest.json" "$OUT/read-book.epub"
+  if ! api "$SERVER/api/v2/books/$READ_BOOK/read/manifest.json" > "$OUT/read-manifest.json"; then
+    rm -f "$OUT/read-manifest.json"
+    api "$SERVER/api/v2/books/$READ_BOOK/files?format=ebook" > "$OUT/read-book.epub" \
+      || die "no reading order for \"$READ_TITLE\": neither its manifest nor its EPUB could be fetched"
+  fi
+  python3 - "$OUT" > "$OUT/read-start.json" 2> "$OUT/read-start.err" <<'PY' \
+    || die "no reading order for \"$READ_TITLE\": $(tail -1 "$OUT/read-start.err")"
+import json, os, posixpath, sys, time, zipfile
+import xml.etree.ElementTree as ET
+out = sys.argv[1]
+manifest = os.path.join(out, "read-manifest.json")
+if os.path.exists(manifest):
+    first = json.load(open(manifest))["readingOrder"][0]
+    href, kind = first["href"], first.get("type")
+else:
+    book = zipfile.ZipFile(os.path.join(out, "read-book.epub"))
+    ns = {"c": "urn:oasis:names:tc:opendocument:xmlns:container", "o": "http://www.idpf.org/2007/opf"}
+    opf = ET.fromstring(book.read("META-INF/container.xml")).find(".//c:rootfile", ns).get("full-path")
+    package = ET.fromstring(book.read(opf))
+    items = {i.get("id"): i for i in package.find("o:manifest", ns)}
+    item = items[package.find("o:spine", ns).find("o:itemref", ns).get("idref")]
+    href = posixpath.normpath(posixpath.join(posixpath.dirname(opf), item.get("href")))
+    kind = item.get("media-type")
+print(json.dumps({
+    "locator": {"href": href, "type": kind or "application/xhtml+xml",
+                "locations": {"progression": 0, "totalProgression": 0}},
+    "timestamp": round(time.time() * 1000)}))
+PY
+  api -X POST -H "Content-Type: application/json" --data @"$OUT/read-start.json" \
+      "$SERVER/api/v2/books/$READ_BOOK/positions" >/dev/null \
+    || die "could not put \"$READ_TITLE\" back at its start"
+fi
+
 # On 3.x a book can have no status, and reading it files it as Reading. That
 # happens once per book, so the book is put back to no status first; without
 # this the check would pass on a status an earlier run set.
@@ -245,20 +288,36 @@ if [ "$BOOKS" = 1 ] && [ "$GENERATION" = v3 ]; then
   api -X PUT -H "Content-Type: application/json" -d '{"status":null}' \
       "$SERVER/api/v2/books/$READ_BOOK/status" >/dev/null \
     || die "could not clear the status of \"$READ_TITLE\""
-  # Read back, not trusted: a 2xx that left the status in place (a server
-  # that ignores a null, or coerces it) would let the `filed` verdict pass on
-  # the status an earlier run set. This is also where a newer 3.x is seen
-  # still to accept `{"status":null}`.
-  api "$SERVER/api/v2/books" > "$OUT/books-cleared.json" \
-    || die "could not read \"$READ_TITLE\" back after clearing its status"
-  CLEARED=$(python3 - "$OUT/books-cleared.json" "$READ_BOOK" <<'PY'
+fi
+
+# Both read back, not trusted. A 2xx that left the status in place (a server
+# that ignores a null, or coerces it) would let the `filed` verdict pass on
+# the status an earlier run set, and one that kept the old position would
+# leave the page turns judged from the wrong place. This is also where a
+# newer 3.x is seen still to accept `{"status":null}`. The position's
+# timestamp is taken from what the server kept, as the baseline.
+if [ "$BOOKS" = 1 ]; then
+  api "$SERVER/api/v2/books" > "$OUT/books-reset.json" \
+    || die "could not read \"$READ_TITLE\" back after putting it at its start"
+  python3 - "$OUT/books-reset.json" "$READ_BOOK" "$OUT/read-start.json" "$GENERATION" \
+      > "$OUT/read-reset.txt" <<'PY' || die "could not read \"$READ_TITLE\" back after putting it at its start"
 import json, sys
 book = next((b for b in json.load(open(sys.argv[1])) if b["uuid"] == sys.argv[2]), None)
-print("missing" if book is None else ((book.get("status") or {}).get("name") or "none"))
+start = json.load(open(sys.argv[3]))["locator"]
+if book is None:
+    sys.exit("the book is gone")
+position = book.get("position") or {}
+locator = position.get("locator") or {}
+status = (book.get("status") or {}).get("name") or "none"
+problem = ""
+if locator.get("href") != start["href"] or (locator.get("locations") or {}).get("progression") not in (0, 0.0):
+    problem = "is still at %s, not at its start %s" % (locator.get("href"), start["href"])
+elif sys.argv[4] == "v3" and status != "none":
+    problem = "still has the status \"%s\" after clearing it, so filing it cannot be checked" % status
+print(position.get("timestamp") or 0, problem)
 PY
-) || die "could not read \"$READ_TITLE\" back after clearing its status"
-  [ "$CLEARED" = none ] \
-    || die "\"$READ_TITLE\" still has the status \"$CLEARED\" after clearing it, so filing it cannot be checked"
+  read -r READ_BEFORE RESET_PROBLEM < "$OUT/read-reset.txt" || true
+  [ -z "$RESET_PROBLEM" ] || die "\"$READ_TITLE\" $RESET_PROBLEM"
 fi
 
 # A read-along picks up where it was left, and a run that crossed its first
@@ -431,23 +490,37 @@ READ_AFTER=0 READ_STATUS=unread
 if [ "$BOOKS" = 1 ] && ! api "$SERVER/api/v2/books" > "$OUT/books-after.json"; then
   fail "server: could not read the catalogue back after the test, so the position and filing were not checked"
 elif [ "$BOOKS" = 1 ]; then
-  python3 - "$OUT/books-after.json" "$READ_BOOK" > "$OUT/read-after.txt" <<'PY' \
-    || echo "0 unread" > "$OUT/read-after.txt"
+  # Newer is not enough: a tap that turned nothing still saves, with a new
+  # timestamp and the same place. The place must have moved on from the
+  # start the book was put at.
+  python3 - "$OUT/books-after.json" "$READ_BOOK" "$OUT/read-start.json" > "$OUT/read-after.txt" <<'PY' \
+    || echo "0 unread no nowhere" > "$OUT/read-after.txt"
 import json, sys
 book = next((b for b in json.load(open(sys.argv[1])) if b["uuid"] == sys.argv[2]), None)
+start = json.load(open(sys.argv[3]))["locator"]
 if book is None:
-    print(0, "missing")
+    print(0, "missing", "no", "nowhere")
 else:
     status = (book.get("status") or {}).get("name") or "none"
-    print((book.get("position") or {}).get("timestamp") or 0, status)
+    position = book.get("position") or {}
+    locator = position.get("locator") or {}
+    href = locator.get("href") or "nowhere"
+    progression = (locator.get("locations") or {}).get("progression") or 0
+    moved = href != start["href"] or progression > 0
+    print(position.get("timestamp") or 0, status, "yes" if moved else "no",
+          "%s@%.3f" % (href, progression))
 PY
-  read -r READ_AFTER READ_STATUS < "$OUT/read-after.txt" || true
+  read -r READ_AFTER READ_STATUS READ_MOVED READ_WHERE < "$OUT/read-after.txt" || true
+  READ_START=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["locator"]["href"])' \
+    "$OUT/read-start.json" 2>/dev/null) || READ_START="its start"
   if [ "$READ_STATUS" = missing ] || [ "$READ_STATUS" = unread ]; then
     fail "position: \"$READ_TITLE\" could not be read back from the server ($READ_STATUS)"
-  elif [ "$READ_AFTER" -gt "$READ_BEFORE" ]; then
-    pass "position: \"$READ_TITLE\" has a newer position on the server ($READ_BEFORE -> $READ_AFTER)"
-  else
+  elif [ "$READ_AFTER" -le "$READ_BEFORE" ]; then
     fail "position: \"$READ_TITLE\" has no newer position on the server ($READ_BEFORE -> $READ_AFTER)"
+  elif [ "$READ_MOVED" != yes ]; then
+    fail "position: \"$READ_TITLE\" saved again but did not move from $READ_START: the pages did not turn"
+  else
+    pass "position: \"$READ_TITLE\" moved from $READ_START to $READ_WHERE on the server ($READ_BEFORE -> $READ_AFTER)"
   fi
   if [ "$GENERATION" = v3 ]; then
     if [ "$READ_STATUS" = Reading ]; then
