@@ -104,7 +104,7 @@ docker compose up -d
 PUBLIC_HOST=$(ipconfig getifaddr en0) node setup.mjs
 ```
 
-`docker compose up` brings up Storyteller `web-v2.14.21` and Keycloak;
+`docker compose up` brings up Storyteller `web-v2.14.23` and Keycloak;
 `setup.mjs` waits for both, creates an admin account, wires Keycloak in as an
 OIDC provider with group-derived permissions, and smoke-tests the endpoints the
 client depends on. It is idempotent, and drives Storyteller's first-run screen
@@ -150,6 +150,25 @@ STORYTELLER_URL=http://$(ipconfig getifaddr en0):8003 PUBLIC_HOST=$(ipconfig get
 
 The provisioning scripts take `STORYTELLER_URL` for either server.
 
+The older tags the client must still work with run beside them under
+`--profile legacy`: `web-v2.14.21` on port 8011, the version App Review's
+server runs, and `web-v3.0.0-beta.40` on 8013. Each needs its own copy of the
+data its newer pin started from, taken **before** that pin moved, because a
+newer server migrates the database one way:
+
+```bash
+cd Tools/docker
+docker compose --profile v3 stop
+cp -Rp data/storyteller data/storyteller-legacy
+cp -Rp data/storyteller-v3 data/storyteller-v3-legacy
+docker compose --profile legacy up -d
+STORYTELLER_URL=http://$(ipconfig getifaddr en0):8011 PUBLIC_HOST=$(ipconfig getifaddr en0) node setup.mjs
+STORYTELLER_URL=http://$(ipconfig getifaddr en0):8013 PUBLIC_HOST=$(ipconfig getifaddr en0) node setup.mjs
+```
+
+They are not restarted on their own; `docker compose --profile legacy stop`
+puts them away after the smoke run.
+
 With a server up, `scripts/live-check.sh` runs the release rule's live checks
 (CLAUDE.md) on an iPhone or iPad simulator:
 
@@ -174,11 +193,13 @@ the server version.
 
 ## Notes on the server
 
-This client is written against Storyteller `web-v2.14.21`, the latest stable
-tag, and verified to behave the same against the 3.0 beta line
-(`web-v3.0.0-beta.40`). It tells the two apart by feature, not by version
-string: `GET /api/v2/server/public` exists only on 3.x, while a self-built 3.x
-image reports its package version, which is still 2.14.21. Where they differ it
+This client is written against Storyteller `web-v2.14.21` and still works
+with it, which is what App Review's server runs. It is tested against
+`web-v2.14.23`, the latest stable tag, and the 3.0 beta line at
+`web-v3.0.0-beta.46`, and still checked against `web-v3.0.0-beta.40`. It tells
+the generations apart by feature, not by version string: `GET
+/api/v2/server/public` exists only on 3.x, while a self-built 3.x image
+reports its package version, which is still a 2.x number. Where they differ it
 adjusts. Covers come from 3.x's content-addressed image route rather than the
 cover route, which on 3.x only redirects. A status's label is shown where 3.x
 lets an admin rename one. A book with no status, which 3.x allows and does not

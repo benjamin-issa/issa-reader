@@ -181,6 +181,28 @@ is the only way all three can carry the same number.
   failed`): Gatekeeper refuses a Mac App Store signature outside the store. Test
   the sandboxed behaviour in the Debug build, which carries the same sandbox.
 
+## Before a release: the test run
+
+The whole rule is in `CLAUDE.md`, against the Storyteller servers pinned in
+`Tools/docker/compose.yaml`. Its first two items are one command:
+
+```bash
+scripts/release-tests.sh          # every package suite, then IssaSharedTests
+```
+
+It runs each suite one at a time under `ISSA_RELEASE_RUN=1`, so a suite whose
+input is absent (the real-alignment books in `/tmp`, Apple Intelligence for
+the real-model Ask suites) fails instead of skipping, and it fails the run on
+any skipped test or a suite that printed no `Test run with` line. The record
+is `.build/release-tests/summary.txt`.
+
+`scripts/asc-api.py`, which the duplicate-build guard above relies on, has its
+own tests against a loopback stub; they never reach App Store Connect:
+
+```bash
+python3 scripts/tests/test_asc_api.py
+```
+
 ## Before a release: the layout sweep
 
 ```bash
