@@ -245,6 +245,20 @@ if [ "$BOOKS" = 1 ] && [ "$GENERATION" = v3 ]; then
   api -X PUT -H "Content-Type: application/json" -d '{"status":null}' \
       "$SERVER/api/v2/books/$READ_BOOK/status" >/dev/null \
     || die "could not clear the status of \"$READ_TITLE\""
+  # Read back, not trusted: a 2xx that left the status in place (a server
+  # that ignores a null, or coerces it) would let the `filed` verdict pass on
+  # the status an earlier run set. This is also where a newer 3.x is seen
+  # still to accept `{"status":null}`.
+  api "$SERVER/api/v2/books" > "$OUT/books-cleared.json" \
+    || die "could not read \"$READ_TITLE\" back after clearing its status"
+  CLEARED=$(python3 - "$OUT/books-cleared.json" "$READ_BOOK" <<'PY'
+import json, sys
+book = next((b for b in json.load(open(sys.argv[1])) if b["uuid"] == sys.argv[2]), None)
+print("missing" if book is None else ((book.get("status") or {}).get("name") or "none"))
+PY
+) || die "could not read \"$READ_TITLE\" back after clearing its status"
+  [ "$CLEARED" = none ] \
+    || die "\"$READ_TITLE\" still has the status \"$CLEARED\" after clearing it, so filing it cannot be checked"
 fi
 
 # A read-along picks up where it was left, and a run that crossed its first
@@ -258,14 +272,20 @@ fi
 if [ "$BOOKS" = 1 ] && [ "$AUDIO" = 1 ]; then
   api "$SERVER/api/v2/books/$READALONG_BOOK/read/manifest.json" > "$OUT/readalong-manifest.json" \
     || die "no reading order for \"$READALONG_TITLE\""
-  python3 - "$OUT/readalong-manifest.json" > "$OUT/readalong-start.json" <<'PY'
+  python3 - "$OUT/readalong-manifest.json" > "$OUT/readalong-start.json" 2> "$OUT/readalong-start.err" <<'PY' \
+    || die "\"$READALONG_TITLE\": $(tail -1 "$OUT/readalong-start.err"), so a crossing cannot be told from a start"
 import json, sys, time
 order = json.load(open(sys.argv[1]))["readingOrder"]
 # The first chapter with a media overlay: a title page ahead of it has no
 # audio, so starting there would reach the narration without crossing a file.
 narrated = [r for r in order
             if any("guided-navigation" in (a.get("type") or "") for a in r.get("alternate") or [])]
-first = (narrated or order)[0]
+# None at all is a refusal, not the first spine item: starting on a page with
+# no audio, pressing Play reaches the narration in a later item, and the
+# verdict below would call that a crossing when no file boundary was crossed.
+if not narrated:
+    sys.exit("no chapter in the reading order has a media overlay (guided-navigation)")
+first = narrated[0]
 print(json.dumps({
     "locator": {"href": first["href"], "type": first.get("type") or "application/xhtml+xml",
                 "locations": {"progression": 0, "totalProgression": 0}},
@@ -379,6 +399,11 @@ if [ -s "$OUT/code.txt" ]; then
   else
     fail "approve: the code was not approved; see $OUT/approve.log"
   fi
+elif [ "$FRESH" = 1 ]; then
+  # --fresh exists to prove the pairing. A run that landed without showing a
+  # code paired nothing, whatever the sign-in line says, and that is a fail:
+  # the keychain reset left something the app signed back in with.
+  fail "approve: --fresh, but the app showed no code to approve, so no pairing was made"
 fi
 
 # The test's own verdicts, one line per check it made.
