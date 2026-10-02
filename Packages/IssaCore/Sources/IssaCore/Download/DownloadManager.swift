@@ -153,14 +153,77 @@ public final class DownloadManager: NSObject {
     /// the residual half of that fix: cancelling one job invalidates that job's
     /// stamp and nobody else's, and a restart of the same job takes the new
     /// number, so the old transfer and the new one are still told apart.
+    ///
+    /// Kept across launches, in `fenceStore`. The daemon keeps a task's stamp
+    /// for as long as it keeps the task, and a transfer stamped in one process
+    /// can finish — and be reported — in the next. Every launch used to begin
+    /// again at nothing, so a transfer stamped after a sign-out, or after a
+    /// cancel and a restart, that finished while the app was away was thrown
+    /// out the moment the next launch heard of it: the system deleted the
+    /// file, no row appeared, and the book offered "Download" again.
     private nonisolated let generation = OSAllocatedUnfairLock(initialState: Fence())
 
     /// Which `stop()` and which `cancel(_:)` a task belongs after.
-    struct Fence: Sendable {
+    struct Fence: Sendable, Equatable {
         var global = 0
         var perJob: [Job: Int] = [:]
+        /// Whether a stamp is judged at all.
+        ///
+        /// Armed once the numbers are known: loaded from `fenceStore`, or
+        /// after this process's first `stop()` or `cancel(_:)`. Before that —
+        /// the first launch after upgrading from a build that kept no fence —
+        /// the last process's numbers are unknown, so no stamp can be shown
+        /// stale, and any that decodes is taken. A transfer 1.3.0 stamped after
+        /// a sign-out and finished while the app was away is the reader's book,
+        /// and throwing it away is the worse of the two mistakes.
+        var armed = false
 
         func epoch(for job: Job) -> Int { perJob[job] ?? 0 }
+
+        /// Whether a task stamped this way is one this manager still wants.
+        func admits(_ job: Job, generation: Int, epoch: Int) -> Bool {
+            !armed || (global == generation && self.epoch(for: job) == epoch)
+        }
+    }
+
+    /// Where the fence is kept between launches: `.standard` in the app, nil
+    /// to keep it in memory only.
+    private let fenceStore: UserDefaults?
+    static let fenceKey = "issa.downloads.fence"
+
+    /// The fence as it is kept: its two counters, each job named by the
+    /// description a task for it carries before any stamp is added.
+    private struct StoredFence: Codable {
+        var global: Int
+        var perJob: [String: Int]
+    }
+
+    /// The fence a previous launch left, armed; nil when none was kept.
+    static func loadFence(from store: UserDefaults?) -> Fence? {
+        guard let data = store?.data(forKey: fenceKey),
+              let stored = try? JSONDecoder().decode(StoredFence.self, from: data)
+        else { return nil }
+        var perJob: [Job: Int] = [:]
+        for (description, epoch) in stored.perJob {
+            guard let job = decode(description) else { continue }
+            perJob[job] = epoch
+        }
+        return Fence(global: stored.global, perJob: perJob, armed: true)
+    }
+
+    static func saveFence(_ fence: Fence, to store: UserDefaults?) {
+        guard let store else { return }
+        let stored = StoredFence(
+            global: fence.global,
+            perJob: Dictionary(uniqueKeysWithValues: fence.perJob.map { (encode($0.key), $0.value) }))
+        guard let data = try? JSONEncoder().encode(stored) else { return }
+        store.set(data, forKey: fenceKey)
+    }
+
+    /// Writes the fence down, so a transfer stamped from here on is judged by
+    /// the same numbers in the next launch.
+    private func keepFence() {
+        Self.saveFence(generation.withLock { $0 }, to: fenceStore)
     }
 
     /// The stamp a task started now should carry.
@@ -173,7 +236,7 @@ public final class DownloadManager: NSObject {
         guard let description = task.taskDescription,
               let (job, stamped, epoch) = Self.decodeStamped(description)
         else { return nil }
-        let live = generation.withLock { $0.global == stamped && $0.epoch(for: job) == epoch }
+        let live = generation.withLock { $0.admits(job, generation: stamped, epoch: epoch) }
         return live ? job : nil
     }
     /// A job cancelled while `start(_:)` was still awaiting a token, before its
@@ -187,19 +250,30 @@ public final class DownloadManager: NSObject {
     /// the Downloads screen, but the download itself kept going.
     private var cancelledBeforeStart: Set<Job> = []
 
+    /// - Parameter fenceStore: where the fence is kept between launches. The
+    ///   app's own defaults unless a caller — a test — wants it kept in
+    ///   memory (nil) or somewhere of its own.
     public init(
         baseURL: URL,
         tokens: any TokenProviding,
         identifier: String = "com.benjaminissa.issareader.downloads",
+        fenceStore: UserDefaults? = .standard,
         destinationFor: @escaping @Sendable (Job) -> URL,
     ) {
         self.baseURL = baseURL
         self.tokens = tokens
         self.identifier = identifier
+        self.fenceStore = fenceStore
         self.destinationFor = destinationFor
         super.init()
 
         wifiOnly = UserDefaults.standard.bool(forKey: Self.wifiOnlyKey)
+        // Before the session exists: building it is what has the daemon
+        // replay whatever finished while the app was away, and each of those
+        // callbacks is judged by this.
+        if let kept = Self.loadFence(from: fenceStore) {
+            generation.withLock { $0 = kept }
+        }
         session = makeSession()
     }
 
@@ -354,15 +428,18 @@ public final class DownloadManager: NSObject {
         // Per job, not global: every other live transfer carries the global
         // number, and bumping that here would strand all of them — their files
         // never moved into place and their rows never finished.
-        generation.withLock { $0.perJob[job, default: 0] += 1 }
+        generation.withLock {
+            $0.perJob[job, default: 0] += 1
+            $0.armed = true
+        }
+        keepFence()
         if let task = tasks[job] {
-            // Marked only when a live task exists to produce the cancellation
-            // callback that consumes the marker. Inserting unconditionally
-            // left a permanent marker behind the X on a failed row, which made
-            // the *next* download of the same job swallow a system-initiated
-            // cancellation as though it were a pause — freezing the row at
-            // "downloading" with no task ever coming to finish it.
-            pausing.insert(job)
+            // No pause marker. The epoch advanced above fences out this
+            // task's own cancellation, so nothing would ever consume one —
+            // and a marker left behind made the next download of the same job
+            // take a cancellation it did not ask for, the system reclaiming
+            // the transfer, for a pause: its row froze at "downloading" with
+            // no task ever coming to finish it.
             task.cancel()
             tasks[job] = nil
         } else {
@@ -410,7 +487,8 @@ public final class DownloadManager: NSObject {
         // The per-job epochs go with it: every stamp is stale now on the global
         // number alone, and carrying them forward would leave the next account
         // starting each job at whatever count the last one happened to reach.
-        generation.withLock { $0 = Fence(global: $0.global + 1, perJob: [:]) }
+        generation.withLock { $0 = Fence(global: $0.global + 1, perJob: [:], armed: true) }
+        keepFence()
         for task in tasks.values { task.cancel() }
         tasks = [:]
         resumeData = [:]
@@ -443,16 +521,40 @@ public final class DownloadManager: NSObject {
 
     /// Reattaches to whatever the system carried on with while the app was away.
     public func reattach() async {
-        let running = await session.tasks.2
+        adopt(await session.tasks.2)
+    }
+
+    /// Takes on the transfers the system carried on with, and stops the ones
+    /// this manager has let go of since they started.
+    ///
+    /// Armed, a task's stamp is judged like any callback's: one stamped before
+    /// a `stop()` or a `cancel(_:)` this manager knows of — in this launch or,
+    /// through `fenceStore`, an earlier one — is cancelled, not adopted. Every
+    /// task used to be re-stamped with the current numbers and adopted, which
+    /// brought a job cancelled before this ran back to life: tracked, shown as
+    /// downloading, and moved into the place its removal had just emptied.
+    ///
+    /// Unarmed, no stamp can be judged, so every task is re-stamped as this
+    /// launch's own, as before; arming later then leaves it live.
+    ///
+    /// Internal rather than private for the tests, which hand it tasks
+    /// carrying the stamps they mean to have judged.
+    func adopt(_ running: [URLSessionDownloadTask]) {
+        let fence = generation.withLock { $0 }
         for task in running {
-            guard let description = task.taskDescription, let job = Self.decode(description) else { continue }
-            // Re-stamped: the stamp it carries is from the process that started
-            // it, and means nothing to this one. Both numbers, because a job
-            // this process has already cancelled must not be adopted back into
-            // life by a task the system carried on with while the app was away.
-            let stamp = currentStamp(for: job)
-            task.taskDescription = Self.encode(
-                job, generation: stamp.generation, epoch: stamp.epoch)
+            guard let description = task.taskDescription,
+                  let (job, stamped, epoch) = Self.decodeStamped(description)
+            else { continue }
+            if fence.armed {
+                guard fence.admits(job, generation: stamped, epoch: epoch) else {
+                    // Its callbacks are stale already; this stops the transfer.
+                    task.cancel()
+                    continue
+                }
+            } else {
+                task.taskDescription = Self.encode(
+                    job, generation: fence.global, epoch: fence.epoch(for: job))
+            }
             tasks[job] = task
             states[job] = .downloading(fractionCompleted: task.progress.fractionCompleted,
                                        bytesWritten: task.countOfBytesReceived,
