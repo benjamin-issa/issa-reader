@@ -9,7 +9,8 @@ import Testing
 /// source describes it; these prove it handles what a web-v3.0.0-beta.40 server
 /// actually wrote. Neither file is committed — each embeds its audio — and each
 /// test is skipped when its file is absent, so the suite stays green on a clean
-/// checkout. Produce them against the `--profile v3` server in Tools/docker:
+/// checkout — except on a release run (`ISSA_RELEASE_RUN=1`), where an absent
+/// file fails every test that needed it. Produce them against the `--profile v3` server in Tools/docker:
 /// narrate a two-chapter public-domain text with `say`, with the headings read
 /// aloud and digital silence placed around it, import the EPUB and the audio by
 /// path (`POST /api/v2/books {"paths": […]}`), `POST /api/v2/books/{id}/process`,
@@ -27,8 +28,10 @@ struct RealAlignmentV3Tests {
     static let loopPath = "/tmp/pw3-loop.epub"
     static let interludePath = "/tmp/pw3.epub"
 
-    static var loopAvailable: Bool { FileManager.default.fileExists(atPath: loopPath) }
-    static var interludeAvailable: Bool { FileManager.default.fileExists(atPath: interludePath) }
+    /// On a release run (`ISSA_RELEASE_RUN=1`, see `ReleaseRun`) these are
+    /// always true, and an absent file fails the test that needed it.
+    static var loopAvailable: Bool { ReleaseRun.shouldRun(needing: [loopPath]) }
+    static var interludeAvailable: Bool { ReleaseRun.shouldRun(needing: [interludePath]) }
 
     static func timeline(_ path: String) throws -> (SMILTimeline, EPUBPackage) {
         let package = try EPUBPackage.open(url: URL(fileURLWithPath: path))
@@ -38,6 +41,7 @@ struct RealAlignmentV3Tests {
     @Test("a file that ends in an after-hole hands on to the next file, not back to the hole",
           .enabled(if: RealAlignmentV3Tests.loopAvailable))
     func fileEndingInAHole() throws {
+        guard ReleaseRun.require([Self.loopPath]) else { return }
         let (timeline, _) = try Self.timeline(Self.loopPath)
         let entries = timeline.entries
         let firstFile = try #require(entries.first?.audioHref)
@@ -56,6 +60,7 @@ struct RealAlignmentV3Tests {
     @Test("an audio-only chapter is played through and stepped over",
           .enabled(if: RealAlignmentV3Tests.interludeAvailable))
     func audioOnlyChapter() throws {
+        guard ReleaseRun.require([Self.interludePath]) else { return }
         let (timeline, package) = try Self.timeline(Self.interludePath)
         let entries = timeline.entries
         let interlude = entries.filter { $0.textHref.contains("storyteller-audio-") }
@@ -85,7 +90,11 @@ struct RealAlignmentV3Tests {
     @Test("every v3 entry is coherent",
           .enabled(if: RealAlignmentV3Tests.loopAvailable || RealAlignmentV3Tests.interludeAvailable))
     func entriesAreCoherent() throws {
-        for path in [Self.loopPath, Self.interludePath] where FileManager.default.fileExists(atPath: path) {
+        let paths = [Self.loopPath, Self.interludePath]
+        // A release run needs both: with one absent, this ran on half its input
+        // and passed.
+        if ReleaseRun.isOn { guard ReleaseRun.require(paths) else { return } }
+        for path in paths where FileManager.default.fileExists(atPath: path) {
             let (timeline, package) = try Self.timeline(path)
             #expect(timeline.entries.contains { $0.isAudioOnly }, "\(path) has no audio-only entries")
             var previous: TimeInterval = 0
