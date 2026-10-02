@@ -339,9 +339,15 @@ struct LibraryTabs: View {
         // or one book swapped for another, keeps the count and left Spotlight
         // naming the old library until the next launch.
         .task(id: SpotlightIndex.version(of: app.books)) { await SpotlightIndex.index(app.books) }
-        .task { openPendingBook() }
-        // An intent runs outside the scene and cannot navigate, so it leaves
-        // the book in an inbox for the scene to collect when it appears.
+        .task {
+            // An intent runs outside the scene and cannot navigate, so it
+            // leaves the book in an inbox. Collected here, as the library
+            // appears — a cold launch from Siri writes it before this view
+            // exists — and below, whenever it is written while it does.
+            AppIntentInbox.shared.deliver(to: app)
+            openPendingBook()
+        }
+        .onChange(of: AppIntentInbox.shared.bookID) { AppIntentInbox.shared.deliver(to: app) }
         .onChange(of: scenePhase) { _, phase in
             if phase == .background {
                 flushOnSuspend()
@@ -355,10 +361,7 @@ struct LibraryTabs: View {
             // A download can finish while the app is in the background, and the
             // finish hook only fires in-process.
             app.refreshDownloadedSet()
-            guard let id = AppIntentInbox.shared.bookID else { return }
-            AppIntentInbox.shared.bookID = nil
-            // "Continue reading" means exactly that.
-            app.requestBook(id, .read)
+            AppIntentInbox.shared.deliver(to: app)
         }
     }
 }
