@@ -2586,6 +2586,11 @@ public final class AppModel {
         for model in readers.values {
             await model.saveProgress()
         }
+        // And the audiobook, which has no reader model. Its position was
+        // written only by the fifteen-second writer, and ⌘Q ends the process
+        // with that task in it — so quitting while listening lost everything
+        // since the last accepted tick, up to most of a minute on a long book.
+        await writeListeningPositionNow()
         await drainPendingWrites(waitingForInFlight: true)
         // The log too, and here rather than in each scene-phase handler,
         // because all three platforms already route their exit through this
@@ -3292,8 +3297,8 @@ public final class AppModel {
         book: Book, coordinator: AudiobookCoordinator, every interval: Duration = .seconds(15),
     ) {
         listeningProgressTask?.cancel()
+        listeningLastWritten = -1
         listeningProgressTask = Task { [weak self, weak coordinator] in
-            var lastWritten: Double = -1
             while !Task.isCancelled {
                 try? await Task.sleep(for: interval)
                 // `try?` swallows the `CancellationError`, and the loop test
@@ -3311,8 +3316,8 @@ public final class AppModel {
                 let progress = coordinator.bookProgress
                 // Only when it actually moved: a paused book must not generate
                 // a write every fifteen seconds forever.
-                guard abs(progress - lastWritten) > 0.0005 else { continue }
-                lastWritten = progress
+                guard abs(progress - self.listeningLastWritten) > 0.0005 else { continue }
+                self.listeningLastWritten = progress
                 // A scrub is the listener naming a place; the clock arriving
                 // somewhere is not. The coordinator owns every seek entry point,
                 // so it is the only thing that can tell them apart.
@@ -3351,6 +3356,45 @@ public final class AppModel {
                 guard !Task.isCancelled, self.listeningBook?.uuid == book.uuid else { return }
                 self.publishListeningSnapshot(book: book, coordinator: coordinator)
             }
+        }
+    }
+
+    /// The book progress the listening writer last wrote, or -1 when it has
+    /// written nothing since it was armed. On the model rather than in the
+    /// writer's task so `writeListeningPositionNow` asks the same question the
+    /// writer does — whether the book has moved since.
+    private var listeningLastWritten: Double = -1
+
+    /// Writes where the audiobook is, now, as the writer's next tick would.
+    ///
+    /// For `flushOpenReaders`, the exit path, which saved every reader model
+    /// and nothing else: an audiobook has none, so ⌘Q while listening lost
+    /// everything since the writer's last tick.
+    ///
+    /// On the writer's terms exactly. Only while it is armed: a hand-off
+    /// cancels it before handing the book to the read-along, whose clock the
+    /// position is then on, and a start that has not attached, or a stopped
+    /// book, has nothing playing to write. Only when the book has moved since
+    /// the writer last wrote: a paused book written again on every trip to
+    /// the background would stamp an old place with a new time, and the
+    /// server would take it over a later place read on another device. The
+    /// same steering rule, the same guard, and the anchor only for a position
+    /// the guard accepted.
+    private func writeListeningPositionNow() async {
+        guard listeningProgressTask != nil, let coordinator = listening, let book = listeningBook
+        else { return }
+        let progress = coordinator.bookProgress
+        guard abs(progress - listeningLastWritten) > 0.0005 else { return }
+        listeningLastWritten = progress
+        let origin: PositionOrigin = coordinator.consumeSteering() ? .chosen : .derived
+        let accepted = await writePosition(
+            Self.audioLocator(for: coordinator, book: book),
+            timestamp: ProgressService.now(),
+            for: book.uuid,
+            origin: origin,
+        )
+        if accepted, let anchor = coordinator.currentAnchor {
+            try? await store?.setAudioAnchor(anchor, forBook: book.uuid)
         }
     }
 
