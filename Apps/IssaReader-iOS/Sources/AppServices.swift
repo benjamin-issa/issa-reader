@@ -168,7 +168,13 @@ final class AppServices {
         bridge.currentChapter = { [app] in
             if let coordinator = app.listening { return coordinator.chapterIndex }
             guard let reader = app.reader, let package = reader.package else { return nil }
-            return CarPlayChapters.entries(for: package).firstIndex { $0.spineIndex == reader.chapterIndex }
+            // By the page's place in its file, not the file alone: several
+            // chapters can share one, and each has its own row.
+            let layout = reader.layout
+            return CarPlayChapters.currentIndex(
+                in: CarPlayChapters.entries(for: package), spineIndex: reader.chapterIndex,
+                offset: reader.currentPage?.characterRange.location ?? 0,
+            ) { layout?.fragmentRange(for: $0)?.location }
         }
         bridge.onPlayChapter = { [app] index in
             if let coordinator = app.listening {
