@@ -36,8 +36,33 @@ struct WhitespaceStabilityTests {
     """
 
     static var withStraySpaces: String {
-        chapter.replacingOccurrences(of: "\n", with: "\n ")
+        spaced(chapter)
     }
+
+    static func spaced(_ text: String) -> String {
+        text.replacingOccurrences(of: "\n", with: "\n ")
+    }
+
+    /// A chapter with decisions in it for the chunker to make.
+    ///
+    /// The six lines above are seventy-five words, which the chunker merges
+    /// into one passage whatever the spacing — so a comparison over them
+    /// compared one whole chapter with its twin, and no boundary could move.
+    /// This one has short paragraphs that merge until a passage is full and
+    /// then start the next (so there are boundaries to move), and one paragraph
+    /// past `maximumWords` (so the sentence splitter runs).
+    static let decidingChapter: String = {
+        let short = (1 ... 9).map { index in
+            "On the \(index) day the Wart carried the arrows out to the butts for Kay, and "
+                + "stood at the back of the yard while the elder boy shot, and said nothing "
+                + "about it to anybody at supper."
+        }
+        let long = (1 ... 8).map { index in
+            "Sir Ector watched them from the wall on the \(index) evening and thought about "
+                + "the letter that had come with the second boy."
+        }.joined(separator: " ")
+        return (short.prefix(5) + [long] + short.dropFirst(5)).joined(separator: "\n")
+    }()
 
     /// Text as its words, so a comparison is about what was chosen rather than
     /// how it was spaced.
@@ -62,12 +87,28 @@ struct WhitespaceStabilityTests {
     /// equality against one string, which is a different property and cannot
     /// catch this.
     @Test("the same words are chunked the same way, however the blocks are spaced")
-    func chunkingIgnoresBlockWhitespace() {
-        let tidy = PassageChunker.indexable(text: Self.chapter, spineIndex: 3)
-        let stray = PassageChunker.indexable(text: Self.withStraySpaces, spineIndex: 3)
+    func chunkingIgnoresBlockWhitespace() throws {
+        let tidy = PassageChunker.indexable(text: Self.decidingChapter, spineIndex: 3)
+        let stray = PassageChunker.indexable(
+            text: Self.spaced(Self.decidingChapter), spineIndex: 3,
+        )
+
+        // The fixture's own shape first, or the comparison below proves
+        // nothing: several passages, so merges stopped somewhere, and the long
+        // paragraph's opening and closing sentences in different ones, so the
+        // splitter cut it.
+        try #require(tidy.count >= 3)
+        let long = try #require(Self.decidingChapter.split(separator: "\n")
+            .first { PassageChunker.wordCount(String($0)) > PassageChunker.Limits.maximumWords })
+        // Its sentences differ only in the evening they name.
+        let opening = "on the 1 evening", closing = "on the 8 evening"
+        try #require(long.contains(opening) && long.contains(closing))
+        let holdsOpening = tidy.firstIndex { $0.text.contains(opening) }
+        let holdsClosing = tidy.firstIndex { $0.text.contains(closing) }
+        try #require(holdsOpening != nil && holdsClosing != nil)
+        try #require(holdsOpening != holdsClosing)
 
         #expect(tidy.count == stray.count)
-        #expect(!tidy.isEmpty)
         for (a, b) in zip(tidy, stray) {
             #expect(a.ordinal == b.ordinal)
             #expect(a.spineIndex == b.spineIndex)

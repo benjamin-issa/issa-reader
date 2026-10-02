@@ -240,21 +240,33 @@ struct SearchBookToolTests {
         #expect(Set(shown.values).isSubset(of: Set(best.map(\.passage))))
     }
 
+    /// On a book where the fast path *would* answer, the tool still returns
+    /// excerpts.
+    ///
+    /// This asked about Alice's sister, who is never named, so the kinship
+    /// table found nothing and the tool returned the same thing whether or not
+    /// it allowed the fast path — and the test also accepted "no matches",
+    /// which is what a fast-path answer turns into here. On the synthetic book
+    /// that states "Her brother, Dask", the same question answered from the
+    /// table without a model call (`AskEngineTests.kinshipFastPathAnswersOutright`),
+    /// so a tool that let the fast path through would come back empty-handed.
     @Test("the tool may not answer the question itself")
     func neverAnswersOutright() async throws {
-        let (store, _, directory) = try await AskFixture.preparedStore()
-        defer { AskFixture.remove(directory) }
-        let tool = SearchBookTool(
-            store: store, bookUUID: AskFixture.bookUUID,
-            boundary: try AskFixture.endOf(spine: AskFixture.Spine.chapterI),
+        let (store, _, boundary, directory) = try AskFixture.syntheticStore(
+            chapters: [AskEngineTests.kinshipChapter],
         )
+        defer { AskFixture.remove(directory) }
+        let tool = SearchBookTool(store: store, bookUUID: AskFixture.bookUUID, boundary: boundary)
         await tool.beginGeneration(numberingFrom: 7)
 
         // The model has already been called by the time this runs, and handing
         // it a finished sentence in place of excerpts is not a search result.
-        let result = try await tool.call(arguments: .init(query: "Who is Alice's sister?"))
-        #expect(result.hasPrefix("[7] (Section ") || result == SearchBookTool.noMatches)
-        #expect(!result.hasPrefix("Alice's sister is"))
+        let result = try await tool.call(arguments: .init(query: "What is the name of Ryn's brother?"))
+        #expect(result.hasPrefix("[7] (Section "), "\(result)")
+        #expect(result != SearchBookTool.noMatches)
+        #expect(!result.contains("Ryn's brother is Dask."))
+        // The excerpt it returned is the sentence that states it.
+        #expect(result.contains("Her brother, Dask"))
     }
 
     @Test("what comes back fits in roughly three hundred tokens")

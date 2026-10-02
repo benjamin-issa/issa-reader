@@ -56,15 +56,32 @@ struct QueryTermsTests {
             "Why does she say \"curiouser and curiouser\"?",
             "Who lives in the Rabbit-Hole — and why?",
             "Alice's sister's book?",
-            "'''",
-            "-- OR 1=1 --",
             "NEAR(a b) AND *",
         ]
         for question in questions {
             let terms = QueryTerms.extract(from: question)
-            guard !terms.searchTokens.isEmpty else { continue }
-            let joined = terms.searchTokens.joined(separator: " ")
-            #expect(FTS5Pattern(matchingAnyTokenIn: joined) != nil, "\(question)")
+            #expect(!terms.searchTokens.isEmpty, "\(question)")
+            // The builders production actually uses, not GRDB's
+            // `FTS5Pattern(matchingAnyTokenIn:)` — which production stopped
+            // using because it splits "ryn's" into `ryn OR s`, and which only
+            // needs one plain word to succeed. A nil here is retrieval
+            // returning nothing and the reader being told "not yet".
+            let any = FTSQuery.any(terms.searchTokens)
+            let all = FTSQuery.all(terms.searchTokens)
+            #expect(any != nil, "\(question)")
+            #expect(all != nil, "\(question)")
+            // Every token survives into the pattern, apostrophes and all: a
+            // token dropped on the way is a word of the question nobody
+            // searched for.
+            for token in FTSQuery.usable(terms.searchTokens) {
+                #expect(any?.rawPattern.contains(FTSQuery.quoted(token)) == true,
+                        "\(question): \(token)")
+            }
+        }
+        // Nothing but punctuation and operators: no tokens, said rather than
+        // skipped past, so a change that tokenised them would show up here.
+        for degenerate in ["'''", "-- OR 1=1 --"] {
+            #expect(QueryTerms.extract(from: degenerate).searchTokens.isEmpty, "\(degenerate)")
         }
     }
 

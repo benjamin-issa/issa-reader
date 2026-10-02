@@ -64,8 +64,18 @@ struct SystemAnswerModelTests {
         #expect(!found.notYetRevealed)
     }
 
-    @Test("a question about a character not yet met gets the sentinel")
+    /// The answer-side guard, against the real model.
+    ///
+    /// This asked "Who is the Cheshire Cat?", which never reaches the model at
+    /// all: "cheshire" is unmet at the end of Chapter I, so retrieval answers
+    /// `.notYet` from SQL and the model is consulted only for its language and
+    /// its window. It passed on the question-side guard alone, and would have
+    /// kept passing with `vetted` deleted. A question whose own words are all
+    /// met is the one that is put to the model — and the model has read the
+    /// book, so what it says is checked against what the reader has.
+    @Test("a question the model is asked is answered without spoiling what comes later")
     func refusesToSpoil() async throws {
+        guard ReleaseRun.requireModel() else { return }
         let directory = try AskFixture.temporaryDirectory()
         defer { AskFixture.remove(directory) }
         let store = AskIndexStore(directory: directory)
@@ -73,14 +83,17 @@ struct SystemAnswerModelTests {
         try await store.prepare(source: source)
 
         let engine = AskEngine(model: SystemAnswerModel(), store: store)
-        let question = "Who is the Cheshire Cat?"
+        let question = "What does Alice meet in the wood?"
+        let boundary = try AskFixture.endOf(spine: AskFixture.Spine.chapterI)
         let start = ContinuousClock.now
         var answer: AskAnswer?
-        for try await event in engine.ask(
-            question: question, source: source,
-            boundary: try AskFixture.endOf(spine: AskFixture.Spine.chapterI),
-        ) {
-            if case let .answered(value) = event { answer = value }
+        var phases: [AskPhase] = []
+        for try await event in engine.ask(question: question, source: source, boundary: boundary) {
+            switch event {
+            case let .answered(value): answer = value
+            case let .phase(phase): phases.append(phase)
+            case .partial: break
+            }
         }
         let milliseconds = Self.elapsedMilliseconds(since: start)
 
@@ -91,9 +104,20 @@ struct SystemAnswerModelTests {
         [ask] A: \(found.text)
         [ask] notYetRevealed \(found.notYetRevealed)
         """)
-        // The model has read the canon; it knows perfectly well who the
-        // Cheshire Cat is. The reader, at the end of Chapter I, does not.
-        #expect(found.notYetRevealed)
+        // The model was asked: this is the path the question-side guard cannot
+        // reach.
+        #expect(phases.contains(.thinking))
+        // Whatever it said — the sentinel, or an answer — names nobody the
+        // reader has not met. The index has the last word, as in the engine.
+        if found.notYetRevealed {
+            #expect(found.sources.isEmpty)
+        } else {
+            let candidates = AskEngine.unvettedNames(in: found.text, question: question)
+            let unmet = try await store.unmetWords(
+                candidates, in: AskFixture.bookUUID, before: boundary,
+            )
+            #expect(unmet.isEmpty, "\(unmet)")
+        }
     }
 
     @Test("the model's own tokeniser agrees with the estimate to within a third")
