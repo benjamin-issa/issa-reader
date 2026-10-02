@@ -27,9 +27,9 @@ public extension NSAttributedString.Key {
     static let issaBlockquoteDepth = NSAttributedString.Key("issaBlockquoteDepth")
     /// Archive path of an image occupying this run.
     ///
-    /// The image is drawn by the renderer rather than by a text attachment view
-    /// provider, because pages are drawn straight into a CGContext with no text
-    /// view in the picture.
+    /// A label, not what draws it: the run's `ImageAttachment` carries the
+    /// decoded image, and TextKit draws that when the page is drawn into its
+    /// CGContext. Nothing reads this back to load the picture again.
     static let issaImageHref = NSAttributedString.Key("issaImageHref")
     /// A first-line indent the book asked for as a fraction of the column
     /// (`text-indent: 5%` is 0.05), so a new column width can re-resolve it
