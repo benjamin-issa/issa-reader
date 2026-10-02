@@ -77,14 +77,35 @@ public struct SystemAnswerModel: AnswerModel {
     }
 
     public func supportsLanguage(_ bcp47: String?) -> Bool {
-        // An EPUB with no `dc:language` is common enough — and guessing wrong
-        // would refuse a book the model could have answered about — so an
-        // unknown language is allowed through and the framework decides.
+        Self.supports(bcp47, among: Array(model.supportedLanguages))
+    }
+
+    /// The decision itself, apart from the model, so it can be tested on a
+    /// machine without one.
+    ///
+    /// An EPUB with no `dc:language` is common enough — and guessing wrong
+    /// would refuse a book the model could have answered about — so an unknown
+    /// language is allowed through and the framework decides.
+    ///
+    /// "Unknown" includes a language written as a *name*. `Locale.Language`
+    /// does not reject `English`: it returns the non-ISO code `english`, which
+    /// no model language matches, so a book whose `dc:language` says
+    /// "English" — invalid, and in the wild — was refused on every question,
+    /// before the index was touched and with nothing the reader could do. The
+    /// codes that say "no particular language" (`und`, `mul`, `zxx`) are ISO
+    /// and match nothing either, and are unknown in the same sense.
+    static func supports(
+        _ bcp47: String?, among supported: [Locale.Language],
+    ) -> Bool {
         guard let bcp47, !bcp47.isEmpty else { return true }
         let asked = Locale.Language(identifier: bcp47)
-        guard let code = asked.languageCode else { return true }
-        return model.supportedLanguages.contains { $0.languageCode == code }
+        guard let code = asked.languageCode, code.isISOLanguage,
+              !unspecifiedLanguages.contains(code.identifier)
+        else { return true }
+        return supported.contains { $0.languageCode == code }
     }
+
+    static let unspecifiedLanguages: Set<String> = ["und", "mul", "zxx"]
 
     public func answer(
         instructions: String,

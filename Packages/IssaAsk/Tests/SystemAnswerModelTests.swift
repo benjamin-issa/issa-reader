@@ -115,6 +115,33 @@ struct SystemAnswerModelTests {
     }
 }
 
+/// Which books the model is asked about at all.
+///
+/// Outside the gated suite: the decision needs the SDK's `Locale.Language`,
+/// not the model, and a refusal here is every question about the book.
+struct SupportedLanguageTests {
+    static let english: [Locale.Language] = [Locale.Language(identifier: "en")]
+
+    @Test("a language written as a name, or as no language, is let through")
+    func unknownLanguagesAreAllowed() {
+        // `Locale.Language("English").languageCode` is `english` — not nil —
+        // so this was refused on every question, before the index was touched.
+        for written in ["English", "english", "Deutsch", "und", "mul", "zxx", "", nil] {
+            #expect(SystemAnswerModel.supports(written, among: Self.english), "\(written ?? "nil")")
+        }
+    }
+
+    @Test("a real code is still judged against the model's languages")
+    func realCodesAreJudged() {
+        for supported in ["en", "en-US", "en_GB", "eng"] {
+            #expect(SystemAnswerModel.supports(supported, among: Self.english), "\(supported)")
+        }
+        for refused in ["fr", "ja", "zh-Hant"] {
+            #expect(!SystemAnswerModel.supports(refused, among: Self.english), "\(refused)")
+        }
+    }
+}
+
 /// The translation between the engine's sampler and the framework's.
 ///
 /// Deliberately outside the suite above: this needs the SDK but not the model,
