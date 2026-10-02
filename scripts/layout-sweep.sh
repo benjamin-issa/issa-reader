@@ -162,7 +162,10 @@ APP="$PRODUCTS/IssaReader-iOS.app"
 
 # The reader needs a book on disk: DownloadManager uses a background session,
 # which URLProtocol cannot intercept, so the fixture cannot serve one.
-python3 Tools/scripts/make-readalong-fixture.py "$WORK/readalong.epub" >/dev/null 2>&1 || true
+# LayoutSweepTests.testReaderScreen opens it, so a generator that fails is a
+# failed sweep, not a plant quietly skipped.
+python3 Tools/scripts/make-readalong-fixture.py "$WORK/readalong.epub" > "$WORK/readalong.log" 2>&1 \
+  || { echo "error: the reader's book could not be generated — $WORK/readalong.log" >&2; exit 1; }
 
 FAILED=0
 RESULTS=()
@@ -186,12 +189,15 @@ for row in "${SELECTED[@]}"; do
   # Install first: there is no data container before one. xcodebuild's own
   # reinstall of the same bundle id below preserves it.
   xcrun simctl install "$CURRENT_UDID" "$APP"
-  if [ -f "$WORK/readalong.epub" ]; then
-    DATA=$(xcrun simctl get_app_container "$CURRENT_UDID" "$BUNDLE_ID" data)
-    mkdir -p "$DATA/Library/Application Support/Books"
+  # Under both the read-along's name and the ebook's: Read opens the
+  # read-along only when the server calls it aligned, which the fixture's
+  # does not, so the edition the reader asks for is the ebook.
+  DATA=$(xcrun simctl get_app_container "$CURRENT_UDID" "$BUNDLE_ID" data)
+  mkdir -p "$DATA/Library/Application Support/Books"
+  for format in readaloud ebook; do
     cp "$WORK/readalong.epub" \
-       "$DATA/Library/Application Support/Books/$FIXTURE_READALONG_UUID-readaloud.epub"
-  fi
+       "$DATA/Library/Application Support/Books/$FIXTURE_READALONG_UUID-$format.epub"
+  done
 
   RESULT="$WORK/$slug.xcresult"
   rm -rf "$RESULT"

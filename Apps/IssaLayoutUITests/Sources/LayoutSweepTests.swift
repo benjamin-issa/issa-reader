@@ -215,6 +215,74 @@ final class LayoutSweepTests: XCTestCase {
         capture(shelf, "settings")
     }
 
+    // MARK: - The reader
+
+    /// The reader, on the read-along book whose EPUB the sweep script plants.
+    ///
+    /// The plant had been dead setup since it was added: no leg here ever
+    /// opened the reader, so its chrome — the progress readout, the bars, the
+    /// narration controls — had no layout coverage at any width, and a
+    /// generator failure went unnoticed. The script plants the file under the
+    /// read-along's name and the ebook's, so whichever edition Read chooses
+    /// for a book whose read-along the fixture does not call aligned, it is
+    /// on disk; the stub server answers every file request with a 404, so a
+    /// missing plant shows here as a reader that never draws a page.
+    ///
+    /// Reached the way a reader would: the shelf's search, the book screen,
+    /// Read. The window reference is read on the book screen, before the
+    /// reader covers the probe.
+    func testReaderScreen() throws {
+        let app = launch(["-issa.library.mode", "all"])
+        waitForLibrary(app)
+        selectTab("Library", in: app)
+        let search = app.textFields["Title, author, narrator, series, tag"]
+        XCTAssertTrue(search.waitForExistence(timeout: 15), "no library search field")
+        search.tap()
+        search.typeText("Peter and Wendy\n")
+        let book = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@",
+                                  "cell.book.", "Peter and Wendy"))
+            .firstMatch
+        guard book.waitForExistence(timeout: 15) else {
+            return XCTFail("the read-along book is not on the shelf")
+        }
+        book.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["screen.bookDetail"].waitForExistence(timeout: 15))
+        let reference = try LayoutReference.read(from: app)
+        recordReference(reference)
+
+        let read = app.descendants(matching: .any)["action.read"].firstMatch
+        guard read.waitForExistence(timeout: 15) else { return XCTFail("no Read action on the book screen") }
+        read.tap()
+
+        // The first-run guide is modal to accessibility, and takes the first
+        // tap itself without turning a page.
+        let coach = app.descendants(matching: .any)
+            .matching(NSPredicate(
+                format: "label BEGINSWITH %@ OR label BEGINSWITH %@",
+                "Reading gestures", "This book is narrated"))
+            .firstMatch
+        if coach.waitForExistence(timeout: 20) {
+            coach.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        }
+        let page = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "value BEGINSWITH %@", "Page "))
+            .firstMatch
+        guard page.waitForExistence(timeout: 60) else {
+            capture(app, "reader")
+            return XCTFail("the reader never drew a page: is the planted EPUB on disk under this book's name?")
+        }
+        // The bars, so their layout is measured too. The middle of the page
+        // toggles them; the edges would turn it.
+        let back = app.buttons["Back to the book"].firstMatch
+        if !back.waitForExistence(timeout: 3) {
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+            XCTAssertTrue(back.waitForExistence(timeout: 10), "the reader's bars never showed")
+        }
+        assertHorizontallyContained(try app.snapshot(), reference, screen: "reader")
+        capture(app, "reader")
+    }
+
     /// `content:` is accepted and ignored, deliberately — see below.
     private func check(
         _ app: XCUIApplication, screen: String, root identifier: String, content: String?
