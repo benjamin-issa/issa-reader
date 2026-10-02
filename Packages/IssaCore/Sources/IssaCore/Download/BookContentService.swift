@@ -300,12 +300,60 @@ public struct BookContentService: Sendable {
         // Streamed to a temporary file rather than held in memory: a readaloud
         // edition is hundreds of megabytes, and this path runs on the main
         // reading flow where a memory spike shows up as a jettison.
-        try await client.download(
+        let response = try await client.download(
             Endpoint.files(book.uuid),
             query: [URLQueryItem(name: "format", value: format.rawValue)],
             to: destination,
         )
+        // Judged where it landed, because the client moves it there before
+        // returning. Kept, a page would count as this book from now on and be
+        // refused by the reader on every open.
+        if let refusal = Self.validateDownloadedFile(
+            at: destination, format: format, mimeType: response.mimeType)
+        {
+            try? FileManager.default.removeItem(at: destination)
+            IssaLog.warning("downloaded file refused", [
+                "book": book.uuid, "format": format.rawValue, "type": response.mimeType ?? "none",
+            ])
+            throw StorytellerError.download(refusal)
+        }
         return destination
+    }
+
+    /// Whether a finished transfer is this edition's file, or something that
+    /// arrived with a 2xx in its place.
+    ///
+    /// A status is the server's word that it answered, not that it answered
+    /// with the book: a proxy whose session lapsed, or a captive portal,
+    /// answers the file route with a page of its own and a 200. Kept, that page
+    /// counted as downloaded everywhere, opened to "Couldn't open this book"
+    /// every time, and nothing ever removed it.
+    ///
+    /// Only what holds for every server, old or new. An EPUB is a zip whose
+    /// first entry the format fixes, so the file begins with a zip's local
+    /// header, `PK\u{3}\u{4}`. Nothing is assumed about an audiobook's
+    /// container, which is whatever the server was given: only what no audio
+    /// ever is — a web page, an API's JSON — is refused, by the type the
+    /// response declared.
+    ///
+    /// - Returns: nil to keep the file; otherwise why it was refused, as the
+    ///   reader will see it.
+    public static func validateDownloadedFile(at url: URL, format: Format, mimeType: String?) -> String? {
+        switch format {
+        case .ebook, .readaloud:
+            if beginsAsZip(url) { return nil }
+        case .audiobook:
+            let type = mimeType?.lowercased()
+            if type != "text/html", type != "application/json" { return nil }
+        }
+        return "The server sent something other than this book. Tap to try again."
+    }
+
+    /// Whether the file starts with a zip's local file header.
+    private static func beginsAsZip(_ url: URL) -> Bool {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
+        defer { try? handle.close() }
+        return (try? handle.read(upToCount: 4)) == Data([0x50, 0x4B, 0x03, 0x04])
     }
 
     public func removeDownload(_ book: Book, format: Format) {

@@ -651,12 +651,38 @@ extension DownloadManager: URLSessionDownloadDelegate {
         // stop() returns, and a transfer that outlived it would otherwise
         // re-create the folder and move the signed-out account's book into it.
         guard let job = liveJob(in: downloadTask), !isShutDown else { return }
+        finishDownload(job: job, location: location, response: downloadTask.response)
+    }
 
-        // The temporary file is deleted the moment this returns, so it has to be
-        // moved here and now, synchronously, before hopping to the actor.
-        let status = (downloadTask.response as? HTTPURLResponse)?.statusCode ?? 0
+    /// Moves a finished transfer into place, or records why it was not.
+    ///
+    /// The temporary file is deleted the moment the delegate callback returns,
+    /// so it has to be judged and moved here and now, synchronously, before
+    /// hopping to the actor.
+    ///
+    /// A 2xx used to be enough. A proxy whose session lapsed, or a captive
+    /// portal, answers the file route with a page and a 200, and that page was
+    /// moved into place as the book — downloaded as far as every screen could
+    /// tell, refused by the reader on every open, and never removed.
+    /// `BookContentService.validateDownloadedFile` now has the last word; a
+    /// file it refuses is left where it arrived, for the system to delete.
+    ///
+    /// Internal rather than private, so a test can hand it the response a
+    /// transfer would have carried.
+    nonisolated func finishDownload(job: Job, location: URL, response: URLResponse?) {
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         var moveError: String?
-        if (200 ..< 300).contains(status) {
+        if !(200 ..< 300).contains(status) {
+            moveError = "The server returned \(status)."
+        } else if let refusal = BookContentService.validateDownloadedFile(
+            at: location, format: job.format, mimeType: response?.mimeType)
+        {
+            IssaLog.warning("downloaded file refused", [
+                "book": job.bookUUID, "format": job.format.rawValue,
+                "type": response?.mimeType ?? "none",
+            ])
+            moveError = refusal
+        } else {
             let destination = destinationFor(job)
             do {
                 try FileManager.default.createDirectory(
@@ -668,8 +694,6 @@ extension DownloadManager: URLSessionDownloadDelegate {
                                 ["to": destination.lastPathComponent])
                 moveError = error.localizedDescription
             }
-        } else {
-            moveError = "The server returned \(status)."
         }
 
         let failure = moveError

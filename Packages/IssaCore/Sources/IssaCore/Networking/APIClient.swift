@@ -77,7 +77,13 @@ public actor APIClient {
     ///
     /// `URLSession.download` writes to a temporary file which is deleted as soon
     /// as this returns, so the move happens here rather than at the call site.
-    public func download(_ path: String, query: [URLQueryItem] = [], to destination: URL) async throws {
+    ///
+    /// - Returns: the response, for a caller that has to judge what arrived:
+    ///   a 2xx says the server answered, not that it answered with the file.
+    @discardableResult
+    public func download(
+        _ path: String, query: [URLQueryItem] = [], to destination: URL,
+    ) async throws -> HTTPURLResponse {
         var req = request(path, method: "GET", query: query)
         if let token = await tokens.currentToken() {
             req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -119,6 +125,7 @@ public actor APIClient {
             IssaLog.failure("download move", error, ["path": req.url?.path ?? "?"])
             throw StorytellerError.download(error.localizedDescription)
         }
+        return http
     }
 
     /// Returns the raw status without throwing, for capability probing.
