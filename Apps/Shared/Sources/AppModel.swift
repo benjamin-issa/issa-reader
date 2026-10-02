@@ -747,6 +747,10 @@ public final class AppModel {
         // signed in, so one coming back after this takes nothing off the
         // arriving account's.
         libraryRefreshesInFlight = 0
+        // And the downloads the Wi-Fi rule held back. A job is a book uuid
+        // and an edition, which the next account shares, and a refusal is a
+        // reason given to the reader who asked.
+        downloadRefusals = [:]
         // Everything else keyed by a value the next account shares. The server
         // hands the same book uuids to a different reader, which is why
         // positionGuards is cleared above — and `pendingBook` is a book uuid,
@@ -1463,6 +1467,7 @@ public final class AppModel {
         // and on-disk items together, which puts that one tap away.
         downloads?.cancel(job)
         downloads?.clear(job)
+        downloadRefusals[job] = nil
         // No session needed: this is a file being deleted, and requiring an
         // `APIClient` for it is why a reader who had signed out keeping their
         // downloads could not remove one.
@@ -1491,6 +1496,8 @@ public final class AppModel {
     public func cancelDownload(_ job: DownloadManager.Job) {
         downloads?.cancel(job)
         downloads?.clear(job)
+        // A refusal is listed as a transfer row, and this is that row's X.
+        downloadRefusals[job] = nil
         BookContentService.removeDownload(bookUUID: job.bookUUID, format: job.format)
         refreshDownloadedSet()
     }
@@ -3508,9 +3515,10 @@ public final class AppModel {
         // often — in which case `states[job]` is never populated and the loop
         // below would wait on a state that can never arrive. It used to: this
         // is what left the reader stuck on "Downloading…" forever, with the
-        // real reason sitting unseen in `loadError`.
+        // real reason sitting unseen in `loadError`. The reason is the job's
+        // own now (`downloadRefusals`).
         guard await download(book, format: format) else {
-            throw StorytellerError.download(loadError ?? "Couldn't start the download.")
+            throw StorytellerError.download(downloadRefusals[job] ?? "Couldn't start the download.")
         }
 
         // The last real byte counts seen, for a pause to keep showing.
@@ -3547,9 +3555,57 @@ public final class AppModel {
         throw CancellationError()
     }
 
-    /// Pending transfers, in a form the Downloads screen can list.
+    /// Pending transfers, in a form the Downloads screen can list — and the
+    /// downloads the Wi-Fi-only preference held back, as failed rows saying
+    /// why, so the screen that lists transfers lists the one that was asked
+    /// for and did not start. A refusal is newer than any state the manager
+    /// still holds for the same job (a paused transfer resumed on cellular),
+    /// so it is the row shown.
     public var downloadsPending: [(job: DownloadManager.Job, state: DownloadManager.State)] {
-        downloads?.pending ?? []
+        let transfers = (downloads?.pending ?? []).filter { downloadRefusals[$0.job] == nil }
+        let refused = downloadRefusals.map { (job: $0.key, state: DownloadManager.State.failed($0.value)) }
+        return (transfers + refused).sorted {
+            ($0.job.bookUUID, $0.job.format.rawValue) < ($1.job.bookUUID, $1.job.format.rawValue)
+        }
+    }
+
+    /// Downloads the reader asked for that the Wi-Fi-only preference held
+    /// back, and the sentence saying so, by job.
+    ///
+    /// For the book screen and the Downloads screen to show beside the
+    /// edition that was asked for. A refusal starts nothing, so the transfer
+    /// manager has no state for the job and the screen showing that edition
+    /// has nothing of its own to say; this is the only record that the tap
+    /// was heard.
+    ///
+    /// It used to be written to `loadError`, the library-load error. The book
+    /// screen never reads that, the library shows it only over an empty
+    /// library, and the Downloads screen hides its "No longer in your library"
+    /// band and its orphan sweep while it is set — so on cellular "Save for
+    /// offline" did nothing visible, and took two parts of the Downloads
+    /// screen away until the next successful refresh.
+    ///
+    /// A job leaves when it starts, when it is cancelled or removed, and with
+    /// the account (`leaveAccount`).
+    public private(set) var downloadRefusals: [DownloadManager.Job: String] = [:]
+
+    /// Stands in for `reachability.isExpensive` when set.
+    ///
+    /// A test seam, nil in production, and internal for that reason alone, as
+    /// `useStore` is: whether the connection is metered is the network's to
+    /// say, and nothing else can make a simulator's connection metered.
+    @ObservationIgnored var meteredNetworkOverride: Bool?
+
+    /// Whether the connection is one the Wi-Fi-only preference holds large
+    /// downloads back on: cellular, or a Low Data Mode network.
+    private var isOnMeteredNetwork: Bool { meteredNetworkOverride ?? reachability.isExpensive }
+
+    /// Takes `manager` as the download manager, as `connect` builds one.
+    ///
+    /// For `IssaSharedTests`, and internal for that reason alone, as
+    /// `useStore` is: `connect` is the only other way to get one.
+    func useDownloads(_ manager: DownloadManager) {
+        downloads = manager
     }
 
     public var wifiOnlyDownloads: Bool {
@@ -3562,6 +3618,7 @@ public final class AppModel {
     public func resumeDownload(_ job: DownloadManager.Job) async {
         guard let book = books.first(where: { $0.uuid == job.bookUUID }) else {
             cancelPendingRemoval(matching: job)
+            downloadRefusals[job] = nil
             await downloads?.start(job)
             return
         }
@@ -3591,18 +3648,21 @@ public final class AppModel {
         // zero bytes — letting the one case the preference exists for (a
         // multi-hundred-MB readaloud with no reported size) straight through on
         // cellular. Unknown fails safe: assumed large until proven otherwise.
-        if downloads.wifiOnly, reachability.isExpensive, expected.map({ $0 > 20_000_000 }) ?? true {
+        let job = DownloadManager.Job(bookUUID: book.uuid, format: format)
+        if downloads.wifiOnly, isOnMeteredNetwork, expected.map({ $0 > 20_000_000 }) ?? true {
             // On a Mac this fires *while on Wi-Fi* — a Low Data Mode network is
             // constrained, and constrained counts as expensive — so naming
             // Wi-Fi there describes the connection the reader already has.
+            //
+            // Against the job, not in `loadError`: see `downloadRefusals`.
             #if os(macOS)
-            loadError = "Waiting for an unmetered connection to download this."
+            downloadRefusals[job] = "Waiting for an unmetered connection to download this."
             #else
-            loadError = "Waiting for Wi-Fi to download this."
+            downloadRefusals[job] = "Waiting for Wi-Fi to download this."
             #endif
             return false
         }
-        let job = DownloadManager.Job(bookUUID: book.uuid, format: format)
+        downloadRefusals[job] = nil
         // After the guard above, so a download the Wi-Fi rule refused does not
         // quietly take back a removal it is not going to replace — but before
         // the transfer starts, so the timer cannot fire between the two.
