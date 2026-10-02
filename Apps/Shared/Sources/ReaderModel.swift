@@ -192,6 +192,16 @@ public final class ReaderModel {
     /// does not have to know about AppModel to use the one download engine.
     public weak var downloadHost: AppModel?
 
+    /// Where `open` looks for the book's file, when not the app's own download
+    /// directory.
+    ///
+    /// Nil in the app, where every edition is wherever `BookContentService`
+    /// put it. A test sets it, so that opening a book it built does not mean
+    /// writing into the directory the whole app reads its downloads from — a
+    /// suite running alongside would count the file as a download, and a
+    /// removal or a sweep could take it mid-open.
+    var booksDirectory: URL?
+
     public var onSaveAnnotation: ((Annotation) -> Void)?
     public var onDeleteAnnotation: ((Annotation) -> Void)?
 
@@ -347,7 +357,7 @@ public final class ReaderModel {
 
     public func open(pageSize: CGSize) async {
         self.pageSize = pageSize
-        let content = BookContentService(client: session.client)
+        let content = BookContentService(client: session.client, cacheDirectory: booksDirectory)
         guard let format = content.preferredReadingFormat(for: book) else {
             phase = .failed("This book has no readable edition on the server.")
             return
@@ -381,6 +391,17 @@ public final class ReaderModel {
             // it from the first page rather than re-flowing into it.
             styleSheets = Self.styleSheets(in: package)
             resolvePublisherFont(in: package)
+            // And the reparse that resolving it asked for, revoked: the parse
+            // below is made under the style as it now stands, so there is
+            // nothing for it to do. Left alone it was a sixty-millisecond timer
+            // on a chapter load of its own — `package` is already set, so its
+            // guard passed — and with the position fetch below still out it
+            // laid out the front of the book under the spinner. Backing out or
+            // backgrounding in that window then saved the cover as a place the
+            // reader had chosen.
+            styleTask?.cancel()
+            styleTask = nil
+            pendingReparse = false
 
             // Resume where the server says we were, before the first render, so
             // the reader never flashes page one and then jumps.
@@ -576,7 +597,7 @@ public final class ReaderModel {
             // Both used to render as "Couldn't reach your server", which sent
             // people looking at their network for a book that simply had not
             // finished downloading.
-            let onDisk = BookContentService(client: session.client)
+            let onDisk = BookContentService(client: session.client, cacheDirectory: booksDirectory)
                 .isDownloaded(book, format: format)
             phase = .failed(onDisk
                 ? "Couldn't open this book. " + AppModel.message(for: error)
@@ -1334,9 +1355,19 @@ public final class ReaderModel {
     /// a larger font means more pages.
     private func reloadCurrentChapter() async {
         // A style change can land before the book is open — the publisher's
-        // face is resolved during `open`, and assigning it fires this. There is
-        // no chapter to reload yet, and `open` is about to parse one anyway.
-        guard package != nil else { return }
+        // face is resolved during `open`, and assigning it fires this; on the
+        // television the screen's own style is applied just before `open`
+        // runs. There is no chapter to reload yet, and `open` is about to parse
+        // one anyway.
+        //
+        // The layout, not the package. `open` sets `package` long before it
+        // knows which chapter to land on — the stored position is fetched in
+        // between, over a network that can take its time — so a guard on the
+        // package let this load chapter zero underneath the opening spinner,
+        // and a reader who backed out then had the front of the book saved
+        // over their place. A chapter on screen is the only thing there is to
+        // reload.
+        guard package != nil, layout != nil else { return }
         // `firstFragment(beginningOn:)`, not `firstFragmentOnCurrentPage()`.
         // The latter returns the first id it finds from the page's start, which
         // is normally the sentence straddling the break — one that *began on
