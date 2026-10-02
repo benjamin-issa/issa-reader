@@ -334,8 +334,11 @@ struct LibraryTabs: View {
         .onChange(of: app.pendingBook) { openPendingBook() }
         .onChange(of: app.books) { openPendingBook() }
         // Indexed off the main path: a large library should not delay the
-        // first frame to make itself searchable.
-        .task(id: app.books.count) { await SpotlightIndex.index(app.books) }
+        // first frame to make itself searchable. Keyed on the same version the
+        // index compares, not on the count: a title corrected on the server,
+        // or one book swapped for another, keeps the count and left Spotlight
+        // naming the old library until the next launch.
+        .task(id: SpotlightIndex.version(of: app.books)) { await SpotlightIndex.index(app.books) }
         .task { openPendingBook() }
         // An intent runs outside the scene and cannot navigate, so it leaves
         // the book in an inbox for the scene to collect when it appears.
