@@ -43,6 +43,12 @@ struct ChapterClockTests {
         )
     }
 
+    /// Every track pointed at a real, silent file, for a test that needs the
+    /// engine to actually go where it is sent.
+    static func silence(_ manifest: AudiobookManifest) -> [String: URL] {
+        Dictionary(uniqueKeysWithValues: manifest.readingOrder.map { ($0.href, SilentAudio.url) })
+    }
+
     static func coordinator(
         _ manifest: AudiobookManifest,
         chapters: [AudiobookChapter] = [],
@@ -830,6 +836,32 @@ struct ChapterClockTests {
         // And the losing call left nothing behind it to tidy up: it is the
         // caller's belief that was wrong, never the player's state.
         #expect(subject.player.currentAudioHref == "chunk2.mp3")
+    }
+
+    /// A scrub inside the track a load is still opening. The load had set the
+    /// player's file before it awaited AVFoundation, so the scrub took the
+    /// same-track branch and seeked; the load then woke up, ran its trailing
+    /// seek over the scrub's and restated `bookTime` from its own offset. The
+    /// listener's scrub was lost, and the clock said so only by being wrong.
+    ///
+    /// Enqueued before the load begins, so it runs at the load's suspension
+    /// inside AVFoundation, as `aSupersededLoadIsNotARefusal` arranges its own.
+    @Test("a same-track scrub made during a load keeps the clock it set")
+    func aSameTrackScrubDuringALoadKeepsItsClock() async {
+        let manifest = Self.manifest(trackCount: 3, each: 100)
+        // Real audio, so the engine goes where each seek sends it.
+        let subject = Self.coordinator(manifest, files: Self.silence(manifest))
+        _ = Self.detachClock(subject)
+
+        let scrub = Task { @MainActor in await subject.seek(toBookTime: 130) }
+        _ = await subject.seek(toBookTime: 150)
+        let scrubbed = await scrub.value
+
+        #expect(scrubbed == .landed)
+        #expect(subject.trackIndex == 1)
+        #expect(subject.bookTime == 130, "the load restated its own offset over the scrub")
+        #expect(abs(subject.player.engineTime - 30) < 0.01,
+                "the audio is at \(subject.player.engineTime), not where the scrub put it")
     }
 
     /// The other half of the same enum, so the fix cannot be "never say no": a

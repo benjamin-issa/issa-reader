@@ -644,7 +644,9 @@ public final class AudiobookCoordinator {
 
     /// - Returns: which of the three things happened. See `MoveOutcome`: there
     ///   is no audio here, or a newer load owns the state, or this one does —
-    ///   and the first two used to be the same word.
+    ///   and the first two used to be the same word. A load a same-track scrub
+    ///   overtook has landed: its track is the one playing, and the place in it
+    ///   is the scrub's.
     @discardableResult
     private func load(track index: Int, startAt offset: TimeInterval) async -> MoveOutcome {
         guard tracks.indices.contains(index) else { return .unplayable }
@@ -716,18 +718,35 @@ public final class AudiobookCoordinator {
             whileLoading = nil
             await hook()
         }
-        await player.load(
+        let outcome = await player.load(
             url: destination.url, href: track.href,
             startAt: offset, cookies: destination.cookies,
         )
         // A newer load started while this one was awaiting; it owns the state.
         guard loadGeneration == generation else { return .superseded }
-        // Restated rather than trusted: the player's periodic observer writes
-        // `bookTime` on every tick without consulting the counter — only the
-        // chapter announcement is gated — so a sample that landed during the
-        // load has left the clock describing the file being replaced.
-        bookTime = manifest.startTime(ofTrackAt: index) + offset
-        chapterIndex = chapterIndex(atBookTime: bookTime)
+        switch outcome {
+        case .superseded:
+            // The player's own count of loads says the same thing the guard
+            // above does; every load it sees comes from here.
+            return .superseded
+        case .loaded:
+            // Restated rather than trusted: the player's periodic observer
+            // writes `bookTime` on every tick without consulting the counter —
+            // only the chapter announcement is gated — so a sample that landed
+            // during the load has left the clock describing the file being
+            // replaced.
+            bookTime = manifest.startTime(ofTrackAt: index) + offset
+            chapterIndex = chapterIndex(atBookTime: bookTime)
+        case .overtaken:
+            // A scrub inside this same track, made while it was opening, owns
+            // the playhead: it took `seek(toTrack:)`'s same-track branch, which
+            // set the clock and the chapter itself, and the player has left the
+            // audio where it put them. Restating them from this call's offset
+            // is the write that used to throw the scrub away — the clock went
+            // back to where the load began, and the player's own trailing seek
+            // took the audio with it.
+            break
+        }
         // Announced late, and unconditionally, as every load has always
         // announced: Now Playing rebuilds from this and a reloaded track is a
         // new item there whether or not the chapter around it changed. The

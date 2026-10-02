@@ -27,6 +27,100 @@ struct AudioPlayerEpochTests {
         #expect(player.currentTime.isFinite)
     }
 
+    // MARK: - Which call owns the playhead
+
+    /// A seek into the file a load is still opening. The load used to wake up,
+    /// find no newer *load*, and run its own trailing seek over the newer one.
+    @Test("a seek made while a load opens its file owns the playhead, and the load says so")
+    func aSeekDuringALoadOvertakesIt() async {
+        let player = AudioPlayer()
+        player.whileLoadingAsset = { await player.seek(to: 7) }
+
+        let outcome = await player.load(url: SilentAudio.url, href: "silence.wav", startAt: 300)
+
+        #expect(outcome == .overtaken)
+        #expect(abs(player.currentTime - 7) < 0.01, "the load's own offset was written over the seek")
+        #expect(abs(player.engineTime - 7) < 0.01, "the engine ran the load's trailing seek: \(player.engineTime)")
+        // The item is still this load's, and what describes it was written.
+        #expect(player.currentAudioHref == "silence.wav")
+        #expect(player.duration == SilentAudio.duration)
+    }
+
+    /// A load another load replaced. It owns nothing, and writes nothing.
+    @Test("a load another load replaced writes nothing")
+    func aSupersededLoadWritesNothing() async {
+        let player = AudioPlayer()
+        var newer: AudioPlayer.LoadOutcome?
+        player.whileLoadingAsset = {
+            newer = await player.load(url: SilentAudio.url, href: "newer.wav", startAt: 42)
+        }
+
+        let older = await player.load(url: SilentAudio.url, href: "older.wav", startAt: 300)
+
+        #expect(older == .superseded)
+        #expect(newer == .loaded)
+        #expect(player.currentAudioHref == "newer.wav")
+        #expect(abs(player.currentTime - 42) < 0.01)
+        #expect(abs(player.engineTime - 42) < 0.01, "the superseded load seeked the newer item: \(player.engineTime)")
+    }
+
+    /// A seek that completes after something newer took the playhead: the
+    /// trailing seek of a load the next load interrupted, which AVFoundation
+    /// calls back with `finished == false`. It wrote the clock and restored
+    /// the rate regardless, so the new item started from its first second with
+    /// the old file's time on the clock.
+    ///
+    /// The clock is not asserted mid-window: the engine really does move for
+    /// the stale seek here, and the periodic observer reports every time jump,
+    /// so it can legitimately show 500 until the newer load's own seek lands.
+    /// What the guard owns is the answer and the rate.
+    @Test("a seek something newer overtook does not claim the playhead or start the engine")
+    func anOvertakenSeekWritesNothing() async {
+        let player = AudioPlayer()
+        await player.load(url: SilentAudio.url, href: "older.wav", startAt: 60)
+        player.play()
+        let issuedBefore = player.playheadGeneration
+        var owned: Bool?
+        var rateWhileLanding: Float?
+        player.whileLoadingAsset = {
+            // The older seek completing inside the newer load's window.
+            owned = await player.seekPlayhead(500, generation: issuedBefore)
+            rateWhileLanding = player.engineRate
+        }
+
+        await player.load(url: SilentAudio.url, href: "newer.wav", startAt: 42)
+
+        #expect(owned == false, "a seek something newer overtook claimed the playhead")
+        #expect(rateWhileLanding == 0, "the stale seek started the new item before it was placed")
+        #expect(abs(player.currentTime - 42) < 0.01)
+        #expect(player.engineRate == player.rate, "and the newer load started it once placed")
+    }
+
+    /// Play — or a new speed — pressed while a chapter is opening. Either one
+    /// set the engine's rate straight away, so the new item played from its
+    /// first second until the load's seek landed: for a streamed track, a
+    /// network round trip of the wrong audio.
+    @Test("play pressed while a load is placing its item waits for the placement")
+    func playDuringALoadWaitsForThePlacement() async {
+        let player = AudioPlayer()
+        var afterPlay: Float?
+        var afterRate: Float?
+        player.whileLoadingAsset = {
+            player.play()
+            afterPlay = player.engineRate
+            player.rate = 1.5
+            afterRate = player.engineRate
+        }
+
+        let outcome = await player.load(url: SilentAudio.url, href: "silence.wav", startAt: 120)
+
+        #expect(outcome == .loaded)
+        #expect(afterPlay == 0, "play started the new item before its seek had landed")
+        #expect(afterRate == 0, "a new speed started it too")
+        #expect(player.isPlaying, "the intent is kept")
+        #expect(player.engineRate == 1.5, "and the placement honours the speed chosen meanwhile")
+    }
+
     /// The conversion on its own: saturating where it used to trap, and the
     /// round-up every ordinary target depends on left exactly as it was.
     @Test("a seek target saturates past what the timescale holds, and still rounds up")

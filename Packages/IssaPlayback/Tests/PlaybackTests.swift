@@ -810,6 +810,51 @@ struct ReadalongCoordinatorTests {
                 "and the page turned, rather than being lost to a mid-move sample")
     }
 
+    /// Two moves in a burst, the second into the file the first is opening: a
+    /// held remote button, a sentence tapped while the next file loads.
+    ///
+    /// The first move's load had set the player's file before it awaited
+    /// AVFoundation, so the second move took the same-file branch and seeked.
+    /// Then the load woke up, still the newest *load*, and ran its trailing
+    /// seek over the newer one: the audio sat at the first target while the
+    /// highlight, the scrubber and the position writer all said the second.
+    ///
+    /// Enqueued on the main actor before the first move begins, so it runs at
+    /// that move's own suspension inside AVFoundation — the window the race
+    /// lives in, as `aMidMoveSampleIsNotAChapterEnding` arranges its sample.
+    @Test("a seek made while a load is opening its file owns the playhead")
+    func aSeekDuringALoadOwnsThePlayhead() async throws {
+        let (timeline, _) = try ReadalongLookupTests.timeline()
+        // The fixture's own audio is a tenth of a second long, so a seek to a
+        // clip time would land on its end; a file long enough to hold every
+        // clip lets the engine go where it is sent, and be checked there.
+        let files = Dictionary(uniqueKeysWithValues: Set(timeline.entries.map(\.audioHref)).map {
+            ($0, SilentAudio.url)
+        })
+        let subject = ReadalongCoordinator(timeline: timeline, audioFiles: files)
+        subject.player.onTimeUpdate = nil
+        subject.player.onFinishedFile = nil
+        let entries = timeline.entries
+        // Two sentences of one file, neither at its very start — a load resets
+        // the clock to zero, so a target of zero could not tell the seek from
+        // nothing — and the first well into it, so its load has a trailing
+        // seek of its own to run.
+        let first = try #require(entries.last { $0.audioHref == entries[0].audioHref })
+        let second = try #require(
+            entries.first { $0.audioHref == first.audioHref && $0.start > 0 && $0 != first })
+        try #require(first.start > 0 && second.start != first.start)
+
+        let racing = Task { @MainActor in await subject.prepare(at: second) }
+        await subject.prepare(at: first)
+        await racing.value
+
+        #expect(subject.activeEntry == second, "the second move published last")
+        #expect(abs(subject.player.currentTime - second.start) < 0.01,
+                "the clock is at \(subject.player.currentTime), not at the sentence the highlight names")
+        #expect(abs(subject.player.engineTime - second.start) < 0.01,
+                "the audio is at \(subject.player.engineTime), not at the sentence the highlight names")
+    }
+
     /// The one ending that is real still gets through. `advanceToNextFile`
     /// captures the document that ran out *before* calling `move`, and announces
     /// after it returns — by which point the counter is back to zero — so

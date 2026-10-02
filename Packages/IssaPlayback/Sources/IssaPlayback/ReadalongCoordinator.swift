@@ -404,6 +404,13 @@ public final class ReadalongCoordinator {
         movesInFlight += 1
         defer { movesInFlight -= 1 }
         if let destination {
+            // A later move into this same file, made while this load is still
+            // opening it, takes the same-file branch below and owns the
+            // playhead from then on: the player skips this load's trailing
+            // seek rather than running it over the newer one, which is what
+            // left the audio at the first target while the highlight named the
+            // second. Nothing here needs undoing — this move published before
+            // the await, and the newer one published after it.
             await player.load(url: destination, href: entry.audioHref, startAt: entry.start + within)
         } else {
             await player.seek(to: entry.start + within)
