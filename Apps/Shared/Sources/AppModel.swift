@@ -86,7 +86,22 @@ public final class AppModel {
     /// the library and detail screens agree without extra requests.
     public var ratings: [String: Double] = [:]
     public var loadError: String?
-    public var isLoadingLibrary = false
+    /// Whether a library refresh is in flight for the account signed in now.
+    ///
+    /// A count rather than a flag. The flag was set by every refresh and
+    /// cleared by whichever finished first, so with two in flight — a pull to
+    /// refresh during the launch's own, or a departed account's slow request
+    /// still out when the arriving account's refresh began — the first to
+    /// come back took the spinner down while the other was still fetching,
+    /// and the arriving account was shown "No books yet" over a library on
+    /// its way.
+    public var isLoadingLibrary: Bool { libraryRefreshesInFlight > 0 }
+    /// The refreshes `isLoadingLibrary` counts: each is counted in for the
+    /// account it fetches for, and out only while that account is still the
+    /// one signed in. An account's exit starts the count again from nothing
+    /// (`leaveAccount`), so a departed account's refresh coming back later
+    /// takes nothing off the arriving account's.
+    private(set) var libraryRefreshesInFlight = 0
 
     /// Derived rails, computed from the single catalogue fetch.
     ///
@@ -727,6 +742,11 @@ public final class AppModel {
         localWrites.removeAll()
         ratings = [:]
         loadError = nil
+        // The departing account's refreshes, still counted towards the
+        // spinner. Each counts itself out only while its own account is
+        // signed in, so one coming back after this takes nothing off the
+        // arriving account's.
+        libraryRefreshesInFlight = 0
         // Everything else keyed by a value the next account shares. The server
         // hands the same book uuids to a different reader, which is why
         // positionGuards is cleared above — and `pendingBook` is a book uuid,
@@ -967,12 +987,25 @@ public final class AppModel {
 
     public func refreshLibrary() async {
         guard let session else { return }
-        isLoadingLibrary = true
-        defer { isLoadingLibrary = false }
+        // Counted in for the account this starts under, and out only if that
+        // account is still the one signed in when it returns (see
+        // `libraryRefreshesInFlight`).
+        var countedFor = catalogueGeneration
+        libraryRefreshesInFlight += 1
+        defer {
+            if catalogueGeneration == countedFor { libraryRefreshesInFlight -= 1 }
+        }
         // Whose session this is, if the last time the server was asked it gave
         // no answer. Before the fence below, which belongs to the account the
         // answer names.
         guard await reidentifyIfFailed(session) else { return }
+        // A re-identify that handed the device to another account started the
+        // count again, and this refresh goes on to fetch for that account: it
+        // is counted again, for the account it now belongs to.
+        if catalogueGeneration != countedFor {
+            countedFor = catalogueGeneration
+            libraryRefreshesInFlight += 1
+        }
         // Whose catalogue this is, and what this device has written that the
         // answer may not include — both taken before the request is sent.
         //
