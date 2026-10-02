@@ -106,12 +106,23 @@ struct BookTypographyView: View {
             allowsMultipleSelection: false,
         ) { result in
             guard case let .success(urls) = result, let picked = urls.first else { return }
-            if let family = FontImport.adopt(picked) {
+            if let typeface = Self.importedTypeface(picked) {
                 customFamilies = CustomFonts.families()
-                style.typeface = .custom(family)
+                style.typeface = typeface
             }
         }
         #endif
+    }
+
+    /// The face to select for a picked file, or nil when the import was
+    /// refused — which `FontImport.notice` says under "Add a font…".
+    ///
+    /// Resolved the way the reading settings resolve it: a file of a family
+    /// the app ships is answered with that family, and was set here as
+    /// `.custom`, so the book was set in the app's own face under no row of
+    /// the picker, listed as a face of the reader's that is not theirs.
+    static func importedTypeface(_ picked: URL) -> ReaderStyle.Typeface? {
+        FontImport.adopt(picked).map(FontImport.typeface(for:))
     }
 
     private var footer: String {
