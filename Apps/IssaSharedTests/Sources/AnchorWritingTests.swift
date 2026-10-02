@@ -190,17 +190,22 @@ private final class PositionCapture {
 struct ListeningWriterCancellationTests {
     static let uuid = "listening-writer-uuid"
 
-    /// Three tracks of a thousand seconds, driven by a real (if unplayable)
-    /// `AudioPlayer` — the same `/dev/null` `BookClockTests` uses.
+    /// Three tracks of a thousand seconds, driven by a real `AudioPlayer` over
+    /// a real file of silence — thirty minutes of it, which `.local` hands to
+    /// every track, so no seek here runs off its end.
+    ///
+    /// It was `/dev/null`, which AVFoundation cannot open: once a load that
+    /// fails says so, the scrub below was a failed load, and the writer under
+    /// test was watching a coordinator that had nowhere to be.
     static func coordinator() -> AudiobookCoordinator {
         let subject = AudiobookCoordinator(
             manifest: AudiobookManifest(
                 metadata: .init(title: ["und": "A Book"]),
                 readingOrder: (0 ..< 3).map { index in
-                    .init(href: "t\(index).mp3", type: "audio/mpeg", duration: 1_000)
+                    .init(href: "t\(index).wav", type: "audio/wav", duration: 1_000)
                 },
             ),
-            source: .local(URL(fileURLWithPath: "/dev/null")),
+            source: .local(SilentAudio.url),
         )
         // The periodic observer fires on its own with a time of zero and would
         // walk the arrangement back between the scrub and the assertion;
