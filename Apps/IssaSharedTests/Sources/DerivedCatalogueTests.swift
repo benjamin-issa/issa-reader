@@ -59,6 +59,41 @@ struct DerivedCatalogueTests {
                 "the book screen would still be showing \(String(describing: after))")
     }
 
+    /// A book with no status — which 3.x sends for a book nobody has filed —
+    /// is shelved by its position, so the first position written for it moves
+    /// it from To read to Reading. `recordPosition` ran only the position-only
+    /// rebuild, on the premise that a page turn cannot change a shelf: the grid
+    /// moved the book while the chips went on counting it under To read and
+    /// the Reading tab went on listing it under Up next, beside the Continue
+    /// card it had just become. Where the rule then files it the full rebuild
+    /// runs anyway; where it does not — no permission to write a status, or no
+    /// status known to write — that was the state until the next refresh.
+    @Test("a position that moves an unfiled book to another shelf moves its counts and rails")
+    func aPositionThatChangesTheShelfRebuildsTheFacets() async {
+        let app = Self.model([
+            SharedFixtures.book("Dracula", uuid: "d"),
+            SharedFixtures.book("Bleak House", uuid: "b"),
+        ])
+        #expect(app.facets.count(.toRead) == 2)
+        #expect(app.facets.count(.reading) == 0)
+        #expect(app.readingHome.upNext.contains { $0.uuid == "d" })
+
+        await app.recordPosition(
+            ReadiumLocator(href: "OEBPS/ch09.xhtml", type: "application/xhtml+xml",
+                           locations: .init(progression: 0.5, totalProgression: 0.5)),
+            timestamp: 1,
+            for: "d",
+        )
+
+        #expect(app.arrangedBooks.contains { $0.uuid == "d" }, "the grid is not what is under test")
+        #expect(app.facets.count(.reading) == 1, "the Reading chip did not count the book now on it")
+        #expect(app.facets.count(.toRead) == 1, "the To read chip went on counting a book being read")
+        #expect(app.rails.reading.contains { $0.uuid == "d" })
+        #expect(!app.rails.toRead.contains { $0.uuid == "d" })
+        #expect(!app.readingHome.upNext.contains { $0.uuid == "d" },
+                "Up next listed the book beside the Continue card it had become")
+    }
+
     /// Signing out empties the catalogue, and an index that survived it would
     /// hand the next account a book from the previous one — the same class of
     /// leak the sign-out widening closed for `pendingBook` and the ratings.

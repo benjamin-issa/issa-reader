@@ -1383,8 +1383,9 @@ public final class AppModel {
     /// The part of the above a position can move: the Continue card, the
     /// Reading tab's order, and the arrangement when it sorts by recency or
     /// progress. The facets and the rails — shelves, tags, series, what is
-    /// downloaded — cannot change with a page turn, and this path runs on
-    /// every debounced save while narrating.
+    /// downloaded — change with a page turn only when it moves a book with no
+    /// status to another shelf, which `recordPosition` checks for; this path
+    /// runs on every debounced save while narrating.
     private func rebuildAfterPositionChange() {
         readingHome = ReadingHome(books: books, rails: rails)
         bookByUUID = Dictionary(books.map { ($0.uuid, $0) }, uniquingKeysWith: { first, _ in first })
@@ -3718,8 +3719,21 @@ public final class AppModel {
     ) async {
         guard let index = books.firstIndex(where: { $0.uuid == bookUUID }) else { return }
         let generation = catalogueGeneration
+        let shelvedOn = LibraryArrangement.stage(of: books[index])
         books[index].adopt(position: locator, timestamp: timestamp)
-        rebuildAfterPositionChange()
+        // A book with no status is shelved by its position, so this write can
+        // move it from To read to Reading, or on to Finished — and the shelf
+        // counts and the Reading tab's rails are built from the shelf. Only
+        // the cheap rebuild ran, so the grid moved the book and the chips and
+        // the rails did not: To read went on counting it, Up next went on
+        // listing it beside the Continue card it had become. The whole
+        // rebuild on the write that changes the shelf, which for a given book
+        // is the first and the one at 98%, and the cheap one otherwise.
+        if LibraryArrangement.stage(of: books[index]) != shelvedOn {
+            rebuildDerived()
+        } else {
+            rebuildAfterPositionChange()
+        }
         await persist(books[index], generation: generation)
     }
 
