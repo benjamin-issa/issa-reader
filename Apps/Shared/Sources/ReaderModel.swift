@@ -1143,12 +1143,36 @@ public final class ReaderModel {
     /// Turns the book to the page being spoken, wherever that has got to.
     ///
     /// Called when a reader comes back to a book that carried on playing while
-    /// they were somewhere else in the app. Deliberately unconditional, unlike
-    /// the page-following in `onFragmentChange`: `followNarration` governs
-    /// whether the page turns *under someone who is reading it*, and this is a
-    /// fresh open. Landing on the page they left, an hour behind the voice, with
-    /// nothing to say why, is the same lost place by a different route.
+    /// they were somewhere else in the app. Unconditional about the setting,
+    /// unlike the page-following in `onFragmentChange`: `followNarration`
+    /// governs whether the page turns *under someone who is reading it*, and
+    /// this is a fresh open. Landing on the page they left, an hour behind the
+    /// voice, with nothing to say why, is the same lost place by a different
+    /// route.
+    ///
+    /// But only when the voice did carry on: it is playing now, or the sentence
+    /// it is on is not the one it was on when the reader left. A pause keeps
+    /// its sentence, and the model of a paused book is kept while the reader
+    /// is away — so a reader who paused, read on silently, went to the library
+    /// and came back was turned back to the paused sentence with nothing said,
+    /// and their next page turn saved that older place over the one they had
+    /// reached.
     public func syncToNarration() async {
+        guard let readalong, let entry = readalong.activeEntry,
+              readalong.player.isPlaying || entry != entryWhenHidden
+        else { return }
+        await turnToNarration()
+    }
+
+    /// The sentence the voice was on when the reader screen last went away.
+    ///
+    /// Recorded by `setReaderVisible(false)` and read by `syncToNarration`,
+    /// which is the question it answers: did the voice move while nobody was
+    /// looking? Nothing draws it, so nothing observes it.
+    @ObservationIgnored private var entryWhenHidden: SMILEntry?
+
+    /// Puts the page on the sentence the voice is on.
+    private func turnToNarration() async {
         guard let entry = readalong?.activeEntry else { return }
         await followNarration(toDocument: entry.textHref, fragment: entry.fragmentID)
         // `followNarration` returns early when the chapter is already loaded,
@@ -1184,10 +1208,15 @@ public final class ReaderModel {
     /// by a person. `play(from:)` and `prepare(at:)` announce nothing, which is
     /// exactly the contract wanted here.
     ///
-    /// `positionOrigin` is set explicitly rather than left to `syncToNarration`:
+    /// `positionOrigin` is set explicitly rather than left to the page turn:
     /// that only labels the move when the page actually turned, and a hand-off
     /// that lands on the page already on screen would otherwise be saved under
     /// whatever the reader's last deliberate move left behind.
+    ///
+    /// The page is turned whether or not the voice is playing, and whether or
+    /// not the sentence is the one the reader left it on: this is not the
+    /// reader coming back to a voice that may have moved, which is what
+    /// `syncToNarration` asks about, but a place handed over to be shown.
     ///
     /// - Returns: whether the narration reached the sentence. False when its
     ///   audio file is not on disk, in which case nothing moved and the caller
@@ -1200,7 +1229,7 @@ public final class ReaderModel {
             : await readalong.prepare(at: entry)
         guard reached else { return false }
         positionOrigin = .derived
-        await syncToNarration()
+        await turnToNarration()
         return true
     }
 
@@ -1359,8 +1388,13 @@ public final class ReaderModel {
     private var isReaderVisible = false
 
     /// The fine-grained clock is only worth running while the page is visible.
+    ///
+    /// Leaving also notes the sentence the voice is on, so that coming back
+    /// can tell a voice that carried on from one that stayed paused — see
+    /// `syncToNarration`.
     public func setReaderVisible(_ visible: Bool) {
         isReaderVisible = visible
+        if !visible { entryWhenHidden = readalong?.activeEntry }
         readalong?.player.setHighFrequencyUpdates(visible)
         onVisibilityChanged?(visible)
     }
