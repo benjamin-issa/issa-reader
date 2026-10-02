@@ -302,6 +302,7 @@ public struct SignInView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Read a book from your files")
+            .accessibilityAddTraits(.isLink)
             .accessibilityHint(
                 "Opens \(LocalBooksCopy.originalsPlace) to choose an EPUB to read on this \(LocalDevice.noun) without a server.")
             .accessibilityIdentifier("link.readFromFiles")

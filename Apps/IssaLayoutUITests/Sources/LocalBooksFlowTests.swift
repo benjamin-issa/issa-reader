@@ -78,9 +78,16 @@ final class LocalBooksFlowTests: XCTestCase {
         XCTAssertTrue(row(in: app).waitForExistence(timeout: 15), "closing the reader lost the list")
 
         // Swipe to remove; the row goes at once; Undo puts it back.
-        swipeToRemove(row(in: app), in: app)
+        // A beat for the reader's cover to finish leaving, then the swipe —
+        // twice at most, since a swipe that lands while the list is still
+        // settling only scrolls it.
+        Thread.sleep(forTimeInterval: 1)
         let undo = app.buttons["Undo"].firstMatch
-        XCTAssertTrue(undo.waitForExistence(timeout: 5), "the removal offered no undo")
+        for _ in 0..<2 where !undo.exists {
+            swipeToRemove(row(in: app), in: app)
+            _ = undo.waitForExistence(timeout: 5)
+        }
+        XCTAssertTrue(undo.exists, "the removal offered no undo")
         XCTAssertFalse(row(in: app).exists, "the row should leave at once")
         undo.tap()
         XCTAssertTrue(row(in: app).waitForExistence(timeout: 5), "Undo did not put the book back")

@@ -440,13 +440,13 @@ public struct LocalBooksScreen: View {
         if placement == .standalone {
             ToolbarItem(placement: .topBarLeading) {
                 Button { showsSettings = true } label: { Label("Settings", systemImage: "gearshape") }
-                    .foregroundStyle(Palette.ink)
+                    .tint(Palette.ink)
                     .accessibilityIdentifier("button.localSettings")
             }
         }
         ToolbarItem(placement: .topBarTrailing) {
             Button { choose() } label: { Label("Add a book from Files", systemImage: "plus") }
-                .foregroundStyle(Palette.ink)
+                .tint(Palette.ink)
                 .accessibilityIdentifier("button.addLocalBook")
         }
         #endif
@@ -961,9 +961,6 @@ struct LocalImportRow: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Cancel adding \(item.fileName)")
-                #if os(macOS)
-                .keyboardShortcut(.cancelAction)
-                #endif
             }
         }
         .padding(Metrics.spacing12)

@@ -168,6 +168,26 @@ final class LayoutSweepTests: XCTestCase {
         assertScrollContentFits(root, reference)
         capture(app, "localBooks")
 
+        // Book info, from the row's menu.
+        row.press(forDuration: 1.2)
+        let infoItem = app.buttons["Book Info"].firstMatch
+        XCTAssertTrue(infoItem.waitForExistence(timeout: 10), "the row's menu has no Book Info")
+        infoItem.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["screen.localBookInfo"].waitForExistence(timeout: 10))
+        // Captured, not measured: on iPad a form sheet's dimming layer is an
+        // image wider than the window, and it is the system's, not ours.
+        capture(app, "localBookInfo")
+        app.buttons["Done"].firstMatch.tap()
+
+        // The reduced Settings a reader with no server has.
+        let gear = app.buttons["button.localSettings"].firstMatch
+        XCTAssertTrue(gear.waitForExistence(timeout: 10), "no Settings button on the standalone list")
+        gear.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["screen.localSettings"].waitForExistence(timeout: 10))
+        capture(app, "localSettings")
+        app.buttons["Done"].firstMatch.tap()
+        XCTAssertTrue(row.waitForExistence(timeout: 10))
+
         // The card's frame slides with the swipe, so the revealed Remove is
         // tapped where its trailing edge was.
         let frame = row.frame
@@ -301,6 +321,30 @@ final class LayoutSweepTests: XCTestCase {
         let reference = try LayoutReference.read(from: shelf)
         assertHorizontallyContained(try shelf.snapshot(), reference, screen: "settings")
         capture(shelf, "settings")
+
+        // Advanced, open, with the row to the books from Files, and the list
+        // it pushes — the signed-in placement, inside the Settings tab.
+        // Near the foot of the list, below the fold on a phone.
+        let advanced = shelf.buttons["Advanced"].firstMatch
+        for _ in 0..<6 where !(advanced.exists && advanced.isHittable) {
+            shelf.collectionViews.firstMatch.swipeUp(velocity: .slow)
+        }
+        XCTAssertTrue(advanced.waitForExistence(timeout: 15), "no Advanced disclosure")
+        advanced.tap()
+        for _ in 0..<4 where !shelf.descendants(matching: .any)["settings.localBooks"].firstMatch.isHittable {
+            shelf.collectionViews.firstMatch.swipeUp(velocity: .slow)
+        }
+        let localRow = shelf.descendants(matching: .any)["settings.localBooks"].firstMatch
+        XCTAssertTrue(localRow.waitForExistence(timeout: 15), "no row to the books from Files in Advanced")
+        assertHorizontallyContained(try shelf.snapshot(), reference, screen: "settingsAdvanced")
+        capture(shelf, "settingsAdvanced")
+        localRow.tap()
+        XCTAssertTrue(shelf.descendants(matching: .any)["screen.localBooks"].waitForExistence(timeout: 15),
+                      "the Advanced row did not push the local list")
+        let pushed = try shelf.snapshot()
+        assertHorizontallyContained(pushed, reference, screen: "localBooksPushed")
+        assertScrollContentFits(pushed, reference)
+        capture(shelf, "localBooksPushed")
     }
 
     /// Every book cell's identifier on the screen, scrolling to find them: the
