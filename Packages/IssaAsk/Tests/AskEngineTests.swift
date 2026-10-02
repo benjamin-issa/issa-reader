@@ -24,6 +24,50 @@ struct AskEngineTests {
         }
     }
 
+    /// Collects a whole run, recording each event as it lands so a test can
+    /// wait on one mid-stream.
+    static func drain(
+        _ stream: AsyncThrowingStream<AskEvent, any Error>, into seen: Collected,
+    ) async -> (events: [AskEvent], failure: (any Error)?) {
+        var events: [AskEvent] = []
+        do {
+            for try await event in stream {
+                events.append(event)
+                await seen.append(event)
+            }
+            return (events, nil)
+        } catch {
+            return (events, error)
+        }
+    }
+
+    /// Asserts that the second question is queued at the turnstile while the
+    /// first holds the model — the thing a 50 ms sleep used to infer.
+    ///
+    /// `.thinking` first, because the engine yields it just before it asks for
+    /// the turn: the question has finished retrieving and is on its way to the
+    /// model. Then a bounded wait for one of the two outcomes, so neither
+    /// direction depends on timing: a working turnstile queues it, and a
+    /// broken one lets it reach the model, which fails here rather than
+    /// passing because the sleep landed early. The bound only matters when the
+    /// turnstile is broken *and* the call never arrives, which is a failure
+    /// either way.
+    static func expectQueued(
+        behind turnstile: AskTurnstile, model: ScriptedAnswerModel, seen: Collected,
+        sourceLocation: SourceLocation = #_sourceLocation,
+    ) async throws {
+        await seen.waitForThinking()
+        let deadline = ContinuousClock.now + .seconds(10)
+        while await turnstile.waiting == 0, await model.received.count < 2,
+              ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(await turnstile.waiting == 1, "the second question must be queued",
+                sourceLocation: sourceLocation)
+        #expect(await model.received.count == 1, "and must not have reached the model",
+                sourceLocation: sourceLocation)
+    }
+
     static func partials(_ events: [AskEvent]) -> [String] {
         events.compactMap { if case let .partial(text) = $0 { text } else { nil } }
     }
@@ -483,11 +527,23 @@ struct AskEngineTests {
         var events: [AskEvent] = []
         private var waiters: [CheckedContinuation<Void, Never>] = []
 
+        private var thinkingWaiters: [CheckedContinuation<Void, Never>] = []
+
         func append(_ event: AskEvent) {
             events.append(event)
+            if event == .phase(.thinking) {
+                for waiter in thinkingWaiters { waiter.resume() }
+                thinkingWaiters.removeAll()
+            }
             guard case .partial = event else { return }
             for waiter in waiters { waiter.resume() }
             waiters.removeAll()
+        }
+
+        /// Until the engine says it is about to ask the model.
+        func waitForThinking() async {
+            guard !events.contains(.phase(.thinking)) else { return }
+            await withCheckedContinuation { thinkingWaiters.append($0) }
         }
 
         func waitForAPartial() async {
@@ -831,7 +887,10 @@ struct AskEngineTests {
             Turn(partials: ["first"], holdsAfterPartials: 1),
             Turn.answer("Second answer.\nSources: 1"),
         ])
-        let engine = AskEngine(model: model, store: store)
+        // Passed rather than defaulted only so the test can see the queue; one
+        // engine with its own turnstile is exactly what the default builds.
+        let turnstile = AskTurnstile()
+        let engine = AskEngine(model: model, store: store, turnstile: turnstile)
         let boundary = try AskFixture.endOf(spine: AskFixture.Spine.chapterI)
 
         let first = Task {
@@ -842,16 +901,16 @@ struct AskEngineTests {
         }
         await model.waitUntilHolding()
 
+        let seen = Collected()
         let second = Task {
             await Self.drain(engine.ask(
                 question: "Where did Alice land at the bottom?",
                 source: source, boundary: boundary,
-            ))
+            ), into: seen)
         }
         // The on-device model rejects a second concurrent session outright, so
         // the second question must be waiting rather than racing.
-        try await Task.sleep(for: .milliseconds(50))
-        #expect(await model.received.count == 1)
+        try await Self.expectQueued(behind: turnstile, model: model, seen: seen)
 
         await model.release()
         let (firstEvents, _) = await first.value
@@ -888,14 +947,14 @@ struct AskEngineTests {
         }
         await model.waitUntilHolding()
 
+        let seen = Collected()
         let secondTask = Task {
             await Self.drain(second.ask(
                 question: "Where did Alice land at the bottom?",
                 source: source, boundary: boundary,
-            ))
+            ), into: seen)
         }
-        try await Task.sleep(for: .milliseconds(50))
-        #expect(await model.received.count == 1)
+        try await Self.expectQueued(behind: turnstile, model: model, seen: seen)
 
         await model.release()
         _ = await firstTask.value
