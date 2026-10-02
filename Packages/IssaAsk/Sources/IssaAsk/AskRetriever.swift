@@ -74,6 +74,14 @@ public struct AskRetriever: Sendable {
         /// The evidence scan's ceiling. In book order, so the three hundred it
         /// keeps are the earliest — where introductions live.
         public static let evidencePool = 300
+        /// The passages just before the reader's position that every
+        /// non-recap question is also shown, behind what the search found.
+        /// Twelve passages is about 1,100 words — the page or two the reader
+        /// has just turned. Measured in the 1.4.0 Ask review: on the
+        /// regression set and an invented novella it took hand-graded
+        /// answers from 19.5 to 23.5 of 26, with no spoiler and no passage
+        /// past the boundary.
+        public static let recencyPassages = 12
         /// Below this a kinship question is topped up with ordinary passages,
         /// so a book that states a relationship once is not answered from one
         /// sentence with no context around it. It is topped up to `limit`.
@@ -91,17 +99,22 @@ public struct AskRetriever: Sendable {
     /// False for the tool: the model has already been called, and handing it a
     /// finished sentence in place of excerpts is not a search result.
     private let allowsFastPath: Bool
+    /// How many of the passages just read to add behind what the search
+    /// found. Zero for the tool, whose search results are only search results.
+    private let recencyPassages: Int
 
     public init(
         store: AskIndexStore,
         bookUUID: String,
         boundary: ReadingBoundary,
         allowsFastPath: Bool = true,
+        recencyPassages: Int? = nil,
     ) {
         self.store = store
         self.bookUUID = bookUUID
         self.boundary = boundary
         self.allowsFastPath = allowsFastPath
+        self.recencyPassages = recencyPassages ?? (allowsFastPath ? Limits.recencyPassages : 0)
     }
 
     // MARK: - Asking
@@ -154,7 +167,42 @@ public struct AskRetriever: Sendable {
             IssaLog.info("ask answered from the book's own sentence")
             return .answered(answer, evidence: EvidenceFinder.ranked(found))
         }
-        return .evidence(EvidenceFinder.ranked(found), kind: terms.kind)
+        let ranked = EvidenceFinder.ranked(found)
+        guard recencyPassages > 0 else { return .evidence(ranked, kind: terms.kind) }
+        let recent = try await store.recapPassages(
+            in: bookUUID, before: boundary, limit: recencyPassages,
+        )
+        return .evidence(Self.withRecency(ranked, recent: recent), kind: terms.kind)
+    }
+
+    /// What the search found, with the pages just read behind it.
+    ///
+    /// The search finds the sentences that name the question's words; the
+    /// answer is very often in the paragraphs around where the reader is,
+    /// which name none of them. "What did Alice drink?" from the end of
+    /// Chapter I retrieved her deciding the bottle was not marked poison and
+    /// not the paragraph where she drinks it, and the model answered that she
+    /// had not. The recent passages come from the same bounded query a recap
+    /// uses, so they cannot reach past the reader.
+    ///
+    /// They rank behind everything the search found, so a small window drops
+    /// them first, and a recent passage that overlaps a found excerpt is left
+    /// out rather than sent twice. Book order, which is what the builder
+    /// numbers and the model reads.
+    static func withRecency(
+        _ found: [PassageRanker.Ranked], recent: [RetrievedPassage],
+    ) -> [PassageRanker.Ranked] {
+        let offset = (found.map(\.priority).max() ?? -1) + 1
+        let extra = recapRanked(recent).filter { candidate in
+            !found.contains {
+                $0.passage.spineIndex == candidate.passage.spineIndex
+                    && $0.passage.start < candidate.passage.end
+                    && candidate.passage.start < $0.passage.end
+            }
+        }.map { PassageRanker.Ranked(retrieved: $0.retrieved, priority: $0.priority + offset) }
+        return (found + extra).sorted {
+            ($0.passage.spineIndex, $0.passage.start) < ($1.passage.spineIndex, $1.passage.start)
+        }
     }
 
     /// The sentences, before they are packaged. Public so a test can assert on

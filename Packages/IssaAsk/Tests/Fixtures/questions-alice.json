@@ -34,7 +34,7 @@
       "evidenceContains": ["drink me"],
       "evidenceExcludes": [],
       "answerContainsAny": ["bottle", "drink me", "cordial"],
-      "answerExcludes": [],
+      "answerExcludes": ["did not drink", "didn't drink", "never drank", "not drink from"],
       "modelCalled": true,
       "allowsNewNames": true
     },

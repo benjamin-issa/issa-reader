@@ -866,7 +866,9 @@ struct AskEngineTests {
         let sent = try #require(await model.received.first)
         let excerpts = sent.prompt.components(separatedBy: "] (Section ").count - 1
         #expect(excerpts > 0)
-        #expect(excerpts <= EvidenceFinder.Limits.identityExcerpts)
+        // The identity sentences, and behind them the recency top-up's
+        // passages from the pages just read.
+        #expect(excerpts <= EvidenceFinder.Limits.identityExcerpts + AskRetriever.Limits.recencyPassages)
         // Sentence windows rather than whole paragraphs: the measured prompt on
         // the real book was 45% smaller for the same question.
         //
