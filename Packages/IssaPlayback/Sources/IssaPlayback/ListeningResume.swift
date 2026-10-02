@@ -164,10 +164,20 @@ public enum ListeningResume {
         //    bridge Storyteller is built on, and exact when the timeline is in
         //    memory. A file and an offset is all this rung ever meant, and all
         //    it now says.
+        //
+        //    Exact about the chapter, too, or it says nothing. The locator's
+        //    href is matched to one of the overlay's own documents first — the
+        //    official client writes absolute, percent-encoded hrefs, and the
+        //    overlay keys archive paths — and the fragment is then looked up in
+        //    that document alone. It used to be looked up under the raw href,
+        //    miss, and fall back to the first chapter using that id: in a book
+        //    that numbers sentences per chapter that was chapter one, declared
+        //    exact, so nothing held the audio clock and the next write put it
+        //    over a reader chapters further on.
         if let locator, !locator.isAudioScaled,
            let timeline,
            let fragment = locator.sentenceID,
-           let entry = timeline.entry(forFragment: fragment, inDocument: locator.href),
+           let entry = Self.entry(for: fragment, at: locator, in: timeline),
            let time = manifest.bookTime(inFile: entry.audioHref, offset: entry.start) {
             return Resolution(bookTime: time, reason: .readingPositionViaOverlay)
         }
@@ -209,5 +219,24 @@ public enum ListeningResume {
             ? .noStoredPosition
             : (anchor == nil ? .noAnchorStored : .anchorNamesUnknownFile)
         return Resolution(bookTime: nil, reason: reason)
+    }
+
+    /// The overlay entry a reading position names: the fragment, in the
+    /// overlay document the locator's href means, and nowhere else.
+    ///
+    /// The href spelled exactly as the overlay spells it wins; otherwise the
+    /// documents that `ReadiumLocator.matchesHref` accepts are tried in book
+    /// order. Never the id-only fallback — see rung 3.
+    static func entry(
+        for fragment: String, at locator: ReadiumLocator, in timeline: SMILTimeline,
+    ) -> SMILEntry? {
+        let documents = timeline.documentHrefs.filter { $0 == locator.href }
+            + timeline.documentHrefs.filter { $0 != locator.href && locator.matchesHref($0) }
+        for document in documents {
+            if let entry = timeline.exactEntry(forFragment: fragment, inDocument: document) {
+                return entry
+            }
+        }
+        return nil
     }
 }

@@ -876,6 +876,76 @@ struct ReadalongCoordinatorTests {
                 "the audio is at \(subject.player.engineTime), not at the sentence the highlight names")
     }
 
+    /// A document the timeline visits twice — a spine that comes back to a
+    /// page, or an overlay whose pars point into another document — is two
+    /// places, and the chapter commands have to move from the one the listener
+    /// is in. They looked the document up by its first run, so "next" from the
+    /// second visit went back to the document after the *first* one.
+    ///
+    ///      0  a-s0  OEBPS/a.xhtml   track1  0–5
+    ///      1  b-s0  OEBPS/b.xhtml   track1  5–10
+    ///      2  a-s1  OEBPS/a.xhtml   track1  10–15   the second run of a
+    ///      3  c-s0  OEBPS/c.xhtml   track2a 0–5
+    @Test("the chapter commands move between runs of a document, not between documents")
+    func chapterCommandsMoveBetweenRuns() async throws {
+        let shapes = ReadalongV3ShapesTests.self
+        let timeline = shapes.narration([
+            ("a-s0", "OEBPS/a.xhtml", shapes.track1, 0, 5, false),
+            ("b-s0", "OEBPS/b.xhtml", shapes.track1, 5, 10, false),
+            ("a-s1", "OEBPS/a.xhtml", shapes.track1, 10, 15, false),
+            ("c-s0", "OEBPS/c.xhtml", shapes.track2, 0, 5, false),
+        ])
+        let (subject, directory) = try shapes.make(timeline)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        // The commands play from where they land; neither the real clock nor a
+        // real end of file may move the entry before it is looked at.
+        subject.player.onTimeUpdate = nil
+        subject.player.onFinishedFile = nil
+        let entries = timeline.entries
+        let map = CommandMap()
+
+        #expect(await subject.prepare(at: entries[2]))
+        await subject.perform(.nextChapter, using: map)
+        #expect(subject.activeEntry == entries[3], "next from the second visit to a is c, not b")
+
+        #expect(await subject.prepare(at: entries[2]))
+        await subject.perform(.previousChapter, using: map)
+        #expect(subject.activeEntry == entries[1], "previous from the second visit to a is b")
+
+        #expect(await subject.prepare(at: entries[1]))
+        await subject.perform(.nextChapter, using: map)
+        #expect(subject.activeEntry == entries[2], "next from b is the second visit to a, not the first")
+    }
+
+    /// A sentence id two chapters share — legal, and what an aligner other
+    /// than Storyteller's writes. A tap in chapter twelve resolved by id alone
+    /// and played chapter one. The reader's routes switch to this call once
+    /// it exists; this is the call.
+    @Test("a sentence id two chapters share plays in the chapter that named it")
+    func aSharedIDPlaysInTheChapterThatNamedIt() async throws {
+        let shapes = ReadalongV3ShapesTests.self
+        let timeline = shapes.narration([
+            ("s5", "OEBPS/ch01.xhtml", shapes.track1, 0, 5, false),
+            ("s5", "OEBPS/ch12.xhtml", shapes.track2, 0, 5, false),
+        ])
+        let (subject, directory) = try shapes.make(timeline)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        subject.player.onTimeUpdate = nil
+        subject.player.onFinishedFile = nil
+        var seeks = 0
+        subject.onSeek = { seeks += 1 }
+
+        await subject.seek(toFragment: "s5", inDocument: "OEBPS/ch12.xhtml")
+        #expect(subject.activeEntry == timeline.entries[1], "chapter one's s5 played instead")
+        #expect(seeks == 1)
+
+        // A document that does not narrate it names nowhere, and moves nothing.
+        await subject.seek(toFragment: "s5", inDocument: "OEBPS/ch09.xhtml")
+        #expect(subject.activeEntry == timeline.entries[1])
+        #expect(seeks == 1)
+        subject.player.pause()
+    }
+
     /// The one ending that is real still gets through. `advanceToNextFile`
     /// captures the document that ran out *before* calling `move`, and announces
     /// after it returns — by which point the counter is back to zero — so

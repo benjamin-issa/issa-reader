@@ -426,8 +426,23 @@ public final class ReadalongCoordinator {
         return true
     }
 
+    /// Plays from a fragment named by id alone, falling back to the first
+    /// chapter that uses it. Best effort; a caller that knows which document
+    /// the id came from uses `seek(toFragment:inDocument:)`.
     public func seek(toFragment fragmentID: String) async {
         guard let entry = timeline.entry(forFragment: fragmentID) else { return }
+        await jump(to: entry)
+    }
+
+    /// Plays from a fragment in exactly this document, or does nothing.
+    ///
+    /// Ids are unique per document, not per book, and only Storyteller's
+    /// aligner happens to prefix them. Resolved by id alone, a tap in chapter
+    /// twelve of a book that numbers its sentences per chapter played chapter
+    /// one, and turned the page there. `document` is the archive path the
+    /// timeline uses — the reader's spine href.
+    public func seek(toFragment fragmentID: String, inDocument document: String) async {
+        guard let entry = timeline.exactEntry(forFragment: fragmentID, inDocument: document) else { return }
         await jump(to: entry)
     }
 
@@ -545,15 +560,15 @@ public final class ReadalongCoordinator {
         await jump(to: entry)
     }
 
+    /// From the run of the document the listener is in, to the start of the
+    /// run beside it — refused at either end of the book.
+    ///
+    /// By run, not by document name: a document the timeline visits twice is
+    /// two places, and looking it up by name found its first visit, so "next"
+    /// from the second visit went backwards and "previous" from it was refused.
     private func moveChapter(forward: Bool) async {
-        guard let current = activeEntry else { return }
-        let documents = timeline.entries.map(\.textHref).reduce(into: [String]()) { list, href in
-            if list.last != href { list.append(href) }
-        }
-        guard let index = documents.firstIndex(of: current.textHref) else { return }
-        let target = forward ? index + 1 : index - 1
-        guard documents.indices.contains(target),
-              let entry = timeline.firstEntry(inDocument: documents[target])
+        guard let current = activeEntry,
+              let entry = timeline.firstEntry(ofRunAdjacentTo: current, forward: forward)
         else { return }
         await jump(to: entry)
     }

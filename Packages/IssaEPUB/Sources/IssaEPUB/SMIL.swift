@@ -221,6 +221,20 @@ public struct SMILTimeline: Sendable {
     /// lock-screen drag landed in a different chapter, and it is also what
     /// `spineProgress` reports to the server.
     private let documentRanges: [String: [Range<Int>]]
+    /// Every run of one text document, in book order — the same runs as
+    /// `documentRanges`, laid end to end. What "the next chapter" walks: a
+    /// document the timeline visits twice is two places, and stepping from the
+    /// second visit has to start from the second visit.
+    private let documentRuns: [Range<Int>]
+
+    /// The text documents the narration covers, each once, in the order the
+    /// book first reaches them.
+    ///
+    /// For a caller holding a document href from somewhere else — a stored
+    /// position, which another client may have spelled differently — to find
+    /// which of the timeline's own documents it means before asking for a
+    /// fragment in it. See `exactEntry(forFragment:inDocument:)`.
+    public let documentHrefs: [String]
 
     public var totalDuration: TimeInterval { entries.last?.cumulativeEnd ?? 0 }
     public var isEmpty: Bool { entries.isEmpty }
@@ -272,15 +286,21 @@ public struct SMILTimeline: Sendable {
         // filtered on demand because a progress bar scoped to the chapter asks
         // for this on every tick, and `entries.filter` walks the whole book.
         var documents: [String: [Range<Int>]] = [:]
+        var runs: [Range<Int>] = []
+        var order: [String] = []
         start = 0
         while start < entries.count {
             let href = entries[start].textHref
             var end = start + 1
             while end < entries.count, entries[end].textHref == href { end += 1 }
+            if documents[href] == nil { order.append(href) }
             documents[href, default: []].append(start ..< end)
+            runs.append(start ..< end)
             start = end
         }
         documentRanges = documents
+        documentRuns = runs
+        documentHrefs = order
     }
 
     /// Where one text document's narration sits on the virtual book timeline.
@@ -376,6 +396,22 @@ public struct SMILTimeline: Sendable {
         -> SMILEntry?
     {
         resolve(fragmentID, in: document).map { entries[$0] }
+    }
+
+    /// The fragment in exactly this document, or nothing.
+    ///
+    /// `entry(forFragment:inDocument:)` falls back to the first chapter that
+    /// uses the id when the document key misses, which is the right answer for
+    /// a caller with no document to offer and the wrong one for a caller that
+    /// has one: in a book that numbers its sentences per chapter, a tap in
+    /// chapter twelve played chapter one, and a resume declared exact landed
+    /// chapters away from the reader. This one never guesses.
+    ///
+    /// `document` is matched exactly, as the timeline spells it — the archive
+    /// path `EPUBPackage.resolve` produces. A caller holding a differently
+    /// spelled href resolves it against `documentHrefs` first.
+    public func exactEntry(forFragment fragmentID: String, inDocument document: String) -> SMILEntry? {
+        indexByFragment[FragmentKey(document: document, fragment: fragmentID)].map { entries[$0] }
     }
 
     private func resolve(_ fragmentID: String, in document: String?) -> Int? {
@@ -688,6 +724,27 @@ public struct SMILTimeline: Sendable {
     /// First entry of each text document, for chapter navigation.
     public func firstEntry(inDocument href: String) -> SMILEntry? {
         entries.first { $0.textHref == href }
+    }
+
+    /// The first entry of the document run after — or before — the run that
+    /// holds `entry`: the next or previous chapter, as narration reaches it.
+    ///
+    /// By run rather than by document. A document the timeline visits twice —
+    /// a spine that comes back to a page, an overlay whose pars point into
+    /// another document — is two places, and looking a document up by name
+    /// always found its *first* visit: "next chapter" from the second visit
+    /// went back to whatever followed the first, and "previous" from it was
+    /// refused outright.
+    ///
+    /// Nil at either end of the book, and for an entry this timeline does not
+    /// hold.
+    public func firstEntry(ofRunAdjacentTo entry: SMILEntry, forward: Bool) -> SMILEntry? {
+        guard let index = index(of: entry),
+              let run = documentRuns.firstIndex(where: { $0.contains(index) })
+        else { return nil }
+        let target = forward ? run + 1 : run - 1
+        guard documentRuns.indices.contains(target) else { return nil }
+        return entries[documentRuns[target].lowerBound]
     }
 
     /// The first narrated entry belonging to any of `documents`.
