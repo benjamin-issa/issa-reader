@@ -53,6 +53,22 @@ struct IssaLogTests {
         #expect(entry("task \(uuid) failed").line.contains(uuid))
     }
 
+    /// The rule promised `"key": "value"` and caught only `key=value` and
+    /// `key: value`: in JSON the key is quoted, and the quote between the key
+    /// and the colon let every secret in a body through untouched.
+    @Test("a secret inside a JSON body is not recorded")
+    func redactsJSONQuotedSecrets() {
+        let compact = entry(#"refresh answered {"token":"abcDEF123","expires":3600}"#).line
+        #expect(!compact.contains("abcDEF123"))
+        #expect(compact.contains("3600"), "the rest of the body survives")
+
+        let spaced = entry(#"sign-in answered { "access_token" : "xyz789QRS", "token_type": "bearer" }"#).line
+        #expect(!spaced.contains("xyz789QRS"))
+
+        let field = entry("refresh failed", ["body": #"{"refresh_token": "rft456LMN"}"#]).line
+        #expect(!field.contains("rft456LMN"), "a field not named as a secret is scrubbed the same way")
+    }
+
     @Test("a token embedded in a URL query is not recorded")
     func redactsQueryToken() {
         let line = entry("polling https://s.example/token?device_code=UBHO1MuQZWx81snQ").line
