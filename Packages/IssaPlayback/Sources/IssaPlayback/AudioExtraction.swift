@@ -9,25 +9,29 @@ import IssaEPUB
 /// inside a ZIP, so the tracks are written out once and cached — which also
 /// means playback survives with no network at all.
 public enum AudioExtraction {
-    /// One extraction at a time, process-wide.
+    /// One extraction at a time *per directory* — which is to say per book.
     ///
-    /// The reader and the car can now ask for the same book's narration at
-    /// once: opening an aligned book extracts it, and `startListening` extracts
-    /// it again to build a manifest over the chunks. The body below is
-    /// idempotent everywhere except the legacy-name rescue — `moveItem` on a
-    /// file the other run has already moved throws, and the throw aborts an
-    /// extraction that was otherwise fine, so the book simply refuses to play.
-    /// Coarse on purpose: extraction is I/O-bound and rare, and a lock per book
-    /// would be a second thing to get right for no measurable gain.
+    /// The reader and the car can ask for the same book's narration at once:
+    /// opening an aligned book extracts it, and `startListening` extracts it
+    /// again to build a manifest over the chunks. The body below is idempotent
+    /// everywhere except the legacy-name rescue — `moveItem` on a file the
+    /// other run has already moved throws, and the throw aborts an extraction
+    /// that was otherwise fine, so the book simply refuses to play.
     ///
-    /// `removeExtractedAudio` is under it too, and that is the other half of the
-    /// same problem. The removal deletes the very directory an extraction is
-    /// writing into, and the two racing left it torn: some chunks gone, some
+    /// `removeExtractedAudio` takes the same lock, and that is the other half of
+    /// the same problem. The removal deletes the very directory an extraction
+    /// is writing into, and the two racing left it torn: some chunks gone, some
     /// still there, and a manifest built over the survivors. How long a removal
-    /// can be made to wait is bounded by the cancellation check below, which is
-    /// what makes taking the lock on the main actor tolerable — the extraction
-    /// gives up at the next chunk boundary rather than at the end of the book.
-    private static let serial = NSLock()
+    /// can be made to wait is bounded by the cancellation check below — the
+    /// extraction gives up at the next chunk boundary — and by nothing else.
+    ///
+    /// Per directory, because this lock was process-wide, and the removal takes
+    /// it synchronously on the main actor: removing book Y from Downloads while
+    /// book X's narration was being inflated froze the app for the rest of X's
+    /// extraction — tens of seconds to minutes for a long book — and the only
+    /// cancellations that could cut it short were for X itself. Two books share
+    /// no file, so they share no lock.
+    private static let locks = DirectoryLocks()
 
     /// Extracts every audio file the timeline references.
     ///
@@ -55,21 +59,25 @@ public enum AudioExtraction {
         into directory: URL? = nil,
         isCancelled: @Sendable () -> Bool = { Task.isCancelled },
     ) throws -> [String: URL] {
-        try serial.withLock {
-            try extract(
-                from: package, timeline: timeline, bookID: bookID, into: directory,
-                isCancelled: isCancelled)
+        let base = directory ?? defaultDirectory(for: bookID)
+        // One entry per distinct file — a book has a handful of tracks but tens
+        // of thousands of entries — in a fixed order, so a revoked extraction
+        // stops at the same file every time and a log of one run reads like
+        // the next. A `Set`'s order changes from launch to launch.
+        let hrefs = Set(timeline.entries.map(\.audioHref)).sorted()
+        return try locks.lock(for: base).withLock {
+            try extract(hrefs: hrefs, read: package.archive.read, into: base, isCancelled: isCancelled)
         }
     }
 
-    private static func extract(
-        from package: EPUBPackage,
-        timeline: SMILTimeline,
-        bookID: String,
-        into directory: URL?,
-        isCancelled: @Sendable () -> Bool,
+    /// The extraction itself, over a list of archive hrefs and a way to read
+    /// one. Internal so a test can state a layout no fixture book has.
+    static func extract(
+        hrefs: [String],
+        read: (String) throws -> Data,
+        into base: URL,
+        isCancelled: () -> Bool,
     ) throws -> [String: URL] {
-        let base = directory ?? defaultDirectory(for: bookID)
         // Before the directory exists, not after. This is the line that used to
         // undo a removal: an extraction that had been waiting on the lock woke
         // up and re-made the folder the removal had just deleted.
@@ -81,9 +89,6 @@ public enum AudioExtraction {
         try? mutable.setResourceValues(values)
 
         var result: [String: URL] = [:]
-        // One entry per distinct file; a book has a handful of tracks but tens
-        // of thousands of entries.
-        let hrefs = Set(timeline.entries.map(\.audioHref))
 
         // How many hrefs each *old* name stood for. Files were named by
         // `lastPathComponent` until this branch, and changing the scheme with
@@ -95,6 +100,36 @@ public enum AudioExtraction {
         var legacyClaims: [String: Int] = [:]
         for href in hrefs { legacyClaims[(href as NSString).lastPathComponent, default: 0] += 1 }
 
+        // The rescue runs over what an *older build* left, so it runs before
+        // this run writes anything. Interleaved with the writes, it could not
+        // tell an old leftover from a file this run had just extracted: with a
+        // root-level `intro.mp3` beside `Audio/intro.mp3`, the old name
+        // `intro.mp3` is claimed twice and is also the root-level track's new
+        // name, so when that track was written first the nested track's rescue
+        // deleted it, and the reader was handed a file that was gone.
+        for href in hrefs {
+            // The whole href, flattened — not `lastPathComponent`, which
+            // collides. A book laid out as Audio/ch01/track.mp3,
+            // Audio/ch02/track.mp3 — what a CLI-aligned readaloud produces —
+            // mapped every chapter onto one file: the first was written, the
+            // `fileExists` check skipped the rest, and each was then pointed at
+            // the first one's bytes. Chapter one's narration played under
+            // chapter twelve's highlighted text for the whole book, with no
+            // error anywhere. Cached across sessions, so it persisted.
+            let destination = base.appending(path: Self.filename(for: href))
+            let legacyName = (href as NSString).lastPathComponent
+            let legacy = base.appending(path: legacyName)
+            guard !FileManager.default.fileExists(atPath: destination.path),
+                  legacyName != Self.filename(for: href),
+                  FileManager.default.fileExists(atPath: legacy.path)
+            else { continue }
+            if legacyClaims[legacyName] == 1 {
+                try FileManager.default.moveItem(at: legacy, to: destination)
+            } else {
+                try? FileManager.default.removeItem(at: legacy)
+            }
+        }
+
         for href in hrefs {
             // Between chunks, so a revoked extraction stops at the file it is
             // on rather than at the end of the book. Throwing rather than
@@ -102,29 +137,9 @@ public enum AudioExtraction {
             // book that plays chapter one and then stops, which is worse than a
             // book that says it could not be prepared.
             guard !isCancelled() else { throw CancellationError() }
-            // The whole href, flattened — not `lastPathComponent`, which collides.
-            // A book laid out as Audio/ch01/track.mp3, Audio/ch02/track.mp3 —
-            // what a CLI-aligned readaloud produces — mapped every chapter onto
-            // one file: the first was written, the `fileExists` check below
-            // skipped the rest, and each was then pointed at the first one's
-            // bytes. Chapter one's narration played under chapter twelve's
-            // highlighted text for the whole book, with no error anywhere, and
-            // because `hrefs` is a Set the winner was not even stable between
-            // launches. Cached across sessions, so it persisted.
             let destination = base.appending(path: Self.filename(for: href))
-            let legacyName = (href as NSString).lastPathComponent
-            let legacy = base.appending(path: legacyName)
-            if !FileManager.default.fileExists(atPath: destination.path),
-               legacyName != Self.filename(for: href),
-               FileManager.default.fileExists(atPath: legacy.path) {
-                if legacyClaims[legacyName] == 1 {
-                    try FileManager.default.moveItem(at: legacy, to: destination)
-                } else {
-                    try? FileManager.default.removeItem(at: legacy)
-                }
-            }
             if !FileManager.default.fileExists(atPath: destination.path) {
-                let data = try package.archive.read(href)
+                let data = try read(href)
                 try data.write(to: destination, options: .atomic)
             }
             result[href] = destination
@@ -190,8 +205,31 @@ public enum AudioExtraction {
     /// which, by making the extraction stand down rather than re-make what this
     /// has just deleted.
     public static func removeExtractedAudio(for bookID: String, in root: URL? = nil) {
-        serial.withLock {
-            try? FileManager.default.removeItem(at: defaultDirectory(for: bookID, in: root))
+        let directory = defaultDirectory(for: bookID, in: root)
+        locks.lock(for: directory).withLock {
+            try? FileManager.default.removeItem(at: directory)
+        }
+    }
+}
+
+/// One lock per extraction directory, made on first use.
+///
+/// Keyed by the directory rather than the book id because the directory is
+/// what the two operations share: `defaultDirectory(for:)` makes the id a
+/// single safe path component, so two ids can in principle name one folder,
+/// and a caller may pass a directory of its own. Never emptied — an `NSLock`
+/// per book the device has ever extracted is nothing.
+final class DirectoryLocks: @unchecked Sendable {
+    private let guardLock = NSLock()
+    private var locks: [String: NSLock] = [:]
+
+    func lock(for directory: URL) -> NSLock {
+        let key = directory.standardizedFileURL.path
+        return guardLock.withLock {
+            if let existing = locks[key] { return existing }
+            let made = NSLock()
+            locks[key] = made
+            return made
         }
     }
 }
