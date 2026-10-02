@@ -927,6 +927,33 @@ public struct BookDetailView: View {
         _ title: String, format: BookContentService.Format,
         detail: String, size: Int?, missing: Bool,
     ) -> some View {
+        VStack(alignment: .leading, spacing: Metrics.spacing4) {
+            editionLine(title, format: format, detail: detail, size: size, missing: missing)
+            // Why "Save for offline" did nothing. The Wi-Fi-only rule refuses
+            // before any transfer exists, so the status beside the edition
+            // never moved and the tap looked ignored.
+            if !missing, let refusal = Self.refusal(for: book, format: format, in: app.downloadRefusals) {
+                Text(refusal)
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.alert)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(Metrics.spacing12)
+    }
+
+    /// What the app said when this edition's download was refused, if it was.
+    static func refusal(
+        for book: Book, format: BookContentService.Format,
+        in refusals: [DownloadManager.Job: String],
+    ) -> String? {
+        refusals[DownloadManager.Job(bookUUID: book.uuid, format: format)]
+    }
+
+    private func editionLine(
+        _ title: String, format: BookContentService.Format,
+        detail: String, size: Int?, missing: Bool,
+    ) -> some View {
         HStack(spacing: Metrics.spacing8) {
             Text(title).font(Typography.callout).foregroundStyle(Palette.ink)
             Spacer()
@@ -952,7 +979,6 @@ public struct BookDetailView: View {
                 editionMenu(for: format)
             }
         }
-        .padding(Metrics.spacing12)
     }
 
     private func editionNote(_ text: String) -> some View {
