@@ -104,15 +104,19 @@ struct HighlighterTests {
     @Test("choosing nothing resolves to exactly the page's own highlight",
           arguments: ReaderTheme.allCases)
     func noChoiceIsTheDefault(_ theme: ReaderTheme) {
+        // The first swatch is the default preset, and in both appearances it
+        // must be what the page paints. This loop compared
+        // `highlightColor(for: nil)` with `highlight` — the same expression by
+        // definition — so a drift between the swatch and the page was caught
+        // only in the light appearance, by a single line below it.
         for dark in [false, true] {
-            let chosen = Self.srgba(theme.highlightColor(for: nil), dark: dark)
+            let swatch = Self.srgba(theme.highlightColor(for: .preset(theme.defaultHighlighter)), dark: dark)
             let painted = Self.srgba(theme.highlight, dark: dark)
-            #expect(chosen == painted, "\(theme) default drifted from its highlight")
+            #expect(swatch == painted, "\(theme) default swatch drifted from its highlight (dark: \(dark))")
         }
-        // And the default preset is the same colour again, by another route.
-        let viaPreset = Self.srgba(
-            theme.highlightColor(for: .preset(theme.defaultHighlighter)), dark: false)
-        #expect(viaPreset == Self.srgba(theme.highlight, dark: false))
+        // And choosing nothing is that colour.
+        #expect(Self.srgba(theme.highlightColor(for: nil), dark: false)
+            == Self.srgba(theme.highlight, dark: false))
     }
 
     @Test("a preset is laid down at the ground's own strength",
