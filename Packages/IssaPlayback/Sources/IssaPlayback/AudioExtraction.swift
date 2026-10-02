@@ -217,7 +217,18 @@ public enum AudioExtraction {
     /// which, by making the extraction stand down rather than re-make what this
     /// has just deleted.
     public static func removeExtractedAudio(for bookID: String, in root: URL? = nil) {
-        let directory = defaultDirectory(for: bookID, in: root)
+        removeExtractedAudio(at: defaultDirectory(for: bookID, in: root))
+    }
+
+    /// Drops narration extracted into a directory the caller chose, under the
+    /// lock an extraction into that directory holds.
+    ///
+    /// For a book added from the reader's own files, whose narration is
+    /// extracted into its own folder (`LocalBookFiles.narration`) rather than
+    /// `Audio/`: removing the book must neither tear an extraction in progress
+    /// nor be undone by one finishing — the race `removeExtractedAudio(for:)`
+    /// is locked against.
+    public static func removeExtractedAudio(at directory: URL) {
         locks.lock(for: directory).withLock {
             try? FileManager.default.removeItem(at: directory)
         }

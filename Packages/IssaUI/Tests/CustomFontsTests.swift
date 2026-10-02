@@ -378,4 +378,32 @@ struct CustomFontsTests {
 
         #expect(!FileManager.default.fileExists(atPath: extracted.path))
     }
+
+    // MARK: - A book from the reader's own files
+
+    /// A local book's face lives in that book's own folder, so removing the
+    /// book removes it — and has to unregister it first, for the reason the
+    /// download's removal does: CoreText would otherwise keep a mapping for a
+    /// file that is gone, and hand the family back if the book came again.
+    @Test("a face in a book's own folder is made, registered and removed by that folder")
+    func faceInABooksOwnFolder() throws {
+        CustomFonts.testRegistryLock.lock()
+        defer { CustomFonts.testRegistryLock.unlock() }
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        defer { unregisterFonts(under: root) }
+
+        let fonts = root.appendingPathComponent("Local/book/Fonts", isDirectory: true)
+        let prepared = try #require(CustomFonts.prepareExtractedDirectory(at: fonts))
+        #expect(prepared == fonts)
+        #expect(FileManager.default.fileExists(atPath: fonts.path))
+        #expect(try fonts.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup == true)
+
+        let face = try unbundledFont(into: fonts, as: "Body.ttf", family: "Locaface")
+        #expect(CustomFonts.register(face) == "Locaface")
+
+        CustomFonts.removeExtracted(at: fonts)
+        #expect(!FileManager.default.fileExists(atPath: fonts.path))
+        #expect(!Self.isRegistered(face, family: "Locaface"))
+    }
 }

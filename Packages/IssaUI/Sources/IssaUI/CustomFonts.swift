@@ -191,6 +191,15 @@ public enum CustomFonts {
         prepared(extractedDirectory(bookUUID: bookUUID))
     }
 
+    /// A directory the caller names, created and excluded from backup.
+    ///
+    /// For a book added from the reader's own files, whose face lives in that
+    /// book's own folder (`LocalBookFiles.fonts`) so that removing the book —
+    /// one folder — takes it, and no sweep of `Fonts/` can.
+    public static func prepareExtractedDirectory(at directory: URL) -> URL? {
+        prepared(directory)
+    }
+
     /// Drops the faces extracted from one book, when its download goes.
     ///
     /// `ReaderModel.resolvePublisherFont` writes a publisher's embedded face to
@@ -221,7 +230,10 @@ public enum CustomFonts {
     /// `extractedDirectory` hashes it a second time and names a directory that
     /// has never existed — so "sign out and delete my downloads" would have
     /// walked straight past the very faces the guard above was protecting.
-    private static func removeExtracted(at directory: URL) {
+    ///
+    /// Public for a book added from the reader's own files, whose faces are
+    /// in its own folder: they are unregistered here before the folder goes.
+    public static func removeExtracted(at directory: URL) {
         lock.lock()
         for url in registered.keys where url.path.hasPrefix(directory.path + "/") {
             CTFontManagerUnregisterFontsForURL(url as CFURL, .process, nil)

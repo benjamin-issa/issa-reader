@@ -800,6 +800,34 @@ public actor AskIndexStore {
         try? FileManager.default.removeItem(at: directory)
     }
 
+    /// Everything except the indexes of `kept`.
+    ///
+    /// For sign-out on a device that also holds books the reader added from
+    /// their own files: those belong to the device, not to the account leaving,
+    /// and their indexes are kept with them. Every other file in the directory
+    /// goes — finished indexes, half-built ones and their journals alike.
+    public func removeAll(keeping kept: Set<String>) {
+        guard !kept.isEmpty else { return removeAll() }
+        open = open.filter { kept.contains($0.key) }
+        var keptNames: Set<String> = []
+        for uuid in kept {
+            let url = indexURL(for: uuid)
+            for candidate in [url, Self.buildingURL(for: url)] {
+                let name = candidate.lastPathComponent
+                // SQLite's own companions are `-wal`, `-shm` and `-journal`;
+                // `remove(bookUUID:)` names `.wal` and `.shm`, so both spellings.
+                for suffix in ["", "-wal", "-shm", "-journal", ".wal", ".shm"] {
+                    keptNames.insert(name + suffix)
+                }
+            }
+        }
+        let entries = (try? FileManager.default.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: nil)) ?? []
+        for entry in entries where !keptNames.contains(entry.lastPathComponent) {
+            try? FileManager.default.removeItem(at: entry)
+        }
+    }
+
     // MARK: - Opening
 
     /// This book's handle, opening the file if it exists and is not open yet.
