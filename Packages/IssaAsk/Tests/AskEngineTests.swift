@@ -1013,16 +1013,47 @@ struct AskEngineTests {
         #expect(AskEngine.failure(for: try #require(failure)) == .other(AskFailure.couldNotAnswer))
     }
 
-    @Test("a stream that restarts mid-answer keeps the prose it already sent")
-    func segmentedStreamKeepsItsProse() async throws {
+    /// A snapshot is the answer so far, and the next token can extend the last
+    /// grapheme rather than start a new one. `Character`-wise, "Cafe" is not a
+    /// prefix of "Café" once the combining accent lands, and the merge that
+    /// appended non-prefix snapshots doubled the whole answer.
+    @Test("a snapshot that extends the last grapheme is not appended to itself")
+    func graphemeExtendingSnapshotIsNotDoubled() async throws {
         let (store, source, directory) = try await AskFixture.preparedStore()
         defer { AskFixture.remove(directory) }
-        // The second snapshot does not carry the first: a fresh segment, which
-        // is what a tool round trip can produce. Taking it whole would have
-        // thrown the sentence away and left the footer as the whole answer.
         let model = ScriptedAnswerModel(turns: [Turn(partials: [
-            "Alice follows a white rabbit down a hole.",
-            "\nSources: 1, 2",
+            "Alice drinks from a bottle at the cafe",
+            "Alice drinks from a bottle at the cafe\u{301}",
+            "Alice drinks from a bottle at the cafe\u{301}.\nSources: 1",
+        ])])
+        let engine = AskEngine(model: model, store: store)
+
+        let (events, failure) = await Self.drain(engine.ask(
+            question: "What did Alice drink?",
+            source: source,
+            boundary: try AskFixture.endOf(spine: AskFixture.Spine.chapterI),
+        ))
+        #expect(failure == nil)
+        let answer = try #require(Self.answer(events))
+        #expect(answer.text == "Alice drinks from a bottle at the cafe\u{301}.")
+        #expect(answer.citations == [1])
+        // And never on the way there either: a partial that showed the answer
+        // twice is a flash the reader sees.
+        for case let .partial(text) in events {
+            #expect(text.components(separatedBy: "Alice drinks").count <= 2, "\(text)")
+        }
+    }
+
+    /// The stream is cumulative, so a snapshot that does not start with the
+    /// text before it is the model's whole answer now — never a segment to
+    /// glue onto the old one.
+    @Test("a snapshot that does not carry the text before it replaces it")
+    func nonPrefixSnapshotReplaces() async throws {
+        let (store, source, directory) = try await AskFixture.preparedStore()
+        defer { AskFixture.remove(directory) }
+        let model = ScriptedAnswerModel(turns: [Turn(partials: [
+            "Alice follows a rabbit",
+            "Alice follows a white rabbit down a hole.\nSources: 1, 2",
         ])])
         let engine = AskEngine(model: model, store: store)
 

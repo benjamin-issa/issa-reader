@@ -584,16 +584,28 @@ public actor AskEngine {
             // Per snapshot: the reader who taps Cancel expects the words to
             // stop arriving, not to finish and then be thrown away.
             try Task.checkCancellation()
-            // Assigned while the stream is cumulative — the shape
-            // `streamResponse` documents and `ScriptedAnswerModel` mirrors — and
-            // appended when it is not. A snapshot that does not carry what came
-            // before it is a fresh segment rather than a longer answer, and
-            // taking it whole would throw away the prose already streamed.
-            if snapshot.hasPrefix(raw) {
-                raw = snapshot
-            } else if !raw.hasPrefix(snapshot) {
-                raw += snapshot
+            // Each snapshot is the answer so far — the shape `streamResponse`
+            // documents, `ScriptedAnswerModel` mirrors, and every live probe of
+            // the 27 model has shown — so it replaces what came before.
+            //
+            // This once appended a snapshot that did not start with the text
+            // before it, on the theory that a tool round trip could restart the
+            // stream as a fresh segment. No stream was ever seen doing that, and
+            // the guess cost more than it bought. `hasPrefix` compares
+            // `Character`s, so a snapshot whose next token extended the last
+            // grapheme — a combining accent, an emoji modifier, the second half
+            // of a flag — did not count as carrying the old text, and the whole
+            // answer was appended to itself; a snapshot equal to a prefix of the
+            // old one was dropped outright. A non-cumulative snapshot is logged,
+            // by length and never by text, so the next one is evidence rather
+            // than a theory.
+            if !snapshot.unicodeScalars.starts(with: raw.unicodeScalars) {
+                IssaLog.info("ask snapshot was not cumulative", [
+                    "previousLength": String(raw.utf16.count),
+                    "snapshotLength": String(snapshot.utf16.count),
+                ])
             }
+            raw = snapshot
             let visible = AskAnswerParser.visible(raw)
             guard visible != shown else { continue }
             shown = visible
