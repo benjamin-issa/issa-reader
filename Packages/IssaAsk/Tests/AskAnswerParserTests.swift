@@ -49,6 +49,29 @@ struct AskAnswerParserTests {
         #expect(parsed.citations == [1, 2])
     }
 
+    /// Only the word right before a number introduces it. "section" was
+    /// remembered past its own number, so every citation after a "(Section N)"
+    /// was read as a chapter too, until a word came along to reset it.
+    @Test("a citation after a section parenthetical is still a citation")
+    func citationsAfterASectionAreKept() {
+        #expect(AskAnswerParser.ordinals(inCitationLine: " [1] (Section 3), [2] (Section 5)")
+            == [1, 2])
+        #expect(AskAnswerParser.ordinals(inCitationLine: " 1 (Section 2), 3 (Section 4), 5")
+            == [1, 3, 5])
+        #expect(AskAnswerParser.ordinals(inCitationLine: " 1 (Section 2); 3 (Section 4)")
+            == [1, 3])
+        // The shapes that already worked still do.
+        #expect(AskAnswerParser.ordinals(inCitationLine: " 1 and 2 (Section 4)") == [1, 2])
+        #expect(AskAnswerParser.ordinals(inCitationLine: " 1 (Sections 3)") == [1])
+        // End to end, through the footer the reader's sources row is built from.
+        let parsed = AskAnswerParser.parse("""
+        His father was Josiah Franklin.
+        Sources: [1] (Section 3), [2] (Section 5)
+        """)
+        #expect(parsed.text == "His father was Josiah Franklin.")
+        #expect(parsed.citations == [1, 2])
+    }
+
     // MARK: - Resolving citations
 
     /// Six excerpts, numbered the way the prompt numbers them.

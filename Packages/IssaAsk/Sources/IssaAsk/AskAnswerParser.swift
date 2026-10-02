@@ -388,6 +388,11 @@ public enum AskAnswerParser {
             defer { current = "" }
             guard !current.isEmpty else { return }
             guard isDigits else { lastWord = current; return }
+            // Only the word *immediately* before a number introduces it. Kept
+            // past the number, "section" went on silencing every ordinal after
+            // it until the next word came along, so "[1] (Section 3), [2]
+            // (Section 5)" cited only the first excerpt.
+            defer { lastWord = "" }
             guard !chapterWords.contains(lastWord), let value = Int(current) else { return }
             ordinals.append(value)
         }
