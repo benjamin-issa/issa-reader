@@ -424,6 +424,11 @@ public struct QueryTerms: Sendable, Hashable {
         "story so far",
     ]
 
+    /// The interrogatives that say the answer is a person: search tokens for
+    /// the ranker, but never the only thing a passage is required to contain
+    /// beside its subject. See `AskRetriever.optionalTerms(_:subject:)`.
+    static let personWords: Set<String> = ["who", "whom", "whose"]
+
     /// Words that carry no retrieval signal. Deliberately short: an aggressive
     /// stop list throws away "who", which is the one word that says the answer
     /// is a person, and the ranker wants that signal.

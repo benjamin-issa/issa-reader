@@ -346,7 +346,7 @@ public struct AskRetriever: Sendable {
     ) async throws -> [Evidence] {
         var candidates: [RetrievedPassage] = []
         if let subject {
-            let others = terms.searchTokens.filter { !subject.tokens.contains($0) }
+            let others = Self.optionalTerms(terms, subject: subject)
             if let pattern = FTSQuery.all(subject.tokens, andAnyOf: others) {
                 candidates = try await store.passages(
                     matching: pattern, in: bookUUID, before: boundary, order: .relevance,
@@ -363,6 +363,36 @@ public struct AskRetriever: Sendable {
         return EvidenceFinder.passages(
             PassageRanker.rank(candidates, terms: terms, limit: max(1, limit)),
         )
+    }
+
+    /// The words a passage about the subject must have at least one of, beside
+    /// the subject itself.
+    ///
+    /// **Not the subject's own family.** A subject that is a family word drags
+    /// its whole group into the search tokens — "father" brings "mother",
+    /// "parents", "papa" — and those are other ways of saying the subject, not
+    /// further things a passage about it has to say.
+    ///
+    /// **And not "who" on its own.** "who", "whom" and "whose" stay search
+    /// tokens because the ranker reads them as the sign that the answer is a
+    /// person, and beside a content word they only widen the net. But when
+    /// nothing else is left to require, requiring one of them asks every
+    /// passage for a relative pronoun, so the subject is required alone.
+    ///
+    /// Together they lost a reported case. *Autobiography of Benjamin
+    /// Franklin*'s name table holds "Father Abraham", so "Who is the author's
+    /// father?" took `father` as its subject, and every passage had to contain
+    /// "father" and one of "who", "mother", "parents"… — which "Josiah, my
+    /// father, married young, and carried his wife with three children into
+    /// New England" does not. Four passages came back, none saying who the
+    /// father was, and the answer was assembled from an apprenticeship, a
+    /// cutler and an epitaph.
+    static func optionalTerms(_ terms: QueryTerms, subject: Subject) -> [String] {
+        let family = Set(Kinship.groups(matching: subject.tokens).flatMap { $0 })
+        let others = terms.searchTokens.filter {
+            !subject.tokens.contains($0) && !family.contains($0)
+        }
+        return others.allSatisfy(QueryTerms.personWords.contains) ? [] : others
     }
 
     // MARK: - Logging

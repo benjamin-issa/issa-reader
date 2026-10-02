@@ -29,43 +29,28 @@ struct AskQuestionFixture: Decodable, Sendable {
     var evidenceContains: [String]
     /// …and that must not appear in any of them.
     var evidenceExcludes: [String]
-    /// At least one of these must appear in the answer. Empty means the
-    /// question's wording is not pinned — either because no particular answer
-    /// is right (the degradation cases) or because one was pinned and the model
-    /// has since moved off it.
+    /// At least one of these must appear in the answer. Empty means no
+    /// particular wording is right — the degradation cases.
     ///
-    /// One case is the latter, and what moved it is worth writing down, because
-    /// the first two explanations given for it were both wrong.
+    /// Never emptied to make a case pass. "Who is the author's father?" was:
+    /// it answered *Benjamin* Franklin once — the book's own author rather than
+    /// his father — which is why the question is in this file at all; it was
+    /// fixed, it answered *Josiah* Franklin for several releases, and when the
+    /// renderer stopped keeping the stray space between two blocks on
+    /// 2026-09-17 it stopped naming him, and this list was blanked as a model
+    /// wobble that no test should pin.
     ///
-    /// "Who is the author's father?" answered *Benjamin* Franklin once — the
-    /// book's own author rather than his father — which is why the question is
-    /// in this file at all; it was fixed, and it answered *Josiah* Franklin for
-    /// several releases. On 2026-09-17 the renderer stopped keeping the stray
-    /// space that pretty-printed markup leaves between two blocks, and the
-    /// answer stopped naming him.
-    ///
-    /// It was first recorded here that shortening the excerpts let one more of
-    /// them fit the model's budget. **That is not what happened**, and it was
-    /// asserted without being measured. Both versions were then run side by
-    /// side over every question in this file, dumping what retrieval chose and
-    /// what the prompt carried:
-    ///
-    /// - retrieval chose the **same four passages, in the same order**;
-    /// - the prompt carried **all four, in both**, dropping none;
-    /// - the prompt was *longer* afterwards, 526 tokens against 529, even
-    ///   though the text had lost characters.
-    ///
-    /// So nothing was selected differently. What changed is how the same prose
-    /// tokenises once a space between two paragraphs is gone, and generation is
-    /// greedy (`usesNucleusSampling = false`), so one different token at the
-    /// front is a different answer all the way down. Six of the fifteen
-    /// questions reworded; five of the six were harmless and this one was not.
-    ///
-    /// Which is why it is recorded rather than asserted away: there is nothing
-    /// in retrieval to fix, pinning a wording pins the model rather than the
-    /// feature, and no prompt change ships on one question. `evidenceContains`
-    /// still checks the excerpts, and `leaked` and `newNames` still check the
-    /// answer — see `WhitespaceStabilityTests` for what is now held down.
+    /// It was not a wobble. The sentence that answers the question — "Josiah,
+    /// my father, married young, and carried his wife with three children into
+    /// New England" — had never been retrieved: `father` is a known name in
+    /// this book ("Father Abraham"), so it became the subject, and every
+    /// passage had to contain "father" *and* one of "who", "mother",
+    /// "parents"…, which that sentence does not. The model was handed four
+    /// excerpts that never said who the father was, and its answer turned on
+    /// an epitaph's "Josiah Franklin" — which greedy decoding over slightly
+    /// different whitespace stopped reaching. Retrieval was the fix (see
+    /// `AskRetriever.optionalTerms(_:subject:)`), `evidenceContains` now pins
+    /// the sentence itself, and the answer names him again.
     var answerContainsAny: [String]
     /// None of these may.
     var answerExcludes: [String]

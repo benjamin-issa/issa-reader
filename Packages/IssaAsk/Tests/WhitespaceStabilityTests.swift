@@ -19,9 +19,10 @@ import Testing
 /// so the next change of the same shape is checked rather than re-investigated.
 ///
 /// The suite is deliberately about *inter-block* whitespace. Interior spacing
-/// inside a passage does change the characters the model is tokenising, and no
-/// test can hold a language model's wording still — see the note on
-/// `AskQuestionFixture.answerContainsAny`.
+/// inside a passage does change the characters the model is tokenising, and an
+/// answer that leaned on one lucky phrasing can move with it — which is why
+/// the fixture pins the excerpt that states an answer, not only the answer.
+/// See the note on `AskQuestionFixture.answerContainsAny`.
 @Suite("Whitespace between blocks moves nothing")
 struct WhitespaceStabilityTests {
     /// A chapter as the renderer emits it, and the same chapter as it used to
