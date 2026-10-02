@@ -25,7 +25,10 @@ public struct LibraryMutationService: Sendable {
     /// read, which is usually what someone wants but is surprising if they have
     /// just marked something "To read". 3.x skips a book with *no* status — its
     /// update has no row to change — so the client makes that one move itself
-    /// (`StatusAdvance`), through this call, which inserts the missing row.
+    /// (`StatusAdvance`), and not through this call: the app applies the
+    /// status it chose to the book (`applyStatus`) and queues the write in
+    /// `MutationQueue`, and `MutationDrain.send` sends it, as the same PUT this
+    /// call makes, which inserts the missing row.
     public func setStatus(_ statusUUID: String, for bookUUID: String) async throws {
         try await client.put(Endpoint.status(bookUUID), body: StatusBody(status: statusUUID))
     }
