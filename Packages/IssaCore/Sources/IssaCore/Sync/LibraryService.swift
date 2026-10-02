@@ -35,11 +35,18 @@ public struct LibraryService: Sendable {
     ///
     /// Logged rather than silent: a book vanishing from the library with no
     /// explanation is its own support problem.
+    ///
+    /// And the boundary for `localCopy` too, which marks a book as one the
+    /// reader added from their own files. No server sends it; one that did
+    /// would have its book drawn as a file on this device, opened from a
+    /// folder it does not own and kept out of the account's own reset. So it
+    /// is dropped from every book here, whatever it says.
     static func refusingUnsafeIdentifiers(_ books: [Book]) -> [Book] {
         var kept: [Book] = []
         kept.reserveCapacity(books.count)
-        for book in books {
+        for var book in books {
             if book.uuid.isBareUUID {
+                book.localCopy = nil
                 kept.append(book)
             } else {
                 IssaLog.warning("catalogue entry refused: uuid is not a uuid", [
@@ -67,11 +74,18 @@ public struct LibraryService: Sendable {
     }
 
     public func book(_ uuid: String) async throws -> Book {
-        let book: Book = try await client.get(Endpoint.book(uuid))
+        try Self.refusingUnsafeIdentifier(try await client.get(Endpoint.book(uuid)))
+    }
+
+    /// One book, under the same two rules as the catalogue: a uuid that is a
+    /// uuid, and no `localCopy` — see `refusingUnsafeIdentifiers`.
+    static func refusingUnsafeIdentifier(_ book: Book) throws -> Book {
         guard book.uuid.isBareUUID else {
             IssaLog.warning("book refused: uuid is not a uuid", ["title": book.title])
             throw StorytellerError.notFound
         }
+        var book = book
+        book.localCopy = nil
         return book
     }
 

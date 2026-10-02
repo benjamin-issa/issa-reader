@@ -55,6 +55,17 @@ public actor LibraryStore {
         StorageRoot.directory("Store")
     }
 
+    /// The key of the store for books the reader added from their own files.
+    ///
+    /// Not a URL, so it cannot collide with a server's normalised address,
+    /// and the file it names is the device's rather than any account's.
+    /// **That store must never see `replaceCatalogue`, `clearAccountData`,
+    /// `setAccount` or a `MutationQueue`**: its rows are not a catalogue, they
+    /// belong to no account, and nothing in them is ever sent anywhere. Its
+    /// annotations are written with no account, which `annotations(for:)`
+    /// reads back as `account IS NULL` for as long as none is set.
+    public static let deviceBooksKey = "issa.device-books"
+
     /// A server URL is not a filename; hash it rather than trying to sanitise.
     ///
     /// SHA-256, not `hashValue`: Swift seeds string hashing randomly *per
@@ -307,6 +318,12 @@ public actor LibraryStore {
         try dbQueue.write { db in try row.save(db) }
     }
 
+    /// Removes one book's row. For the device store, when the reader removes
+    /// a book they added; a server's catalogue is replaced whole instead.
+    public func deleteBook(_ uuid: String) throws {
+        _ = try dbQueue.write { db in try BookRow.deleteOne(db, key: uuid) }
+    }
+
     public var isEmpty: Bool {
         get throws { try dbQueue.read { try BookRow.fetchCount($0) == 0 } }
     }
@@ -418,6 +435,13 @@ public actor LibraryStore {
                     + "writtenAt = excluded.writtenAt "
                     + "WHERE excluded.writtenAt > audioAnchor.writtenAt",
                 arguments: [uuid, anchor.audioHref, anchor.offset, anchor.writtenAt])
+        }
+    }
+
+    /// Forgets where one book's playback was, when the book itself goes.
+    public func deleteAudioAnchor(forBook uuid: String) throws {
+        try dbQueue.write { db in
+            try db.execute(sql: "DELETE FROM audioAnchor WHERE bookUUID = ?", arguments: [uuid])
         }
     }
 

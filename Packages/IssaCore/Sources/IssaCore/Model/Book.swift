@@ -80,6 +80,12 @@ public struct Book: Codable, Hashable, Sendable, Identifiable {
     public var audiobook: AudiobookFormat?
     public var readaloud: ReadaloudFormat?
 
+    /// Set only on a book the reader added from their own files, and never by
+    /// a server: `LibraryService` strips it from everything it decodes, so a
+    /// catalogue cannot make one of its books look like a file on this device.
+    /// See `LocalCopy` and `Book.local(uuid:metadata:narrationDuration:copy:)`.
+    public var localCopy: LocalCopy?
+
     public var id: String { uuid }
 
     private enum CodingKeys: String, CodingKey {
@@ -93,6 +99,9 @@ public struct Book: Codable, Hashable, Sendable, Identifiable {
         case series, tags, collections, identifiers, externalData
         case status, position
         case ebook, audiobook, readaloud
+        // A name no Storyteller version sends, so a server's own field can
+        // never land here by coincidence; one sent on purpose is stripped.
+        case localCopy = "issaLocal"
     }
 }
 
