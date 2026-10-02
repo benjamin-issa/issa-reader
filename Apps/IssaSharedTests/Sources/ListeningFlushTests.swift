@@ -132,4 +132,48 @@ struct ListeningFlushTests {
 
         #expect(try await fixture.queuedPositions().isEmpty)
     }
+
+    /// F04#4. The log first, before anything that can wait on the network:
+    /// a queued write and a server that takes it, and the flush made through
+    /// the model's seam records how many requests had gone out when it ran.
+    @Test("the log is flushed before the drain sends anything")
+    func theLogIsFlushedBeforeTheDrain() async throws {
+        let server = ScriptedServer.make("listening-flush")
+        defer { ScriptedServer.forget(server) }
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "log-flush-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try LibraryStore(serverKey: server.absoluteString, directory: directory)
+        try await MutationQueue(store: store).enqueue(
+            .position, bookUUID: Self.uuid,
+            payload: JSONEncoder().encode(MutationDrain.PositionPayload(
+                locator: ReadiumLocator(
+                    href: "OEBPS/ch01.xhtml", type: "application/xhtml+xml",
+                    locations: .init(progression: 0.2, totalProgression: 0.2)),
+                timestamp: 10)),
+            supersedes: 10)
+        let app = AppModel(keychain: LifecycleTokens(), notificationCentre: NotificationCenter())
+        app.useStore(store)
+        app.session = ScriptedServer.session(on: server, storing: "token-A")
+        let flushes = FlushLog()
+        app.logFlush = { [server] in
+            await flushes.record(sent: ScriptedServer.requests(to: server).count)
+        }
+
+        await app.flushOpenReaders()
+
+        let sentAtEachFlush = await flushes.sent
+        #expect(ScriptedServer.requests(to: server).contains {
+            $0.method == "POST" && $0.path == Endpoint.positions(Self.uuid)
+        }, "the drain has to have sent the queued write")
+        #expect(sentAtEachFlush.first == 0,
+                "the log was first flushed after the drain had already gone to the network")
+        #expect(sentAtEachFlush.count >= 2, "and again at the end, for what the drain logged")
+    }
+}
+
+/// How many requests had been sent each time the log was flushed.
+private actor FlushLog {
+    private(set) var sent: [Int] = []
+    func record(sent count: Int) { sent.append(count) }
 }

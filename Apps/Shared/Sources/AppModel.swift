@@ -2583,6 +2583,14 @@ public final class AppModel {
     /// away. The caller is responsible for holding the app awake long enough;
     /// see the scene-phase handler.
     public func flushOpenReaders() async {
+        // The log first, before anything here can wait on the network. Every
+        // save below queues its write and drains, and the drain at the end
+        // waits for one too: a POST to an unreachable server waits out
+        // URLSession's sixty seconds, the Mac answers its quit after three
+        // and iOS's background time runs out after about thirty, so on
+        // exactly the quit that needs it most the flush at the end never ran.
+        // Flushed again at the end, for what the saves and the drain logged.
+        await logFlush()
         for model in readers.values {
             await model.saveProgress()
         }
@@ -2601,8 +2609,16 @@ public final class AppModel {
         // the entries the log exists to capture. Awaited off the main actor:
         // the flush is lock-held file I/O, and this runs inside the background
         // assertion and the terminate deadline.
-        await IssaLog.flush()
+        await logFlush()
     }
+
+    /// How `flushOpenReaders` flushes the log: `IssaLog.flush`.
+    ///
+    /// A test seam, and internal for that reason alone, as `useStore` is:
+    /// what matters is when the flush runs relative to the drain's first
+    /// request, and the log's own file says nothing about when it was
+    /// written.
+    @ObservationIgnored var logFlush: @Sendable () async -> Void = { await IssaLog.flush() }
 
     /// Releases every open reader and stops whichever is narrating. Every open
     /// book belongs to the account being left, unlike the per-window release
