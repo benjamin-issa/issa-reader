@@ -59,8 +59,8 @@ final class LiveServerTVTests: XCTestCase {
         sessionSurvives(app)
         serverVersion(app)
 
-        let stillIn = !signedOut(app)
-        record("sessionAtEnd", stillIn, stillIn ? "still signed in" : "signed out by the end of the run")
+        let end = signedIn(app)
+        record("sessionAtEnd", end.passed, end.detail)
     }
 
     // MARK: - Checks
@@ -108,8 +108,9 @@ final class LiveServerTVTests: XCTestCase {
         record("library", loaded, loaded ? "the library shows its books" : "no book appeared on the shelf")
         Thread.sleep(forTimeInterval: 30)
         capture(app, "library")
-        let survived = !signedOut(app)
-        record("session", survived, survived ? "still signed in 30 s after the covers" : "signed out while covers loaded")
+        let survived = signedIn(app)
+        record("session", survived.passed, survived.passed
+            ? "still signed in 30 s after the covers" : "while covers loaded: \(survived.detail)")
     }
 
     /// tvOS lists Advanced's rows inline, under a plain heading, so the row is
@@ -165,6 +166,20 @@ final class LiveServerTVTests: XCTestCase {
     /// knows its server skips the form and starts a new pairing at once.
     private func signedOut(_ app: XCUIApplication) -> Bool {
         codeElement(app).exists || app.staticTexts["Sign in to your server"].exists
+    }
+
+    /// Signed in, on positive evidence: the app in the foreground on one of
+    /// its signed-in screens. "No code on screen" alone passed over an app
+    /// that had crashed or quit, which shows no code either.
+    private func signedIn(_ app: XCUIApplication) -> (passed: Bool, detail: String) {
+        guard app.state == .runningForeground else {
+            return (false, "the app is not running in the foreground (state \(app.state.rawValue))")
+        }
+        if signedOut(app) { return (false, "signed out") }
+        guard isLanded(app) || app.descendants(matching: .any)["screen.settings"].exists else {
+            return (false, "no signed-in screen on show")
+        }
+        return (true, "still signed in")
     }
 
     /// Moves focus up into the tab bar, then along it to `title`. A tab is

@@ -76,8 +76,8 @@ final class LiveServerTests: XCTestCase {
 
         // Again at the end: a session that survived the covers can still be
         // lost to a reader's download or a position write.
-        let stillIn = !signedOut(app)
-        record("sessionAtEnd", stillIn, stillIn ? "still signed in" : "signed out by the end of the run")
+        let end = signedIn(app)
+        record("sessionAtEnd", end.passed, end.detail)
     }
 
     // MARK: - Checks
@@ -160,8 +160,9 @@ final class LiveServerTests: XCTestCase {
         record("library", loaded, loaded ? "the library shows its books" : "no rail or book cell appeared")
         Thread.sleep(forTimeInterval: 30)
         capture(app, "library")
-        let survived = !signedOut(app)
-        record("session", survived, survived ? "still signed in 30 s after the covers" : "signed out while covers loaded")
+        let survived = signedIn(app)
+        record("session", survived.passed, survived.passed
+            ? "still signed in 30 s after the covers" : "while covers loaded: \(survived.detail)")
     }
 
     /// Settings › Advanced shows the version the script expects.
@@ -373,6 +374,28 @@ final class LiveServerTests: XCTestCase {
     private func signedOut(_ app: XCUIApplication) -> Bool {
         app.descendants(matching: .any)["screen.signIn"].exists
             || app.staticTexts["Your session has ended."].exists
+    }
+
+    /// Signed in, on the evidence of something a signed-in app shows, not
+    /// only the absence of the sign-in screen. A crashed or quit app shows no
+    /// sign-in screen either, so "not signed out" passed both session checks
+    /// over an app that was no longer running.
+    ///
+    /// The witness is the app in the foreground and either a signed-in tab
+    /// or the reader: its Back button, or its page while the bars are hidden.
+    private func signedIn(_ app: XCUIApplication) -> (passed: Bool, detail: String) {
+        guard app.state == .runningForeground else {
+            return (false, "the app is not running in the foreground (state \(app.state.rawValue))")
+        }
+        if signedOut(app) { return (false, "signed out") }
+        let any = app.descendants(matching: .any)
+        let onATab = isLanded(app) || any["screen.settings"].exists
+        let inTheReader = app.buttons["Back to the book"].exists
+            || any.matching(NSPredicate(format: "value BEGINSWITH %@", "Page ")).firstMatch.exists
+        guard onATab || inTheReader else {
+            return (false, "no signed-in screen and no reader on show")
+        }
+        return (true, "still signed in")
     }
 
     /// Opens a book by the same link a widget uses, and dismisses the
