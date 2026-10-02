@@ -17,7 +17,7 @@ public struct SeriesGroup: Sendable, Hashable, Identifiable {
     /// Where a book sits in *this* series. A book can belong to two, so the
     /// membership is looked up by name rather than taken from `series.first`.
     public func position(of book: Book) -> Double? {
-        book.series.first { $0.name == name }?.position
+        book.membership(inSeries: name)?.position
     }
 
     /// How long the series can be said to be: the number of books held,
@@ -61,7 +61,8 @@ public struct LibraryRails: Sendable, Equatable {
     /// its "See all" opens can never disagree about a book.
     public let withAudio: [Book]
     /// The most-used tags, each with the books that carry it. Tags on a single
-    /// book are skipped — a rail of one is a label, not a place to look around.
+    /// book are skipped — a rail of one is a label, not a place to look around
+    /// (`minimumBooksPerTag`, the floor a book page's tag chip links by too).
     public let tagRails: [TagRail]
     /// Books not yet started, newest arrivals first — the Reading tab's
     /// "Up next".
@@ -93,7 +94,7 @@ public struct LibraryRails: Sendable, Equatable {
         withAudio = Array(books.filter(\.hasServableAudio).prefix(Self.railLength))
 
         tagRails = derivation.byTag
-            .filter { $0.value.count > 1 }
+            .filter { $0.value.count >= Self.minimumBooksPerTag }
             .sorted { $0.value.count == $1.value.count ? $0.key < $1.key : $0.value.count > $1.value.count }
             .prefix(Self.tagRailCount)
             .map { TagRail(tag: $0.key, books: Array($0.value.prefix(Self.railLength))) }
