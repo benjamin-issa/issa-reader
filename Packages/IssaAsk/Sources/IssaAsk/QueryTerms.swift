@@ -262,7 +262,8 @@ public struct QueryTerms: Sendable, Hashable {
         "from", "into", "onto", "upon", "over", "under", "above", "below",
         "through", "across", "along", "around", "behind", "beyond", "during",
         "against", "between", "among", "beside", "toward", "towards", "off",
-        "out", "up", "down", "back", "away",
+        "out", "up", "down", "back", "away", "despite", "throughout", "beneath",
+        "inside", "outside", "unlike",
         // Adverbs that open sentences.
         "not", "never", "always", "often", "sometimes", "soon", "now", "later",
         "again", "already", "almost", "nearly", "just", "only", "even",

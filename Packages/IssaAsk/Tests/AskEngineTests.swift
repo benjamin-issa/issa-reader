@@ -721,6 +721,16 @@ struct AskEngineTests {
                     + "Then everything went dark.",
                 "What happened?", []
             ),
+            // Measured on the 27 model (1.4.0 Ask review): three correct
+            // answers about the garden opened "Despite her efforts, …", and
+            // *Alice* never says "despite" in its first two chapters, so all
+            // three were refused. A preposition is closed-class; a name is
+            // still caught after it.
+            (
+                "Despite her efforts, she cannot get in. Throughout, Aldric waits. "
+                    + "Inside, it is dark. Unlike Ryn, she stays.",
+                "Does Alice get into the garden?", ["aldric", "ryn"]
+            ),
             // The honest worst case. "Cooks" is a plural noun opening a
             // sentence, and it costs a refusal on a book that never uses the
             // word. A test that hid this would be a bad test.
