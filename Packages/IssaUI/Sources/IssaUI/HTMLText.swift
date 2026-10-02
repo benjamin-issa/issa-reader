@@ -242,11 +242,17 @@ public enum HTMLText {
     }
 
     /// Collapses runs of whitespace, the way a browser lays out HTML.
+    ///
+    /// Except the non-breaking spaces, which a browser collapses no more than
+    /// it would a letter. `Character.isWhitespace` is true for them, so
+    /// `Vol.&nbsp;II` became a space a line could break at, and a leading run
+    /// of `&nbsp;` — a description's own indent — collapsed to one space that
+    /// the leading trim then removed.
     private static func collapse(_ text: String) -> String {
         var out = ""
         var lastWasSpace = false
         for character in text {
-            let isSpace = character.isWhitespace
+            let isSpace = character.isWhitespace && !nonBreaking.contains(character)
             if isSpace {
                 if !lastWasSpace { out.append(" ") }
             } else {
@@ -256,6 +262,12 @@ public enum HTMLText {
         }
         return out
     }
+
+    /// The spaces that mean "do not break here", which collapsing must keep.
+    private static let nonBreaking: Set<Character> = [
+        "\u{00A0}", // no-break space, `&nbsp;`
+        "\u{202F}", // narrow no-break space
+    ]
 
     /// Decodes the entity forms that actually appear in book metadata.
     ///

@@ -49,6 +49,24 @@ struct HTMLTextTests {
         #expect(plain("Pretty\n   printed\t\tdescription") == "Pretty printed description")
     }
 
+    /// `Character.isWhitespace` is true for U+00A0, so a non-breaking space
+    /// collapsed into an ordinary one: `Vol.&nbsp;II` could break between
+    /// its halves, and a leading run of them — a description's own
+    /// indentation — collapsed to one space that the leading trim then took.
+    /// A browser, the model here, collapses neither.
+    @Test("a non-breaking space is kept, not collapsed into a breakable one")
+    func nonBreakingSpaces() {
+        #expect(plain("Vol.&nbsp;II") == "Vol.\u{00A0}II")
+        #expect(plain("Chapter&nbsp;&nbsp;One") == "Chapter\u{00A0}\u{00A0}One")
+        #expect(plain("a&#160;b") == "a\u{00A0}b")
+        #expect(plain("a\u{00A0}b") == "a\u{00A0}b")
+        #expect(plain("10\u{202F}km") == "10\u{202F}km")
+        #expect(plain("&nbsp;&nbsp;&nbsp;&nbsp;Indented line")
+            == "\u{00A0}\u{00A0}\u{00A0}\u{00A0}Indented line")
+        // Ordinary whitespace beside one still collapses around it.
+        #expect(plain("a \n &nbsp;\t b") == "a \u{00A0} b")
+    }
+
     @Test("unknown tags are dropped rather than shown or thrown")
     func unknownTags() {
         #expect(plain("<span class=\"x\">Kept</span> <madeup>text</madeup>") == "Kept text")
