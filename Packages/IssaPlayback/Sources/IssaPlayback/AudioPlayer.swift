@@ -423,21 +423,43 @@ public final class AudioPlayer {
     }
 
     public func seek(to seconds: TimeInterval) async {
-        // Rounded *up* to the timescale rather than to nearest. A sentence
-        // rarely begins on an exact 1/600 of a second, so half of all targets
-        // used to quantise a fraction of a millisecond *below* the sentence
-        // they name — and the fragment lookup is half-open, so the next tick
-        // resolved to the sentence before, dragged the highlight back, and
-        // across a document turned the page back and told the sleep timer a
-        // chapter had ended. Up to 1/600 s late is inaudible; early is visible.
-        let target = CMTime(
-            value: CMTimeValue((max(0, seconds) * 600).rounded(.up)), timescale: 600,
-        )
+        let target = Self.cmTime(forSeconds: seconds)
         // Exact seeking: a read-along highlight lands on the wrong sentence if
         // the player rounds to the nearest keyframe.
         await player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
-        currentTime = seconds
+        // The time asked for, unless it is not a time at all; then where the
+        // engine was actually sent, so the clock never holds an infinity.
+        currentTime = seconds.isFinite ? seconds : target.seconds
         if isPlaying { player.rate = rate }
+    }
+
+    /// The engine's target for a time in seconds: the 1/600 s timescale,
+    /// rounded up, and saturating rather than trapping.
+    ///
+    /// Rounded *up* rather than to nearest. A sentence rarely begins on an
+    /// exact 1/600 of a second, so half of all targets used to quantise a
+    /// fraction of a millisecond *below* the sentence they name — and the
+    /// fragment lookup is half-open, so the next tick resolved to the sentence
+    /// before, dragged the highlight back, and across a document turned the
+    /// page back and told the sleep timer a chapter had ended. Up to 1/600 s
+    /// late is inaudible; early is visible.
+    ///
+    /// Saturating, because a seek target is whatever a book says. `SMILClock`
+    /// refuses only the non-finite and the negative, so a `clipBegin` of
+    /// `1e20s` reaches here, and so does a manifest track claiming `1e300`
+    /// seconds; `CMTimeValue(Double)` traps past `Int64.max / 600` seconds —
+    /// about 1.5e16 — and on infinity, which crashed the app every time such a
+    /// book was opened at that place. Anything past the largest value the
+    /// timescale can hold is a seek to the end of the item, which is where
+    /// AVFoundation puts a seek past it anyway. NaN is no place, and goes to
+    /// the start, as `max(0, .nan)` always sent it.
+    static func cmTime(forSeconds seconds: TimeInterval) -> CMTime {
+        guard !seconds.isNaN else { return .zero }
+        let ticks = (max(0, seconds) * 600).rounded(.up)
+        guard let value = CMTimeValue(exactly: ticks) else {
+            return CMTime(value: .max, timescale: 600)
+        }
+        return CMTime(value: value, timescale: 600)
     }
 
     public func skip(by delta: TimeInterval) async {
