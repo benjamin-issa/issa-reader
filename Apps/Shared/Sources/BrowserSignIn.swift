@@ -251,25 +251,67 @@ public final class BrowserSignInModel {
 
     public private(set) var stage: Stage = .starting
 
+    /// One browser sign-in, start to finish. A parameter so a test can stand
+    /// in for the browser and the server.
+    typealias Flow = @Sendable (URL) async -> AppTokenOutcome
+
     private let serverURL: URL
+    private let flow: Flow
     private var task: Task<Void, Never>?
 
-    public init(serverURL: URL) {
-        self.serverURL = serverURL
+    public convenience init(serverURL: URL) {
+        self.init(serverURL: serverURL) { url in
+            await AppTokenSignInFlow(serverURL: url, browser: SafariApprovalBrowser()).run()
+        }
     }
 
-    /// Bumped by every `begin`, so a superseded attempt cannot write.
+    init(serverURL: URL, flow: @escaping Flow) {
+        self.serverURL = serverURL
+        self.flow = flow
+    }
+
+    /// Bumped by every attempt, so a superseded one cannot write.
     private var generation = 0
 
+    /// Starts the sign-in, once. A second call while one is running, or after
+    /// it has finished, does nothing.
+    ///
+    /// Called from the view's `onAppear`, and the view appears more than once:
+    /// the browser covers it the way a `fullScreenCover` does, so its
+    /// dismissal after a successful callback appears the view again. When
+    /// this started over unconditionally, that second appearance cancelled
+    /// the token exchange still in flight — the browser flashed open again,
+    /// and on a slow server went on doing so until one exchange beat the
+    /// animation — or, with the exchange done and the account being adopted,
+    /// opened a second browser session that minted a server session nothing
+    /// would ever use. Starting again is `restart()`, which only the reader
+    /// asks for.
     public func begin() {
+        // Not `task == nil`: `cancel()` clears the task when the route is left
+        // or the token has been handed over, and an appearance after that must
+        // not start a sign-in either.
+        guard !started else { return }
+        start()
+    }
+
+    /// Abandons whatever attempt there is and starts a new one: "Try again".
+    public func restart() {
         task?.cancel()
+        start()
+    }
+
+    /// Whether `begin()` has been and gone.
+    private var started = false
+
+    private func start() {
+        started = true
         generation &+= 1
         let attempt = generation
         stage = .starting
         let url = serverURL
+        let flow = flow
         task = Task { [weak self] in
-            let outcome = await AppTokenSignInFlow(
-                serverURL: url, browser: SafariApprovalBrowser()).run()
+            let outcome = await flow(url)
             self?.finish(outcome, from: attempt)
         }
     }
@@ -377,6 +419,13 @@ struct BrowserSignInView: View {
                 Text(reason)
                     .font(Typography.body)
                     .foregroundStyle(Palette.alert)
+                // The sentence above says "Try again", so there has to be
+                // something to try it with. The appearing view no longer starts
+                // over by itself — see `begin()` — so this is the way back in.
+                Button("Try again") { model.restart() }
+                    .font(Typography.body)
+                    .foregroundStyle(Palette.tangerine)
+                    .buttonStyle(.plain)
             }
 
             // Names its destination. It used to say "a different way", which
@@ -411,8 +460,9 @@ struct BrowserSignInView: View {
         // presents nothing and therefore never covers anything.
         //
         // Cancellation is now deliberate, from the two places the route is
-        // actually left — see `SignInView.content` — plus `begin()`, which
-        // supersedes its own previous attempt.
+        // actually left — see `SignInView.content` — plus `restart()`, which
+        // supersedes its own previous attempt. `begin()` starts one attempt
+        // and only one, however often this view appears.
     }
 
     private var headline: String {
