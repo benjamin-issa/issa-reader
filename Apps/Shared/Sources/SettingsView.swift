@@ -8,6 +8,8 @@ public struct SettingsView: View {
     @Environment(NowPlayingController.self) private var nowPlaying
     @Environment(PlaybackSettings.self) private var settings
     @State private var confirmingSignOut = false
+    /// True from the confirmation until the sign-out has finished.
+    @State private var isSigningOut = false
 
     public init() {}
 
@@ -95,18 +97,40 @@ public struct SettingsView: View {
             .listRowBackground(Palette.surface)
 
             Section {
-                Button("Sign out", role: .destructive) { confirmingSignOut = true }
+                // Held off while one is under way. Signing out tells the
+                // server first, and a server that does not answer is waited
+                // for up to the logout's own limit — seconds in which nothing
+                // on this screen changed and Sign out could be pressed again,
+                // starting a second sign-out behind the first.
+                Button(isSigningOut ? "Signing out…" : "Sign out", role: .destructive) {
+                    confirmingSignOut = true
+                }
+                .disabled(isSigningOut)
             }
             .listRowBackground(Palette.surface)
             .confirmationDialog("Sign out?", isPresented: $confirmingSignOut, titleVisibility: .visible) {
                 // Downloaded books are expensive to fetch again, so this is a
                 // choice rather than an assumption.
-                Button("Sign out and keep downloads") { Task { await app.signOut(keepDownloads: true, nowPlaying: nowPlaying) } }
+                Button("Sign out and keep downloads") { signOut(keepDownloads: true) }
+                    .disabled(isSigningOut)
                 Button("Sign out and delete downloads", role: .destructive) {
-                    Task { await app.signOut(keepDownloads: false, nowPlaying: nowPlaying) }
+                    signOut(keepDownloads: false)
                 }
+                .disabled(isSigningOut)
                 Button("Cancel", role: .cancel) {}
             }
+        }
+    }
+
+    private func signOut(keepDownloads: Bool) {
+        guard !isSigningOut else { return }
+        isSigningOut = true
+        Task {
+            await app.signOut(keepDownloads: keepDownloads, nowPlaying: nowPlaying)
+            // Usually moot — a finished sign-out leaves this screen — but a
+            // sign-out that ends with the app still here must not leave the
+            // button dead.
+            isSigningOut = false
         }
     }
 
