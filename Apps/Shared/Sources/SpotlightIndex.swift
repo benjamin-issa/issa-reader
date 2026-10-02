@@ -74,9 +74,71 @@ enum SpotlightIndex {
         }
     }
 
+    /// Takes this library out of system search, waiting for that at most
+    /// `clearWait`.
+    ///
+    /// Called in line by an account's departure — sign-out and an account
+    /// switch — which awaited the deletion outright. The deletion is answered
+    /// by a system daemon, and one that never answers (seen on an iOS 27
+    /// simulator under load, for minutes on end) held the hand-over with it:
+    /// the arriving account never reached its library. The deletion still
+    /// runs to the end when it is slow; only the departure stops waiting.
     static func clear() async {
         UserDefaults.standard.removeObject(forKey: versionKey)
-        try? await CSSearchableIndex.default().deleteSearchableItems(withDomainIdentifiers: [domain])
+        let finished = await BoundedWait.run(for: clearWait) {
+            try? await CSSearchableIndex.default().deleteSearchableItems(withDomainIdentifiers: [domain])
+        }
+        if !finished {
+            IssaLog.warning("spotlight clear still running; not waiting for it",
+                            ["seconds": String(Int(clearWait.components.seconds))])
+        }
     }
+
+    static let clearWait: Duration = .seconds(3)
     #endif
+}
+
+/// Waits for some work, or for a deadline, whichever comes first.
+///
+/// For work a caller cannot cancel and must not be held by: the work runs in
+/// a task of its own and goes on after the wait ends. A task group cannot do
+/// this, because it waits for every child, and a child stuck in a call that
+/// ignores cancellation holds the group as surely as awaiting it directly.
+enum BoundedWait {
+    /// - Returns: whether the work finished before the deadline.
+    @discardableResult
+    static func run(
+        for limit: Duration, _ work: @escaping @Sendable () async -> Void,
+    ) async -> Bool {
+        let once = Once()
+        return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            once.hold(continuation)
+            Task.detached {
+                await work()
+                once.resume(returning: true)
+            }
+            Task.detached {
+                try? await Task.sleep(for: limit)
+                once.resume(returning: false)
+            }
+        }
+    }
+
+    /// Resumes a continuation exactly once, whichever side gets there first.
+    private final class Once: @unchecked Sendable {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<Bool, Never>?
+
+        func hold(_ continuation: CheckedContinuation<Bool, Never>) {
+            lock.withLock { self.continuation = continuation }
+        }
+
+        func resume(returning value: Bool) {
+            let waiting = lock.withLock { () -> CheckedContinuation<Bool, Never>? in
+                defer { continuation = nil }
+                return continuation
+            }
+            waiting?.resume(returning: value)
+        }
+    }
 }
