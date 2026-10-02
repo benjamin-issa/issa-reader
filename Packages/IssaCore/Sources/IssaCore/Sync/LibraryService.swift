@@ -218,43 +218,65 @@ public struct LibraryDerivation: Sendable {
 
     /// Author name to their books, for the design's "More by…" rail.
     public var byAuthor: [String: [Book]] {
-        Dictionary(grouping: books.flatMap { book in book.authors.map { ($0.name, book) } },
-                   by: \.0)
-            .mapValues { $0.map(\.1) }
+        grouped { $0.authors.map(\.name) }
     }
 
     public var byNarrator: [String: [Book]] {
-        Dictionary(grouping: books.flatMap { book in book.narrators.map { ($0.name, book) } },
-                   by: \.0)
-            .mapValues { $0.map(\.1) }
+        grouped { $0.narrators.map(\.name) }
     }
 
     /// Series name to its books in reading order.
     public var bySeries: [String: [Book]] {
-        Dictionary(grouping: books.flatMap { book in book.series.map { ($0.name, book) } },
-                   by: \.0)
-            .mapValues { pairs in
-                // The ordinal must come from the series being grouped, not
-                // `series.first`: a book in two series has two positions, and
-                // ordering one series by the other's numbers shuffles it.
-                // Every pair in a group shares its name, so read it once.
-                let name = pairs[0].0
-                return pairs.map(\.1).sorted { lhs, rhs in
-                    let l = lhs.series.first { $0.name == name }?.position ?? .greatestFiniteMagnitude
-                    let r = rhs.series.first { $0.name == name }?.position ?? .greatestFiniteMagnitude
-                    return l < r
-                }
+        var ordered: [String: [Book]] = [:]
+        for (name, members) in grouped(by: { $0.series.map(\.name) }) {
+            // The ordinal must come from the series being grouped, not
+            // `series.first`: a book in two series has two positions, and
+            // ordering one series by the other's numbers shuffles it.
+            ordered[name] = members.sorted { lhs, rhs in
+                let l = lhs.series.first { $0.name == name }?.position ?? .greatestFiniteMagnitude
+                let r = rhs.series.first { $0.name == name }?.position ?? .greatestFiniteMagnitude
+                return l < r
             }
+        }
+        return ordered
+    }
+
+    /// Tag name to the books that carry it, in catalogue order: the Browse
+    /// screen's tag rails, and anything else that lists a tag's books.
+    public var byTag: [String: [Book]] {
+        grouped { $0.tags.map(\.name) }
+    }
+
+    /// Each name a book gives, to the books that give it — every book once.
+    ///
+    /// A catalogue row can name the same creator, series or tag twice: an
+    /// EPUB whose metadata repeats a `dc:creator` is enough. Grouped once per
+    /// mention, the book went into the group twice — two cells with one
+    /// identity in a rail, "3 books" for two on a series screen, another book
+    /// listed twice in a "More by" rail, and a tag or series on one book
+    /// passing the "more than one book" test for a rail of its own.
+    private func grouped(by names: (Book) -> [String]) -> [String: [Book]] {
+        var groups: [String: [Book]] = [:]
+        var members: [String: Set<String>] = [:]
+        for book in books {
+            for name in names(book) {
+                guard members[name, default: []].insert(book.uuid).inserted else { continue }
+                groups[name, default: []].append(book)
+            }
+        }
+        return groups
     }
 
     /// Tag counts, for the filter UI a 3.x server would serve from /library/facets.
+    ///
+    /// Books per tag, each once, as the tag filter counts them.
     ///
     /// Written out rather than chained: the inferred tuple type made this one of
     /// the slowest expressions in the package to type-check.
     public var tagCounts: [(name: String, count: Int)] {
         var counts: [String: Int] = [:]
-        for tag in books.flatMap(\.tags) {
-            counts[tag.name, default: 0] += 1
+        for (name, tagged) in byTag {
+            counts[name] = tagged.count
         }
         let pairs: [(name: String, count: Int)] = counts.map { (name: $0.key, count: $0.value) }
         return pairs.sorted { left, right in

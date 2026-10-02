@@ -65,18 +65,17 @@ public struct LibraryRails: Sendable, Equatable {
         recentlyAdded = Array(Self.byArrival(books.filter { $0.createdAt?.value != nil })
             .prefix(Self.railLength))
 
-        series = LibraryDerivation(books: books).bySeries
+        // Each book once per series and per tag, so "more than one book"
+        // below counts books, not mentions. See `LibraryDerivation.grouped`.
+        let derivation = LibraryDerivation(books: books)
+        series = derivation.bySeries
             .filter { $0.value.count > 1 }
             .map { SeriesGroup(name: $0.key, books: $0.value) }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
 
         withAudio = Array(books.filter(\.hasServableAudio).prefix(Self.railLength))
 
-        var byTag: [String: [Book]] = [:]
-        for book in books {
-            for tag in book.tags { byTag[tag.name, default: []].append(book) }
-        }
-        tagRails = byTag
+        tagRails = derivation.byTag
             .filter { $0.value.count > 1 }
             .sorted { $0.value.count == $1.value.count ? $0.key < $1.key : $0.value.count > $1.value.count }
             .prefix(Self.tagRailCount)
