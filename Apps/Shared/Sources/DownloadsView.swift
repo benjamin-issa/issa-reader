@@ -305,9 +305,26 @@ public struct DownloadsView: View {
 
     // MARK: - Data
 
+    /// The books whose files are on disk, which during a removal's undo
+    /// window is one more than `downloadedUUIDs` says.
+    ///
+    /// The app's set already leaves out the book being removed, so every
+    /// other screen stops offering it. Its file is still there, though, and
+    /// the scan counts whatever it finds that no book claims as "No longer in
+    /// your library": for six seconds the storage bar drew the book just
+    /// swiped away as an alert-red band, under a toast offering to undo it.
+    static func onDisk(
+        _ downloaded: Set<String>, pending: AppModel.PendingRemoval?,
+    ) -> Set<String> {
+        guard let pending else { return downloaded }
+        return downloaded.union([pending.bookUUID])
+    }
+
     private func refresh() async {
         let scanned = await DownloadsInventory.scan(
-            books: app.books, downloaded: app.downloadedUUIDs, scope: .everything)
+            books: app.books,
+            downloaded: Self.onDisk(app.downloadedUUIDs, pending: app.pendingRemoval),
+            scope: .everything)
         // Superseded while it was walking the disk. `scan` has nothing to check
         // cancellation against — it is one straight pass — so the check that
         // matters is the one before it writes.
