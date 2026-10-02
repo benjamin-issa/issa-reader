@@ -126,6 +126,19 @@ public extension Book {
         return formats
     }
 
+    /// Whether the server can serve narration for this book: a read-along or
+    /// an audiobook with a file behind it that the server has not lost.
+    ///
+    /// What "With audio" means — the shelf, the count on its chip and the
+    /// Browse rail. They read the rows instead (`hasReadalong` or any
+    /// audiobook row), while the cover's mark, the Listen button and CarPlay
+    /// read `servableFormats`, so a book whose audio row had no file sat on
+    /// the shelf with nothing on its screen to play.
+    var hasServableAudio: Bool {
+        let formats = servableFormats
+        return formats.contains(.readaloud) || formats.contains(.audiobook)
+    }
+
     /// Whether opening this book leads to the reader at all. An audiobook-only
     /// book has no on-screen text, so a "resume reading" request for it lands on
     /// the detail screen instead — callers use this to keep that promise honest.

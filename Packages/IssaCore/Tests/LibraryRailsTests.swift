@@ -123,6 +123,16 @@ struct LibraryRailsTests {
         #expect(rails.withAudio.count == 2)
     }
 
+    /// The rail offered books with nothing to listen to: an audiobook row with
+    /// no file, or a file the server marks missing. Their covers carry no audio
+    /// mark and their screens no Listen button.
+    @Test("the audio rail holds only audio the server can serve")
+    func audioRailHoldsOnlyServableAudio() throws {
+        let books = try UnservableAudio.books()
+        let rails = LibraryRails(books: books)
+        #expect(rails.withAudio.map(\.title) == [UnservableAudio.playable])
+    }
+
     @Test("tag rails skip single-book tags and lead with the most used")
     func tagRails() {
         let rails = LibraryRails(books: [

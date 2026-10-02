@@ -104,6 +104,16 @@ struct LibraryArrangementTests {
         #expect(!LibraryArrangement().isFiltering)
     }
 
+    /// "With audio" promised narration for a book whose audio row has no file
+    /// behind it, or one the server has lost — a book whose own screen then
+    /// offered nothing to listen to.
+    @Test("the audio shelf holds only audio the server can serve")
+    func audioShelfHoldsOnlyServableAudio() throws {
+        let books = try UnservableAudio.books()
+        let shelf = LibraryArrangement(sort: .title, shelf: .withNarration).apply(to: books)
+        #expect(shelf.map(\.title) == [UnservableAudio.playable])
+    }
+
     @Test("the downloaded shelf asks the app, which is the only thing that knows")
     func downloadedShelf() {
         let books = [book("On disk"), book("Not on disk")]

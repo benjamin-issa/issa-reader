@@ -159,7 +159,7 @@ public extension LibraryArrangement {
             case .toRead: Self.stage(of: book) == .toRead
             case .finished: Self.stage(of: book) == .finished
             case .downloaded: isDownloaded(book)
-            case .withNarration: book.hasReadalong || book.audiobook != nil
+            case .withNarration: book.hasServableAudio
             }
         }
         if !tags.isEmpty {

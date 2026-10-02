@@ -70,8 +70,7 @@ public struct LibraryRails: Sendable, Equatable {
             .map { SeriesGroup(name: $0.key, books: $0.value) }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
 
-        withAudio = Array(books.filter { $0.hasReadalong || $0.audiobook != nil }
-            .prefix(Self.railLength))
+        withAudio = Array(books.filter(\.hasServableAudio).prefix(Self.railLength))
 
         var byTag: [String: [Book]] = [:]
         for book in books {

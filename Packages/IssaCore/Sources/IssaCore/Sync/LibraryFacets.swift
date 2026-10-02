@@ -47,7 +47,7 @@ public struct LibraryFacets: Sendable, Equatable {
             }
             // The same predicate the shelf filter uses, so a chip's number can
             // never disagree with the grid beneath it.
-            if book.hasReadalong || book.audiobook != nil {
+            if book.hasServableAudio {
                 shelves[.withNarration, default: 0] += 1
             }
             if downloadedUUIDs.contains(book.uuid) {
