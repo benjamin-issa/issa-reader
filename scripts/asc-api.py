@@ -30,6 +30,10 @@ import urllib.error
 import urllib.request
 
 HOST = "https://api.appstoreconnect.apple.com"
+# Seconds a request may take. Without one, a connection App Store Connect
+# accepted and never answered held release.sh at its duplicate-build guard
+# until someone pressed Ctrl-C.
+TIMEOUT = 60
 
 
 def _signing_value(key, default=""):
@@ -94,14 +98,22 @@ def _token():
 
 
 def call(method, path, body=None):
-    """Returns (status, decoded JSON)."""
+    """Returns (status, decoded JSON).
+
+    `path` is either a path on HOST or a full URL that App Store Connect
+    handed back (a `links.next`), which must be on HOST: the token goes
+    with the request, so a link anywhere else is refused, not followed.
+    """
+    url = path if path.startswith(("http://", "https://")) else HOST + path
+    if not url.startswith(HOST + "/"):
+        sys.exit(f"refusing to send the App Store Connect token to {url}")
     request = urllib.request.Request(
-        HOST + path, method=method,
+        url, method=method,
         data=json.dumps(body).encode() if body is not None else None,
         headers={"Authorization": "Bearer " + _token(),
                  "Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(request) as response:
+        with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
             return response.status, json.loads(response.read() or b"{}")
     except urllib.error.HTTPError as error:
         raw = error.read()
@@ -109,6 +121,25 @@ def call(method, path, body=None):
             return error.code, json.loads(raw)
         except ValueError:
             return error.code, {"raw": raw.decode(errors="replace")}
+    except (urllib.error.URLError, TimeoutError, OSError) as error:
+        sys.exit(f"App Store Connect did not answer {method} {path} within {TIMEOUT} s: {error}")
+
+
+def paged(path):
+    """Every item of a list endpoint, following `links.next` to the end.
+
+    One page is at most 200 items. Reading only the first was how the
+    duplicate-build guard could miss a number once a platform had more
+    uploads than that.
+    """
+    items, url = [], path
+    while url:
+        status, data = call("GET", url)
+        if status != 200:
+            sys.exit(f"HTTP {status}: {json.dumps(data)[:400]}")
+        items += data.get("data", [])
+        url = (data.get("links") or {}).get("next")
+    return items
 
 
 def app_id():
@@ -124,12 +155,9 @@ def platforms():
     A macOS upload is rejected until macOS is one of them, and no endpoint can
     add it — like the CarPlay capability, it is a checkbox in App Store Connect.
     """
-    status, data = call(
-        "GET", f"/v1/apps/{app_id()}/appStoreVersions"
-               "?fields[appStoreVersions]=platform&limit=200")
-    if status != 200:
-        sys.exit(f"HTTP {status}: {json.dumps(data)[:400]}")
-    return sorted({item["attributes"]["platform"] for item in data.get("data", [])})
+    items = paged(f"/v1/apps/{app_id()}/appStoreVersions"
+                  "?fields[appStoreVersions]=platform&limit=200")
+    return sorted({item["attributes"]["platform"] for item in items})
 
 
 def builds(platform):
@@ -139,13 +167,12 @@ def builds(platform):
     `manageAppVersionAndBuildNumber` is false, so reusing one fails as
     ENTITY_ERROR.ATTRIBUTE.INVALID.DUPLICATE — better caught before the archive.
     """
-    status, data = call(
-        "GET", f"/v1/builds?filter[app]={app_id()}"
-               f"&filter[preReleaseVersion.platform]={platform}"
-               "&fields[builds]=version&limit=200")
-    if status != 200:
-        sys.exit(f"HTTP {status}: {json.dumps(data)[:400]}")
-    return sorted({item["attributes"]["version"] for item in data.get("data", [])},
+    # Newest first, and every page: the numbers release.sh asks about are the
+    # newest, and the server's default order is not documented.
+    items = paged(f"/v1/builds?filter[app]={app_id()}"
+                  f"&filter[preReleaseVersion.platform]={platform}"
+                  "&fields[builds]=version&sort=-version&limit=200")
+    return sorted({item["attributes"]["version"] for item in items},
                   key=lambda v: (len(v), v))
 
 
