@@ -796,6 +796,15 @@ public enum SMILParser {
         public let isAudioOnly: Bool
         /// See `SMILEntry.sentenceID`.
         public let sentenceID: String?
+        /// The par's `<audio>` stated no `clipEnd` at all, which SMIL defines
+        /// as "to the end of the media". `end` then holds `start`, as it always
+        /// did, and the timeline resolves the real end — see
+        /// `SMILParser.timeline(from:fileDurations:)`.
+        ///
+        /// Never true for a book either Storyteller generation aligned: both
+        /// write `clipEnd` on every par. A `clipEnd` that is present and
+        /// unreadable is not this either; that par is refused, as before.
+        public let isOpenEnded: Bool
     }
 
     /// Parses one SMIL document into rows.
@@ -837,6 +846,7 @@ public enum SMILParser {
                         end: end,
                         isAudioOnly: isAudioOnly(child),
                         sentenceID: sentence == fragment ? nil : sentence,
+                        isOpenEnded: audioNode["clipEnd"] == nil,
                     ))
                 case "seq" where typeTokens(child).contains("text-range-small"):
                     walk(child, sentence: (child["epub:textref"] ?? child["textref"]).flatMap(fragmentID(in:)))
@@ -877,7 +887,13 @@ public enum SMILParser {
     ///
     /// Spine items with no overlay are skipped silently — a book may have
     /// narration for only some chapters, and the front matter usually has none.
-    public static func timeline(for package: EPUBPackage) -> SMILTimeline {
+    ///
+    /// - Parameter fileDurations: measured lengths of the audio files, by
+    ///   archive href, where the caller already has them. Only a clip with no
+    ///   stated end reads them; see `timeline(from:fileDurations:)`.
+    public static func timeline(
+        for package: EPUBPackage, fileDurations: [String: TimeInterval] = [:],
+    ) -> SMILTimeline {
         var rows: [Row] = []
         for item in package.spine {
             guard let overlayID = item.mediaOverlayID,
@@ -887,7 +903,48 @@ public enum SMILParser {
             else { continue }
             rows += parsed
         }
-        return timeline(from: rows)
+        return timeline(from: rows, fileDurations: fileDurations)
+    }
+
+    /// How long a clip with no stated end is taken to be when nothing says
+    /// where it ends: long enough to be kept, and no more.
+    ///
+    /// A guess with a purpose. Dropped, as such a clip used to be, its file
+    /// had no entry at all when it was the file's only clip — the whole file's
+    /// audio left the book — and otherwise its sentence never lit and could
+    /// not be tapped. Kept at this length it is still the last clip of its
+    /// file, which `entry(inFile:at:)` answers for everything past its start,
+    /// so it lights for as long as the file plays on and the end of the file
+    /// moves to the next one. What the guess costs is the book clock: the
+    /// clip's real length is not on it until a file length is supplied.
+    static let openClipPlaceholder: TimeInterval = minimumMeaningfulDuration
+
+    /// Where each clip with no stated end does end: at the next clip that
+    /// starts later in the same audio file, else at that file's measured
+    /// length, else after `openClipPlaceholder`.
+    static func resolvingOpenEnds(
+        _ rows: [Row], fileDurations: [String: TimeInterval],
+    ) -> [Row] {
+        guard rows.contains(where: \.isOpenEnded) else { return rows }
+        var startsByFile: [String: [TimeInterval]] = [:]
+        for row in rows { startsByFile[row.audioHref, default: []].append(row.start) }
+        for href in startsByFile.keys { startsByFile[href]?.sort() }
+        return rows.map { row in
+            guard row.isOpenEnded else { return row }
+            let starts = startsByFile[row.audioHref] ?? []
+            let end: TimeInterval
+            if let next = starts.first(where: { $0 > row.start }) {
+                end = next
+            } else if let length = fileDurations[row.audioHref], length.isFinite, length > row.start {
+                end = length
+            } else {
+                end = row.start + openClipPlaceholder
+            }
+            return Row(
+                fragmentID: row.fragmentID, textHref: row.textHref, audioHref: row.audioHref,
+                start: row.start, end: end, isAudioOnly: row.isAudioOnly,
+                sentenceID: row.sentenceID, isOpenEnded: true)
+        }
     }
 
     /// The timeline for rows already parsed, in book order: the fillers
@@ -897,12 +954,24 @@ public enum SMILParser {
     /// test's, with no EPUB around it — becomes exactly the timeline the app
     /// would build from it, rather than one assembled by a second copy of this
     /// loop that could disagree with it.
-    public static func timeline(from rows: [Row]) -> SMILTimeline {
+    ///
+    /// A clip with no stated end — `Row.isOpenEnded`, which SMIL defines as
+    /// "to the end of the media" — used to come out as long as nothing and be
+    /// dropped as padding. It now ends where the next clip in its file begins,
+    /// or at the end of the file when `fileDurations` knows it, or else is
+    /// kept at `openClipPlaceholder`. Rows that state their end, which is
+    /// every row either Storyteller generation writes, are untouched.
+    public static func timeline(
+        from rows: [Row], fileDurations: [String: TimeInterval] = [:],
+    ) -> SMILTimeline {
         var entries: [SMILEntry] = []
         var cumulative: TimeInterval = 0
-        for row in rows {
+        for row in resolvingOpenEnds(rows, fileDurations: fileDurations) {
             let duration = max(0, row.end - row.start)
-            guard duration >= minimumMeaningfulDuration else { continue }
+            // Measured the way it is built, so a placeholder survives however
+            // the subtraction rounds: an open clip is never padding.
+            guard duration >= minimumMeaningfulDuration || (row.isOpenEnded && duration > 0)
+            else { continue }
             cumulative += duration
             entries.append(SMILEntry(
                 fragmentID: row.fragmentID,

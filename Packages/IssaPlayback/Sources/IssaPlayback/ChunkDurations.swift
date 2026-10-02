@@ -40,7 +40,17 @@ public enum ChunkDurations {
     /// measurement runs again; there is nothing here that is worth reporting to
     /// a listener or worth refusing to play over.
     public static func load(bookID: String, in root: URL? = nil) -> [String: TimeInterval] {
-        guard let data = try? Data(contentsOf: cacheURL(bookID: bookID, in: root)),
+        decode(cacheURL(bookID: bookID, in: root))
+    }
+
+    /// The same, for an extraction directory named outright rather than by
+    /// book — `ReadaloudSource.load`'s `into:`.
+    static func load(fromDirectory directory: URL) -> [String: TimeInterval] {
+        decode(directory.appending(path: filename))
+    }
+
+    private static func decode(_ url: URL) -> [String: TimeInterval] {
+        guard let data = try? Data(contentsOf: url),
               let decoded = try? JSONDecoder().decode([String: TimeInterval].self, from: data)
         else { return [:] }
         return decoded

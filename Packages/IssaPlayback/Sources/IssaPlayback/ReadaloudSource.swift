@@ -35,7 +35,15 @@ public struct ReadaloudSource: Sendable {
         into directory: URL? = nil,
     ) throws -> ReadaloudSource {
         let opened = try package ?? EPUBPackage.open(url: epubURL)
-        let overlay = timeline ?? SMILParser.timeline(for: opened)
+        // With whatever file lengths an earlier listen measured: a clip whose
+        // overlay states no end runs to the end of its file, and the cache is
+        // the only place that length is known before the audio is extracted.
+        // Empty for every book a server aligned, and for a book never listened
+        // to, where such a clip keeps its placeholder length.
+        let overlay = timeline ?? SMILParser.timeline(
+            for: opened,
+            fileDurations: directory.map(ChunkDurations.load(fromDirectory:))
+                ?? ChunkDurations.load(bookID: bookID))
         let files = try AudioExtraction.extractAudio(
             from: opened, timeline: overlay, bookID: bookID, into: directory)
         return ReadaloudSource(package: opened, timeline: overlay, audioFiles: files)
