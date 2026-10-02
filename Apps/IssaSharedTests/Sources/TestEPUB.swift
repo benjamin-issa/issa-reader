@@ -18,22 +18,40 @@ enum TestEPUB {
         let title: String
         /// Everything inside `<body>`, as markup.
         let body: String
+        /// The element ids its media overlay narrates, in order, a second
+        /// each of the book's one audio file. Empty for a chapter with none.
+        var narrated: [String] = []
     }
 
     /// The spine href `open` gives a chapter, for asserting against.
     static func href(of chapter: Chapter) -> String { "OEBPS/\(chapter.id).xhtml" }
 
+    /// The archive path of the audio every narrated chapter plays.
+    static let audioHref = "OEBPS/narration.wav"
+
     /// The whole book, as the bytes of a `.epub`.
-    static func data(title: String = "A Test Book", chapters: [Chapter]) -> Data {
+    ///
+    /// - Parameter audio: the bytes of the one audio file the overlays point
+    ///   at; needed whenever a chapter is narrated.
+    static func data(title: String = "A Test Book", chapters: [Chapter], audio: Data? = nil) -> Data {
         let container = """
         <?xml version="1.0" encoding="utf-8"?>
         <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
         <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
         </container>
         """
-        let manifest = chapters.map {
-            "<item id=\"\($0.id)\" href=\"\($0.id).xhtml\" media-type=\"application/xhtml+xml\"/>"
+        var manifest = chapters.map { chapter in
+            let overlay = chapter.narrated.isEmpty ? "" : " media-overlay=\"\(chapter.id)_overlay\""
+            return "<item id=\"\(chapter.id)\" href=\"\(chapter.id).xhtml\" "
+                + "media-type=\"application/xhtml+xml\"\(overlay)/>"
         }.joined(separator: "\n")
+        for chapter in chapters where !chapter.narrated.isEmpty {
+            manifest += "\n<item id=\"\(chapter.id)_overlay\" href=\"\(chapter.id).smil\" "
+                + "media-type=\"application/smil+xml\"/>"
+        }
+        if audio != nil {
+            manifest += "\n<item id=\"narration\" href=\"narration.wav\" media-type=\"audio/wav\"/>"
+        }
         let spine = chapters.map { "<itemref idref=\"\($0.id)\"/>" }.joined()
         let opf = """
         <?xml version="1.0" encoding="utf-8"?>
@@ -65,6 +83,9 @@ enum TestEPUB {
             ("OEBPS/content.opf", opf),
             ("OEBPS/nav.xhtml", nav),
         ]
+        // Clips run on through the one file from chapter to chapter, a second
+        // each, so no two sentences claim the same moment of it.
+        var second = 0
         for chapter in chapters {
             files.append((href(of: chapter), """
             <?xml version="1.0" encoding="utf-8"?>
@@ -73,13 +94,35 @@ enum TestEPUB {
             <body>\(chapter.body)</body>
             </html>
             """))
+            guard !chapter.narrated.isEmpty else { continue }
+            let first = second
+            second += chapter.narrated.count
+            let pars = chapter.narrated.enumerated().map { index, id in
+                """
+                <par id="\(chapter.id)-par\(index)"><text src="\(chapter.id).xhtml#\(id)"/>\
+                <audio src="narration.wav" clipBegin="\(first + index).000s" \
+                clipEnd="\(first + index + 1).000s"/></par>
+                """
+            }.joined(separator: "\n")
+            files.append(("OEBPS/\(chapter.id).smil", """
+            <?xml version="1.0" encoding="utf-8"?>
+            <smil xmlns="http://www.w3.org/ns/SMIL" xmlns:epub="http://www.idpf.org/2007/ops" version="3.0">
+            <body><seq epub:textref="\(chapter.id).xhtml">
+            \(pars)
+            </seq></body>
+            </smil>
+            """))
         }
-        return zip(files.map { ($0.0, Data($0.1.utf8)) })
+        var members = files.map { ($0.0, Data($0.1.utf8)) }
+        if let audio { members.append((audioHref, audio)) }
+        return zip(members)
     }
 
     /// The book, opened.
-    static func package(title: String = "A Test Book", chapters: [Chapter]) throws -> EPUBPackage {
-        try EPUBPackage.open(archive: EPUBArchive(data: data(title: title, chapters: chapters)))
+    static func package(
+        title: String = "A Test Book", chapters: [Chapter], audio: Data? = nil,
+    ) throws -> EPUBPackage {
+        try EPUBPackage.open(archive: EPUBArchive(data: data(title: title, chapters: chapters, audio: audio)))
     }
 
     // MARK: - ZIP

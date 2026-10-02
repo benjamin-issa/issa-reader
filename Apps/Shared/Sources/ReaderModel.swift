@@ -946,7 +946,7 @@ public final class ReaderModel {
         // and a tap in the space a sentence does not own still finds the
         // nearest one on the page.
         guard let fragment = layout.fragmentID(at: point, on: page, matching: { id in
-            timeline?.entry(forFragment: id) != nil
+            narratedEntry(forFragment: id) != nil
         }) else {
             IssaLog.warning("tap to play found nothing", [
                 "book": book.title, "chapter": String(chapterIndex), "page": String(pageIndex),
@@ -957,8 +957,29 @@ public final class ReaderModel {
         // seek(toFragment:) starts playback, which is the point: tapping a
         // sentence in a paused book should begin reading it aloud, not merely
         // move the playhead somewhere the reader cannot hear.
-        await readalong.seek(toFragment: fragment)
+        await seekNarration(readalong, toFragment: fragment)
         return true
+    }
+
+    /// The narration of an element id in the chapter on screen — that
+    /// chapter's own, never another chapter's that happens to use the id.
+    ///
+    /// Every route from the page into narration resolves through here or
+    /// `seekNarration`. Ids are unique per document, not per book: only
+    /// Storyteller's aligner happens to prefix them with the chapter, and a
+    /// book that numbers its sentences afresh in every chapter had a tap in
+    /// chapter twelve play chapter one — and turn the page there — while the
+    /// play button, asking about the visible page, measured chapter one's
+    /// sentence as most of a book away and refused to start at all.
+    private func narratedEntry(forFragment fragmentID: String) -> SMILEntry? {
+        guard let timeline, let href = currentSpineHref else { return nil }
+        return timeline.exactEntry(forFragment: fragmentID, inDocument: href)
+    }
+
+    /// Plays from an element id in the chapter on screen; see `narratedEntry`.
+    private func seekNarration(_ readalong: ReadalongCoordinator, toFragment fragmentID: String) async {
+        guard let href = currentSpineHref else { return }
+        await readalong.seek(toFragment: fragmentID, inDocument: href)
     }
 
     /// Highlights the whole of the current page.
@@ -977,13 +998,13 @@ public final class ReaderModel {
     /// Starts narration at the first narrated sentence on this page.
     public func playFirstSentenceOnPage() async {
         guard let readalong, let fragment = firstFragmentOnCurrentPage() else { return }
-        await readalong.seek(toFragment: fragment)
+        await seekNarration(readalong, toFragment: fragment)
     }
 
     /// Plays the narration for whatever is selected.
     public func playSelection() async {
         positionOrigin = .chosen
-        guard let selection, let layout, let readalong, let timeline else { return }
+        guard let selection, let layout, let readalong else { return }
         // The bound `selectedText` and `annotate` both carry, and this one did
         // not. `attribute(at:)` raises NSRangeException — an Objective-C
         // exception Swift cannot catch, so the process goes down — and the
@@ -996,8 +1017,8 @@ public final class ReaderModel {
         guard selection.location >= 0, selection.location < text.length else { return }
         let fragment = text
             .attribute(.issaFragmentID, at: selection.location, effectiveRange: nil) as? String
-        guard let fragment, timeline.entry(forFragment: fragment) != nil else { return }
-        await readalong.seek(toFragment: fragment)
+        guard let fragment, narratedEntry(forFragment: fragment) != nil else { return }
+        await seekNarration(readalong, toFragment: fragment)
     }
 
     /// Starts narration from whatever the reader is currently looking at.
@@ -1025,7 +1046,7 @@ public final class ReaderModel {
         else { return nil }
         var within = 0.0
         if let span = timeline.span(ofDocumentContaining: entry),
-           let time = timeline.bookTime(forFragment: entry.fragmentID),
+           let time = timeline.bookTime(forFragment: entry.fragmentID, inDocument: entry.textHref),
            span.duration > 0 {
             within = (((time - span.start) / span.duration).asProgression ?? 0)
         }
@@ -1054,7 +1075,7 @@ public final class ReaderModel {
                inTextOfLength: layout.attributedText.length,
            ),
            let fragment = firstNarratedFragment(in: rest, carriedOver: true),
-           let entry = timeline.entry(forFragment: fragment) {
+           let entry = timeline.exactEntry(forFragment: fragment, inDocument: href) {
             return (entry, "page")
         }
         // 2. The sentence the stored position named. An exact audio anchor, and
@@ -1062,7 +1083,7 @@ public final class ReaderModel {
         //    `fragmentRanges` — the case rung 1 structurally cannot see. Held to
         //    this chapter so a stale locator cannot move the reader out of it.
         if let sentence = restoredSentenceID,
-           let entry = timeline.entry(forFragment: sentence), entry.textHref == href {
+           let entry = timeline.exactEntry(forFragment: sentence, inDocument: href) {
             return (entry, "restored")
         }
         // 3. The nearest narration at or after this chapter. On a fully aligned
@@ -1257,13 +1278,13 @@ public final class ReaderModel {
     ///   it would turn the page straight back. A fragment whose own extent
     ///   cannot be resolved is skipped rather than assumed to begin here.
     private func firstNarratedFragment(in range: NSRange, carriedOver: Bool) -> String? {
-        guard let layout, let timeline else { return nil }
+        guard let layout, timeline != nil else { return nil }
         let text = layout.attributedText
         guard range.location >= 0, range.length > 0, NSMaxRange(range) <= text.length
         else { return nil }
         var found: String?
         text.enumerateAttribute(.issaFragmentID, in: range) { value, _, stop in
-            guard let id = value as? String, timeline.entry(forFragment: id) != nil
+            guard let id = value as? String, narratedEntry(forFragment: id) != nil
             else { return }
             if !carriedOver {
                 guard let whole = layout.fragmentRange(for: id), whole.location >= range.location
@@ -1294,9 +1315,9 @@ public final class ReaderModel {
     /// `NarrationReach`, which is where the fallback's honesty runs out. It used
     /// to run to the end of the chapter.
     func firstNarratedFragment(beginningOn page: RenderedPage) -> String? {
-        guard let layout, let timeline else { return nil }
+        guard let layout, timeline != nil else { return nil }
         if let id = layout.firstFragment(
-            beginningOn: page, matching: { timeline.entry(forFragment: $0) != nil },
+            beginningOn: page, matching: { narratedEntry(forFragment: $0) != nil },
         ) { return id }
 
         guard let reach = NarrationReach.range(
@@ -1345,7 +1366,7 @@ public final class ReaderModel {
         guard wasPlaying, let readalong, let page = currentPage,
               let fragment = firstNarratedFragment(beginningOn: page)
         else { return }
-        await readalong.seek(toFragment: fragment)
+        await seekNarration(readalong, toFragment: fragment)
     }
 
     /// Play/pause for a page the reader may have turned away from the voice.
@@ -1365,7 +1386,7 @@ public final class ReaderModel {
             return
         }
         // `seek(toFragment:)` starts playback, which is what was asked for.
-        await readalong.seek(toFragment: fragment)
+        await seekNarration(readalong, toFragment: fragment)
     }
 
     public func togglePlayback() async {
