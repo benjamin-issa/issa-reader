@@ -288,13 +288,17 @@ public struct BookDetailView: View {
     /// numbers a book within a series but never says how long the series is —
     /// so a book alone in its series has no group, no count, and reads
     /// "Gothic Horror · Book 1".
+    ///
+    /// The count is the group's `statedCount` — said only when the books held
+    /// are exactly the series' first N — rather than how many it holds, which
+    /// put "Book 2 of 2" beside a "Book 3" in the same library.
     @ViewBuilder
     private var seriesLines: some View {
+        let groups = app.rails.series
+        let firstLinked = Self.firstLinkedSeriesID(book.series, groups: groups)
         ForEach(book.series) { membership in
-            let group = app.rails.series.first { $0.name == membership.name }
-            let text = SeriesText.label(
-                name: membership.name, position: membership.position,
-                count: group?.books.count)
+            let group = groups.first { $0.name == membership.name }
+            let text = SeriesText.label(for: membership, in: group)
             if group != nil {
                 // A series with more than one book has a screen; a book alone
                 // in its series has nowhere to go.
@@ -304,13 +308,25 @@ public struct BookDetailView: View {
                     // exactly one element, so a book in two grouped series used
                     // to raise "multiple matching elements" in the sweep
                     // instead of tapping.
-                    .accessibilityIdentifier(
-                        membership.id == book.series.first?.id ? "bookDetail.series" : "",
-                    )
+                    .accessibilityIdentifier(membership.id == firstLinked ? "bookDetail.series" : "")
             } else {
                 seriesLine(text, showsLink: false)
             }
         }
+    }
+
+    /// The membership whose line is the first *link*, which is the one the
+    /// identifier goes on.
+    ///
+    /// Not simply the first membership: when that one is a series of one —
+    /// plain text, no screen — the identifier sat on no link at all, and a
+    /// book whose second series did have a screen had no element to find.
+    static func firstLinkedSeriesID(
+        _ memberships: [SeriesMembership], groups: [SeriesGroup],
+    ) -> SeriesMembership.ID? {
+        memberships.first { membership in
+            groups.contains { $0.name == membership.name }
+        }?.id
     }
 
     /// The control that opens a series screen from the hero.
@@ -607,8 +623,19 @@ public struct BookDetailView: View {
         // five stars") audible on entry, while the individual star buttons stay
         // separately focusable so the rating can still be changed.
         .accessibilityElement(children: .contain)
-        .accessibilityLabel(mine.map { "Your rating, \(Int($0)) star\($0 == 1 ? "" : "s")" }
-            ?? "Your rating, not rated. Rate this book from one to five stars.")
+        .accessibilityLabel(Self.ratingLabel(mine))
+    }
+
+    /// What VoiceOver says on entering the rating row.
+    ///
+    /// The count is clamped to the five stars there are before it becomes an
+    /// `Int`. The rating is the server's number, decoded as any `Double`, and
+    /// `Int(1e300)` is not a wrong answer but a crash — every time the book's
+    /// page opened, until a refresh replaced the value.
+    static func ratingLabel(_ mine: Double?) -> String {
+        guard let mine else { return "Your rating, not rated. Rate this book from one to five stars." }
+        let stars = mine.isFinite ? Int(min(max(mine.rounded(), 0), 5)) : 0
+        return "Your rating, \(stars) star\(stars == 1 ? "" : "s")"
     }
 
     /// Not a control of its own — the stars are — just the cue that makes the
@@ -687,8 +714,9 @@ public struct BookDetailView: View {
         // The first row is there only while the selection matches no status,
         // because a pop-up whose selection matches none of its items shows a
         // blank title. Storyteller 3 lets a book have no status, and a status
-        // the list has not loaded yet is the same case. Tagged with the
-        // book's own uuid, not nil, so it matches in both. Choosing it does
+        // the list has not loaded yet is the same case. Tagged with
+        // `book.status?.uuid` — the value `statusSelection` reads, nil when
+        // the book has no status — so it matches in both. Choosing it does
         // nothing (see `statusSelection`), and there is deliberately no item
         // that clears a status: the phone has none either.
         // The title is the spoken label. `.labelsHidden()` keeps it off the
