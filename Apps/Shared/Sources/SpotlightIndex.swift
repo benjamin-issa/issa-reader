@@ -1,5 +1,6 @@
 import Foundation
 import IssaCore
+import IssaUI
 #if !os(tvOS)
 import CoreSpotlight
 import UniformTypeIdentifiers
@@ -23,6 +24,22 @@ enum SpotlightIndex {
         return "\(books.count)-\(Int(newest))"
     }
 
+    /// The line under a result: the byline, then the blurb as plain text.
+    ///
+    /// The blurb is the server's HTML — a 3.x description arrives as
+    /// `<p>It is a truth <i>universally acknowledged</i>…` — and Spotlight
+    /// shows a description verbatim, tags, entities and all. The detail screen
+    /// has always put the same string through `HTMLText`; this is the plain
+    /// half of that.
+    static func contentDescription(for book: Book) -> String {
+        let blurb = book.description.map {
+            HTMLText.plain($0).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return [book.byline, blurb]
+            .compactMap { $0?.isEmpty == false ? $0 : nil }
+            .joined(separator: "\n")
+    }
+
     /// tvOS ships CoreSpotlight but not its indexing API — the classes are
     /// marked unavailable — so there the whole thing is a no-op rather than a
     /// separate code path at every call site.
@@ -38,9 +55,7 @@ enum SpotlightIndex {
         let items = books.map { book -> CSSearchableItem in
             let attributes = CSSearchableItemAttributeSet(contentType: UTType.content)
             attributes.title = book.title
-            attributes.contentDescription = [book.byline, book.description]
-                .compactMap { $0?.isEmpty == false ? $0 : nil }
-                .joined(separator: "\n")
+            attributes.contentDescription = contentDescription(for: book)
             attributes.authorNames = book.authors.map(\.name)
             attributes.contentType = UTType.epub.identifier
             // Series and tags make a book findable by what it is as well as
