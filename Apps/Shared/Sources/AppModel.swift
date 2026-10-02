@@ -625,6 +625,14 @@ public final class AppModel {
             // the only copy of it, and it belongs to them the way their
             // annotations do rather than to the account that is leaving.
             CustomFonts.removeAllExtracted()
+            // The exit read the set back from the disk a moment ago. The
+            // directories have gone since, and everything a sweep would
+            // release went with them — the extracted narration, the
+            // publisher faces, and the question indexes the sign-out
+            // broadcast purged — so the set is emptied to match rather than
+            // re-read into a sweep with nothing left to do.
+            downloadedOnDisk = []
+            downloadedUUIDs = []
         }
         phase = .chooseServer
     }
@@ -673,7 +681,29 @@ public final class AppModel {
         // wrote the departed account's catalogue back over the DELETE.
         catalogueGeneration += 1
 
-        // 2. Anything audible. Stop the audio, and stop anything listening for
+        // 2. A removal still inside its undo window, carried out now. It is a
+        // decision the reader has already made, and the timer holding it knows
+        // nothing of accounts: `signOut` committed it first thing, and a switch
+        // never did, so it fired six seconds into the arriving account's
+        // session — deleting the file and stopping whatever was playing it —
+        // while the toast offering to undo it, with the departed account's
+        // title, stood over the arriving account's library.
+        commitPendingRemoval()
+
+        // 3. A listening start that has claimed a book but not yet attached it.
+        // For the manifest fetch, the chunk extraction and the duration
+        // measurement — seconds on a long book — such a start owns nothing the
+        // steps below can stop, and it woke up afterwards with its claim
+        // intact: the departed account's book attached and playing under the
+        // arriving account, on its lock screen and its widget, with the
+        // fifteen-second writer filing positions into its library. A dropped
+        // claim is what the start stands down on (`startStillClaimed`), and
+        // the extraction is cancelled for the reason a removal cancels it:
+        // `Task.detached` does not inherit cancellation.
+        startingListening = nil
+        listeningExtraction?.cancel()
+
+        // 4. Anything audible. Stop the audio, and stop anything listening for
         // it, before the stopping itself is announced.
         //
         // Order matters twice over. `pause()` notifies its rate observers
@@ -688,7 +718,7 @@ public final class AppModel {
         // keep narrating the departed account's library out loud.
         releaseAllReaders()
 
-        // 3. Memory, all of it before anything below suspends, so nothing
+        // 5. Memory, all of it before anything below suspends, so nothing
         // that runs in those suspensions finds half an account. Every write
         // that could resume into it is behind the fence above.
         //
@@ -702,10 +732,6 @@ public final class AppModel {
         refusalsLogged = [:]
         books = []
         rebuildDerived()
-        // Both, or the next refresh would derive the visible set from the
-        // departing account's disk reading.
-        downloadedOnDisk = []
-        downloadedUUIDs = []
         statuses = []
         // Book uuids as well, standing for status writes the `mutation` table
         // held — and it is cleared below.
@@ -728,7 +754,7 @@ public final class AppModel {
         visibleReaderUUID = nil
         listeningError = nil
 
-        // 4. The write queue, retired and put out of reach before its table is
+        // 6. The write queue, retired and put out of reach before its table is
         // emptied. Emptying the `mutation` table was said to be what kept the
         // departed account's undrained writes from going out under the
         // arriving account's token, and alone it was not: a write already on
@@ -745,7 +771,7 @@ public final class AppModel {
         mutations = nil
         await retiring?.retire()
 
-        // 5. The store's copy of the account. The catalogue belongs to the
+        // 7. The store's copy of the account. The catalogue belongs to the
         // account, so it goes with it. Annotations do not: they are
         // device-local and this is their only copy.
         //
@@ -756,7 +782,7 @@ public final class AppModel {
             try? await store?.clearAccountData()
         }
 
-        // 6. What the rest of the app keeps per book. Reader styles, volume
+        // 8. What the rest of the app keeps per book. Reader styles, volume
         // trims and question indexes are keyed by book uuid like everything
         // above, and the objects holding them are not this model's to reach
         // into — hence a notification rather than a call.
@@ -767,7 +793,7 @@ public final class AppModel {
             notificationCentre.post(name: PlaybackSettings.signOutNotification, object: nil)
         }
 
-        // 7. Transfers, covers, the widget and Spotlight.
+        // 9. Transfers, covers, the widget and Spotlight.
         //
         // The account's transfers go with it. The manager itself stays: its
         // background session owns its identifier for the life of the process,
@@ -790,6 +816,17 @@ public final class AppModel {
         // account's titles, bylines and blurbs answering Home Screen searches
         // for up to 30 days after it stopped being the account signed in.
         await SpotlightIndex.clear()
+
+        // 10. The downloaded set, read again from the disk rather than emptied.
+        // The Books directory has no account in it — the files are the
+        // device's — and an emptied set had nothing to fill it again on the
+        // way into the next account's library: on the Mac and the Apple TV,
+        // which have no foreground hook, the arriving account's Downloaded
+        // shelf, its count and the storage screens said nothing was on the
+        // device for the rest of the session, while every book screen, which
+        // asks the disk, said Downloaded. A sign-out that deletes the
+        // downloads empties the set itself, once they have gone (`signOut`).
+        refreshDownloadedSet()
     }
 
     /// Opens the durable write queue, if it is not open already.
@@ -2501,15 +2538,18 @@ public final class AppModel {
         startingListening = (book.uuid, format)
     }
 
-    /// Whether the start that claimed this book still holds it.
+    /// Whether the start that claimed this book still holds it, under the
+    /// account it began for.
     ///
     /// Asked after every suspension in `startListening`. A cleared claim means a
-    /// removal, a sign-out or another book's start landed while this one was
-    /// waiting, and the honest answer is to return without attaching anything —
-    /// the caller has nothing to tidy up, because a start that has not attached
-    /// owns nothing yet.
-    private func startStillClaimed(_ book: Book) -> Bool {
-        guard startingListening?.bookUUID == book.uuid else {
+    /// removal, an account exit or another book's start landed while this one
+    /// was waiting, and a moved generation means the account it began under
+    /// has gone even if something has claimed the same book since. Either way
+    /// the honest answer is to return without attaching anything — the caller
+    /// has nothing to tidy up, because a start that has not attached owns
+    /// nothing yet.
+    private func startStillClaimed(_ book: Book, since generation: Int) -> Bool {
+        guard startingListening?.bookUUID == book.uuid, catalogueGeneration == generation else {
             IssaLog.info("listening start stood down", ["book": book.title])
             return false
         }
@@ -2537,6 +2577,12 @@ public final class AppModel {
             isStartingListening = false
             startingListening = nil
         }
+        // And under which account. An account exit drops the claim
+        // (`leaveAccount`), but a claim is only a book uuid, and the same
+        // server hands the same uuids to the next account: a claim on this
+        // book made after the exit would let this start through again. The
+        // generation cannot be taken back.
+        let generation = catalogueGeneration
         // Clear last time's error at the top of every genuine attempt, so no
         // later `return` — the resume fast-path below included — can leave a
         // stale message that CarPlay's `onPlay` would read back as this
@@ -2606,7 +2652,8 @@ public final class AppModel {
                 // seconds after the reader taps Remove, and starting a book out
                 // of files that are already on their way off the device is what
                 // this whole guard exists to stop.
-                guard startStillClaimed(book), isDownloaded(book, format: .readaloud)
+                guard startStillClaimed(book, since: generation),
+                      isDownloaded(book, format: .readaloud)
                 else { return }
                 let attached = await attachListening(
                     manifest: built.manifest, source: .files(built.files),
@@ -2639,12 +2686,21 @@ public final class AppModel {
                 listeningError = nil
             }
         }
+        // An account exit while the extraction ran cancelled it, and what
+        // comes next is a request for the departed account's book made with
+        // the arriving account's token. Only the account is asked here: a
+        // removal that dropped the claim is answered after the fetch, as it
+        // always has been.
+        guard catalogueGeneration == generation else {
+            IssaLog.info("listening start stood down", ["book": book.title])
+            return
+        }
         let service = AudiobookService(client: session.client, baseURL: url, tokens: session.tokenProvider)
         do {
             let manifest = try await service.manifest(for: book.uuid)
             // The network round trip is a suspension like any other, and on a
             // slow connection a long one.
-            guard startStillClaimed(book) else { return }
+            guard startStillClaimed(book, since: generation) else { return }
             guard !manifest.playableTracks.isEmpty else {
                 listeningError = "This audiobook has no playable tracks on the server."
                 return
@@ -2675,7 +2731,7 @@ public final class AppModel {
                     cookies: await service.playbackCookies(for: book.uuid),
                 )
             // The cookies are a second round trip on the streaming branch.
-            guard startStillClaimed(book) else { return }
+            guard startStillClaimed(book, since: generation) else { return }
             let attached = await attachListening(
                 manifest: manifest, source: source, chapters: [], timeline: nil,
                 manifestKind: .original,
@@ -2690,6 +2746,9 @@ public final class AppModel {
             if attached == .wouldNotPlay { stopListening(nowPlaying: nowPlaying) }
         } catch {
             IssaLog.failure("start listening", error, ["book": book.title])
+            // A request that failed after the account it was made for had
+            // gone is not news for the account that has arrived.
+            guard catalogueGeneration == generation else { return }
             listeningError = Self.message(for: error)
         }
     }
