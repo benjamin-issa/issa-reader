@@ -308,7 +308,12 @@ public enum AskAnswerParser {
     }
 
     /// The words that may stand among the ordinals in a footer.
-    static let citationWords: Set<String> = ["and", "section", "sections"]
+    ///
+    /// "none" because the 27 model writes "Sources: none" under a refusal,
+    /// and a footer the parser did not recognise stayed in the text as prose:
+    /// the sentinel was stripped from in front of it and "Sources: none" was
+    /// left as the answer.
+    static let citationWords: Set<String> = ["and", "section", "sections", "none"]
 
     /// …and the ones that introduce a chapter rather than a citation, so the
     /// number after them is not an ordinal. One list, read by both

@@ -436,4 +436,21 @@ struct FooterBoundaryTests {
         #expect(AskAnswerParser.visible("She fell. Soon after, she stood.")
             == "She fell. Soon after, she stood.")
     }
+
+    /// Measured on the 27 model (1.4.0 Ask review): under a refusal it writes
+    /// "Sources: none". "none" was not a citation word, so the footer was kept
+    /// as prose, the sentinel stripped from in front of it, and "Sources: none"
+    /// went on as the answer — hidden only because the vetting refused the
+    /// capital S in a book that never says "sources".
+    @Test("a footer that cites nothing is a footer, not the answer")
+    func footerCitingNothing() {
+        let refusal = AskAnswerParser.parse("The story hasn't revealed that yet.\n\nSources: none")
+        #expect(refusal.notYetRevealed)
+        #expect(refusal.text == AskAnswerParser.notYetSentinel)
+        #expect(refusal.citations.isEmpty)
+
+        let answer = AskAnswerParser.parse("Dinah is Alice's cat.\nSources: none")
+        #expect(answer.text == "Dinah is Alice's cat.")
+        #expect(answer.citations.isEmpty)
+    }
 }
