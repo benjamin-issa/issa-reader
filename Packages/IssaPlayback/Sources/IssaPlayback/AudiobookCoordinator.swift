@@ -425,7 +425,20 @@ public final class AudiobookCoordinator {
     /// chapter this way; this is the same address for the branch that stays in
     /// the file it is already playing.
     @discardableResult
-    private func seek(toTrack index: Int, offset: TimeInterval) async -> MoveOutcome {
+    private func seek(toTrack index: Int, offset requested: TimeInterval) async -> MoveOutcome {
+        // Never exactly onto the end of the book. `locate` answers a time at or
+        // past the end with the last track at its full duration, so a skip in
+        // the last half minute, a scrub to the far end of the bar, or resuming a
+        // finished book all seeked onto the end of the file and restored the
+        // rate. Whether AVFoundation then reports the end is the one thing the
+        // read-along declines to rely on — see its `endOfEntryMargin` — and
+        // this engine had no counterpart: without that report `advance()`
+        // never runs and `isPlaying` stays true over a stopped player. Landing
+        // a hair short lets the file play out and the book end the ordinary way.
+        var offset = requested
+        if index == tracks.count - 1, let duration = tracks[index].duration {
+            offset = min(offset, max(0, duration - ReadalongCoordinator.endOfEntryMargin))
+        }
         if index != trackIndex || player.currentAudioHref == nil {
             // `load` sets the clock and the chapter itself, and is the only one
             // of the two branches that can decline.

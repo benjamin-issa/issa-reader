@@ -120,6 +120,31 @@ struct BookClockTests {
         #expect(subject.progress <= 1)
     }
 
+    /// The end of the last track is not somewhere to land.
+    ///
+    /// `locate` answers a time at or past the end of the book with the last
+    /// track and its full duration, so a thirty-second skip in the last half
+    /// minute — or a scrub to the far end of the bar — seeked exactly onto the
+    /// end of the file and restored the rate. The read-along has always landed
+    /// `endOfEntryMargin` short of an end for this reason; the audiobook had no
+    /// counterpart.
+    @Test("a skip or a scrub to the very end lands just short of the last track's end")
+    func theEndOfTheBookIsNotALandingPlace() async {
+        let subject = coordinator(manifest(trackCount: 3, each: 1_000))
+        subject.player.onTimeUpdate = nil
+        let total = subject.totalDuration
+
+        await subject.seek(toBookTime: total - 10)
+        await subject.skip(by: 30)
+        #expect(subject.trackIndex == 2)
+        #expect(subject.bookTime < total, "the skip landed on the end of the file itself")
+        #expect(subject.bookTime >= total - 0.01, "and only a hair short of it")
+
+        await subject.seek(toProgress: 1)
+        #expect(subject.bookTime < total, "nor may a scrub to the end of the bar")
+        #expect(subject.bookTime >= total - 0.01)
+    }
+
     /// `previousChapter()`'s restart-the-current-track branch used to seek the
     /// player directly, without the `bookTime` update every other seek path —
     /// `seek(toBookTime:)`, `load(track:startAt:)` — performs. A skip fired
