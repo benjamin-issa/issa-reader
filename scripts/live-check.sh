@@ -126,6 +126,39 @@ RESULTS=()
 FAILED=0
 pass() { RESULTS+=("PASS $1"); }
 fail() { RESULTS+=("FAIL $1"); FAILED=1; }
+# Setting up refused: said on the console and kept in the record.
+die() { echo "error: $1" >&2; fail "setup: $1"; exit 1; }
+
+GENERATION="unknown"
+EXPECT_VERSION=""
+APPROVER=""
+stop_approver() { if [ -n "$APPROVER" ]; then kill "$APPROVER" >/dev/null 2>&1 || true; APPROVER=""; fi; }
+
+# summary.txt is written here, on the way out, whatever the way out is. It
+# used to be the script's last lines, so anything `set -e` stopped on after a
+# ten-minute test (the server gone, the token expired, a book deleted) lost
+# the whole record, the verdicts already reached with it, and printed nothing
+# but curl's exit status. A run that stops early is a failed run, and says so.
+finish() {
+  local status=$?
+  trap - EXIT
+  stop_approver
+  if [ "$status" != 0 ] && [ "$FAILED" = 0 ]; then
+    fail "run: stopped early (exit $status); the checks after that point did not run"
+  fi
+  {
+    echo "server   $SERVER ($GENERATION, expecting \"$EXPECT_VERSION\")"
+    echo "device   $DEVICE"
+    echo "label    $LABEL"
+    echo "when     $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo
+    for line in ${RESULTS[@]+"${RESULTS[@]}"}; do echo "$line"; done
+  } > "$OUT/summary.txt"
+  cat "$OUT/summary.txt"
+  if [ "$status" = 0 ]; then exit "$FAILED"; else exit "$status"; fi
+}
+trap finish EXIT
+trap 'exit 130' INT TERM
 
 # ── The server ────────────────────────────────────────────────────────────
 
@@ -134,8 +167,8 @@ echo "▸ $SERVER"
 # a saved token outlives the database it was minted against.
 TOKEN=$(curl -sf -X POST "$SERVER/api/v2/token" \
           --data-urlencode usernameOrEmail=admin --data-urlencode password=issareader \
-        | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])') \
-  || { echo "error: no admin token from $SERVER. Is it up, and provisioned by setup.mjs?" >&2; exit 1; }
+        | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])' 2>/dev/null) \
+  || die "no admin token from $SERVER. Is it up, and provisioned by setup.mjs?"
 api() { curl -sf -H "Authorization: Bearer $TOKEN" "$@"; }
 
 # The generation, decided the way the app decides it: /server/public exists
@@ -143,7 +176,7 @@ api() { curl -sf -H "Authorization: Bearer $TOKEN" "$@"; }
 case "$(curl -s -o /dev/null -w '%{http_code}' "$SERVER/api/v2/server/public")" in
   404) GENERATION=v2 ;;
   200) GENERATION=v3 ;;
-  *) echo "error: $SERVER/api/v2/server/public answered neither 200 nor 404" >&2; exit 1 ;;
+  *) die "$SERVER/api/v2/server/public answered neither 200 nor 404" ;;
 esac
 
 # What Settings › Advanced should say, in `ServerCapabilities.displayVersion`'s
@@ -197,10 +230,9 @@ STATUS_BOOK="" STATUS_LABEL="" READ_BOOK="" READ_BEFORE=0 READALONG_BOOK=""
 if [ "$BOOKS" = 1 ]; then
   . "$OUT/books.env"
   [ -n "$STATUS_BOOK" ] || echo "  no \"$STATUS_TITLE\" on this server: its status will not be checked"
-  [ -n "$READ_BOOK" ] || { echo "error: no \"$READ_TITLE\" on this server (set LIVE_READ_TITLE)" >&2; exit 1; }
+  [ -n "$READ_BOOK" ] || die "no \"$READ_TITLE\" on this server (set LIVE_READ_TITLE)"
   if [ "$AUDIO" = 1 ] && [ -z "$READALONG_BOOK" ]; then
-    echo "error: --audio, but no aligned \"$READALONG_TITLE\" on this server (set LIVE_READALONG_TITLE)" >&2
-    exit 1
+    die "--audio, but no aligned \"$READALONG_TITLE\" on this server (set LIVE_READALONG_TITLE)"
   fi
 fi
 
@@ -210,7 +242,7 @@ fi
 if [ "$BOOKS" = 1 ] && [ "$GENERATION" = v3 ]; then
   api -X PUT -H "Content-Type: application/json" -d '{"status":null}' \
       "$SERVER/api/v2/books/$READ_BOOK/status" >/dev/null \
-    || { echo "error: could not clear the status of \"$READ_TITLE\"" >&2; exit 1; }
+    || die "could not clear the status of \"$READ_TITLE\""
 fi
 
 # A read-along picks up where it was left, and a run that crossed its first
@@ -223,7 +255,7 @@ fi
 # moved on to a later chapter.
 if [ "$BOOKS" = 1 ] && [ "$AUDIO" = 1 ]; then
   api "$SERVER/api/v2/books/$READALONG_BOOK/read/manifest.json" > "$OUT/readalong-manifest.json" \
-    || { echo "error: no reading order for \"$READALONG_TITLE\"" >&2; exit 1; }
+    || die "no reading order for \"$READALONG_TITLE\""
   python3 - "$OUT/readalong-manifest.json" > "$OUT/readalong-start.json" <<'PY'
 import json, sys, time
 order = json.load(open(sys.argv[1]))["readingOrder"]
@@ -239,7 +271,7 @@ print(json.dumps({
 PY
   api -X POST -H "Content-Type: application/json" --data @"$OUT/readalong-start.json" \
       "$SERVER/api/v2/books/$READALONG_BOOK/positions" >/dev/null \
-    || { echo "error: could not put \"$READALONG_TITLE\" back at its start" >&2; exit 1; }
+    || die "could not put \"$READALONG_TITLE\" back at its start"
 fi
 
 # ── The simulator ─────────────────────────────────────────────────────────
@@ -256,9 +288,8 @@ for runtime, devices in json.load(sys.stdin)["devices"].items():
         found += [((int(m.group(1)), int(m.group(2))), d["udid"]) for d in devices if d["name"] == sys.argv[1]]
 print(max(found)[1] if found else "")' "$DEVICE" "$RUNTIME")
 if [ -z "$UDID" ]; then
-  echo "error: no available $RUNTIME simulator named \"$DEVICE\". These are:" >&2
   xcrun simctl list devices available "$RUNTIME" >&2 || true
-  exit 1
+  die "no available $RUNTIME simulator named \"$DEVICE\"; the ones there are are listed above"
 fi
 echo "▸ $DEVICE"
 xcrun simctl boot "$UDID" >/dev/null 2>&1 || true
@@ -276,9 +307,6 @@ if [ "$FRESH" = 1 ]; then xcrun simctl keychain "$UDID" reset; fi
 
 # Approves the pairing code the moment the test writes it. It waits as long
 # as the build and the test take, and is stopped when they end.
-APPROVER=""
-stop_approver() { if [ -n "$APPROVER" ]; then kill "$APPROVER" >/dev/null 2>&1 || true; fi; }
-trap stop_approver EXIT INT TERM
 (
   until [ -s "$OUT/code.txt" ]; do sleep 1; done
   cd "$ROOT/Tools/docker"
@@ -367,16 +395,29 @@ fi
 
 # What only the server can say. The position is compared by its timestamp,
 # which the client sets when it writes one.
-if [ "$BOOKS" = 1 ]; then
-  api "$SERVER/api/v2/books" > "$OUT/books-after.json"
-  python3 - "$OUT/books-after.json" "$READ_BOOK" > "$OUT/read-after.txt" <<'PY'
+#
+# Every step here tolerates failing. This runs after a test of ten minutes
+# or more, and a server that restarted, a token that expired or a book
+# deleted meanwhile is a FAIL for the checks it touches, not the end of the
+# record: the checks after it still run, and summary.txt is still written.
+READ_AFTER=0 READ_STATUS=unread
+if [ "$BOOKS" = 1 ] && ! api "$SERVER/api/v2/books" > "$OUT/books-after.json"; then
+  fail "server: could not read the catalogue back after the test, so the position and filing were not checked"
+elif [ "$BOOKS" = 1 ]; then
+  python3 - "$OUT/books-after.json" "$READ_BOOK" > "$OUT/read-after.txt" <<'PY' \
+    || echo "0 unread" > "$OUT/read-after.txt"
 import json, sys
-book = next(b for b in json.load(open(sys.argv[1])) if b["uuid"] == sys.argv[2])
-status = (book.get("status") or {}).get("name") or "none"
-print((book.get("position") or {}).get("timestamp") or 0, status)
+book = next((b for b in json.load(open(sys.argv[1])) if b["uuid"] == sys.argv[2]), None)
+if book is None:
+    print(0, "missing")
+else:
+    status = (book.get("status") or {}).get("name") or "none"
+    print((book.get("position") or {}).get("timestamp") or 0, status)
 PY
-  read -r READ_AFTER READ_STATUS < "$OUT/read-after.txt"
-  if [ "$READ_AFTER" -gt "$READ_BEFORE" ]; then
+  read -r READ_AFTER READ_STATUS < "$OUT/read-after.txt" || true
+  if [ "$READ_STATUS" = missing ] || [ "$READ_STATUS" = unread ]; then
+    fail "position: \"$READ_TITLE\" could not be read back from the server ($READ_STATUS)"
+  elif [ "$READ_AFTER" -gt "$READ_BEFORE" ]; then
     pass "position: \"$READ_TITLE\" has a newer position on the server ($READ_BEFORE -> $READ_AFTER)"
   else
     fail "position: \"$READ_TITLE\" has no newer position on the server ($READ_BEFORE -> $READ_AFTER)"
@@ -393,16 +434,17 @@ PY
   # the end of the first file, and the same chapter is narration that did not.
   if [ "$AUDIO" = 1 ]; then
     python3 - "$OUT/books-after.json" "$READALONG_BOOK" "$OUT/readalong-manifest.json" \
-        "$OUT/readalong-start.json" > "$OUT/readalong-after.txt" <<'PY'
+        "$OUT/readalong-start.json" > "$OUT/readalong-after.txt" <<'PY' \
+      || echo "FAIL unknown unreadable" > "$OUT/readalong-after.txt"
 import json, sys
-book = next(b for b in json.load(open(sys.argv[1])) if b["uuid"] == sys.argv[2])
+book = next((b for b in json.load(open(sys.argv[1])) if b["uuid"] == sys.argv[2]), None) or {}
 order = [r["href"] for r in json.load(open(sys.argv[3]))["readingOrder"]]
 start = json.load(open(sys.argv[4]))["locator"]["href"]
 after = ((book.get("position") or {}).get("locator") or {}).get("href") or "nowhere"
 crossed = after in order and order.index(after) > order.index(start)
 print("PASS" if crossed else "FAIL", start, after)
 PY
-    read -r CROSSED START_HREF AFTER_HREF < "$OUT/readalong-after.txt"
+    read -r CROSSED START_HREF AFTER_HREF < "$OUT/readalong-after.txt" || true
     if [ "$CROSSED" = PASS ]; then
       pass "crossed: \"$READALONG_TITLE\" moved on from $START_HREF to $AFTER_HREF on the server"
     else
@@ -416,7 +458,7 @@ DATA=$(xcrun simctl get_app_container "$UDID" "$BUNDLE_ID" data 2>/dev/null) || 
 LOG="$DATA/$STORAGE/Logs/current.log"
 if [ -n "$DATA" ] && [ -f "$LOG" ]; then
   cp "$LOG" "$OUT/current.log"
-  python3 - "$OUT/current.log" > "$OUT/detected.txt" <<'PY'
+  python3 - "$OUT/current.log" > "$OUT/detected.txt" <<'PY' || : > "$OUT/detected.txt"
 import json, sys
 seen = ""
 for line in open(sys.argv[1]):
@@ -439,13 +481,5 @@ else
   fail "log: no current.log in the app's container"
 fi
 
-{
-  echo "server   $SERVER ($GENERATION, expecting \"$EXPECT_VERSION\")"
-  echo "device   $DEVICE"
-  echo "label    $LABEL"
-  echo "when     $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  echo
-  for line in ${RESULTS[@]+"${RESULTS[@]}"}; do echo "$line"; done
-} > "$OUT/summary.txt"
-cat "$OUT/summary.txt"
+# summary.txt is written by `finish`, on the way out.
 exit "$FAILED"
