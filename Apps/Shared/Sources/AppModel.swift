@@ -3825,10 +3825,19 @@ public final class AppModel {
     /// Counted in `localWrites` the way `applyStatus` counts a status, so a
     /// refresh keeps a rating set while its request was in flight, and queued
     /// only while the catalogue is still the account's that rated it.
+    ///
+    /// And queued only while it is still the newest rating for the book, as
+    /// a status is. Two ratings in quick succession — four stars, then five —
+    /// each save and then queue, suspending between, and the queue keeps the
+    /// newest row per book, which is whichever was queued last. Had the four
+    /// resumed after the five, it queued after it: the server ended at four
+    /// while the screen said five, and the next refresh after the drain put
+    /// four back. A superseded rating queues nothing and saves the newer one
+    /// again, since its own save may have reached the store after it.
     public func setRating(_ value: Double?, for book: Book) async {
         guard session != nil else { return }
         let generation = catalogueGeneration
-        localWrites.begin(.rating, book.uuid)
+        let mark = localWrites.begin(.rating, book.uuid)
         defer {
             if catalogueGeneration == generation { localWrites.end(.rating, book.uuid) }
         }
@@ -3839,10 +3848,22 @@ public final class AppModel {
         // launch — the queued write still reached the server eventually, but
         // the reader had every reason to think it was lost and enter it again.
         try? await store?.setRating(value, forBook: book.uuid)
+        await beforeQueueingRating?(book.uuid)
         guard catalogueGeneration == generation else { return }
+        guard localWrites.isNewest(mark, .rating, book.uuid) else {
+            try? await store?.setRating(ratings[book.uuid], forBook: book.uuid)
+            return
+        }
+        // Nothing suspends between the check above and the INSERT being
+        // submitted, so a newer rating, which has yet to begin, queues after.
         await enqueue(.rating, bookUUID: book.uuid,
                       payload: MutationDrain.RatingPayload(rating: value))
     }
+
+    /// Runs between a rating's local save and the queueing of its row, when
+    /// set. A test seam, nil in production, for the reason
+    /// `beforeQueueingStatus` is one.
+    @ObservationIgnored var beforeQueueingRating: (@MainActor (String) async -> Void)?
 
     /// Records a position the app has just written, without asking the server.
     ///
