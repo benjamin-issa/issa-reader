@@ -26,6 +26,29 @@ public final class ReaderModel {
     public private(set) var phase: Phase = .loading("Opening…")
     public internal(set) var package: EPUBPackage?
 
+    /// A chapter that would not open, once the book already had.
+    ///
+    /// Said over the page rather than instead of it: one corrupt spine item in
+    /// a book that is open and reading is not a book that cannot be opened,
+    /// and `.failed` — which replaces the whole reader with "Couldn't open this
+    /// book" — is kept for `open`. Identified, so the same words a second time
+    /// are a second notice rather than no change at all.
+    public struct ChapterNotice: Equatable, Identifiable, Sendable {
+        public let id = UUID()
+        public let message: String
+    }
+
+    /// The notice on screen, if any. The view takes it down after a while, or
+    /// when it is tapped, through `dismissChapterNotice(_:)`.
+    public private(set) var chapterNotice: ChapterNotice?
+
+    /// Takes a notice down — that one only, so a later notice that replaced it
+    /// is not cleared by the timer the earlier one started.
+    public func dismissChapterNotice(_ notice: ChapterNotice) {
+        guard chapterNotice?.id == notice.id else { return }
+        chapterNotice = nil
+    }
+
     /// The book's stylesheets, parsed once each.
     ///
     /// Every chapter of a book links the same two or three sheets, so this is
@@ -1451,9 +1474,28 @@ public final class ReaderModel {
         } catch {
             IssaLog.failure("load chapter", error,
                             ["book": book.title, "chapter": String(index)])
-            phase = .failed("Couldn't open this chapter. " + AppModel.message(for: error))
+            let reason = AppModel.message(for: error)
+            if phase == .ready {
+                // The book is open and its chapter is still on screen, intact —
+                // nothing above committed. Replacing the reader with "Couldn't
+                // open this book" for it made the rest of the book unreachable:
+                // Try Again reopened at the saved place in front of the bad
+                // chapter, and the next page turn failed the same way.
+                chapterNotice = ChapterNotice(
+                    message: Self.unreadable(title(inSpineItem: index, atOffset: 0)) + " " + reason)
+            } else {
+                // Still opening: there is no page to keep, and `open` decides
+                // what to do about it — it retries from the first readable
+                // chapter before it gives up.
+                phase = .failed("Couldn't open this chapter. " + reason)
+            }
             return false
         }
+    }
+
+    /// The first words of a notice about a chapter that would not open.
+    private static func unreadable(_ title: String?) -> String {
+        title.map { "Couldn't open “\($0)”." } ?? "Couldn't open a chapter of this book."
     }
 
     // MARK: - Navigation
@@ -1496,17 +1538,39 @@ public final class ReaderModel {
     /// Both directions skip. Only forward did before, which meant paging back
     /// into a wrapper item stranded the reader on a blank page — and for a
     /// VoiceOver reader, on a silent one.
+    ///
+    /// A chapter that will not load is stepped over the same way, and said so.
+    /// It used to end the move, and the failure took the whole reader with it,
+    /// so a book with one corrupt spine item could not be read past it by
+    /// turning pages at all.
     private func move(toChapter index: Int, landingOnLastPage: Bool) async {
         guard let package else { return }
         let step = landingOnLastPage ? -1 : 1
         var target = index
+        // Whether anything loaded: the pages below are counted on `layout`,
+        // which still holds the chapter the reader started from when every
+        // attempt failed — landing on its first page would be a move nobody
+        // made.
+        var landed = false
+        var skipped: [Int] = []
         for _ in 0 ..< Self.emptyChapterSkipLimit {
-            guard package.spine.indices.contains(target) else { return }
-            guard await loadChapter(target) else { return }
-            if !isCurrentChapterEmpty { break }
+            guard package.spine.indices.contains(target) else { break }
+            if await loadChapter(target) {
+                landed = true
+                if !isCurrentChapterEmpty { break }
+            } else {
+                skipped.append(target)
+            }
             target += step
         }
+        guard landed else { return }
         pageIndex = landingOnLastPage ? max((layout?.pages.count ?? 1) - 1, 0) : 0
+        if let first = skipped.first {
+            let title = title(inSpineItem: first, atOffset: 0)
+            chapterNotice = ChapterNotice(message: title.map {
+                "“\($0)” couldn't be opened, so it was skipped."
+            } ?? "A chapter of this book couldn't be opened, so it was skipped.")
+        }
     }
 
     /// A chapter is empty only if it has neither prose nor an illustration.
