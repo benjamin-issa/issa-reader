@@ -128,4 +128,20 @@ struct DerivedCatalogueTests {
         #expect(app.booksByAuthor["Bram Stoker"]?.count == 2)
         #expect(app.booksByNarrator["A Reader"]?.count == 1)
     }
+
+    /// The tag page lists `booksByTag[name]`, and the book page links a chip
+    /// by its count — so a book that lists a tag twice must be in it once.
+    @Test("the tag grouping says what the derivation does, each book once")
+    func tagGroupingMatchesTheDerivation() {
+        let books = [
+            SharedFixtures.book("Dracula", uuid: "d", tags: ["Gothic", "Gothic"]),
+            SharedFixtures.book("Carmilla", uuid: "c", tags: ["Gothic", "Vampires"]),
+        ]
+        let app = Self.model(books)
+
+        #expect(app.booksByTag.mapValues { $0.map(\.uuid) }
+            == LibraryDerivation(books: books).byTag.mapValues { $0.map(\.uuid) })
+        #expect(app.booksByTag["Gothic"]?.map(\.uuid) == ["d", "c"])
+        #expect(app.booksByTag["Vampires"]?.count == 1)
+    }
 }

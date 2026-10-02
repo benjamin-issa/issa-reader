@@ -31,6 +31,10 @@ enum SharedFixtures {
         ebook: Bool = true,
         authors: [String] = [],
         narrators: [String] = [],
+        /// Tag names, each its own row: a name given twice is two rows with
+        /// one name, which is how a catalogue repeats a tag.
+        tags: [String] = [],
+        series: [(name: String, position: Double?)] = [],
     ) -> Book {
         var json: [String: Any] = [
             "uuid": uuid ?? title,
@@ -38,7 +42,13 @@ enum SharedFixtures {
             "authors": authors.map { ["uuid": $0, "name": $0] },
             "narrators": narrators.map { ["uuid": $0, "name": $0] },
             "creators": [], "collections": [],
-            "identifiers": [], "tags": [], "series": [],
+            "identifiers": [],
+            "tags": tags.enumerated().map { ["uuid": "\($0.element)-\($0.offset)", "name": $0.element] },
+            "series": series.map { membership -> [String: Any] in
+                var row: [String: Any] = ["uuid": membership.name, "name": membership.name]
+                if let position = membership.position { row["position"] = position }
+                return row
+            },
         ]
         if let status { json["status"] = ["uuid": status, "name": status] }
         if let progress {

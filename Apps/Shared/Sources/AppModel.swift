@@ -1364,6 +1364,15 @@ public final class AppModel {
     /// every two seconds. Authors do not change with a page turn.
     public private(set) var booksByAuthor: [String: [Book]] = [:]
     public private(set) var booksByNarrator: [String: [Book]] = [:]
+    /// Tag name to its books, each once, for the tag page and for deciding
+    /// which of a book page's tag chips lead anywhere. Memoised for the reason
+    /// `booksByAuthor` is: both are read from view bodies.
+    ///
+    /// Grouped like the other two, so these copies keep the positions they
+    /// had when the catalogue last changed. A screen that draws progress from
+    /// them resolves each book through `bookByUUID`, which a position does
+    /// move.
+    public private(set) var booksByTag: [String: [Book]] = [:]
 
     /// The catalogue by uuid.
     ///
@@ -1381,6 +1390,7 @@ public final class AppModel {
         let derivation = LibraryDerivation(books: books)
         booksByAuthor = derivation.byAuthor
         booksByNarrator = derivation.byNarrator
+        booksByTag = derivation.byTag
         rebuildAfterPositionChange()
     }
 
@@ -1837,6 +1847,12 @@ public final class AppModel {
     ) {
         commitPendingRemoval()
         pendingRemoval = PendingRemoval(bookUUID: bookUUID, format: format, title: title)
+        // Said out loud, because the row simply vanishes and nothing else
+        // announces why. Here, once per removal, rather than by the toast: a
+        // removal can now come from a book's menu on any screen, so there is a
+        // toast on every tab's stack, and each one announcing it read the same
+        // line once per tab.
+        AccessibilityNotification.Announcement("Removed \(title). Undo is available.").post()
         pendingRemovalTask = Task { [weak self] in
             try? await Task.sleep(for: undoWindow)
             guard !Task.isCancelled else { return }
@@ -1950,6 +1966,22 @@ public final class AppModel {
     /// Back out of the reader and in again — reopened the reader unasked.
     public func discardPendingBook() {
         pendingBook = nil
+    }
+
+    /// Arms the one-shot reader request for a book whose page is about to be
+    /// pushed, as `consumePendingBook` does for a deep link — for a book's
+    /// menu, whose Read pushes the page on top of the screen it came from
+    /// instead of through the deep-link inbox, whose path reset would throw
+    /// that screen away. The page then opens the reader as it appears, and
+    /// Back from the reader lands on the book and then where the menu was.
+    ///
+    /// - Returns: whether it armed. A book with no text has no reader to
+    ///   open, and its page is where Read takes it.
+    @discardableResult
+    public func requestReader(for book: Book) -> Bool {
+        guard book.isReadable else { return false }
+        readerRequest = book.uuid
+        return true
     }
 
     /// Whether this book's screen should open the reader as it appears.

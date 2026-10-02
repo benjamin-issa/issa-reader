@@ -631,9 +631,14 @@ private struct SwipeToRemove<Content: View>: View {
 extension View {
     /// The undo toast for a removal still inside its window.
     ///
-    /// A modifier applied by the screen rather than a view inside the section,
-    /// because a toast in the scroll content scrolls away from the reader it
-    /// is addressed to.
+    /// Applied once per container — each iPhone tab's stack, the Mac's detail
+    /// column and its Settings window — rather than by the screens that list
+    /// downloads: a book's menu can remove a download from any screen, and
+    /// the toast has to be wherever the reader is. Never inside scroll
+    /// content, which would scroll it away from the reader it is addressed
+    /// to. It says nothing itself; `AppModel.removeDownload(bookUUID:format:
+    /// title:)` announces each removal once, where a toast per tab would have
+    /// announced it once per tab.
     func downloadRemovalToast() -> some View {
         modifier(DownloadRemovalToast())
     }
@@ -689,14 +694,5 @@ private struct DownloadRemovalToast: ViewModifier {
             #endif
         }
         .animation(.snappy, value: app.pendingRemoval)
-        // Said out loud, because the row simply vanished and nothing announced
-        // why. `.isModal` moved the cursor onto the toast, which was the only
-        // thing making it noticeable at all — so removing the trait without
-        // this would have made the removal silent.
-        .onChange(of: app.pendingRemoval) { _, pending in
-            guard let pending else { return }
-            AccessibilityNotification.Announcement("Removed \(pending.title). Undo is available.")
-                .post()
-        }
     }
 }
