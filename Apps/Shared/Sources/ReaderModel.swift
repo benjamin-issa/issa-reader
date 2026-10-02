@@ -1809,10 +1809,16 @@ public final class ReaderModel {
         didSet { anchorAnnotations() }
     }
 
-    /// Where each of this chapter's annotations actually starts, resolved once.
+    /// Where each of this chapter's annotations actually is, resolved once.
     ///
     /// Whole-book `annotations` holds every chapter's marks; this holds only
-    /// the ones the loaded chapter claims, by annotation id.
+    /// the ones the loaded chapter claims, by annotation id — highlights and
+    /// notes by their own words, bookmarks by the place they mark (a range of
+    /// no length). Everything that asks where a mark is asks this: the paint,
+    /// the jump from the marks list, and whether this page is bookmarked. The
+    /// last two used to read the stored offset, which the renderer change made
+    /// stale, so a mark painted on one page opened the page after it, and a
+    /// bookmark showed on the page after its own.
     ///
     /// `@ObservationIgnored` because `highlightBlocks(on:)` is read from inside
     /// a view's `body` — `PageCanvas` reads it directly — and a plain stored
@@ -1820,11 +1826,14 @@ public final class ReaderModel {
     /// inside view evaluation is how a redraw loop starts. Nothing observes
     /// this; it is derived from two things that are observed.
     ///
-    /// Offsets and never rectangles: `relayoutCurrentChapter` re-paginates the
+    /// Ranges and never rectangles: `relayoutCurrentChapter` re-paginates the
     /// same `ChapterLayout` in place on a rotation or a margin change, so
-    /// cached geometry would be drawn at stale positions, while an offset into
-    /// the text survives both that and `recolour`.
-    @ObservationIgnored private var anchoredOffsets: [String: Int] = [:]
+    /// cached geometry would be drawn at stale positions, while a range in the
+    /// text survives both that and `recolour`. And ranges rather than offsets,
+    /// because words found again may not be the excerpt's length: a mark made
+    /// under the old renderer has two spaces at a paragraph break where the
+    /// chapter now has one newline.
+    @ObservationIgnored private var anchoredRanges: [String: NSRange] = [:]
     private var selectionAnchor: Int?
 
     public var selectedText: String? {
@@ -1938,7 +1947,7 @@ public final class ReaderModel {
         return annotation
     }
 
-    /// Resolves this chapter's annotations to character offsets, once.
+    /// Resolves this chapter's annotations to where they are in its text, once.
     ///
     /// Re-run whenever the chapter changes or `annotations` does — the reader
     /// can make a mark, delete one, or have a session's worth loaded from the
@@ -1950,21 +1959,27 @@ public final class ReaderModel {
     /// `highlightBlocks(on:)` is called from a view body that re-evaluates on
     /// every narrated sentence. That is a whole-chapter search per sentence,
     /// for ever, because the corrected offset was never kept.
+    ///
+    /// Bookmarks included. They were left out and matched on their raw offset
+    /// instead, which the same renderer change made stale — so a bookmark
+    /// showed on the page after its own, and the button on its own page added
+    /// a second one.
     private func anchorAnnotations() {
         guard let layout, let package, package.spine.indices.contains(chapterIndex) else {
-            anchoredOffsets = [:]
+            anchoredRanges = [:]
             return
         }
         let href = package.spine[chapterIndex].href
-        let text = layout.attributedText.string as NSString
-        var resolved: [String: Int] = [:]
-        for annotation in annotations
-            where annotation.kind != .bookmark && annotation.locator.matchesHref(href) {
-            if let offset = Self.offset(of: annotation, in: text) {
-                resolved[annotation.id] = offset
+        let text = layout.attributedText.string
+        var resolved: [String: NSRange] = [:]
+        for annotation in annotations where annotation.locator.matchesHref(href) {
+            if let range = Self.anchoredRange(
+                of: annotation, in: text, fragmentRanges: layout.fragmentRanges)
+            {
+                resolved[annotation.id] = range
             }
         }
-        anchoredOffsets = resolved
+        anchoredRanges = resolved
     }
 
     /// Opens the page an annotation is on.
@@ -1988,8 +2003,16 @@ public final class ReaderModel {
         }
         if index != chapterIndex {
             guard await loadChapter(index, restoring: annotation.locator) else { return }
-        } else if let layout, let offset = annotation.locator.locations?.charOffset,
-                  let page = layout.page(containingOffset: offset) {
+        }
+        // The page the mark is anchored on — the page a highlight is painted
+        // on — and not the one its stored offset names. A mark made under the
+        // previous renderer has an offset a character late for every paragraph
+        // above it, so a highlight near the foot of a page opened the page
+        // after the one it was drawn on, with nothing marked on it, and that
+        // page was then saved as the reader's own choice. The chapter load
+        // above has already anchored this chapter's marks.
+        if let layout, let anchored = anchoredRanges[annotation.id],
+           let page = layout.page(containingOffset: anchored.location) {
             pageIndex = page.index
         }
         positionOrigin = .chosen
@@ -2012,15 +2035,16 @@ public final class ReaderModel {
         bookmarkOnCurrentPage != nil
     }
 
+    /// The bookmark on the page being shown, by where it is anchored — see
+    /// `anchoredRanges` — and by its stored offset only when it has not been.
     public var bookmarkOnCurrentPage: Annotation? {
-        guard let layout, let page = currentPage else { return nil }
+        guard let page = currentPage, let href = currentSpineHref else { return nil }
         return annotations.first { annotation in
-            guard annotation.kind == .bookmark,
-                  annotation.locator.matchesHref(currentSpineHref ?? ""),
-                  let offset = annotation.locator.locations?.charOffset
+            guard annotation.kind == .bookmark, annotation.locator.matchesHref(href),
+                  let place = anchoredRanges[annotation.id]?.location
+                      ?? annotation.locator.locations?.charOffset
             else { return false }
-            _ = layout
-            return NSLocationInRange(offset, page.characterRange)
+            return NSLocationInRange(place, page.characterRange)
         }
     }
 
@@ -2080,10 +2104,10 @@ public final class ReaderModel {
         for annotation in annotations where annotation.kind != .bookmark {
             guard annotation.locator.matchesHref(href) else { continue }
             // Resolved when the chapter loaded, not here: this runs inside a
-            // view's body, once per narrated sentence.
-            guard let offset = anchoredOffsets[annotation.id] else { continue }
-            let length = (annotation.excerpt as NSString).length
-            let range = NSRange(location: offset, length: length)
+            // view's body, once per narrated sentence. The range found, not the
+            // excerpt's length from its start: the words can be shorter now
+            // than when they were stored.
+            guard let range = anchoredRanges[annotation.id] else { continue }
             let lines = layout.lines(forRange: range, on: page)
             guard !lines.isEmpty else { continue }
             result.append(PageSurface.AnnotationBlock(lines: lines, tint: annotation.tint))
@@ -2091,46 +2115,55 @@ public final class ReaderModel {
         return result
     }
 
-    /// Where a stored highlight's own words are in the chapter as it reads now.
+    /// Where a stored mark is in the chapter as it reads now.
     ///
-    /// Its own words first, and the recorded offset only as a fallback. This
-    /// used to be the offset alone, which made every highlight in a book hostage
-    /// to the chapter rendering to exactly the same length for ever — and the
-    /// day the renderer stopped keeping the stray space at the start of every
-    /// paragraph, every highlight in every book would have been painted a
-    /// character further along for each paragraph above it. Reading positions
-    /// have re-anchored by their quoted text since they were written
-    /// (`LocatorAnchoring.characterOffset`); highlights never did.
+    /// A highlight by its own words, and by the recorded offset only when they
+    /// cannot be found. This used to be the offset alone, which made every
+    /// highlight in a book hostage to the chapter rendering to exactly the same
+    /// length for ever — and the day the renderer stopped keeping the stray
+    /// space at the start of every paragraph, every highlight in every book
+    /// would have been painted a character further along for each paragraph
+    /// above it.
     ///
-    /// The search starts from the recorded offset, so a phrase the reader
-    /// highlighted twice resolves to the copy they marked rather than to the
-    /// first one in the chapter.
-    static func offset(of annotation: Annotation, in text: NSString) -> Int? {
+    /// The words are looked for by `LocatorAnchoring.nearestOccurrence`, the
+    /// search a reading position's quote goes through too:
+    ///
+    /// - every copy in the chapter is found, and the one nearest the recorded
+    ///   offset wins, so a phrase highlighted twice resolves to the copy the
+    ///   reader marked rather than the first one in the chapter;
+    /// - whitespace is matched by the run, so a mark across a paragraph break —
+    ///   stored with a space where the chapter has a newline, or with two if it
+    ///   was made under the old renderer — is found at all;
+    /// - a short mark is matched by whole words, and placed by the words stored
+    ///   before it, so a one-word highlight lands neither inside "then" nor on
+    ///   the next "the" along.
+    ///
+    /// A bookmark marks a place rather than words — its excerpt is the top of
+    /// its page, or the chapter's title on a page with no text at all — so it
+    /// is resolved the way a reading position is, by
+    /// `LocatorAnchoring.characterOffset`: the sentence it was made in, the
+    /// words at the top of its page, then its offset. It comes back as a range
+    /// of no length.
+    static func anchoredRange(
+        of annotation: Annotation, in text: String, fragmentRanges: [String: NSRange] = [:],
+    ) -> NSRange? {
+        if annotation.kind == .bookmark {
+            return LocatorAnchoring.characterOffset(
+                for: annotation.locator, in: text, fragmentRanges: fragmentRanges,
+            ).map { NSRange(location: $0, length: 0) }
+        }
         let recorded = annotation.locator.locations?.charOffset
-        let excerpt = annotation.excerpt
-        guard !excerpt.isEmpty else { return recorded }
-        if let recorded, recorded >= 0, recorded + (excerpt as NSString).length <= text.length,
-           text.substring(
-               with: NSRange(location: recorded, length: (excerpt as NSString).length)) == excerpt {
-            return recorded
+        if let found = LocatorAnchoring.nearestOccurrence(
+            of: annotation.excerpt, in: text, near: recorded,
+            before: annotation.locator.text?.before)
+        {
+            return found
         }
-        var best: Int?
-        var searchFrom = 0
-        while searchFrom < text.length {
-            let found = text.range(
-                of: excerpt, options: [],
-                range: NSRange(location: searchFrom, length: text.length - searchFrom))
-            guard found.location != NSNotFound else { break }
-            if let recorded {
-                if best == nil || abs(found.location - recorded) < abs(best! - recorded) {
-                    best = found.location
-                }
-            } else {
-                return found.location
-            }
-            searchFrom = found.location + 1
-        }
-        return best ?? recorded
+        // The words are not in the chapter any more — another edition, or a
+        // publisher's re-export. The recorded offset is a better guess than
+        // painting the mark somewhere arbitrary.
+        guard let recorded, recorded >= 0 else { return nil }
+        return NSRange(location: recorded, length: (annotation.excerpt as NSString).length)
     }
 
     // MARK: - Progress
