@@ -963,6 +963,73 @@ struct DownloadRemovalTests {
         #expect(!Self.exists(file))
     }
 
+    /// Anything else that reads the disk inside the window — another download
+    /// finishing, the app coming forward, a car connecting — runs the sweep,
+    /// and the sweep compared the disk's last reading with the set the window
+    /// had already taken the book out of. A book whose only edition was in the
+    /// window looked as though its file had gone behind the app's back: what
+    /// was playing it stopped, and its extracted narration was deleted with
+    /// the file still on disk. Undo then gave back a book whose narration had
+    /// to be extracted again, minutes on a long read-along.
+    @Test("a refresh inside the undo window keeps the book's narration and what is playing it")
+    func aRefreshInsideTheWindowKeepsTheNarration() throws {
+        let app = AppModel(keychain: InMemoryTokens(), notificationCentre: NotificationCenter())
+        let uuid = Self.freshUUID()
+        let readaloud = try Self.plant(uuid, format: .readaloud)
+        defer { try? FileManager.default.removeItem(at: readaloud) }
+        let narration = AudioExtraction.defaultDirectory(for: uuid)
+        try FileManager.default.createDirectory(at: narration, withIntermediateDirectories: true)
+        try Data(repeating: 0, count: 16).write(to: narration.appending(path: "chunk-0001.mp3"))
+        defer { try? FileManager.default.removeItem(at: narration) }
+        app.refreshDownloadedSet()
+        let engine = Self.silentEngine()
+        engine.player.play()
+        app.installListening(engine, book: SharedFixtures.book("Dracula", uuid: uuid))
+
+        app.removeDownload(bookUUID: uuid, format: .readaloud, title: "Dracula",
+                           undoWindow: .seconds(600))
+        // Another transfer finishing, say.
+        app.refreshDownloadedSet()
+
+        #expect(Self.exists(narration), "the narration was deleted with its file still on disk")
+        #expect(app.listening === engine, "the book was stopped as if its file had gone")
+        #expect(!app.downloadedUUIDs.contains(uuid), "the window still holds the book off every shelf")
+
+        app.undoPendingRemoval()
+        #expect(app.downloadedUUIDs.contains(uuid))
+        #expect(Self.exists(narration), "undo has nothing to extract again")
+        app.stopListening(nowPlaying: nil)
+    }
+
+    /// The window closing runs the removal, which stops only what was reading
+    /// the edition going — and then reads the disk, where the sweep found the
+    /// book's last file gone and stopped everything playing it, a stream
+    /// included. A stream reads nothing on this device; `aStreamedBookSurvives
+    /// EveryRemoval` keeps three editions so the book never departs, and so
+    /// never met this.
+    @Test("the window closing on a book's last edition leaves a stream of it playing")
+    func theWindowClosingLeavesAStreamPlaying() throws {
+        let app = AppModel(keychain: InMemoryTokens(), notificationCentre: NotificationCenter())
+        let uuid = Self.freshUUID()
+        let ebook = try Self.plant(uuid, format: .ebook)
+        defer { try? FileManager.default.removeItem(at: ebook) }
+        app.refreshDownloadedSet()
+        let engine = Self.silentEngine()
+        engine.player.play()
+        app.installListening(
+            engine, book: SharedFixtures.book("Dracula", uuid: uuid), reading: nil)
+
+        app.removeDownload(bookUUID: uuid, format: .ebook, title: "Dracula",
+                           undoWindow: .seconds(600))
+        app.commitPendingRemoval()
+
+        #expect(!Self.exists(ebook))
+        #expect(!app.downloadedUUIDs.contains(uuid))
+        #expect(app.listening === engine, "a removal silenced a stream, which reads nothing here")
+        #expect(engine.player.isPlaying)
+        app.stopListening(nowPlaying: nil)
+    }
+
     /// A timer that fired after the account had gone would delete a file
     /// belonging to whoever signed in next.
     @Test("signing out closes an open undo window first")

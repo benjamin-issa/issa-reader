@@ -1468,7 +1468,7 @@ public final class AppModel {
         // downloads could not remove one.
         BookContentService.removeDownload(bookUUID: bookUUID, format: format)
         releaseDerivedFiles(for: bookUUID, format: format)
-        refreshDownloadedSet()
+        refreshDownloadedSet(after: job)
     }
 
     /// Stops a transfer that has not finished, and takes nothing else with it.
@@ -1656,6 +1656,19 @@ public final class AppModel {
     /// the last set it did read is a better answer than a wrong one, and the
     /// next refresh is a few seconds away.
     public func refreshDownloadedSet() {
+        refreshDownloadedSet(after: nil)
+    }
+
+    /// The same, after a removal of the reader's.
+    ///
+    /// - Parameter removal: the edition `removeDownload` has just deleted, if
+    ///   that is why the set is being read. The sweep finds the book gone when
+    ///   it was the last edition, and would stop everything playing it as if
+    ///   the file had left behind the app's back — a stream included, which
+    ///   no removal may silence (`removalSilencesListening`). The removal has
+    ///   already stopped what was reading that edition, knowing which it was,
+    ///   so the sweep leaves that book's playback to it.
+    private func refreshDownloadedSet(after removal: DownloadManager.Job?) {
         let previous = downloadedOnDisk
         guard let current = try? BookContentService.downloadedBookUUIDs() else {
             IssaLog.warning("could not read the downloads directory; keeping the last set",
@@ -1672,7 +1685,7 @@ public final class AppModel {
         // deliberately lost none yet — reconciling against the set the window
         // has already been subtracted from would delete the very derived files
         // the deferral exists to keep recoverable.
-        reconcileDownloads(previouslyDownloaded: previous)
+        reconcileDownloads(previouslyDownloaded: previous, after: removal)
     }
 
     /// Recomputes `downloadedUUIDs` from the disk's answer and the open window.
@@ -1731,8 +1744,20 @@ public final class AppModel {
     ///
     /// Takes the previous set rather than keeping one of its own, so there is
     /// exactly one definition of "what is downloaded" and it is the disk.
-    func reconcileDownloads(previouslyDownloaded previous: Set<String>) {
-        let departed = DownloadsInventory.departed(from: previous, to: downloadedUUIDs)
+    /// - Parameter removal: the edition a removal of the reader's has just
+    ///   deleted, whose book's playback that removal has already settled.
+    func reconcileDownloads(
+        previouslyDownloaded previous: Set<String>, after removal: DownloadManager.Job? = nil,
+    ) {
+        // Against the disk's reading, not `downloadedUUIDs`. That set has a
+        // removal still inside its undo window subtracted from it, and a book
+        // whose only edition is in the window has lost no file: diffed against
+        // it, any refresh in those six seconds — another download finishing,
+        // the app coming forward, a car connecting — took the book for one
+        // that had left, stopped its playback and deleted its extracted
+        // narration while the file sat on disk. Undo then put back a book
+        // whose narration had to be extracted again from the start.
+        let departed = DownloadsInventory.departed(from: previous, to: downloadedOnDisk)
         guard !departed.isEmpty else { return }
         for bookUUID in departed {
             // The sweep deletes the same narration directory a removal does, so
@@ -1740,8 +1765,12 @@ public final class AppModel {
             // app's back can still be the one playing. See `stopPlayback`.
             // No format, for the same reason `releaseDerivedFiles` gets none:
             // by here the files have already gone and there is nothing left to
-            // ask which of them it was.
-            stopPlayback(of: bookUUID, format: nil)
+            // ask which of them it was. Except for the book a removal has just
+            // taken its last edition from: that removal knew the edition, and
+            // stopped exactly what was reading it.
+            if removal?.bookUUID != bookUUID {
+                stopPlayback(of: bookUUID, format: nil)
+            }
             releaseDerivedFiles(for: bookUUID, format: nil)
         }
         IssaLog.info("reconciled downloads", ["gone": String(departed.count)])
