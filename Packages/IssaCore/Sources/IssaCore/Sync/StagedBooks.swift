@@ -71,7 +71,7 @@ public struct StagedBooks: Equatable, Sendable {
         sections = Stage.allCases.compactMap { stage in
             guard let books = byStage[stage], !books.isEmpty else { return nil }
             return Section(
-                stage: stage, title: Self.title(of: stage, statuses: statuses),
+                stage: stage, title: Self.title(of: stage, statuses: statuses, books: books),
                 books: Self.ordered(books, in: stage))
         }
         count = unique.count
@@ -114,15 +114,20 @@ public struct StagedBooks: Equatable, Sendable {
 
     /// The status the server calls this stage, by its built-in name first —
     /// 3.x keeps those fixed and puts any rewording in the label — then any
-    /// status that files under the stage, then the built-in name itself.
-    static func title(of stage: Stage, statuses: [Status]) -> String {
+    /// status that files under the stage. Before the server's list has loaded,
+    /// or when it fails to, the section's own books still carry their status,
+    /// so theirs is the next best word; the built-in name is the last.
+    static func title(of stage: Stage, statuses: [Status], books: [Book] = []) -> String {
         let builtIn = switch stage {
         case .reading: Status.readingName
         case .toRead: Status.toReadName
         case .finished: Status.readName
         }
+        let carried = books.compactMap(\.status)
         let status = statuses.first { $0.name == builtIn }
             ?? statuses.first { Self.stage(ofStatusNamed: $0.name) == stage }
+            ?? carried.first { $0.name == builtIn }
+            ?? carried.first { Self.stage(ofStatusNamed: $0.name) == stage }
         return status?.displayName ?? builtIn
     }
 

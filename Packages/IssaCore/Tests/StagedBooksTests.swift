@@ -61,6 +61,15 @@ struct StagedBooksTests {
         #expect(staged.sections.last?.spokenOverline == "Finished, 1 book")
     }
 
+    @Test("before the server's statuses load, a section takes its name from its books' own status")
+    func titleFromTheBooks() {
+        let staged = StagedBooks(books: [book("Done", status: "Finished"), book("Open", progress: 0.2)],
+                                 statuses: [])
+        // "Finished" is the books' word for the stage; the book with no status
+        // carries none, so its section falls back to the built-in name.
+        #expect(staged.sections.map(\.title) == ["Reading", "Finished"])
+    }
+
     @Test("Reading is most recently opened first; the rest are A–Z without their articles")
     func orderWithinSections() {
         let staged = StagedBooks(books: [
