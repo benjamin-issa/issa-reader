@@ -62,11 +62,14 @@ struct DerivedCatalogueTests {
     /// Signing out empties the catalogue, and an index that survived it would
     /// hand the next account a book from the previous one — the same class of
     /// leak the sign-out widening closed for `pendingBook` and the ratings.
+    ///
+    /// Keeping the downloads: the download directory is the host app's real
+    /// one, and nothing here is about the files.
     @Test("signing out empties the index too")
     func signOutClearsTheIndex() async {
         let app = Self.model([SharedFixtures.book("Dracula", uuid: "d")])
         #expect(app.bookByUUID["d"] != nil)
-        await app.signOut()
+        await app.signOut(keepDownloads: true)
         #expect(app.bookByUUID.isEmpty)
     }
 
