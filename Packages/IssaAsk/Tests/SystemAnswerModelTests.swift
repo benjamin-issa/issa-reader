@@ -12,7 +12,9 @@ import Testing
 /// Gated on the model actually being available, because most machines and every
 /// CI runner will not have it — and a suite that silently passed by not running
 /// would be worse than one that is honestly skipped.
-@Suite(.enabled(if: SystemAnswerModel.isAvailableForTesting))
+// With `ISSA_RELEASE_RUN=1` the suite runs regardless, and each test's first
+// line reports a missing model as an issue — see `ReleaseRun`.
+@Suite(.enabled(if: ReleaseRun.shouldRunModelSuites))
 struct SystemAnswerModelTests {
     static func elapsedMilliseconds(since start: ContinuousClock.Instant) -> Int {
         Int((ContinuousClock.now - start) / .milliseconds(1))
@@ -20,6 +22,7 @@ struct SystemAnswerModelTests {
 
     @Test("a question the book has answered gets a real answer")
     func answersFromWhatHasBeenRead() async throws {
+        guard ReleaseRun.requireModel() else { return }
         let directory = try AskFixture.temporaryDirectory()
         defer { AskFixture.remove(directory) }
         let store = AskIndexStore(directory: directory)
@@ -95,6 +98,7 @@ struct SystemAnswerModelTests {
 
     @Test("the model's own tokeniser agrees with the estimate to within a third")
     func estimateIsCloseEnoughToBudgetWith() async throws {
+        guard ReleaseRun.requireModel() else { return }
         let model = SystemAnswerModel()
         let text = try AskFixture.text(spine: AskFixture.Spine.chapterI).prefix(2_000)
         let real = try await model.tokenCount(for: String(text))
@@ -110,6 +114,7 @@ struct SystemAnswerModelTests {
 
     @Test("availability reads as available on a machine that has the model")
     func availabilityAgrees() {
+        guard ReleaseRun.requireModel() else { return }
         #expect(AskAvailability.current() == .available)
         #expect(AskAvailability.current().isReady)
     }

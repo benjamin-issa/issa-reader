@@ -21,11 +21,13 @@ import Testing
 ///
 /// Gated, because most machines and every CI runner have no model, and a suite
 /// that silently passed by not running would be worse than one honestly
-/// skipped.
-@Suite(.enabled(if: SystemAnswerModel.isAvailableForTesting))
+/// skipped. On a release run (`ISSA_RELEASE_RUN=1`) it is not skipped: a
+/// missing model is an issue — see `ReleaseRun`.
+@Suite(.enabled(if: ReleaseRun.shouldRunModelSuites))
 struct RegressionQuestionsTests {
     @Test("every fixture question is answered from what the reader has read")
     func answersEveryFixtureQuestion() async throws {
+        guard ReleaseRun.requireModel() else { return }
         for (book, questions) in AskQuestionFixture.books() {
             let run = try await RegressionRun(book: book)
             defer { run.tearDown() }
