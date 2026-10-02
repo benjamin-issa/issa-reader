@@ -8,6 +8,19 @@ import UIKit
 import AppKit
 #endif
 
+/// What `AskCoordinator` asks of the notification centre.
+///
+/// A protocol so a test can count what was asked. The coordinator's
+/// once-only permission prompt was otherwise unobservable — a real one is a
+/// system alert in front of a real runner, so the tests passed no notifier at
+/// all — and deleting the guard that makes it once-only left every test green.
+protocol AskNotifying: Sendable {
+    func requestAuthorizationIfNeeded() async
+    @MainActor func postAnswerReady(job: AskJob) async
+    func removeDelivered(bookUUID: String) async
+    func removeAllDelivered() async
+}
+
 /// Telling a reader their answer is ready, when they are not looking at it.
 ///
 /// The body is the **book**, and neither the question nor the answer. A
@@ -29,7 +42,7 @@ import AppKit
 /// `threadIdentifier` still separates books, so two answers waiting at once
 /// still read as two conversations rather than one pile — which is most of what
 /// the question was doing there.
-struct AskNotifier: Sendable {
+struct AskNotifier: AskNotifying {
     private let centre: @Sendable () -> UNUserNotificationCenter
 
     init(centre: @escaping @Sendable () -> UNUserNotificationCenter = {

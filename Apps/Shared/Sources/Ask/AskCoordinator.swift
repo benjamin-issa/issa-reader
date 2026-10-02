@@ -59,10 +59,10 @@ final class AskCoordinator {
     private let preparer: AskEngine
 
     private let defaults: UserDefaults
-    /// Nil in tests. Everything else about a job can be driven deterministically
-    /// with a scripted model, but a permission prompt is a real system alert in
-    /// front of a real runner, and `UNUserNotificationCenter` has no stand-in.
-    private let notifier: AskNotifier?
+    /// Nil or a counting stand-in in tests: a permission prompt is a real
+    /// system alert in front of a real runner, and `UNUserNotificationCenter`
+    /// has no stand-in of its own.
+    private let notifier: (any AskNotifying)?
 
     /// Books whose index has been built and whose model has been warmed this
     /// session, so opening the sheet a second time costs nothing.
@@ -86,7 +86,7 @@ final class AskCoordinator {
     init(
         store: AskIndexStore = AskIndexStore(),
         model: (any AnswerModel)? = nil,
-        notifier: AskNotifier? = AskNotifier(),
+        notifier: (any AskNotifying)? = AskNotifier(),
         defaults: UserDefaults = .standard,
         // Injectable for the same reason `PlaybackSettings`'s is: this observer
         // registers with `object: nil`, so a sign-out posted by any suite in a

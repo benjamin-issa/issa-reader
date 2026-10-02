@@ -40,6 +40,7 @@ struct AskCoordinatorTests {
     ///   was asked to do, and when.
     static func coordinator(
         turns: [ScriptedAnswerModel.Turn] = [.answer("Alice followed a white rabbit.\nSources: 1")],
+        notifier: (any AskNotifying)? = nil,
     ) throws -> (AskCoordinator, ScriptedAnswerModel, URL, UserDefaults, String) {
         let directory = URL.temporaryDirectory
             .appending(path: "issa-ask-coordinator-\(UUID().uuidString)")
@@ -49,12 +50,26 @@ struct AskCoordinatorTests {
         let coordinator = AskCoordinator(
             store: AskIndexStore(directory: directory),
             model: model,
-            // No notifier: a permission prompt is a real system alert in front
-            // of a real runner.
-            notifier: nil,
+            // No real notifier: a permission prompt is a real system alert in
+            // front of a real runner. A test that needs to see what was asked
+            // passes a counting one.
+            notifier: notifier,
             defaults: defaults,
         )
         return (coordinator, model, directory, defaults, name)
+    }
+
+    /// Counts what the coordinator asks of the notification centre, and asks
+    /// the real one nothing.
+    @MainActor
+    final class CountingNotifier: AskNotifying {
+        private(set) var authorizationRequests = 0
+        private(set) var posted = 0
+
+        func requestAuthorizationIfNeeded() async { authorizationRequests += 1 }
+        func postAnswerReady(job: AskJob) async { posted += 1 }
+        func removeDelivered(bookUUID: String) async {}
+        func removeAllDelivered() async {}
     }
 
     static func cleanUp(_ directory: URL, _ suite: String) {
@@ -323,6 +338,43 @@ struct AskCoordinatorTests {
                                                boundary: Self.boundary()))
         coordinator.sheetDismissed(bookUUID: source.bookUUID)
         #expect(defaults.bool(forKey: AskCoordinator.askedForNotificationsKey))
+        await Self.settle(job)
+    }
+
+    /// Once means once across dismissals, not one flag set.
+    ///
+    /// The test above can only see the remembered flag, and the flag is set
+    /// whether or not the guard in front of it works: with the once-only guard
+    /// deleted, every dismissal of a working sheet asked again and that test
+    /// stayed green.
+    @Test("closing two sheets on working questions asks about notifications once")
+    func twoDismissalsAskOnce() async throws {
+        let notifier = CountingNotifier()
+        let (coordinator, model, directory, _, suite) = try Self.coordinator(
+            turns: [.init(partials: ["Alice"], holdsAfterPartials: 1)], notifier: notifier,
+        )
+        defer { Self.cleanUp(directory, suite) }
+        let source = try Self.source()
+
+        let job = try #require(coordinator.ask("What did Alice follow?", source: source,
+                                               boundary: Self.boundary()))
+        await model.waitUntilHolding()
+        #expect(job.state.isWorking)
+
+        coordinator.sheetDismissed(bookUUID: source.bookUUID)
+        coordinator.sheetDismissed(bookUUID: source.bookUUID)
+        // The request goes out on a task of its own. Bounded, so a broken
+        // coordinator that never asks fails here rather than hanging.
+        let deadline = ContinuousClock.now + .seconds(10)
+        while notifier.authorizationRequests == 0, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        // Main-actor tasks run in the order they were made, so a second request
+        // made by the second dismissal has run by the time these have.
+        for _ in 0 ..< 5 { await Task { @MainActor in }.value }
+        #expect(notifier.authorizationRequests == 1)
+
+        await model.release()
         await Self.settle(job)
     }
 
