@@ -112,7 +112,11 @@ public final class ReaderModel {
     /// cold open of a long read-along holds that lock for a hundred and
     /// seventy-six files. Cancelling first bounds the wait to one chunk, which
     /// is what `startListening`'s own extraction already does.
-    private var narrationExtraction: Task<[String: URL]?, Never>?
+    ///
+    /// A slot rather than a bare optional — see `ExtractionSlot` for the open
+    /// that overwrote it, and the one that then cleared it out from under the
+    /// extraction actually running.
+    @ObservationIgnored private var narrationExtraction = ExtractionSlot()
     /// Whether any change in the current burst needs a reparse.
     ///
     /// Accumulated, not recomputed per change: the task is cancelled and
@@ -811,9 +815,9 @@ public final class ReaderModel {
         let extraction = Task.detached(priority: .userInitiated) {
             try? AudioExtraction.extractAudio(from: package, timeline: timeline, bookID: bookID)
         }
-        narrationExtraction = extraction
+        narrationExtraction.hold(extraction)
         let files = await extraction.value
-        narrationExtraction = nil
+        narrationExtraction.release(extraction)
         try Task.checkCancellation()
         guard let files, !files.isEmpty else {
             // A book whose play button never appears, with no reason given, is
@@ -839,7 +843,7 @@ public final class ReaderModel {
     /// cancelled `nil` task is a no-op, and the extraction only exists for the
     /// few seconds of a cold open.
     func cancelNarrationExtraction() {
-        narrationExtraction?.cancel()
+        narrationExtraction.cancel()
     }
 
     /// Builds the narration engine over an already-extracted set of audio files
@@ -2317,6 +2321,49 @@ public final class ReaderModel {
             as: .reading(book.uuid),
         )
     }
+}
+
+// MARK: - The narration extraction
+
+/// The one narration extraction a reader can revoke.
+///
+/// `open` runs again when a rotation changes the page size mid-open, and the
+/// second run starts its own extraction while the first is still writing —
+/// `Task.detached` does not inherit the cancellation that replaced its opener,
+/// and the awaiting open only wakes when the work is done. The handle was a
+/// bare optional: the second open overwrote it, so a removal then revoked the
+/// extraction that was merely queued behind the lock and waited, on the main
+/// actor, for the one actually writing; and when that one finished, the first
+/// open cleared the handle unconditionally, leaving the second's extraction
+/// beyond reach.
+///
+/// So the slot revokes whatever it held when it is taken — the open that
+/// started it has been superseded, and an extraction skips the files that
+/// already exist, so the newer one loses nothing — and gives itself up only
+/// for the extraction that still holds it.
+struct ExtractionSlot {
+    private var extraction: Task<[String: URL]?, Never>?
+
+    /// Takes the slot, revoking the extraction that held it.
+    mutating func hold(_ task: Task<[String: URL]?, Never>) {
+        extraction?.cancel()
+        extraction = task
+    }
+
+    /// Gives the slot up, if `task` still holds it. A superseded extraction
+    /// finishing late has nothing to give up.
+    mutating func release(_ task: Task<[String: URL]?, Never>) {
+        if extraction == task { extraction = nil }
+    }
+
+    /// Revokes whichever extraction holds the slot. A no-op when none does,
+    /// which is almost always.
+    func cancel() {
+        extraction?.cancel()
+    }
+
+    /// Whether an extraction holds the slot.
+    var isHeld: Bool { extraction != nil }
 }
 
 // MARK: - The publisher's font
