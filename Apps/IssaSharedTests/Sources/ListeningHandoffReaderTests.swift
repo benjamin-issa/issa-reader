@@ -773,8 +773,7 @@ struct ListeningHandoffReaderTests {
     }
 
     /// The same one rung down: nothing resolved, so the start is from zero — and
-    /// `start(atProgress:)` declines in silence, returning `Void`. The player is
-    /// what has to be asked.
+    /// `start(atProgress:)` declines, and its outcome is what has to be asked.
     @Test("an unresolved start that loads nothing says so too")
     func anUnresolvedStartThatLoadsNothingSpeaksUp() async throws {
         let app = AppModel(notificationCentre: NotificationCenter())
@@ -795,6 +794,44 @@ struct ListeningHandoffReaderTests {
         #expect(app.listeningError != nil)
         #expect(app.listening?.player.currentAudioHref == nil, "nothing was ever loaded")
         #expect(!app.isWritingListeningPosition)
+    }
+
+    /// The case the one above cannot reach: the first track is there and will
+    /// not open. `.files([:])` refuses before the player is touched; a file
+    /// that exists and is not audio gets as far as AVFoundation, which fails
+    /// it. `start(atProgress:)` swallowed that, and the start was reported as
+    /// `.started` — CarPlay pushed Now Playing for a silent book, the writer
+    /// was armed, and a synthesised manifest never fell back to the server's
+    /// original upload.
+    @Test("an unresolved start whose first track will not open says so")
+    func anUnresolvedStartWhoseTrackWillNotOpenSpeaksUp() async throws {
+        let app = AppModel(notificationCentre: NotificationCenter())
+        let book = SharedFixtures.book("Fixture", uuid: Self.uuid, readaloud: true)
+        app.books = [book]
+        let model = app.reader(for: book, session: try Self.session())
+        let (files, directory) = try await Self.opened(model)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let built = try Self.chunked(model, files: files)
+        // Every chunk present, and none of them audio.
+        let broken = directory.appending(path: "not-audio", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: broken, withIntermediateDirectories: true)
+        var unreadable: [String: URL] = [:]
+        for (href, _) in built.files {
+            let url = broken.appending(path: "\(unreadable.count).mp3")
+            try Data("this is not an mp3 file".utf8).write(to: url)
+            unreadable[href] = url
+        }
+
+        let outcome = await app.attachListening(
+            manifest: built.manifest, source: .files(unreadable),
+            chapters: built.chapters, timeline: built.timeline,
+            manifestKind: .synthesised, book: book,
+            nowPlaying: NowPlayingController(), settings: Self.settings())
+
+        #expect(outcome == .wouldNotPlay, "a track that would not open was reported as a start")
+        #expect(app.listeningError != nil, "CarPlay reads a nil error as success")
+        #expect(app.listening?.player.isPlaying != true)
+        #expect(!app.isWritingListeningPosition, "the writer was armed over a player holding nothing")
     }
 
     /// A cold open: the screen appears long before the narration is extracted,

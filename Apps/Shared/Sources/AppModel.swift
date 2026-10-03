@@ -3553,16 +3553,30 @@ public final class AppModel {
                 ])
             }
         } else {
-            await coordinator.start(atProgress: 0)
+            let outcome = await coordinator.start(atProgress: 0)
             guard listening === coordinator else {
                 return slotChangedHands(book, coordinator, at: "started")
             }
-            // `start(atProgress:)` returns nothing and declines in silence, so
-            // the player is what has to be asked. The href rather than the
-            // anchor: the anchor is being worked on elsewhere, and this is the
-            // plainer fact anyway — a player holding no audio at all.
-            guard coordinator.player.currentAudioHref != nil else {
+            // Its outcome, as the resolved branch above takes the seek's. The
+            // player's href was asked instead, and a first track that exists
+            // and will not open had already set it before failing — so a
+            // start from nowhere over a broken track was reported as started:
+            // CarPlay pushed Now Playing for a silent book, the writer was
+            // armed, and a synthesised manifest never fell back to the
+            // server's original upload.
+            switch outcome {
+            case .landed:
+                break
+            case .unplayable:
                 return declined(book, reason: "nothingLoaded")
+            case .superseded:
+                // As above: a newer load in this same coordinator owns the
+                // player — a chapter tap while the book was opening — so the
+                // book is fine and playing from there. Nothing to say, and the
+                // publish and the writer below are still owed.
+                IssaLog.info("listening start was overtaken by a newer load", [
+                    "book": book.title,
+                ])
             }
         }
         // After the seek, never before: a coordinator one line old still
