@@ -81,8 +81,10 @@ struct LocalBooksRootTests {
         #expect(local.library.pendingRemoval == nil)
     }
 
-    /// An undo left on the stack for a removal a later one has carried out
-    /// must not take back the later one, or put back a book already deleted.
+    /// A removal a later one has carried out leaves no undo on the stack
+    /// (R-27), and an undo for it reaching the library anyway — from another
+    /// window's manager — takes back neither the later removal nor a book
+    /// already deleted.
     @Test("an old undo does not reach a later removal")
     func staleUndoIsHarmless() async throws {
         let local = try LocalFixtures()
@@ -91,15 +93,14 @@ struct LocalBooksRootTests {
         await local.importAndWait(try local.pick("readalong"))
         let first = try #require(local.library.books.first { $0.title.hasPrefix("Alice") })
         let second = try #require(local.library.books.first { !$0.title.hasPrefix("Alice") })
-        let undo = UndoManager()
+        let undo = LocalBooksHardeningTests.eventUndoManager()
 
-        local.library.remove([first.uuid], undoManager: undo)
-        // A second removal carries out the first, and has no undo of its own
-        // on this manager — so the only undo there is is the stale one.
+        LocalBooksHardeningTests.inOneEvent(undo) { local.library.remove([first.uuid], undoManager: undo) }
+        // A second removal, a later event, carries out the first and has no
+        // undo of its own on this manager.
         local.library.remove([second.uuid])
-        try #require(undo.canUndo)
-        undo.undo()
-        #expect(!undo.canUndo, "the stale undo was not the one run")
+        #expect(!undo.canUndo, "the carried-out removal's undo was left on the stack")
+        local.library.undoRemoval(of: [first.uuid])
 
         #expect(local.library.pendingRemoval?.books.map(\.uuid) == [second.uuid],
                 "the stale undo took back the wrong removal")

@@ -83,6 +83,9 @@ public final class LocalLibrary: ReaderPersistence {
     @ObservationIgnored private var runner: Task<Void, Never>?
     @ObservationIgnored private var running: (id: UUID, task: Task<Void, Never>)?
     @ObservationIgnored private var removalTask: Task<Void, Never>?
+    /// The undo manager the pending removal registered with, so its entry is
+    /// withdrawn once the removal is undone or carried out.
+    @ObservationIgnored private weak var removalUndoManager: UndoManager?
     /// Books whose folders `load()` kept without a row it could read: the
     /// store would not answer, or the row is a shape a later build wrote.
     @ObservationIgnored private var unreadable: Set<String> = []
@@ -507,6 +510,7 @@ public final class LocalLibrary: ReaderPersistence {
             }
             undoManager.setActionName(
                 leaving.count == 1 ? "Remove \(leaving[0].title)" : "Remove \(leaving.count) Books")
+            removalUndoManager = undoManager
         }
         let window = undoWindow
         removalTask = Task { [weak self] in
@@ -530,7 +534,18 @@ public final class LocalLibrary: ReaderPersistence {
         removalTask?.cancel()
         removalTask = nil
         pendingRemoval = nil
+        withdrawUndo()
         books = Self.ordered(books + pending.books)
+    }
+
+    /// Takes the pending removal's entry off its window's undo stack, once
+    /// the toast's Undo or the closing window has settled it: left there,
+    /// Edit › Undo kept offering "Undo Remove Dracula" and did nothing (R-27).
+    /// Not from inside the manager's own undo, which takes the entry itself.
+    private func withdrawUndo() {
+        guard let manager = removalUndoManager else { return }
+        removalUndoManager = nil
+        if !manager.isUndoing { manager.removeAllActions(withTarget: self) }
     }
 
     /// Carries out the removal still waiting: the folder, the row, the
@@ -541,6 +556,7 @@ public final class LocalLibrary: ReaderPersistence {
         removalTask?.cancel()
         removalTask = nil
         pendingRemoval = nil
+        withdrawUndo()
         for book in pending.books {
             let files = files(for: book.uuid)
             // Under the locks an extraction into these folders holds, so one

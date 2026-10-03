@@ -146,6 +146,45 @@ struct LocalBooksHardeningTests {
         try #require(sqlite3_changes(db) == 1)
     }
 
+    // MARK: - R-27: an undo that has nothing left to do is not offered
+
+    @Test("after the toast's Undo, or the removal carried out, Edit › Undo offers nothing")
+    func undoIsWithdrawn() async throws {
+        let local = try LocalFixtures()
+        defer { local.tearDown() }
+        await local.importAndWait(try local.pick("alice"))
+        let book = try #require(local.library.books.first)
+        let undo = Self.eventUndoManager()
+
+        Self.inOneEvent(undo) { local.library.remove([book.uuid], undoManager: undo) }
+        try #require(undo.canUndo)
+        local.library.undoRemoval()
+        #expect(!undo.canUndo, "Undo Remove still offered after the toast's Undo")
+        #expect(local.library.books.map(\.uuid) == [book.uuid])
+
+        Self.inOneEvent(undo) { local.library.remove([book.uuid], undoManager: undo) }
+        try #require(undo.canUndo)
+        local.library.commitPendingRemoval()
+        #expect(!undo.canUndo, "Undo Remove still offered after the removal was carried out")
+    }
+
+    /// An undo manager whose groups this test closes, as a window's closes
+    /// one at the end of each event. Its entries are withdrawn only from
+    /// closed groups, and the toast's Undo, or the six seconds running out,
+    /// is always a later event than the removal.
+    static func eventUndoManager() -> UndoManager {
+        let undo = UndoManager()
+        undo.groupsByEvent = false
+        return undo
+    }
+
+    /// `body` as one event's work: its own undo group, closed at the end.
+    static func inOneEvent(_ undo: UndoManager, _ body: () -> Void) {
+        undo.beginUndoGrouping()
+        body()
+        undo.endUndoGrouping()
+    }
+
     // MARK: - A book from another volume
 
     /// What a USB drive or a network share gets: not a clone, a chunked copy.
