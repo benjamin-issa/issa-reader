@@ -31,8 +31,12 @@ struct LocalAccountIsolationTests {
         let centre = NotificationCenter()
         let app = AppModel(keychain: LocalTestTokens(), notificationCentre: centre)
         app.localBookUUIDs = { [library = local.library] in library.uuids }
-        let storage = local.base.appending(path: "Storage", directoryHint: .isDirectory)
+        // The storage root is the folder `Local/` sits in, as `StorageRoot`
+        // is in the app: a root beside the library instead of above it could
+        // not see a sign-out that took `Local/` with the account's folders.
+        let storage = local.base
         app.storageRoot = storage
+        try #require(local.root == storage.appending(path: "Local", directoryHint: .isDirectory))
         let nowPlaying = NowPlayingController()
         app.nowPlayingController = nowPlaying
         let (defaults, suite) = SharedFixtures.scratchDefaults()
@@ -90,6 +94,9 @@ struct LocalAccountIsolationTests {
         let files = local.library.files(for: localBook.uuid)
         #expect(FileManager.default.fileExists(atPath: files.epub.path))
         #expect(FileManager.default.fileExists(atPath: files.narration.path))
+        #expect(FileManager.default.fileExists(atPath: local.root.path), "Local/ went with the account")
+        #expect(FileManager.default.fileExists(atPath: local.storeDirectory.path),
+                "the device store went with the account")
         #expect(settings.override(for: localBook.uuid) != nil, "the local book's typography went")
         #expect(settings.volumeTrim(for: localBook.uuid) == -3, "and its level")
         #expect(FileManager.default.fileExists(atPath: askStore.indexURL(for: localBook.uuid).path),
