@@ -21,8 +21,9 @@ import AppKit
 /// page look like a page. What that subset will and will not read — and why it
 /// will never read anything that changes *which characters* are rendered — is
 /// written there.
-/// Not `Sendable`: it holds an image loader that vends `UIImage`/`NSImage`,
-/// which are not. Parsing happens on one actor at a time, so this costs nothing.
+/// Not `Sendable`: it holds an image loader that vends artwork — `UIImage`,
+/// `NSImage` or `ArchivePlate` — which is not. Parsing happens on one actor at
+/// a time, so this costs nothing.
 public struct HTMLContentParser {
     /// `NSAttributedString` is immutable but predates `Sendable`, and this
     /// struct only ever holds a finished, never-mutated instance.
@@ -36,7 +37,7 @@ public struct HTMLContentParser {
     }
 
     private let style: ReaderStyle
-    private let loadImage: ((String) -> PlatformImage?)?
+    private let loadImage: ((String) -> (any ChapterArtwork)?)?
     private let loadStyleSheet: ((String) -> EPUBStyleSheet?)?
     private let maxImageWidth: CGFloat
     private let maxImageHeight: CGFloat
@@ -80,7 +81,8 @@ public struct HTMLContentParser {
     }
 
     /// - Parameters:
-    ///   - loadImage: given an archive path, the decoded artwork. Supplying it is
+    ///   - loadImage: given an archive path, the artwork: its size is read at
+    ///     once, its pixels only when drawn (`ChapterArtwork`). Supplying it is
     ///     what lets illustrations occupy real space and actually draw; without
     ///     it, images are skipped and an illustrated chapter reads as empty.
     ///     Results are expected to be cached by the caller — a chapter asks once
@@ -116,7 +118,7 @@ public struct HTMLContentParser {
         maxImageWidth: CGFloat = 320,
         maxImageHeight: CGFloat = .greatestFiniteMagnitude,
         columnWidth: CGFloat = 320,
-        loadImage: ((String) -> PlatformImage?)? = nil,
+        loadImage: ((String) -> (any ChapterArtwork)?)? = nil,
         loadStyleSheet: ((String) -> EPUBStyleSheet?)? = nil,
     ) {
         self.style = style
@@ -389,7 +391,7 @@ public struct HTMLContentParser {
         guard let src = node["src"] ?? node["href"], !src.isEmpty else { return }
         let href = EPUBPackage.resolve(src, relativeTo: context.baseHref)
         guard let image = loadImage?(href) else { return }
-        let pixelSize = image.size
+        let pixelSize = image.layoutSize
         guard pixelSize.width > 0, pixelSize.height > 0 else { return }
 
         // Both bounds, never up: an upscaled 60px decoration looks worse than a
@@ -399,7 +401,7 @@ public struct HTMLContentParser {
             min(maxImageWidth / pixelSize.width, maxImageHeight / pixelSize.height))
         let displaySize = CGSize(width: pixelSize.width * scale, height: pixelSize.height * scale)
 
-        let attachment = ImageAttachment(displaySize: displaySize, image: image)
+        let attachment = ImageAttachment(displaySize: displaySize, artwork: image)
 
         var attributes = attributes(for: context)
         attributes[.attachment] = attachment
