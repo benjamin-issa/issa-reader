@@ -149,7 +149,9 @@ the copy is tied to the `STORYTELLER_SECRET_KEY` it first boots with.
 
 ```bash
 cd Tools/docker
-docker compose stop && cp -Rp data/storyteller data/storyteller-v3 && docker compose up -d
+# Guarded: `cp -R` into a directory that exists copies *inside* it, so a
+# second run would leave the server on the old copy with a nested new one.
+docker compose stop && { [ -e data/storyteller-v3 ] || cp -Rp data/storyteller data/storyteller-v3; } && docker compose up -d
 docker compose --profile v3 up -d
 STORYTELLER_URL=http://$(ipconfig getifaddr en0):8003 PUBLIC_HOST=$(ipconfig getifaddr en0) node setup.mjs
 ```
@@ -160,13 +162,24 @@ The older tags the client must still work with run beside them under
 `--profile legacy`: `web-v2.14.21` on port 8011, the version App Review's
 server runs, and `web-v3.0.0-beta.40` on 8013. Each needs its own copy of the
 data its newer pin started from, taken **before** that pin moved, because a
-newer server migrates the database one way:
+newer server migrates the database one way and an older one must never be
+handed data a newer one has migrated.
+
+So the copies below are made once, while `data/storyteller` and
+`data/storyteller-v3` are still the old pins' — at the latest, just before a
+pin moves. After a move, copying them hands the old servers migrated data;
+take the copy from a backup made before the move instead, and if there is
+none, there is no safe copy to make. Make them before the first
+`--profile legacy up`, too: Compose creates a missing bind-mount directory
+empty, and the guards (which keep a second run from nesting a copy inside the
+first) would then keep the empty one.
 
 ```bash
 cd Tools/docker
 docker compose --profile v3 stop
-cp -Rp data/storyteller data/storyteller-legacy
-cp -Rp data/storyteller-v3 data/storyteller-v3-legacy
+# Only while the pins are still the old ones; see above.
+[ -e data/storyteller-legacy ] || cp -Rp data/storyteller data/storyteller-legacy
+[ -e data/storyteller-v3-legacy ] || cp -Rp data/storyteller-v3 data/storyteller-v3-legacy
 docker compose --profile legacy up -d
 STORYTELLER_URL=http://$(ipconfig getifaddr en0):8011 PUBLIC_HOST=$(ipconfig getifaddr en0) node setup.mjs
 STORYTELLER_URL=http://$(ipconfig getifaddr en0):8013 PUBLIC_HOST=$(ipconfig getifaddr en0) node setup.mjs

@@ -32,12 +32,13 @@ bring them up is in the README, under "A local server to talk to".
    under which a suite whose input is absent records a failure instead of
    skipping, and it fails the run on any skipped test or any suite with no
    `Test run with` line; `.build/release-tests/summary.txt` is the record.
-   The two opt-in Ask recorders, `AskScorecardTests` (`ISSA_ASK_SCORECARD`)
-   and `RethinkExperiments` (`ISSA_ASK_RETHINK`), are left out by name.
-   That includes the two real-model Ask suites (`RegressionQuestionsTests`,
+   The run includes the two real-model Ask suites (`RegressionQuestionsTests`,
    `SystemAnswerModelTests`), which need Apple Intelligence on and its model
-   downloaded: a release run sees them run. The suites carry captured
-   responses and read-along books from every server generation above — in
+   downloaded: a release run sees them run, and fails if they cannot. Only the
+   two opt-in Ask recorders, `AskScorecardTests` (`ISSA_ASK_SCORECARD`) and
+   `RethinkExperiments` (`ISSA_ASK_RETHINK`), are left out, by name. The
+   suites carry captured responses and read-along books from every server
+   generation above — in
    `Packages/IssaCore/Tests/Fixtures`, 2.14.21's at the top level, 2.14.23's
    in `v2-14-23/`, beta.40's in `v3/` and beta.46's in `v3/beta46/`, and the
    read-along books `readalong.epub` (2.x) and `readalong-v3.epub` (3.x) in
