@@ -237,7 +237,9 @@ public struct BookMenu: Equatable, Sendable {
                 StatusChoice(status: $0, isCurrent: $0.uuid == book.status?.uuid)
             }))
         }
-        opinion.append(.rate(current: inputs.rating.map { Int($0.rounded()) }))
+        // Through `StarRating`, never `Int(_:)` on the server's number: a
+        // rating of 1e300 trapped every time this menu was built.
+        opinion.append(.rate(current: inputs.rating.map(StarRating.wholeStars)))
         add(opinion)
 
         // 3. Where it sits in the library.

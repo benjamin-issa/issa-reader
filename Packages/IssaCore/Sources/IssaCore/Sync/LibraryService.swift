@@ -65,11 +65,17 @@ public struct LibraryService: Sendable {
     ///
     /// One request for the whole library rather than one per book — the detail
     /// screen and the library grid both want them.
+    ///
+    /// Each put on the five-star scale here, where it arrives: from this
+    /// dictionary a rating is persisted, reloaded at every launch and handed
+    /// to every surface that draws stars. See `StarRating`.
     public func myRatings() async throws -> [String: Double] {
         struct Row: Decodable { let bookUuid: String?; let rating: Double? }
         let rows: [Row] = try await client.get(Endpoint.userRatings)
         return rows.reduce(into: [:]) { result, row in
-            if let uuid = row.bookUuid, let rating = row.rating { result[uuid] = rating }
+            if let uuid = row.bookUuid, let rating = row.rating.flatMap(StarRating.clamped) {
+                result[uuid] = rating
+            }
         }
     }
 
@@ -311,5 +317,29 @@ public struct LibraryDerivation: Sendable {
                 + book.series.map(\.name)).joined(separator: " ")
             return haystack.range(of: needle, options: [.caseInsensitive, .diacriticInsensitive]) != nil
         }
+    }
+}
+
+/// A reader's rating on the five stars there are.
+///
+/// The server's rating is any `Double` — nothing stops a client, or a request
+/// straight to the API, storing `1e300` — and `Int(1e300)` is not a wrong
+/// answer but a trap. `LibraryService.myRatings()` clamps each one as it
+/// arrives, and the surfaces that turn a rating into whole stars go through
+/// `wholeStars(_:)`, so a value persisted before the clamp is safe too.
+public enum StarRating {
+    /// The scale: no stars to five.
+    public static let scale: ClosedRange<Double> = 0 ... 5
+
+    /// The rating on the scale, or nil for one that is not a number at all.
+    public static func clamped(_ rating: Double) -> Double? {
+        guard rating.isFinite else { return nil }
+        return min(max(rating, scale.lowerBound), scale.upperBound)
+    }
+
+    /// Whole stars, 0 to 5, for any `Double` whatever.
+    public static func wholeStars(_ rating: Double) -> Int {
+        guard let clamped = clamped(rating.rounded()) else { return 0 }
+        return Int(clamped)
     }
 }

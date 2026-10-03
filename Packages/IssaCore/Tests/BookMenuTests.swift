@@ -114,6 +114,17 @@ struct BookMenuTests {
         #expect(menu(book(), .init(rating: 4)).items.contains(.rate(current: 4)))
     }
 
+    /// R-07. The rating is the server's number, decoded as any `Double`, and
+    /// `Int(1e300)` is not a wrong answer but a trap — every time the book's
+    /// hold menu was built, and on tvOS that menu is the only rating surface.
+    /// The book page learned this in 1.3.0; the shared menu had to as well.
+    @Test("a rating far outside five stars is clamped, not a crash", arguments: [
+        (1e300, 5), (-1e300, 0), (7.6, 5), (-2, 0), (3.4, 3),
+    ])
+    func absurdRatingIsClamped(rating: Double, stars: Int) {
+        #expect(menu(book(), .init(rating: rating)).items.contains(.rate(current: stars)))
+    }
+
     // MARK: - Editions
 
     @Test("each edition's one action follows its download state")
