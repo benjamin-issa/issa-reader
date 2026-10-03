@@ -456,6 +456,11 @@ public final class LocalLibrary: ReaderPersistence {
         copy.hasCover = FileManager.default.fileExists(atPath: files.cover.path)
         copy.epubVersion = prepared.epubVersion
         copy.isFixedLayout = prepared.isFixedLayout
+        // What this file and this device make of it, like everything else
+        // above: a record restored with no notices, given a file whose
+        // narration does not play here, has to say why it reads as text
+        // (R-28) — and one that plays now must not keep saying it cannot.
+        copy.notices = prepared.notices
         // The same book, perhaps a fresher copy: what it says about itself and
         // whether it narrates are read again, and the reader's place kept.
         var restored = Book.local(

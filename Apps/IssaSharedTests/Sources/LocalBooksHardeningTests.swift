@@ -185,6 +185,38 @@ struct LocalBooksHardeningTests {
         undo.endUndoGrouping()
     }
 
+    // MARK: - R-28: a file put back says what is true of it now
+
+    @Test("a file put back under a restored record carries its own notices")
+    func reattachCarriesNotices() async throws {
+        let local = try LocalFixtures()
+        defer { local.tearDown() }
+        let opus = TestEPUB.data(
+            title: "The Opus Narration", chapters: [Self.narrated],
+            audio: Data(repeating: 0, count: 512), audioMediaType: "audio/opus")
+        let url = try local.pick(opus, as: "opus.epub")
+        await local.importAndWait(url)
+        let book = try #require(local.library.books.first)
+        try #require(book.localCopy?.notices == [.narrationUnplayable])
+        // Read, and dismissed: the restored record carries none.
+        local.library.dismissNotice(.narrationUnplayable, for: book.uuid)
+        let cleared = await LocalImportTests.eventually {
+            let store = local.library.store
+            return (try? await store?.book(book.uuid))?.localCopy?.notices.isEmpty == true
+        }
+        try #require(cleared)
+        try FileManager.default.removeItem(at: local.library.files(for: book.uuid).folder)
+        let restored = local.relaunched()
+        await restored.load()
+        try #require(restored.missingFiles == [book.uuid])
+
+        restored.importBooks([url], reattaching: book.uuid)
+        await restored.importsSettled()
+
+        #expect(restored.books.first?.localCopy?.notices == [.narrationUnplayable],
+                "the book stopped narrating with nothing on its row to say why")
+    }
+
     // MARK: - A book from another volume
 
     /// What a USB drive or a network share gets: not a clone, a chunked copy.
