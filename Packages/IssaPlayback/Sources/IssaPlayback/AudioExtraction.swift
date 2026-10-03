@@ -79,6 +79,27 @@ public enum AudioExtraction {
         }
     }
 
+    /// Extracts only the files `hrefs` names, under the names `extractAudio`
+    /// gives them, so a later extraction of the whole narration into the same
+    /// folder finds them written and keeps them.
+    ///
+    /// For a book added from the reader's own files whose clips state no end:
+    /// those files are measured as the book is added (`LocalBookImporter`), so
+    /// its length is real from the first time the list shows it, and the
+    /// first open does not inflate them a second time.
+    public static func extractAudio(
+        _ hrefs: Set<String>,
+        from package: EPUBPackage,
+        into directory: URL,
+        isCancelled: @Sendable () -> Bool = { Task.isCancelled },
+    ) throws -> [String: URL] {
+        try locks.lock(for: directory).withLock {
+            try extract(
+                hrefs: hrefs.sorted(), write: { try package.archive.extract($0, to: $1) },
+                into: directory, isCancelled: isCancelled)
+        }
+    }
+
     /// The extraction itself, over a list of archive hrefs and a way to write
     /// one to a file. Internal so a test can state a layout no fixture book
     /// has.

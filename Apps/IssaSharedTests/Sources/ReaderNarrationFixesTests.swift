@@ -67,6 +67,37 @@ struct ReaderNarrationFixesTests {
                 "the second open measured again instead of reading the cache")
     }
 
+    /// The same book, before it has ever been opened. Its length was taken
+    /// from the clips at import — a few milliseconds for each open last clip —
+    /// so the list's row and Book info said a second or two until the reader
+    /// measured the files on the first open.
+    @Test("a local read-along whose clips state no end is listed at its real length as it is added")
+    func openClipsListedAtRealLength() async throws {
+        let local = try LocalFixtures()
+        defer { local.tearDown() }
+        await local.importAndWait(try local.pick(OpenClipBook.data(chapters: Self.openClipChapters), as: "open.epub"))
+        let book = try #require(local.library.books.first, "the book was not added")
+        try #require(book.hasReadalong, "it has to be added as a read-along for this to mean anything")
+
+        // What the row and Book info read (`LocalBooksScreen`, `LocalBookInfoView`).
+        let length = try #require(book.narrationDuration)
+        #expect(abs(length - 8) < 0.1, "listed at \(length) s for eight seconds of narration")
+
+        // The lengths are kept where the reader's first open looks for them,
+        // beside the files measured, in the book's own folder — so that open
+        // neither inflates nor measures them again — and nothing is left over
+        // in `.incoming/`.
+        let files = local.library.files(for: book.uuid)
+        let cached = ChunkDurations.load(fromDirectory: files.narration)
+        #expect(cached.count == 2, "the measured lengths were not kept in Local/<uuid>/Audio/: \(cached)")
+        #expect(local.incoming().isEmpty, "left in .incoming/: \(local.incoming())")
+
+        // Stored with the row, so a relaunch lists it the same.
+        let relaunched = local.relaunched()
+        await relaunched.load()
+        #expect(abs((relaunched.books.first?.narrationDuration ?? 0) - 8) < 0.1)
+    }
+
     // MARK: - MAC-3: resuming where the voice was
 
     /// A local book narrated to its fourth sentence and quit there: the place

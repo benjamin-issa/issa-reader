@@ -402,6 +402,13 @@ public final class LocalLibrary: ReaderPersistence {
             try FileManager.default.createDirectory(at: files.folder, withIntermediateDirectories: true)
             try FileManager.default.moveItem(at: prepared.copy, to: files.epub)
             if let cover = prepared.cover { try? FileManager.default.moveItem(at: cover, to: files.cover) }
+            // The narration measured as the book was checked, and its
+            // lengths: the reader's first open extracts into this folder and
+            // finds them there.
+            if let narration = prepared.narration {
+                try? FileManager.default.moveItem(at: narration, to: files.narration)
+                try? FileManager.default.removeItem(at: narration)
+            }
         } catch {
             try? FileManager.default.removeItem(at: files.folder)
             throw .copyFailed
@@ -447,6 +454,15 @@ public final class LocalLibrary: ReaderPersistence {
             if let cover = prepared.cover {
                 try? FileManager.default.removeItem(at: files.cover)
                 try? FileManager.default.moveItem(at: cover, to: files.cover)
+            }
+            // Only into a book with no narration on disk: one already there
+            // is the reader's own extraction, perhaps open right now. What is
+            // not moved goes.
+            if let narration = prepared.narration {
+                if !FileManager.default.fileExists(atPath: files.narration.path) {
+                    try? FileManager.default.moveItem(at: narration, to: files.narration)
+                }
+                try? FileManager.default.removeItem(at: narration)
             }
         } catch {
             throw .copyFailed

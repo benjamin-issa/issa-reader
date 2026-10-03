@@ -34,6 +34,10 @@ struct LocalBookImporter: Sendable {
         /// The narration's length when the book narrates here; nil when it has
         /// none, or has narration this device cannot play.
         let narrationDuration: Double?
+        /// The narration files measured for that length, with the lengths
+        /// cached beside them, also in `.incoming/`: the book's narration
+        /// folder to be, when its clips stated no end. Nil otherwise.
+        let narration: URL?
         let notices: [LocalNotice]
         let packageIdentifier: String?
         let epubVersion: String?
@@ -43,6 +47,7 @@ struct LocalBookImporter: Sendable {
         func discard() {
             try? FileManager.default.removeItem(at: copy)
             if let cover { try? FileManager.default.removeItem(at: cover) }
+            if let narration { try? FileManager.default.removeItem(at: narration) }
         }
     }
 
@@ -146,10 +151,24 @@ struct LocalBookImporter: Sendable {
         if inspection.isFixedLayout { notices.append(.fixedLayout) }
         // Extraction on first open roughly duplicates the audio, so it counts.
         if narrates { try checkSpace(needed: Self.adding(byteCount, inspection.audioByteCount)) }
+        // A book whose clips state no end says nothing of how long its last
+        // clip in each file runs, and its timeline holds a few milliseconds
+        // for each: the list and Book info gave such a book a length of a
+        // second or two until it was opened. Those files are measured now,
+        // unless the book states its own length.
+        let declared = inspection.package.metadata.mediaDuration
+        let narration = incoming.appending(path: "\(id.uuidString)-Audio", directoryHint: .isDirectory)
+        var keepNarration = false
+        defer { if !keepNarration { try? FileManager.default.removeItem(at: narration) } }
+        var timelineLength = inspection.timeline.totalDuration
+        if narrates, Self.saneLength(declared) == nil, !inspection.timeline.filesNeedingLength.isEmpty,
+           let measured = await Self.measuredLength(of: inspection, into: narration) {
+            timelineLength = measured
+            keepNarration = true
+        }
+        if Task.isCancelled { throw .copyFailed }
         let duration = narrates
-            ? Self.narrationLength(
-                declared: inspection.package.metadata.mediaDuration,
-                timeline: inspection.timeline.totalDuration)
+            ? Self.narrationLength(declared: declared, timeline: timelineLength)
             : nil
 
         let cover = incoming.appending(path: "\(id.uuidString).jpg")
@@ -165,6 +184,7 @@ struct LocalBookImporter: Sendable {
             byteCount: byteCount,
             metadata: inspection.package.localMetadata(fallbackTitle: stem.isEmpty ? "Untitled" : stem),
             narrationDuration: duration,
+            narration: keepNarration ? narration : nil,
             notices: notices,
             packageIdentifier: inspection.package.metadata.uniqueIdentifier,
             epubVersion: inspection.version,
@@ -187,12 +207,41 @@ struct LocalBookImporter: Sendable {
     /// the narration still plays, so it is clamped rather than dropped —
     /// nil here would add the book as text.
     static func narrationLength(declared: Double?, timeline: Double) -> Double? {
-        func sane(_ value: Double?) -> Double? {
-            value.flatMap { $0.isFinite && $0 > 0 && $0 <= longestNarration ? $0 : nil }
-        }
-        if let length = sane(declared) ?? sane(timeline) { return length }
+        if let length = saneLength(declared) ?? saneLength(timeline) { return length }
         let claimed = [declared ?? 0, timeline].contains { $0 > 0 }
         return claimed ? longestNarration : nil
+    }
+
+    /// A claimed length that is a length at all: finite, more than nothing,
+    /// and no longer than `longestNarration`.
+    static func saneLength(_ value: Double?) -> Double? {
+        value.flatMap { $0.isFinite && $0 > 0 && $0 <= longestNarration ? $0 : nil }
+    }
+
+    /// What the narration adds up to once the files whose last clip states no
+    /// end have been measured, or nil when none of them could be.
+    ///
+    /// The files are extracted into `directory` under the names the reader's
+    /// own extraction gives them, and their lengths cached beside them, as
+    /// the reader does on its first open (`ReaderModel.measuredTimeline`).
+    /// The library moves the folder into the book's as the book is added, so
+    /// that first open finds both and neither inflates nor measures again.
+    /// Off the main actor, as all of this runs: AVFoundation walks every
+    /// frame of each file for an exact length.
+    static func measuredLength(of inspection: EPUBInspection, into directory: URL) async -> Double? {
+        let package = inspection.package
+        guard let files = try? AudioExtraction.extractAudio(
+            inspection.timeline.filesNeedingLength, from: package, into: directory)
+        else { return nil }
+        let measured = await ChunkDurations.measure(files, cached: [:])
+        guard !measured.isEmpty, !Task.isCancelled else { return nil }
+        do {
+            try ChunkDurations.save(measured, toDirectory: directory)
+        } catch {
+            // The length below still stands; the first open measures again.
+            IssaLog.failure("save narration lengths at import", error)
+        }
+        return SMILParser.timeline(for: package, fileDurations: measured).totalDuration
     }
 
     // MARK: - Room
