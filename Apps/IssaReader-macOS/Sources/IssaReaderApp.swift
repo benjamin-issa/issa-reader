@@ -408,54 +408,24 @@ struct MacRootView: View {
     @Environment(AppModel.self) private var app
     @Environment(LocalLibrary.self) private var local
     @Environment(\.openWindow) private var openWindow
-    @State private var selection: Destination? = .shelf(.all)
+    /// The sidebar's row and the pages pushed over it, as one value; see
+    /// `MacContentColumn`.
+    @State private var column = MacContentColumn()
     /// Which book the inspector is showing. A cover's click writes it; the
     /// shared cells read it to mark themselves selected.
     @State private var inspected = MacBookSelection()
-    /// Bumped to rebuild the content column's stack from its root, for a
-    /// "Show in Library" asked for while already on All books.
-    @State private var stackGeneration = 0
     /// This window's "Show in Library" requests, and no other window's.
     @State private var navigator = LibraryNavigator()
 
-    /// What the content column's stack is rebuilt on.
-    private struct StackIdentity: Hashable {
-        let selection: Destination?
-        let generation: Int
-    }
+    /// The sidebar's entries; see `MacSidebar`.
+    typealias Destination = MacSidebar
 
-    /// The sidebar's entries. Shelves come from the same definition the phone
-    /// filters by, so the two never drift apart.
-    enum Destination: Hashable {
-        case reading
-        case shelf(LibraryArrangement.Shelf)
-        case listening
-        case downloads
+    private var selection: Destination? { column.selection }
 
-        var title: String {
-            switch self {
-            case .reading: "Reading"
-            case let .shelf(shelf): shelf.title
-            case .listening: "Listening"
-            case .downloads: "Downloads"
-            }
-        }
-
-        var symbol: String {
-            switch self {
-            // Not `bookmark` or `book`: those are the To read and Reading
-            // shelves' glyphs two rows down.
-            case .reading: "text.book.closed"
-            case .shelf(.all): "books.vertical"
-            case .shelf(.reading): "book"
-            case .shelf(.toRead): "bookmark"
-            case .shelf(.finished): "checkmark.circle"
-            case .shelf(.downloaded): "arrow.down.circle"
-            case .shelf(.withNarration): "waveform"
-            case .listening: "headphones"
-            case .downloads: "internaldrive"
-            }
-        }
+    /// The sidebar's binding: a row picked there goes through
+    /// `MacContentColumn.select`, which takes the pages down in the same write.
+    private var sidebarSelection: Binding<Destination?> {
+        Binding(get: { column.selection }, set: { column.select($0) })
     }
 
     var body: some View {
@@ -568,131 +538,78 @@ struct MacRootView: View {
     }
 
     private var readyBody: some View {
-        NavigationSplitView {
-            // Three named zones: where you are, what you own, and the two
-            // machinery screens. The rows and their bindings are unchanged —
-            // only the grouping is new, so a shelf still sets the arrangement
-            // and nothing gained a second idea of what a shelf is.
-            List(selection: $selection) {
-                // The phone's Reading tab: where you are, above where you
-                // might look. Its "See all" sets a shelf, and the shelf
-                // observer below moves the sidebar there.
-                Section("Reading") {
-                    Label(Destination.reading.title, systemImage: Destination.reading.symbol)
-                        .tag(Destination.reading)
-                        // "Reading" is also a shelf one zone down, and the
-                        // heading above says it too. VoiceOver would read the
-                        // word three times without this.
-                        .accessibilityLabel("Continue reading")
-                }
-                Section("Library") {
-                    ForEach(LibraryArrangement.Shelf.allCases) { shelf in
-                        let destination = Destination.shelf(shelf)
-                        Label(destination.title, systemImage: destination.symbol)
-                            .tag(destination)
-                    }
-                }
-                Section("Audio & storage") {
-                    Label(Destination.listening.title, systemImage: Destination.listening.symbol)
-                        .tag(Destination.listening)
-                    Label(Destination.downloads.title, systemImage: Destination.downloads.symbol)
-                        .tag(Destination.downloads)
-                }
-            }
-            .listStyle(.sidebar)
-            .scrollContentBackground(.hidden)
-            .background(Palette.paper)
-            .navigationSplitViewColumnWidth(min: 200, ideal: 220)
-        } detail: {
-            // The book column sits beside the stack in a plain HStack rather
-            // than in `.inspector`. It was an inspector until macOS 27, where
-            // an inspector inside a NavigationSplitView puts AppKit into an
-            // update-constraints storm the second time the selection changes
-            // — "more Update Constraints in Window passes than there are
-            // views in the window" — and the process is killed. The shipped
-            // 1.1.1 dies the same way. A conditional trailing column has no
-            // NSSplitView behind it, collapses the same way, and gives the
-            // grid its width back just as the inspector did.
-            HStack(spacing: 0) {
-            // A stack, because the Browse rails and the book detail both push a
-            // series screen. Without one those were links to nowhere — which
-            // did not show before, because the Mac never rendered the rails and
-            // could not reach the detail at all.
-            NavigationStack {
-                Group {
-                    switch selection ?? .shelf(.all) {
-                    case .reading:
-                        // "See all" is that shelf's grid, "Go to Library" the
-                        // library's landing (`LibraryModeSwitch.fromReading`);
-                        // the sidebar follows the shelf.
-                        ReadingView { shelf in
-                            app.showLibrary(fromReading: shelf)
-                            selection = .shelf(app.arrangement.shelf)
+        // The book column sits beside the split view, outside it, in a plain
+        // HStack. Two reasons, one per place it has been:
+        //
+        // - It was an `.inspector` until macOS 27, where an inspector inside a
+        //   NavigationSplitView puts AppKit into an update-constraints storm
+        //   the second time the selection changes — "more Update Constraints
+        //   in Window passes than there are views in the window" — and the
+        //   process is killed. The shipped 1.1.1 dies the same way.
+        // - It then sat inside the detail column, beside the stack. But a
+        //   stack in the detail column is the column's own on macOS 27: a
+        //   pushed page replaced the whole column, this with it, so a tag or
+        //   author page opened from the inspector took the inspector away
+        //   while Book Info still said it was on (F4).
+        //
+        // Out here a page replaces only the stack. A conditional trailing
+        // column has no NSSplitView behind it, collapses the same way, and
+        // gives the grid its width back just as the inspector did.
+        HStack(spacing: 0) {
+            NavigationSplitView {
+                sidebar
+            } detail: {
+                // A stack, because the Browse rails and the book detail both
+                // push a series screen, and the inspector's tag chips and a
+                // book menu's "More by" push the tag and author pages. The
+                // pages are a path (`MacContentColumn`), emptied rather than
+                // the stack rebuilt — that type says what rebuilding left
+                // behind.
+                NavigationStack(path: $column.path) {
+                    content
+                        .navigationDestination(for: BookRouter.Route.self) { page in
+                            BookRouter.destination(for: page)
                         }
-                    case .shelf: LibraryView()
-                    case .listening: ListeningView()
-                    case .downloads: DownloadsView()
-                    }
                 }
-                .navigationTitle((selection ?? .shelf(.all)).title)
-                // The inspector's series and tag links land here, and a book
-                // menu's Go to Series and More by: none of them has a stack of
-                // its own (see `MacBookSelection.pushed`), so they ask, and
-                // this is the stack that answers.
-                .navigationDestination(item: $inspected.pushed) { page in
-                    BookRouter.destination(for: page)
-                }
+                // The window's undo toast, over the content column: a book's
+                // menu, or the inspector's edition menu, can remove a
+                // download from either. See `downloadRemovalToast`.
+                .downloadRemovalToast()
             }
-            // A fresh stack per sidebar row, so a series pushed under Library
-            // does not survive a switch to Downloads. These links are closures,
-            // not a path, so nothing else can pop them — which is also how
-            // "Show in Library" gets back to the grid.
-            .id(StackIdentity(selection: selection, generation: stackGeneration))
             if showsInspector.wrappedValue {
                 Divider()
                 // The inspector's old ideal width, and it governs — which it
                 // did not in 1.2.0 (41) through (44). The detail inside was
                 // pinning itself to `containerRelativeFrame`, which walks past
-                // this `HStack` to the split view's detail column: measured on
-                // macOS 27 at a 1114pt window, 894 points of content centred
-                // on this 320pt frame, painting 287pt over the grid on one
-                // side and 287pt off the window on the other. The grid looked
-                // clipped because it was covered, not because it was too wide.
+                // this `HStack`: measured on macOS 27 at a 1114pt window, 894
+                // points of content centred on this 320pt frame.
                 // `BookDetailView.pinnedToContainerWidth` is where that is
                 // fixed, and why.
                 //
                 // It can no longer be dragged either: that needs the
                 // `NSSplitView` behind `.inspector`, which is what crashes on
-                // macOS 27. The collapse survives the move; the drag does not,
-                // and saying so is better than a comment claiming nothing was
-                // lost.
+                // macOS 27.
                 MacBookInspector(bookID: inspected.bookID)
                     .frame(width: 320)
                     .frame(maxHeight: .infinity)
                     .transition(.move(edge: .trailing))
             }
-            }
-            // The window's undo toast, over the content column and the
-            // inspector alike: a book's menu, or the inspector's edition
-            // menu, can remove a download from either. See
-            // `downloadRemovalToast`.
-            .downloadRemovalToast()
         }
         .environment(inspected)
         .environment(navigator)
-        // The stack that answers `pushed` is rebuilt by `.id(selection)`
-        // above, and rebuilding is not popping — so a series pushed under
-        // Library was still asked for when the reader clicked Downloads, and
-        // the fresh stack pushed it straight over the downloads list. The
-        // request belongs to the row it was made from.
-        .onChange(of: selection) { _, _ in inspected.pushed = nil }
+        // The inspector's series and tag links, and a book menu's Go to
+        // Series and More by, ask here (`MacBookSelection.pushed`): none of
+        // them has a stack of its own, and this window's content column is
+        // the one that answers. Taken at once, so the same request made twice
+        // is two requests.
+        .onChange(of: inspected.pushed) { _, page in
+            guard let page else { return }
+            inspected.pushed = nil
+            column.push(page)
+        }
         // "Show in Library" from a tag or author page: the All books grid,
         // with the filter or search the page has already set.
-        .onChange(of: navigator.showRequests) {
-            inspected.pushed = nil
-            selection = .shelf(.all)
-            stackGeneration &+= 1
-        }
+        .onChange(of: navigator.showRequests) { column.showLibrary() }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Toggle(isOn: showsInspector) {
@@ -719,18 +636,78 @@ struct MacRootView: View {
         .toolbarBackground(Palette.paper, for: .windowToolbar)
         // Picking a sidebar shelf sets the same arrangement the phone
         // uses, rather than a second, parallel idea of what a shelf is.
-        .onChange(of: selection) { _, new in
+        .onChange(of: column.selection) { _, new in
             if case let .shelf(shelf) = new { app.arrangement.shelf = shelf }
         }
         // And the other direction: the arrangement is restored from
-        // UserDefaults while `selection` starts at `.shelf(.all)` every
+        // UserDefaults while the sidebar starts at `.shelf(.all)` every
         // launch, so without `initial: true` the sidebar highlighted — and the
         // title claimed — "All books" over a grid filtered to the saved shelf.
         // Equal values do not re-fire `.onChange`, so the two writers settle
         // rather than loop.
         .onChange(of: app.arrangement.shelf, initial: true) { _, shelf in
-            selection = .shelf(shelf)
+            column.select(.shelf(shelf))
         }
+    }
+
+    /// Three named zones: where you are, what you own, and the two machinery
+    /// screens. A shelf sets the arrangement, so nothing gained a second idea
+    /// of what a shelf is.
+    private var sidebar: some View {
+        List(selection: sidebarSelection) {
+            // The phone's Reading tab: where you are, above where you might
+            // look. Its "See all" sets a shelf, and the shelf observer moves
+            // the sidebar there.
+            Section("Reading") {
+                Label(Destination.reading.title, systemImage: Destination.reading.symbol)
+                    .tag(Destination.reading)
+                    // "Reading" is also a shelf one zone down, and the heading
+                    // above says it too. VoiceOver would read the word three
+                    // times without this.
+                    .accessibilityLabel("Continue reading")
+            }
+            Section("Library") {
+                ForEach(LibraryArrangement.Shelf.allCases) { shelf in
+                    let destination = Destination.shelf(shelf)
+                    Label(destination.title, systemImage: destination.symbol)
+                        .tag(destination)
+                }
+            }
+            Section("Audio & storage") {
+                Label(Destination.listening.title, systemImage: Destination.listening.symbol)
+                    .tag(Destination.listening)
+                Label(Destination.downloads.title, systemImage: Destination.downloads.symbol)
+                    .tag(Destination.downloads)
+            }
+        }
+        .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
+        .background(Palette.paper)
+        .navigationSplitViewColumnWidth(min: 200, ideal: 220)
+    }
+
+    /// The sidebar row's own screen, at the root of the content column.
+    private var content: some View {
+        Group {
+            switch selection ?? .shelf(.all) {
+            case .reading:
+                // "See all" is that shelf's grid, "Go to Library" the
+                // library's landing (`LibraryModeSwitch.fromReading`); the
+                // sidebar follows the shelf.
+                ReadingView { shelf in
+                    app.showLibrary(fromReading: shelf)
+                    column.select(.shelf(app.arrangement.shelf))
+                }
+            case .shelf: LibraryView()
+            case .listening: ListeningView()
+            case .downloads: DownloadsView()
+            }
+        }
+        // A fresh screen per row, as the rebuilt stack used to give: one
+        // shelf's search and scroll position are not the next one's. The
+        // root's identity, not the stack's — see `MacContentColumn`.
+        .id(selection)
+        .navigationTitle((selection ?? .shelf(.all)).title)
     }
 }
 

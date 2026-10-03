@@ -49,6 +49,7 @@ struct SeriesView: View {
         .navigationTitle(name)
         // A book's menu here does not offer the way to this series.
         .bookRoutes(place: .series(name))
+        .libraryPageToolbar()
     }
 }
 

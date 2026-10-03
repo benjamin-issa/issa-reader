@@ -95,6 +95,12 @@ public struct LibraryView: View {
     }
     #endif
 
+    private func takePendingSearch() {
+        guard let navigator, let pending = navigator.pendingSearch else { return }
+        search = pending
+        navigator.pendingSearch = nil
+    }
+
     /// Search results are already the answer to a question; re-sorting them by
     /// title would bury the best match. Arrangement applies to the shelf only.
     private var books: [Book] {
@@ -122,11 +128,12 @@ public struct LibraryView: View {
         // as the view appears, because the request rebuilds the library's
         // stack (`LibraryNavigator`): a view that took it on change was the
         // old one, about to be replaced by one with an empty field.
-        .task {
-            guard let navigator, let pending = navigator.pendingSearch else { return }
-            search = pending
-            navigator.pendingSearch = nil
-        }
+        .task { takePendingSearch() }
+        // And as it changes. The Mac's content column is no longer rebuilt
+        // for "Show in Library" — its pages are popped (`MacContentColumn`) —
+        // so on All books the grid it returns to is this one, already up, and
+        // the author's search was never typed in.
+        .onChange(of: navigator?.pendingSearch) { takePendingSearch() }
         #if !os(iOS)
         // The Mac keeps its toolbar search — the sidebar is already its shelf
         // control — and tvOS renders TVLibraryView, so this only has to compile.

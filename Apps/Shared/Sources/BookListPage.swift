@@ -156,6 +156,7 @@ struct BookListPage: View {
         #endif
         .refreshable { await app.refreshLibrary() }
         .bookRoutes(place: subject.place)
+        .libraryPageToolbar()
     }
 
     /// The author page's line under a cover, where the byline would only
@@ -203,6 +204,69 @@ struct BookListPage: View {
         offset >= nameBottom
     }
 }
+
+extension View {
+    /// The library's own toolbar controls, on a page pushed over the Mac's
+    /// library: the Browse / All Books switch and the search field. Nothing
+    /// elsewhere.
+    func libraryPageToolbar() -> some View {
+        #if os(macOS)
+        modifier(LibraryPageToolbar())
+        #else
+        self
+        #endif
+    }
+}
+
+#if os(macOS)
+/// The library window's toolbar, kept on the pages pushed over the grid.
+///
+/// They are the library's own controls, so a page that replaced the grid used
+/// to take them with it: on a tag, author or series page the Browse / All
+/// Books switch and the search field were simply gone, and the way back to
+/// either was Back (F4). Here they lead back to the library: a segment picked
+/// lands on that view of it, and a search is run there — the page is a
+/// focused cut, not a second library with its own search. Neither segment
+/// shows as chosen, because neither is what is on screen.
+private struct LibraryPageToolbar: ViewModifier {
+    @Environment(AppModel.self) private var app
+    @Environment(LibraryNavigator.self) private var navigator: LibraryNavigator?
+    @State private var query = ""
+
+    func body(content: Content) -> some View {
+        if let navigator {
+            content
+                .searchable(text: $query, prompt: "Search your library")
+                .onSubmit(of: .search) {
+                    let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !text.isEmpty else { return }
+                    query = ""
+                    navigator.showLibrary(search: text)
+                }
+                .toolbar {
+                    ToolbarItem(placement: .principal) {
+                        Picker("Library view", selection: Binding<AppModel.LibraryMode?>(
+                            get: { nil },
+                            set: { picked in
+                                guard let picked else { return }
+                                let landing = LibraryModeSwitch.fromPage(picked)
+                                app.arrangement.shelf = landing.shelf
+                                app.libraryMode = landing.mode
+                                navigator.showLibrary()
+                            },
+                        )) {
+                            Text("Browse").tag(Optional(AppModel.LibraryMode.browse))
+                            Text("All Books").tag(Optional(AppModel.LibraryMode.all))
+                        }
+                        .pickerStyle(.segmented)
+                    }
+                }
+        } else {
+            content
+        }
+    }
+}
+#endif
 
 /// One page's staging of its books, rebuilt only when the books or the
 /// statuses it was built from change — not on every body, which anything on

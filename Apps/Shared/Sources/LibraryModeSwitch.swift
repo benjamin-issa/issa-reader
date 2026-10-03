@@ -50,6 +50,14 @@ enum LibraryModeSwitch {
         }
     }
 
+    /// Where a segment picked on a page pushed over the library lands — a
+    /// tag, author or series page, whose toolbar keeps the switch
+    /// (`libraryPageToolbar`). The library's All books, as "Show in Library"
+    /// goes: Browse is its rails, All Books its grid, and nothing searched.
+    static func fromPage(_ picked: AppModel.LibraryMode) -> State {
+        State(mode: picked, shelf: .all, isSearching: false)
+    }
+
     /// Where the Reading screen's links into the library land.
     ///
     /// A "See all" names a shelf — Up next's To read, the downloads'
