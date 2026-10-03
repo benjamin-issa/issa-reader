@@ -268,8 +268,8 @@ final class LiveServerTests: XCTestCase {
             record("readerOpened", false, "not run: no book to read given")
             return
         }
-        guard openReader(app, book: book) else {
-            record("readerOpened", false, "the reader never opened \(book)")
+        if let failure = openReader(app, book: book) {
+            record("readerOpened", false, "\(book): \(failure)")
             return
         }
         let page = app.descendants(matching: .any)
@@ -298,6 +298,12 @@ final class LiveServerTests: XCTestCase {
         record("readerOpened", turned, turned
             ? "turned from \"\(before.value)\" to \"\(after.value)\""
             : "three taps on the right edge left the page at \"\(before.value)\"")
+
+        // And out again, as a reader leaves a book. A reader still up after
+        // its close is reported here, by name, rather than as whatever the
+        // next check fails to find under it.
+        let closed = closeReader(app)
+        record("readerClosed", closed == nil, closed ?? "Back to the book closed the reader")
     }
 
     /// The page's text and its place, together: either changing is a turn.
@@ -328,8 +334,8 @@ final class LiveServerTests: XCTestCase {
             return
         }
         // The narrated book is a larger download than a plain EPUB.
-        guard openReader(app, book: book, timeout: 240) else {
-            record("readAlong", false, "the reader never opened \(book)")
+        if let failure = openReader(app, book: book, timeout: 240) {
+            record("readAlong", false, "\(book): \(failure)")
             return
         }
         let play = app.buttons["Play narration"].firstMatch
@@ -389,7 +395,9 @@ final class LiveServerTests: XCTestCase {
         }
         if signedOut(app) { return (false, "signed out") }
         let any = app.descendants(matching: .any)
-        let onATab = isLanded(app) || any["screen.settings"].exists
+        // The book page too: closing the reader of a book opened by its link
+        // leaves the reader on that book's page, pushed over the tab's root.
+        let onATab = isLanded(app) || any["screen.settings"].exists || any["screen.bookDetail"].exists
         let inTheReader = app.buttons["Back to the book"].exists
             || any.matching(NSPredicate(format: "value BEGINSWITH %@", "Page ")).firstMatch.exists
         guard onATab || inTheReader else {
@@ -399,33 +407,108 @@ final class LiveServerTests: XCTestCase {
     }
 
     /// Opens a book by the same link a widget uses, and dismisses the
-    /// first-run guide if it comes up.
+    /// first-run guide when it comes up.
     ///
-    /// `open` relaunches the app with the URL. The guide is modal to
-    /// accessibility, so while it shows, the reader's own bars are not in the
-    /// tree at all — which is why either one counts as arrived.
-    private func openReader(_ app: XCUIApplication, book: String, timeout: TimeInterval = 120) -> Bool {
-        guard let url = URL(string: "issareader://book/\(book)") else { return false }
+    /// `open` relaunches the app with the URL. On a fresh install the reader
+    /// opens under its first-run guide (`ReaderCoachOverlay`) — the zones on
+    /// the first book, the narration tip on the first narrated one — which a
+    /// live check meets as a first-time reader does: it is not pre-dismissed
+    /// through the app's defaults. The guide comes up once the page is ready,
+    /// which can be after the reader's Back button is already there; it takes
+    /// the next tap itself, and while it shows it is modal to accessibility,
+    /// so neither the page nor the bars are in the tree. So the open waits
+    /// for the page or the guide, not for the Back button.
+    ///
+    /// - Returns: nil once the reader is up and clear, else what went wrong.
+    private func openReader(_ app: XCUIApplication, book: String, timeout: TimeInterval = 120) -> String? {
+        guard let url = URL(string: "issareader://book/\(book)") else { return "no link for the book" }
         app.open(url)
-        let back = app.buttons["Back to the book"].firstMatch
-        let coach = app.descendants(matching: .any)
+        let page = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "value BEGINSWITH %@", "Page "))
+            .firstMatch
+        let guide = readingGuide(app)
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline, !page.exists, !guide.exists {
+            Thread.sleep(forTimeInterval: 1)
+        }
+        guard page.exists || guide.exists else {
+            capture(app, "reader-never-ready")
+            return app.descendants(matching: .any)["screen.reader"].exists
+                ? "the reader opened but drew no page within \(Int(timeout)) s"
+                : "the reader never opened"
+        }
+        // The page and the guide arrive together, near enough: a short wait
+        // for a guide that is a moment behind the page.
+        if let failure = dismissGuide(app, waitingUpTo: 5) { return failure }
+        // Back in the tree once the guide has gone.
+        guard page.waitForExistence(timeout: 10) else {
+            capture(app, "reader-no-page")
+            return "the reading guide went, and no page was under it"
+        }
+        return nil
+    }
+
+    /// The reader's first-run guide, by what it says: its combined label
+    /// starts with the zones' headline or the narration tip's.
+    private func readingGuide(_ app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any)
             .matching(NSPredicate(
                 format: "label BEGINSWITH %@ OR label BEGINSWITH %@",
                 "Reading gestures", "This book is narrated"))
             .firstMatch
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline, !back.exists, !coach.exists {
-            Thread.sleep(forTimeInterval: 1)
+    }
+
+    /// Dismisses the guide, the way a reader does — a tap anywhere on it —
+    /// if it is up or comes up within `wait`. The way
+    /// `LocalBooksFlowTests` and `LayoutSweepTests.testReaderScreen` do.
+    ///
+    /// - Returns: nil when no guide is left on screen, else why.
+    private func dismissGuide(_ app: XCUIApplication, waitingUpTo wait: TimeInterval) -> String? {
+        let guide = readingGuide(app)
+        guard guide.exists || guide.waitForExistence(timeout: wait) else { return nil }
+        capture(app, "guide")
+        // The guide takes the tap itself, so this turns no page.
+        guide.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        guard guide.waitForNonExistence(timeout: 10) else {
+            capture(app, "guide-stuck")
+            return "the reading guide did not go away when tapped"
         }
-        if coach.exists {
-            capture(app, "coach")
-            // The guide takes the tap itself, so this turns no page.
-            coach.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
-        }
-        if back.waitForExistence(timeout: 5) { return true }
-        // The bars may have hidden; the middle of the page brings them back.
+        return nil
+    }
+
+    /// The reader's Back button on screen and hittable, showing the bars
+    /// with a tap in the middle of the page if they have hidden.
+    private func showBars(_ app: XCUIApplication) -> Bool {
+        let back = app.buttons["Back to the book"].firstMatch
+        if back.waitForExistence(timeout: 5), back.isHittable { return true }
+        // The middle of the page toggles the bars; the edges would turn it.
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
-        return back.waitForExistence(timeout: 5)
+        return back.waitForExistence(timeout: 5) && back.isHittable
+    }
+
+    /// Closes the reader with its Back button and checks it went.
+    ///
+    /// The reader's own screen has to be gone, not just something under it
+    /// present: a tab and its pages stay in the tree under the reader's
+    /// cover, so finding one says nothing about whether the close worked.
+    ///
+    /// - Returns: nil once the reader has gone, else what went wrong.
+    private func closeReader(_ app: XCUIApplication) -> String? {
+        // A guide that came up late would take the close's tap itself.
+        if let failure = dismissGuide(app, waitingUpTo: 0) { return failure }
+        guard showBars(app) else {
+            capture(app, "close-no-bars")
+            return "no Back to the book button to close the reader with"
+        }
+        app.buttons["Back to the book"].firstMatch.tap()
+        let reader = app.descendants(matching: .any)["screen.reader"]
+        guard reader.waitForNonExistence(timeout: 15) else {
+            capture(app, "reader-not-closed")
+            return readingGuide(app).exists
+                ? "the reader did not close: the reading guide took the tap"
+                : "the reader did not close: Back to the book left it on screen"
+        }
+        return nil
     }
 
     /// Selects a tab by its label; see `LayoutSweepTests.selectTab` for why
