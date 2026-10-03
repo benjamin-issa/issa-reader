@@ -1062,6 +1062,85 @@ struct DownloadRemovalTests {
         #expect(app.pendingRemoval == nil)
         #expect(!Self.exists(file))
     }
+
+    // MARK: - Asking for an edition inside its undo window
+
+    /// A model with a transfer manager of its own, as `connect` builds one,
+    /// over a background session no transfer here ever reaches: the edition
+    /// reports a size no device has room for, so a `start` that is reached
+    /// at all fails at the free-space check rather than going to a network.
+    private static func downloading(_ uuid: String) throws -> (AppModel, DownloadManager, Book) {
+        let app = AppModel(keychain: InMemoryTokens(), notificationCentre: NotificationCenter())
+        let session = try Self.session()
+        app.session = session
+        let manager = DownloadManager(
+            baseURL: session.serverURL, tokens: session.tokenProvider,
+            identifier: "issa-tests.download-removal.\(UUID().uuidString)", fenceStore: nil,
+        ) { job in
+            FileManager.default.temporaryDirectory.appending(path: "\(job.bookUUID)-\(job.format.rawValue)")
+        }
+        app.useDownloads(manager)
+        // Whatever another suite left the preference at, the connection is
+        // not metered, so the Wi-Fi rule is not what is under test.
+        app.meteredNetworkOverride = false
+        var book = SharedFixtures.book("Dracula", uuid: uuid)
+        book.ebook?.fileSize = 1 << 60
+        app.books = [book]
+        app.rebuildDerived()
+        return (app, manager, book)
+    }
+
+    /// Hold a book, Remove download, then open it within the six seconds.
+    /// The removal is taken back — and then a whole new transfer of the file
+    /// still on disk was started, which on a long read-along is hundreds of
+    /// megabytes, and with too little room said "Not enough space" about a
+    /// book that was on the device.
+    @Test("asking for an edition inside its undo window takes the removal back and fetches nothing")
+    func askingInsideTheWindowFetchesNothing() async throws {
+        let uuid = Self.freshUUID()
+        let file = try Self.plant(uuid, format: .ebook)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let (app, manager, book) = try Self.downloading(uuid)
+        defer { manager.stop() }
+        app.refreshDownloadedSet()
+        app.removeDownload(bookUUID: uuid, format: .ebook, title: "Dracula", undoWindow: .seconds(600))
+        try #require(!app.isDownloaded(book, format: .ebook))
+
+        // What the reader's open does: wait for the edition.
+        let opened = try await app.downloadAndWait(book, format: .ebook) { _, _ in }
+
+        let job = DownloadManager.Job(bookUUID: uuid, format: .ebook)
+        #expect(manager.state(for: job) == nil, "a transfer was started for a file already on the device")
+        #expect(app.pendingRemoval == nil, "the removal was not taken back")
+        #expect(Self.exists(file))
+        #expect(opened.lastPathComponent == file.lastPathComponent)
+        #expect(app.isDownloaded(book, format: .ebook))
+    }
+
+    /// The row's X cancels a transfer, and a transfer that landed between the
+    /// tap and the cancel has its file removed. If that was the book's only
+    /// file, the sweep after it found the book gone and stopped everything
+    /// playing it — a stream of it included, which reads nothing here. The
+    /// cancel knows which edition it removed, as a removal does, and says so.
+    @Test("cancelling a transfer that landed leaves a stream of the book playing")
+    func cancellingALandedTransferLeavesAStreamPlaying() throws {
+        let app = AppModel(keychain: InMemoryTokens(), notificationCentre: NotificationCenter())
+        let uuid = Self.freshUUID()
+        app.refreshDownloadedSet()
+        let landed = try Self.plant(uuid, format: .ebook)
+        defer { try? FileManager.default.removeItem(at: landed) }
+        app.refreshDownloadedSet()
+        let engine = Self.silentEngine()
+        engine.player.play()
+        app.installListening(engine, book: SharedFixtures.book("Dracula", uuid: uuid), reading: nil)
+
+        app.cancelDownload(DownloadManager.Job(bookUUID: uuid, format: .ebook))
+
+        #expect(!Self.exists(landed), "the cancelled transfer's file stays only if nothing removes it")
+        #expect(app.listening === engine, "a cancelled ebook silenced a stream of its book")
+        #expect(engine.player.isPlaying)
+        app.stopListening(nowPlaying: nil)
+    }
 }
 
 /// A token store that never touches the keychain, so these tests neither read

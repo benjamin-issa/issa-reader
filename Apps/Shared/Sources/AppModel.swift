@@ -1672,8 +1672,16 @@ public final class AppModel {
         downloads?.clear(job)
         // A refusal is listed as a transfer row, and this is that row's X.
         downloadRefusals[job] = nil
+        // A transfer that landed before the tap has a file, and something may
+        // already be reading it; only what reads this edition is stopped,
+        // as a removal stops it.
+        stopPlayback(of: job.bookUUID, format: job.format)
         BookContentService.removeDownload(bookUUID: job.bookUUID, format: job.format)
-        refreshDownloadedSet()
+        // Named, as `removeDownload` names its edition: when that file was
+        // the book's last, the sweep otherwise took it for one that left
+        // behind the app's back and stopped everything playing the book — a
+        // stream of it included, which reads nothing on this device.
+        refreshDownloadedSet(after: job)
     }
 
     /// Everything a download leaves behind on disk once its file has gone.
@@ -2038,10 +2046,13 @@ public final class AppModel {
     /// that it should be on the device, so it wins over a removal that has not
     /// happened yet. Only for the same job: a removal of one book has nothing
     /// to say about a download of another.
-    private func cancelPendingRemoval(matching job: DownloadManager.Job) {
+    /// - Returns: whether there was one to take back.
+    @discardableResult
+    private func cancelPendingRemoval(matching job: DownloadManager.Job) -> Bool {
         guard pendingRemoval?.bookUUID == job.bookUUID,
-              pendingRemoval?.format == job.format else { return }
+              pendingRemoval?.format == job.format else { return false }
         undoPendingRemoval()
+        return true
     }
 
     /// Puts the row back. Nothing was deleted, so there is nothing to fetch.
@@ -3933,6 +3944,9 @@ public final class AppModel {
         guard await download(book, format: format) else {
             throw StorytellerError.download(downloadRefusals[job] ?? "Couldn't start the download.")
         }
+        // The removal `download` took back left the file where it was, and
+        // no transfer was started to wait on.
+        if isDownloaded(book, format: format) { return destination }
 
         // The last real byte counts seen, for a pause to keep showing.
         var lastReported: (written: Int64, total: Int64) = (0, 0)
@@ -4079,7 +4093,13 @@ public final class AppModel {
         // After the guard above, so a download the Wi-Fi rule refused does not
         // quietly take back a removal it is not going to replace — but before
         // the transfer starts, so the timer cannot fire between the two.
-        cancelPendingRemoval(matching: job)
+        let tookBack = cancelPendingRemoval(matching: job)
+        // A removal taken back deleted nothing, so the edition is still here
+        // and there is nothing to fetch. Opening a book inside its undo window
+        // started a whole new transfer of the file on disk — hundreds of
+        // megabytes for a read-along, and with too little room "Not enough
+        // space" about a book that was on the device.
+        if tookBack, isDownloaded(book, format: format) { return true }
         await downloads.start(job, expectedBytes: expected)
         return true
     }
