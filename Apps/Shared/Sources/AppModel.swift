@@ -1560,7 +1560,8 @@ public final class AppModel {
         let derivation = LibraryDerivation(books: books)
         booksByAuthor = derivation.byAuthor
         booksByNarrator = derivation.byNarrator
-        booksByTag = derivation.byTag
+        // From the rails' own pass: grouping the library by tag is theirs.
+        booksByTag = rails.byTag
         rebuildAfterPositionChange()
     }
 

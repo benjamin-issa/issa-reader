@@ -156,6 +156,22 @@ struct LibraryRailsTests {
         #expect(rails.tagRails.map(\.tag) == ["A", "B", "C", "D"])
     }
 
+    /// The whole tag index, single-book tags and all, which the app model
+    /// memoises from this pass rather than grouping the library again.
+    @Test("the rails carry every tag's books, as the derivation groups them")
+    func everyTagIsKept() {
+        let books = [
+            book("A", tags: ["Fiction", "Rare", "Fiction"]),
+            book("B", tags: ["Fiction", "History"]),
+        ]
+        let rails = LibraryRails(books: books)
+        #expect(rails.byTag.mapValues { $0.map(\.uuid) }
+            == LibraryDerivation(books: books).byTag.mapValues { $0.map(\.uuid) })
+        #expect(rails.byTag["Rare"]?.map(\.uuid) == ["A"])
+        #expect(rails.byTag["Fiction"]?.map(\.uuid) == ["A", "B"])
+        #expect(LibraryRails.empty.byTag.isEmpty)
+    }
+
     // MARK: - Reading and to-read
 
     @Test("in-progress books are ordered by recency, never-opened ones last")

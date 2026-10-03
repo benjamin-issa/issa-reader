@@ -70,6 +70,11 @@ public struct LibraryRails: Sendable, Equatable {
     /// Books in progress by status, most recently positioned first and the
     /// ones never opened last. Uncapped: the Reading tab lists them all.
     public let reading: [Book]
+    /// Every tag, with each book that carries it once, in catalogue order —
+    /// `LibraryDerivation.byTag`, which the tag rails above are cut from.
+    /// Kept so the app model memoises its tag index from this pass rather
+    /// than grouping the whole library a second time.
+    public let byTag: [String: [Book]]
 
     public struct TagRail: Sendable, Equatable, Identifiable {
         public let tag: String
@@ -93,7 +98,8 @@ public struct LibraryRails: Sendable, Equatable {
 
         withAudio = Array(books.filter(\.hasServableAudio).prefix(Self.railLength))
 
-        tagRails = derivation.byTag
+        byTag = derivation.byTag
+        tagRails = byTag
             .filter { $0.value.count >= Self.minimumBooksPerTag }
             .sorted { $0.value.count == $1.value.count ? $0.key < $1.key : $0.value.count > $1.value.count }
             .prefix(Self.tagRailCount)
