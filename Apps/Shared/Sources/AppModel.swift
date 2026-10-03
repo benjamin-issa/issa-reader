@@ -176,6 +176,7 @@ public final class AppModel {
         // A property initialiser does not fire `didSet`, so without this the
         // first frame renders empty facets and an unarranged shelf.
         rebuildDerived()
+        watchMetering()
     }
 
     private static let lastServerKey = "issa.lastServer"
@@ -4021,7 +4022,9 @@ public final class AppModel {
     /// A test seam, nil in production, and internal for that reason alone, as
     /// `useStore` is: whether the connection is metered is the network's to
     /// say, and nothing else can make a simulator's connection metered.
-    @ObservationIgnored var meteredNetworkOverride: Bool?
+    @ObservationIgnored var meteredNetworkOverride: Bool? {
+        didSet { meteringMayHaveChanged() }
+    }
 
     /// Whether the connection is one the Wi-Fi-only preference holds large
     /// downloads back on: cellular, or a Low Data Mode network.
@@ -4037,7 +4040,57 @@ public final class AppModel {
 
     public var wifiOnlyDownloads: Bool {
         get { downloads?.wifiOnly ?? false }
-        set { downloads?.wifiOnly = newValue }
+        set {
+            downloads?.wifiOnly = newValue
+            // The reader lifting the rule is the wait every refusal names
+            // ending.
+            if !newValue { retryRefusedDownloads() }
+        }
+    }
+
+    /// Starts the downloads the Wi-Fi rule held back, once it no longer
+    /// holds them: the connection stopped being metered, or Wi-Fi only was
+    /// turned off.
+    ///
+    /// A refusal says "Waiting for Wi-Fi to download this.", and nothing was
+    /// waiting: joining Wi-Fi or lifting the rule started nothing, and the
+    /// note went on saying it, on Wi-Fi, until the reader tapped again or
+    /// relaunched. Each goes back through `resumeDownload` — the path the
+    /// row's Resume takes — so the rule and the free-space check are asked
+    /// again rather than assumed.
+    private func retryRefusedDownloads() {
+        let refused = Array(downloadRefusals.keys)
+        guard !refused.isEmpty else { return }
+        IssaLog.info("retrying held-back downloads", ["count": String(refused.count)])
+        Task { [weak self] in
+            for job in refused {
+                // Only what is still refused: a cancel or a removal since
+                // has taken the row away.
+                guard let self, self.downloadRefusals[job] != nil else { continue }
+                await self.resumeDownload(job)
+            }
+        }
+    }
+
+    /// Asked whenever the connection may have changed kind.
+    private func meteringMayHaveChanged() {
+        if !isOnMeteredNetwork { retryRefusedDownloads() }
+    }
+
+    /// Follows `reachability.isExpensive`, which `Reachability` changes on
+    /// every path update, so a move from cellular to Wi-Fi — which is not a
+    /// return from offline, and so fires no `onBecameOnline` — is heard.
+    private func watchMetering() {
+        withObservationTracking {
+            _ = reachability.isExpensive
+        } onChange: { [weak self] in
+            // `onChange` runs before the value is set; the hop reads it after.
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.meteringMayHaveChanged()
+                self.watchMetering()
+            }
+        }
     }
 
     /// Restarts a paused or failed transfer, looking the book back up so the

@@ -148,4 +148,70 @@ struct DownloadRefusalTests {
         #expect(app.downloadRefusals.isEmpty)
         #expect(app.downloadsPending.isEmpty)
     }
+
+    // MARK: - A refusal is a wait, and the wait ends
+
+    /// The fixture's book, reporting a size no device has room for: a retry
+    /// that reaches `DownloadManager.start` fails at its free-space check
+    /// rather than sending anything to a network.
+    static func unfittable(_ app: AppModel) throws -> Book {
+        var book = try #require(app.bookByUUID[uuid])
+        book.readaloud?.fileSize = 1 << 60
+        app.books = [book]
+        app.rebuildDerived()
+        return book
+    }
+
+    /// "Waiting for Wi-Fi to download this." Joining Wi-Fi started nothing,
+    /// and the note went on saying it was waiting, on Wi-Fi, until the
+    /// reader tapped again or relaunched.
+    @Test("a refused download starts once the connection is no longer metered")
+    func aRefusalIsRetriedOnAnUnmeteredConnection() async throws {
+        let fixture = Self.fixture()
+        defer { fixture.tearDown() }
+        let app = fixture.app
+        let book = try Self.unfittable(app)
+        await app.download(book, format: .readaloud)
+        try #require(app.downloadRefusals[Self.job] != nil)
+
+        app.meteredNetworkOverride = false
+        let retried = await waitUntil(within: .seconds(5)) { fixture.manager.state(for: Self.job) != nil }
+
+        #expect(retried, "the download the note said was waiting for Wi-Fi never started on Wi-Fi")
+        #expect(app.downloadRefusals[Self.job] == nil, "the note still says it is waiting")
+    }
+
+    /// Switching Wi-Fi only off in Downloads is the reader lifting the rule.
+    @Test("a refused download starts once Wi-Fi only is turned off")
+    func aRefusalIsRetriedWhenTheRuleIsLifted() async throws {
+        let fixture = Self.fixture()
+        defer { fixture.tearDown() }
+        let app = fixture.app
+        let book = try Self.unfittable(app)
+        await app.download(book, format: .readaloud)
+        try #require(app.downloadRefusals[Self.job] != nil)
+
+        app.wifiOnlyDownloads = false
+        let retried = await waitUntil(within: .seconds(5)) { fixture.manager.state(for: Self.job) != nil }
+
+        #expect(retried, "turning the rule off left its refusal waiting")
+        #expect(app.downloadRefusals[Self.job] == nil)
+    }
+
+    /// The control: still metered, still Wi-Fi only — nothing moves.
+    @Test("a refused download stays refused while the rule still applies")
+    func aRefusalStaysWhileTheRuleApplies() async throws {
+        let fixture = Self.fixture()
+        defer { fixture.tearDown() }
+        let app = fixture.app
+        let book = try Self.unfittable(app)
+        await app.download(book, format: .readaloud)
+
+        app.meteredNetworkOverride = true
+        app.wifiOnlyDownloads = true
+        try? await Task.sleep(for: .milliseconds(300))
+
+        #expect(fixture.manager.state(for: Self.job) == nil)
+        #expect(app.downloadRefusals[Self.job] == Self.expectedReason)
+    }
 }
