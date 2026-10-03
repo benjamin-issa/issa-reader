@@ -293,6 +293,10 @@ public struct CoverImage: View {
     let session: Session?
     var aspect: CGFloat = Metrics.coverAspect
     var shape: LibraryService.CoverShape = .portrait
+    /// The longest side a local book's cover is decoded to, in pixels: the
+    /// size it is drawn at, so a list of thumbnails does not hold a 600-px
+    /// decode per row.
+    var localPixels: CGFloat = 600
 
     @State private var image: Image?
 
@@ -300,11 +304,13 @@ public struct CoverImage: View {
         book: Book, session: Session?,
         aspect: CGFloat = Metrics.coverAspect,
         shape: LibraryService.CoverShape = .portrait,
+        localPixels: CGFloat = 600,
     ) {
         self.book = book
         self.session = session
         self.aspect = aspect
         self.shape = shape
+        self.localPixels = localPixels
     }
 
     public var body: some View {
@@ -342,7 +348,7 @@ public struct CoverImage: View {
             // at import, and no server to ask: its uuid is not one any server
             // has, and asking would send it somewhere it must not go.
             if book.isLocal {
-                let local = await CoverCache.shared.localImage(for: book)
+                let local = await CoverCache.shared.localImage(for: book, maxPixel: localPixels)
                 if !Task.isCancelled { image = local }
                 return
             }

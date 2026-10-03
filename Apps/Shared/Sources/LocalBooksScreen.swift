@@ -77,7 +77,9 @@ public struct LocalBooksScreen: View {
             .overlay(alignment: .bottom) { toasts }
             .animation(.snappy, value: library.pendingRemoval)
             .animation(.snappy, value: library.duplicate?.uuid)
-            .task(id: library.books.map(\.uuid)) { await refreshSizes() }
+            // The set, not the order: opening a book moves it to the top, and
+            // that is no reason to walk every book's folder again (R-62).
+            .task(id: Set(library.books.map(\.uuid))) { await refreshSizes() }
             .onAppear { library.noteShown() }
             .onChange(of: library.addRequested, initial: true) { _, requested in
                 guard requested else { return }
@@ -368,7 +370,10 @@ public struct LocalBooksScreen: View {
     #if !os(macOS)
     @ViewBuilder
     private var booksGroup: some View {
-        VStack(alignment: .leading, spacing: Metrics.spacing8) {
+        // Lazy, as the Mac's List is: a reader with hundreds of books had
+        // every row and every cover built at once, each cover held by its row
+        // where the cover cache's limit could not free it (R-62).
+        LazyVStack(alignment: .leading, spacing: Metrics.spacing8) {
             if !library.imports.isEmpty { Text("Books").overlineStyle() }
             ForEach(library.books) { book in
                 SwipeToRemove(
@@ -735,7 +740,9 @@ struct LocalBookRow: View {
     }
 
     private var cover: some View {
-        CoverImage(book: book, session: nil)
+        // Decoded at the size drawn — 38 pt wide, 57 at the accessibility
+        // sizes — rather than 600 px for a thumbnail (R-62).
+        CoverImage(book: book, session: nil, localPixels: typeSize.isAccessibilitySize ? 260 : 180)
             .overlay {
                 if isMissing {
                     RoundedRectangle(cornerRadius: Metrics.radiusSmall).fill(Palette.borderStrong.opacity(0.7))
@@ -884,7 +891,7 @@ struct LocalBookMacRow: View {
     }
 
     private var cover: some View {
-        CoverImage(book: book, session: nil)
+        CoverImage(book: book, session: nil, localPixels: 180)
             .frame(width: 32)
             .opacity(isMissing ? 0.5 : 1)
     }
