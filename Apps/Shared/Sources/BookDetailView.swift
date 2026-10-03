@@ -634,12 +634,13 @@ public struct BookDetailView: View {
     /// What VoiceOver says on entering the rating row.
     ///
     /// The count is clamped to the five stars there are before it becomes an
-    /// `Int`. The rating is the server's number, decoded as any `Double`, and
+    /// `Int`, by `StarRating.wholeStars`, the clamp the rest of the app uses.
+    /// The rating is the server's number, decoded as any `Double`, and
     /// `Int(1e300)` is not a wrong answer but a crash — every time the book's
     /// page opened, until a refresh replaced the value.
     static func ratingLabel(_ mine: Double?) -> String {
         guard let mine else { return "Your rating, not rated. Rate this book from one to five stars." }
-        let stars = mine.isFinite ? Int(min(max(mine.rounded(), 0), 5)) : 0
+        let stars = StarRating.wholeStars(mine)
         return "Your rating, \(stars) star\(stars == 1 ? "" : "s")"
     }
 
