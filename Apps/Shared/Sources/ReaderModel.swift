@@ -62,8 +62,20 @@ public final class ReaderModel {
     public private(set) var layout: ChapterLayout?
     public private(set) var chapterIndex = 0
     public var pageIndex = 0
-    /// Fragment currently narrated, when audio is playing.
-    public var activeFragmentID: String?
+    /// The narrated sentence to light on the page: the one the voice is on,
+    /// when it is in the chapter on screen, and nil otherwise.
+    ///
+    /// Scoped by document because ids are unique per chapter, not per book —
+    /// only Storyteller's aligner happens to prefix them. Read bare, the voice
+    /// in chapter one lit the same-numbered sentence of chapter two whenever
+    /// the reader had paged on ahead of it.
+    public var activeFragmentID: String? {
+        guard let narratedFragment, narratedDocument == currentSpineHref else { return nil }
+        return narratedFragment
+    }
+    /// The sentence the voice is on, by id, and the document that id is in.
+    private var narratedFragment: String?
+    private var narratedDocument: String?
     /// Present only when the book has usable media overlays.
     public private(set) var readalong: ReadalongCoordinator?
 
@@ -81,6 +93,28 @@ public final class ReaderModel {
     /// clock can use directly — and the only one that still resolves when a
     /// chapter's overlay ids never reached the rendered text.
     private var restoredSentenceID: String?
+
+    /// Where the voice was when this book was last put down: the anchor the
+    /// last save wrote while narration was part of the reader's place.
+    ///
+    /// The saved position is a page, and it should be — a page is what a
+    /// reader returns to. But the anchor beside it is the sentence, and it was
+    /// read back only for a position the audiobook wrote, so a book quit
+    /// mid-narration reopened on the right page and then started the voice at
+    /// the page's first sentence rather than the one it had been on. Consulted
+    /// by `narrationStart` only while that sentence is on the page on screen.
+    @ObservationIgnored private var quitAnchor: AudioAnchor?
+
+    /// Which `open` is the current one. Bumped by every open, read after every
+    /// suspension in it: an open that something newer has replaced — Try
+    /// Again pressed while it was still preparing narration — stands down
+    /// rather than install a second coordinator over the first.
+    @ObservationIgnored private var openGeneration = 0
+
+    /// Called at the start of narration's preparation, once the chapter is on
+    /// screen and before anything is extracted. A test seam, nil on every
+    /// path a reader can reach, and spent when it fires.
+    @ObservationIgnored var whilePreparingNarration: (@MainActor () async -> Void)?
 
     /// What this book offers by way of its own face, once opened.
     public internal(set) var publisherFont: EPUBFontResolver.Resolution?
@@ -434,10 +468,26 @@ public final class ReaderModel {
     static let localFileMissing =
         "This book's file is no longer on this device. Add it again to keep reading — your place and highlights are kept."
 
+    /// What `open` reads the book from: the server's edition, or the reader's
+    /// own copy.
+    ///
+    /// `Source` with the edition resolved. The edition used to travel beside
+    /// the source as an optional that was nil exactly when the book was local,
+    /// so two places had to guard against a combination that cannot happen —
+    /// one returned leaving the phase unchanged, the other threw a
+    /// cancellation that the catch below swallowed, a spinner for ever with no
+    /// line in the log, had either ever been reached.
+    private enum Opening {
+        case server(Session, BookContentService.Format)
+        case local(LocalBookFiles)
+    }
+
     public func open(pageSize: CGSize) async {
         self.pageSize = pageSize
+        openGeneration &+= 1
+        let generation = openGeneration
         // Which edition, for a server book; a local book has the one file.
-        let format: BookContentService.Format?
+        let opening: Opening
         switch source {
         case let .server(session):
             let content = BookContentService(client: session.client, cacheDirectory: booksDirectory)
@@ -445,17 +495,18 @@ public final class ReaderModel {
                 phase = .failed("This book has no readable edition on the server.")
                 return
             }
-            format = preferred
+            opening = .server(session, preferred)
         case let .local(files):
-            format = nil
             guard FileManager.default.fileExists(atPath: files.epub.path) else {
                 IssaLog.warning("local book file missing", ["book": book.uuid])
                 phase = .failed(Self.localFileMissing)
                 return
             }
+            opening = .local(files)
         }
         do {
-            let url = try await resolveFile(format: format)
+            let url = try await resolveFile(opening)
+            try checkStillOpening(generation)
             let package = try EPUBPackage.open(url: url)
             self.package = package
             fileURL = url
@@ -464,7 +515,14 @@ public final class ReaderModel {
             // And a book from the reader's files narrates only when its import
             // found every file of its audio playable here (`hasReadalong`): one
             // added as text, whose overlay names Opus, say, reads as text.
-            let timeline = SMILParser.timeline(for: package)
+            //
+            // With whatever file lengths an earlier open measured: a clip whose
+            // overlay states no end runs to the end of its file, and the cache
+            // beside the narration is the only place that length is known
+            // before the audio is extracted. Empty for every book a server
+            // aligned — they state every end — and for a first open.
+            let timeline = SMILParser.timeline(
+                for: package, fileDurations: ChunkDurations.load(fromDirectory: narrationDirectory))
             let narrates = !isLocal || book.hasReadalong
             self.timeline = timeline.isEmpty || !narrates ? nil : timeline
 
@@ -510,14 +568,18 @@ public final class ReaderModel {
             // the fetch was in flight otherwise saw the open run to the end —
             // a second package, a second layout, a second coordinator with its
             // own player — while the replacement did it all again.
-            try Task.checkCancellation()
+            try checkStillOpening(generation)
             restoredSentenceID = stored?.locator.sentenceID
             // Fetched up front rather than inside the branch that wants it, so
             // the decision below is a pure function of what is known. Only an
-            // audio-scaled position has anything to gain from an anchor: a
-            // reading position already names its own chapter.
-            let anchor = (stored?.locator.isAudioScaled ?? false)
-                ? await loadAudioAnchor?() : nil
+            // audio-scaled position has anything to gain from an anchor for
+            // the *landing*: a reading position already names its own chapter.
+            // But every narrated book keeps it as the place the voice was —
+            // see `quitAnchor`.
+            let storedAnchor = timeline.isEmpty ? nil : await loadAudioAnchor?()
+            try checkStillOpening(generation)
+            quitAnchor = storedAnchor
+            let anchor = (stored?.locator.isAudioScaled ?? false) ? storedAnchor : nil
             let landing = Self.resolveLanding(
                 stored: stored?.locator, anchor: anchor, package: package, timeline: timeline)
             let resumed = landing.index
@@ -586,6 +648,13 @@ public final class ReaderModel {
                     chapterIndex = fallback
                     restoring = nil
                     loaded = await loadChapter(chapterIndex, restoring: restoring)
+                    // The landing chapter's failure set `.failed`, and the book
+                    // has now opened after all: still opening, not failed.
+                    // Left alone, the reader showed "Couldn't open this book"
+                    // and Try Again over a book that had opened, for as long as
+                    // its narration took to extract — and a Try Again there
+                    // started a second open beside this one.
+                    if loaded { phase = .loading("Opening…") }
                 }
             }
 
@@ -602,7 +671,7 @@ public final class ReaderModel {
                 phase = .failed("This book's file doesn't contain any readable chapters.")
                 return
             }
-            try Task.checkCancellation()
+            try checkStillOpening(generation)
             if self.timeline == nil, !timeline.isEmpty {
                 // A local book whose import found narration this device cannot
                 // play, and added it as text.
@@ -610,7 +679,7 @@ public final class ReaderModel {
                     "book": book.title, "reason": "notPlayableHere",
                 ])
             } else {
-                try await prepareNarration(package: package)
+                try await prepareNarration(package: package, generation: generation)
             }
             phase = .ready
             // Spelled out rather than inline: enough of these and the type
@@ -649,7 +718,7 @@ public final class ReaderModel {
             if let fragment = restoredSentenceID, self.timeline != nil,
                let entry = timeline.entry(
                    forFragment: fragment, inDocument: package.spine[chapterIndex].href),
-               await loadAudioAnchor?() == nil
+               storedAnchor == nil
             {
                 await recordAudioAnchor?(AudioAnchor(
                     audioHref: entry.audioHref,
@@ -668,13 +737,14 @@ public final class ReaderModel {
             // picks the wait back up, so leave the phase exactly as it is.
             return
         } catch {
-            IssaLog.failure("open book", error, [
-                "book": book.title,
-                "format": format.map { String(describing: $0) } ?? "local",
-            ])
-            switch source {
-            case let .server(session):
-                guard let format else { return }
+            let edition: String = if case let .server(_, format) = opening {
+                String(describing: format)
+            } else {
+                "local"
+            }
+            IssaLog.failure("open book", error, ["book": book.title, "format": edition])
+            switch opening {
+            case let .server(session, format):
                 // Distinguish "the file never arrived" from "the server is down".
                 // Both used to render as "Couldn't reach your server", which sent
                 // people looking at their network for a book that simply had not
@@ -692,15 +762,31 @@ public final class ReaderModel {
         }
     }
 
+    /// Throws when this open is no longer the one that counts: its task was
+    /// cancelled — a layout pass replaced it — or a newer open has begun.
+    private func checkStillOpening(_ generation: Int) throws {
+        try Task.checkCancellation()
+        guard generation == openGeneration else { throw CancellationError() }
+    }
+
+    /// Where this book's narration is extracted to, and its file lengths
+    /// cached: its own folder for a book from the reader's files, `Audio/` for
+    /// a server book.
+    private var narrationDirectory: URL {
+        if case let .local(files) = source {
+            files.narration
+        } else {
+            AudioExtraction.defaultDirectory(for: book.uuid)
+        }
+    }
+
     /// The EPUB to open: for a server book the download — fetched first when it
     /// is not on the device — and for a local book its copy.
-    private func resolveFile(format: BookContentService.Format?) async throws -> URL {
-        switch source {
+    private func resolveFile(_ opening: Opening) async throws -> URL {
+        switch opening {
         case let .local(files):
             return files.epub
-        case let .server(session):
-            // `open` never calls this for a server book without one.
-            guard let format else { throw CancellationError() }
+        case let .server(session, format):
             let content = BookContentService(client: session.client, cacheDirectory: booksDirectory)
             // Through the model where there is one, so opening a book whose
             // edition is inside its undo window goes down the download path —
@@ -764,6 +850,9 @@ public final class ReaderModel {
     }
 
     /// Starts the whole open again after a failure.
+    ///
+    /// An open still running stands down at its next step — see
+    /// `openGeneration` — so this never runs beside it to the end.
     public func retryOpen(pageSize: CGSize) async {
         phase = .loading("Opening…")
         await open(pageSize: pageSize)
@@ -926,13 +1015,18 @@ public final class ReaderModel {
     /// Only runs when the timeline is non-empty, so a book the server reports as
     /// ALIGNED but which carries no overlays simply reads as a plain ebook
     /// rather than showing a player that can never play anything.
-    private func prepareNarration(package: EPUBPackage) async throws {
+    private func prepareNarration(package: EPUBPackage, generation: Int) async throws {
         guard let timeline, !timeline.isEmpty else {
             IssaLog.info("narration unavailable", [
                 "book": book.title, "reason": "emptyTimeline",
             ])
             return
         }
+        if let hook = whilePreparingNarration {
+            whilePreparingNarration = nil
+            await hook()
+        }
+        try checkStillOpening(generation)
         // Off the main actor: this inflates every audio track in the book and
         // writes it to disk, which for a long readaloud is hundreds of
         // megabytes through the deflater — and it ran on the main actor, so
@@ -954,7 +1048,7 @@ public final class ReaderModel {
         narrationExtraction.hold(extraction)
         let files = await extraction.value
         narrationExtraction.release(extraction)
-        try Task.checkCancellation()
+        try checkStillOpening(generation)
         guard let files, !files.isEmpty else {
             // A book whose play button never appears, with no reason given, is
             // indistinguishable from one that was never aligned.
@@ -964,8 +1058,52 @@ public final class ReaderModel {
             ])
             return
         }
+        let resolved = timeline.filesNeedingLength.isEmpty
+            ? timeline
+            : try await measuredTimeline(timeline, package: package, files: files, generation: generation)
 
-        attachNarration(timeline: timeline, audioFiles: files)
+        attachNarration(timeline: resolved, audioFiles: files)
+    }
+
+    /// The timeline again, with the real length of every file whose last
+    /// clip states no end.
+    ///
+    /// Such a clip runs "to the end of the media", and nothing in the book says
+    /// where that is. Left at its placeholder, a local read-along aligned one
+    /// clip per chapter file had a book clock of a few milliseconds a file: the
+    /// scrubber and the lock screen meaningless, a thirty-second skip landing
+    /// in the last chapter and saving it as a place the reader had chosen.
+    ///
+    /// Each file is measured once, off the main actor, and the answers are
+    /// kept beside the narration — `Local/<uuid>/Audio/` for a book from the
+    /// reader's files — where `open` reads them back next time and where
+    /// removing the book takes them. Only the files that need it: a book a
+    /// server aligned states every end and never gets here.
+    private func measuredTimeline(
+        _ timeline: SMILTimeline, package: EPUBPackage, files: [String: URL], generation: Int,
+    ) async throws -> SMILTimeline {
+        let directory = narrationDirectory
+        let cached = ChunkDurations.load(fromDirectory: directory)
+        let wanted = files.filter { timeline.filesNeedingLength.contains($0.key) }
+        let measured = await ChunkDurations.measure(wanted, cached: cached)
+        try checkStillOpening(generation)
+        if measured.count > cached.count {
+            do {
+                try ChunkDurations.save(measured, toDirectory: directory)
+            } catch {
+                IssaLog.failure("save narration lengths", error, ["book": book.title])
+            }
+        }
+        let resolved = await Task.detached(priority: .userInitiated) {
+            SMILParser.timeline(for: package, fileDurations: measured)
+        }.value
+        try checkStillOpening(generation)
+        IssaLog.info("narration lengths measured", [
+            "book": book.title, "files": String(wanted.count),
+            "before": String(format: "%.3f", timeline.totalDuration),
+            "after": String(format: "%.3f", resolved.totalDuration),
+        ])
+        return resolved
     }
 
     /// Revokes an extraction that is still writing this book's narration.
@@ -996,6 +1134,17 @@ public final class ReaderModel {
         // coordinator is built over, and the two disagreeing is how a highlight
         // ends up pointing at a sentence the page cannot find.
         self.timeline = timeline
+        // Whatever this replaces is silenced and cut loose first. Two opens
+        // racing used to leave two coordinators alive for one book, the first
+        // still talking — Now Playing kept it, and stopping narration reached
+        // only the second.
+        if let previous = readalong {
+            previous.player.pause()
+            previous.player.removeRateObservers()
+            previous.onFragmentChange = nil
+            previous.onChapterChange = nil
+            previous.onSeek = nil
+        }
         let coordinator = ReadalongCoordinator(timeline: timeline, audioFiles: audioFiles)
         // The saved rate is otherwise written to preferences and never applied,
         // so every book starts at 1x however the reader left it.
@@ -1004,13 +1153,23 @@ public final class ReaderModel {
         // here and nothing else would tell it, so a trimmed book would open at
         // the recorded level until the reader touched the slider again.
         coordinator.player.gain = VolumeTrim.gain(preferredVolumeTrim)
-        coordinator.onFragmentChange = { [weak self] fragment in
+        coordinator.onFragmentChange = { [weak self, weak coordinator] fragment in
             guard let self else { return }
-            activeFragmentID = fragment
+            // The document the id belongs to, which the hook does not carry:
+            // the coordinator has already moved `activeEntry` onto it.
+            let document = coordinator?.activeEntry?.textHref
+            narratedFragment = fragment
+            narratedDocument = document
             // Keep the narrated sentence on screen. If it is already visible,
             // do not fight the reader by turning the page underneath them.
+            //
+            // Only in its own chapter. Ids are unique per document, and looked
+            // up bare, a sentence in chapter one turned chapter two's page to
+            // the sentence of the same number — and at every chapter boundary
+            // the new chapter's first sentence turned the old one's page before
+            // the new chapter had loaded.
             var moved = false
-            if style.followNarration, let layout,
+            if style.followNarration, let layout, document == currentSpineHref,
                let page = layout.page(containingFragment: fragment),
                page.index != pageIndex {
                 pageIndex = page.index
@@ -1046,7 +1205,7 @@ public final class ReaderModel {
             // that crossed the boundary. Loading without it took `pageIndex = 0`
             // and saved the top of the chapter over the line being spoken — on
             // every chapter boundary, every session.
-            let fragment = activeFragmentID
+            let fragment = narratedFragment
             Task { [weak self] in
                 await self?.followNarration(toDocument: href, fragment: fragment)
             }
@@ -1194,10 +1353,19 @@ public final class ReaderModel {
     /// Every rung is anchored to the chapter the reader is in, and the last one
     /// still only looks *forward* through the spine. There is deliberately no
     /// rung that can reach the start of the book from the middle of it.
-    private func narrationStart() -> (entry: SMILEntry, via: String)? {
+    ///
+    /// Internal so a test can ask it where play would begin without playing.
+    func narrationStart() -> (entry: SMILEntry, via: String)? {
         guard let timeline, let package, package.spine.indices.contains(chapterIndex) else { return nil }
         let href = package.spine[chapterIndex].href
 
+        // 0. Where the voice was when the book was last put down, while that
+        //    sentence is on the page on screen — a book quit mid-narration,
+        //    reopened on the page it was saved on. Off this page it is a place
+        //    the reader has read on from, and the rungs below decide.
+        if let entry = quitSentenceOnVisiblePage {
+            return (entry, "quitPoint")
+        }
         // 1. What the reader can see, or the next narrated sentence after it in
         //    this chapter: a page often opens on a heading or a plate carrying
         //    no overlay of its own while the prose beneath it is narrated. The
@@ -1268,7 +1436,10 @@ public final class ReaderModel {
         // `play(from:)`, not `seek(toFragment:)`: a seek is the reader naming a
         // place, and pressing play is not. Keeping this on the derived side of
         // the line is what leaves the position guard armed.
-        await readalong.play(from: entry)
+        guard await readalong.play(from: entry) else {
+            narrationWouldNotPlay(entry.audioHref)
+            return
+        }
         // Belt and braces, and idempotent: `followNarration` returns
         // immediately when the chapter is already loaded. `move(to:)` now
         // announces the boundary itself, so this no longer carries the case
@@ -1338,7 +1509,12 @@ public final class ReaderModel {
         await followNarration(toDocument: entry.textHref, fragment: entry.fragmentID)
         // `followNarration` returns early when the chapter is already loaded,
         // which is the common case — the page still has to move.
-        guard let layout, let page = layout.page(containingFragment: entry.fragmentID),
+        //
+        // In the voice's own chapter only: when that chapter would not load,
+        // the one on screen is another, and the voice's id names a different
+        // sentence there.
+        guard entry.textHref == currentSpineHref, let layout,
+              let page = layout.page(containingFragment: entry.fragmentID),
               page.index != pageIndex
         else { return }
         pageIndex = page.index
@@ -1392,6 +1568,17 @@ public final class ReaderModel {
         positionOrigin = .derived
         await turnToNarration()
         return true
+    }
+
+    /// The sentence `quitAnchor` names, when it is on the page on screen.
+    private var quitSentenceOnVisiblePage: SMILEntry? {
+        guard let anchor = quitAnchor, let timeline, let package, let href = currentSpineHref,
+              let layout, let page = currentPage,
+              let placed = ListeningHandoff.place(anchor, in: package, timeline: timeline),
+              placed.entry.textHref == href,
+              layout.page(containingFragment: placed.entry.fragmentID)?.index == page.index
+        else { return nil }
+        return placed.entry
     }
 
     /// The first narrated fragment inside a stretch of the chapter's text.
@@ -1514,6 +1701,12 @@ public final class ReaderModel {
     /// Everything else is the ordinary toggle.
     public func playFromVisiblePage() async {
         guard let readalong else { return }
+        // A first press on a book reopened where its voice stopped starts
+        // there, as the play button does — see `quitAnchor`.
+        if readalong.activeEntry == nil, quitSentenceOnVisiblePage != nil {
+            await startNarration()
+            return
+        }
         guard !readalong.player.isPlaying, !narrationIsOnVisiblePage,
               let page = currentPage,
               let fragment = firstNarratedFragment(beginningOn: page)
@@ -1530,14 +1723,30 @@ public final class ReaderModel {
         if readalong.player.isPlaying {
             IssaLog.info("narration paused", [
                 "book": book.title, "chapter": String(chapterIndex),
-                "fragment": activeFragmentID ?? "none",
+                "fragment": narratedFragment ?? "none",
             ])
             readalong.player.pause()
         } else if readalong.activeEntry == nil {
             await startNarration()
-        } else {
-            readalong.player.play()
+        } else if await !readalong.resume() {
+            // `resume` reopens a file that would not play rather than pressing
+            // play over it, and says when it still will not.
+            narrationWouldNotPlay(readalong.activeEntry?.audioHref)
         }
+    }
+
+    /// What the reader is told when narration would not play: its file is
+    /// there by name and will not open.
+    static let narrationUnplayable =
+        "The narration here couldn't be played. Its audio file may be damaged."
+
+    /// Says so, over the page, rather than leaving a play button that does
+    /// nothing. The player has already stood down; this is the words.
+    private func narrationWouldNotPlay(_ audioHref: String?) {
+        IssaLog.warning("narration would not play", [
+            "book": book.title, "audio": audioHref ?? "none",
+        ])
+        chapterNotice = ChapterNotice(message: Self.narrationUnplayable)
     }
 
     /// Notified as the reader view appears (true) and goes away (false), so the
@@ -1758,7 +1967,16 @@ public final class ReaderModel {
             }
             target += step
         }
-        guard landed else { return }
+        guard landed else {
+            // Nowhere to land. Each failed load put up its own notice, so the
+            // one left on screen named the *last* chapter tried — up to seven
+            // past the one that stopped the turn. Said for that one.
+            if let first = skipped.first {
+                chapterNotice = ChapterNotice(
+                    message: Self.unreadable(title(inSpineItem: first, atOffset: 0)))
+            }
+            return
+        }
         pageIndex = landingOnLastPage ? max((layout?.pages.count ?? 1) - 1, 0) : 0
         if let first = skipped.first {
             let title = title(inSpineItem: first, atOffset: 0)
