@@ -239,8 +239,19 @@ public struct SMILTimeline: Sendable {
     public var totalDuration: TimeInterval { entries.last?.cumulativeEnd ?? 0 }
     public var isEmpty: Bool { entries.isEmpty }
 
-    public init(entries: [SMILEntry]) {
+    /// The audio files whose last clip states no end and was not given the
+    /// file's length, so it holds `SMILParser.openClipPlaceholder` and the
+    /// book clock is short by the rest of that file.
+    ///
+    /// Empty for every book either Storyteller generation aligned, which state
+    /// every end. A reader that finds files here measures them — once, and
+    /// caches the answer beside the narration — and builds the timeline again
+    /// with their lengths.
+    public let filesNeedingLength: Set<String>
+
+    public init(entries: [SMILEntry], filesNeedingLength: Set<String> = []) {
         self.entries = entries
+        self.filesNeedingLength = filesNeedingLength
         var index: [FragmentKey: Int] = [:]
         index.reserveCapacity(entries.count)
         var byIDOnly: [String: Int] = [:]
@@ -925,26 +936,55 @@ public enum SMILParser {
     static func resolvingOpenEnds(
         _ rows: [Row], fileDurations: [String: TimeInterval],
     ) -> [Row] {
-        guard rows.contains(where: \.isOpenEnded) else { return rows }
+        resolveOpenEnds(rows, fileDurations: fileDurations).rows
+    }
+
+    /// The same, and which files were left waiting on their length — the
+    /// files `SMILTimeline.filesNeedingLength` names.
+    ///
+    /// The next start is found by binary search over the file's sorted
+    /// starts. It was a linear scan per open clip, which is quadratic in the
+    /// clips one file holds: a third-party book that gives thirty thousand
+    /// clips a `clipBegin` and no `clipEnd` in one long file spent most of a
+    /// second here, on the main actor, at every open.
+    static func resolveOpenEnds(
+        _ rows: [Row], fileDurations: [String: TimeInterval],
+    ) -> (rows: [Row], filesNeedingLength: Set<String>) {
+        guard rows.contains(where: \.isOpenEnded) else { return (rows, []) }
         var startsByFile: [String: [TimeInterval]] = [:]
         for row in rows { startsByFile[row.audioHref, default: []].append(row.start) }
         for href in startsByFile.keys { startsByFile[href]?.sort() }
-        return rows.map { row in
+        var waiting: Set<String> = []
+        let resolved = rows.map { row in
             guard row.isOpenEnded else { return row }
             let starts = startsByFile[row.audioHref] ?? []
             let end: TimeInterval
-            if let next = starts.first(where: { $0 > row.start }) {
+            if let next = firstStart(after: row.start, in: starts) {
                 end = next
             } else if let length = fileDurations[row.audioHref], length.isFinite, length > row.start {
                 end = length
             } else {
                 end = row.start + openClipPlaceholder
+                waiting.insert(row.audioHref)
             }
             return Row(
                 fragmentID: row.fragmentID, textHref: row.textHref, audioHref: row.audioHref,
                 start: row.start, end: end, isAudioOnly: row.isAudioOnly,
                 sentenceID: row.sentenceID, isOpenEnded: true)
         }
+        return (resolved, waiting)
+    }
+
+    /// The first value in `sorted` strictly greater than `value`, by binary
+    /// search: an upper bound.
+    static func firstStart(after value: TimeInterval, in sorted: [TimeInterval]) -> TimeInterval? {
+        var low = 0
+        var high = sorted.count
+        while low < high {
+            let mid = (low + high) / 2
+            if sorted[mid] > value { high = mid } else { low = mid + 1 }
+        }
+        return low < sorted.count ? sorted[low] : nil
     }
 
     /// The timeline for rows already parsed, in book order: the fillers
@@ -966,7 +1006,8 @@ public enum SMILParser {
     ) -> SMILTimeline {
         var entries: [SMILEntry] = []
         var cumulative: TimeInterval = 0
-        for row in resolvingOpenEnds(rows, fileDurations: fileDurations) {
+        let resolved = resolveOpenEnds(rows, fileDurations: fileDurations)
+        for row in resolved.rows {
             let duration = max(0, row.end - row.start)
             // Measured the way it is built, so a placeholder survives however
             // the subtraction rounds: an open clip is never padding.
@@ -984,6 +1025,6 @@ public enum SMILParser {
                 sentenceID: row.sentenceID,
             ))
         }
-        return SMILTimeline(entries: entries)
+        return SMILTimeline(entries: entries, filesNeedingLength: resolved.filesNeedingLength)
     }
 }
