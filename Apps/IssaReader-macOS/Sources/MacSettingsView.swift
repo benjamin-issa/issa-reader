@@ -44,16 +44,26 @@ struct AccountSettingsView: View {
                 LabeledContent("Signed in as", value: user.username ?? user.name ?? "—")
                 LabeledContent("Server", value: session.serverURL.absoluteString)
             }
-            Section {
-                // Held off while one is under way, as on the phone: signing
-                // out tells the server first and waits up to the logout's own
-                // limit for an answer, and in those seconds nothing here
-                // changed and Sign Out could start a second sign-out behind
-                // the first.
-                Button(isSigningOut ? "Signing Out…" : "Sign Out…", role: .destructive) {
-                    confirmingSignOut = true
+            // Only with a session to leave. The pane is a Settings tab, up
+            // whatever the library window shows, and it went on offering an
+            // enabled Sign Out… to a reader already signed out (F6).
+            if AccountPane.offersSignOut(hasSession: app.session != nil, isSigningOut: isSigningOut) {
+                Section {
+                    // Held off while one is under way, as on the phone:
+                    // signing out tells the server first and waits up to the
+                    // logout's own limit for an answer, and in those seconds
+                    // nothing here changed and Sign Out could start a second
+                    // sign-out behind the first.
+                    Button(isSigningOut ? "Signing Out…" : "Sign Out…", role: .destructive) {
+                        confirmingSignOut = true
+                    }
+                    .disabled(isSigningOut)
                 }
-                .disabled(isSigningOut)
+            } else {
+                Section {
+                    Text("Not signed in. Connect to your server from the library window.")
+                        .foregroundStyle(Palette.inkSecondary)
+                }
             }
         }
         .formStyle(.grouped)

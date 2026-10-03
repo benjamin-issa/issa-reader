@@ -248,3 +248,14 @@ final class SignOutProgress {
         return true
     }
 }
+
+/// Settings › Account's Sign Out….
+enum AccountPane {
+    /// Offered while there is a session to leave, and kept, disabled, while
+    /// one is being left — the session goes nil part-way through. After that
+    /// there is nothing to sign out of: the pane used to offer an enabled
+    /// "Sign Out…" to a reader already signed out (F6).
+    static func offersSignOut(hasSession: Bool, isSigningOut: Bool) -> Bool {
+        hasSession || isSigningOut
+    }
+}
