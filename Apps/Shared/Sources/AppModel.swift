@@ -340,7 +340,7 @@ public final class AppModel {
             try? await store?.setAccount(account)
         }
         // A session again means the widget may be written again.
-        CurrentBookPublisher.shared.resume()
+        currentBookPublisher.resume()
         await reopenMutationQueue()
         // Only for someone who is actually signed in. Showing the cached shelf
         // on the strength of the database alone meant signing out left the
@@ -779,6 +779,13 @@ public final class AppModel {
         // library.
         pendingBook = nil
         readerRequest = nil
+        // And Siri's: "continue reading" asked while this account's token had
+        // lapsed leaves its book in the inbox, with no library mounted to
+        // collect it, and the next account's library delivered it the moment
+        // it appeared.
+        #if os(iOS)
+        intentInbox.bookID = nil
+        #endif
         // Unless the reader on screen is a book from the reader's own files,
         // which is still on screen and still the device's after this.
         if let visible = visibleReaderUUID, readers[visible]?.isLocal != true {
@@ -849,7 +856,7 @@ public final class AppModel {
         // cover fetch and left the widget with no art at all.
         // Reloads the CurrentBook timeline itself; the accessory families
         // share it, so a second reloadAllTimelines here was redundant.
-        CurrentBookPublisher.shared.clear()
+        currentBookPublisher.clear()
         // And the device-wide Spotlight index, which otherwise keeps this
         // account's titles, bylines and blurbs answering Home Screen searches
         // for up to 30 days after it stopped being the account signed in.
@@ -951,6 +958,14 @@ public final class AppModel {
     /// on the way into the library, and by a refresh that re-identified.
     private func recordSignedInAccount() async {
         if let session, case let .signedIn(user) = session.state {
+            // The widget's writer, which every account exit suspends. `connect`
+            // lifts it too, but a same-server switch — `adopt`, the launch's
+            // restore, a refresh that re-identified — runs after `connect`, so
+            // the arriving account's widget and Siri's "continue reading" were
+            // dead until the next cold launch. Here, because this is every
+            // route that ends with an account signed in; before the await, so
+            // nothing of the account's can be published ahead of it.
+            currentBookPublisher.resume()
             try? await store?.setAccount(user.id)
             UserDefaults.standard.set(user.id, forKey: Self.accountKey(for: session.serverURL))
         }
@@ -2540,6 +2555,21 @@ public final class AppModel {
     /// app's own downloads under every suite running beside it.
     @ObservationIgnored var storageRoot: URL = StorageRoot.url
 
+    /// The widget's one writer: `CurrentBookPublisher.shared`.
+    ///
+    /// A seam, and internal for that reason alone, as `storageRoot` is: whether
+    /// an account's exit and the next account's arrival leave the publisher
+    /// suspended is a fact about the one instance every suite shares, and a
+    /// test asserting it there would be reading the last sign-out of whichever
+    /// suite ran beside it.
+    @ObservationIgnored var currentBookPublisher: CurrentBookPublisher = .shared
+
+    #if os(iOS)
+    /// Where Siri's "continue reading" leaves its book: `AppIntentInbox.shared`.
+    /// A seam for the same reason as the publisher above.
+    @ObservationIgnored var intentInbox: AppIntentInbox = .shared
+    #endif
+
     /// Whatever is playing, of either kind. Nil when nothing is.
     public var playback: (any PlaybackDriving)? {
         if let listening { return listening }
@@ -3591,7 +3621,7 @@ public final class AppModel {
     ) {
         let progress = coordinator.bookProgress
         let total = coordinator.totalDuration
-        CurrentBookPublisher.shared.publish(
+        currentBookPublisher.publish(
             book: book,
             session: session,
             progress: progress,

@@ -74,7 +74,13 @@ final class CurrentBookPublisher {
     /// arrives soon after the network does.
     static let coverRetry: TimeInterval = 10 * 60
 
-    private init() {}
+    /// Internal rather than private so a test can have a publisher of its
+    /// own (`AppModel.currentBookPublisher`), as it can an inbox.
+    init() {}
+
+    /// Whether `clear()`'s suspension is still in force, for the tests that
+    /// ask whether an account's arrival lifted it.
+    var isSuspended: Bool { suspended }
 
     /// Whether `candidate` may take the snapshot from whoever holds it.
     ///
