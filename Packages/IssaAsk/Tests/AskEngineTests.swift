@@ -95,8 +95,11 @@ struct AskEngineTests {
             boundary: try AskFixture.endOf(spine: AskFixture.Spine.chapterI),
         ))
         #expect(failure == nil)
+        // Whole words only, each vetted before it is drawn: "Alice" has no
+        // whitespace after it yet, so it is not known to be finished, and the
+        // last word of a snapshot waits for the next one (R-16).
         #expect(Self.partials(events) == [
-            "Alice", "Alice follows a white rabbit",
+            "Alice follows a white",
             "Alice follows a white rabbit down a hole.",
         ])
         let answer = try #require(Self.answer(events))
@@ -517,7 +520,8 @@ struct AskEngineTests {
         consumer.cancel()
         _ = await consumer.value
 
-        #expect(Self.partials(await seen.events) == ["Alice foll"])
+        // Cut back to the last whole word, which is what is drawn.
+        #expect(Self.partials(await seen.events) == ["Alice"])
         #expect(Self.answer(await seen.events) == nil)
     }
 

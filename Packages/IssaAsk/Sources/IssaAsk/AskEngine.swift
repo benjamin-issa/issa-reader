@@ -272,6 +272,7 @@ public actor AskEngine {
                 options: generationOptions(
                     question: sanitised, bookUUID: source.bookUUID, boundary: boundary,
                 ),
+                bookUUID: source.bookUUID, boundary: boundary,
                 into: continuation,
             )
             try Task.checkCancellation()
@@ -527,6 +528,8 @@ public actor AskEngine {
         question: String,
         ranked: [PassageRanker.Ranked],
         options: AskGenerationOptions,
+        bookUUID: String,
+        boundary: ReadingBoundary,
         into continuation: AsyncThrowingStream<AskEvent, any Error>.Continuation,
     ) async throws -> AskAnswer {
         try await turnstile.withTurn { () async throws -> AskAnswer in
@@ -547,7 +550,10 @@ public actor AskEngine {
                 }
 
                 do {
-                    let answer = try await self.stream(built, options: options, into: continuation)
+                    let answer = try await self.stream(
+                        built, options: options, bookUUID: bookUUID, boundary: boundary,
+                        into: continuation,
+                    )
                     // Resolved here, inside the attempt that survived: the retry
                     // loop means the prompt whose numbering the citations refer
                     // to is whichever one did not throw `.tooMuchContext`, and
@@ -597,14 +603,39 @@ public actor AskEngine {
         return sizes.map { PassageRanker.best(ranked, count: $0) }
     }
 
+    /// Streams one attempt, drawing only what has been vetted.
+    ///
+    /// Every snapshot used to go to the sheet as it arrived, and the vetting
+    /// ran once the stream had ended — so a hedge the vetting then refused,
+    /// "The story hasn't revealed that yet. However, Alice is later guided by
+    /// the Cheshire Cat…", had been read word by word, seconds before it was
+    /// replaced (R-16). Now a partial is the answer so far cut back to its last
+    /// whole word, put through the same test the finished answer gets: every
+    /// name in it must be one the book has used before the boundary. The first
+    /// partial that names one it has not stops the drawing for the rest of the
+    /// attempt — the sheet keeps the last vetted words, and the finished answer
+    /// is then refused whole by `vetted` exactly as before.
+    ///
+    /// Streaming survives: a safe answer still arrives a word at a time, one
+    /// token behind the model, and each name costs one indexed lookup the first
+    /// time it appears and nothing after. Whole words only, because a name is
+    /// not a name until it is finished — "Du" is too short to probe and "Ali"
+    /// is not a word the book uses, so a cut mid-word would either show the
+    /// first letters of a spoiler or hold back a met name.
     private func stream(
         _ built: AskPromptBuilder.Built,
         options: AskGenerationOptions,
+        bookUUID: String,
+        boundary: ReadingBoundary,
         into continuation: AsyncThrowingStream<AskEvent, any Error>.Continuation,
     ) async throws -> AskAnswer {
         var raw = ""
         var shown = ""
         var hasAnswered = false
+        // Names already probed and met, so a name repeated in every snapshot
+        // is looked up once; and whether an unmet one has stopped the drawing.
+        var met: Set<String> = []
+        var isHeld = false
         let snapshots = model.answer(
             instructions: AskPromptBuilder.instructions,
             prompt: built.prompt,
@@ -637,8 +668,21 @@ public actor AskEngine {
                 ])
             }
             raw = snapshot
-            let visible = AskAnswerParser.visible(raw)
+            guard !isHeld else { continue }
+            let visible = AskAnswerParser.visible(Self.wholeWords(raw))
             guard visible != shown else { continue }
+            let unprobed = Self.unvettedNames(in: visible).filter { !met.contains($0) }
+            if !unprobed.isEmpty {
+                let unmet = try await store.unmetWords(unprobed, in: bookUUID, before: boundary)
+                guard unmet.isEmpty else {
+                    // Never the words: an unmet name is a spoiler, and the log
+                    // is exported by the reader and pasted into an email.
+                    IssaLog.info("ask held a streamed answer back", ["unmet": String(unmet.count)])
+                    isHeld = true
+                    continue
+                }
+                met.formUnion(unprobed)
+            }
             shown = visible
             if !hasAnswered, !visible.isEmpty {
                 hasAnswered = true
@@ -667,6 +711,17 @@ public actor AskEngine {
         // Returned rather than yielded: the answer still has to be vetted
         // against the boundary before the reader sees it as final.
         return answer
+    }
+
+    /// The answer so far, up to its last whole word.
+    ///
+    /// A snapshot ends wherever the model's last token did, which is as often
+    /// the middle of a word as the end of one; the whitespace after a word
+    /// arrives with the next token. Nothing before the first whitespace is
+    /// whole, so nothing is shown until there is.
+    static func wholeWords(_ raw: String) -> String {
+        guard let last = raw.lastIndex(where: \.isWhitespace) else { return "" }
+        return String(raw[..<last])
     }
 
     // MARK: - Failures

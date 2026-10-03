@@ -74,12 +74,13 @@ struct SpoilerGateTests {
     /// question contained the words.
     @Test("an answer naming an unmet character is refused even when the question named it")
     func answerSideExemptsNothingUnprobed() async throws {
-        let (answer, _, _) = try await Self.ask(
+        let (answer, partials, _) = try await Self.ask(
             "who is the queen of hearts?",
             answering: "The Queen of Hearts is a furious ruler who orders beheadings.\nSources: 1",
         )
         #expect(answer.notYetRevealed, "answered: \(answer.text)")
         #expect(!answer.text.contains("Queen"))
+        #expect(!partials.contains { $0.contains("Queen") })
     }
 
     /// Without these the guards could pass everything above by refusing
@@ -142,5 +143,65 @@ struct SpoilerGateTests {
         )
         #expect(modelCalled, "\(question) was refused without the model")
         #expect(!answer.notYetRevealed)
+    }
+
+    // MARK: - R-16: nothing unvetted is ever drawn
+
+    /// Every prefix of a stream, one character at a time — the most a model
+    /// could ever show of a word before it finishes it.
+    static func everyPrefix(of text: String) -> [String] {
+        (1 ... text.count).map { String(text.prefix($0)) }
+    }
+
+    /// The hedge, streamed. Each snapshot was drawn in the sheet as it
+    /// arrived, and the vetting ran only once the stream had ended — so the
+    /// reader read "the Cheshire Cat" word by word, seconds before it was
+    /// replaced by "The story hasn't revealed that yet."
+    @Test("a spoiling stream never surfaces the name in any partial")
+    func aSpoilingStreamIsHeldBack() async throws {
+        let (store, source, directory) = try await AskFixture.preparedStore()
+        defer { AskFixture.remove(directory) }
+        let spoiler = "The story hasn't revealed that yet. However, Alice is later guided by "
+            + "the Cheshire Cat, who grins and vanishes.\nSources: 1, 2"
+        let model = ScriptedAnswerModel(turns: [Turn(partials: Self.everyPrefix(of: spoiler))])
+        let engine = AskEngine(model: model, store: store)
+
+        let (events, failure) = await AskEngineTests.drain(engine.ask(
+            question: "What did Alice follow down the hole?", source: source,
+            boundary: try AskFixture.endOf(spine: AskFixture.Spine.chapterI),
+        ))
+        #expect(failure == nil)
+        let partials = AskEngineTests.partials(events)
+        // Not even the first letters of it.
+        #expect(!partials.contains { $0.contains("Ch") && $0.contains("However") },
+                "\(partials.last ?? "")")
+        #expect(!partials.contains { $0.contains("Cheshire") })
+        let answer = try #require(AskEngineTests.answer(events))
+        #expect(answer.notYetRevealed)
+    }
+
+    /// The cost the fix must not pay: a safe answer still streams.
+    @Test("a safe answer still arrives a word at a time")
+    func aSafeAnswerStillStreams() async throws {
+        let (store, source, directory) = try await AskFixture.preparedStore()
+        defer { AskFixture.remove(directory) }
+        let safe = "Alice followed the White Rabbit down a large rabbit-hole under the hedge, "
+            + "and she fell for a long time.\nSources: 1"
+        let model = ScriptedAnswerModel(turns: [Turn(partials: Self.everyPrefix(of: safe))])
+        let engine = AskEngine(model: model, store: store)
+
+        let (events, _) = await AskEngineTests.drain(engine.ask(
+            question: "What did Alice follow down the hole?", source: source,
+            boundary: try AskFixture.endOf(spine: AskFixture.Spine.chapterI),
+        ))
+        let partials = AskEngineTests.partials(events)
+        let answer = try #require(AskEngineTests.answer(events))
+        #expect(!answer.notYetRevealed)
+        // Word by word, each one extending the last, and every one a prefix of
+        // the answer the reader is finally given.
+        #expect(partials.count >= 15, "\(partials.count) partials")
+        #expect(partials.allSatisfy { answer.text.hasPrefix($0) })
+        #expect(zip(partials, partials.dropFirst()).allSatisfy { $1.count > $0.count })
+        #expect(partials.contains { $0.hasPrefix("Alice followed the White Rabbit") })
     }
 }
