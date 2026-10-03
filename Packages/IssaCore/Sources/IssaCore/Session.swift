@@ -176,7 +176,7 @@ public final class Session {
             baseURL: serverURL, tokens: RevokedToken(token: token), session: transport)
         let hold = logoutWillSend
         let timeout = logoutTimeout
-        let finished = await LogoutWait.run(for: timeout) {
+        let finished = await BoundedWait.run(for: timeout) {
             await hold?()
             // Nothing cancels this task. Were anything to, the revoke would
             // be lost — and whether URLSession still sends a request from a
@@ -358,51 +358,4 @@ private struct RevokedToken: TokenProviding {
     let token: String
     func currentToken() async -> String? { token }
     func invalidate() async {}
-}
-
-/// Waits for some work, or for a deadline, whichever comes first — and never
-/// cancels the work.
-///
-/// The work runs in a task of its own and goes on after the wait ends. A
-/// task group cannot do this: it waits for every child, so the loser has to
-/// be cancelled, and a cancelled request is one that was never sent. The
-/// app's `BoundedWait` (SpotlightIndex.swift) is the same shape; IssaCore
-/// cannot import the app.
-private enum LogoutWait {
-    /// - Returns: whether the work finished before the deadline.
-    static func run(
-        for limit: Duration, _ work: @escaping @Sendable () async -> Void,
-    ) async -> Bool {
-        let once = Once()
-        return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
-            once.hold(continuation)
-            let timer = Task.detached {
-                try? await Task.sleep(for: limit)
-                once.resume(returning: false)
-            }
-            Task.detached {
-                await work()
-                once.resume(returning: true)
-                timer.cancel()
-            }
-        }
-    }
-
-    /// Resumes a continuation exactly once, whichever side gets there first.
-    private final class Once: @unchecked Sendable {
-        private let lock = NSLock()
-        private var continuation: CheckedContinuation<Bool, Never>?
-
-        func hold(_ continuation: CheckedContinuation<Bool, Never>) {
-            lock.withLock { self.continuation = continuation }
-        }
-
-        func resume(returning value: Bool) {
-            let waiting = lock.withLock { () -> CheckedContinuation<Bool, Never>? in
-                defer { continuation = nil }
-                return continuation
-            }
-            waiting?.resume(returning: value)
-        }
-    }
 }

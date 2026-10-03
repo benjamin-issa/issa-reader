@@ -1,4 +1,5 @@
 import Foundation
+import IssaCore
 import Testing
 
 @testable import IssaReader_iOS
