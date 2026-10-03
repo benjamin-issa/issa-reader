@@ -71,10 +71,30 @@ final class LocalBooksFlowTests: XCTestCase {
         let play = app.buttons["Play narration"].firstMatch
         XCTAssertTrue(play.waitForExistence(timeout: 30), "a local read-along offered no narration")
 
-        // And back to the list.
+        // The first-run guide, which a reader on a fresh device meets here:
+        // it sits over the bars and takes the first tap itself, so the close
+        // below would only have dismissed it. It shows once the page is ready
+        // — the narration's button is the sign of that — and only until it
+        // has been seen, which on a device another test has already read on
+        // (the sweep runs `LayoutSweepTests` first) it has.
+        let guide = app.descendants(matching: .any)
+            .matching(NSPredicate(
+                format: "label BEGINSWITH %@ OR label BEGINSWITH %@",
+                "Reading gestures", "This book is narrated"))
+            .firstMatch
+        if guide.waitForExistence(timeout: 5) {
+            guide.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+            XCTAssertTrue(guide.waitForNonExistence(timeout: 10), "the reading guide did not go away")
+        }
+
+        // And back to the list. The reader has to be gone, not just the row
+        // present: the list stays in the tree under the reader's cover, so
+        // the row alone says nothing about whether the close worked.
         let back = app.buttons["Back to the book"].firstMatch
         XCTAssertTrue(back.waitForExistence(timeout: 10))
         back.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["screen.reader"].waitForNonExistence(timeout: 15),
+                      "the reader did not close")
         XCTAssertTrue(row(in: app).waitForExistence(timeout: 15), "closing the reader lost the list")
 
         // Swipe to remove; the row goes at once; Undo puts it back.
