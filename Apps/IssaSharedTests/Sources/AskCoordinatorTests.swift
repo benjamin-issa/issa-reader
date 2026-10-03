@@ -68,8 +68,12 @@ struct AskCoordinatorTests {
 
         func requestAuthorizationIfNeeded() async { authorizationRequests += 1 }
         func postAnswerReady(job: AskJob) async { posted += 1 }
+        /// What each purge asked to keep, so a sign-out that swept the
+        /// device's own banners shows here.
+        private(set) var removedAllKeeping: [Set<String>] = []
+
         func removeDelivered(bookUUID: String) async {}
-        func removeAllDelivered() async {}
+        func removeAllDelivered(keeping kept: Set<String>) async { removedAllKeeping.append(kept) }
     }
 
     static func cleanUp(_ directory: URL, _ suite: String) {

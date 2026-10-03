@@ -91,7 +91,7 @@ final class AppServices {
         // Set at launch rather than when the first question is asked: a
         // notification tapped from a cold launch arrives before any sheet has
         // ever been opened, and a delegate set later would miss it.
-        let delegate = AskNotificationDelegate(coordinator: ask, app: app)
+        let delegate = AskNotificationDelegate(coordinator: ask, app: app, local: local)
         askNotifications = delegate
         UNUserNotificationCenter.current().delegate = delegate
         connectLocalBooks()
@@ -104,14 +104,7 @@ final class AppServices {
     /// leaving the list lets its reader go at once, and one that is gone for
     /// good takes its question index, reader style and level with it.
     private func connectLocalBooks() {
-        app.localBookUUIDs = { [local] in local.uuids }
-        local.onRemove = { [app] uuid in app.releaseLocalBook(uuid) }
-        local.onForget = { [ask, settings] uuid in
-            ask.remove(bookUUID: uuid)
-            settings.forgetBook(uuid)
-        }
-        Task { [local] in
-            await local.load()
+        LocalBooksWiring.connect(app: app, local: local, ask: ask, settings: settings) { local in
             #if ISSA_UITEST_FIXTURE
             LocalImportFixture.importIfRequested(into: local)
             #endif

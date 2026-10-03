@@ -1,6 +1,7 @@
 #if !os(tvOS)
 import Foundation
 import IssaCore
+import Observation
 import UserNotifications
 #if canImport(UIKit)
 import UIKit
@@ -18,17 +19,14 @@ protocol AskNotifying: Sendable {
     func requestAuthorizationIfNeeded() async
     @MainActor func postAnswerReady(job: AskJob) async
     func removeDelivered(bookUUID: String) async
-    func removeAllDelivered() async
     /// Every book's but `kept`'s: sign-out on a device that also holds books
     /// the reader added from their own files, whose answers are the device's.
+    ///
+    /// The one way to remove them all, with no default. There used to be a
+    /// second requirement without `kept` and a default for this one that
+    /// called it — so a conformer that implemented only the short form
+    /// silently swept the device's own banners, and no test could tell.
     func removeAllDelivered(keeping kept: Set<String>) async
-}
-
-extension AskNotifying {
-    /// A notifier with nothing finer to offer removes them all.
-    func removeAllDelivered(keeping kept: Set<String>) async {
-        await removeAllDelivered()
-    }
 }
 
 /// Telling a reader their answer is ready, when they are not looking at it.
@@ -146,16 +144,12 @@ struct AskNotifier: AskNotifying {
         centre.removeDeliveredNotifications(withIdentifiers: identifiers)
     }
 
-    /// Every book's, for sign-out and for deleting the downloads with the
-    /// account.
+    /// Every book's but `kept`'s, for sign-out and for deleting the downloads
+    /// with the account.
     ///
     /// By identifier rather than `removeAllDeliveredNotifications()`: this app
     /// posts nothing else today, and a later notification that has nothing to do
     /// with asking should not be swept away by a purge of the Ask indexes.
-    func removeAllDelivered() async {
-        await removeAllDelivered(keeping: [])
-    }
-
     func removeAllDelivered(keeping kept: Set<String>) async {
         let centre = centre()
         let keptThreads = Set(kept.map(Self.thread(for:)))
@@ -195,13 +189,26 @@ final class AskNotificationDelegate: NSObject, UNUserNotificationCenterDelegate 
     private let coordinator: AskCoordinator
     private let app: AppModel
     private let centre: NotificationCenter
+    private let local: LocalLibrary?
+    private let localRequests: LocalBookRequests
 
     /// - Parameter centre: where `bringReaderForward` is posted. Injectable so
     ///   a test can watch for it without hearing every other suite's taps.
-    init(coordinator: AskCoordinator, app: AppModel, centre: NotificationCenter = .default) {
+    /// - Parameter local: the books from the reader's files, waited for before
+    ///   a tap is routed — until it has loaded, `app.localBookUUIDs()` is
+    ///   empty and a tap for one of them was asked of the server's library,
+    ///   which never answers it. Nil when there is none to wait for.
+    /// - Parameter localRequests: where a tap for one of those books is left
+    ///   for a window to take.
+    init(
+        coordinator: AskCoordinator, app: AppModel, centre: NotificationCenter = .default,
+        local: LocalLibrary? = nil, localRequests: LocalBookRequests = .shared,
+    ) {
         self.coordinator = coordinator
         self.app = app
         self.centre = centre
+        self.local = local
+        self.localRequests = localRequests
     }
 
     /// "Bring this book's reader window to the front", with the book's uuid
@@ -210,12 +217,8 @@ final class AskNotificationDelegate: NSObject, UNUserNotificationCenterDelegate 
     nonisolated static let bringReaderForward = Notification.Name("issa.ask.bringReaderForward")
 
     /// "Open this book from the reader's files", with its uuid under
-    /// `AskNotifier.bookUUIDKey`.
-    ///
-    /// A local book is not in `app.books`, so `requestBook` — which waits for
-    /// the book to turn up in the server's catalogue — would hold the request
-    /// for ever. Its reader is presented by the local route instead: the
-    /// iPhone and iPad root's cover, the Mac's LocalReader window.
+    /// `AskNotifier.bookUUIDKey` — posted on the Mac only, for the list
+    /// window; everything else takes `LocalBookRequests`. See `route(_:)`.
     nonisolated static let openLocalBook = Notification.Name("issa.ask.openLocalBook")
 
     /// Nothing on screen while the app is in front.
@@ -264,12 +267,17 @@ final class AskNotificationDelegate: NSObject, UNUserNotificationCenterDelegate 
         // what makes setting the request before the book safe.
         coordinator.reopenRequest = uuid
         let needsBook = Self.needsBookRequest(for: uuid, visibleReader: app.visibleReaderUUID)
-        if needsBook, app.localBookUUIDs().contains(uuid) {
-            // The same rule for a book from the reader's files, routed to
-            // where those books open rather than to the server's library.
-            centre.post(name: Self.openLocalBook, object: nil, userInfo: [AskNotifier.bookUUIDKey: uuid])
-        } else if needsBook {
-            app.requestBook(uuid, .read)
+        if needsBook {
+            if let local, !local.isLoaded {
+                // A cold launch from the banner: which library the book is in
+                // is not known until the local one has loaded.
+                Task { [weak self] in
+                    await Self.loaded(local)
+                    self?.route(uuid)
+                }
+            } else {
+                route(uuid)
+            }
         } else {
             // The request was also what brought the Mac's window for this
             // book to the front — the library window turned it into
@@ -281,6 +289,44 @@ final class AskNotificationDelegate: NSObject, UNUserNotificationCenterDelegate 
             centre.post(
                 name: Self.bringReaderForward, object: nil,
                 userInfo: [AskNotifier.bookUUIDKey: uuid])
+        }
+    }
+
+    /// A book from the reader's files is left in `localRequests`, where one
+    /// window takes it and opens its reader; any other book is asked of the
+    /// server's library.
+    ///
+    /// Not a broadcast. It used to be posted to every window, and on an iPad
+    /// with two each presented a reader over the one shared model — closing
+    /// either released the model the other still showed — while on a Mac with
+    /// only reader windows nothing heard it and the tap was lost. A request
+    /// stays until a window takes it, as `pendingBook` does for the server's.
+    private func route(_ uuid: String) {
+        if app.localBookUUIDs().contains(uuid) {
+            localRequests.request(uuid)
+            #if os(macOS)
+            // Also said to the Mac's list window, which still listens for it
+            // (`LocalBooksScreen`) and is the one window that does not yet take
+            // the request. Opening a book's window by its uuid brings an open
+            // one forward, so the window that takes the request and this
+            // cannot open two.
+            centre.post(name: Self.openLocalBook, object: nil, userInfo: [AskNotifier.bookUUIDKey: uuid])
+            #endif
+        } else {
+            app.requestBook(uuid, .read)
+        }
+    }
+
+    /// Returns once the local library has loaded.
+    private static func loaded(_ local: LocalLibrary) async {
+        while !local.isLoaded {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                withObservationTracking {
+                    _ = local.isLoaded
+                } onChange: {
+                    continuation.resume()
+                }
+            }
         }
     }
 
@@ -296,6 +342,31 @@ final class AskNotificationDelegate: NSObject, UNUserNotificationCenterDelegate 
     /// screen; this is the same rule, decided before anything is armed.
     nonisolated static func needsBookRequest(for uuid: String, visibleReader: String?) -> Bool {
         visibleReader != uuid
+    }
+}
+
+/// A book from the reader's files that a tapped answer asked to open, waiting
+/// for one window to take it.
+///
+/// The local books' counterpart of `AppModel.pendingBook`: a local book is not
+/// in the server's catalogue, so that inbox would wait for it for ever, and its
+/// reader is presented by the local route instead — the iPhone and iPad root's
+/// cover, the Mac's LocalReader window. Taken, not observed: `take()` empties
+/// it, so of two windows answering the same change only the first opens the
+/// book.
+@MainActor
+@Observable
+final class LocalBookRequests {
+    static let shared = LocalBookRequests()
+
+    private(set) var pending: String?
+
+    func request(_ uuid: String) { pending = uuid }
+
+    /// The waiting book, once; nil for every later caller.
+    func take() -> String? {
+        defer { pending = nil }
+        return pending
     }
 }
 #endif

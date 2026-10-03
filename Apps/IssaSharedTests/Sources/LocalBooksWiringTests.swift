@@ -40,6 +40,7 @@ struct LocalBooksWiringTests {
 
     private static func delegate(
         centre: NotificationCenter, local: Set<String>,
+        library: LocalLibrary? = nil, requests: LocalBookRequests = LocalBookRequests(),
     ) -> (AskNotificationDelegate, AppModel, String) {
         let (defaults, suite) = SharedFixtures.scratchDefaults()
         let coordinator = AskCoordinator(
@@ -48,7 +49,8 @@ struct LocalBooksWiringTests {
             notifier: nil, defaults: defaults, centre: NotificationCenter())
         let app = AppModel(keychain: LocalTestTokens(), notificationCentre: NotificationCenter())
         app.localBookUUIDs = { local }
-        return (AskNotificationDelegate(coordinator: coordinator, app: app, centre: centre), app, suite)
+        return (AskNotificationDelegate(
+            coordinator: coordinator, app: app, centre: centre, local: library, localRequests: requests), app, suite)
     }
 
     /// Names posted on a centre, in order, with the book each named.
@@ -58,7 +60,7 @@ struct LocalBooksWiringTests {
         private var tokens: [any NSObjectProtocol] = []
 
         init(_ centre: NotificationCenter) {
-            for name in [AskNotificationDelegate.openLocalBook, AskNotificationDelegate.bringReaderForward] {
+            for name in [AskNotificationDelegate.bringReaderForward] {
                 tokens.append(centre.addObserver(forName: name, object: nil, queue: nil) { [weak self] note in
                     let book = note.userInfo?[AskNotifier.bookUUIDKey] as? String
                     MainActor.assumeIsolated { self?.seen.append((name, book)) }
@@ -70,20 +72,53 @@ struct LocalBooksWiringTests {
     }
 
     /// A request for a book that is not in the server's catalogue waits for it
-    /// for ever; a local book is opened where local books open.
-    @Test("an answer tapped for a local book opens its reader, not a request for it")
+    /// for ever; a local book is left for a window to open where local books
+    /// open — once, for one window, rather than broadcast to all of them.
+    @Test("an answer tapped for a local book is left for one window to open, not asked of the server")
     func tapOpensTheLocalReader() {
         let centre = NotificationCenter()
         let posts = Posts(centre)
         defer { posts.stop(centre) }
-        let (delegate, app, suite) = Self.delegate(centre: centre, local: [Self.uuid])
+        let requests = LocalBookRequests()
+        let (delegate, app, suite) = Self.delegate(centre: centre, local: [Self.uuid], requests: requests)
         defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
 
         delegate.open(bookUUID: Self.uuid)
 
         #expect(app.pendingBook == nil, "a local book was asked of the server's library")
-        #expect(posts.seen.map(\.0) == [AskNotificationDelegate.openLocalBook])
-        #expect(posts.seen.first?.1 == Self.uuid)
+        #expect(posts.seen.isEmpty)
+        #expect(requests.take() == Self.uuid)
+        #expect(requests.take() == nil, "a second window took the same tap")
+    }
+
+    /// A cold launch from the banner: until the local library has loaded,
+    /// `localBookUUIDs()` is empty, and the tap was asked of the server's
+    /// library, which never has the book.
+    @Test("a tap before the local library has loaded waits for it")
+    func tapWaitsForTheLibrary() async throws {
+        let local = try LocalFixtures()
+        defer { local.tearDown() }
+        let requests = LocalBookRequests()
+        let centre = NotificationCenter()
+        let (delegate, app, suite) = Self.delegate(
+            centre: centre, local: [], library: local.library, requests: requests)
+        defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
+        // What `localBookUUIDs` answers once the library is in.
+        var loadedUUIDs: Set<String> = []
+        app.localBookUUIDs = { loadedUUIDs }
+
+        delegate.open(bookUUID: Self.uuid)
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(app.pendingBook == nil, "the tap was routed before the library could say whose book it is")
+        #expect(requests.pending == nil)
+
+        loadedUUIDs = [Self.uuid]
+        await local.library.load()
+
+        let routed = await LocalImportTests.eventually(within: .seconds(5)) { requests.pending != nil }
+        #expect(routed, "the tap was never routed once the library loaded")
+        #expect(requests.take() == Self.uuid)
+        #expect(app.pendingBook == nil)
     }
 
     @Test("an answer tapped for the local book on screen brings its window forward")
