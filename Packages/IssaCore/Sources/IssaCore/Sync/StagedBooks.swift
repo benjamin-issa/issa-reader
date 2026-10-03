@@ -145,17 +145,14 @@ public struct StagedBooks: Equatable, Sendable {
     /// would repeat the page's title: the series and number, else the year.
     ///
     /// The series is `primarySeries`, the one with a number where there is
-    /// one. The year is read in UTC: the server stores a bare year as its
-    /// first midnight in UTC, and read in a zone west of Greenwich that is the
-    /// last evening of the year before.
+    /// one. The year is `PublishedYearText`'s, read in UTC as the book page's
+    /// Published row reads it.
     public static func authorCaption(for book: Book) -> String? {
         if let series = book.primarySeries {
             guard let position = series.position else { return series.name }
             return "\(series.name) · \(SeriesText.ordinal(position))"
         }
         guard let published = book.publicationDate?.value else { return nil }
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone(identifier: "UTC") ?? .gmt
-        return String(calendar.component(.year, from: published))
+        return PublishedYearText.text(published)
     }
 }

@@ -17,6 +17,21 @@ public enum DurationText {
     }
 }
 
+/// The year a book was published, as a reader sees it: "1994".
+///
+/// Read in UTC. Both server generations store a bare year as that year's first
+/// midnight in UTC, so read in the device's own zone a reader west of
+/// Greenwich saw the year before. One copy, for the book page's Published row
+/// and the More by page's caption: each had its own, and they had already
+/// disagreed once.
+public enum PublishedYearText {
+    public static func text(_ date: Date) -> String {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC") ?? .gmt
+        return String(calendar.component(.year, from: date))
+    }
+}
+
 /// A byte count as a reader sees it: "146.2 MB".
 public enum ByteCountText {
     public static func text(_ bytes: Int64) -> String {

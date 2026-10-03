@@ -1115,15 +1115,11 @@ public struct BookDetailView: View {
 
     /// The year a book was published, read in UTC.
     ///
-    /// Both server generations store a bare year as that year's first
-    /// midnight in UTC, so formatted in the device's own zone a reader west of
-    /// Greenwich saw the year before — "Published 1993" here over "1994" in
-    /// the More by page's caption, which reads it in UTC
-    /// (`StagedBooks.authorCaption`).
+    /// Formatted in the device's own zone, a reader west of Greenwich saw
+    /// "Published 1993" here over "1994" in the More by page's caption. Both
+    /// now ask `PublishedYearText`, so the two cannot drift apart again.
     nonisolated static func publishedYear(_ date: Date) -> String {
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone(identifier: "UTC") ?? .gmt
-        return String(calendar.component(.year, from: date))
+        PublishedYearText.text(date)
     }
 
     private var facts: some View {
