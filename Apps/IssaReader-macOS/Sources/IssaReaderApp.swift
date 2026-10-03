@@ -38,14 +38,13 @@ struct IssaReaderMacApp: App {
                 .frame(minWidth: 900, minHeight: 560)
         }
         .commands {
-            // The File menu's one decision, read here as a value: the commands
-            // are rebuilt when it flips, which is when the local library has
-            // loaded or the reader first looks at it, and not on every page
-            // turned in a local book. See `MacFileMenu`.
+            // The File menu's one decision is `MacFileMenu`'s, read by the
+            // item itself — and remembered across launches, because macOS
+            // adds no menu to the bar after it is built. See that type.
             IssaCommands(
                 app: services.app, settings: services.settings,
                 nowPlaying: services.nowPlaying, local: services.local,
-                offersAddBook: services.fileMenu.offersAddBook)
+                fileMenu: services.fileMenu)
         }
 
         // A book opens in its own window, which is what a Mac reader should do:
@@ -155,18 +154,17 @@ struct IssaCommands: Commands {
     let settings: PlaybackSettings
     let nowPlaying: NowPlayingController
     let local: LocalLibrary
-    /// `MacFileMenu.offersAddBook`, as a value: the body reads nothing of the
-    /// library itself.
-    let offersAddBook: Bool
+    /// Whether File offers Add Book…, read by `FileMenuAddBook` rather than by
+    /// this body: nothing here reads the library itself, and only the one
+    /// item is rebuilt when the answer turns.
+    let fileMenu: MacFileMenu
 
     var body: some Commands {
         // Nothing here creates documents, so an enabled New menu would be a
         // lie. Add Book… takes its place once the books from Files have been
         // looked at — never for a server reader who has not.
         CommandGroup(replacing: .newItem) {
-            if offersAddBook {
-                AddBookCommand(local: local)
-            }
+            FileMenuAddBook(fileMenu: fileMenu, local: local)
         }
 
         CommandGroup(after: .toolbar) {
@@ -263,6 +261,22 @@ struct IssaCommands: Commands {
         Task {
             await coordinator.perform(action, using: settings.commandMap)
             nowPlaying.publish()
+        }
+    }
+}
+
+/// File's Add Book…, when `MacFileMenu` offers it.
+///
+/// A view, so the answer is observed by the one item it governs. The File menu
+/// itself has to exist when the bar is built for this to show — which is why
+/// `MacFileMenu` remembers a yes.
+struct FileMenuAddBook: View {
+    let fileMenu: MacFileMenu
+    let local: LocalLibrary
+
+    var body: some View {
+        if fileMenu.offersAddBook {
+            AddBookCommand(local: local)
         }
     }
 }

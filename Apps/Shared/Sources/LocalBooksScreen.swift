@@ -482,6 +482,13 @@ public struct LocalBooksScreen: View {
         #if os(macOS)
         ToolbarItem(placement: .primaryAction) {
             Button { choose() } label: { Label("Add Book…", systemImage: "plus") }
+                // ⌘O here too. File › Add Book… carries it once the File menu
+                // exists, but on the launch where the reader first opens this
+                // window macOS will not add that menu (`MacFileMenu`), and the
+                // shortcut the menu would have taught must still work here.
+                // With both present the menu's equivalent answers first, and
+                // does the same thing.
+                .keyboardShortcut("o", modifiers: .command)
                 .help("Add Book…")
                 .accessibilityIdentifier("button.addLocalBook")
         }
