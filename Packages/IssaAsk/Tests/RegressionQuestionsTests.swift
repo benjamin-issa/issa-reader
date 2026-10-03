@@ -49,7 +49,6 @@ struct RegressionRun {
     let directory: URL
     let store: AskIndexStore
     let source: BookSource
-    let engine: AskEngine
     let model: SystemAnswerModel
 
     init(book: AskBook) async throws {
@@ -59,11 +58,6 @@ struct RegressionRun {
         // book that fails to index cannot leave one behind.
         (store, source, directory) = try await book.preparedStore()
         model = SystemAnswerModel()
-        // The engine `AskCoordinator.ask` builds, but for the process's
-        // turnstile, which only orders questions. Until 1.4.0 the app also
-        // registered a search tool this suite never had, so the suite had
-        // never measured what a reader was answered with.
-        engine = AskEngine(model: model, store: store)
     }
 
     func tearDown() { AskFixture.remove(directory) }
@@ -138,6 +132,13 @@ struct RegressionRun {
         let start = ContinuousClock.now
         var answer: AskAnswer?
         var phases: [AskPhase] = []
+        // The engine the app answers with, search tool and all, built the way
+        // `AskCoordinator` builds it: per question, because the tool is bound
+        // to this question's boundary. Until 1.4.0 this suite asked an engine
+        // with no tool while the app registered one.
+        let engine = AskEngine.forQuestion(
+            model: model, store: store, bookUUID: book.bookUUID, boundary: boundary,
+        )
         for try await event in engine.ask(
             question: fixture.question, source: source, boundary: boundary,
         ) {

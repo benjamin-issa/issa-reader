@@ -20,6 +20,7 @@ public protocol AnswerModel: Sendable {
     func answer(
         instructions: String,
         prompt: String,
+        tools: [AskTool],
         options: AskGenerationOptions,
     ) -> AsyncThrowingStream<String, any Error>
 
@@ -27,7 +28,8 @@ public protocol AnswerModel: Sendable {
     /// to an estimate when the model cannot be asked.
     func tokenCount(for text: String) async throws -> Int
 
-    /// Total window for instructions, prompt and the answer together.
+    /// Total window for instructions, prompt, tool schemas, tool output and the
+    /// answer together.
     var contextSize: Int { get }
 
     /// Warms the model up while the reader is still typing.
@@ -57,6 +59,53 @@ public extension AnswerModel {
 }
 
 // MARK: -
+
+/// A tool the model may call, in terms the engine can hold without importing
+/// FoundationModels.
+///
+/// Only `SystemAnswerModel` ever turns one of these into a real
+/// `FoundationModels.Tool`; everything else — the scripted model, the tests —
+/// treats it as a description of what the model was allowed to do.
+public protocol AskTool: Sendable {
+    var name: String { get }
+    var toolDescription: String { get }
+    /// How many times this tool may be called for one question, after which it
+    /// answers with a refusal rather than more of the book.
+    var callLimit: Int { get }
+
+    /// Called immediately before each generation, and nowhere else.
+    ///
+    /// Two things have to be reset per generation, and both are bugs if they are
+    /// not. The call budget: a tool that counted across questions would spend
+    /// its two searches on the reader's first question and be useless for the
+    /// rest of the book. And the numbering: the tool's excerpts continue the
+    /// prompt's, so a passage it finds is `[7]` rather than a second `[1]` that
+    /// the citation line cannot distinguish from the first.
+    ///
+    /// Per generation rather than per question because each generation is a
+    /// fresh `LanguageModelSession` with an empty transcript — a context-window
+    /// retry has genuinely not searched anything yet, and the prompt it is
+    /// rebuilding has a different number of excerpts in it.
+    func beginGeneration(numberingFrom firstOrdinal: Int) async
+
+    /// The excerpts this tool handed the model during the last generation, by
+    /// the ordinal it numbered them with. A tool that answers nothing here is a
+    /// tool whose excerpts can be cited and never shown.
+    func passagesShown() async -> [Int: Passage]
+}
+
+public extension AskTool {
+    /// A stateless tool needs nothing per generation.
+    func beginGeneration(numberingFrom _: Int) async {}
+
+    /// A tool that showed the model nothing has nothing to be cited for.
+    ///
+    /// Defaulted rather than required so a tool that only computes — and the
+    /// stand-ins in the tests — are untouched, and so this file still builds
+    /// where FoundationModels is unavailable and `SearchBookTool` is not
+    /// compiled at all.
+    func passagesShown() async -> [Int: Passage] { [:] }
+}
 
 /// What the engine asks the model to do with its sampler.
 ///

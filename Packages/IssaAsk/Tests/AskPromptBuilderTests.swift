@@ -107,7 +107,7 @@ struct AskPromptBuilderTests {
         let question = "Who is the Duchess's cook?"
         let built = await AskPromptBuilder.build(
             question: question, ranked: Self.ranked([Self.passage(0)]),
-            contextSize: 4_096, tokenCount: Self.counter,
+            contextSize: 4_096, hasTool: false, tokenCount: Self.counter,
         )
         #expect(built.prompt.contains(question))
         #expect(!AskPromptBuilder.instructions.contains(question))
@@ -121,7 +121,7 @@ struct AskPromptBuilderTests {
         let built = await AskPromptBuilder.build(
             question: "What happened?", ranked: Self.ranked(passages),
             // Small enough that most of them have to go.
-            contextSize: 1_400, tokenCount: Self.counter,
+            contextSize: 1_400, hasTool: false, tokenCount: Self.counter,
         )
         #expect(built.dropped > 0)
         #expect(built.passages.count + built.dropped == passages.count)
@@ -144,7 +144,7 @@ struct AskPromptBuilderTests {
         let built = await AskPromptBuilder.build(
             question: "What happened?",
             ranked: Self.ranked(passages, priorities: [5, 4, 3, 2, 1, 0]),
-            contextSize: 1_400, tokenCount: Self.counter,
+            contextSize: 1_400, hasTool: false, tokenCount: Self.counter,
         )
         try #require(built.dropped > 0)
         #expect(built.passages == Array(passages.suffix(built.passages.count)))
@@ -158,7 +158,7 @@ struct AskPromptBuilderTests {
             // Best in the middle, worst at either end, so a builder that showed
             // its survivors in rank order would open the prompt with ordinal 3.
             ranked: Self.ranked(passages, priorities: [4, 2, 1, 0, 3, 5]),
-            contextSize: 1_400, tokenCount: Self.counter,
+            contextSize: 1_400, hasTool: false, tokenCount: Self.counter,
         )
         try #require(built.passages.count > 1)
         try #require(built.dropped > 0)
@@ -170,6 +170,41 @@ struct AskPromptBuilderTests {
         // handed events out of sequence invents a chronology to explain them.
         #expect(built.passages.map(\.ordinal) == built.passages.map(\.ordinal).sorted())
         #expect(built.prompt.contains(AskPromptBuilder.excerpts(built.passages)))
+    }
+
+    @Test("registering a tool lowers the passage budget")
+    func toolLowersTheCeiling() async throws {
+        // Sized from the ceiling rather than hand-counted. Twelve 90-word
+        // passages were far over the old ceiling and are over the new one by a
+        // hair, so the next tune of either number would have left this test
+        // passing while asserting nothing at all.
+        // A window so large that only the ceiling can be what trims — and the
+        // ceiling for *this* window, which grows with it up to a cap.
+        let window = 100_000
+        var passages: [Passage] = []
+        repeat {
+            passages.append(Self.passage(passages.count, words: 90))
+        } while AskPromptBuilder.estimatedTokens(AskPromptBuilder.excerpts(passages))
+            <= AskPromptBuilder.Budget.passageCeiling(contextSize: window, hasTool: false)
+
+        let without = await AskPromptBuilder.build(
+            question: "What happened?", ranked: Self.ranked(passages),
+            contextSize: window, hasTool: false, tokenCount: Self.counter,
+        )
+        let with = await AskPromptBuilder.build(
+            question: "What happened?", ranked: Self.ranked(passages),
+            contextSize: window, hasTool: true, tokenCount: Self.counter,
+        )
+        // Without an overflow of the higher ceiling neither ceiling is
+        // consulted, and the comparison below compares two whole corpora.
+        try #require(without.dropped > 0)
+        // The tool's schema is in the window, and its output has to fit in what
+        // is left when the model calls it.
+        #expect(
+            AskPromptBuilder.Budget.passageCeiling(contextSize: window, hasTool: true)
+                < AskPromptBuilder.Budget.passageCeiling(contextSize: window, hasTool: false),
+        )
+        #expect(with.passages.count < without.passages.count)
     }
 
     @Test("fifteen excerpts of the book's own prose fit inside the budget")
@@ -193,17 +228,19 @@ struct AskPromptBuilderTests {
             / Double(AskRetriever.Limits.excerpts * PassageChunker.Limits.targetWords)
         #expect(density > 4.5 && density < 6.5, "\(density) characters a word")
 
-        let built = await AskPromptBuilder.build(
-            question: "What has happened so far?", ranked: Self.ranked(passages),
-            // The window a real device reports, and the estimate standing in
-            // for the real tokeniser — the conservative end of what it
-            // measures on English prose, so a pass here is not a pass bought
-            // from a lenient fake.
-            contextSize: 4_096,
-            tokenCount: { AskPromptBuilder.estimatedTokens($0) },
-        )
-        #expect(built.dropped == 0)
-        #expect(built.passages.count == AskRetriever.Limits.excerpts)
+        for hasTool in [false, true] {
+            let built = await AskPromptBuilder.build(
+                question: "What has happened so far?", ranked: Self.ranked(passages),
+                // The window a real device reports, and the estimate standing in
+                // for the real tokeniser — the conservative end of what it
+                // measures on English prose, so a pass here is not a pass bought
+                // from a lenient fake.
+                contextSize: 4_096, hasTool: hasTool,
+                tokenCount: { AskPromptBuilder.estimatedTokens($0) },
+            )
+            #expect(built.dropped == 0, "hasTool: \(hasTool)")
+            #expect(built.passages.count == AskRetriever.Limits.excerpts, "hasTool: \(hasTool)")
+        }
     }
 
     @Test("the ceiling holds even when the context window is enormous")
@@ -211,13 +248,13 @@ struct AskPromptBuilderTests {
         let passages = (0 ..< 40).map { Self.passage($0, words: 90) }
         let built = await AskPromptBuilder.build(
             question: "What happened?", ranked: Self.ranked(passages),
-            contextSize: 1_000_000, tokenCount: Self.counter,
+            contextSize: 1_000_000, hasTool: false, tokenCount: Self.counter,
         )
         let excerptTokens = try await Self.counter(AskPromptBuilder.excerpts(built.passages))
         // A bigger window in a later OS must not silently start sending a
         // quarter of the book to the model: the ceiling grows with the window,
         // and stops at twice the number that was measured.
-        let ceiling = AskPromptBuilder.Budget.passageCeiling(contextSize: 1_000_000)
+        let ceiling = AskPromptBuilder.Budget.passageCeiling(contextSize: 1_000_000, hasTool: false)
         #expect(ceiling == AskPromptBuilder.Budget.passageCeiling * 2)
         #expect(excerptTokens <= ceiling)
     }
@@ -227,7 +264,7 @@ struct AskPromptBuilderTests {
         let huge = Self.passage(0, words: 4_000)
         let built = await AskPromptBuilder.build(
             question: "What happened?", ranked: Self.ranked([huge]),
-            contextSize: 4_096, tokenCount: Self.counter,
+            contextSize: 4_096, hasTool: false, tokenCount: Self.counter,
         )
         #expect(built.passages == [huge])
         #expect(built.prompt.contains(huge.displayText))
@@ -237,7 +274,7 @@ struct AskPromptBuilderTests {
     func handlesNoPassages() async {
         let built = await AskPromptBuilder.build(
             question: "What happened?", ranked: [],
-            contextSize: 4_096, tokenCount: Self.counter,
+            contextSize: 4_096, hasTool: false, tokenCount: Self.counter,
         )
         #expect(built.passages.isEmpty)
         #expect(built.prompt.contains("Question: What happened?"))
@@ -251,17 +288,20 @@ struct WindowScalingTests {
     @Test("the tuned window yields exactly the tuned ceilings")
     func tunedWindowIsUnchanged() {
         let tuned = AskPromptBuilder.Budget.tunedContextSize
-        #expect(AskPromptBuilder.Budget.passageCeiling(contextSize: tuned)
+        #expect(AskPromptBuilder.Budget.passageCeiling(contextSize: tuned, hasTool: true)
+            == AskPromptBuilder.Budget.passageCeilingWithTool)
+        #expect(AskPromptBuilder.Budget.passageCeiling(contextSize: tuned, hasTool: false)
             == AskPromptBuilder.Budget.passageCeiling)
         #expect(AskRetriever.Limits.excerpts(for: tuned) == AskRetriever.Limits.excerpts)
     }
 
     @Test("a larger window is given to passages, up to a cap")
     func largerWindowGrows() {
-        let tuned = AskPromptBuilder.Budget.passageCeiling
-        #expect(AskPromptBuilder.Budget.passageCeiling(contextSize: 5_000) == tuned + 904)
-        #expect(AskPromptBuilder.Budget.passageCeiling(contextSize: 8_192) == tuned * 2)
-        #expect(AskPromptBuilder.Budget.passageCeiling(contextSize: 100_000) == tuned * 2)
+        let with = AskPromptBuilder.Budget.passageCeilingWithTool
+        #expect(AskPromptBuilder.Budget.passageCeiling(contextSize: 5_000, hasTool: true) == with + 904)
+        #expect(AskPromptBuilder.Budget.passageCeiling(contextSize: 8_192, hasTool: true) == with * 2)
+        #expect(AskPromptBuilder.Budget.passageCeiling(contextSize: 100_000, hasTool: false)
+            == AskPromptBuilder.Budget.passageCeiling * 2)
         #expect(AskRetriever.Limits.excerpts(for: 6_144) == 22)
         #expect(AskRetriever.Limits.excerpts(for: 8_192) == AskRetriever.Limits.excerptsCeiling)
         #expect(AskRetriever.Limits.excerpts(for: 100_000) == AskRetriever.Limits.excerptsCeiling)
@@ -270,8 +310,8 @@ struct WindowScalingTests {
     @Test("a smaller window is never given fewer excerpts to choose from")
     func smallerWindowIsTheBuildersProblem() {
         #expect(AskRetriever.Limits.excerpts(for: 2_048) == AskRetriever.Limits.excerpts)
-        #expect(AskPromptBuilder.Budget.passageCeiling(contextSize: 2_048)
-            == AskPromptBuilder.Budget.passageCeiling)
+        #expect(AskPromptBuilder.Budget.passageCeiling(contextSize: 2_048, hasTool: true)
+            == AskPromptBuilder.Budget.passageCeilingWithTool)
     }
 }
 

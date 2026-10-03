@@ -89,10 +89,14 @@ public struct AskRetriever: Sendable {
     /// answered from a different one than its first.
     private let bookUUID: String
     private let boundary: ReadingBoundary
-    /// Whether the deterministic kinship table may answer without the model —
-    /// `AskEngine.usesKinshipFastPath`, the kill switch for that table.
+    /// Whether the deterministic kinship table may answer without the model:
+    /// `AskEngine.usesKinshipFastPath` for the engine, and false for the
+    /// `searchBook` tool — the model has already been called, and handing it a
+    /// finished sentence in place of excerpts is not a search result.
     private let allowsFastPath: Bool
     /// How many of the passages just read to add behind what the search found.
+    /// Zero for the `searchBook` tool: the recent pages are already in the
+    /// prompt, and a search result is what matched the search.
     private let recencyPassages: Int
 
     public init(

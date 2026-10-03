@@ -10,7 +10,7 @@ import Testing
 /// The Ask rethink experiments: the shipped pipeline and its alternatives, run
 /// against the real on-device model and recorded one JSON line per ask.
 ///
-///     ISSA_ASK_RETHINK=1 ISSA_ASK_RETHINK_VARIANTS=E0,P0,R \
+///     ISSA_ASK_RETHINK=1 ISSA_ASK_RETHINK_VARIANTS=E0,EN,P0 \
 ///     ISSA_ASK_RETHINK_OUT=/path/results.jsonl swift test --filter RethinkExperiments
 ///
 /// Skipped without `ISSA_ASK_RETHINK`. An experiment, not a regression suite:
@@ -185,8 +185,11 @@ struct ToolLimits: Sendable {
 @available(iOS 27.0, macOS 27.0, visionOS 27.0, *)
 struct RVariant: Sendable {
     var name: String
-    /// The real `AskEngine`, exactly as the app builds it.
+    /// The real `AskEngine`: with `engineTool`, exactly as the app builds it
+    /// (`AskEngine.forQuestion`, search tool on); without, the same engine
+    /// with no tool.
     var engine = false
+    var engineTool = false
     /// The context size the builder and the retriever are sized for; nil is
     /// the model's own.
     var packContext: Int? = nil
@@ -205,7 +208,8 @@ struct RVariant: Sendable {
     var questionGuard = true
 
     static let all: [String: RVariant] = [
-        "E0": RVariant(name: "E0", engine: true),
+        "E0": RVariant(name: "E0", engine: true, engineTool: true),
+        "EN": RVariant(name: "EN", engine: true),
         "P0": RVariant(name: "P0"),
         "N": RVariant(name: "N", packContext: 4_096),
         "R": RVariant(name: "R", recency: 12),
@@ -479,8 +483,14 @@ struct RethinkRunner {
     ) async throws -> AskAnswer? {
         // Under ISSA_ASK_RETHINK_SAMPLED the engine's own seeded sampler, so
         // a sampled run measures the shipped seed rather than the harness's.
+        // `AskEngine.forQuestion`'s engine, built by hand only so the sampler
+        // can be switched: same tool, same boundary.
+        let tool = v.engineTool
+            ? SearchBookTool(store: book.store, bookUUID: book.source.bookUUID, boundary: boundary)
+            : nil
         let engine = AskEngine(
-            model: SystemAnswerModel(), store: book.store, usesNucleusSampling: Rethink.sampled,
+            model: SystemAnswerModel(), store: book.store, tools: tool.map { [$0] } ?? [],
+            usesNucleusSampling: Rethink.sampled,
         )
         var answer: AskAnswer?
         for try await event in engine.ask(question: q.question, source: book.source, boundary: boundary) {
@@ -493,6 +503,11 @@ struct RethinkRunner {
                 }
             case .phase: break
             }
+        }
+        if let tool {
+            let shown = await tool.passagesShown()
+            o.excerptsFromTool = shown.count
+            o.physicalLeak = shown.values.contains { !Self.within($0, boundary) }
         }
         o.rawAnswer = answer?.text ?? ""
         return answer
@@ -577,7 +592,7 @@ struct RethinkRunner {
         let built: AskPromptBuilder.Built
         if v.appRetrieval || v.fullText {
             built = await AskPromptBuilder.build(
-                question: sanitised, ranked: ranked, contextSize: ctx,
+                question: sanitised, ranked: ranked, contextSize: ctx, hasTool: v.tool != nil,
                 tokenCount: { [model] text in try await model.tokenCount(for: text) },
             )
         } else {
@@ -775,7 +790,7 @@ extension RethinkBodies {
                     guard case let .evidence(ranked, _) = try await retriever.retrieve(question: q.question, limit: 30) else { continue }
                     let built = await AskPromptBuilder.build(
                         question: QueryTerms.sanitise(q.question), ranked: ranked, contextSize: model.contextSize,
-                        tokenCount: { try await model.tokenCount(for: $0) })
+                        hasTool: false, tokenCount: { try await model.tokenCount(for: $0) })
                     if mode == "shipped" {
                         LanguageModelSession(model: model, instructions: AskPromptBuilder.instructions).prewarm()
                         try await Task.sleep(for: .milliseconds(1_500))

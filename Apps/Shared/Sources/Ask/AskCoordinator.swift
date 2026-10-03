@@ -45,7 +45,7 @@ final class AskCoordinator {
     /// nothing to deserve. It is passed to **both** construction sites below.
     private let turnstile = AskTurnstile()
     /// For index building, prewarming and chips — everything that has no
-    /// boundary of its own.
+    /// boundary of its own, so it needs no tool.
     private let preparer: AskEngine
 
     private let defaults: UserDefaults
@@ -225,9 +225,11 @@ final class AskCoordinator {
         // `<uuid>.building.sqlite`.
         let preparation = preparing[uuid]
 
-        // Exactly the engine `RegressionRun` asks the real model with, but for
-        // the process's one turnstile — so the suite measures what ships.
-        let engine = AskEngine(model: model, store: store, turnstile: turnstile)
+        // Per question, with the `searchBook` tool bound to this boundary: the
+        // same factory `RegressionRun` asks the real model through.
+        let engine = AskEngine.forQuestion(
+            model: model, store: store, bookUUID: uuid, boundary: boundary, turnstile: turnstile,
+        )
 
         job.task = Task { [weak self] in
             // Costs nothing when the sheet's build has already finished, and
