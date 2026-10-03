@@ -10,7 +10,8 @@ public struct LibraryView: View {
     @Environment(AppModel.self) private var app
     @State private var search = ""
     @State private var results: [Book] = []
-    private let navigator = LibraryNavigator.shared
+    /// This window's "Show in Library" requests; see `LibraryNavigator`.
+    @Environment(LibraryNavigator.self) private var navigator: LibraryNavigator?
 
     public init() {}
 
@@ -122,7 +123,7 @@ public struct LibraryView: View {
         // stack (`LibraryNavigator`): a view that took it on change was the
         // old one, about to be replaced by one with an empty field.
         .task {
-            guard let pending = navigator.pendingSearch else { return }
+            guard let navigator, let pending = navigator.pendingSearch else { return }
             search = pending
             navigator.pendingSearch = nil
         }

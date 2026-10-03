@@ -1,9 +1,6 @@
 import IssaCore
 import IssaUI
 import SwiftUI
-#if os(macOS)
-import AppKit
-#endif
 
 extension EnvironmentValues {
     /// Which screen a book's menu is opened on; see `BookMenu.Place`. Set by
@@ -216,6 +213,7 @@ struct BookActions: DynamicProperty {
     #if os(macOS)
     @Environment(MacBookSelection.self) private var selection: MacBookSelection?
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.dismissWindow) private var dismissWindow
     #endif
 
     var capabilities: BookMenu.Capabilities {
@@ -282,10 +280,19 @@ struct BookActions: DynamicProperty {
             withAnimation(.snappy(duration: 0.2)) { selection.bookID = book.uuid }
         } else {
             // The library window answers a details request by selecting the
-            // book into its inspector, from any window. This one is in the
-            // way of it, so it goes.
+            // book into its inspector, from any window. This one — Settings,
+            // the only window with a book menu and no inspector — is in the
+            // way of it, so it goes: this window, by its own environment. It
+            // was `NSApp.keyWindow`, which a right-click in an inactive window
+            // does not make this one, so the library window that had to
+            // answer, or a reader, or the Now Playing panel was closed instead.
             app.requestBook(book.uuid, .details)
-            NSApp.keyWindow?.close()
+            if ShowInLibrary.opensLibraryWindow(libraryWindowsOpen: LibraryWindows.shared.open) {
+                // With none open nothing would ever take the request, and the
+                // stale one selected the book whenever one next appeared.
+                openWindow(id: ShowInLibrary.libraryWindowID)
+            }
+            dismissWindow()
         }
         #elseif os(iOS)
         if let router {
@@ -351,12 +358,12 @@ struct BookActions: DynamicProperty {
 
     func push(_ route: BookRouter.Route) {
         #if os(macOS)
-        // The window's own stack pushes; see `MacBookSelection.pushed`.
-        switch route {
-        case let .series(name): selection?.pushed = .series(name)
-        case let .author(name): selection?.pushed = .author(name)
-        case let .tag(name): selection?.pushed = .tag(name)
-        case let .details(book): viewDetails(book)
+        // The window's own stack pushes; see `MacBookSelection.pushed`. A
+        // book's details are the inspector's, not a page.
+        if case let .details(book) = route {
+            viewDetails(book)
+        } else {
+            selection?.pushed = route
         }
         #elseif os(iOS)
         router?.route = route
@@ -368,22 +375,45 @@ struct BookActions: DynamicProperty {
     func perform(_ action: BookMenu.EditionAction, on book: Book) {
         let job = DownloadManager.Job(bookUUID: book.uuid, format: action.format)
         switch action.kind {
-        case .save, .retry:
+        case .save, .retry, .resume:
             Task {
-                guard !(await app.download(book, format: action.format)) else { return }
-                // The Wi-Fi rule's reason, kept against the job for the book
-                // page's edition row. The menu has closed, so it is said here.
-                router?.alert = BookAlert(
-                    title: "Not downloaded yet",
-                    message: app.downloadRefusals[job] ?? "The download could not start.")
+                // The menu has closed, so a refusal is said here.
+                if let alert = await Self.startDownload(action.kind, of: book, format: action.format, in: app) {
+                    router?.alert = alert
+                }
             }
         case .pause:
             app.downloads?.pause(job)
-        case .resume:
-            Task { await app.resumeDownload(job) }
         case .remove:
             remove(book, format: action.format)
         }
+    }
+
+    /// Saves, retries or resumes an edition, and says what the reader has to
+    /// be told: the Wi-Fi rule's reason when it held the download back,
+    /// kept against the job for the book page's edition row too.
+    ///
+    /// Resume included. It used to throw the outcome away, so on cellular with
+    /// Wi-Fi only a "Resume download" from the menu looked ignored while Save
+    /// and Try again, refused for the same reason, said why.
+    static func startDownload(
+        _ kind: BookMenu.EditionAction.Kind, of book: Book, format: BookContentService.Format, in app: AppModel,
+    ) async -> BookAlert? {
+        let job = DownloadManager.Job(bookUUID: book.uuid, format: format)
+        let started: Bool
+        switch kind {
+        case .resume:
+            await app.resumeDownload(job)
+            started = app.downloadRefusals[job] == nil
+        case .save, .retry:
+            started = await app.download(book, format: format)
+        case .pause, .remove:
+            return nil
+        }
+        guard !started else { return nil }
+        return BookAlert(
+            title: "Not downloaded yet",
+            message: app.downloadRefusals[job] ?? "The download could not start.")
     }
 
     /// The removal every Downloads row makes: hidden now, deleted when the

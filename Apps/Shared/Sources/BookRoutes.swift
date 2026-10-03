@@ -36,6 +36,33 @@ final class BookRouter {
     var showsPlayer = false
     /// Something a menu item tried and could not do.
     var alert: BookAlert?
+
+    /// Whether a deep link takes down the page this router pushed.
+    ///
+    /// Yes, so the tab's own reset can push the link's book — except for a
+    /// link to the book whose reader is already up. The tab's root discards
+    /// that request rather than resetting (`LibraryTabs.openPendingBook`), and
+    /// the reader may be sitting on a page this router pushed: a book opened
+    /// from a cover's menu. Dropping the page dismissed that reader
+    /// mid-session — the very thing the root's exemption exists to prevent.
+    static func dropsPushedPage(for pending: String?, visibleReader: String?) -> Bool {
+        guard let pending else { return false }
+        return pending != visibleReader
+    }
+
+    /// The screen a route pushes, for every stack that pushes one: a screen's
+    /// own router here, the Mac window's content column (`MacRootView`), and
+    /// the book page's series and tag links. One switch, so a page's
+    /// construction cannot drift between them.
+    @ViewBuilder
+    static func destination(for route: Route) -> some View {
+        switch route {
+        case let .details(book): BookDetailView(book: book)
+        case let .series(name): SeriesView(name: name)
+        case let .author(name): AuthorView(name: name)
+        case let .tag(name): TagView(name: name)
+        }
+    }
 }
 
 /// A failure worth telling the reader about: a Listen that could not start, a
@@ -67,14 +94,16 @@ private struct BookRoutes: ViewModifier {
             .environment(\.bookPlace, place)
             #if os(iOS)
             .navigationDestination(item: $router.route) { route in
-                Self.destination(for: route)
+                BookRouter.destination(for: route)
             }
             .sheet(isPresented: $router.showsPlayer) { NowPlayingSheet() }
             // A deep link resets the tab's path and pushes its own book. A page
             // this router pushed is not in that path, so it is taken down here
             // rather than left for the reset to reconcile with.
             .onChange(of: app.pendingBook) { _, pending in
-                if pending != nil { router.route = nil }
+                if BookRouter.dropsPushedPage(for: pending?.uuid, visibleReader: app.visibleReaderUUID) {
+                    router.route = nil
+                }
             }
             // Nothing to expand into once playback has stopped.
             .onChange(of: app.playback == nil) { _, stopped in
@@ -94,15 +123,6 @@ private struct BookRoutes: ViewModifier {
             }
     }
 
-    @ViewBuilder
-    static func destination(for route: BookRouter.Route) -> some View {
-        switch route {
-        case let .details(book): BookDetailView(book: book)
-        case let .series(name): SeriesView(name: name)
-        case let .author(name): AuthorView(name: name)
-        case let .tag(name): TagView(name: name)
-        }
-    }
 }
 
 /// A request to show the library's own grid, made from a page that cannot get
@@ -113,12 +133,18 @@ private struct BookRoutes: ViewModifier {
 /// switch tabs or empty a stack it did not build. So the page asks here and the
 /// root answers, the way a deep link asks `AppModel` and `openPendingBook`
 /// answers: by rebuilding the library's stack from its root, since most pages
-/// are pushed by `NavigationLink(destination:)` and no path holds them. One
-/// for the process, as `AppModel` is one for the process.
+/// are pushed by `NavigationLink(destination:)` and no path holds them.
+///
+/// One per window, owned by that window's root and handed down through the
+/// environment. It used to be one for the process, which every window's root
+/// observed: a request from an author page reset every iPad window and every
+/// Mac library window to the library's root — closing a reader open in
+/// another — and the search went to whichever window's library appeared
+/// first.
 @MainActor
 @Observable
 final class LibraryNavigator {
-    static let shared = LibraryNavigator()
+    init() {}
 
     /// Bumped by each request; the platform root goes to the library grid.
     private(set) var showRequests = 0

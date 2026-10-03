@@ -75,16 +75,26 @@ struct BookListPage: View {
     }
 
     @Environment(AppModel.self) private var app
+    /// The window's library, for "Show in Library"; none where there is no
+    /// library to show.
+    @Environment(LibraryNavigator.self) private var navigator: LibraryNavigator?
     let subject: Subject
     let books: [Book]
 
-    /// How far the page has scrolled from rest, and where the header's name
-    /// ends, both in the content's own points.
-    @State private var scrolled: CGFloat = 0
+    /// Whether the header's name has scrolled under the bar, and where it
+    /// ends, in the content's own points.
+    ///
+    /// The crossing, not the offset. The raw offset was written on every
+    /// scroll frame, and body reads it, so every frame re-ran body — the
+    /// staging, its localized sort and every section — which on a tag of a
+    /// few hundred books is most of a 120 Hz frame's budget.
+    @State private var nameScrolledAway = false
     @State private var nameBottom: CGFloat = .greatestFiniteMagnitude
+    /// The last staging, kept while its inputs have not changed.
+    @State private var staging = StagingCache()
 
     var body: some View {
-        let staged = StagedBooks(books: books, statuses: app.statuses)
+        let staged = staging.staged(books: books, statuses: app.statuses)
         ScrollView {
             if !staged.isEmpty {
                 VStack(alignment: .leading, spacing: 0) {
@@ -116,10 +126,11 @@ struct BookListPage: View {
                     .containerRelativeFrame([.horizontal, .vertical])
             }
         }
-        .onScrollGeometryChange(for: CGFloat.self) { geometry in
-            geometry.contentOffset.y + geometry.contentInsets.top
-        } action: { _, offset in
-            scrolled = offset
+        .onScrollGeometryChange(for: Bool.self) { [nameBottom] geometry in
+            Self.hasScrolledPast(
+                nameBottom, offset: geometry.contentOffset.y + geometry.contentInsets.top)
+        } action: { _, past in
+            nameScrolledAway = past
         }
         .accessibilityIdentifier("screen.\(subject.identifier)")
         .background(Palette.paper)
@@ -136,8 +147,8 @@ struct BookListPage: View {
                     .font(.headline)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .opacity(staged.isEmpty || scrolled >= nameBottom ? 1 : 0)
-                    .animation(.easeInOut(duration: 0.2), value: scrolled >= nameBottom)
+                    .opacity(staged.isEmpty || nameScrolledAway ? 1 : 0)
+                    .animation(.easeInOut(duration: 0.2), value: nameScrolledAway)
                     // The header already reads the name, as a heading.
                     .accessibilityHidden(!staged.isEmpty)
             }
@@ -179,11 +190,37 @@ struct BookListPage: View {
         switch subject {
         case let .tag(name):
             app.showAllBooks(shelf: .all, tags: [name])
-            LibraryNavigator.shared.showLibrary()
+            navigator?.showLibrary()
         case let .author(name):
             app.showAllBooks(shelf: .all)
-            LibraryNavigator.shared.showLibrary(search: name)
+            navigator?.showLibrary(search: name)
         }
+    }
+
+    /// Whether the content has scrolled far enough for the header's name to
+    /// be under the bar.
+    nonisolated static func hasScrolledPast(_ nameBottom: CGFloat, offset: CGFloat) -> Bool {
+        offset >= nameBottom
+    }
+}
+
+/// One page's staging of its books, rebuilt only when the books or the
+/// statuses it was built from change — not on every body, which anything on
+/// the page can cause.
+@MainActor
+final class StagingCache {
+    private var inputs: (books: [Book], statuses: [Status])?
+    private var cached: StagedBooks?
+    /// How many times a staging was built, for a test to count.
+    private(set) var builds = 0
+
+    func staged(books: [Book], statuses: [Status]) -> StagedBooks {
+        if let cached, let inputs, inputs.books == books, inputs.statuses == statuses { return cached }
+        let staged = StagedBooks(books: books, statuses: statuses)
+        builds += 1
+        inputs = (books, statuses)
+        cached = staged
+        return staged
     }
 }
 

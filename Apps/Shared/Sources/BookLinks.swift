@@ -24,15 +24,6 @@ public final class MacBookSelection {
     /// the only way back was clicking a cover again.
     public private(set) var lastShownBookID: String?
 
-    /// A page the inspector, or a book's menu, has asked the window to show.
-    public enum Pushed: Hashable, Identifiable, Sendable {
-        case series(String)
-        case author(String)
-        case tag(String)
-
-        public var id: Self { self }
-    }
-
     /// The page the window's content column should push.
     ///
     /// The inspector has no navigation stack of its own. It used to: on
@@ -44,12 +35,46 @@ public final class MacBookSelection {
     /// book's menu, which has no stack to push onto either — sets this, and
     /// the window's own stack, which exists precisely because the rails and
     /// the detail both push pages, does the pushing.
-    public var pushed: Pushed?
+    ///
+    /// A `BookRouter.Route`, the phone's own, so there is one idea of a page
+    /// rather than a Mac copy and a translation between the two. Never
+    /// `.details`: on the Mac a book's details are this selection
+    /// (`BookActions.push`).
+    var pushed: BookRouter.Route?
 
     public init() {}
 }
 
 #endif
+
+/// How many library windows the Mac has open: each `MacRootView` counts itself
+/// in as it appears and out as it goes.
+///
+/// For what has to reach a library window from one that is not: a request
+/// parked in `AppModel.pendingBook` is taken only by a library window, and
+/// with none open it waited — the click that made it did nothing visible,
+/// and the request fired whenever a library window next appeared.
+@MainActor
+@Observable
+final class LibraryWindows {
+    static let shared = LibraryWindows()
+    private(set) var open = 0
+
+    func appeared() { open += 1 }
+    func disappeared() { open = max(0, open - 1) }
+}
+
+/// "Show in Library" from the Mac's Settings window, which has no library of
+/// its own: park the request, open a library window when none is there to
+/// take it, and close Settings.
+enum ShowInLibrary {
+    /// The main window group's id, so a menu can open one.
+    static let libraryWindowID = "Library"
+
+    static func opensLibraryWindow(libraryWindowsOpen: Int) -> Bool {
+        libraryWindowsOpen == 0
+    }
+}
 
 /// Routes a book the way each platform expects: a pushed detail screen on
 /// iOS and tvOS, and on the Mac a click that selects it into the inspector

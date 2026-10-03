@@ -305,7 +305,7 @@ public struct BookDetailView: View {
             if group != nil {
                 // A series with more than one book has a screen; a book alone
                 // in its series has nowhere to go.
-                seriesLink(to: membership.name) { seriesLine(text, showsLink: true) }
+                pageLink(.series(membership.name)) { seriesLine(text, showsLink: true) }
                     .buttonStyle(.plain)
                     // On the first link only. A subscript query resolves to
                     // exactly one element, so a book in two grouped series used
@@ -332,21 +332,23 @@ public struct BookDetailView: View {
         }?.id
     }
 
-    /// The control that opens a series screen from the hero.
+    /// The control that opens a series or tag screen from this page.
     ///
     /// A link into the enclosing stack everywhere but the Mac's inspector,
     /// which has no stack: there it asks the window to push instead, for the
-    /// reason `MacBookSelection.pushed` gives.
+    /// reason `MacBookSelection.pushed` gives. One helper for both, building
+    /// the page through `BookRouter.destination(for:)`, where the series line
+    /// and the tag chips each had a copy.
     @ViewBuilder
-    private func seriesLink(to name: String, @ViewBuilder label: () -> some View) -> some View {
+    private func pageLink(_ route: BookRouter.Route, @ViewBuilder label: () -> some View) -> some View {
         #if os(macOS)
         if layout == .inspector, let selection {
-            Button { selection.pushed = .series(name) } label: { label() }
+            Button { selection.pushed = route } label: { label() }
         } else {
-            NavigationLink { SeriesView(name: name) } label: { label() }
+            NavigationLink { BookRouter.destination(for: route) } label: { label() }
         }
         #else
-        NavigationLink { SeriesView(name: name) } label: { label() }
+        NavigationLink { BookRouter.destination(for: route) } label: { label() }
         #endif
     }
 
@@ -899,18 +901,8 @@ public struct BookDetailView: View {
     /// window, as the series line is.
     @ViewBuilder
     private func tagLink(to name: String) -> some View {
-        Group {
-            #if os(macOS)
-            if layout == .inspector, let selection {
-                Button { selection.pushed = .tag(name) } label: { Text(name) }
-            } else {
-                NavigationLink { TagView(name: name) } label: { Text(name) }
-            }
-            #else
-            NavigationLink { TagView(name: name) } label: { Text(name) }
-            #endif
-        }
-        .buttonStyle(TagChipStyle(name: name))
+        pageLink(.tag(name)) { Text(name) }
+            .buttonStyle(TagChipStyle(name: name))
         .accessibilityLabel(name)
         .accessibilityHint("Shows all books with this tag.")
     }
@@ -1120,12 +1112,25 @@ public struct BookDetailView: View {
         #endif
     }
 
+    /// The year a book was published, read in UTC.
+    ///
+    /// Both server generations store a bare year as that year's first
+    /// midnight in UTC, so formatted in the device's own zone a reader west of
+    /// Greenwich saw the year before — "Published 1993" here over "1994" in
+    /// the More by page's caption, which reads it in UTC
+    /// (`StagedBooks.authorCaption`).
+    nonisolated static func publishedYear(_ date: Date) -> String {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC") ?? .gmt
+        return String(calendar.component(.year, from: date))
+    }
+
     private var facts: some View {
         VStack(alignment: .leading, spacing: Metrics.spacing8) {
             Text("Details").overlineStyle()
             VStack(spacing: 1) {
                 if let published = book.publicationDate?.value {
-                    factRow("Published", published.formatted(.dateTime.year()))
+                    factRow("Published", Self.publishedYear(published))
                 }
                 if let language = book.language { factRow("Language", language.uppercased()) }
                 if !book.collections.isEmpty {
