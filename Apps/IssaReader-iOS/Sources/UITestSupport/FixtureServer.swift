@@ -30,10 +30,14 @@ final class FixtureServer: URLProtocol {
             .hasPrefix("Bearer ") == true
 
         let (status, body): (Int, Data) = {
-            guard authorized else { return (401, Data()) }
+            guard authorized, !Self.revocation.isRevoked else { return (401, Data()) }
             switch path {
             case Endpoint.user: return (200, FixtureLibrary.userJSON)
-            case Endpoint.books: return (200, FixtureLibrary.booksJSON)
+            case Endpoint.books:
+                // The catalogue once, then a revoked token: the session ends
+                // while the app is in use (`SignInAgainFlowTests`).
+                Self.revocation.catalogueServed()
+                return (200, FixtureLibrary.booksJSON)
             case Endpoint.statuses, Endpoint.userRatings, Endpoint.tags,
                  Endpoint.series, Endpoint.collections, Endpoint.creators:
                 return (200, FixtureLibrary.emptyArrayJSON)
@@ -55,5 +59,25 @@ final class FixtureServer: URLProtocol {
     }
 
     override func stopLoading() {}
+
+    /// `-IssaUITestFixtureRevokeAfterLoad`: every request after the first
+    /// catalogue is refused, as a server refuses a revoked device grant.
+    static let revocation = Revocation(
+        enabled: ProcessInfo.processInfo.arguments.contains("-IssaUITestFixtureRevokeAfterLoad"))
+
+    final class Revocation: @unchecked Sendable {
+        private let lock = NSLock()
+        private let enabled: Bool
+        private var revoked = false
+
+        init(enabled: Bool) { self.enabled = enabled }
+
+        var isRevoked: Bool { lock.withLock { revoked } }
+
+        func catalogueServed() {
+            guard enabled else { return }
+            lock.withLock { revoked = true }
+        }
+    }
 }
 #endif

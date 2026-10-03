@@ -49,4 +49,36 @@ enum LibraryModeSwitch {
         case .all: State(mode: .all, shelf: state.shelf, isSearching: state.isSearching)
         }
     }
+
+    /// Where the Reading screen's links into the library land.
+    ///
+    /// A "See all" names a shelf — Up next's To read, the downloads'
+    /// Downloaded — and means that shelf's flat grid, which is what
+    /// `AppModel.showAllBooks(shelf:)` does everywhere else. The empty
+    /// screen's "Go to Library" names none and means the library's landing:
+    /// Browse's rails on All books, with nothing searched. On the Mac the
+    /// link used to change only the sidebar and keep the mode, so whichever
+    /// the library was last left on decided what "Go to Library" showed.
+    static func fromReading(_ shelf: LibraryArrangement.Shelf?) -> State {
+        if let shelf {
+            State(mode: .all, shelf: shelf, isSearching: false)
+        } else {
+            State(mode: .browse, shelf: .all, isSearching: false)
+        }
+    }
+}
+
+extension AppModel {
+    /// Puts the library where `LibraryModeSwitch.fromReading` says a link
+    /// from the Reading screen lands. The caller shows the library, from its
+    /// root, so no search or pushed page is left over it.
+    func showLibrary(fromReading shelf: LibraryArrangement.Shelf?) {
+        let landing = LibraryModeSwitch.fromReading(shelf)
+        if landing.mode == .all {
+            showAllBooks(shelf: landing.shelf)
+        } else {
+            arrangement.shelf = landing.shelf
+            libraryMode = landing.mode
+        }
+    }
 }

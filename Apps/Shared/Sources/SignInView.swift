@@ -176,6 +176,7 @@ public struct SignInView: View {
                     .foregroundStyle(.white)
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier("button.signInAgain")
             localBooksLink
         }
     }
@@ -411,6 +412,10 @@ public struct SignInView: View {
         connecting = true
         defer { connecting = false }
         signInNote = nil
+        // A sign-in the reader started is the screen they asked for. The
+        // books-from-Files flag is this window's root while signed out, and
+        // left set it would put the list over the sign-in as the phase moves.
+        if localRoute?.showsListSignedOut == true { localRoute?.showsListSignedOut = false }
         if address.isEmpty { address = app.serverAddress }
         await app.connect(to: address)
         // A stored token may have signed us straight in.
