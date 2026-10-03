@@ -46,7 +46,6 @@ public struct LocalBooksScreen: View {
     /// The duplicate's row, outlined for two seconds.
     @State private var highlighted: String?
     @State private var dropTargeted = false
-    @State private var dropCount = 0
     /// Which row's swipe is open, so opening one closes the other.
     @State private var openRow: String?
     /// The window's undo manager, so Edit › Undo (⌘Z) takes a removal back.
@@ -372,7 +371,10 @@ public struct LocalBooksScreen: View {
         VStack(alignment: .leading, spacing: Metrics.spacing8) {
             if !library.imports.isEmpty { Text("Books").overlineStyle() }
             ForEach(library.books) { book in
-                LocalSwipeRow(id: book.uuid, openRow: $openRow, onRemove: { remove([book.uuid]) }) {
+                SwipeToRemove(
+                    id: book.uuid, openRow: $openRow, label: "Remove",
+                    onRemove: { remove([book.uuid]) }, onTap: { tap(book) },
+                ) {
                     LocalBookRow(
                         book: book, size: sizes[book.uuid],
                         isMissing: library.missingFiles.contains(book.uuid),
@@ -390,14 +392,12 @@ public struct LocalBooksScreen: View {
                     tap(book)
                     return .handled
                 }
-                // ⌘⌫ on the row the keyboard is on, as well as the shortcut
-                // below for when no row has the keyboard yet.
+                // ⌘⌫ on the row the keyboard is on, as the shortcut below is.
                 .onKeyPress(keys: [.delete], phases: .down) { press in
                     guard press.modifiers.contains(.command) else { return .ignored }
                     remove([book.uuid])
                     return .handled
                 }
-                .onTapGesture { tap(book) }
                 .contextMenu { menu(for: book) }
                 .accessibilityAction(named: "Book Info") { info = book }
                 .accessibilityAction(named: "Remove from this \(LocalDevice.noun)") { remove([book.uuid]) }
@@ -1159,64 +1159,4 @@ struct LocalToast: View {
     }
 }
 
-#if os(iOS)
-/// Swipe left to reveal Remove, for a card that is not in a `List`: the
-/// Reading tab's gesture, with the design's label. A swipe past 200 points
-/// removes without the tap.
-struct LocalSwipeRow<Content: View>: View {
-    let id: String
-    @Binding var openRow: String?
-    let onRemove: () -> Void
-    @ViewBuilder let content: () -> Content
-
-    private static var revealWidth: CGFloat { 88 }
-    private static var commitDistance: CGFloat { 200 }
-    @State private var drag: CGFloat = 0
-
-    private var isOpen: Bool { openRow == id }
-    private var offset: CGFloat { min(0, (isOpen ? -Self.revealWidth : 0) + drag) }
-
-    var body: some View {
-        ZStack(alignment: .trailing) {
-            Button(role: .destructive) {
-                openRow = nil
-                onRemove()
-            } label: {
-                Text("Remove")
-                    .font(Typography.callout.weight(.semibold))
-                    .foregroundStyle(Palette.paper)
-                    .frame(width: max(Self.revealWidth, -offset))
-                    .frame(maxHeight: .infinity)
-                    .background(Palette.alert)
-            }
-            .buttonStyle(.plain)
-            .accessibilityHidden(true)
-            content()
-                .offset(x: offset)
-                .simultaneousGesture(
-                    DragGesture(minimumDistance: 12, coordinateSpace: .local)
-                        .onChanged { value in
-                            guard abs(value.translation.width) > abs(value.translation.height) else { return }
-                            drag = value.translation.width
-                        }
-                        .onEnded { value in
-                            let travelled = -offset
-                            drag = 0
-                            guard abs(value.translation.width) > abs(value.translation.height) else { return }
-                            if travelled > Self.commitDistance {
-                                openRow = nil
-                                onRemove()
-                            } else if travelled > Self.revealWidth / 2 {
-                                withAnimation(.snappy) { openRow = id }
-                            } else {
-                                withAnimation(.snappy) { if isOpen { openRow = nil } }
-                            }
-                        },
-                )
-        }
-        .clipShape(RoundedRectangle(cornerRadius: Metrics.radiusMedium))
-        .animation(.snappy, value: isOpen)
-    }
-}
-#endif
 #endif

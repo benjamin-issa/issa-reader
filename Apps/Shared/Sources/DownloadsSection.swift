@@ -543,12 +543,31 @@ struct DownloadsSection: View {
 /// The gesture only takes over once the drag is more horizontal than vertical.
 /// Claiming every drag would break scrolling in the tab this row lives in,
 /// which is a far worse bug than a swipe that occasionally has to be repeated.
-private struct SwipeToRemove<Content: View>: View {
+///
+/// Shared with the list of books from the reader's files, whose button says
+/// Remove — its book's original stays in Files — rather than Delete.
+struct SwipeToRemove<Content: View>: View {
     let id: String
     @Binding var openRow: String?
+    /// The revealed button's word.
+    let label: String
     let onRemove: () -> Void
     let onTap: () -> Void
     @ViewBuilder let content: () -> Content
+
+    /// Spelled out: the memberwise one is private, because `drag` is.
+    init(
+        id: String, openRow: Binding<String?>, label: String = "Delete",
+        onRemove: @escaping () -> Void, onTap: @escaping () -> Void,
+        @ViewBuilder content: @escaping () -> Content,
+    ) {
+        self.id = id
+        _openRow = openRow
+        self.label = label
+        self.onRemove = onRemove
+        self.onTap = onTap
+        self.content = content
+    }
 
     /// The revealed button's width, and the distance past which the swipe
     /// means it without being tapped.
@@ -609,7 +628,7 @@ private struct SwipeToRemove<Content: View>: View {
             openRow = nil
             onRemove()
         } label: {
-            Text("Delete")
+            Text(label)
                 .font(Typography.callout.weight(.semibold))
                 // Paper on alert, not white. `Palette.alert` is a foreground
                 // colour everywhere else in this app — a deep maroon in light
