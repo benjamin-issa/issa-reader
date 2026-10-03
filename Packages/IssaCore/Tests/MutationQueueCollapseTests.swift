@@ -277,6 +277,34 @@ struct DrainExclusionTests {
         #expect(await first.value == 1)
     }
 
+    /// R-55. The decline above is only right if the drain it declines to
+    /// sends what the declining caller came with. A rating tapped twice inside
+    /// one round trip — 4, then 5 — collapses the queued 4 into a new row
+    /// for 5 while the 4 is on the wire; the drain that enqueue triggers
+    /// declines, and the running drain worked from a list read before the 5
+    /// existed. The server kept 4, the screen said 5, until some unrelated
+    /// drain came along.
+    @Test("a write queued while a drain runs goes with that drain")
+    func aWriteQueuedMidDrainGoesWithIt() async throws {
+        let (drain, queue, directory) = try await makeDrain()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try await queue.enqueue(.rating, bookUUID: "a", payload: Data(#"{"rating":4}"#.utf8))
+
+        let first = Task { await drain.drain() }
+        await settle { BlockingProtocol.requestsStarted == 1 }
+        #expect(BlockingProtocol.requestsStarted == 1, "the first drain has to be mid-request")
+
+        // The second tap: the queued 4 becomes a row for 5, and the drain this
+        // enqueue triggers declines.
+        try await queue.enqueue(.rating, bookUUID: "a", payload: Data(#"{"rating":5}"#.utf8))
+        #expect(await drain.drain() == 0)
+
+        BlockingProtocol.release()
+        #expect(await first.value == 2, "the 5 was left for some later drain")
+        #expect(BlockingProtocol.requestsStarted == 2)
+        #expect(try await queue.count == 0)
+    }
+
     /// My regression: the exit path passed through the same decline, so
     /// `flushOpenReaders()` on ⌘Q sent nothing whenever a background drain
     /// happened to be blocked — and on the way out there is no next enqueue.

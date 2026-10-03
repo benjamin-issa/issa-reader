@@ -394,10 +394,12 @@ public struct MutationDrain: Sendable {
     ///   `MutationQueue.waitToDrain`.
     public func drain(waitingForInFlight: Bool = false) async -> Int {
         // One drain at a time. A second caller returning 0 immediately is
-        // correct: the writes it would have sent are the ones already in
-        // flight, and it will be re-triggered by whatever enqueues next —
-        // except on the way out, where nothing enqueues next, which is what
-        // the waiting form is for.
+        // correct because the drain it declines to sends what that caller came
+        // with: the running one reads the queue again after each pass and goes
+        // on while rows it has not tried are waiting — so a write enqueued
+        // mid-drain (whose own drain is this decline) goes with it. On the way
+        // out the waiting form is used instead, because the running drain
+        // yields its remaining rows to whoever waits.
         if waitingForInFlight {
             await queue.waitToDrain()
         } else {
@@ -413,7 +415,6 @@ public struct MutationDrain: Sendable {
     }
 
     private func drainHoldingTheLock() async -> Int {
-        guard let pending = try? await queue.pending(), !pending.isEmpty else { return 0 }
         var sent = 0
         // Rows refused with a 404 or a 403, held until this drain knows who
         // refused them. See `settle(_:sent:askingTheServer:)`.
@@ -421,85 +422,104 @@ public struct MutationDrain: Sendable {
         // Whether the loop reached the end of its rows, rather than stopping
         // at a broken connection, a 401 or someone waiting for the lock.
         var reachedTheEnd = true
+        // Every row this drain has had a go at, so a pass over the queue read
+        // again sends only what arrived since. Ids only grow (the column is
+        // AUTOINCREMENT), and a collapse is a DELETE and an INSERT, so a write
+        // that replaced one in flight is a new id here.
+        var tried: Set<Int64> = []
 
-        for item in pending {
-            // Before every row, not once: a pause taken mid-drain waits for
-            // the request in flight, not for everything behind it, and a
-            // queue retired mid-drain sends nothing more.
-            guard await !queue.shouldYield else {
-                reachedTheEnd = false
-                break
-            }
-            do {
-                try await send(item)
-                try? await queue.remove(item.id)
-                sent += 1
-            } catch StorytellerError.positionConflict {
-                // The server has something newer. Ours is obsolete, not failed.
-                //
-                // Logged, because this and the refusals below are where a
-                // write is thrown away on the server's word, and they were the
-                // only ones that said nothing — so a server that refused every
-                // position looked exactly like a client that never sent one.
-                IssaLog.info("mutation superseded by server", [
-                    "kind": String(describing: item.kind), "book": item.bookUUID,
-                ])
-                try? await queue.remove(item.id)
-            } catch StorytellerError.notAuthenticated {
-                // Not this item's problem — the whole session is bad, and every
-                // later item would fail identically. Keeping it queued, rather
-                // than falling into the `!isRetryable` branch below and
-                // discarding it, means a write that would have succeeded once
-                // signed in again is not lost. Stopping the loop is what keeps
-                // an expired token from silently emptying the entire backlog in
-                // one pass — the removal below has no `break`, so before this
-                // case existed the first 401 deleted everything behind it too.
-                reachedTheEnd = false
-                break
-            } catch let error as StorytellerError where error == .notFound || error == .forbidden {
-                // Most likely about this item — the book was deleted
-                // server-side, or a permission was revoked for it — so the
-                // rest of the queue still deserves its turn. But only most
-                // likely: `APIClient` maps a 404 or a 403 from *whatever*
-                // answered, and a reverse proxy whose Storyteller is down, or
-                // a path prefix that has changed, answers every route that
-                // way. Deleted on the spot, one drain emptied the whole
-                // offline backlog against it. Held until the drain is done.
-                refused.append((item, error))
-            } catch let error as StorytellerError where !error.isRetryable {
-                // A refusal that will not change on retry and that no front
-                // door produces for every route — a payload the server would
-                // not take. Genuinely per-item, so the rest still goes.
-                //
-                // A discarded write is worth a line even when discarding is
-                // correct: this is where a rejected locator shape would go, and
-                // without it the position simply stops moving for no stated
-                // reason.
-                IssaLog.failure("sync mutation discarded", error, [
-                    "kind": String(describing: item.kind), "book": item.bookUUID,
-                ])
-                try? await queue.remove(item.id)
-            } catch {
-                IssaLog.failure("sync mutation", error, ["kind": String(describing: item.kind)])
-                // Anything else is worth another go later — but only a failure
-                // that could implicate the write itself counts toward giving
-                // up on it. Every offline drain used to count, and eight of
-                // them — well under a minute of reading without signal, since
-                // each debounced save triggers one — quietly deleted the head
-                // of the queue. A proxy's 502s were the same eight drains with
-                // a status code on them; they do not count either.
-                if countsTowardAbandonment(error),
-                   (try? await queue.recordFailure(item.id)) == true {
-                    // The one place a write is thrown away on this client's
-                    // own judgement, and until this line it said nothing.
-                    IssaLog.failure("sync mutation abandoned", error, [
+        // Pass after pass, until one finds nothing new. The rows are read once
+        // per pass, not once per drain: a drain declined while this one runs
+        // (`beginDraining()`) is relying on this one to send its row, and with
+        // a single read a rating tapped 4 then 5 inside one round trip left the
+        // server at 4 and the screen at 5 until some unrelated drain came by.
+        // Each further pass needs a row enqueued during the last one, so this
+        // ends as soon as the reader stops writing for one round trip.
+        while reachedTheEnd {
+            guard let pending = try? await queue.pending() else { break }
+            let fresh = pending.filter { !tried.contains($0.id) }
+            if fresh.isEmpty { break }
+
+            for item in fresh {
+                // Before every row, not once: a pause taken mid-drain waits for
+                // the request in flight, not for everything behind it, and a
+                // queue retired mid-drain sends nothing more.
+                guard await !queue.shouldYield else {
+                    reachedTheEnd = false
+                    break
+                }
+                tried.insert(item.id)
+                do {
+                    try await send(item)
+                    try? await queue.remove(item.id)
+                    sent += 1
+                } catch StorytellerError.positionConflict {
+                    // The server has something newer. Ours is obsolete, not failed.
+                    //
+                    // Logged, because this and the refusals below are where a
+                    // write is thrown away on the server's word, and they were the
+                    // only ones that said nothing — so a server that refused every
+                    // position looked exactly like a client that never sent one.
+                    IssaLog.info("mutation superseded by server", [
                         "kind": String(describing: item.kind), "book": item.bookUUID,
                     ])
+                    try? await queue.remove(item.id)
+                } catch StorytellerError.notAuthenticated {
+                    // Not this item's problem — the whole session is bad, and every
+                    // later item would fail identically. Keeping it queued, rather
+                    // than falling into the `!isRetryable` branch below and
+                    // discarding it, means a write that would have succeeded once
+                    // signed in again is not lost. Stopping the loop is what keeps
+                    // an expired token from silently emptying the entire backlog in
+                    // one pass — the removal below has no `break`, so before this
+                    // case existed the first 401 deleted everything behind it too.
+                    reachedTheEnd = false
+                    break
+                } catch let error as StorytellerError where error == .notFound || error == .forbidden {
+                    // Most likely about this item — the book was deleted
+                    // server-side, or a permission was revoked for it — so the
+                    // rest of the queue still deserves its turn. But only most
+                    // likely: `APIClient` maps a 404 or a 403 from *whatever*
+                    // answered, and a reverse proxy whose Storyteller is down, or
+                    // a path prefix that has changed, answers every route that
+                    // way. Deleted on the spot, one drain emptied the whole
+                    // offline backlog against it. Held until the drain is done.
+                    refused.append((item, error))
+                } catch let error as StorytellerError where !error.isRetryable {
+                    // A refusal that will not change on retry and that no front
+                    // door produces for every route — a payload the server would
+                    // not take. Genuinely per-item, so the rest still goes.
+                    //
+                    // A discarded write is worth a line even when discarding is
+                    // correct: this is where a rejected locator shape would go, and
+                    // without it the position simply stops moving for no stated
+                    // reason.
+                    IssaLog.failure("sync mutation discarded", error, [
+                        "kind": String(describing: item.kind), "book": item.bookUUID,
+                    ])
+                    try? await queue.remove(item.id)
+                } catch {
+                    IssaLog.failure("sync mutation", error, ["kind": String(describing: item.kind)])
+                    // Anything else is worth another go later — but only a failure
+                    // that could implicate the write itself counts toward giving
+                    // up on it. Every offline drain used to count, and eight of
+                    // them — well under a minute of reading without signal, since
+                    // each debounced save triggers one — quietly deleted the head
+                    // of the queue. A proxy's 502s were the same eight drains with
+                    // a status code on them; they do not count either.
+                    if countsTowardAbandonment(error),
+                       (try? await queue.recordFailure(item.id)) == true {
+                        // The one place a write is thrown away on this client's
+                        // own judgement, and until this line it said nothing.
+                        IssaLog.failure("sync mutation abandoned", error, [
+                            "kind": String(describing: item.kind), "book": item.bookUUID,
+                        ])
+                    }
+                    // Stop on the first genuine failure: the connection is probably
+                    // gone, and hammering the rest achieves nothing.
+                    reachedTheEnd = false
+                    break
                 }
-                // Stop on the first genuine failure: the connection is probably
-                // gone, and hammering the rest achieves nothing.
-                reachedTheEnd = false
-                break
             }
         }
         if !refused.isEmpty {
