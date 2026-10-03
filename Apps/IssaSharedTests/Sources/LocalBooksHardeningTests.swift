@@ -227,6 +227,20 @@ struct LocalBooksHardeningTests {
         #expect(LocalBooksKeyboard.removalTarget(focused: books[0].uuid) == books[0].uuid)
     }
 
+    // MARK: - R-19: a description written as markup
+
+    @Test("a description Calibre wrote as markup reads as text in Book info")
+    func descriptionMarkupIsRendered() throws {
+        let about = try #require(LocalBookInfoView.aboutText(
+            "<div><p>A tale of salt &amp; ash.</p><p>Second <i>part</i>.</p></div>"))
+        #expect(!about.contains("<"), "tags on screen: \(about)")
+        #expect(!about.contains("&amp;"))
+        #expect(about.contains("A tale of salt & ash."))
+        #expect(about.contains("Second part."))
+        #expect(LocalBookInfoView.aboutText("<p> </p>") == nil)
+        #expect(LocalBookInfoView.aboutText(nil) == nil)
+    }
+
     // MARK: - A book from another volume
 
     /// What a USB drive or a network share gets: not a clone, a chunked copy.

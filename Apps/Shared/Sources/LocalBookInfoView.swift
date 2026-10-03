@@ -32,7 +32,7 @@ struct LocalBookInfoView: View {
                     hero
                     if isMissing { missingCard } else { primary }
                     details
-                    if !isMissing, let description = current.description, !description.isEmpty {
+                    if !isMissing, let description = Self.aboutText(current.description) {
                         VStack(alignment: .leading, spacing: Metrics.spacing8) {
                             Text("About this book").overlineStyle()
                             Text(description)
@@ -70,6 +70,19 @@ struct LocalBookInfoView: View {
         #endif
         .presentationBackground(Palette.paper)
         .accessibilityIdentifier("screen.localBookInfo")
+    }
+
+    /// "About this book": the package's `dc:description` as text.
+    ///
+    /// Calibre and most tools write it as escaped HTML, which the XML parser
+    /// hands back as literal tags and entities, so it showed `<div><p>…` on
+    /// screen (R-19), the bug the server book screen fixed by rendering
+    /// through `HTMLText`. Plain rather than attributed, to keep this
+    /// sheet's serif.
+    static func aboutText(_ description: String?) -> String? {
+        guard let description, !description.isEmpty else { return nil }
+        let text = HTMLText.plain(description).trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? nil : text
     }
 
     private var hero: some View {
