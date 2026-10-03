@@ -114,14 +114,17 @@ struct LocalBookImporter: Sendable {
         var keepCopy = false
         defer { if !keepCopy { try? FileManager.default.removeItem(at: copy) } }
 
-        try await coordinatedCopy(
+        let hashed = try await coordinatedCopy(
             from: source, to: copy, expected: size, wasDownloaded: !notDownloaded, stage: stage)
         if Task.isCancelled { throw .copyFailed }
 
         stage(.checking)
         let byteCount = (try? copy.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? size
         if byteCount > maximumSize { throw .tooLarge(bytes: byteCount) }
-        guard let fingerprint = try? Self.sha256(of: copy, chunkSize: chunkSize) else { throw .copyFailed }
+        // The chunked copy hashed every byte as it wrote it; only a clone,
+        // which read nothing, is read again for its fingerprint.
+        guard let fingerprint = hashed ?? (try? Self.sha256(of: copy, chunkSize: chunkSize))
+        else { throw .copyFailed }
         if Task.isCancelled { throw .copyFailed }
 
         let inspection: EPUBInspection
@@ -185,10 +188,13 @@ struct LocalBookImporter: Sendable {
     /// at its next chunk. Same volume: `copyItem`, which APFS makes a clone —
     /// instant, and no extra space while the original exists. Otherwise a
     /// chunked copy that says how far it has got.
+    ///
+    /// - Returns: the copy's SHA-256 when the chunked copy made it, which
+    ///   hashes as it goes; nil for a clone.
     private func coordinatedCopy(
         from source: URL, to destination: URL, expected: Int64, wasDownloaded: Bool,
         stage: @escaping @Sendable (LocalImport.Stage) -> Void,
-    ) async throws(LocalImportError) {
+    ) async throws(LocalImportError) -> String? {
         // Boxed: `NSFileCoordinator` is not `Sendable`, and is used from two
         // places — the queue that reads, and the cancellation handler, whose
         // `cancel()` Foundation documents as safe from any thread.
@@ -197,11 +203,11 @@ struct LocalBookImporter: Sendable {
         let chunkSize = chunkSize
         let afterChunk = afterChunk
         let cloneable = allowsClone && Self.sameVolume(source, destination.deletingLastPathComponent())
-        let outcome: Result<Void, LocalImportError> = await withTaskCancellationHandler {
+        let outcome: Result<String?, LocalImportError> = await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
                 DispatchQueue.global(qos: .userInitiated).async {
                     var coordinationError: NSError?
-                    var result: Result<Void, LocalImportError> = .failure(.copyFailed)
+                    var result: Result<String?, LocalImportError> = .failure(.copyFailed)
                     // `.withoutChanges`: the file as it is, without asking its
                     // writer to save first, which a book in Files never needs.
                     // Synchronous: the accessor has run by the time this returns.
@@ -225,24 +231,35 @@ struct LocalBookImporter: Sendable {
             cancelled.set()
             coordinator.value.cancel()
         }
-        if case let .failure(error) = outcome {
+        switch outcome {
+        case let .success(hash):
+            return hash
+        case let .failure(error):
             try? FileManager.default.removeItem(at: destination)
             throw error
         }
     }
 
     /// The copy itself, inside the coordinator's accessor.
+    ///
+    /// Progress is told only when the whole percent the row shows moves:
+    /// each report is a hop to the main actor that rewrites the list, and a
+    /// 4 GB book copied a megabyte at a time made four thousand of them for
+    /// a hundred visible changes. The bytes are hashed as they are written,
+    /// so the fingerprint costs no second read of the copy.
+    ///
+    /// - Returns: the copy's SHA-256, or nil for a clone.
     private static func copy(
         _ source: URL, to destination: URL, expected: Int64, cloneable: Bool,
         chunkSize: Int, afterChunk: @Sendable () -> Void, isCancelled: () -> Bool,
         stage: @Sendable (LocalImport.Stage) -> Void,
-    ) -> Result<Void, LocalImportError> {
+    ) -> Result<String?, LocalImportError> {
         try? FileManager.default.removeItem(at: destination)
         if cloneable {
             do {
                 try FileManager.default.copyItem(at: source, to: destination)
                 stage(.copying(1))
-                return .success(())
+                return .success(nil)
             } catch {
                 // Fall through to the chunked copy, which reports the reason
                 // if this was more than a clone refused.
@@ -259,16 +276,30 @@ struct LocalBookImporter: Sendable {
         defer { try? output.close() }
         var written: Int64 = 0
         let total = max(expected, 1)
+        var hasher = SHA256()
+        // `.copying(0)` was told as the accessor began.
+        var reportedPercent = 0
         while true {
             if isCancelled() { return .failure(.copyFailed) }
-            guard let chunk = try? input.read(upToCount: chunkSize) else { return .failure(.copyFailed) }
+            // `read(upToCount:)` answers nil at the end of the file, not an
+            // empty chunk: taken for a failure, it made every copy that was
+            // not a clone — a book from a USB drive or a network share —
+            // end in "Couldn't copy this book".
+            let chunk: Data
+            do { chunk = try input.read(upToCount: chunkSize) ?? Data() } catch { return .failure(.copyFailed) }
             if chunk.isEmpty { break }
             do { try output.write(contentsOf: chunk) } catch { return .failure(.copyFailed) }
+            hasher.update(data: chunk)
             written += Int64(chunk.count)
-            stage(.copying(min(Double(written) / Double(total), 1)))
+            let fraction = min(Double(written) / Double(total), 1)
+            let percent = Int((fraction * 100).rounded(.down))
+            if percent > reportedPercent {
+                reportedPercent = percent
+                stage(.copying(fraction))
+            }
             afterChunk()
         }
-        return .success(())
+        return .success(Self.hex(hasher.finalize()))
     }
 
     // MARK: - Fingerprint and cover
@@ -281,7 +312,11 @@ struct LocalBookImporter: Sendable {
         while let chunk = try handle.read(upToCount: chunkSize), !chunk.isEmpty {
             hasher.update(data: chunk)
         }
-        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+        return hex(hasher.finalize())
+    }
+
+    static func hex(_ digest: SHA256.Digest) -> String {
+        digest.map { String(format: "%02x", $0) }.joined()
     }
 
     /// Cuts the cover out of the book as a JPEG of at most `coverPixels`.
