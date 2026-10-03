@@ -30,6 +30,9 @@ struct ChunkDurationsTests {
             "OEBPS/Audio/track2.mp3": 9.87,
         ]
 
+        // The extraction makes the folder; the cache only ever writes into it.
+        try FileManager.default.createDirectory(
+            at: AudioExtraction.defaultDirectory(for: "book", in: root), withIntermediateDirectories: true)
         try ChunkDurations.save(measured, bookID: "book", in: root)
         #expect(ChunkDurations.load(bookID: "book", in: root) == measured)
 

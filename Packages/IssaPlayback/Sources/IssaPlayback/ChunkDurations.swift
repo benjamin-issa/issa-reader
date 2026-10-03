@@ -44,8 +44,9 @@ public enum ChunkDurations {
     }
 
     /// The same, for an extraction directory named outright rather than by
-    /// book — `ReadaloudSource.load`'s `into:`.
-    static func load(fromDirectory directory: URL) -> [String: TimeInterval] {
+    /// book — `ReadaloudSource.load`'s `into:`, and a local book's
+    /// `LocalBookFiles.narration`.
+    public static func load(fromDirectory directory: URL) -> [String: TimeInterval] {
         decode(directory.appending(path: filename))
     }
 
@@ -59,12 +60,34 @@ public enum ChunkDurations {
     public static func save(
         _ durations: [String: TimeInterval], bookID: String, in root: URL? = nil,
     ) throws {
-        let url = cacheURL(bookID: bookID, in: root)
-        try FileManager.default.createDirectory(
-            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        // Atomically, because this is read on the next launch by a path that
-        // cannot tell a half-written file from a short book.
-        try JSONEncoder().encode(durations).write(to: url, options: .atomic)
+        try save(durations, toDirectory: AudioExtraction.defaultDirectory(for: bookID, in: root))
+    }
+
+    /// Writes the cache into the folder the narration was extracted to — and
+    /// only into one that is still there.
+    ///
+    /// The folder is never made here. It is the extraction's, and the cache
+    /// only describes what is in it: a read-along removed while its first
+    /// listen was still measuring had this re-create the folder its removal
+    /// had just deleted, and the next extraction of that book then trusted
+    /// lengths left over from a different edition. Refused as well from a task
+    /// that has been cancelled — the measurement that produced these numbers
+    /// was stopped part-way, by a removal or the listen ending — and under the
+    /// extraction's lock, so a removal is never in the middle of it.
+    public static func save(
+        _ durations: [String: TimeInterval], toDirectory directory: URL,
+    ) throws {
+        guard !Task.isCancelled else { throw CancellationError() }
+        let data = try JSONEncoder().encode(durations)
+        try AudioExtraction.locks.lock(for: directory).withLock {
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: directory.path, isDirectory: &isDirectory),
+                  isDirectory.boolValue
+            else { throw CocoaError(.fileNoSuchFile, userInfo: [NSFilePathErrorKey: directory.path]) }
+            // Atomically, because this is read on the next launch by a path
+            // that cannot tell a half-written file from a short book.
+            try data.write(to: directory.appending(path: filename), options: .atomic)
+        }
     }
 
     /// Measures whatever is not already known, and returns the merged answer.
