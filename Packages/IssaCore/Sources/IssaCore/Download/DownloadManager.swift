@@ -116,6 +116,11 @@ public final class DownloadManager: NSObject {
     /// the delegate had to ignore every cancellation, which left a killed
     /// download showing "downloading" forever with every button dead.
     private var pausing: Set<Job> = []
+    /// How many pauses' own callbacks — the resume data a paused task hands
+    /// back — have reached the main actor, fenced or not. Internal, for the
+    /// tests that have to know a callback has come and gone before they can
+    /// say what it left behind.
+    private(set) var pauseCallbacksDelivered = 0
     /// Set when the session has been torn down, so late delegate callbacks from
     /// a superseded session cannot write state the app is no longer showing.
     ///
@@ -309,6 +314,9 @@ public final class DownloadManager: NSObject {
     /// from "it was, and is running unobserved".
     func hasTask(for job: Job) -> Bool { tasks[job] != nil }
 
+    /// Whether resume data is held for this job. Internal, for tests.
+    func hasResumeData(for job: Job) -> Bool { resumeData[job] != nil }
+
     /// The request a live task was built with. Internal, for the test that
     /// reconfigures a manager and needs to see which server it now asks.
     func request(for job: Job) -> URLRequest? { tasks[job]?.originalRequest }
@@ -405,9 +413,17 @@ public final class DownloadManager: NSObject {
         }
         pausing.insert(job)
         let fraction = states[job]?.fraction ?? 0
+        // The callback below arrives whenever the daemon gets to it. A cancel
+        // (or a sign-out's stop) in the meantime advances this stamp, and what
+        // the callback would write — `.paused` and the resume data — is then
+        // for a download the reader has already thrown away: written anyway,
+        // a cancelled row came back as "Paused", offering to resume it.
+        let stamp = currentStamp(for: job)
         task.cancel { [weak self] data in
             Task { @MainActor in
                 guard let self else { return }
+                self.pauseCallbacksDelivered += 1
+                guard self.currentStamp(for: job) == stamp else { return }
                 if let data { self.resumeData[job] = data }
                 self.states[job] = .paused(fractionCompleted: fraction)
                 self.tasks[job] = nil
@@ -433,13 +449,15 @@ public final class DownloadManager: NSObject {
             $0.armed = true
         }
         keepFence()
+        // No pause marker, and none left by a pause this cancel overtakes.
+        // The epoch advanced above fences out the task's own cancellation, so
+        // nothing would ever consume one — and a marker left behind made the
+        // next download of the same job take a cancellation it did not ask
+        // for, the system reclaiming the transfer, for a pause: its row froze
+        // at "downloading" with no task ever coming to finish it. A pause's
+        // own resume-data callback is fenced by the same epoch (see `pause`).
+        pausing.remove(job)
         if let task = tasks[job] {
-            // No pause marker. The epoch advanced above fences out this
-            // task's own cancellation, so nothing would ever consume one —
-            // and a marker left behind made the next download of the same job
-            // take a cancellation it did not ask for, the system reclaiming
-            // the transfer, for a pause: its row froze at "downloading" with
-            // no task ever coming to finish it.
             task.cancel()
             tasks[job] = nil
         } else {

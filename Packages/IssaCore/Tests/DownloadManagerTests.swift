@@ -854,4 +854,65 @@ struct DownloadFenceTests {
         #expect(!subject.hasTask(for: job))
         await subject.shutDown()
     }
+
+    /// R-56. Pause, then the X beside it before the daemon hands the paused
+    /// task's resume data back. The cancel cleared the row; the pause's own
+    /// callback, arriving after, wrote `.paused` and the resume data straight
+    /// back, so the row the reader had just cancelled returned as "Paused",
+    /// offering to resume it.
+    @Test("a pause's late callback does not bring back a download cancelled after it")
+    func aCancelAfterAPauseStaysCancelled() async {
+        let subject = manager(books: temporary())
+        let job = DownloadManager.Job(bookUUID: "b", format: .ebook)
+        await subject.start(job)
+        #expect(subject.hasTask(for: job), "the pause has to find a live task")
+
+        subject.pause(job)
+        subject.cancel(job)
+        #expect(subject.state(for: job) == nil)
+
+        // The real task's cancellation callback, whenever the daemon sends it.
+        await settle { subject.pauseCallbacksDelivered > 0 }
+        #expect(subject.pauseCallbacksDelivered == 1, "the pause's callback never came")
+
+        #expect(subject.state(for: job) == nil, "the cancelled download came back as \(String(describing: subject.state(for: job)))")
+        #expect(!subject.hasResumeData(for: job))
+        await subject.shutDown()
+    }
+
+    /// R-57. The same pause-then-cancel left the pause's marker behind: the
+    /// cancel advanced the epoch, which fences out the paused task's own
+    /// cancellation — the only thing that consumed the marker. The next
+    /// download of the job then took the system's cancellation of its transfer
+    /// for that pause, and froze at "downloading" with no task behind it.
+    @Test("a download paused, cancelled and started again still reports an interruption it did not ask for")
+    func aRestartAfterPauseAndCancelStillReportsInterruption() async {
+        let subject = manager(books: temporary())
+        let job = DownloadManager.Job(bookUUID: "b", format: .ebook)
+        await subject.start(job)
+        #expect(subject.hasTask(for: job), "the pause has to find a live task")
+
+        subject.pause(job)
+        subject.cancel(job)
+        await settle { subject.pauseCallbacksDelivered > 0 }
+
+        await subject.start(job)
+        let restarted = URLSession.shared.downloadTask(with: unreachableServer.appending(path: "file"))
+        restarted.taskDescription = subject.liveTaskDescription(for: job)
+        subject.urlSession(
+            URLSession.shared, downloadTask: restarted,
+            didWriteData: 512, totalBytesWritten: 512, totalBytesExpectedToWrite: 1_024)
+        await settle { subject.state(for: job)?.fraction == 0.5 }
+        #expect(subject.state(for: job)?.fraction == 0.5, "the restarted transfer is under way")
+
+        // The system reclaims it: a cancellation nobody here asked for.
+        subject.urlSession(
+            URLSession.shared, task: restarted,
+            didCompleteWithError: NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled))
+        await settle { subject.state(for: job)?.isFailure == true }
+
+        #expect(subject.state(for: job)?.isFailure == true,
+                "swallowed as the old pause, the row stays at downloading with nothing behind it")
+        await subject.shutDown()
+    }
 }
