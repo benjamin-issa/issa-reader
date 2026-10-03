@@ -985,6 +985,9 @@ struct LocalImportRow: View {
     let item: LocalImport
     let reduceMotion: Bool
     let onCancel: () -> Void
+    #if os(macOS)
+    @FocusState private var isFocused: Bool
+    #endif
 
     var body: some View {
         HStack(spacing: Metrics.spacing12) {
@@ -1026,9 +1029,14 @@ struct LocalImportRow: View {
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("localImport.row")
         #if os(macOS)
-        // Esc stops the import row the keyboard is on (3d). Focusable for
-        // exactly that: Tab reaches it, and Esc then means this file.
-        .focusable(item.isUnfinished)
+        // Esc stops the import row the keyboard is on (3d; 5 Spec §9).
+        // Focusable for exactly that, and reachable: `.edit`, because a view
+        // that only activates joins the Tab loop only with Keyboard Navigation
+        // turned on, so by default Tab never left the list and no row could
+        // be given the keyboard (MAC-2). A click on the row gives it too.
+        .focusable(item.isUnfinished, interactions: .edit)
+        .focused($isFocused)
+        .onTapGesture { if item.isUnfinished { isFocused = true } }
         .onExitCommand { if item.isUnfinished { onCancel() } }
         #endif
     }
