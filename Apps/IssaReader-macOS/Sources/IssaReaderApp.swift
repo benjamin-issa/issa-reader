@@ -465,6 +465,13 @@ struct MacRootView: View {
         // to the front and did nothing else. `AppModel.open` is shared and
         // already parses `issareader://book/{uuid}`.
         .onOpenURL { app.open($0) }
+        // In this window, not a new one. Without a preference SwiftUI answers
+        // an external event by opening another window of the group the
+        // handler is in, so every `issareader://book/…` opened from Finder,
+        // a widget or `open` added a library window (F7). Preferring every
+        // event routes it to the library window already open; with none
+        // open the group still makes one.
+        .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
         // The other half of the Handoff the reader has always advertised. The
         // reader's `.userActivity` runs on macOS too, but nothing here ever
         // listened, so continuing a book from the phone landed on the shelf.
