@@ -886,7 +886,12 @@ public final class AppModel {
         // overtake; an empty set then purged every local book's style, level
         // and question index — the index store, told to keep nothing, deletes
         // its whole directory.
+        //
+        // And only once that list is in. The disk does not know every book:
+        // one whose folder a backup did not bring back is a row in the
+        // library's store and nothing else, until `load()` has read it.
         if exit != .serverSwitch {
+            await localBooksLoaded()
             let kept = localBookUUIDs()
                 .union(readers.values.filter(\.isLocal).map(\.book.uuid))
                 .union(localBookFolders())
@@ -2677,6 +2682,11 @@ public final class AppModel {
     /// the per-book state the rest of the app keeps for them — styles, volume
     /// trims, question indexes — is told to keep theirs. Empty until then.
     @ObservationIgnored var localBookUUIDs: () -> Set<String> = { [] }
+
+    /// Returns once the local library has read its store, which is when
+    /// `localBookUUIDs` names every one of those books. Handed over with it;
+    /// an account's exit waits for it before it says which books to keep.
+    @ObservationIgnored var localBooksLoaded: () async -> Void = {}
 
     /// The folder "Sign out and delete downloads" deletes from: `StorageRoot`.
     ///

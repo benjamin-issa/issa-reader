@@ -23,8 +23,15 @@ enum LocalBooksWiring {
             ask.remove(bookUUID: uuid)
             settings.forgetBook(uuid)
         }
+        let loading = Task { [local] in await local.load() }
+        // And the exit waits for it before it reads them. The list is filled
+        // by `load()`, after a store read of its own, and an exit early in a
+        // launch could overtake it: a book whose folder a backup did not bring
+        // back is known only to the store, so neither the list nor the disk
+        // named it, and its style, level and question index were purged.
+        app.localBooksLoaded = { await loading.value }
         Task { [local] in
-            await local.load()
+            await loading.value
             afterLoad(local)
         }
     }
