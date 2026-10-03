@@ -216,11 +216,6 @@ final class AskNotificationDelegate: NSObject, UNUserNotificationCenterDelegate 
     /// with `openWindow`, which focuses the window already open for that value.
     nonisolated static let bringReaderForward = Notification.Name("issa.ask.bringReaderForward")
 
-    /// "Open this book from the reader's files", with its uuid under
-    /// `AskNotifier.bookUUIDKey` — posted on the Mac only, for the list
-    /// window; everything else takes `LocalBookRequests`. See `route(_:)`.
-    nonisolated static let openLocalBook = Notification.Name("issa.ask.openLocalBook")
-
     /// Nothing on screen while the app is in front.
     ///
     /// The reader can already see the pill say "Answer ready"; a banner over the
@@ -303,15 +298,10 @@ final class AskNotificationDelegate: NSObject, UNUserNotificationCenterDelegate 
     /// stays until a window takes it, as `pendingBook` does for the server's.
     private func route(_ uuid: String) {
         if app.localBookUUIDs().contains(uuid) {
+            // And nothing else: every window that can open a local book takes
+            // the request, the Mac's list window included, so a broadcast as
+            // well is a second opening of the same book.
             localRequests.request(uuid)
-            #if os(macOS)
-            // Also said to the Mac's list window, which still listens for it
-            // (`LocalBooksScreen`) and is the one window that does not yet take
-            // the request. Opening a book's window by its uuid brings an open
-            // one forward, so the window that takes the request and this
-            // cannot open two.
-            centre.post(name: Self.openLocalBook, object: nil, userInfo: [AskNotifier.bookUUIDKey: uuid])
-            #endif
         } else {
             app.requestBook(uuid, .read)
         }

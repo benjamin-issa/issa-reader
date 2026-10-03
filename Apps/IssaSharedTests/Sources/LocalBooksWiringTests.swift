@@ -53,19 +53,22 @@ struct LocalBooksWiringTests {
             coordinator: coordinator, app: app, centre: centre, local: library, localRequests: requests), app, suite)
     }
 
-    /// Names posted on a centre, in order, with the book each named.
+    /// Everything posted on a centre, in order, with the book each named.
+    ///
+    /// Every name, not a list of the ones expected: a broadcast added under a
+    /// new name — the Mac's list window had one of its own — would otherwise
+    /// go unseen. The centre is the test's own, so nothing else posts here.
     @MainActor
     private final class Posts {
         private(set) var seen: [(Notification.Name, String?)] = []
         private var tokens: [any NSObjectProtocol] = []
 
         init(_ centre: NotificationCenter) {
-            for name in [AskNotificationDelegate.bringReaderForward] {
-                tokens.append(centre.addObserver(forName: name, object: nil, queue: nil) { [weak self] note in
-                    let book = note.userInfo?[AskNotifier.bookUUIDKey] as? String
-                    MainActor.assumeIsolated { self?.seen.append((name, book)) }
-                })
-            }
+            tokens.append(centre.addObserver(forName: nil, object: nil, queue: nil) { [weak self] note in
+                let name = note.name
+                let book = note.userInfo?[AskNotifier.bookUUIDKey] as? String
+                MainActor.assumeIsolated { self?.seen.append((name, book)) }
+            })
         }
 
         func stop(_ centre: NotificationCenter) { tokens.forEach(centre.removeObserver) }
@@ -86,7 +89,10 @@ struct LocalBooksWiringTests {
         delegate.open(bookUUID: Self.uuid)
 
         #expect(app.pendingBook == nil, "a local book was asked of the server's library")
-        #expect(posts.seen.isEmpty)
+        // Said to no window at all, under any name. The Mac's list window
+        // used to hear a broadcast of its own beside the request, and so
+        // opened the book a second time beside whichever window took it.
+        #expect(posts.seen.isEmpty, "the tap was also broadcast: \(posts.seen.map(\.0.rawValue))")
         #expect(requests.take() == Self.uuid)
         #expect(requests.take() == nil, "a second window took the same tap")
     }
