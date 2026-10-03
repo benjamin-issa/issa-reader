@@ -308,13 +308,15 @@ public enum HTMLText {
             }
             return value.flatMap(Unicode.Scalar.init).map(Character.init)
         }
-        return named[name.lowercased()]
+        // All of HTML's names, the table the chapters decode with, and
+        // case-sensitive as HTML is: a table of nineteen looked up in lower
+        // case left `&ntilde;` raw and made `&Eacute;mile` "émile".
+        if let character = HTMLEntities.character(named: name) { return character }
+        // `&AMP;` and `&QUOT;` are how some feeds write XML's five, and they
+        // always decoded here.
+        let lower = name.lowercased()
+        return Self.caseInsensitive.contains(lower) ? HTMLEntities.character(named: lower) : nil
     }
 
-    private static let named: [String: Character] = [
-        "amp": "&", "lt": "<", "gt": ">", "quot": "\"", "apos": "'",
-        "nbsp": "\u{00A0}", "mdash": "—", "ndash": "–", "hellip": "…",
-        "lsquo": "‘", "rsquo": "’", "ldquo": "“", "rdquo": "”",
-        "copy": "©", "reg": "®", "trade": "™", "deg": "°", "eacute": "é",
-    ]
+    private static let caseInsensitive: Set<String> = ["amp", "lt", "gt", "quot", "apos"]
 }

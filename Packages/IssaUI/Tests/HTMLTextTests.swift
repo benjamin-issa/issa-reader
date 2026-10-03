@@ -36,6 +36,19 @@ struct HTMLTextTests {
         #expect(plain("Tom & Jerry & Co;") == "Tom & Jerry & Co;")
     }
 
+    /// R-60. Descriptions went through a table of nineteen names looked up in
+    /// lower case, where the chapters go through all of HTML's: `&ntilde;`
+    /// and `&uuml;` stayed raw on the book page and in Spotlight, and
+    /// `&Eacute;mile` came out "émile".
+    @Test("every HTML named entity decodes, capitals kept")
+    func everyNamedEntity() {
+        #expect(plain("<p>&Eacute;mile Pe&ntilde;a&rsquo;s m&uuml;sic</p>") == "Émile Peña’s müsic")
+        #expect(plain("gar&ccedil;on &aacute; &szlig; &euro; &asymp; &there4; &Omega;&omega;")
+            == "garçon á ß € ≈ ∴ Ωω")
+        // XML's own five still decode, as they always did.
+        #expect(plain("&lt;&amp;&gt; &quot;a&apos;") == "<&> \"a'")
+    }
+
     @Test("paragraphs become breaks and <br> a single newline")
     func breaks() {
         #expect(plain("<p>One</p><p>Two</p>") == "One\n\nTwo")
