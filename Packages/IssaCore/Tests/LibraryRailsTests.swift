@@ -257,7 +257,9 @@ struct RepeatedNamesTests {
 
         #expect(facets.tagCounts == [LibraryFacets.TagCount(name: "Gothic", count: 2)])
         #expect(LibraryArrangement(tags: ["Gothic"]).apply(to: books).count == 2)
-        #expect(LibraryDerivation(books: books).tagCounts.map(\.count) == [2])
+        // And as the tag's own page lists them (`booksByTag` is the
+        // derivation's `byTag`): one grouping behind the chip and the page.
+        #expect(LibraryDerivation(books: books).byTag["Gothic"]?.count == 2)
     }
 }
 

@@ -287,23 +287,6 @@ public struct LibraryDerivation: Sendable {
         return groups
     }
 
-    /// Tag counts, for the filter UI a 3.x server would serve from /library/facets.
-    ///
-    /// Books per tag, each once, as the tag filter counts them.
-    ///
-    /// Written out rather than chained: the inferred tuple type made this one of
-    /// the slowest expressions in the package to type-check.
-    public var tagCounts: [(name: String, count: Int)] {
-        var counts: [String: Int] = [:]
-        for (name, tagged) in byTag {
-            counts[name] = tagged.count
-        }
-        let pairs: [(name: String, count: Int)] = counts.map { (name: $0.key, count: $0.value) }
-        return pairs.sorted { left, right in
-            left.count == right.count ? left.name < right.name : left.count > right.count
-        }
-    }
-
     /// Case- and diacritic-insensitive match across title, authors and narrators.
     /// Replaced by an FTS5 query once the local store lands; this keeps the
     /// behaviour identical in the meantime.
