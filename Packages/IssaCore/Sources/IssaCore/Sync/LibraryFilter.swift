@@ -172,7 +172,10 @@ public extension LibraryArrangement {
         return sorted(filtered)
     }
 
-    enum Stage: Sendable { case toRead, reading, finished }
+    /// The three reading stages: the library's shelves, and the sections of
+    /// the tag and "More by" pages (`StagedBooks`), which are the same stages
+    /// rather than a copy of them.
+    public enum Stage: Sendable { case toRead, reading, finished }
 
     /// Which of the three reading stages a book is in.
     ///

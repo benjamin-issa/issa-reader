@@ -23,9 +23,12 @@ public extension LibraryRails {
 /// Built from whatever books it is given, live, every time: nothing here is a
 /// copy that can go stale when a status or a position changes.
 public struct StagedBooks: Equatable, Sendable {
-    public enum Stage: Sendable, CaseIterable {
-        case reading, toRead, finished
-    }
+    /// The library's own stages, not a copy: a book is in the same section
+    /// here as on the shelves because it is the same function that files it.
+    public typealias Stage = LibraryArrangement.Stage
+
+    /// In-progress first, then unread, then finished.
+    static let order: [Stage] = [.reading, .toRead, .finished]
 
     public struct Section: Equatable, Sendable, Identifiable {
         public let stage: Stage
@@ -66,9 +69,9 @@ public struct StagedBooks: Equatable, Sendable {
 
         var byStage: [Stage: [Book]] = [:]
         for book in unique {
-            byStage[Self.stage(of: book), default: []].append(book)
+            byStage[LibraryArrangement.stage(of: book), default: []].append(book)
         }
-        sections = Stage.allCases.compactMap { stage in
+        sections = Self.order.compactMap { stage in
             guard let books = byStage[stage], !books.isEmpty else { return nil }
             return Section(
                 stage: stage, title: Self.title(of: stage, statuses: statuses, books: books),
@@ -76,10 +79,9 @@ public struct StagedBooks: Equatable, Sendable {
         }
         count = unique.count
         inProgress = byStage[.reading]?.count ?? 0
-        withNarration = unique.filter {
-            let formats = $0.servableFormats
-            return formats.contains(.readaloud) || formats.contains(.audiobook)
-        }.count
+        // The predicate the With narration shelf and its chip use, so the
+        // header can never count audio differently from them.
+        withNarration = unique.filter(\.hasServableAudio).count
     }
 
     /// "24 books · 3 in progress · 7 with narration". A clause is dropped when
@@ -104,14 +106,6 @@ public struct StagedBooks: Equatable, Sendable {
 
     static func count(_ n: Int) -> String { n == 1 ? "1 book" : "\(n) books" }
 
-    static func stage(of book: Book) -> Stage {
-        switch LibraryArrangement.stage(of: book) {
-        case .reading: .reading
-        case .toRead: .toRead
-        case .finished: .finished
-        }
-    }
-
     /// The status the server calls this stage, by its built-in name first —
     /// 3.x keeps those fixed and puts any rewording in the label — then any
     /// status that files under the stage. Before the server's list has loaded,
@@ -125,18 +119,10 @@ public struct StagedBooks: Equatable, Sendable {
         }
         let carried = books.compactMap(\.status)
         let status = statuses.first { $0.name == builtIn }
-            ?? statuses.first { Self.stage(ofStatusNamed: $0.name) == stage }
+            ?? statuses.first { LibraryArrangement.stage(ofStatusNamed: $0.name) == stage }
             ?? carried.first { $0.name == builtIn }
-            ?? carried.first { Self.stage(ofStatusNamed: $0.name) == stage }
+            ?? carried.first { LibraryArrangement.stage(ofStatusNamed: $0.name) == stage }
         return status?.displayName ?? builtIn
-    }
-
-    private static func stage(ofStatusNamed name: String) -> Stage {
-        switch LibraryArrangement.stage(ofStatusNamed: name) {
-        case .reading: .reading
-        case .toRead: .toRead
-        case .finished: .finished
-        }
     }
 
     /// Reading by recency — the one to resume is the one last opened — and

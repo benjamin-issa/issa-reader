@@ -105,6 +105,29 @@ struct StagedBooksTests {
         #expect(quiet.summary == "2 books")
     }
 
+    /// R-79. The page header's "N with narration" and its sections are the
+    /// library's own predicate and stages, not copies of them, so the header
+    /// cannot count audio differently from the With narration chip, nor file
+    /// a book in a different section from its shelf.
+    @Test("the header counts narration, and files books, exactly as the library's shelves do")
+    func sameRulesAsTheShelves() {
+        let books = [
+            book("A", status: "Reading", progress: 0.1, readaloud: true),
+            book("B", status: "To read", audiobook: true),
+            book("C", progress: 0.99),
+            book("D"),
+        ]
+        let staged = StagedBooks(books: books, statuses: [])
+        let facets = LibraryFacets(books: books, downloadedUUIDs: [])
+
+        #expect(staged.withNarration == facets.count(.withNarration))
+        for section in staged.sections {
+            for book in section.books {
+                #expect(LibraryArrangement.stage(of: book) == section.stage, "\(book.title)")
+            }
+        }
+    }
+
     @Test("one book is only '1 book', with no overline and no Show in Library")
     func oneBook() {
         let one = StagedBooks(books: [book("A", status: "Reading", progress: 0.4, readaloud: true)], statuses: [])
