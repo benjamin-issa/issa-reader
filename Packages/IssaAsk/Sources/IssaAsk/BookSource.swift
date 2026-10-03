@@ -94,7 +94,15 @@ public struct IndexKey: Sendable, Hashable, Codable {
     /// per paragraph, which is every passage offset in every index built
     /// before it — and an offset a character out is a spoiler boundary a
     /// sentence out. Rebuilt the same lazy way as 2, 3 and 4.
-    public static let currentParserVersion = 5
+    ///
+    /// 6 since 1.4.0's chapter parse substitutes every HTML 4.01 entity name
+    /// rather than 1.3.0's two hundred, and parses navigation documents through
+    /// the same table. A chapter using one of the new names rendered k
+    /// characters shorter under 1.3.0 — or failed to parse at all — so a 1.3.0
+    /// index's offsets run up to k ahead of the reader's page, and the spoiler
+    /// boundary with them; a contents page that failed to parse left its front
+    /// matter indexed. Rebuilt the same lazy way as 2 to 5.
+    public static let currentParserVersion = 6
     /// 2 since the `name` table grew `nameKey`: an index built before it pools
     /// two spellings of one character as two people.
     public static let currentSchemaVersion = 2

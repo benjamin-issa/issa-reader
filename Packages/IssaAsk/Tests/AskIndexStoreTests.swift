@@ -399,6 +399,34 @@ struct AskIndexStoreTests {
         #expect(older != key)
     }
 
+    /// 1.3.0 stamped its indexes with parser version 5. 1.4.0 renders text the
+    /// 1.3.0 parse did not — 48 more HTML entity names substituted, navigation
+    /// documents parsed through the same table — so a 1.3.0 index's offsets can
+    /// run ahead of the reader's, and the spoiler boundary with them. An index
+    /// with that stamp has to be rebuilt, which only happens when the key no
+    /// longer matches (R-25).
+    @Test("an index stamped by 1.3.0 is not current, so it is rebuilt")
+    func aParserVersionFiveIndexIsRebuilt() async throws {
+        let (store, source, directory) = try await AskFixture.preparedStore()
+        defer { AskFixture.remove(directory) }
+        #expect(await store.isPrepared(source: source))
+
+        var shipped = source.indexKey
+        shipped.parserVersion = 5
+        let stamp = shipped.storedValue
+        let queue = try AskIndexStore.openQueue(at: store.indexURL(for: AskFixture.bookUUID))
+        try await queue.write { db in
+            try db.execute(
+                sql: "INSERT OR REPLACE INTO meta(key, value) VALUES ('indexKey', ?)",
+                arguments: [stamp],
+            )
+        }
+        try queue.close()
+
+        #expect(!(await store.isPrepared(source: source)), "a 1.3.0 index was taken as current")
+        #expect(try await store.prepare(source: source), "and nothing rebuilt it")
+    }
+
     // MARK: - Deleting
 
     @Test("removing a book takes its index and its side files with it")
