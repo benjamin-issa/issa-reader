@@ -239,19 +239,25 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
       configs:
-        # Signed with the Apple Development certificate, not ad-hoc, and with
-        # no provisioning profile — which works because the Debug entitlements
-        # deliberately ask for nothing that needs one. Ad-hoc cost two real
-        # things: the sandbox could not be turned on (an ad-hoc bundle has a
-        # hash identifier, and the sandbox cannot make a container from that),
-        # so the configuration that ships was never the one that ran; and every
-        # rebuild produced a different code identity, so the keychain refused
-        # the saved token and prompted for the login password on each launch.
+        # Signed with the Developer ID Application certificate and a Developer
+        # ID provisioning profile, never ad-hoc. Ad-hoc cost two real things:
+        # the sandbox could not be turned on (an ad-hoc bundle has a hash
+        # identifier, and the sandbox cannot make a container from that), so the
+        # configuration that ships was never the one that ran; and every rebuild
+        # produced a different code identity. A profile is what gives the build
+        # an application identifier, and the data-protection keychain refuses a
+        # write without one (errSecMissingEntitlement, -34018) — so with no
+        # profile the token could not be saved, and since a sign-in whose token
+        # is not saved now fails, Debug could not sign in at all. A Developer ID
+        # profile lists no devices, where a Mac development profile would need
+        # this Mac registered. Both values come from Signing.xcconfig, so a
+        # fork without such a profile can go back to "Apple Development" and no
+        # profile in Signing.local.xcconfig.
         Debug:
           CODE_SIGN_ENTITLEMENTS: Apps/IssaReader-macOS/IssaReader-Debug.entitlements
           CODE_SIGN_STYLE: Manual
-          CODE_SIGN_IDENTITY: "Apple Development"
-          PROVISIONING_PROFILE_SPECIFIER: ""
+          CODE_SIGN_IDENTITY: "$(ISSA_MACOS_DEBUG_IDENTITY)"
+          PROVISIONING_PROFILE_SPECIFIER: "$(ISSA_MACOS_DEBUG_PROFILE)"
           DEVELOPMENT_TEAM: "$(ISSA_TEAM_ID)"
         # Real Mac App Store signing, pinned the same way tvOS is and for the
         # same reason: Automatic archiving mints a Development profile first,
