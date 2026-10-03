@@ -59,6 +59,41 @@ struct RecencyTopUpTests {
         }
     }
 
+    /// A title page and a copyright page the book never tagged, so both were
+    /// indexed. Asked from the first page of Chapter 1, the top-up walked back
+    /// across spine items and sent the title and the author's name — which the
+    /// prompt's own rule says are never sent — for every question, not only a
+    /// recap (R-26).
+    @Test("the pages just read never reach back into the untagged front matter")
+    func recencyStaysInTheChapter() async throws {
+        let (store, _, boundary, directory) = try AskFixture.syntheticStore(chapters: [
+            ["The Lantern Keeper", "A Novel by Imogen Hartwell"],
+            ["Copyright 2026 Imogen Hartwell. All rights reserved. First edition."],
+            [
+                "Chapter One",
+                "The girl sat on the harbour wall and cried, because the lantern boat had gone "
+                    + "out without her and nobody on the quay would say where it was going.",
+                "Her uncle came down the steps with a coat over his arm and asked her why she "
+                    + "was crying, and she would not tell him, and he sat down beside her anyway.",
+            ],
+        ])
+        defer { AskFixture.remove(directory) }
+        let retriever = AskRetriever(store: store, bookUUID: AskFixture.bookUUID, boundary: boundary)
+
+        guard case let .evidence(ranked, _) = try await retriever.retrieve(
+            question: "Why is the girl crying?",
+        ) else {
+            Issue.record("the question retrieved nothing")
+            return
+        }
+        #expect(!ranked.isEmpty)
+        let spines = Set(ranked.map(\.passage.spineIndex))
+        #expect(spines == [boundary.spineIndex], "front matter was sent: \(spines.sorted())")
+        let text = ranked.map(\.passage.text).joined(separator: "\n")
+        #expect(!text.contains("Hartwell"))
+        #expect(!text.contains("Lantern Keeper"))
+    }
+
     // MARK: - The merge
 
     static func ranked(_ spine: Int, _ start: Int, _ end: Int, priority: Int) -> PassageRanker.Ranked {

@@ -168,7 +168,29 @@ public struct AskRetriever: Sendable {
         let recent = try await store.recapPassages(
             in: bookUUID, before: boundary, limit: recencyPassages,
         )
-        return .evidence(Self.withRecency(ranked, recent: recent), kind: terms.kind)
+        return .evidence(
+            Self.withRecency(ranked, recent: Self.inReadersChapter(recent, boundary: boundary)),
+            kind: terms.kind,
+        )
+    }
+
+    /// The recent passages that are in the spine item the reader is in.
+    ///
+    /// The recap query walks back across spine items, which for a recap is the
+    /// point. For the top-up it is not: on the first pages of a book the twelve
+    /// passages before the reader reach past Chapter 1 into whatever came
+    /// before it, and a title page or copyright page the book never tagged is
+    /// indexed like any chapter — so every question asked there sent the title
+    /// and the author's name, which the prompt never sends (R-26). The book's
+    /// structural tags cannot say where the story starts (see
+    /// `EPUBPackage.frontMatter`), but the spine item the reader is standing
+    /// in is story by definition. The cost is a reader on the first page of a
+    /// later chapter, who loses the end of the previous one from the top-up;
+    /// the search still reaches it.
+    static func inReadersChapter(
+        _ recent: [RetrievedPassage], boundary: ReadingBoundary,
+    ) -> [RetrievedPassage] {
+        recent.filter { $0.passage.spineIndex == boundary.spineIndex }
     }
 
     /// What the search found, with the pages just read behind it.
