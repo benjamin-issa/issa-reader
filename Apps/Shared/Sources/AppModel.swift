@@ -143,6 +143,9 @@ public final class AppModel {
     /// (`drainPendingWrites`); an identity route that hears `.signedIn` and
     /// has made the hand-over lets it go (`identified`).
     private weak var unidentifiedSession: Session?
+    /// The session of the server `connect` is leaving, for the window between
+    /// that exit and the new session being installed (`refreshLibrary`).
+    private weak var departingSession: Session?
     /// Streams books to disk in the background. Created with the session, since
     /// it needs the server URL and the bearer token.
     public private(set) var downloads: DownloadManager?
@@ -331,6 +334,7 @@ public final class AppModel {
         serverAddress = resolved
         let session = Session(serverURL: url, keychain: keychain)
         self.session = session
+        departingSession = nil
         // Its token is the keychain's, and nobody has asked the server whose
         // it is yet: nothing queued goes out with it until somebody has.
         unidentifiedSession = session
@@ -426,6 +430,13 @@ public final class AppModel {
         IssaLog.info("leaving server", [
             "from": current.serverURL.absoluteString, "to": url.absoluteString,
         ])
+        // Before the exit moves the fence. The exit suspends — the queue, the
+        // Spotlight index — before `connect` replaces the session and the
+        // store, and a refresh started in that window (⌘R is never disabled)
+        // took this session and the fence as it already stood: every check
+        // passed, and the server being left had its catalogue shown as the
+        // next server's library and written into the next server's store.
+        departingSession = current
         await leaveAccount(.serverSwitch, nowPlaying: nowPlayingController)
     }
 
@@ -1073,7 +1084,10 @@ public final class AppModel {
     }
 
     public func refreshLibrary() async {
-        guard let session else { return }
+        // Not for a server `connect` is leaving (`prepareForServer`): its
+        // exit has already moved the fence, so a refresh begun now would
+        // take the fence as it stands and pass every check below.
+        guard let session, session !== departingSession else { return }
         // Counted in for the account this starts under, and out only if that
         // account is still the one signed in when it returns (see
         // `libraryRefreshesInFlight`).
@@ -1123,8 +1137,10 @@ public final class AppModel {
             // Only that half was ever fenced, so a refresh in flight across an
             // account switch published the departed account's catalogue on
             // the arriving account's screen, over the one its own refresh had
-            // just put there.
-            guard catalogueGeneration == generation else { return }
+            // just put there. And for the session it was asked with: the
+            // fence is an account's, and a connect to another server replaces
+            // the session and the store under one.
+            guard catalogueGeneration == generation, self.session === session else { return }
 
             // Reconciled, not assigned: a refetch that predates a write still in
             // the queue carries a stale position, and `replaceCatalogue` below
@@ -1177,7 +1193,8 @@ public final class AppModel {
             // which the guard above has just confirmed.
             let ratingsToPersist = mergedRatings
             Task { [weak self] in
-                guard let self, self.catalogueGeneration == generation else { return }
+                guard let self, self.catalogueGeneration == generation, self.session === session
+                else { return }
                 try? await self.store?.replaceCatalogue(merged)
                 // Behind the same fence as the catalogue. This write sat in
                 // the body above, outside every generation check, and the
@@ -1201,7 +1218,7 @@ public final class AppModel {
             // the departed account's error, until the reader tried again.
             // After the cache read, the one suspension here, so a switch
             // during it cannot have the departing account's cache published.
-            guard catalogueGeneration == generation else { return }
+            guard catalogueGeneration == generation, self.session === session else { return }
             if !cached.isEmpty {
                 books = cached
                 rebuildDerived()
