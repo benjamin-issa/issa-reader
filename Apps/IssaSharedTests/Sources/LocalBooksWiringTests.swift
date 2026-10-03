@@ -18,13 +18,24 @@ struct LocalBooksWiringTests {
     /// device's books' state, a removed book's reader would play on, and its
     /// index, style and level would outlive it.
     @Test("the app's services hand the local library to the app at launch")
-    func servicesWireTheLibrary() {
+    func servicesWireTheLibrary() async throws {
         let services = AppServices.shared
         services.start()
         #expect(services.local.onRemove != nil, "a removed book's reader would be left playing")
         #expect(services.local.onForget != nil, "a removed book's index, style and level would stay")
-        #expect(services.app.localBookUUIDs() == services.local.uuids,
+        // A book on the list, so the comparison cannot be two empty sets: the
+        // unwired default answers [] whatever the library holds. In memory
+        // only — the app's own folders and store are not touched — and after
+        // the launch's load, which would otherwise replace it.
+        let loaded = await LocalImportTests.eventually(within: .seconds(10)) { services.local.isLoaded }
+        try #require(loaded, "the app's local library never loaded")
+        let held = services.local.books
+        defer { services.local.setBooksForTesting(held) }
+        let seeded = SharedFixtures.book("Dracula", uuid: Self.uuid)
+        services.local.setBooksForTesting(held + [seeded])
+        #expect(services.app.localBookUUIDs().contains(Self.uuid),
                 "an account's exit would not know which books are the device's")
+        #expect(services.app.localBookUUIDs() == services.local.uuids)
     }
 
     private static func delegate(

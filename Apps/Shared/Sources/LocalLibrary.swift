@@ -207,6 +207,10 @@ public final class LocalLibrary: ReaderPersistence {
 
     public func book(_ uuid: String) -> Book? { books.first { $0.uuid == uuid } }
 
+    /// Puts books on the list without the disk, for a test that has to see the
+    /// app's own library holding something without writing to its folders.
+    func setBooksForTesting(_ books: [Book]) { self.books = books }
+
     /// Whether the list has anything on it at all: a book, a book waiting for
     /// its file, or a file on its way in.
     public var hasAnything: Bool { !books.isEmpty || !missingFiles.isEmpty || !imports.isEmpty }
