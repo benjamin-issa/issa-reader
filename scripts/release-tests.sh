@@ -121,10 +121,12 @@ judge() {
 
 # Left out on purpose, and named rather than filtered by a pattern: suites
 # that are opt-in by design and not release checks. AskScorecardTests
-# records a scorecard on request (ISSA_ASK_SCORECARD) rather than asserting.
+# records a scorecard on request (ISSA_ASK_SCORECARD) rather than asserting;
+# RethinkExperiments records the Ask design experiments on request
+# (ISSA_ASK_RETHINK). Both would otherwise report themselves skipped.
 skip_args() {
   case "$1" in
-    IssaAskTests) echo "--skip AskScorecardTests" ;;
+    IssaAskTests) echo "--skip AskScorecardTests --skip RethinkExperiments" ;;
   esac
 }
 
@@ -132,7 +134,7 @@ if [ "$ONLY" != app ]; then
   for suite in "${PACKAGE_SUITES[@]}"; do
     echo "▸ $suite"
     set +e
-    # shellcheck disable=SC2046 # skip_args is one flag and a plain name, or nothing
+    # shellcheck disable=SC2046 # skip_args is flags and plain names, or nothing
     swift test --filter "$suite" $(skip_args "$suite") > "$OUT/$suite.log" 2>&1
     status=$?
     set -e

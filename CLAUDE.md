@@ -32,6 +32,8 @@ bring them up is in the README, under "A local server to talk to".
    under which a suite whose input is absent records a failure instead of
    skipping, and it fails the run on any skipped test or any suite with no
    `Test run with` line; `.build/release-tests/summary.txt` is the record.
+   The two opt-in Ask recorders, `AskScorecardTests` (`ISSA_ASK_SCORECARD`)
+   and `RethinkExperiments` (`ISSA_ASK_RETHINK`), are left out by name.
    That includes the two real-model Ask suites (`RegressionQuestionsTests`,
    `SystemAnswerModelTests`), which need Apple Intelligence on and its model
    downloaded: a release run sees them run. The suites carry captured
