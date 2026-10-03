@@ -160,4 +160,56 @@ struct RealAlignmentV3Tests {
             #expect(timeline.entries.allSatisfy { $0.sentenceID == nil }, "\(path) has a word-granular entry")
         }
     }
+
+    // MARK: R-70 — the staged files are the server's they claim to be
+
+    /// The Storyteller version a book's package says aligned it: the
+    /// `storyteller:version` meta every 2.x and 3.x server writes into
+    /// `content.opf`.
+    static func alignedBy(_ path: String) throws -> String? {
+        let archive = try EPUBPackage.open(url: URL(fileURLWithPath: path)).archive
+        let container = String(decoding: try archive.read("META-INF/container.xml"), as: UTF8.self)
+        guard let opf = container.firstMatch(of: /full-path="([^"]+)"/)?.1 else { return nil }
+        let package = String(decoding: try archive.read(String(opf)), as: UTF8.self)
+        return package.firstMatch(of: /<meta property="storyteller:version">\s*([^<\s]+)\s*<\/meta>/)
+            .map { String($0.1) }
+    }
+
+    /// The staged files of `pair` that some other server aligned, each with
+    /// the version it names. Absent files are not this question's business.
+    static func misattributed(_ pair: Pair) throws -> [String] {
+        let expected = String(pair.tag.trimmingPrefix("web-v"))
+        return try pair.paths
+            .filter { FileManager.default.fileExists(atPath: $0) }
+            .compactMap { path in
+                let version = try alignedBy(path)
+                return version == expected ? nil : "\(path) was aligned by \(version ?? "an unknown version")"
+            }
+    }
+
+    /// The books are told apart only by where they are staged, and the
+    /// beta.46 slot reuses the `/tmp` paths 1.3.0 used for beta.40's. A
+    /// machine still holding those ran the newer pin's cases on the older
+    /// server's output and passed them. Each book names the server that
+    /// aligned it, so each pair's staged files must name that pair's tag.
+    @Test("the staged books were aligned by the server their slot names",
+          .enabled(if: RealAlignmentV3Tests.anyAvailable), arguments: RealAlignmentV3Tests.pairs)
+    func stagedBooksAreTheirServers(_ pair: Pair) throws {
+        for path in pair.paths { _ = Self.present(path) }
+        let wrong = try Self.misattributed(pair)
+        #expect(wrong.isEmpty, "\(pair.tag)'s slot holds another server's books: \(wrong)")
+    }
+
+    /// The guard itself, on the mix-up it exists for: beta.40's books in the
+    /// beta.46 slot.
+    @Test("a slot holding an older server's books is caught",
+          .enabled(if: RealAlignmentV3Tests.pairs[1].paths.allSatisfy {
+              FileManager.default.fileExists(atPath: $0)
+          }))
+    func staleBooksAreCaught() throws {
+        let older = Self.pairs[1]
+        let stale = Pair(tag: Self.pairs[0].tag, interludePath: older.interludePath, loopPath: older.loopPath)
+        #expect(try Self.misattributed(stale).count == 2)
+        #expect(try Self.misattributed(older).isEmpty)
+    }
 }
