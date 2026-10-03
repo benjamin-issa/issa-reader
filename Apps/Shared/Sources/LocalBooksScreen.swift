@@ -413,11 +413,13 @@ public struct LocalBooksScreen: View {
     private var keyboardCommands: some View {
         Group {
             Button("Remove from this \(LocalDevice.noun)") {
-                if let uuid = focusedRow ?? library.books.first?.uuid { remove([uuid]) }
+                if let uuid = LocalBooksKeyboard.removalTarget(focused: focusedRow) { remove([uuid]) }
             }
             .keyboardShortcut(.delete, modifiers: .command)
             Button("Book Info") {
-                if let uuid = focusedRow ?? library.books.first?.uuid { info = library.book(uuid) }
+                if let uuid = LocalBooksKeyboard.infoTarget(focused: focusedRow, books: library.books) {
+                    info = library.book(uuid)
+                }
             }
             .keyboardShortcut("i", modifiers: .command)
         }
@@ -607,6 +609,22 @@ public struct LocalBooksScreen: View {
         }.value
         sizes = found
         freeSpace = free
+    }
+}
+
+// MARK: - Keyboard
+
+/// Which book a hardware keyboard's shortcut acts on (3a).
+enum LocalBooksKeyboard {
+    /// ⌘⌫: the row the keyboard is on, and nothing when it is on none.
+    /// Falling back to the first book removed the one opened last — the
+    /// list's first row — when the rows had been reached by touch (R-30).
+    static func removalTarget(focused: String?) -> String? { focused }
+
+    /// ⌘I: the row the keyboard is on, else the first book. Showing a
+    /// book's info destroys nothing, so it may guess.
+    static func infoTarget(focused: String?, books: [Book]) -> String? {
+        focused ?? books.first?.uuid
     }
 }
 

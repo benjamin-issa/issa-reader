@@ -217,6 +217,16 @@ struct LocalBooksHardeningTests {
                 "the book stopped narrating with nothing on its row to say why")
     }
 
+    // MARK: - R-30: ⌘⌫ with no row focused removes nothing
+
+    @Test("⌘⌫ removes only the row the keyboard is on")
+    func commandDeleteNeedsAFocusedRow() {
+        let books = [SharedFixtures.book("Dracula", uuid: "11111111-1111-4111-8111-111111111111")]
+        #expect(LocalBooksKeyboard.removalTarget(focused: nil) == nil)
+        #expect(LocalBooksKeyboard.infoTarget(focused: nil, books: books) == books[0].uuid, "⌘I may still guess")
+        #expect(LocalBooksKeyboard.removalTarget(focused: books[0].uuid) == books[0].uuid)
+    }
+
     // MARK: - A book from another volume
 
     /// What a USB drive or a network share gets: not a clone, a chunked copy.
