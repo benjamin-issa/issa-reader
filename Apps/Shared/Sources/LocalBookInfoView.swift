@@ -136,7 +136,7 @@ struct LocalBookInfoView: View {
 
     private var primaryTitle: String {
         guard let progress = current.progress, progress > 0 else { return "Read" }
-        return "Continue · \(Int((progress * 100).rounded()))%"
+        return "Continue · \(ReadingProgress.percentText(progress))"
     }
 
     /// The problem row's shape without the "!": this is not something the
@@ -165,7 +165,7 @@ struct LocalBookInfoView: View {
 
     private var missingReason: String {
         let file = copy?.fileName ?? "the file"
-        let place = current.progress.map { " from \(Int(($0 * 100).rounded()))%" } ?? ""
+        let place = current.progress.map { " from \(ReadingProgress.percentText($0))" } ?? ""
         return "Your place and highlights came back from the backup, but the EPUB didn’t. Choose \(file) again to keep reading\(place)."
     }
 
@@ -176,7 +176,7 @@ struct LocalBookInfoView: View {
                 if !isMissing { row("Added from", LocalBooksCopy.originalsPlace) }
                 row("File", copy?.fileName ?? "—", truncation: .middle)
                 if !isMissing {
-                    row("Size", copy.map { LocalByteText.text($0.byteCount) } ?? "—")
+                    row("Size", copy.map { ByteCountText.text($0.byteCount) } ?? "—")
                     row("Format", format)
                 }
                 if let added = copy?.importedAt {

@@ -124,9 +124,9 @@ public enum LocalImportError: Error, Equatable, Sendable {
         case .drmProtected:
             "It has DRM, a lock some shops add so a book opens only in their own app. Books from Kindle, Kobo, Apple Books or Adobe Digital Editions usually have it, and won’t open here."
         case let .tooLarge(bytes):
-            "This book is \(LocalByteText.text(bytes)). Books up to 4 GB can be added."
+            "This book is \(ByteCountText.text(bytes)). Books up to 4 GB can be added."
         case let .notEnoughSpace(needed, free):
-            "This book needs \(LocalByteText.text(needed)) and \(LocalByteText.text(free)) is free. Free up some space, then try again."
+            "This book needs \(ByteCountText.text(needed)) and \(ByteCountText.text(free)) is free. Free up some space, then try again."
         case .notDownloaded:
             "This \(LocalDevice.noun) seems to be offline. Connect to the internet, then try again."
         case .accessDenied:
@@ -267,12 +267,5 @@ enum LocalDevice {
         case "Mac": "laptopcomputer"
         default: "iphone"
         }
-    }
-}
-
-/// Byte counts as the copy deck writes them: "1.2 GB", "640 MB".
-enum LocalByteText {
-    static func text(_ bytes: Int64) -> String {
-        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
     }
 }

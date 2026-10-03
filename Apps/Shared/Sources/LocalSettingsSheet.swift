@@ -24,7 +24,7 @@ struct LocalSettingsSheet: View {
             List {
                 Section {
                     LabeledContent("Books", value: "\(library.books.count)")
-                    LabeledContent("Space used", value: spaceUsed.map(LocalByteText.text) ?? "—")
+                    LabeledContent("Space used", value: spaceUsed.map(ByteCountText.text) ?? "—")
                 } header: {
                     Text("On this \(LocalDevice.noun)")
                 }

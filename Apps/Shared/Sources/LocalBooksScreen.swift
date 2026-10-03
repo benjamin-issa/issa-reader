@@ -263,8 +263,8 @@ public struct LocalBooksScreen: View {
     private var storageLine: String {
         let count = library.books.count
         var parts = ["\(count) book\(count == 1 ? "" : "s")"]
-        parts.append(LocalByteText.text(sizes.values.reduce(0, +)))
-        if let freeSpace { parts.append("\(LocalByteText.text(freeSpace)) free") }
+        parts.append(ByteCountText.text(sizes.values.reduce(0, +)))
+        if let freeSpace { parts.append("\(ByteCountText.text(freeSpace)) free") }
         return parts.joined(separator: " · ")
     }
 
@@ -661,8 +661,8 @@ struct LocalBookFacts {
         guard let progress = book.progress, progress > 0 else { return nil }
         return progress
     }
-    var percent: String? { progress.map { "\(Int(($0 * 100).rounded()))%" } }
-    var sizeText: String? { size.map(LocalByteText.text) }
+    var percent: String? { progress.map(ReadingProgress.percentText) }
+    var sizeText: String? { size.map(ByteCountText.text) }
     var trailing: String? { isMissing ? LocalBooksCopy.notOnDevice : sizeText }
 
     var notices: [LocalRowNotice] {
@@ -794,8 +794,9 @@ struct LocalBookRow: View {
                     .labelStyle(.titleAndIcon)
             }
             if let progress = facts.progress, !isMissing {
-                LocalProgressBar(fraction: progress)
+                ProgressBar(value: progress)
                     .frame(maxWidth: 220)
+                    .accessibilityHidden(true)
                     .padding(.top, Metrics.spacing4)
             }
         }
@@ -918,7 +919,7 @@ struct LocalBookMacRow: View {
                 Image(systemName: "chart.bar.fill").foregroundStyle(Palette.tangerine).font(Typography.caption)
             }
             if let progress = facts.progress, !isMissing {
-                LocalProgressBar(fraction: progress).frame(width: 90)
+                ProgressBar(value: progress).frame(width: 90).accessibilityHidden(true)
                 Text(facts.percent ?? "").font(Typography.caption.monospacedDigit())
                     .foregroundStyle(Palette.inkTertiary).frame(width: 34, alignment: .trailing)
             }
@@ -938,7 +939,7 @@ struct LocalBookMacRow: View {
                     .joined(separator: " · "))
                     .font(Typography.caption).foregroundStyle(Palette.inkTertiary).lineLimit(1)
                 if let progress = facts.progress, !isMissing {
-                    LocalProgressBar(fraction: progress).frame(maxWidth: 160)
+                    ProgressBar(value: progress).frame(maxWidth: 160).accessibilityHidden(true)
                 }
             }
             Spacer(minLength: Metrics.spacing8)
@@ -953,23 +954,6 @@ struct LocalBookMacRow: View {
     }
 }
 #endif
-
-/// A 3-point capsule, tangerine on an ink-at-25% track.
-struct LocalProgressBar: View {
-    let fraction: Double
-
-    var body: some View {
-        GeometryReader { proxy in
-            ZStack(alignment: .leading) {
-                Capsule().fill(Palette.ink.opacity(0.25))
-                Capsule().fill(Palette.tangerine)
-                    .frame(width: proxy.size.width * min(max(fraction, 0), 1))
-            }
-        }
-        .frame(height: 3)
-        .accessibilityHidden(true)
-    }
-}
 
 /// A bar with no percentage: a 30% segment moving left to right over 1.2 s,
 /// or, with Reduce Motion, pulsing where it stands.
@@ -1062,7 +1046,7 @@ struct LocalImportRow: View {
     @ViewBuilder
     private var bar: some View {
         switch item.stage {
-        case let .copying(fraction): LocalProgressBar(fraction: fraction).frame(maxWidth: 260)
+        case let .copying(fraction): ProgressBar(value: fraction).frame(maxWidth: 260).accessibilityHidden(true)
         case .downloading, .checking: LocalIndeterminateBar(reduceMotion: reduceMotion).frame(maxWidth: 260)
         default: EmptyView()
         }
