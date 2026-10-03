@@ -31,7 +31,9 @@ public enum AudioExtraction {
     /// extraction — tens of seconds to minutes for a long book — and the only
     /// cancellations that could cut it short were for X itself. Two books share
     /// no file, so they share no lock.
-    private static let locks = DirectoryLocks()
+    ///
+    /// Internal so a test can hold it the way an extraction does.
+    static let locks = DirectoryLocks()
 
     /// Extracts every audio file the timeline references.
     ///
@@ -228,9 +230,51 @@ public enum AudioExtraction {
     /// `Audio/`: removing the book must neither tear an extraction in progress
     /// nor be undone by one finishing — the race `removeExtractedAudio(for:)`
     /// is locked against.
+    ///
+    /// Never waits for an extraction to finish the member it is writing.
+    /// Cancellation is noticed between members, and a member is streamed whole
+    /// however large it is — a narration cut into a couple of files of a
+    /// gigabyte or more held the main actor here for the rest of one, seconds
+    /// of a frozen interface. When an extraction holds the lock, the folder is
+    /// renamed aside instead, which is atomic and does not care what is open
+    /// inside it, and deleted off the caller's thread. Nothing can be put back:
+    /// the extraction creates its folder once, before its first member, and
+    /// every later write — the rename that finishes the member in flight, the
+    /// next member's file — names a folder that is no longer there and fails,
+    /// which ends that extraction. So the outcome is the one the lock gave,
+    /// all or nothing, without the wait.
+    ///
+    /// Aside into the temporary directory rather than beside the folder, so
+    /// nothing that measures or sweeps `Audio/` or a book's own folder ever
+    /// sees it, and a crash before the deletion runs leaves it to the system's
+    /// own clean-up.
     public static func removeExtractedAudio(at directory: URL) {
-        locks.lock(for: directory).withLock {
+        removeExtractedAudio(at: directory, asideIn: FileManager.default.temporaryDirectory)
+    }
+
+    /// The removal, with where a folder still being written is set aside named
+    /// by the caller: a test's own scratch folder, so it can see the set-aside
+    /// copy go.
+    static func removeExtractedAudio(at directory: URL, asideIn asideRoot: URL) {
+        let lock = locks.lock(for: directory)
+        if lock.try() {
+            defer { lock.unlock() }
             try? FileManager.default.removeItem(at: directory)
+            return
+        }
+        let aside = asideRoot.appending(
+            path: "issa-removing-\(UUID().uuidString)", directoryHint: .isDirectory)
+        guard rename(directory.path, aside.path) == 0 else {
+            // Nothing there to move — the extraction has not made its folder
+            // yet, and its own cancellation check, asked before it does, is
+            // what stops it — or a rename the file system refused (another
+            // volume), which leaves only the wait this used to make.
+            guard FileManager.default.fileExists(atPath: directory.path) else { return }
+            lock.withLock { try? FileManager.default.removeItem(at: directory) }
+            return
+        }
+        DispatchQueue.global(qos: .utility).async {
+            try? FileManager.default.removeItem(at: aside)
         }
     }
 }
