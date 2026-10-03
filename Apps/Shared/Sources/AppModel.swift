@@ -879,8 +879,16 @@ public final class AppModel {
         //
         // Carrying the device's own books, which the observers keep: those in
         // the reader's local library, and any local reader still open.
+        //
+        // And the books whose folders are on the disk. The library's own list
+        // is filled by its `load()`, which an exit early in a launch can
+        // overtake; an empty set then purged every local book's style, level
+        // and question index — the index store, told to keep nothing, deletes
+        // its whole directory.
         if exit != .serverSwitch {
-            let kept = localBookUUIDs().union(readers.values.filter(\.isLocal).map(\.book.uuid))
+            let kept = localBookUUIDs()
+                .union(readers.values.filter(\.isLocal).map(\.book.uuid))
+                .union(localBookFolders())
             notificationCentre.post(
                 name: PlaybackSettings.signOutNotification, object: nil,
                 userInfo: [PlaybackSettings.keptBookUUIDsKey: kept])
@@ -920,6 +928,16 @@ public final class AppModel {
         // asks the disk, said Downloaded. A sign-out that deletes the
         // downloads empties the set itself, once they have gone (`signOut`).
         refreshDownloadedSet()
+    }
+
+    /// The books the reader added from their own files, by the folders they
+    /// keep under `Local/` — the disk's answer, which needs no store read.
+    /// Hidden entries are imports in progress, not books.
+    private func localBookFolders() -> Set<String> {
+        let root = storageRoot.appending(path: "Local", directoryHint: .isDirectory)
+        let entries = (try? FileManager.default.contentsOfDirectory(
+            at: root, includingPropertiesForKeys: nil)) ?? []
+        return Set(entries.map(\.lastPathComponent).filter { !$0.hasPrefix(".") })
     }
 
     /// Builds the write queue over the store `connect` has just opened, and
