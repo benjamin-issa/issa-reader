@@ -44,7 +44,10 @@ public struct EPUBInspection: Sendable {
         /// As the manifest declares it, or nil when no manifest item names
         /// the file.
         public let mediaType: String?
-        /// The uncompressed size, from the central directory.
+        /// What it takes once extracted, from the central directory: up to
+        /// `EPUBArchive.maximumExtractedSize`, which is what extraction
+        /// streams, not `read`'s in-memory cap. Nil when the directory claims
+        /// a size the entry could not have.
         public let byteCount: Int?
         /// Whether the archive holds it at all.
         public let isPresent: Bool
@@ -71,8 +74,15 @@ public struct EPUBInspection: Sendable {
     }
 
     /// The bytes narration will take once extracted on first open.
+    ///
+    /// Saturating: each size is bounded by the archive, but a sum of them is
+    /// still arithmetic on values a file chose, and a trap here is a crash
+    /// during "Checking the book…".
     public var audioByteCount: Int64 {
-        audioFiles.reduce(0) { $0 + Int64($1.byteCount ?? 0) }
+        audioFiles.reduce(Int64(0)) { total, file in
+            let (sum, overflow) = total.addingReportingOverflow(Int64(file.byteCount ?? 0))
+            return overflow ? .max : sum
+        }
     }
 
     /// Inspects the EPUB at `url`.
@@ -119,7 +129,7 @@ public struct EPUBInspection: Sendable {
             audio.append(AudioFile(
                 href: entry.audioHref,
                 mediaType: mediaTypes[entry.audioHref],
-                byteCount: archive.size(of: entry.audioHref),
+                byteCount: archive.extractedSize(of: entry.audioHref),
                 isPresent: archive.contains(entry.audioHref)))
         }
 
