@@ -132,9 +132,9 @@ public struct LibraryView: View {
         .searchable(text: $search, prompt: "Search your library")
         #endif
         #if os(macOS)
-        // Browse or the sortable grid, in the window's own toolbar. Disabled
-        // where rails would be a lie: on a named shelf, and while a search is
-        // showing results.
+        // Browse or the sortable grid, in the window's own toolbar. Never
+        // disabled: Browse takes the reader to All books' rails from any shelf
+        // or search, which is what `LibraryModeSwitch.picking` says and why.
         .toolbar {
             ToolbarItem(placement: .principal) {
                 Picker("Library view", selection: modeBinding) {
@@ -142,7 +142,6 @@ public struct LibraryView: View {
                     Text("All Books").tag(AppModel.LibraryMode.all)
                 }
                 .pickerStyle(.segmented)
-                .disabled(!LibraryModeSwitch.isEnabled(switchState))
                 .accessibilityLabel("Library view")
             }
         }

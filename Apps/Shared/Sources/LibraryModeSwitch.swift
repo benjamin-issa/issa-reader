@@ -30,17 +30,23 @@ enum LibraryModeSwitch {
         showsRails(state) ? .browse : .all
     }
 
-    /// Whether the switch takes a click: not on a named shelf, and not while a
-    /// search is showing results.
-    static func isEnabled(_ state: State) -> Bool {
-        state.shelf == .all && !state.isSearching
-    }
-
     /// What picking a segment leaves the library as.
+    ///
+    /// Browse is the rails, from wherever the library is: it goes to All books
+    /// — the sidebar follows the shelf — and leaves the search, because rails
+    /// are only ever shown on All books with nothing searched. The switch used
+    /// to be disabled everywhere else instead. The Mac lands on a named shelf
+    /// without being asked to (the Reading screen's and a "With audio" rail's
+    /// "See all", a shelf restored at launch) and on a search (an author's
+    /// "Show in Library"), and a disabled segment on the toolbar's glass looks
+    /// like a live one, so Browse was a button that did nothing.
+    ///
+    /// All Books writes the mode and nothing else: the grid keeps the shelf,
+    /// sort and tags it already had, and a search keeps its results.
     static func picking(_ mode: AppModel.LibraryMode, in state: State) -> State {
-        guard isEnabled(state) else { return state }
-        var next = state
-        next.mode = mode
-        return next
+        switch mode {
+        case .browse: State(mode: .browse, shelf: .all, isSearching: false)
+        case .all: State(mode: .all, shelf: state.shelf, isSearching: state.isSearching)
+        }
     }
 }
