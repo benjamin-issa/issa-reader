@@ -88,6 +88,64 @@ struct LocalBooksHardeningTests {
         #expect(host.view.window != nil)
     }
 
+    // MARK: - R-02: a store that cannot be read is not an empty library
+
+    @Test("a device store that will not open leaves every book's folder alone")
+    func unreadableStoreKeepsFolders() async throws {
+        let local = try LocalFixtures()
+        defer { local.tearDown() }
+        await local.importAndWait(try local.pick("alice"))
+        let book = try #require(local.library.books.first)
+        let storeURL = try #require(await local.library.store?.url)
+
+        // What a corrupt file, or a later build's migration that failed on a
+        // full disk, leaves behind.
+        for suffix in ["", "-wal", "-shm", "-journal"] {
+            try? FileManager.default.removeItem(atPath: storeURL.path + suffix)
+        }
+        try Data("not a database, whatever its name says".utf8).write(to: storeURL)
+        let relaunched = local.relaunched()
+        try #require(relaunched.store == nil, "the store opened; this test needs one that does not")
+
+        await relaunched.load()
+
+        #expect(FileManager.default.fileExists(atPath: relaunched.files(for: book.uuid).epub.path),
+                "the only copy of the book was deleted as a crash leftover")
+        #expect(relaunched.uuids.contains(book.uuid),
+                "an account's exit would take the kept book's index and style")
+    }
+
+    @Test("a row that will not decode keeps its folder, and the rest load")
+    func undecodableRowKeepsItsFolder() async throws {
+        let local = try LocalFixtures()
+        defer { local.tearDown() }
+        await local.importAndWait(try local.pick("alice"))
+        await local.importAndWait(try local.pick("readalong"))
+        let bad = try #require(local.library.books.first { $0.title.hasPrefix("Alice") })
+        let good = try #require(local.library.books.first { !$0.title.hasPrefix("Alice") })
+        let storeURL = try #require(await local.library.store?.url)
+
+        // A row shape a newer build wrote, as far as this one can tell.
+        try Self.execute("UPDATE book SET json = x'7B7D' WHERE uuid = '\(bad.uuid)'", at: storeURL)
+        let relaunched = local.relaunched()
+        await relaunched.load()
+
+        #expect(relaunched.books.map(\.uuid) == [good.uuid])
+        #expect(FileManager.default.fileExists(atPath: relaunched.files(for: bad.uuid).epub.path),
+                "the folder of a row this build could not read was deleted")
+        #expect(FileManager.default.fileExists(atPath: relaunched.files(for: good.uuid).epub.path))
+        #expect(relaunched.uuids.contains(bad.uuid))
+    }
+
+    /// One statement against a SQLite file, outside the store.
+    static func execute(_ sql: String, at url: URL) throws {
+        var db: OpaquePointer?
+        defer { sqlite3_close(db) }
+        try #require(sqlite3_open(url.path, &db) == SQLITE_OK)
+        try #require(sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK, "\(String(cString: sqlite3_errmsg(db)))")
+        try #require(sqlite3_changes(db) == 1)
+    }
+
     // MARK: - A book from another volume
 
     /// What a USB drive or a network share gets: not a clone, a chunked copy.

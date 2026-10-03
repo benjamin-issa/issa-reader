@@ -3,6 +3,7 @@ import IssaCore
 import IssaPlayback
 import IssaUI
 import Observation
+import SQLite3
 
 /// The books the reader added from their own files, and everything they write.
 ///
@@ -82,6 +83,9 @@ public final class LocalLibrary: ReaderPersistence {
     @ObservationIgnored private var runner: Task<Void, Never>?
     @ObservationIgnored private var running: (id: UUID, task: Task<Void, Never>)?
     @ObservationIgnored private var removalTask: Task<Void, Never>?
+    /// Books whose folders `load()` kept without a row it could read: the
+    /// store would not answer, or the row is a shape a later build wrote.
+    @ObservationIgnored private var unreadable: Set<String> = []
 
     /// - Parameters:
     ///   - root: the `Local` folder; a test passes a temporary one.
@@ -105,18 +109,43 @@ public final class LocalLibrary: ReaderPersistence {
     /// written — the row is written last for exactly this — and goes too. A row
     /// whose copy is gone is a book restored from a backup, and is kept, marked
     /// missing.
+    ///
+    /// The folder sweep runs only on a complete read: the store opened, its
+    /// books were read, and every row's uuid was read straight from the file,
+    /// whether or not this build can decode the row. A store that will not
+    /// open or answer, read as an empty library, deleted every book's only
+    /// copy as a crash leftover; a row a newer build wrote, dropped by the
+    /// decoder, lost its folder the same way (R-02). Those folders are kept,
+    /// and counted among the device's books for an account's exit.
     public func load() async {
         LocalBookImporter.excludeFromBackup(root)
         try? FileManager.default.removeItem(at: LocalBookFiles.incoming(in: root))
-        let stored = ((try? await store?.allBooks()) ?? []).filter(\.isLocal)
-        let known = Set(stored.map { LocalBookFiles(bookUUID: $0.uuid, root: root).folder.lastPathComponent })
-        let folders = (try? FileManager.default.contentsOfDirectory(
-            at: root, includingPropertiesForKeys: [.isDirectoryKey])) ?? []
-        for folder in folders where !folder.lastPathComponent.hasPrefix(".")
-            && !known.contains(folder.lastPathComponent)
-        {
-            IssaLog.info("local folder with no book removed", ["folder": folder.lastPathComponent])
-            try? FileManager.default.removeItem(at: folder)
+        var read: [Book]?
+        var rows: Set<String>?
+        if let store {
+            read = try? await store.allBooks()
+            if read != nil { rows = await Self.storedRowUUIDs(at: store.url) }
+        }
+        let stored = (read ?? []).filter(\.isLocal)
+        let shown = Set(stored.map { files(for: $0.uuid).folder.lastPathComponent })
+        let folders = ((try? FileManager.default.contentsOfDirectory(
+            at: root, includingPropertiesForKeys: [.isDirectoryKey])) ?? [])
+            .filter { !$0.lastPathComponent.hasPrefix(".") }
+        if let rows {
+            let known = shown.union(rows.map { files(for: $0).folder.lastPathComponent })
+            for folder in folders where !known.contains(folder.lastPathComponent) {
+                IssaLog.info("local folder with no book removed", ["folder": folder.lastPathComponent])
+                try? FileManager.default.removeItem(at: folder)
+            }
+            unreadable = rows.subtracting(stored.map(\.uuid))
+        } else {
+            unreadable = Set(folders.map(\.lastPathComponent)).subtracting(shown)
+            IssaLog.warning("local library store unreadable: folders kept", [
+                "opened": String(store != nil), "folders": String(unreadable.count),
+            ])
+        }
+        if !unreadable.isEmpty {
+            IssaLog.warning("local books kept unread", ["books": String(unreadable.count)])
         }
         missingFiles = Set(stored.filter {
             !FileManager.default.fileExists(atPath: files(for: $0.uuid).epub.path)
@@ -140,9 +169,37 @@ public final class LocalLibrary: ReaderPersistence {
     }
 
     /// Every book's uuid, for the account reset's kept set — the books in the
-    /// list and the ones a removal is still holding.
+    /// list, the ones a removal is still holding, and the ones whose rows
+    /// could not be read this launch but whose folders were kept.
     public var uuids: Set<String> {
-        Set(books.map(\.uuid)).union(pendingRemoval?.books.map(\.uuid) ?? [])
+        Set(books.map(\.uuid)).union(pendingRemoval?.books.map(\.uuid) ?? []).union(unreadable)
+    }
+
+    /// Every row's uuid in the device store's file, read with SQLite itself
+    /// rather than through `LibraryStore`, which drops a row it cannot decode
+    /// without a word. Nil when the file cannot be read.
+    nonisolated static func storedRowUUIDs(at url: URL) async -> Set<String>? {
+        await Task.detached(priority: .userInitiated) { () -> Set<String>? in
+            var db: OpaquePointer?
+            defer { sqlite3_close(db) }
+            guard sqlite3_open_v2(url.path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else { return nil }
+            sqlite3_busy_timeout(db, 5000)
+            var statement: OpaquePointer?
+            defer { sqlite3_finalize(statement) }
+            guard sqlite3_prepare_v2(db, "SELECT uuid FROM book", -1, &statement, nil) == SQLITE_OK
+            else { return nil }
+            var uuids: Set<String> = []
+            while true {
+                switch sqlite3_step(statement) {
+                case SQLITE_ROW:
+                    if let text = sqlite3_column_text(statement, 0) { uuids.insert(String(cString: text)) }
+                case SQLITE_DONE:
+                    return uuids
+                default:
+                    return nil
+                }
+            }
+        }.value
     }
 
     public func book(_ uuid: String) -> Book? { books.first { $0.uuid == uuid } }
