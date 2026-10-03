@@ -33,7 +33,7 @@ SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 ROOT="$PWD"
 
-usage() { sed -n '6,9p' "$SELF" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '5,8p' "$SELF" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 PACKAGE_SUITES=(IssaCoreTests IssaEPUBTests IssaRenderTests IssaPlaybackTests IssaUITests IssaAskTests)
 RUNTIME="com.apple.CoreSimulator.SimRuntime.iOS-27-0"
@@ -73,7 +73,10 @@ finish() {
   fi
   {
     echo "release run  ISSA_RELEASE_RUN=1"
-    echo "commit       $(git rev-parse --short HEAD 2>/dev/null || echo unknown)$(git diff --quiet 2>/dev/null || echo ' (dirty)')"
+    # Dirty by `git status`, not `git diff`: a staged change and an untracked
+    # source file (SwiftPM and XcodeGen compile every file under Sources) are
+    # what was tested too, and `git diff --quiet` sees neither.
+    echo "commit       $(git rev-parse --short HEAD 2>/dev/null || echo unknown)$([ -z "$(git status --porcelain 2>/dev/null)" ] || echo ' (dirty)')"
     echo "when         $(date -u +%Y-%m-%dT%H:%M:%SZ)"
     echo
     for line in ${RESULTS[@]+"${RESULTS[@]}"}; do echo "$line"; done

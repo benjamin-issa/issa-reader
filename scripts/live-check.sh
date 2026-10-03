@@ -61,62 +61,37 @@ DEVICE=""
 PLATFORM=ios
 AUDIO=0
 FRESH=0
+# What was wrong with the arguments, if anything. Collected rather than acted
+# on, because a refusal must not exit before the label's old record is gone.
+BAD=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --device) [ $# -ge 2 ] || usage; DEVICE="$2"; shift ;;
-    --platform) [ $# -ge 2 ] || usage; PLATFORM="$2"; shift ;;
+    --device) if [ $# -ge 2 ]; then DEVICE="$2"; shift; else BAD="--device needs a simulator name"; fi ;;
+    --platform) if [ $# -ge 2 ]; then PLATFORM="$2"; shift; else BAD="--platform needs ios or tvos"; fi ;;
     --audio) AUDIO=1 ;;
     --fresh) FRESH=1 ;;
-    --*) usage ;;
+    --*) BAD="unknown option $1" ;;
     *)
       if [ -z "$SERVER" ]; then SERVER="${1%/}"
       elif [ -z "$LABEL" ]; then LABEL="$1"
-      else usage
+      else BAD="unexpected argument $1"
       fi ;;
   esac
   shift
 done
-[ -n "$SERVER" ] && [ -n "$LABEL" ] || usage
-case "$SERVER" in
-  http://*|https://*) ;;
-  *) echo "error: the server must be a URL, such as http://<address>:8003" >&2; exit 2 ;;
+# No label, no record to keep or clear.
+[ -n "$LABEL" ] || usage
+# The label names a directory this script empties.
+case "$LABEL" in
+  *[!A-Za-z0-9._-]*|.|..)
+    echo "error: a label is letters, digits, dots, dashes and underscores" >&2; exit 2 ;;
 esac
 
-# What differs by platform: the runtime to find the simulator in, the scheme
-# and test target, and where the app keeps its log (`StorageRoot`: Caches on
-# tvOS, Application Support elsewhere). BOOKS says whether this platform's
-# test reads books, which decides the book lookups and the API checks.
-case "$PLATFORM" in
-  ios)
-    RUNTIME=iOS; SIMULATOR="iOS Simulator"; SCHEME=IssaReader-iOS; TESTS=IssaLiveUITests
-    STORAGE="Library/Application Support"; BOOKS=1; DEVICE="${DEVICE:-iPhone 17 Pro}" ;;
-  tvos)
-    RUNTIME=tvOS; SIMULATOR="tvOS Simulator"; SCHEME=IssaReader-tvOS; TESTS=IssaLiveTVUITests
-    STORAGE="Library/Caches"; BOOKS=0; DEVICE="${DEVICE:-Apple TV 4K (3rd generation)}"
-    [ "$AUDIO" = 0 ] || { echo "error: --audio is iPhone and iPad only" >&2; exit 2; } ;;
-  *) usage ;;
-esac
-
-STATUS_TITLE="${LIVE_STATUS_TITLE:-Moby Dick; Or, The Whale}"
-READ_TITLE="${LIVE_READ_TITLE:-The Time Machine}"
-READALONG_TITLE="${LIVE_READALONG_TITLE:-The Gap Book}"
-
-command -v xcodegen >/dev/null || { echo "error: xcodegen not found" >&2; exit 1; }
-command -v node >/dev/null || { echo "error: node not found" >&2; exit 1; }
-[ -d "$ROOT/Tools/docker/node_modules/playwright" ] || {
-  echo "error: Playwright is not installed: (cd Tools/docker && npm install && npx playwright install chromium)" >&2
-  exit 1
-}
-
-# The bundle id the build signs with, read the way layout-sweep.sh reads it
-# (see there for why the loop ends in `|| continue`).
-BUNDLE_ID=$(
-    for f in "$ROOT/Signing.xcconfig" "$ROOT/Signing.local.xcconfig"; do
-        [ -f "$f" ] || continue
-        sed -n 's/^[[:space:]]*ISSA_BUNDLE_ID[[:space:]]*=[[:space:]]*//p' "$f"
-    done | tail -1 | sed 's/[[:space:]]*$//'
-)
-[ -n "$BUNDLE_ID" ] || { echo "error: ISSA_BUNDLE_ID is not set in Signing.xcconfig" >&2; exit 1; }
+# ── The record ────────────────────────────────────────────────────────────
+#
+# Set up before anything can refuse the run. summary.txt is the record
+# CLAUDE.md asks for, and a refused run that left the label's last one in
+# place — all PASS, perhaps — looked like a run that passed.
 
 OUT="$ROOT/.build/live-check/$LABEL"
 DERIVED="$ROOT/.build/dd-live"
@@ -128,6 +103,8 @@ pass() { RESULTS+=("PASS $1"); }
 fail() { RESULTS+=("FAIL $1"); FAILED=1; }
 # Setting up refused: said on the console and kept in the record.
 die() { echo "error: $1" >&2; fail "setup: $1"; exit 1; }
+# The arguments refused: the same, with usage's exit status.
+refuse() { echo "error: $1" >&2; fail "arguments: $1"; exit 2; }
 
 GENERATION="unknown"
 EXPECT_VERSION=""
@@ -159,6 +136,50 @@ finish() {
 }
 trap finish EXIT
 trap 'exit 130' INT TERM
+
+if [ -n "$BAD" ]; then
+  sed -n '6,10p' "$SELF" | sed 's/^# \{0,1\}//' >&2
+  refuse "$BAD"
+fi
+[ -n "$SERVER" ] || refuse "no server given"
+case "$SERVER" in
+  http://*|https://*) ;;
+  *) refuse "the server must be a URL, such as http://<address>:8003" ;;
+esac
+
+# What differs by platform: the runtime to find the simulator in, the scheme
+# and test target, and where the app keeps its log (`StorageRoot`: Caches on
+# tvOS, Application Support elsewhere). BOOKS says whether this platform's
+# test reads books, which decides the book lookups and the API checks.
+case "$PLATFORM" in
+  ios)
+    RUNTIME=iOS; SIMULATOR="iOS Simulator"; SCHEME=IssaReader-iOS; TESTS=IssaLiveUITests
+    STORAGE="Library/Application Support"; BOOKS=1; DEVICE="${DEVICE:-iPhone 17 Pro}" ;;
+  tvos)
+    RUNTIME=tvOS; SIMULATOR="tvOS Simulator"; SCHEME=IssaReader-tvOS; TESTS=IssaLiveTVUITests
+    STORAGE="Library/Caches"; BOOKS=0; DEVICE="${DEVICE:-Apple TV 4K (3rd generation)}"
+    [ "$AUDIO" = 0 ] || refuse "--audio is iPhone and iPad only" ;;
+  *) refuse "unknown platform $PLATFORM: ios or tvos" ;;
+esac
+
+STATUS_TITLE="${LIVE_STATUS_TITLE:-Moby Dick; Or, The Whale}"
+READ_TITLE="${LIVE_READ_TITLE:-The Time Machine}"
+READALONG_TITLE="${LIVE_READALONG_TITLE:-The Gap Book}"
+
+command -v xcodegen >/dev/null || die "xcodegen not found"
+command -v node >/dev/null || die "node not found"
+[ -d "$ROOT/Tools/docker/node_modules/playwright" ] \
+  || die "Playwright is not installed: (cd Tools/docker && npm install && npx playwright install chromium)"
+
+# The bundle id the build signs with, read the way layout-sweep.sh reads it
+# (see there for why the loop ends in `|| continue`).
+BUNDLE_ID=$(
+    for f in "$ROOT/Signing.xcconfig" "$ROOT/Signing.local.xcconfig"; do
+        [ -f "$f" ] || continue
+        sed -n 's/^[[:space:]]*ISSA_BUNDLE_ID[[:space:]]*=[[:space:]]*//p' "$f"
+    done | tail -1 | sed 's/[[:space:]]*$//'
+)
+[ -n "$BUNDLE_ID" ] || die "ISSA_BUNDLE_ID is not set in Signing.xcconfig"
 
 # ── The server ────────────────────────────────────────────────────────────
 
