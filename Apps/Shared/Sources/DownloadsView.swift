@@ -21,6 +21,16 @@ public struct DownloadsView: View {
     /// scan that keying the task had just removed.
     @State private var removals = 0
     @State private var isConfirmingSweep = false
+    #if os(macOS)
+    /// The selected download row, by item id: the one ⌫ removes.
+    @State private var selectedRow: String?
+    /// Whether the list has the keyboard. A click on a row selects it but
+    /// leaves the keyboard where it was — the sidebar, as often as not — so
+    /// ⌫ went there and did nothing (F2). Selecting a row takes it.
+    @FocusState private var listHasKeyboard: Bool
+    @Environment(MacBookSelection.self) private var inspector: MacBookSelection?
+    @Environment(\.openWindow) private var openWindow
+    #endif
 
     /// `revision` for the same reason `DownloadsSection`'s carries one: removing
     /// one edition of a two-edition book moves no count on this screen either,
@@ -45,13 +55,7 @@ public struct DownloadsView: View {
     }
 
     public var body: some View {
-        @Bindable var app = app
-        List {
-            storageSection
-            settingsSection
-            booksSection
-            orphanSection
-        }
+        list
         .paperListBackground()
         .navigationTitle("Downloads")
         // The undo toast belongs to the container this screen is shown in —
@@ -67,6 +71,71 @@ public struct DownloadsView: View {
         // last.
         .task(id: refreshKey) { await refresh() }
     }
+
+    @ViewBuilder
+    private var list: some View {
+        #if os(macOS)
+        // Selectable, so a download row is chosen the way a Mac list row is
+        // and ⌫ has a row to act on (F2); the menu is the list's, asked of
+        // the row it was opened on (F1). See `DownloadsSection.listRows`.
+        List(selection: $selectedRow) {
+            storageSection
+            settingsSection
+            booksSection
+            orphanSection
+        }
+        .contextMenu(forSelectionType: String.self) { ids in
+            if let item = DownloadsRowCommands.target(of: ids, in: listedItems) {
+                BookMenuItems(book: item.book, focusEdition: item.format, onRemoveFocused: { remove(item) })
+            }
+        } primaryAction: { ids in
+            // Double-click or Return: the book, as a cover's double-click.
+            if let item = DownloadsRowCommands.target(of: ids, in: listedItems) {
+                openWindow(id: "Reader", value: item.book.uuid)
+            }
+        }
+        // ⌫, and Edit › Delete: the selected row, with the undo toast. The
+        // menu's "Remove download" shows ⌫ beside it; until now only an open
+        // menu answered it.
+        .onDeleteCommand {
+            if let item = DownloadsRowCommands.target(of: Set([selectedRow].compactMap { $0 }), in: listedItems) {
+                remove(item)
+            }
+        }
+        // In the library window a row is also the inspector's book, as a
+        // cover is. Settings has no inspector.
+        .focused($listHasKeyboard)
+        .onChange(of: selectedRow) { _, id in
+            if id != nil { listHasKeyboard = true }
+            guard let id, let inspector,
+                  let item = DownloadsRowCommands.target(of: [id], in: listedItems) else { return }
+            withAnimation(.snappy(duration: 0.2)) { inspector.bookID = item.book.uuid }
+        }
+        #else
+        List {
+            storageSection
+            settingsSection
+            booksSection
+            orphanSection
+        }
+        #endif
+    }
+
+    #if os(macOS)
+    /// The rows as listed: a removal inside its undo window is off the list.
+    private var listedItems: [DownloadsInventory.DownloadedItem] {
+        let pending = app.pendingRemoval?.id
+        return inventory.items.filter { $0.id != pending }
+    }
+
+    /// The row's removal: hidden now, deleted when the toast expires.
+    private func remove(_ item: DownloadsInventory.DownloadedItem) {
+        if selectedRow == item.id { selectedRow = nil }
+        withAnimation(.snappy) {
+            app.removeDownload(bookUUID: item.book.uuid, format: item.format, title: item.book.title)
+        }
+    }
+    #endif
 
     private var refreshKey: RefreshKey {
         RefreshKey(
@@ -252,8 +321,7 @@ public struct DownloadsView: View {
     /// is on is two components.
     private var booksSection: some View {
         let section = Section {
-            DownloadsSection(placement: .manage, inventory: inventory)
-                .padding(.vertical, Metrics.spacing8)
+            booksRows
         }
         .listRowInsets(EdgeInsets(
             top: 0, leading: Metrics.screenMargin,
@@ -265,6 +333,19 @@ public struct DownloadsView: View {
         return section
         #else
         return section.listRowSeparator(.hidden)
+        #endif
+    }
+
+    /// The section's parts. On the Mac each is a row of this list, selectable
+    /// by its item's id; elsewhere the section stacks itself in one row.
+    @ViewBuilder
+    private var booksRows: some View {
+        #if os(macOS)
+        DownloadsSection(placement: .manage, inventory: inventory, selectedRow: selectedRow)
+            .padding(.vertical, Metrics.spacing4)
+        #else
+        DownloadsSection(placement: .manage, inventory: inventory)
+            .padding(.vertical, Metrics.spacing8)
         #endif
     }
 

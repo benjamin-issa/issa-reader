@@ -46,6 +46,9 @@ struct DownloadsSection: View {
     /// shelf the library already has, so this is not a second list of the same
     /// books with its own rules.
     var showAll: (() -> Void)?
+    /// The Mac Downloads list's selected row, by item id, when that list
+    /// draws this section as its own rows (`DownloadsView`).
+    var selectedRow: String?
 
     @State private var scanned: DownloadsInventory = .empty
     /// Which row has its Delete button revealed. One at a time: two open rows
@@ -102,6 +105,53 @@ struct DownloadsSection: View {
     }
 
     var body: some View {
+        #if os(macOS)
+        if placement == .manage {
+            listRows
+        } else {
+            stacked
+        }
+        #else
+        stacked
+        #endif
+    }
+
+    #if os(macOS)
+    /// The Mac's Downloads screen: the same parts, each its own row of the
+    /// screen's `List` rather than all of them stacked inside one.
+    ///
+    /// Inside one row they were one row to AppKit, which attaches a context
+    /// menu to a table row — so a right-click on any card showed the first
+    /// card's `.bookMenu`, and its "Remove download" removed the first book
+    /// (F1). As rows, each card is tagged with its item's id, selectable, and
+    /// the list's own menu, double-click and ⌫ act on the row they name
+    /// (`DownloadsView`, `DownloadsRowCommands`).
+    @ViewBuilder
+    private var listRows: some View {
+        if showsTransfers {
+            Text("Downloading").overlineStyle()
+            ForEach(app.downloadsPending, id: \.job) { item in
+                transferRow(item.job, state: item.state)
+            }
+        }
+        header
+        if items.isEmpty {
+            if !showsTransfers { emptyState }
+        } else {
+            hint
+            ForEach(visibleItems) { item in
+                row(item)
+                    .tag(item.id)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel(accessibilityLabel(item))
+                    .bookDetailsAccessibilityAction(item.book)
+                    .accessibilityAction(named: "Remove download") { remove(item) }
+            }
+        }
+    }
+    #endif
+
+    private var stacked: some View {
         VStack(alignment: .leading, spacing: Metrics.spacing8) {
             if showsTransfers {
                 // The heading the rewire onto this shared component dropped.
@@ -328,7 +378,7 @@ struct DownloadsSection: View {
         .background(Palette.surface, in: RoundedRectangle(cornerRadius: Metrics.radiusMedium))
         .overlay(
             RoundedRectangle(cornerRadius: Metrics.radiusMedium)
-                .strokeBorder(isSelected(item.book) ? Palette.tangerine : Palette.border, lineWidth: 1),
+                .strokeBorder(isSelected(item) ? Palette.tangerine : Palette.border, lineWidth: 1),
         )
         .contentShape(Rectangle())
     }
@@ -346,9 +396,11 @@ struct DownloadsSection: View {
         "\(item.book.title), \(metaLine(item)), \(ByteCountText.text(item.bytes))"
     }
 
-    private func isSelected(_ book: Book) -> Bool {
+    private func isSelected(_ item: DownloadsInventory.DownloadedItem) -> Bool {
         #if os(macOS)
-        selection?.bookID == book.uuid
+        // The list's own row on the Downloads screen; the inspector's book in
+        // the Reading screen's stack, which has no list to select in.
+        placement == .manage ? selectedRow == item.id : selection?.bookID == item.book.uuid
         #else
         false
         #endif
@@ -644,6 +696,29 @@ struct SwipeToRemove<Content: View>: View {
     }
 }
 #endif
+
+// MARK: - The Mac list's rows
+
+/// The Downloads list's rows, as AppKit reports them.
+///
+/// The Mac's Downloads screen — the sidebar's and Settings' — is a `List`, and
+/// its rows used to be one row: the whole `DownloadsSection` drawn inside a
+/// single list row, with a `.contextMenu` on each card inside it. AppKit
+/// attaches a context menu to a table row, so a right-click anywhere in that
+/// one tall row showed the first card's menu, and its "Remove download"
+/// removed the first book (F1). Each card is its own row now, tagged with its
+/// item's id, and the list's own menu and Delete ask here which item the
+/// click or the selection names.
+enum DownloadsRowCommands {
+    /// The item a right-click, a double-click or ⌫ is about: the one row
+    /// named, if it is still listed. Several, or none, is no one row.
+    static func target(
+        of ids: Set<String>, in items: [DownloadsInventory.DownloadedItem],
+    ) -> DownloadsInventory.DownloadedItem? {
+        guard ids.count == 1, let id = ids.first else { return nil }
+        return items.first { $0.id == id }
+    }
+}
 
 // MARK: - The undo toast
 
