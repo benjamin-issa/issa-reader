@@ -111,7 +111,10 @@ private struct TVReadalongContent: View {
             // landed on. The phone and the Mac have had this banner since the
             // reader learned to skip a chapter that will not open; the
             // television skipped in silence.
-            .overlay(alignment: .top) { chapterNoticeBanner }
+            .overlay(alignment: .top) {
+                ChapterNoticeBanner(model: model, style: .television)
+                    .padding(.top, Self.margin)
+            }
             .animation(.easeInOut(duration: 0.2), value: model.chapterNotice)
             // Keyed on the page, so a chapter is laid out again only when the
             // size it must fit into actually changes.
@@ -395,41 +398,6 @@ private struct TVReadalongContent: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(label)
-    }
-
-    /// A chapter that would not open, for a few seconds — `ReaderView`'s
-    /// banner at ten-foot size.
-    ///
-    /// Not focusable and not dismissed by a press: the remote's focus belongs
-    /// to the page, and a select press there plays narration. It goes on its
-    /// own, and is spoken, because a page that simply did not turn says
-    /// nothing to anyone who cannot see the banner.
-    @ViewBuilder
-    private var chapterNoticeBanner: some View {
-        if let notice = model.chapterNotice {
-            Text(notice.message)
-                .font(Typography.sans(26))
-                .foregroundStyle(model.style.theme.text)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, Metrics.spacing24)
-                .padding(.vertical, Metrics.spacing16)
-                .background(
-                    model.style.theme.background,
-                    in: RoundedRectangle(cornerRadius: Metrics.radiusLarge, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: Metrics.radiusLarge, style: .continuous)
-                        .stroke(model.style.theme.text.opacity(0.15), lineWidth: 1))
-                .shadow(color: .black.opacity(0.2), radius: 16, y: 6)
-                .frame(maxWidth: 1100)
-                .padding(.top, Self.margin)
-                .transition(.opacity)
-                .allowsHitTesting(false)
-                .task(id: notice.id) {
-                    AccessibilityNotification.Announcement(notice.message).post()
-                    try? await Task.sleep(for: .seconds(6))
-                    model.dismissChapterNotice(notice)
-                }
-        }
     }
 
     /// The remote's Menu button is the only way back, and nothing said so.

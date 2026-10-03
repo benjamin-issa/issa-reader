@@ -905,7 +905,9 @@ public struct ReaderView: View {
         // A chapter that would not open, said over the page it left in place.
         // Below the top bar's reserve, which the bar may be drawn over.
         .overlay(alignment: .top) {
-            chapterNoticeBanner
+            ChapterNoticeBanner(model: model, style: .reader)
+                .padding(.horizontal, Metrics.spacing24)
+                .padding(.top, Metrics.spacing12)
                 .padding(.top, Self.drawsOwnTopBar ? ReaderChrome.barHeight : 0)
         }
         .animation(.easeInOut(duration: 0.2), value: model.chapterNotice)
@@ -1020,42 +1022,6 @@ public struct ReaderView: View {
         // while the reader browses the library; visibility and release are the
         // screen-level hooks' business, because this view also disappears
         // whenever the phase merely leaves `.ready`.
-    }
-
-    /// A chapter that would not open, for a few seconds.
-    ///
-    /// A notice rather than the failure screen: the chapter the reader was on
-    /// is still laid out and still theirs. Gone on its own, or at a tap, and
-    /// spoken, because a page that simply did not turn says nothing to anyone
-    /// who cannot see the banner.
-    @ViewBuilder
-    private var chapterNoticeBanner: some View {
-        if let notice = model.chapterNotice {
-            Text(notice.message)
-                .font(Typography.footnote)
-                .foregroundStyle(model.style.theme.text)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, Metrics.spacing16)
-                .padding(.vertical, Metrics.spacing12)
-                // The page's own surface, as the selection menu has it: a
-                // system material goes dark over a light page in Dark Mode.
-                .background(
-                    model.style.theme.background,
-                    in: RoundedRectangle(cornerRadius: Metrics.radiusLarge, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: Metrics.radiusLarge, style: .continuous)
-                        .stroke(model.style.theme.text.opacity(0.15), lineWidth: 1))
-                .shadow(color: .black.opacity(0.15), radius: 12, y: 4)
-                .padding(.horizontal, Metrics.spacing24)
-                .padding(.top, Metrics.spacing12)
-                .transition(.opacity)
-                .onTapGesture { model.dismissChapterNotice(notice) }
-                .task(id: notice.id) {
-                    AccessibilityNotification.Announcement(notice.message).post()
-                    try? await Task.sleep(for: .seconds(5))
-                    model.dismissChapterNotice(notice)
-                }
-        }
     }
 
     /// What to do with the selected text. Copy first, because that is what a
