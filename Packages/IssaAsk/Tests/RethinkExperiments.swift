@@ -690,7 +690,7 @@ struct RethinkRunner {
         _ answer: AskAnswer, question: String, boundary: ReadingBoundary, into o: inout ROutcome,
     ) async throws -> AskAnswer {
         guard !answer.notYetRevealed else { return answer }
-        let candidates = AskEngine.unvettedNames(in: answer.text, question: question)
+        let candidates = AskEngine.unvettedNames(in: answer.text)
         guard !candidates.isEmpty else { return answer }
         let unmet = try await book.store.unmetWords(candidates, in: book.source.bookUUID, before: boundary)
         guard !unmet.isEmpty else { return answer }
@@ -709,7 +709,7 @@ struct RethinkRunner {
         o.leaked = q.exclude.filter { mentions(lowered, $0) }
         o.rawLeaked = q.exclude.filter { mentions(o.rawAnswer.lowercased(), $0) }
         if !q.allowsNewNames, !o.notYetRevealed, o.error == nil {
-            let candidates = AskEngine.unvettedNames(in: o.answer, question: q.question)
+            let candidates = AskEngine.unvettedNames(in: o.answer)
             o.newNames = try await book.store.unmetWords(candidates, in: book.source.bookUUID, before: boundary).sorted()
         }
         if !q.expectAny.isEmpty || !q.expectAll.isEmpty {

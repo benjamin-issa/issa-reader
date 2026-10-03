@@ -160,7 +160,7 @@ struct RegressionRun {
         // an FTS error able to fail a question that does not check this.
         var newNames: [String] = []
         if !fixture.allowsNewNames, !found.notYetRevealed {
-            let candidates = AskEngine.unvettedNames(in: found.text, question: fixture.question)
+            let candidates = AskEngine.unvettedNames(in: found.text)
             newNames = try await store.unmetWords(candidates, in: book.bookUUID, before: boundary)
                 .sorted()
         }

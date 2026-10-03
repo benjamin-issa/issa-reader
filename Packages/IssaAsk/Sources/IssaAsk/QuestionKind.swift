@@ -261,23 +261,7 @@ enum QuestionReader {
 
     // MARK: - Classifying
 
-    /// What the classifier decided, and the text it decided it on.
-    ///
-    /// The second half exists because the spoiler gate has to check the same
-    /// words. `nameCandidates` read the whole question while the classifier had
-    /// already thrown the aside away, so "wait who is Marek again? Is he one of
-    /// the Wardens?" retrieved Marek's introduction and was then refused for a
-    /// word out of a clause nothing had been retrieved for. The gate cannot
-    /// simply always take the clause either: a question whose opening clause
-    /// claims nothing is decided whole, and must be checked whole.
-    struct Reading {
-        var kind: QuestionKind
-        /// The text `kind` was read from — the leading clause when the clause
-        /// claimed the kind, the whole question otherwise.
-        var text: String
-    }
-
-    /// The question's shape, and what it was read from.
+    /// The question's shape.
     ///
     /// Order matters. Recap first, because it has no subject at all; kinship
     /// before identity, because "Who is Alice's sister?" is both a "who is"
@@ -297,45 +281,28 @@ enum QuestionReader {
     /// the reader checking their own memory, not the question — and the question
     /// is the clause they opened with.
     ///
-    /// Each of the four steps records its own `text`, rather than a rule
-    /// deriving one afterwards from the kind: *which* step returned is exactly
-    /// what "the text the classifier decided on" means, and a kind alone cannot
-    /// tell the clause-decided kinship reading from the fall-through one.
-    static func read(_ question: String, vocabulary: Vocabulary) -> Reading {
-        guard !QueryTerms.isRecapQuestion(question) else {
-            return Reading(kind: .recap, text: question)
-        }
+    /// The spoiler gate does not follow the clause: it reads every sentence
+    /// of the question whichever one decided the kind, because an aside can
+    /// name somebody too — see `QueryTerms.nameCandidates`.
+    static func kind(of question: String, vocabulary: Vocabulary) -> QuestionKind {
+        guard !QueryTerms.isRecapQuestion(question) else { return .recap }
         // Stripped once, here, for every reading below. The leading clause is
         // re-tokenised from its own substring, so it carries its own hesitation
         // and has to be stripped separately.
         let words = droppingLeadingFillers(Self.words(in: question))
-        guard !words.isEmpty else { return Reading(kind: .general(nil), text: question) }
+        guard !words.isEmpty else { return .general(nil) }
         let clause = leadingClauseText(of: question)
         let leading = clause.map { droppingLeadingFillers(Self.words(in: $0)) } ?? words
 
-        if let kinship = kinship(in: leading, vocabulary: vocabulary) {
-            return Reading(kind: kinship, text: clause ?? question)
-        }
+        if let kinship = kinship(in: leading, vocabulary: vocabulary) { return kinship }
         if let identity = identity(in: leading, vocabulary: vocabulary),
            case let .identity(subject) = identity,
            namesOneSubject(subject, vocabulary: vocabulary) {
-            return Reading(kind: identity, text: clause ?? question)
+            return identity
         }
-        if let kinship = kinship(in: words, vocabulary: vocabulary) {
-            return Reading(kind: kinship, text: question)
-        }
-        if let identity = identity(in: words, vocabulary: vocabulary) {
-            return Reading(kind: identity, text: question)
-        }
-        return Reading(
-            kind: .general(generalSubject(in: words, vocabulary: vocabulary)), text: question,
-        )
-    }
-
-    /// The question's shape, for a caller with no use for the text it came
-    /// from — which is every caller but `QueryTerms.extract` and the tests.
-    static func kind(of question: String, vocabulary: Vocabulary) -> QuestionKind {
-        read(question, vocabulary: vocabulary).kind
+        if let kinship = kinship(in: words, vocabulary: vocabulary) { return kinship }
+        if let identity = identity(in: words, vocabulary: vocabulary) { return identity }
+        return .general(generalSubject(in: words, vocabulary: vocabulary))
     }
 
     /// Whether an identity subject names one thing, rather than stitching two
@@ -366,9 +333,8 @@ enum QuestionReader {
     /// does a sentence end" is how "Mr." becomes a clause boundary.
     ///
     /// **Nil rather than the whole question**, so the caller can tell the two
-    /// apart — the spoiler gate checks the clause when there is one and the
-    /// whole question when there is not, and a clause equal to the question is
-    /// indistinguishable from no clause. Classification of a one-sentence
+    /// apart — a clause equal to the question is indistinguishable from no
+    /// clause. Classification of a one-sentence
     /// question therefore runs on the caller's own array, unchanged from before
     /// any of this existed. Every case in `QuestionKindTests` and every fixture
     /// question is one sentence, which is what makes the four-step order above
@@ -504,7 +470,7 @@ enum QuestionReader {
 
     /// The question with its hesitation taken off the front.
     ///
-    /// Once, in `read(_:vocabulary:)`, rather than inside the identity reading
+    /// Once, in `kind(of:vocabulary:)`, rather than inside the identity reading
     /// where it used to live. Every other reading looks at a *position*: the
     /// yes/no scan reads the first word to find its copula, `howRelated` for
     /// "how", and `isNameLike` exempts index zero because every question

@@ -249,17 +249,18 @@ struct BoundaryTests {
 
     // MARK: - The gate and the classifier
 
-    /// The spoiler gate reads the text the classifier decided on, on the book.
+    /// The spoiler gate reads every sentence of the question, on the book.
     ///
-    /// A reader who has lost the thread asks their question and then checks
-    /// their own memory out loud. The classifier already ignores the aside — this
-    /// is an identity question about Dinah, and retrieval is about Dinah — but
-    /// the gate read the whole question, found a capitalised word this book has
-    /// never printed, and refused the question that was asked. The excerpts it
-    /// would have refused could not have contained that word: they were
-    /// retrieved for the clause, which is the whole argument for the change.
-    @Test("an unmet name in an aside no longer refuses the clause that was asked")
-    func theGateReadsTheLeadingClause() async throws {
+    /// The classifier ignores the aside — this is an identity question about
+    /// Dinah, and retrieval is about Dinah — and for a while the gate did too,
+    /// on the ground that excerpts retrieved for the clause could not contain
+    /// the aside's word. But the model answers from memory whatever the
+    /// excerpts hold, and the answer side exempted every word of the question,
+    /// so an unmet name in a second sentence passed both guards (R-04). An
+    /// aside naming somebody the book has not introduced is now refused, and
+    /// an aside naming only people the reader has met is still answered.
+    @Test("an unmet name in an aside refuses the question, and a met one does not")
+    func theGateReadsEverySentence() async throws {
         let (store, _, directory) = try await AskFixture.preparedStore()
         defer { AskFixture.remove(directory) }
         let retriever = AskRetriever(
@@ -267,21 +268,28 @@ struct BoundaryTests {
             boundary: try AskFixture.endOf(spine: AskFixture.Spine.chapterI),
         )
 
-        // "Ministry" is in no spine of *Alice*, so this was `.notYet(["ministry"])`.
-        let asked = try await retriever.retrieve(
+        // "Ministry" is in no spine of *Alice*.
+        let aside = try await retriever.retrieve(
             question: "wait who is Dinah again? Is she one of the Ministry people?",
+        )
+        if case let .notYet(unmet) = aside {
+            #expect(unmet == ["ministry"])
+        } else {
+            Issue.record("an unmet name in the aside was not probed")
+        }
+
+        // The control: the same shape with an aside the reader has met.
+        let asked = try await retriever.retrieve(
+            question: "wait who is Dinah again? Is she Alice's cat?",
         )
         if case let .evidence(ranked, kind) = asked {
             #expect(kind.label == "identity")
-            #expect(!ranked.isEmpty)
             #expect(ranked.contains { $0.passage.text.lowercased().contains("dinah") })
         } else {
             Issue.record("the clause the reader asked about was refused")
         }
 
-        // The control, in the same test: a question the classifier read *whole*
-        // is still gated whole. Nothing here narrows what is checked; the gate
-        // moved to the classifier's own text, and this question's is all of it.
+        // And a question the classifier read whole is gated whole.
         let refused = try await retriever.retrieve(
             question: "i lost track. Who is the Cheshire Cat?",
         )

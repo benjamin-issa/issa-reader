@@ -112,7 +112,7 @@ struct SystemAnswerModelTests {
         if found.notYetRevealed {
             #expect(found.sources.isEmpty)
         } else {
-            let candidates = AskEngine.unvettedNames(in: found.text, question: question)
+            let candidates = AskEngine.unvettedNames(in: found.text)
             let unmet = try await store.unmetWords(
                 candidates, in: AskFixture.bookUUID, before: boundary,
             )

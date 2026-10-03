@@ -162,26 +162,27 @@ struct QueryTermsTests {
         #expect(QueryTerms.extract(from: "Did it happen on Tuesday?").nameCandidates.isEmpty)
     }
 
-    /// The gate reads exactly the text the classifier decided on.
+    /// The gate reads every sentence, whichever one the classifier decided on.
     ///
-    /// The classifier decides on the leading clause whenever that clause claims
-    /// a kind, and the aside after it is thrown away — but `nameCandidates` read
-    /// the whole question, so a capitalised word out of the discarded aside
-    /// could refuse the question that was actually asked. Retrieval for this one
-    /// is about Marek and nothing else; no excerpt it returns can contain the
-    /// name in the aside, so there is nothing there to be spoiled.
-    @Test("the spoiler gate reads what the classifier read")
-    func nameCandidatesFollowTheClassifier() {
+    /// For a while it read only the classifier's leading clause, on the ground
+    /// that retrieval for this question is about Marek and an excerpt could not
+    /// contain the aside's name. But the excerpts were never the leak — the
+    /// model's memory is — and the answer side exempted the aside's words as
+    /// already ruled on, so "Who is Alice? Does she ever meet the Cheshire
+    /// Cat?" was answered about the Cat with neither guard having looked (R-04).
+    /// The classifier still reads the clause; the gate reads the question.
+    @Test("the spoiler gate reads every sentence, not only the classifier's clause")
+    func nameCandidatesReadEverySentence() {
         let aside = QueryTerms.extract(
             from: "wait who is Marek again? Is he one of the Wardens?",
             knownNames: ["marek"],
         )
         #expect(aside.kind.label == "identity")
-        #expect(aside.nameCandidates == ["marek"])
+        // "Is" opens its sentence and is a function word; "Wardens" is a name.
+        #expect(aside.nameCandidates == ["marek", "wardens"])
 
-        // The counterpart, and the reason the rule is not "always the clause".
-        // This question's opening clause claims nothing, so it is decided on the
-        // whole question — and the gate has to see the whole question with it.
+        // A question whose opening clause claims nothing is decided on the
+        // whole question, and gated whole as before.
         let fellThrough = QueryTerms.extract(
             from: "i lost track. Is Dask Ryn's brother?", knownNames: ["ryn", "dask"],
         )
@@ -225,9 +226,7 @@ struct QueryTermsTests {
         // `unmetWords` looks each of these up in the index. `dask's` is a word
         // no book contains as one token, so without the strip the guard checks
         // something that is not the name.
-        #expect(AskEngine.unvettedNames(
-            in: "She trusted Dask's word.", question: "Who is Ryn?",
-        ) == ["dask"])
+        #expect(AskEngine.unvettedNames(in: "She trusted Dask's word.") == ["dask"])
     }
 
     @Test("search tokens are unique and lead with the question's own words")

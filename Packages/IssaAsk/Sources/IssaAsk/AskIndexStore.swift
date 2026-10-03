@@ -808,6 +808,30 @@ public actor AskIndexStore {
         return NameFinder.merge(names).prefix(limit).map(\.name)
     }
 
+    /// Every word of every name in this book's name table — **the whole book,
+    /// not bounded by the reader's position.**
+    ///
+    /// The one read in this file that does not go through `readClause`, and on
+    /// purpose: it never chooses what the model or the reader sees. It answers
+    /// "could this lower-case word in the question be somebody?", so the spoiler
+    /// probe — which is bounded — can be asked about it. "who is the cheshire
+    /// cat?" at the end of Chapter I has no capital to go on, and the name it
+    /// asks about is by definition one the bounded table does not hold yet
+    /// (R-04). What a reader can learn from it is that the question is refused,
+    /// which is exactly what the capitalised spelling of the same question gets
+    /// whether or not the book ever names the Cat.
+    ///
+    /// Folded and possessive-stripped the way `QueryTerms` folds a question, so
+    /// the two compare directly. No index means no words — and `unmetWords`
+    /// then calls every candidate unmet, which is the conservative direction.
+    public func nameWords(in bookUUID: String) throws -> Set<String> {
+        guard let queue = try queue(for: bookUUID) else { return [] }
+        let keys = try queue.read { db in
+            try String.fetchAll(db, sql: "SELECT DISTINCT nameKey FROM name")
+        }
+        return Set(keys.flatMap { QueryTerms.tokens(in: $0).map(QueryTerms.strippingPossessive) })
+    }
+
     // MARK: - Deletion
 
     /// Drops one book's index. Called when its download is removed: the index

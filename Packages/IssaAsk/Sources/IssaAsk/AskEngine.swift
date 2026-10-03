@@ -260,7 +260,6 @@ public actor AskEngine {
                         answer, among: Self.numbered(evidence.map(\.passage)),
                         priorities: Self.priorities(of: evidence),
                     ),
-                    question: sanitised,
                     bookUUID: source.bookUUID, boundary: boundary,
                 ),
             ))
@@ -277,10 +276,7 @@ public actor AskEngine {
             )
             try Task.checkCancellation()
             continuation.yield(.answered(
-                try await vetted(
-                    generated, question: sanitised,
-                    bookUUID: source.bookUUID, boundary: boundary,
-                ),
+                try await vetted(generated, bookUUID: source.bookUUID, boundary: boundary),
             ))
         }
     }
@@ -391,9 +387,17 @@ public actor AskEngine {
     /// the answer is held to the same test the question is: every name in it
     /// must be a name the book has already used.
     ///
-    /// Words already in the question are exempt, because the question-side
-    /// guard has ruled on those. A word that merely begins a sentence is exempt
-    /// only when it is a function word — see `unvettedNames`.
+    /// **Nothing is exempt for being in the question.** Words already in the
+    /// question used to be, on the premise that the question-side guard had
+    /// ruled on them — but that guard never probed a recap-shaped question, a
+    /// second sentence or a name in lower case, so "What has happened to the
+    /// Cheshire Cat?", "Who is Alice? Does she ever meet the Cheshire Cat?" and
+    /// "who is the cheshire cat?" each let the model's from-memory answer about
+    /// the Cat through both guards (R-04). A word the question side did probe
+    /// and found met is met here too, so exempting it saved one indexed lookup;
+    /// a word it did not probe is exactly the hole. A word that merely begins
+    /// a sentence is exempt only when it is a function word — see
+    /// `unvettedNames`.
     ///
     /// The sources are deliberately **not** filtered. Every one of them is book
     /// text the reader has already passed: an excerpt exists only because
@@ -401,10 +405,10 @@ public actor AskEngine {
     /// second check here would be a check on something true by construction —
     /// and one that could only ever go wrong by dropping honest evidence.
     private func vetted(
-        _ answer: AskAnswer, question: String, bookUUID: String, boundary: ReadingBoundary,
+        _ answer: AskAnswer, bookUUID: String, boundary: ReadingBoundary,
     ) async throws -> AskAnswer {
         guard !answer.notYetRevealed else { return answer }
-        let candidates = Self.unvettedNames(in: answer.text, question: question)
+        let candidates = Self.unvettedNames(in: answer.text)
         guard !candidates.isEmpty else { return answer }
         let unmet = try await store.unmetWords(candidates, in: bookUUID, before: boundary)
         guard !unmet.isEmpty else { return answer }
@@ -422,8 +426,8 @@ public actor AskEngine {
         )
     }
 
-    /// Capitalised words in an answer that the question did not already ask
-    /// about and that a sentence did not have to capitalise.
+    /// Capitalised words in an answer that a sentence did not have to
+    /// capitalise.
     ///
     /// Deliberately the same crude test as `QueryTerms.nameCandidates`, and for
     /// the same reason: the names readers get spoiled by are invented ones no
@@ -435,8 +439,8 @@ public actor AskEngine {
     /// premise that "Alice went home" and "Rome fell" cannot be told apart
     /// without a tagger. The conclusion drawn from it was wrong. Every sentence
     /// starts with a capital, so exempting them all exempted the spoiler:
-    /// `unvettedNames(in: "Aldric dies. Ryn escapes.", question: "What happens
-    /// next?")` returned `[]`, and both names went to the reader. So did
+    /// `unvettedNames(in: "Aldric dies. Ryn escapes.")` returned `[]`, and
+    /// both names went to the reader. So did
     /// "Bilbo found the ring in the dark." — a headline spoiler is very often
     /// the first word.
     ///
@@ -450,12 +454,7 @@ public actor AskEngine {
     /// precisely where place names are the spoiler: "Mordor lies to the east."
     /// Using its silence to exempt is worse still, because invented names are
     /// what it misses and invented names are what readers get spoiled by.
-    static func unvettedNames(in answer: String, question: String) -> [String] {
-        // Possessive-stripped on both sides, so "Dask's" in the answer is
-        // checked against the index as `dask` — the word the book actually
-        // contains — and a name the question already asked about is still
-        // recognised when the answer inflects it.
-        let asked = Set(QueryTerms.tokens(in: question).map(QueryTerms.strippingPossessive))
+    static func unvettedNames(in answer: String) -> [String] {
         var candidates: Set<String> = []
         // The first word of the answer opens a sentence like any other.
         var opensSentence = true
@@ -477,8 +476,10 @@ public actor AskEngine {
             // than for a person. No special case for the first word of the
             // answer: "Aldric dies." puts the spoiler there.
             if opensSentence, QueryTerms.sentenceOpeners.contains(bare.lowercased()) { continue }
+            // Possessive-stripped, so "Dask's" is checked against the index as
+            // `dask` — the word the book actually contains.
             for token in QueryTerms.tokens(in: bare).map(QueryTerms.strippingPossessive)
-                where token.count > 2 && !asked.contains(token) {
+                where token.count > 2 {
                 candidates.insert(token)
             }
         }

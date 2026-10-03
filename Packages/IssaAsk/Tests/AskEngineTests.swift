@@ -697,29 +697,26 @@ struct AskEngineTests {
             // probe arbitrates, and "Rome" is in *Alice* Chapter II — "London
             // is the capital of Paris, and Paris is the capital of Rome" — so
             // it is cleared from there onwards and refused before it.
-            ("Rome fell.", "What happens next?", ["rome"]),
+            ("Rome fell.", ["rome"]),
             // The bug. Both spoilers opened a sentence, so both went through.
-            ("Aldric dies. Ryn escapes.", "What happens next?", ["aldric", "ryn"]),
+            ("Aldric dies. Ryn escapes.", ["aldric", "ryn"]),
             // A headline spoiler is very often the first word of the answer.
-            ("Bilbo found the ring in the dark.", "What happened in the tunnel?", ["bilbo"]),
+            ("Bilbo found the ring in the dark.", ["bilbo"]),
             // `Mr.` used to end a sentence, which exempted every name that
             // followed an honorific.
-            ("She met Mr. Darcy at the ball.", "Who did she meet?", ["darcy"]),
-            // Both "Alice"s open sentences and "Alice" is in the question
-            // besides; "the" and "who" are function words. What is left is the
-            // pair a reader could be spoiled by.
-            (
-                "Alice met the Duchess, who knew Bilbo. Alice waved.",
-                "Who is Alice?", ["bilbo", "duchess"]
-            ),
+            ("She met Mr. Darcy at the ball.", ["darcy"]),
+            // Both "Alice"s open sentences, and a name is not a function
+            // word; "the" and "who" are. A question that asked about Alice no
+            // longer exempts her: the probe clears her on page one (R-04).
+            ("Alice met the Duchess, who knew Bilbo. Alice waved.", ["alice", "bilbo", "duchess"]),
             // A colon introduces a continuation, not a sentence.
-            ("The note said: Aldric is alive.", "What did the note say?", ["aldric"]),
+            ("The note said: Aldric is alive.", ["aldric"]),
             // The row that earns the list: four sentences, four openers, and
             // not one of them a person.
             (
                 "The rabbit ran. She followed it. There was a door. "
                     + "Then everything went dark.",
-                "What happened?", []
+                []
             ),
             // Measured on the 27 model (1.4.0 Ask review): three correct
             // answers about the garden opened "Despite her efforts, …", and
@@ -729,18 +726,18 @@ struct AskEngineTests {
             (
                 "Despite her efforts, she cannot get in. Throughout, Aldric waits. "
                     + "Inside, it is dark. Unlike Ryn, she stays.",
-                "Does Alice get into the garden?", ["aldric", "ryn"]
+                ["aldric", "ryn"]
             ),
             // The honest worst case. "Cooks" is a plural noun opening a
             // sentence, and it costs a refusal on a book that never uses the
             // word. A test that hid this would be a bad test.
-            ("Cooks use pepper.", "Why is the soup peppery?", ["cooks"]),
+            ("Cooks use pepper.", ["cooks"]),
         ],
     )
     func capitalisedWordsAreNamesUnlessGrammarCapitalisedThem(
-        answer: String, question: String, expected: [String],
+        answer: String, expected: [String],
     ) {
-        #expect(AskEngine.unvettedNames(in: answer, question: question) == expected)
+        #expect(AskEngine.unvettedNames(in: answer) == expected)
     }
 
     @Test("a sentence-opening name the book has used is answered, not refused")
@@ -764,9 +761,7 @@ struct AskEngineTests {
         #expect(!answer.notYetRevealed)
         #expect(answer.text.contains("Alice"))
         // And the guard really was offered her, rather than skipping the check.
-        #expect(AskEngine.unvettedNames(
-            in: answer.text, question: "What happened at the start?",
-        ) == ["alice"])
+        #expect(AskEngine.unvettedNames(in: answer.text) == ["alice"])
     }
 
     // MARK: - The kinship fast path

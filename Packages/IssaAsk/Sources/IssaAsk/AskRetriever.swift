@@ -122,9 +122,24 @@ public struct AskRetriever: Sendable {
         let known = (try? await store.topNames(
             in: bookUUID, before: boundary, limit: Limits.knownNames,
         )) ?? []
-        let terms = QueryTerms.extract(from: question, knownNames: known)
+        // Thrown rather than defaulted: these decide which of the reader's
+        // lower-case words the probe below checks, and an empty set would
+        // quietly check fewer.
+        let bookNames = try await store.nameWords(in: bookUUID)
+        let terms = QueryTerms.extract(from: question, knownNames: known, bookNames: bookNames)
 
-        // A recap names nobody in particular, so it has nothing to be unmet.
+        // Every question, a recap's included. "What has happened so far?" names
+        // nobody and probes nothing — but "What has happened to the Cheshire
+        // Cat?" is a recap by its pattern, and skipping the probe for it took
+        // the recap passages and let the model describe the Cat from memory
+        // (R-04).
+        let unmet = try await store.unmetWords(
+            terms.nameCandidates, in: bookUUID, before: boundary,
+        )
+        // Retrieval is skipped when the answer is already known to be "not
+        // yet": it would only cost a query whose results are thrown away.
+        guard unmet.isEmpty else { return .notYet(unmet: unmet) }
+
         guard !terms.isRecap else {
             let recap = try await store.recapPassages(
                 in: bookUUID, before: boundary, limit: limit,
@@ -139,13 +154,6 @@ public struct AskRetriever: Sendable {
             guard !recap.isEmpty else { return .notYet(unmet: []) }
             return .evidence(Self.recapRanked(recap), kind: .recap)
         }
-
-        let unmet = try await store.unmetWords(
-            terms.nameCandidates, in: bookUUID, before: boundary,
-        )
-        // Retrieval is skipped when the answer is already known to be "not
-        // yet": it would only cost a query whose results are thrown away.
-        guard unmet.isEmpty else { return .notYet(unmet: unmet) }
 
         var found = try await evidence(for: terms, limit: limit)
         if found.isEmpty, terms.kind.subject != nil {
