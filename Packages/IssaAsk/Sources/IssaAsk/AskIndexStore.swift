@@ -524,10 +524,11 @@ public actor AskIndexStore {
     /// Every passage matching this pattern from before the boundary, in the
     /// order the caller needs them.
     ///
-    /// The one bounded query. Everything else in this file that reads passages
-    /// goes through it, so the boundary clause and the truncation of the
-    /// straddling passage exist in exactly one place — a second copy of them
-    /// is a second thing that can be got wrong, and getting it wrong shows the
+    /// The public face of `bounded(_:before:order:limit:in:)`, which every read
+    /// of a passage in this file goes through — the search, the recap and the
+    /// unmet-word probe — so the boundary clause and the truncation of the
+    /// straddling passage exist in exactly one place. A second copy of them is
+    /// a second thing that can be got wrong, and getting it wrong shows the
     /// reader a page they have not read.
     public func passages(
         matching pattern: FTS5Pattern,
@@ -550,30 +551,91 @@ public actor AskIndexStore {
         in queue: DatabaseQueue,
     ) throws -> [RetrievedPassage] {
         try queue.read { db in
-            let rows = try Row.fetchAll(db, sql: """
-                SELECT passage.spineIndex AS spineIndex, passage.ordinal AS ordinal,
-                       passage.start AS start, passage.end AS end,
-                       passage.words AS words, passage.text AS text,
-                       \(order.score) AS score
-                FROM passage
-                JOIN passage_fts ON passage_fts.rowid = passage.rowid
-                WHERE passage_fts MATCH :pattern
-                  AND (passage.spineIndex < :spine
-                       OR (passage.spineIndex = :spine AND passage.start < :offset))
-                ORDER BY \(order.clause)
-                LIMIT :limit
-                """, arguments: [
-                "pattern": pattern, "spine": boundary.spineIndex,
-                "offset": boundary.charOffset, "limit": limit,
-            ])
-            return rows.compactMap { truncated($0, at: boundary) }
+            try bounded(pattern, before: boundary, order: Scan(order), limit: limit, in: db)
         }
+    }
+
+    /// The reading boundary, as SQL: everything in an earlier spine item, and
+    /// in the reader's own spine item whatever starts before their offset.
+    ///
+    /// The top spoiler invariant, written once. The passage queries and the
+    /// name table both read it — the name table with its first mention in
+    /// place of a passage's start, which is the same question asked of a
+    /// person rather than a paragraph. Binds `:spine` and `:offset`.
+    static func readClause(spine: String, offset: String) -> String {
+        "(\(spine) < :spine OR (\(spine) = :spine AND \(offset) < :offset))"
+    }
+
+    /// The orders a bounded read can come back in: the two a caller can ask
+    /// for, and the recap's newest-first, which is how it takes the *last*
+    /// passages before the boundary under a `LIMIT`.
+    enum Scan {
+        case relevance, bookOrder, newestFirst
+
+        init(_ order: PassageOrder) {
+            switch order {
+            case .relevance: self = .relevance
+            case .bookOrder: self = .bookOrder
+            }
+        }
+
+        var clause: String {
+            switch self {
+            case .relevance: PassageOrder.relevance.clause
+            case .bookOrder: PassageOrder.bookOrder.clause
+            case .newestFirst: "passage.spineIndex DESC, passage.ordinal DESC"
+            }
+        }
+
+        var score: String {
+            switch self {
+            case .relevance: PassageOrder.relevance.score
+            case .bookOrder, .newestFirst: "0.0"
+            }
+        }
+    }
+
+    /// The one bounded read of the passage table.
+    ///
+    /// `readClause` decides which rows come back and `truncated` cuts the one
+    /// the reader is standing in, and nothing in this file reads a passage any
+    /// other way: the search, the recap (no pattern) and the unmet-word probe
+    /// (`.bookOrder`, limit 1) are all this. Cached, because the probe runs it
+    /// once per word of a question and an answer.
+    ///
+    /// - Parameter pattern: nil for every passage, which is a recap.
+    static func bounded(
+        _ pattern: FTS5Pattern?, before boundary: ReadingBoundary, order: Scan, limit: Int,
+        in db: Database,
+    ) throws -> [RetrievedPassage] {
+        precondition(pattern != nil || order != .relevance, "bm25 needs a pattern")
+        let matching = pattern == nil ? "" : """
+            JOIN passage_fts ON passage_fts.rowid = passage.rowid
+            WHERE passage_fts MATCH :pattern AND
+            """
+        let statement = try db.cachedStatement(sql: """
+            SELECT passage.spineIndex AS spineIndex, passage.ordinal AS ordinal,
+                   passage.start AS start, passage.end AS end,
+                   passage.words AS words, passage.text AS text,
+                   \(order.score) AS score
+            FROM passage
+            \(pattern == nil ? "WHERE" : matching)
+              \(readClause(spine: "passage.spineIndex", offset: "passage.start"))
+            ORDER BY \(order.clause)
+            LIMIT :limit
+            """)
+        var arguments: StatementArguments = [
+            "spine": boundary.spineIndex, "offset": boundary.charOffset, "limit": limit,
+        ]
+        if let pattern { arguments += ["pattern": pattern] }
+        return try Row.fetchAll(statement, arguments: arguments)
+            .compactMap { truncated($0, at: boundary) }
     }
 
     /// Turns a row into a passage, cutting the straddling one to what has
     /// actually been read.
     ///
-    /// `start < :offset` in the clause above is the whole boundary: `start` is
+    /// `start < :offset` in `readClause` is the whole boundary: `start` is
     /// always below `end`, so it admits exactly the passages that end at or
     /// before the position plus the single one the position falls inside, and
     /// nothing later in the book whatever the query says. That one is then cut
@@ -625,18 +687,8 @@ public actor AskIndexStore {
         before boundary: ReadingBoundary, limit: Int, in queue: DatabaseQueue,
     ) throws -> [RetrievedPassage] {
         try queue.read { db in
-            let rows = try Row.fetchAll(db, sql: """
-                SELECT spineIndex, ordinal, start, end, words, text, 0.0 AS score
-                FROM passage
-                WHERE spineIndex < :spine
-                   OR (spineIndex = :spine AND start < :offset)
-                ORDER BY spineIndex DESC, ordinal DESC
-                LIMIT :limit
-                """, arguments: [
-                "spine": boundary.spineIndex, "offset": boundary.charOffset, "limit": limit,
-            ])
             // Back into reading order: a recap read backwards is a worse recap.
-            return rows.compactMap { truncated($0, at: boundary) }
+            try bounded(nil, before: boundary, order: .newestFirst, limit: limit, in: db)
                 .sorted { ($0.passage.spineIndex, $0.passage.ordinal)
                     < ($1.passage.spineIndex, $1.passage.ordinal) }
         }
@@ -677,47 +729,25 @@ public actor AskIndexStore {
         _ words: [String], before boundary: ReadingBoundary, in queue: DatabaseQueue,
     ) throws -> [String] {
         try queue.read { db in
-            // One preparation, N probes. Prepared inside the filter, SQLite
-            // parsed and planned the same statement once per candidate — and
-            // the answer-side guard now offers it more candidates than it used
-            // to, because the sentence-opener exemption became conditional.
-            // Passages read to their end: `end <= offset` is exactly the
-            // passages `truncated` leaves whole.
-            let whole = try db.cachedStatement(sql: """
-                SELECT 1
-                FROM passage
-                JOIN passage_fts ON passage_fts.rowid = passage.rowid
-                WHERE passage_fts MATCH :pattern
-                  AND (passage.spineIndex < :spine
-                       OR (passage.spineIndex = :spine AND passage.end <= :offset))
-                LIMIT 1
-                """)
-            // The one passage the boundary falls inside, if it matches at all.
-            let straddling = try db.cachedStatement(sql: """
-                SELECT passage.spineIndex, passage.ordinal, passage.start, passage.end,
-                       passage.words, passage.text, 0.0 AS score
-                FROM passage
-                JOIN passage_fts ON passage_fts.rowid = passage.rowid
-                WHERE passage_fts MATCH :pattern
-                  AND passage.spineIndex = :spine
-                  AND passage.start < :offset AND passage.end > :offset
-                LIMIT 1
-                """)
-            let arguments: (FTS5Pattern) -> StatementArguments = { pattern in
-                ["pattern": pattern, "spine": boundary.spineIndex, "offset": boundary.charOffset]
-            }
-            return try words.filter { word in
+            try words.filter { word in
                 // `FTSQuery.all`, not `FTS5Pattern(matchingAnyTokenIn:)`, which
                 // probed "jean'luc" as `jean OR luc` and called the name met
                 // when only one half of it had appeared — an unmet name walking
                 // straight past the spoiler guard. Quoted, it is a phrase, and
                 // only the whole name counts as met.
                 guard let pattern = FTSQuery.all([word]) else { return false }
-                if try Int.fetchOne(whole, arguments: arguments(pattern)) != nil { return false }
-                guard let row = try Row.fetchOne(straddling, arguments: arguments(pattern)),
-                      let read = truncated(row, at: boundary)
-                else { return true }
-                return !Self.contains(phrase: word, in: read.passage.text)
+                // The earliest match before the boundary, through the same
+                // bounded read the search uses. In book order the passage the
+                // reader is standing in comes after every whole one, so the
+                // first match is a whole passage — met — whenever there is
+                // one, and is the straddling passage only when nothing earlier
+                // matches. No match at all, or one the cut emptied, is unmet.
+                guard let first = try bounded(
+                    pattern, before: boundary, order: .bookOrder, limit: 1, in: db,
+                ).first else { return true }
+                guard first.isTruncated else { return false }
+                // The match may sit in the unread tail the cut removed.
+                return !Self.contains(phrase: word, in: first.passage.text)
             }
         }
     }
@@ -764,8 +794,7 @@ public actor AskIndexStore {
         let rows = try queue.read { db in
             try Row.fetchAll(db, sql: """
                 SELECT name, nameKey, SUM(mentions) AS mentions FROM name
-                WHERE spineIndex < :spine
-                   OR (spineIndex = :spine AND firstOffset < :offset)
+                WHERE \(readClause(spine: "spineIndex", offset: "firstOffset"))
                 GROUP BY nameKey, name
                 """, arguments: [
                 "spine": boundary.spineIndex, "offset": boundary.charOffset,

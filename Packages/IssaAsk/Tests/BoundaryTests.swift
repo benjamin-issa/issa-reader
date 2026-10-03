@@ -130,6 +130,49 @@ struct BoundaryTests {
         #expect(order.elementsEqual(order.sorted { $0 < $1 }, by: ==))
     }
 
+    /// The search, the recap and the unmet-word probe draw one line.
+    ///
+    /// They are three queries in the spoiler-safety path, and the probe once
+    /// wrote its own two-part copy of the boundary clause (R-75). Here every
+    /// word of the passage the reader is standing in — read half and unread half
+    /// — is probed, and the probe has to agree with what the bounded search
+    /// would hand the model: met exactly when some passage the search returns,
+    /// cut where the reader is, contains it.
+    @Test(
+        "the unmet-word probe and the search agree on every word around the reader",
+        arguments: [40, 120, 333],
+    )
+    func probeAndSearchDrawOneLine(cut: Int) async throws {
+        let (store, _, directory) = try await AskFixture.preparedStore()
+        defer { AskFixture.remove(directory) }
+        let spine = AskFixture.Spine.chapterII
+        let passages = PassageChunker.chunk(text: try AskFixture.text(spine: spine), spineIndex: spine)
+        let straddled = try #require(passages.first {
+            ($0.text as NSString).length > cut + 80 && $0.ordinal > 1
+        })
+        let boundary = ReadingBoundary(spineIndex: spine, charOffset: straddled.start + cut)
+        let words = Array(Set(QueryTerms.tokens(in: straddled.text).filter {
+            $0.count > 2 && !$0.contains("'")
+        })).sorted()
+        try #require(words.count > 10)
+
+        let unmet = Set(try await store.unmetWords(words, in: AskFixture.bookUUID, before: boundary))
+        for word in words {
+            let pattern = try #require(FTSQuery.all([word]))
+            let found = try await store.passages(
+                matching: pattern, in: AskFixture.bookUUID, before: boundary,
+                order: .bookOrder, limit: 1_000,
+            )
+            let seen = found.contains { AskIndexStore.contains(phrase: word, in: $0.passage.text) }
+            #expect(seen == !unmet.contains(word), "\(word) at \(cut): searched \(seen)")
+        }
+        // And the recap ends where the search does.
+        let recap = try await store.recapPassages(in: AskFixture.bookUUID, before: boundary, limit: 3)
+        let last = try #require(recap.last)
+        #expect(last.passage.ordinal == straddled.ordinal)
+        #expect(last.passage.end == boundary.charOffset)
+    }
+
     @Test("a name the book has not used yet is reported as unmet")
     func unmetWordsSeesTheGap() async throws {
         let (store, _, directory) = try await AskFixture.preparedStore()
