@@ -336,6 +336,25 @@ public final class ReaderModel {
     /// on the right sentence after the audiobook — in the car, say — has moved
     /// the position onto the audio clock.
     public var loadAudioAnchor: (() async -> AudioAnchor?)?
+
+    /// What the widget and Siri are told about this book, handed to the app's
+    /// one publisher.
+    ///
+    /// Installed by `AppModel` with the other hooks, and fenced like them to
+    /// the account the reader was opened under: a reader an account has left
+    /// is still on screen until its cover goes, and a re-open — a rotation
+    /// mid-open runs `open` again — published the departed account's book
+    /// over the arriving account's widget once its publisher was resumed. Nil
+    /// for a model nobody installed hooks on, which publishes straight to the
+    /// shared publisher as it always did.
+    var publishReading: ((ReadingSnapshot) -> Void)?
+
+    /// The account fence this reader was opened under, stamped by
+    /// `AppModel.reader(for:session:)`; nil for a book from the reader's own
+    /// files, which no account owns. `AppModel.hasLeft(_:)` compares it with
+    /// the current one, and that is what the reader's screen closes on.
+    var accountGeneration: Int?
+
     /// When the oldest unwritten change happened, for the debounce ceiling.
     private var firstUnsavedChangeAt: Date?
 
@@ -2718,19 +2737,45 @@ public final class ReaderModel {
     ///
     /// The publisher decides whether anything moved enough to be worth the
     /// widget's reload budget; this just hands it the current state.
-    private func publishSnapshot(progress: Double) {
+    ///
+    /// Internal rather than private so `DepartedReaderTests` can make the
+    /// publish an open makes without a server to open from.
+    func publishSnapshot(progress: Double) {
         // The widget is outside the app, and a book from the reader's files
         // never leaves it. `CurrentBookPublisher` refuses one as well.
         guard publishesToSystem else { return }
-        let remaining = book.narrationDuration.map { $0 * (1 - progress) }
+        let snapshot = ReadingSnapshot(
+            progress: progress,
+            chapter: chapterTitle,
+            remaining: book.narrationDuration.map { $0 * (1 - progress) },
+            isPlaying: isPlaying,
+        )
+        // Through the app, which knows whose reader this is.
+        if let publishReading {
+            publishReading(snapshot)
+            return
+        }
         // One publisher for the whole app: the cover latch, the ownership rule
         // and the reload all live there, because two surfaces writing one file
         // is what made the widget flip between books.
-        CurrentBookPublisher.shared.publish(
+        snapshot.publish(book: book, session: readerSession, to: .shared)
+    }
+}
+
+/// What one reader publish says about its book.
+struct ReadingSnapshot {
+    var progress: Double
+    var chapter: String?
+    var remaining: TimeInterval?
+    var isPlaying: Bool
+
+    @MainActor
+    func publish(book: Book, session: Session?, to publisher: CurrentBookPublisher) {
+        publisher.publish(
             book: book,
-            session: readerSession,
+            session: session,
             progress: progress,
-            chapter: chapterTitle,
+            chapter: chapter,
             remaining: remaining,
             isPlaying: isPlaying,
             as: .reading(book.uuid),

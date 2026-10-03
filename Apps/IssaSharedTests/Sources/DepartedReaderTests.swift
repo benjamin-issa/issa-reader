@@ -2,6 +2,7 @@ import Foundation
 import IssaCore
 import IssaEPUB
 import IssaPlayback
+import Observation
 import Testing
 
 @testable import IssaReader_iOS
@@ -131,5 +132,100 @@ struct DepartedReaderTests {
                 "the departed account's read-along was left playing")
         #expect(app.reader == nil)
         model.readalong?.player.pause()
+    }
+
+    /// The widget. The exit clears it and suspends its publisher, and the
+    /// arriving account's arrival lifts that — after which a re-open of the
+    /// departed reader (a rotation mid-open runs `open` again, which publishes
+    /// on its way out) put the departed account's book back on the Home
+    /// Screen, deep link and all, as the arriving account's.
+    @Test("a reader the account left publishes nothing to the widget")
+    func aDepartedReaderPublishesNothing() async throws {
+        let fixture = try await StoredTokenHandOverTests.fixture(storing: "token-B")
+        defer { fixture.tearDown() }
+        let app = fixture.app
+        let publisher = CurrentBookPublisher()
+        app.currentBookPublisher = publisher
+        app.phase = .ready
+        let session = try #require(app.session)
+        let cached = try #require(app.bookByUUID[Self.first])
+        let model = app.reader(for: cached, session: session)
+        let (_, directory) = try await ListeningHandoffReaderTests.opened(model)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        // The control: while its account is signed in, the reader's publish
+        // reaches the app's publisher.
+        model.publishSnapshot(progress: 0.1)
+        try #require(publisher.owner == .reading(Self.first), "the reader has to publish through the app")
+
+        await app.resumeStoredSession()
+        try #require(Self.reader(of: app.session) == "reader-B")
+        try #require(!publisher.isSuspended, "the arriving account's arrival lifts the suspension")
+        try #require(publisher.owner == nil, "the exit forgets the snapshot")
+
+        model.publishSnapshot(progress: 0.4)
+
+        #expect(publisher.owner == nil, "the departed account's book was published as the arriving one's")
+    }
+
+    /// The listening engine's twin. An engine the exit took out of the slot
+    /// publishes nothing once the arriving account's publisher is open.
+    @Test("an audiobook the account left publishes nothing to the widget")
+    func aDepartedAudiobookPublishesNothing() async throws {
+        let app = AppModel(keychain: LifecycleTokens(), notificationCentre: NotificationCenter())
+        let publisher = CurrentBookPublisher()
+        app.currentBookPublisher = publisher
+        let (_, coordinator, book, directory) = try await ListeningHandoffReaderTests.armed(app)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        app.installListening(coordinator, book: book)
+
+        await app.signOut(keepDownloads: true)
+        publisher.resume()
+        app.publishListeningSnapshot(book: book, coordinator: coordinator)
+
+        #expect(publisher.owner == nil, "an engine the account left published its book")
+    }
+
+    /// The cover. It holds its model in `@State`, and nothing about a
+    /// same-server hand-over took it down: the departed account's book stayed
+    /// open over the arriving account's library. `ReaderScreen` closes on
+    /// `AppModel.hasLeft`, observed; this is that decision, and that the
+    /// hand-over is what moves it.
+    @Test("the hand-over closes the departed account's reader and not the arriving one's")
+    func theHandOverClosesTheDepartedReader() async throws {
+        let fixture = try await StoredTokenHandOverTests.fixture(storing: "token-B")
+        defer { fixture.tearDown() }
+        let app = fixture.app
+        app.currentBookPublisher = CurrentBookPublisher()
+        app.phase = .ready
+        let session = try #require(app.session)
+        let cached = try #require(app.bookByUUID[Self.first])
+        let model = app.reader(for: cached, session: session)
+        #expect(!app.hasLeft(model), "a reader open under the signed-in account stays")
+
+        // What the screen observes, as SwiftUI would.
+        let observed = Flag()
+        withObservationTracking { _ = app.hasLeft(model) } onChange: { observed.set() }
+
+        await app.resumeStoredSession()
+        try #require(Self.reader(of: app.session) == "reader-B")
+
+        #expect(app.hasLeft(model), "the departed account's reader stayed on screen")
+        #expect(observed.isSet, "the screen was never told to look again")
+        // The arriving account opening the same book gets a reader of its own,
+        // which stays.
+        let arriving = try #require(app.bookByUUID[Self.first])
+        let fresh = app.reader(for: arriving, session: try #require(app.session))
+        #expect(fresh !== model)
+        #expect(!app.hasLeft(fresh))
+        // And a model no account opened — a book from the reader's own files
+        // has no fence — is never one an account left.
+        #expect(!app.hasLeft(ReaderModel(book: cached, session: session)))
+    }
+
+    final class Flag: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = false
+        func set() { lock.withLock { value = true } }
+        var isSet: Bool { lock.withLock { value } }
     }
 }

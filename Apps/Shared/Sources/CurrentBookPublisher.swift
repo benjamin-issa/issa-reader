@@ -27,7 +27,8 @@ final class CurrentBookPublisher {
         case listening(String)
     }
 
-    private var owner: Owner?
+    /// Readable for the tests that ask whether anything was published.
+    private(set) var owner: Owner?
     /// Set by `clear()` and lifted by `resume()`. Between a sign-out and the
     /// next session nothing may write: the closing reader's flush and its
     /// debounced save both outlive the account, and used to put its book back

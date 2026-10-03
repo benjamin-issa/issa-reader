@@ -37,6 +37,7 @@ import UIKit
 /// this screen build a second one.
 public struct ReaderScreen: View {
     @Environment(AppModel.self) private var app
+    @Environment(\.dismiss) private var dismiss
     @Environment(PlaybackSettings.self) private var settings
     #if !os(tvOS)
     /// The library a book from the reader's files keeps its writes in. Absent
@@ -67,9 +68,20 @@ public struct ReaderScreen: View {
             // The page's own ground for the one update before the model lands,
             // so a cover that is sliding up is never briefly the wrong colour.
             settings.readerStyle.theme.background.ignoresSafeArea()
-            if let model {
+            // Not a reader an account has left: nothing of the departed
+            // account's book stays on screen while this closes.
+            if let model, !app.hasLeft(model) {
                 ReaderView(model: model)
             }
+        }
+        // Closed when the account it was opened under is left. A same-server
+        // switch keeps the library on screen, and with it the iPhone's cover
+        // and the model it holds: the departed account's book stood open over
+        // the arriving account's library. Its hooks are fenced, so it wrote
+        // nothing, but every page turn went nowhere and it was the departed
+        // account's to read.
+        .onChange(of: model.map { app.hasLeft($0) } ?? false) { _, left in
+            if left { dismiss() }
         }
         .onAppear {
             guard model == nil else { return }

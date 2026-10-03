@@ -2783,6 +2783,15 @@ public final class AppModel {
             guard let self, self.catalogueGeneration == generation else { return }
             self.delete($0)
         }
+        // And the widget, which the exit clears and the arriving account's
+        // arrival opens again: a re-open of the departed reader published its
+        // book there, deep link and all, as the arriving account's. The book
+        // and the session by value, for the reason the uuid is.
+        model.publishReading = { [weak self, book, session] snapshot in
+            guard let self, self.catalogueGeneration == generation else { return }
+            snapshot.publish(book: book, session: session, to: self.currentBookPublisher)
+        }
+        model.accountGeneration = generation
         installSharedHooks(on: model, generation: generation)
         readers[bookUUID] = model
         return model
@@ -2900,6 +2909,22 @@ public final class AppModel {
             // a book to when `readerVisible` fired.
             self?.considerListeningHandoff(trigger: .readerReady)
         }
+    }
+
+    /// Whether `model` is a reader an account has left: opened under an
+    /// account that is no longer the one signed in.
+    ///
+    /// What a reader's screen closes on. An account's exit fences such a
+    /// reader's hooks, so it writes and publishes nothing, but the iPhone's
+    /// cover held the model in `@State` and a same-server switch kept the
+    /// library — and the cover — on screen: the departed account's book stood
+    /// open over the arriving account's library, turning pages that went
+    /// nowhere. Read from `catalogueGeneration`, which the exit moves and the
+    /// screen observes. Never true of a book from the reader's own files,
+    /// which is the device's and outlives every account.
+    func hasLeft(_ model: ReaderModel) -> Bool {
+        guard let opened = model.accountGeneration else { return false }
+        return opened != catalogueGeneration
     }
 
     /// Lets one book's reader go once its own screen has left it and it is not
@@ -3803,9 +3828,16 @@ public final class AppModel {
     ///   driven by a rate change. Left nil on the periodic tick, where the
     ///   player's real state is the honest answer — a stall should stop the
     ///   widget claiming to play.
-    private func publishListeningSnapshot(
+    ///
+    /// Only for the engine in the listening slot. An account's exit empties
+    /// the slot (`stopListening`), so an engine it took away — its rate
+    /// observer, a tick waking late — publishes nothing over the arriving
+    /// account's widget once its publisher has been resumed. Internal for
+    /// `DepartedReaderTests`.
+    func publishListeningSnapshot(
         book: Book, coordinator: AudiobookCoordinator, isPlaying: Bool? = nil,
     ) {
+        guard listening === coordinator, listeningBook?.uuid == book.uuid else { return }
         let progress = coordinator.bookProgress
         let total = coordinator.totalDuration
         currentBookPublisher.publish(
