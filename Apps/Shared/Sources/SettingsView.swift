@@ -176,8 +176,15 @@ struct AdvancedSettingsRows: View {
         localBooksRow
         #endif
         NavigationLink { DiagnosticsView() } label: {
+            // "Export" is a promise Apple TV can't keep: it has no share sheet
+            // and no pasteboard, so there the log can only be read.
+            #if os(tvOS)
+            Label("Logs", systemImage: "doc.text.magnifyingglass")
+                .labelStyle(.gapped)
+            #else
             Label("Export logs", systemImage: "doc.text.magnifyingglass")
-                        .labelStyle(.gapped)
+                .labelStyle(.gapped)
+            #endif
         }
     }
 

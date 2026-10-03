@@ -8,6 +8,15 @@ import SwiftUI
 /// the running process — and the launch worth reporting is usually the one
 /// before the one you are looking at.
 struct DiagnosticsView: View {
+    /// What the screen is for. Apple TV can neither share nor copy the log, so
+    /// telling a TV reader to "export it and send it on" asked for something
+    /// the screen below says it cannot do.
+    #if os(tvOS)
+    static let intro = "Issa Reader keeps a record of what it did for the last six hours. If something goes wrong, the most recent entries are here to read."
+    #else
+    static let intro = "Issa Reader keeps a record of what it did for the last six hours. If something goes wrong, export it and send it on."
+    #endif
+
     @State private var exported: URL?
     @State private var preview: String = ""
     @State private var entryCount = 0
@@ -16,7 +25,7 @@ struct DiagnosticsView: View {
     var body: some View {
         List {
             Section {
-                Text("Issa Reader keeps a record of what it did for the last six hours. If something goes wrong, export it and send it on.")
+                Text(Self.intro)
                     .font(Typography.footnote)
                     .foregroundStyle(Palette.inkSecondary)
             }
