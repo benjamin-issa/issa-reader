@@ -7,14 +7,17 @@ public extension EPUBPackage {
     /// In the order reading systems take it: the manifest item EPUB 3 marks
     /// `cover-image`; then the item EPUB 2's `<meta name="cover">` names by
     /// id (or, as some tools write it, by href); then an image whose id or
-    /// path says "cover". A book with none of these has no cover to cut, and
-    /// the list draws its letter tile.
+    /// file name says "cover" — one called exactly that first, and never one
+    /// that says "back", in the manifest's own order. A book with none of
+    /// these has no cover to cut, and the list draws its letter tile.
     var coverImageHref: String? {
         let images = manifest.values
             .filter { $0.mediaType.lowercased().hasPrefix("image/") }
-            // By id, so the last rule picks the same image every time: the
-            // manifest is a dictionary.
-            .sorted { $0.id < $1.id }
+            // In the book's order, so the last rule picks the same image every
+            // time and the one the publisher listed first: the manifest is a
+            // dictionary. Ordered by id, "back-cover" sorted before "cover"
+            // and "BackCover" before "front-cover", and the back was cut.
+            .sorted { $0.documentOrder < $1.documentOrder }
         if let declared = images.first(where: { $0.properties.contains("cover-image") }) {
             return declared.href
         }
@@ -26,10 +29,15 @@ public extension EPUBPackage {
                 rootDirectory.isEmpty ? named : rootDirectory + "/" + named)
             if let item = images.first(where: { $0.href == path }) { return item.href }
         }
-        return images.first {
-            $0.id.lowercased().contains("cover")
-                || ($0.href as NSString).lastPathComponent.lowercased().contains("cover")
-        }?.href
+        func names(_ item: ManifestItem) -> [String] {
+            let file = ((item.href as NSString).lastPathComponent as NSString).deletingPathExtension
+            return [item.id.lowercased(), file.lowercased()]
+        }
+        let covers = images.filter { item in
+            let said = names(item)
+            return said.contains { $0.contains("cover") } && !said.contains { $0.contains("back") }
+        }
+        return (covers.first { names($0).contains("cover") } ?? covers.first)?.href
     }
 
     /// What this book says about itself, for a book added from the reader's

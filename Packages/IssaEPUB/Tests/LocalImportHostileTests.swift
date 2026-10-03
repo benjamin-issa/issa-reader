@@ -205,4 +205,83 @@ struct LocalImportHostileTests {
         #expect(throws: EPUBError.self) { try archive.read("big.xhtml", maximumSize: 1024) }
         #expect(try archive.read("big.xhtml", maximumSize: 4096).count == 4096)
     }
+
+    // MARK: - Series positions (R-32)
+
+    @Test("a series position that is not a finite number is no position",
+          arguments: ["NaN", "nan", "inf", "-Infinity", "1e999"])
+    func nonFiniteCalibreIndex(_ raw: String) throws {
+        let data = HostileZIP.book(metadata: """
+        <meta name="calibre:series" content="The Lamplighters"/>
+        <meta name="calibre:series_index" content="\(raw)"/>
+        """)
+        let package = try EPUBPackage.open(archive: EPUBArchive(data: data))
+        #expect(package.metadata.series?.name == "The Lamplighters")
+        #expect(package.metadata.series?.position == nil)
+    }
+
+    @Test("an EPUB 3 group-position that is not finite is no position, and a real one is kept")
+    func nonFiniteGroupPosition() throws {
+        let bad = HostileZIP.book(metadata: """
+        <meta property="belongs-to-collection" id="c">The Lamplighters</meta>
+        <meta refines="#c" property="collection-type">series</meta>
+        <meta refines="#c" property="group-position">inf</meta>
+        """)
+        #expect(try EPUBPackage.open(archive: EPUBArchive(data: bad)).metadata.series?.position == nil)
+        let good = HostileZIP.book(metadata: """
+        <meta name="calibre:series" content="The Lamplighters"/>
+        <meta name="calibre:series_index" content="2.5"/>
+        """)
+        #expect(try EPUBPackage.open(archive: EPUBArchive(data: good)).metadata.series?.position == 2.5)
+    }
+
+    // MARK: - The last-resort cover (R-34)
+
+    private func cover(_ manifest: String, images: [String]) throws -> String? {
+        let data = HostileZIP.book(
+            manifest: manifest,
+            extras: images.map { .init(payload: $0) })
+        return try EPUBPackage.open(archive: EPUBArchive(data: data)).coverImageHref
+    }
+
+    @Test("a back cover listed first is not the cover")
+    func backCoverIsNotTheCover() throws {
+        let href = try cover("""
+        <item id="back-cover" href="images/back.jpg" media-type="image/jpeg"/>
+        <item id="cover" href="images/front.jpg" media-type="image/jpeg"/>
+        """, images: ["OEBPS/images/back.jpg", "OEBPS/images/front.jpg"])
+        #expect(href == "OEBPS/images/front.jpg")
+    }
+
+    @Test("a capitalised BackCover does not beat a front-cover")
+    func capitalisedBackCover() throws {
+        let href = try cover("""
+        <item id="BackCover" href="images/b.jpg" media-type="image/jpeg"/>
+        <item id="front-cover" href="images/f.jpg" media-type="image/jpeg"/>
+        """, images: ["OEBPS/images/b.jpg", "OEBPS/images/f.jpg"])
+        #expect(href == "OEBPS/images/f.jpg")
+    }
+
+    @Test("an image called exactly cover wins over one that only mentions it, in any order")
+    func exactStemWins() throws {
+        let href = try cover("""
+        <item id="img-cover-thumb" href="images/cover-thumb.jpg" media-type="image/jpeg"/>
+        <item id="img1" href="images/cover.jpg" media-type="image/jpeg"/>
+        """, images: ["OEBPS/images/cover-thumb.jpg", "OEBPS/images/cover.jpg"])
+        #expect(href == "OEBPS/images/cover.jpg")
+    }
+
+    @Test("with only a back cover, there is no cover to cut")
+    func onlyABackCover() throws {
+        let href = try cover("""
+        <item id="back-cover" href="images/back.jpg" media-type="image/jpeg"/>
+        """, images: ["OEBPS/images/back.jpg"])
+        #expect(href == nil)
+    }
+}
+
+private extension HostileZIP.Member {
+    init(payload name: String) {
+        self.init(name, payload: Data("not really a picture".utf8))
+    }
 }

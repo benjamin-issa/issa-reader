@@ -108,6 +108,9 @@ public struct EPUBPackage: Sendable {
         public let properties: [String]
         /// Manifest id of this item's SMIL overlay, when it has one.
         public let mediaOverlay: String?
+        /// Where it sits in the manifest, first at 0: `manifest` is keyed by
+        /// id, and a rule that takes "the first" has to mean the book's order.
+        public var documentOrder: Int = 0
     }
 
     public struct SpineItem: Sendable, Hashable {
@@ -364,7 +367,7 @@ public extension EPUBPackage {
                 switch name {
                 case "cover": metadata.coverID = metadata.coverID ?? content.trimmingCharacters(in: .whitespaces)
                 case "calibre:series": calibreSeries = content.trimmingCharacters(in: .whitespaces).nonEmpty
-                case "calibre:series_index": calibreIndex = Double(content.trimmingCharacters(in: .whitespaces))
+                case "calibre:series_index": calibreIndex = Self.seriesPosition(content)
                 case "fixed-layout": if content.lowercased() == "true" { metadata.isFixedLayout = true }
                 default: break
                 }
@@ -385,7 +388,7 @@ public extension EPUBPackage {
                 guard type == nil || type == "series", !meta.trimmedText.isEmpty else { continue }
                 metadata.series = Series(
                     name: meta.trimmedText,
-                    position: refined(meta, "group-position").flatMap { Double($0) })
+                    position: refined(meta, "group-position").flatMap(Self.seriesPosition))
             default:
                 continue
             }
@@ -396,10 +399,21 @@ public extension EPUBPackage {
         return metadata
     }
 
+    /// A series position, or nil when the text is not a finite number.
+    ///
+    /// `Double(_:)` accepts "NaN", "inf", "Infinity" and "1e999", and some
+    /// tools write "NaN" for a book with no number. A non-finite position
+    /// reached the stored row, whose JSON encoder refuses it, so the book
+    /// could never be added: "Couldn't copy this book", and a Try Again that
+    /// could never succeed.
+    static func seriesPosition(_ text: String) -> Double? {
+        Double(text.trimmingCharacters(in: .whitespaces)).flatMap { $0.isFinite ? $0 : nil }
+    }
+
     private static func parseManifest(_ opf: EPUBXMLNode, rootDirectory: String) -> [String: ManifestItem] {
         guard let manifestNode = opf.descendants("manifest").first else { return [:] }
         var items: [String: ManifestItem] = [:]
-        for item in manifestNode.children("item") {
+        for (order, item) in manifestNode.children("item").enumerated() {
             guard let id = item["id"], let rawHref = item["href"] else { continue }
             // A URI, like every href — see `resolve` for why it is decoded.
             let href = rawHref.removingPercentEncoding ?? rawHref
@@ -412,6 +426,7 @@ public extension EPUBPackage {
                 mediaType: item["media-type"] ?? "application/octet-stream",
                 properties: (item["properties"] ?? "").split(separator: " ").map(String.init),
                 mediaOverlay: item["media-overlay"],
+                documentOrder: order,
             )
         }
         return items
