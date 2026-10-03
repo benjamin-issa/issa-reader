@@ -8,8 +8,9 @@ public struct SettingsView: View {
     @Environment(NowPlayingController.self) private var nowPlaying
     @Environment(PlaybackSettings.self) private var settings
     @State private var confirmingSignOut = false
-    /// True from the confirmation until the sign-out has finished.
-    @State private var isSigningOut = false
+    /// True from the confirmation until the sign-out has finished — for the
+    /// app, not this screen; see `SignOutProgress`.
+    private var isSigningOut: Bool { SignOutProgress.shared.isRunning }
 
     public init() {}
 
@@ -123,14 +124,10 @@ public struct SettingsView: View {
     }
 
     private func signOut(keepDownloads: Bool) {
-        guard !isSigningOut else { return }
-        isSigningOut = true
-        Task {
-            await app.signOut(keepDownloads: keepDownloads, nowPlaying: nowPlaying)
-            // Usually moot — a finished sign-out leaves this screen — but a
-            // sign-out that ends with the app still here must not leave the
-            // button dead.
-            isSigningOut = false
+        Task { [app, nowPlaying] in
+            await SignOutProgress.shared.run {
+                await app.signOut(keepDownloads: keepDownloads, nowPlaying: nowPlaying)
+            }
         }
     }
 
@@ -220,5 +217,34 @@ struct AdvancedSettingsRows: View {
             Image(systemName: available ? "checkmark.circle.fill" : "minus.circle")
                 .foregroundStyle(available ? Palette.moss : Palette.inkQuaternary)
         }
+    }
+}
+
+/// Whether a sign-out is under way, for the whole app.
+///
+/// Signing out tells the server first and waits up to the logout's own limit,
+/// and in those seconds the Sign Out button has to stay held off. That was a
+/// `@State` of the screen that asked, so a Settings screen built again while
+/// one was running — the Mac's Settings window closed and reopened — had
+/// forgotten it, and offered a second sign-out behind the first.
+@MainActor
+@Observable
+final class SignOutProgress {
+    static let shared = SignOutProgress()
+
+    private(set) var isRunning = false
+
+    /// Runs `work` unless a sign-out is already running.
+    ///
+    /// - Returns: whether it ran.
+    @discardableResult
+    func run(_ work: () async -> Void) async -> Bool {
+        guard !isRunning else { return false }
+        isRunning = true
+        // Usually moot — a finished sign-out leaves the screen — but one that
+        // ends with the app still there must not leave the button dead.
+        defer { isRunning = false }
+        await work()
+        return true
     }
 }

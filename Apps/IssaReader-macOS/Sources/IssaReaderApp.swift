@@ -21,7 +21,9 @@ struct IssaReaderMacApp: App {
     private let services = MacAppServices.shared
 
     var body: some Scene {
-        WindowGroup {
+        // An id, so a menu in a window without a library — Settings' "Show in
+        // Library" — can open one (`ShowInLibrary`).
+        WindowGroup(id: ShowInLibrary.libraryWindowID) {
             MacRootView()
                 .environment(services.app)
                 .environment(services.settings)
@@ -36,9 +38,14 @@ struct IssaReaderMacApp: App {
                 .frame(minWidth: 900, minHeight: 560)
         }
         .commands {
+            // The File menu's one decision, read here as a value: the commands
+            // are rebuilt when it flips, which is when the local library has
+            // loaded or the reader first looks at it, and not on every page
+            // turned in a local book. See `MacFileMenu`.
             IssaCommands(
                 app: services.app, settings: services.settings,
-                nowPlaying: services.nowPlaying, local: services.local)
+                nowPlaying: services.nowPlaying, local: services.local,
+                offersAddBook: services.fileMenu.offersAddBook)
         }
 
         // A book opens in its own window, which is what a Mac reader should do:
@@ -148,15 +155,17 @@ struct IssaCommands: Commands {
     let settings: PlaybackSettings
     let nowPlaying: NowPlayingController
     let local: LocalLibrary
+    /// `MacFileMenu.offersAddBook`, as a value: the body reads nothing of the
+    /// library itself.
+    let offersAddBook: Bool
 
     var body: some Commands {
         // Nothing here creates documents, so an enabled New menu would be a
         // lie. Add Book… takes its place once the books from Files have been
         // looked at — never for a server reader who has not.
         CommandGroup(replacing: .newItem) {
-            if local.wasShown || !local.books.isEmpty {
-                Button("Add Book…") { local.requestAdd() }
-                    .keyboardShortcut("o", modifiers: .command)
+            if offersAddBook {
+                AddBookCommand(local: local)
             }
         }
 
@@ -258,6 +267,52 @@ struct IssaCommands: Commands {
     }
 }
 
+/// File › Add Book…: brings up Books on This Mac and asks it for the picker.
+///
+/// A view, so it has an environment to open a window from — which a
+/// `Commands` body does not — and it opens the window itself. It used to only
+/// set the library's flag, which only the library window and the list window
+/// listened for: with neither open ⌘O did nothing, and the flag left behind
+/// popped the picker unasked the next time the list was opened.
+struct AddBookCommand: View {
+    let local: LocalLibrary
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Button("Add Book…") {
+            local.requestAdd()
+            openWindow(id: "LocalBooks")
+        }
+        .keyboardShortcut("o", modifiers: .command)
+    }
+}
+
+/// Opens a book from the reader's files that a tapped answer left waiting
+/// (`LocalBookRequests`), from whichever Mac window takes it first.
+struct TakesLocalBookRequests: ViewModifier {
+    @Environment(LocalLibrary.self) private var local
+    @Environment(\.openWindow) private var openWindow
+    private let requests = LocalBookRequests.shared
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: requests.pending, initial: true) { take() }
+            .onChange(of: local.isLoaded) { take() }
+    }
+
+    private func take() {
+        guard local.isLoaded, let uuid = requests.pending, local.book(uuid) != nil,
+              requests.take() == uuid else { return }
+        openWindow(id: "LocalReader", value: uuid)
+    }
+}
+
+extension View {
+    /// Any Mac window can open a local book's own window, so each takes the
+    /// request: with only reader windows open the tap used to be dropped.
+    func takesLocalBookRequests() -> some View { modifier(TakesLocalBookRequests()) }
+}
+
 /// Resolves a book id into a reader, so the window can be restored by the system
 /// after a relaunch without holding a reference to a model.
 struct ReaderWindow: View {
@@ -266,6 +321,11 @@ struct ReaderWindow: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
+        content.takesLocalBookRequests()
+    }
+
+    @ViewBuilder
+    private var content: some View {
         if let bookID,
            let book = app.books.first(where: { $0.uuid == bookID }),
            let session = app.session {
@@ -302,6 +362,11 @@ struct LocalReaderWindow: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
+        content.takesLocalBookRequests()
+    }
+
+    @ViewBuilder
+    private var content: some View {
         if !local.isLoaded {
             Palette.paper.ignoresSafeArea()
         } else if let bookID, let book = local.book(bookID), !local.missingFiles.contains(bookID) {
@@ -336,6 +401,8 @@ struct MacRootView: View {
     /// Bumped to rebuild the content column's stack from its root, for a
     /// "Show in Library" asked for while already on All books.
     @State private var stackGeneration = 0
+    /// This window's "Show in Library" requests, and no other window's.
+    @State private var navigator = LibraryNavigator()
 
     /// What the content column's stack is rebuilt on.
     private struct StackIdentity: Hashable {
@@ -399,15 +466,16 @@ struct MacRootView: View {
             openWindow(id: "NowPlaying")
         }
         // An answer tapped for a book from the reader's files: its own window.
-        .onReceive(NotificationCenter.default.publisher(for: AskNotificationDelegate.openLocalBook)) { note in
-            guard let uuid = note.userInfo?[AskNotifier.bookUUIDKey] as? String else { return }
-            openWindow(id: "LocalReader", value: uuid)
-        }
-        // File › Add Book…: the list window takes the request (and opens the
-        // picker) once it is up, so all this has to do is bring it up.
+        .takesLocalBookRequests()
+        // File › Add Book… opens the list window itself now; this stays for a
+        // request made any other way while this window is up.
         .onChange(of: local.addRequested) { _, requested in
             if requested { openWindow(id: "LocalBooks") }
         }
+        // Counted, so "Show in Library" from Settings knows whether there is
+        // a library window to take its request.
+        .onAppear { LibraryWindows.shared.appeared() }
+        .onDisappear { LibraryWindows.shared.disappeared() }
         // The Mac declared the `issareader` scheme in its Info.plist and then
         // handled nothing: a widget, Spotlight or Handoff link brought the app
         // to the front and did nothing else. `AppModel.open` is shared and
@@ -540,7 +608,13 @@ struct MacRootView: View {
                 Group {
                     switch selection ?? .shelf(.all) {
                     case .reading:
-                        ReadingView { shelf in selection = .shelf(shelf ?? .all) }
+                        // "See all" is that shelf's grid, "Go to Library" the
+                        // library's landing (`LibraryModeSwitch.fromReading`);
+                        // the sidebar follows the shelf.
+                        ReadingView { shelf in
+                            app.showLibrary(fromReading: shelf)
+                            selection = .shelf(app.arrangement.shelf)
+                        }
                     case .shelf: LibraryView()
                     case .listening: ListeningView()
                     case .downloads: DownloadsView()
@@ -552,11 +626,7 @@ struct MacRootView: View {
                 // its own (see `MacBookSelection.pushed`), so they ask, and
                 // this is the stack that answers.
                 .navigationDestination(item: $inspected.pushed) { page in
-                    switch page {
-                    case let .series(name): SeriesView(name: name)
-                    case let .author(name): AuthorView(name: name)
-                    case let .tag(name): TagView(name: name)
-                    }
+                    BookRouter.destination(for: page)
                 }
             }
             // A fresh stack per sidebar row, so a series pushed under Library
@@ -595,6 +665,7 @@ struct MacRootView: View {
             .downloadRemovalToast()
         }
         .environment(inspected)
+        .environment(navigator)
         // The stack that answers `pushed` is rebuilt by `.id(selection)`
         // above, and rebuilding is not popping — so a series pushed under
         // Library was still asked for when the reader clicked Downloads, and
@@ -603,7 +674,7 @@ struct MacRootView: View {
         .onChange(of: selection) { _, _ in inspected.pushed = nil }
         // "Show in Library" from a tag or author page: the All books grid,
         // with the filter or search the page has already set.
-        .onChange(of: LibraryNavigator.shared.showRequests) {
+        .onChange(of: navigator.showRequests) {
             inspected.pushed = nil
             selection = .shelf(.all)
             stackGeneration &+= 1

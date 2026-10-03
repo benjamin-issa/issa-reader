@@ -34,8 +34,9 @@ struct AccountSettingsView: View {
     @Environment(AppModel.self) private var app
     @Environment(NowPlayingController.self) private var nowPlaying
     @State private var confirmingSignOut = false
-    /// True from the confirmation until the sign-out has finished.
-    @State private var isSigningOut = false
+    /// True from the confirmation until the sign-out has finished, for the
+    /// app rather than this pane: see `SignOutProgress`.
+    private var isSigningOut: Bool { SignOutProgress.shared.isRunning }
 
     var body: some View {
         Form {
@@ -75,13 +76,10 @@ struct AccountSettingsView: View {
     }
 
     private func signOut(keepDownloads: Bool) {
-        guard !isSigningOut else { return }
-        isSigningOut = true
-        Task {
-            await app.signOut(keepDownloads: keepDownloads, nowPlaying: nowPlaying)
-            // A finished sign-out usually takes this pane with it, but one that
-            // ends with the window still up must not leave the button dead.
-            isSigningOut = false
+        Task { [app, nowPlaying] in
+            await SignOutProgress.shared.run {
+                await app.signOut(keepDownloads: keepDownloads, nowPlaying: nowPlaying)
+            }
         }
     }
 }
