@@ -27,11 +27,10 @@ public struct LibraryView: View {
                     shelf
                 }
                 #elseif os(macOS)
-                // Rails only on All books. The sidebar is the Mac's shelf
-                // control, so picking a shelf there means "show me that cut of
-                // the library", which is the grid. Rails are what the wide
-                // window is for when no cut has been asked for.
-                if app.libraryMode == .browse, search.isEmpty, app.arrangement.shelf == .all {
+                // Rails only on All books, which `LibraryModeSwitch` decides
+                // and says why. Rails are what the wide window is for when no
+                // cut has been asked for.
+                if LibraryModeSwitch.showsRails(switchState) {
                     BrowseView()
                 } else {
                     shelf
@@ -69,6 +68,12 @@ public struct LibraryView: View {
     }
 
     #if os(macOS)
+    /// What the toolbar switch decides from.
+    private var switchState: LibraryModeSwitch.State {
+        LibraryModeSwitch.State(
+            mode: app.libraryMode, shelf: app.arrangement.shelf, isSearching: !search.isEmpty)
+    }
+
     /// The toolbar switch.
     ///
     /// Reads as "All Books" whenever rails are not what is on screen, so the
@@ -77,11 +82,14 @@ public struct LibraryView: View {
     /// which is what "with all its controls intact" has to mean.
     private var modeBinding: Binding<AppModel.LibraryMode> {
         Binding(
-            get: {
-                guard app.arrangement.shelf == .all, search.isEmpty else { return .all }
-                return app.libraryMode
+            get: { LibraryModeSwitch.shown(switchState) },
+            set: { picked in
+                let now = switchState
+                let next = LibraryModeSwitch.picking(picked, in: now)
+                if now.isSearching, !next.isSearching { search = "" }
+                if next.shelf != now.shelf { app.arrangement.shelf = next.shelf }
+                app.libraryMode = next.mode
             },
-            set: { app.libraryMode = $0 },
         )
     }
     #endif
@@ -134,7 +142,7 @@ public struct LibraryView: View {
                     Text("All Books").tag(AppModel.LibraryMode.all)
                 }
                 .pickerStyle(.segmented)
-                .disabled(app.arrangement.shelf != .all || !search.isEmpty)
+                .disabled(!LibraryModeSwitch.isEnabled(switchState))
                 .accessibilityLabel("Library view")
             }
         }
