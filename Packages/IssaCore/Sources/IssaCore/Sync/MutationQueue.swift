@@ -486,7 +486,8 @@ public struct MutationDrain: Sendable {
                 // up on it. Every offline drain used to count, and eight of
                 // them — well under a minute of reading without signal, since
                 // each debounced save triggers one — quietly deleted the head
-                // of the queue.
+                // of the queue. A proxy's 502s were the same eight drains with
+                // a status code on them; they do not count either.
                 if countsTowardAbandonment(error),
                    (try? await queue.recordFailure(item.id)) == true {
                     // The one place a write is thrown away on this client's
@@ -586,21 +587,34 @@ public struct MutationDrain: Sendable {
     /// them. A transport failure is not that — the request never reached the
     /// server, and a queue that outlives an offline weekend is the whole point
     /// of a durable one. A 429 is the server explicitly asking to be tried
-    /// later; obeying must not cost the write. A 5xx *does* count — a
-    /// judgement call: the server received exactly this payload and choked,
-    /// and a payload that reliably breaks a route would otherwise sit at the
-    /// head of the queue forever, while a server that is merely down mostly
-    /// presents as transport failures — even behind a proxy's 502s, nothing is
-    /// lost unless eight separate drains all land inside the same outage.
-    /// Anything unrecognised (a payload that no longer decodes, say) fails
-    /// identically every time, which is what poison means.
+    /// later; obeying must not cost the write.
+    ///
+    /// Nor does a 502, 503 or 504. Those are what a reverse proxy says when the
+    /// Storyteller behind it is down — a container restarting — and they say
+    /// nothing about the payload. They are no rarer than eight drains, either:
+    /// every debounced save triggers one, and since the queue orders by
+    /// `updatedAt` a status or rating is the head of each of them, so a
+    /// couple of minutes of restart while reading used to delete it, for the
+    /// next refresh to put the old value back on screen.
+    ///
+    /// Any other 5xx *does* count — a judgement call: the server received
+    /// exactly this payload and choked, and a payload that reliably breaks a
+    /// route would otherwise sit at the head of the queue forever. Anything
+    /// unrecognised (a payload that no longer decodes, say) fails identically
+    /// every time, which is what poison means.
     private func countsTowardAbandonment(_ error: any Error) -> Bool {
         guard let storyteller = error as? StorytellerError else { return true }
         switch storyteller {
         case .transport, .server(status: 429, message: _):
             return false
+        case let .server(status, _) where Self.gatewayStatuses.contains(status):
+            return false
         default:
             return true
         }
     }
+
+    /// Bad Gateway, Service Unavailable, Gateway Timeout: the answers of a
+    /// front door with nothing behind it. See `countsTowardAbandonment(_:)`.
+    static let gatewayStatuses: Set<Int> = [502, 503, 504]
 }

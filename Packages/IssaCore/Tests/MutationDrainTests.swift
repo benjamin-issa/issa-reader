@@ -288,6 +288,31 @@ struct MutationDrainTests {
                 "a transport failure is no evidence against the item, so it must not even count")
     }
 
+    /// R-06. A reverse proxy whose Storyteller is down — the container
+    /// restarting — answers every route with a 502, 503 or 504. That is the
+    /// front door saying nothing is behind it, not Storyteller choking on the
+    /// payload, and a reader who keeps listening through a two-minute restart
+    /// drains far more than eight times: since the queue orders by `updatedAt`
+    /// a status or rating is the head of every one of those drains, and it was
+    /// deleted on the eighth, for the next refresh to revert on screen.
+    @Test("a proxy's 502, 503 or 504 never counts toward abandoning a write", arguments: [502, 503, 504])
+    func gatewayFailuresNeverAbandon(status: Int) async throws {
+        let (drain, queue, directory) = try await makeDrain()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        try await queue.enqueue(.status, bookUUID: "kept", payload: Data(#"{"status":"read"}"#.utf8))
+
+        // Comfortably past the abandon limit of 8, each a drain of its own.
+        for _ in 1 ... 12 {
+            StatusQueueProtocol.prime([status])
+            #expect(await drain.drain() == 0)
+        }
+
+        let pending = try await queue.pending()
+        #expect(pending.count == 1, "an outage behind a proxy must never cost a queued write")
+        #expect(pending.first?.attempts == 0, "a gateway's answer is no evidence against the write")
+    }
+
     /// The complement: abandonment still exists for writes the server itself
     /// chokes on — a repeated 5xx counts, see `countsTowardAbandonment` for
     /// the judgement — and throwing one away now leaves a line in the log.
