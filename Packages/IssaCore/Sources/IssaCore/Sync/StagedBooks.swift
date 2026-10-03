@@ -128,16 +128,19 @@ public struct StagedBooks: Equatable, Sendable {
     /// Reading by recency — the one to resume is the one last opened — and
     /// the rest by title the way the library's Title sort files them, leading
     /// articles ignored.
+    ///
+    /// Each title's key is worked out once, before the sort. Worked out inside
+    /// the comparison it was two lowercased copies per comparison — thousands
+    /// for a tag on a few hundred books, on every redraw of the page.
     static func ordered(_ books: [Book], in stage: Stage) -> [Book] {
         switch stage {
         case .reading:
             return LibraryRails.byRecency(books)
         case .toRead, .finished:
-            return books.sorted {
-                LibraryArrangement.sortKey($0.title)
-                    .localizedCaseInsensitiveCompare(LibraryArrangement.sortKey($1.title))
-                    == .orderedAscending
-            }
+            return books
+                .map { (key: LibraryArrangement.sortKey($0.title), book: $0) }
+                .sorted { $0.key.localizedCaseInsensitiveCompare($1.key) == .orderedAscending }
+                .map(\.book)
         }
     }
 
