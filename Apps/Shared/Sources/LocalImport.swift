@@ -232,9 +232,15 @@ public enum LocalBooksCopy {
         return "Removed \(titles.count) books. The originals in \(originalsPlace) are kept. Undo available."
     }
 
-    /// "Narrated · 7 h 4 min".
+    /// "Narrated · 7 h 4 min", or "Narrated" alone for a length no clock can
+    /// show.
+    ///
+    /// Through `wholeSeconds`, as `DurationText` is: the length is the book's
+    /// own claim, and 1e21 seconds is finite, passes every check the parser
+    /// makes, and trapped in `Int(_:)` on every draw of the row and Book info.
     public static func narrated(seconds: Double) -> String {
-        let minutes = Int((seconds / 60).rounded())
+        guard seconds > 0, let total = seconds.wholeSeconds else { return "Narrated" }
+        let minutes = Int((Double(total) / 60).rounded())
         let length = minutes >= 60 ? "\(minutes / 60) h \(minutes % 60) min" : "\(max(minutes, 1)) min"
         return "Narrated · \(length)"
     }

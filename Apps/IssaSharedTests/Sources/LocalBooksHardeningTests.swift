@@ -13,6 +13,81 @@ import UIKit
 @Suite("Books from the reader's files, against bad input", .serialized)
 @MainActor
 struct LocalBooksHardeningTests {
+    static let narrated = TestEPUB.Chapter(
+        id: "ch1", title: "One", body: "<p><span id=\"s0\">The night shift began.</span></p>",
+        narrated: ["s0"])
+
+    // MARK: - R-01: a narration length no clock can show
+
+    /// `media:duration` is the book's word for its own length; 1e21 seconds is
+    /// finite, passes every check the parser makes, and trapped the row the
+    /// moment it was drawn. The one clip the overlay plays is what it lasts.
+    @Test("an absurd media:duration is not what the book is said to last")
+    func absurdDurationIsNotKept() async throws {
+        let local = try LocalFixtures()
+        defer { local.tearDown() }
+        let data = TestEPUB.data(
+            title: "The Long Night Shift", chapters: [Self.narrated],
+            audio: Data(repeating: 0, count: 512),
+            metadata: "<meta property=\"media:duration\">1e21s</meta>")
+
+        await local.importAndWait(try local.pick(data, as: "night-shift.epub"))
+
+        let book = try #require(local.library.books.first)
+        #expect(book.hasReadalong, "the narration plays; only its stated length is absurd")
+        let seconds = try #require(book.narrationDuration)
+        #expect(abs(seconds - 1) < 0.01, "kept \(seconds) s as the narration's length")
+    }
+
+    @Test("an absurd length with no sane clip behind it is clamped, never dropped")
+    func absurdTimelineIsClamped() {
+        let ceiling = LocalBookImporter.longestNarration
+        #expect(LocalBookImporter.narrationLength(declared: 1e21, timeline: 1) == 1)
+        #expect(LocalBookImporter.narrationLength(declared: nil, timeline: 1e21) == ceiling)
+        #expect(LocalBookImporter.narrationLength(declared: .nan, timeline: .infinity) == ceiling)
+        #expect(LocalBookImporter.narrationLength(declared: 3600, timeline: 1e21) == 3600)
+        #expect(LocalBookImporter.narrationLength(declared: nil, timeline: 0) == nil)
+        #expect(LocalBookImporter.narrationLength(declared: 0, timeline: 0) == nil)
+    }
+
+    /// A row an earlier build stored with the absurd length still draws: the
+    /// line and Book info say "Narrated" with no length rather than trap.
+    @Test("a stored absurd length draws the row and Book info")
+    func storedAbsurdLengthDraws() async throws {
+        let local = try LocalFixtures()
+        defer { local.tearDown() }
+        let book = Book.local(
+            uuid: UUID().uuidString.lowercased(),
+            metadata: LocalBookMetadata(title: "The Long Night Shift"),
+            narrationDuration: 1e21,
+            copy: LocalCopy(fileName: "night-shift.epub", fingerprint: "f", byteCount: 4096, importedAt: Date()))
+        try #require(book.hasReadalong)
+
+        #expect(LocalBooksCopy.narrated(seconds: 1e21) == "Narrated")
+        #expect(LocalBooksCopy.narrated(seconds: .infinity) == "Narrated")
+        #expect(LocalBooksCopy.narrated(seconds: 25_440) == "Narrated · 7 h 4 min")
+        #expect(LocalBooksCopy.narrated(seconds: 20) == "Narrated · 1 min")
+        let facts = LocalBookFacts(book: book, size: 4096, isMissing: false, isPlaying: false)
+        #expect(facts.narration == "Narrated")
+        #expect(facts.spoken.contains("Narrated"))
+
+        let host = UIHostingController(rootView: AnyView(VStack {
+            LocalBookRow(
+                book: book, size: 4096, isMissing: false, isPlaying: false, isHighlighted: false,
+                onNoticeAction: { _ in })
+            LocalBookInfoView(book: book) {}
+        }.environment(local.library)))
+        let scene = try #require(
+            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = host
+        window.isHidden = false
+        defer { window.isHidden = true }
+        host.view.layoutIfNeeded()
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(host.view.window != nil)
+    }
+
     // MARK: - A book from another volume
 
     /// What a USB drive or a network share gets: not a clone, a chunked copy.

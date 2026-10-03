@@ -145,9 +145,11 @@ struct LocalBookImporter: Sendable {
         if !inspection.timeline.isEmpty, !narrates { notices.append(.narrationUnplayable) }
         if inspection.isFixedLayout { notices.append(.fixedLayout) }
         // Extraction on first open roughly duplicates the audio, so it counts.
-        if narrates { try checkSpace(needed: byteCount + inspection.audioByteCount) }
+        if narrates { try checkSpace(needed: Self.adding(byteCount, inspection.audioByteCount)) }
         let duration = narrates
-            ? (inspection.package.metadata.mediaDuration ?? inspection.timeline.totalDuration)
+            ? Self.narrationLength(
+                declared: inspection.package.metadata.mediaDuration,
+                timeline: inspection.timeline.totalDuration)
             : nil
 
         let cover = incoming.appending(path: "\(id.uuidString).jpg")
@@ -162,18 +164,49 @@ struct LocalBookImporter: Sendable {
             fingerprint: fingerprint,
             byteCount: byteCount,
             metadata: inspection.package.localMetadata(fallbackTitle: stem.isEmpty ? "Untitled" : stem),
-            narrationDuration: duration.flatMap { $0 > 0 ? $0 : nil },
+            narrationDuration: duration,
             notices: notices,
             packageIdentifier: inspection.package.metadata.uniqueIdentifier,
             epubVersion: inspection.version,
             isFixedLayout: inspection.isFixedLayout)
     }
 
+    // MARK: - Narration length
+
+    /// The longest narration a book is taken to have: a thousand hours,
+    /// several times the longest audiobook sold.
+    static let longestNarration: Double = 1000 * 3600
+
+    /// How long the narration is, for the row, Book info and the player.
+    ///
+    /// The book's own `media:duration` first, then what its clips add up to
+    /// — whichever is a length at all. Both are the file's claims: 1e21
+    /// seconds is finite and passes every check the parser makes, and
+    /// stored, it trapped the row on every draw (R-01). A claim past
+    /// `longestNarration` is passed over for the other; with neither sane,
+    /// the narration still plays, so it is clamped rather than dropped —
+    /// nil here would add the book as text.
+    static func narrationLength(declared: Double?, timeline: Double) -> Double? {
+        func sane(_ value: Double?) -> Double? {
+            value.flatMap { $0.isFinite && $0 > 0 && $0 <= longestNarration ? $0 : nil }
+        }
+        if let length = sane(declared) ?? sane(timeline) { return length }
+        let claimed = [declared ?? 0, timeline].contains { $0 > 0 }
+        return claimed ? longestNarration : nil
+    }
+
     // MARK: - Room
 
     private func checkSpace(needed: Int64) throws(LocalImportError) {
         guard let free = availableSpace(root.deletingLastPathComponent()) else { return }
-        if free < needed + spaceMargin { throw .notEnoughSpace(needed: needed, free: free) }
+        if free < Self.adding(needed, spaceMargin) { throw .notEnoughSpace(needed: needed, free: free) }
+    }
+
+    /// A sum of sizes a file declared, saturating: a trap here is a crash
+    /// while the book is being checked, where "not enough space" belonged.
+    static func adding(_ a: Int64, _ b: Int64) -> Int64 {
+        let (sum, overflow) = a.addingReportingOverflow(b)
+        return overflow ? .max : sum
     }
 
     // MARK: - The copy
