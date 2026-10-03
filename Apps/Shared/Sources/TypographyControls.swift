@@ -209,6 +209,14 @@ enum FontImport {
             if !existedBefore { try? FileManager.default.removeItem(at: destination) }
             return refuse(picked, unreadableSentence(for: picked), reason: "not a readable font")
         }
+        // A copy of a family the app ships is answered with the app's own,
+        // and `register` never registers it — so the copy did nothing but sit
+        // in the fonts folder, never listed under "Your fonts" and so with no
+        // way to remove it (F9). It goes now; the bundled row is chosen.
+        // Unregistering first is not needed: it was never registered.
+        if CustomFonts.bundledFamily(matching: family) != nil {
+            try? FileManager.default.removeItem(at: destination)
+        }
         return family
     }
 
