@@ -188,6 +188,8 @@ public struct ReaderView: View {
     /// rather than presenting a sheet of its own.
     @Environment(\.openWindow) private var openWindow
     private var isActiveScene: Bool { controlActiveState == .key }
+    /// This window, to `KeyReaderNarration`.
+    @State private var narrationToken = UUID()
     /// Whether the page holds the keyboard, which is what the bare arrow keys
     /// below depend on. Tracked rather than left to SwiftUI because a sheet
     /// takes the keyboard and does not hand it back: after closing the player —
@@ -582,6 +584,11 @@ public struct ReaderView: View {
         }
     }
 
+    private func reportNarration() {
+        KeyReaderNarration.shared.update(
+            token: narrationToken, isKey: isActiveScene, isNarrated: model.hasNarration)
+    }
+
     /// What each reading command does, in one place.
     private func perform(_ command: ReaderCommand) {
         switch command {
@@ -603,6 +610,9 @@ public struct ReaderView: View {
         case .ask:
             guard showsAskPill else { return }
             showsAsk = true
+        case .playPause:
+            guard model.hasNarration else { return }
+            Task { await model.togglePlayback() }
         case .volumeUp, .volumeDown:
             guard model.hasNarration else { return }
             VolumeTrimControl.nudge(
@@ -1024,6 +1034,15 @@ public struct ReaderView: View {
         .onReceive(NotificationCenter.default.publisher(for: ReaderCommand.ask.notification)) { _ in
             if isActiveScene { perform(.ask) }
         }
+        .onReceive(NotificationCenter.default.publisher(for: ReaderCommand.playPause.notification)) { _ in
+            if isActiveScene { perform(.playPause) }
+        }
+        // Says whether this is the narrated book in front, for Playback ›
+        // Play — which otherwise had nothing to act on until narration had
+        // been started from the page. Each window clears only itself.
+        .onChange(of: isActiveScene, initial: true) { reportNarration() }
+        .onChange(of: model.hasNarration) { reportNarration() }
+        .onDisappear { KeyReaderNarration.shared.left(narrationToken) }
         #endif
         // A re-resolve, not an assignment: `model.style = settings.readerStyle`
         // would throw away this book's own settings the moment the reader

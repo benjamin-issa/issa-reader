@@ -203,11 +203,7 @@ struct IssaCommands: Commands {
             // server field toggled playback instead. The reader page handles
             // Space itself while it has the keyboard, which is the right
             // scope for it.
-            Button(nowPlaying.coordinator?.player.isPlaying == true ? "Pause" : "Play") {
-                nowPlaying.coordinator?.player.togglePlayPause()
-                nowPlaying.publish()
-            }
-            .disabled(nowPlaying.coordinator == nil)
+            PlayPauseCommand(nowPlaying: nowPlaying)
 
             Button("Skip Forward") {
                 perform(.skipForward)
@@ -278,6 +274,32 @@ struct FileMenuAddBook: View {
         if fileMenu.offersAddBook {
             AddBookCommand(local: local)
         }
+    }
+}
+
+/// Playback › Play or Pause.
+///
+/// The player when there is one. Before narration has been started there is
+/// none, and the item was disabled over a narrated book's window (F10): now
+/// the reader in front is asked to start its narration, as the page's own
+/// play button would. A view, so what it reads is observed here and not by
+/// the whole menu bar.
+struct PlayPauseCommand: View {
+    let nowPlaying: NowPlayingController
+    private let keyReader = KeyReaderNarration.shared
+
+    var body: some View {
+        Button(nowPlaying.coordinator?.player.isPlaying == true ? "Pause" : "Play") {
+            if let coordinator = nowPlaying.coordinator {
+                coordinator.player.togglePlayPause()
+                nowPlaying.publish()
+            } else {
+                ReaderCommand.playPause.post()
+            }
+        }
+        .disabled(!KeyReaderNarration.playEnabled(
+            hasCoordinator: nowPlaying.coordinator != nil,
+            narratedReaderIsKey: keyReader.narratedReaderIsKey))
     }
 }
 
@@ -507,7 +529,13 @@ struct MacRootView: View {
         // the reader, which is why the comment below used to say every route
         // ends in a window.
         if pending.destination == .details {
-            inspected.bookID = pending.book.uuid
+            // And the book where it can be seen: no page left over the
+            // library, on a shelf that has it, scrolled to. It used to only
+            // select — "Show in Library" from Settings left an author page
+            // standing, or a grid with the book far below the fold (F10).
+            column.revealBook(
+                isOnCurrentShelf: app.arrangedBooks.contains { $0.uuid == pending.book.uuid })
+            inspected.reveal(pending.book.uuid)
             return
         }
         // `consumePendingBook` arms the one-shot reader request for `.read`, and

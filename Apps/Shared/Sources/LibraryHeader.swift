@@ -114,7 +114,7 @@ struct LibraryHeader: View {
         }
         .controlSize(.small)
         .help("Filter by tag")
-        .accessibilityLabel(selected.isEmpty ? "Filter by tag" : "\(selected.count) tags selected")
+        .accessibilityLabel(Self.tagFilterLabel(selectedCount: selected.count))
         #else
         return Menu {
             if !selected.isEmpty {
@@ -143,10 +143,20 @@ struct LibraryHeader: View {
                 showsChevron: true,
             )
         }
-        .accessibilityLabel(selected.isEmpty ? "Filter by tag" : "\(selected.count) tags selected")
+        .accessibilityLabel(Self.tagFilterLabel(selectedCount: selected.count))
         #endif
     }
     #endif
+
+    /// What the tag filter is called aloud: "1 tag selected", not "1 tags
+    /// selected", which is what one tag read as (F10).
+    static func tagFilterLabel(selectedCount: Int) -> String {
+        switch selectedCount {
+        case 0: "Filter by tag"
+        case 1: "1 tag selected"
+        default: "\(selectedCount) tags selected"
+        }
+    }
 
     #if os(macOS)
     /// One tag's checkmark in the Mac's pull-down.

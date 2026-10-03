@@ -42,6 +42,19 @@ public final class MacBookSelection {
     /// (`BookActions.push`).
     var pushed: BookRouter.Route?
 
+    /// A book the grid should scroll to, once: the grid that shows it takes
+    /// it (`LibraryView`), whether it was on screen when asked or is built
+    /// by the request.
+    var pendingReveal: String?
+
+    /// Selects a book asked for from outside the grid — Settings' "Show in
+    /// Library", a link — and asks the grid to scroll to it. Selecting alone
+    /// left the ring far below the fold (F10).
+    func reveal(_ bookID: String) {
+        self.bookID = bookID
+        pendingReveal = bookID
+    }
+
     public init() {}
 }
 

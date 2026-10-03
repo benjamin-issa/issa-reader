@@ -58,6 +58,25 @@ struct MacContentColumnTests {
         #expect(column.path == [.tag("Gothic"), .author("Bram Stoker")])
     }
 
+    /// Settings' "Show in Library" selected the book and left whatever page
+    /// was up, and a shelf without the book, in the way (F10).
+    @Test("a book revealed from outside is shown on the library, page taken down")
+    func revealBook() {
+        var column = MacContentColumn()
+        column.select(.shelf(.toRead))
+        column.push(.author("Jane Austen"))
+        column.revealBook(isOnCurrentShelf: true)
+        #expect(column.selection == .shelf(.toRead))
+        #expect(column.path.isEmpty)
+
+        column.revealBook(isOnCurrentShelf: false)
+        #expect(column.selection == .shelf(.all))
+
+        column.select(.downloads)
+        column.revealBook(isOnCurrentShelf: true)
+        #expect(column.selection == .shelf(.all), "Downloads is not a shelf the book can be shown on")
+    }
+
     @Test("a page's switch lands on the library's All books")
     func switchFromAPage() {
         #expect(LibraryModeSwitch.showsRails(LibraryModeSwitch.fromPage(.browse)))

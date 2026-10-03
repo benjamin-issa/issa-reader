@@ -87,4 +87,15 @@ struct MacContentColumn: Equatable {
         selection = .shelf(.all)
         path = []
     }
+
+    /// A book asked for in the inspector from outside the window — Settings'
+    /// "Show in Library", a link, Spotlight: the library, with no page over
+    /// it, on the shelf the reader is on when the book is on it and on All
+    /// books otherwise.
+    mutating func revealBook(isOnCurrentShelf: Bool) {
+        path = []
+        if !(selection?.isShelf ?? false) || !isOnCurrentShelf {
+            selection = .shelf(.all)
+        }
+    }
 }

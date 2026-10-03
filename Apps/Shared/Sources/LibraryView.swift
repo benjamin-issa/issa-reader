@@ -12,11 +12,34 @@ public struct LibraryView: View {
     @State private var results: [Book] = []
     /// This window's "Show in Library" requests; see `LibraryNavigator`.
     @Environment(LibraryNavigator.self) private var navigator: LibraryNavigator?
+    #if os(macOS)
+    /// The inspector's book, and a request to scroll to it.
+    @Environment(MacBookSelection.self) private var selection: MacBookSelection?
+    #endif
 
     public init() {}
 
     @ViewBuilder
     private var scrollContent: some View {
+        #if os(macOS)
+        ScrollViewReader { proxy in
+            scrollView
+                // A book asked for from outside — Settings' "Show in Library",
+                // a link — is scrolled to, not only ringed. `initial`, because
+                // the request can be what built this grid.
+                .onChange(of: selection?.pendingReveal, initial: true) { _, bookID in
+                    guard let bookID else { return }
+                    selection?.pendingReveal = nil
+                    guard books.contains(where: { $0.uuid == bookID }) else { return }
+                    withAnimation(.snappy) { proxy.scrollTo(bookID, anchor: .center) }
+                }
+        }
+        #else
+        scrollView
+        #endif
+    }
+
+    private var scrollView: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: Metrics.spacing32, pinnedViews: []) {
                 #if os(iOS)
