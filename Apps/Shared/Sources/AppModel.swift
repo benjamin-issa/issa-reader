@@ -739,6 +739,11 @@ public final class AppModel {
         // `Task.detached` does not inherit cancellation.
         startingListening = nil
         listeningExtraction?.cancel()
+        // And the hand-off's claim, for the same reason. A hand-off suspended
+        // in `resumeNarration` owns nothing below either, and woke with its
+        // claim intact: its guard passed, and the departed account's
+        // read-along was left playing with nothing tracking it.
+        handingOffBook = nil
 
         // 4. Anything audible. Stop the audio, and stop anything listening for
         // it, before the stopping itself is announced.
@@ -2693,22 +2698,45 @@ public final class AppModel {
         // closure the model stores would retain it for the life of the process,
         // pinning the chapter layout, the decoded plates and the coordinator.
         let bookUUID = book.uuid
+        // Whose reader this is, and every hook asks at the moment it fires.
+        //
+        // An account's exit unregisters its readers and nothing more: the
+        // iPhone's reader is a full-screen cover holding its model, and a
+        // same-server switch keeps the library and the cover on screen. Its
+        // hooks wrote through whichever account was signed in when they
+        // fired — the departed reader's page turns as the arriving account's
+        // place in its own copy of the same book (filed by the rule as well),
+        // its narration anchors and its highlights into the arriving
+        // account's store. The fence moves only when an account is left, and
+        // every reader of the account left goes with it, so a model from
+        // before it is one nobody signed in now opened.
+        let generation = catalogueGeneration
         model.enqueuePosition = { [weak self] locator, timestamp, origin in
-            await self?.writePosition(
-                locator, timestamp: timestamp, for: bookUUID, origin: origin) ?? false
+            guard let self, self.catalogueGeneration == generation else { return false }
+            return await self.writePosition(
+                locator, timestamp: timestamp, for: bookUUID, origin: origin)
         }
         model.recordAudioAnchor = { [weak self] anchor in
-            try? await self?.store?.setAudioAnchor(anchor, forBook: bookUUID)
+            guard let self, self.catalogueGeneration == generation else { return }
+            try? await self.store?.setAudioAnchor(anchor, forBook: bookUUID)
         }
         model.loadAudioAnchor = { [weak self] in
-            try? await self?.store?.audioAnchor(forBook: bookUUID)
+            guard let self, self.catalogueGeneration == generation else { return nil }
+            return try? await self.store?.audioAnchor(forBook: bookUUID)
         }
         model.loadStoredAnnotations = { [weak self] in
-            await self?.annotations(for: bookUUID) ?? []
+            guard let self, self.catalogueGeneration == generation else { return [] }
+            return await self.annotations(for: bookUUID)
         }
-        model.onSaveAnnotation = { [weak self] in self?.save($0) }
-        model.onDeleteAnnotation = { [weak self] in self?.delete($0) }
-        installSharedHooks(on: model)
+        model.onSaveAnnotation = { [weak self] in
+            guard let self, self.catalogueGeneration == generation else { return }
+            self.save($0)
+        }
+        model.onDeleteAnnotation = { [weak self] in
+            guard let self, self.catalogueGeneration == generation else { return }
+            self.delete($0)
+        }
+        installSharedHooks(on: model, generation: generation)
         readers[bookUUID] = model
         return model
     }
@@ -2747,7 +2775,8 @@ public final class AppModel {
         }
         model.onSaveAnnotation = { [weak persistence] in persistence?.save($0) }
         model.onDeleteAnnotation = { [weak persistence] in persistence?.delete($0) }
-        installSharedHooks(on: model)
+        // No account's fence: the book is the device's, and outlives them all.
+        installSharedHooks(on: model, generation: nil)
         readers[bookUUID] = model
         persistence.didOpen(bookUUID)
         return model
@@ -2776,7 +2805,14 @@ public final class AppModel {
 
     /// The hooks every open book gets whatever it came from: which reader is
     /// on screen, and the narration it may start.
-    private func installSharedHooks(on model: ReaderModel) {
+    ///
+    /// - Parameter generation: the account fence a server book's reader was
+    ///   opened under, or nil for a book from the reader's own files. A
+    ///   reader the account has left cannot narrate: its play button is still
+    ///   on the cover, and what it started played the departed account's
+    ///   book with nothing tracking it — `narrationDidStart` no longer knows
+    ///   the model — so no mini player, lock screen or sleep timer.
+    private func installSharedHooks(on model: ReaderModel, generation: Int?) {
         let bookUUID = model.book.uuid
         model.onVisibilityChanged = { [weak self] visible in
             self?.setReaderVisible(bookUUID, visible)
@@ -2793,8 +2829,14 @@ public final class AppModel {
         // happened to hold — which, with several windows open, was not
         // necessarily the one whose rate actually changed.
         model.onNarrationReady = { [weak self] coordinator in
-            coordinator.player.setRateObserver(for: coordinator) { [weak self] rate in
+            coordinator.player.setRateObserver(for: coordinator) { [weak self, weak coordinator] rate in
                 guard let self else { return }
+                if rate > 0, let generation, catalogueGeneration != generation {
+                    // Synchronously, from inside `play()`'s own notification:
+                    // `pause()` notifies again with zero, which lands below.
+                    coordinator?.player.pause()
+                    return
+                }
                 if rate > 0 { narrationDidStart(for: bookUUID) }
                 // Not inside the `rate > 0` branch, which is what this observer
                 // used to be entirely: a rate of zero is the *release* signal,
@@ -2895,8 +2937,14 @@ public final class AppModel {
         // Nor run one already scheduled. The screen holds the model beyond
         // this, so a debounced save two seconds out still fired — with no
         // queue to take it, and until recently straight into the widget.
+        //
+        // And silenced, narrating or not. Only the narrating book was stopped,
+        // and a read-along a hand-off was starting had not claimed the book
+        // yet, so it played on for the account that had left.
         for uuid in departing {
-            readers.removeValue(forKey: uuid)?.cancelPendingSave()
+            guard let model = readers.removeValue(forKey: uuid) else { continue }
+            model.cancelPendingSave()
+            model.readalong?.player.pause()
         }
     }
 
