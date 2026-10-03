@@ -51,6 +51,10 @@ struct SpoilerGateTests {
             // clause was all the probe read.
             ("Who is Alice? Does she ever meet the Cheshire Cat?",
              "Yes, she later meets the Cheshire Cat.\nSources: 1"),
+            // The same with a name the book's name table never holds, so only
+            // the capital in the second sentence can catch it.
+            ("Who is Alice? Does she ever meet the Duchess?",
+             "Yes, she later meets the Duchess and the Cheshire Cat.\nSources: 1"),
             // (c) A name typed in lower case: no capital, no candidate.
             ("who is the cheshire cat?",
              "The Cheshire Cat is a grinning cat who can vanish.\nSources: 1"),
