@@ -446,14 +446,13 @@ final class AskCoordinator {
         Task { [store] in await store.remove(bookUUID: bookUUID) }
     }
 
-    /// Every index, on sign-out or when downloads are deleted with the account.
-    func purgeAll() {
-        purgeAll(keeping: [])
-    }
-
-    /// Every index but those of `kept`: the books the reader added from their
-    /// own files, which belong to the device and outlive the account. Their
-    /// jobs, warm-ups and delivered answers are left as they are.
+    /// Every index but those of `kept`, on sign-out or when downloads are
+    /// deleted with the account: `kept` is the books the reader added from
+    /// their own files, which belong to the device and outlive the account.
+    /// Their jobs, warm-ups and delivered answers are left as they are.
+    ///
+    /// The one way to purge. A short form that kept nothing had no caller at
+    /// all, and was one more way to sweep the device's books with the account's.
     func purgeAll(keeping kept: Set<String>) {
         for (uuid, job) in jobs where !kept.contains(uuid) { job.task?.cancel() }
         jobs = jobs.filter { kept.contains($0.key) }
