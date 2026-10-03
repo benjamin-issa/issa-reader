@@ -138,6 +138,11 @@ public final class AppModel {
     /// indistinguishable from outside unless the model can be asked.
     var isWritingListeningPosition: Bool { listeningProgressTask != nil }
     private var isConnecting = false
+    /// The session `connect` built whose stored token the server has not yet
+    /// been asked about. Nothing queued goes out with it until it has been
+    /// (`drainPendingWrites`); an identity route that hears `.signedIn` and
+    /// has made the hand-over lets it go (`identified`).
+    private weak var unidentifiedSession: Session?
     /// Streams books to disk in the background. Created with the session, since
     /// it needs the server URL and the bearer token.
     public private(set) var downloads: DownloadManager?
@@ -163,7 +168,7 @@ public final class AppModel {
         self.notificationCentre = notificationCentre
         serverAddress = UserDefaults.standard.string(forKey: Self.lastServerKey) ?? ""
         reachability.onBecameOnline = { [weak self] in
-            Task { await self?.drainPendingWrites() }
+            Task { await self?.cameBackOnline() }
         }
         // A property initialiser does not fire `didSet`, so without this the
         // first frame renders empty facets and an unarranged shelf.
@@ -326,6 +331,9 @@ public final class AppModel {
         serverAddress = resolved
         let session = Session(serverURL: url, keychain: keychain)
         self.session = session
+        // Its token is the keychain's, and nobody has asked the server whose
+        // it is yet: nothing queued goes out with it until somebody has.
+        unidentifiedSession = session
 
         // Open the local store first and show what is already known. A reader
         // opening the app on a train should see their shelf, not a spinner that
@@ -453,10 +461,17 @@ public final class AppModel {
         // Read once, as in `adopt`: the hand-over suspends, and the branch
         // taken below has to be the one it acted on.
         let state = session.state
-        if case let .signedIn(user) = state {
+        // Only for the session still in use, as `reidentify` asks. A sign-out
+        // that lands while the identity call is out — a slow server, the
+        // cached shelf already up — has let go of this session, and the late
+        // answer walked the signed-out reader back into an empty library,
+        // with `isConnecting` stuck until it did.
+        if self.session === session, case let .signedIn(user) = state {
             await accountResolved(user, on: session.serverURL)
+            identified(session)
         }
         await paused?.resumeDraining()
+        guard self.session === session else { return }
         // The same handling as adopt(). Fixing only that one left this path —
         // the one that runs on every cold launch — dropping the reason on the
         // floor and stranding phase at .signingIn, which renders as the blank
@@ -514,14 +529,19 @@ public final class AppModel {
         // Read once: the hand-over suspends, and the branch taken below has to
         // be the one it acted on.
         let state = session.state
-        if case let .signedIn(user) = state {
+        // Only for the session still in use: a sign-out, or a connect to
+        // another server, can land while the identity call is out (see
+        // `resumeStoredSession`).
+        if self.session === session, case let .signedIn(user) = state {
             await accountResolved(user, on: session.serverURL)
+            identified(session)
         }
         // Before `enterLibrary`, whose refresh drains what the same account
         // left queued. The queue the pause was taken on, whichever it is now:
         // a retired one passes the lock on and sends nothing, and the failure
         // branches keep the queue they had, as they always have.
         await paused?.resumeDraining()
+        guard self.session === session else { return }
         switch state {
         case .signedIn:
             await enterLibrary()
@@ -591,6 +611,13 @@ public final class AppModel {
             "to": user.id,
         ])
         await leaveAccount(.accountSwitch, nowPlaying: nowPlayingController)
+    }
+
+    /// The server has said whose token `session` holds, and the hand-over
+    /// that answer called for has been made: what is queued may go out with
+    /// it from here on (`drainPendingWrites`).
+    private func identified(_ session: Session) {
+        if unidentifiedSession === session { unidentifiedSession = nil }
     }
 
     /// Signs out and leaves nothing behind.
@@ -786,6 +813,11 @@ public final class AppModel {
         #if os(iOS)
         intentInbox.bookID = nil
         #endif
+        // A re-identify still out for a session this exit lets go of. Keyed
+        // by session, so nothing would wait on it; dropped so nothing holds
+        // it either. Not on an account switch, which is the session staying —
+        // and which a re-identify may itself be making.
+        if exit != .accountSwitch { reidentifying = nil }
         // Unless the reader on screen is a book from the reader's own files,
         // which is still on screen and still the device's after this.
         if let visible = visibleReaderUUID, readers[visible]?.isLocal != true {
@@ -1173,9 +1205,17 @@ public final class AppModel {
         }
     }
 
-    /// The re-identify in flight, which a refresh arriving meanwhile waits for
-    /// rather than asking again.
-    private var reidentifying: Task<Void, Never>?
+    /// The re-identify in flight, and the session it is asking about, which a
+    /// refresh of that same session arriving meanwhile waits for rather than
+    /// asking again.
+    ///
+    /// Keyed by the session. It was one slot for whatever was in flight, and
+    /// nothing cleared it when the session it asked about was let go — so
+    /// after leaving a server whose identity call hung, the next account's
+    /// refreshes, its first load included, waited out that call (minutes, on
+    /// an address that answers nothing), and a session of its own that was
+    /// `.failed` was then let through without ever being asked.
+    private var reidentifying: (session: Session, task: Task<Void, Never>)?
 
     /// Asks the server again whose token this is, when the last time it was
     /// asked got no answer — and says whether the refresh should go on.
@@ -1208,13 +1248,14 @@ public final class AppModel {
     ///   about, whatever its state, and one still without an answer refresh as
     ///   they always have.
     private func reidentifyIfFailed(_ session: Session) async -> Bool {
-        if let reidentifying {
-            await reidentifying.value
+        if let reidentifying, reidentifying.session === session {
+            await reidentifying.task.value
         } else if case .failed = session.state {
             let asking = Task { await reidentify(session) }
-            reidentifying = asking
+            reidentifying = (session, asking)
             await asking.value
-            reidentifying = nil
+            // Only its own: another session's may have taken the slot since.
+            if reidentifying?.task == asking { reidentifying = nil }
         } else {
             return true
         }
@@ -1236,6 +1277,7 @@ public final class AppModel {
         // handed over from, and has nothing here to hand over to.
         if self.session === session, case let .signedIn(user) = state {
             await accountResolved(user, on: session.serverURL)
+            identified(session)
         }
         await paused?.resumeDraining()
         guard self.session === session else { return }
@@ -1265,11 +1307,47 @@ public final class AppModel {
     ///   than declining. `true` only from `flushOpenReaders`, the exit path,
     ///   where declining meant sending nothing and there is no next enqueue to
     ///   try again.
+    ///
+    /// Not while nobody knows whose token the session holds. The keychain
+    /// holds whichever token was installed last, and one an adopt installed
+    /// can be another account's than the rows queued under it: a launch whose
+    /// identity call failed kept the cached shelf up and the queue running,
+    /// and the next page turn or the network coming back posted the departed
+    /// account's positions, statuses and ratings with the arriving account's
+    /// bearer. The rows wait, durable, for an identity — which the network
+    /// coming back asks for (`cameBackOnline`), as does any refresh.
     public func drainPendingWrites(waitingForInFlight: Bool = false) async {
-        guard let session, let mutations else { return }
+        guard let session, let mutations, identityIsKnown(for: session) else { return }
         _ = await MutationDrain(queue: mutations, client: session.client)
             .drain(waitingForInFlight: waitingForInFlight)
         pendingWrites = (try? await mutations.count) ?? 0
+    }
+
+    /// Whether the server has said whose token `session` holds — or, for a
+    /// session no identity route has been through, at least not said that it
+    /// could not tell. `.failed` is an identity call that never came back,
+    /// and `.signingIn` one still out.
+    private func identityIsKnown(for session: Session) -> Bool {
+        guard unidentifiedSession !== session else { return false }
+        switch session.state {
+        case .failed, .signingIn: return false
+        case .signedIn, .signedOut, .expired: return true
+        }
+    }
+
+    /// The network is back: send what waited for it.
+    ///
+    /// Unless nobody has asked whose token the session holds — a launch that
+    /// came up offline, its shelf on screen. Then the refresh goes first: it
+    /// asks (`reidentifyIfFailed`), hands over if the token is another
+    /// account's, and drains behind its own fence. A bare drain here was what
+    /// sent the departed account's rows with the arriving account's bearer.
+    func cameBackOnline() async {
+        if let session, phase == .ready, case .failed = session.state {
+            await refreshLibrary()
+        } else {
+            await drainPendingWrites()
+        }
     }
 
     /// The status and rating writes a server's answer may not include yet, as
