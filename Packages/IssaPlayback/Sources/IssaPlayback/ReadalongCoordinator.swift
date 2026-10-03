@@ -423,9 +423,33 @@ public final class ReadalongCoordinator {
                 url: destination, href: entry.audioHref, startAt: entry.start + within)
             if outcome == .failed { return false }
         } else {
+            // The same refusal for an item that turns out to be dead under the
+            // seek: there is nowhere in it to land, and `true` here is what
+            // sent `play(from:)` on to press play over it.
             await player.seek(to: entry.start + within)
+            if player.itemHasFailed { return false }
         }
         return true
+    }
+
+    /// Carries on from where the narration is: the play button, and every
+    /// remote "play".
+    ///
+    /// When the file the player holds would not play, the press is a retry —
+    /// the file is opened again at the sentence the narration is on — rather
+    /// than `AudioPlayer.play()`, which refuses a dead item. Nothing else
+    /// stood that item down: the player had stopped once, when it failed, and
+    /// every later press played over it.
+    ///
+    /// - Returns: whether the narration is playing now. False when the file
+    ///   still will not open, which the caller can tell the reader.
+    @discardableResult
+    public func resume() async -> Bool {
+        if player.itemHasFailed, let entry = activeEntry {
+            return await play(from: entry)
+        }
+        player.play()
+        return player.isPlaying
     }
 
     /// Plays from a fragment named by id alone, falling back to the first
@@ -515,7 +539,7 @@ public final class ReadalongCoordinator {
         // Each navigation route announces its own seek, after it has moved.
         switch action {
         case .playPause:
-            player.togglePlayPause()
+            if player.isPlaying { player.pause() } else { await resume() }
         case .skipForward:
             await skipBook(by: map.skipForwardInterval)
         case .skipBackward:
@@ -542,7 +566,7 @@ public final class ReadalongCoordinator {
         // has already decided which one it means, and its idea of the state —
         // the published rate — can lag `isPlaying` through a stall.
         case .play:
-            player.play()
+            await resume()
         case .pause:
             player.pause()
         case .sleepTimer, .none:

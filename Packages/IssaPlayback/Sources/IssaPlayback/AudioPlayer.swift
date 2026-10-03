@@ -512,6 +512,7 @@ public final class AudioPlayer {
         guard failedItem != item else { return .failed }
         guard playhead == playheadGeneration else { return .overtaken }
         if offset > 0 {
+            beforeTrailingSeek?()
             guard await seekPlayhead(offset, generation: playhead) else {
                 guard item == itemGeneration else { return .superseded }
                 return failedItem == item ? .failed : .overtaken
@@ -525,6 +526,19 @@ public final class AudioPlayer {
             placementPending = false
             if isPlaying { player.rate = rate }
         }
+        // Asked once more on the way out, because both ways an item says it
+        // failed can arrive while it is being placed. The status observer hops
+        // through a Task, so with no trailing seek to wait on this method
+        // returned before that Task ran; and a failure that lands while the
+        // trailing seek is pending releases the seek through
+        // `cancelPendingSeeks` without taking the playhead from it, so the seek
+        // came back owning the playhead and this said `.loaded` for a dead item
+        // — and its caller pressed play over it.
+        if playerItem.status == .failed {
+            itemDidFail(
+                generation: item, reason: playerItem.error.map { String(describing: $0) } ?? "unknown")
+        }
+        guard failedItem != item else { return .failed }
         return .loaded
     }
 
@@ -561,6 +575,12 @@ public final class AudioPlayer {
     /// `if let`, so a shipping build adds no suspension point.
     var whileLoadingAsset: (@MainActor () async -> Void)?
 
+    /// Called from inside `load` just before its own trailing seek is issued:
+    /// the window in which an item that fails leaves that seek to land on a
+    /// dead item. A test seam, nil on every path a listener can reach, and
+    /// synchronous, so it adds no suspension point.
+    var beforeTrailingSeek: (@MainActor () -> Void)?
+
     /// The rate the engine is set to, for tests: the interesting cases are the
     /// ones where it is not `rate`.
     var engineRate: Float { player.rate }
@@ -569,6 +589,16 @@ public final class AudioPlayer {
     var engineTime: TimeInterval { player.currentTime().seconds }
 
     public func play() {
+        // Nothing is claimed over an item that would not play. The session is
+        // non-mixable, so activating it stopped the listener's music — or the
+        // car's working stream — and `isPlaying` drew a pause glyph over
+        // silence that nothing ever stood down, because `itemDidFail` fires
+        // once per item. The coordinators reopen the file instead; see their
+        // `resume()`. The next `load` is a new item, and plays.
+        guard !itemHasFailed else {
+            IssaLog.info("play refused: the loaded audio would not play", [:])
+            return
+        }
         // Activated here, not in `init`: a non-mixable session interrupts
         // whatever else is playing the moment it goes active, which is right
         // when the listener asks for narration and wrong when they only
@@ -612,10 +642,23 @@ public final class AudioPlayer {
         IssaLog.warning("audio would not play", [
             "href": currentAudioHref ?? "", "error": reason,
         ])
+        // The dead file is no longer the one loaded. Left named, every
+        // coordinator's "is this file already in the player?" test said yes:
+        // a tap on another sentence in the same file took the seek-only branch
+        // over a dead item and played, `currentAnchor` named a file that never
+        // opened, and the car's "nothing loaded" check passed. Cleared, the
+        // next move into this file opens it again.
+        currentAudioHref = nil
     }
 
     /// The item `itemDidFail` last stood down, so it does so once.
     private var failedItem: Int?
+
+    /// Whether the item the player holds is one that would not play: the
+    /// newest load failed, or its item stopped for good. `play()` refuses
+    /// while it is true, and the next `load` clears it. Observable, so a
+    /// surface can say why nothing is playing.
+    public var itemHasFailed: Bool { failedItem != nil && failedItem == itemGeneration }
     /// The current item's generation, for tests that report a failure on it.
     var itemGenerationForTests: Int { itemGeneration }
 
@@ -627,9 +670,15 @@ public final class AudioPlayer {
     ///
     /// A load still opening this file loses its trailing seek to this one —
     /// see `LoadOutcome.overtaken`.
-    public func seek(to seconds: TimeInterval) async {
+    ///
+    /// - Returns: whether the playhead landed there and this seek still owns
+    ///   it. False when the item would not play — `itemHasFailed` then says
+    ///   so — or when something newer took the playhead. It used to answer
+    ///   nothing, so a seek on a dead item read as a move that had happened.
+    @discardableResult
+    public func seek(to seconds: TimeInterval) async -> Bool {
         playheadGeneration &+= 1
-        await seekPlayhead(seconds, generation: playheadGeneration)
+        return await seekPlayhead(seconds, generation: playheadGeneration)
     }
 
     /// The tail every seek shares, a load's own trailing seek included.
