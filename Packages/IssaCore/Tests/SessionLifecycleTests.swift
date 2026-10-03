@@ -17,8 +17,11 @@ private final class LifecycleStub: URLProtocol, @unchecked Sendable {
     static let unreachableIdentity = "unreachable-identity.lifecycle.test"
     /// Signs in, then refuses the token on the library route.
     static let revokes = "revokes.lifecycle.test"
-    /// Signs in and answers everything.
-    static let healthy = "healthy.lifecycle.test"
+    /// Signs in, and answers the logout POST after `promptAnswer` — well
+    /// inside any test's timeout, but late enough that a sign-out which did
+    /// not wait for it returns before the answer exists.
+    static let promptLogout = "prompt-logout.lifecycle.test"
+    static let promptAnswer: TimeInterval = 0.3
 
     /// How long the slow logout takes to answer. Far past the test's own
     /// timeout, short enough that an unbounded sign-out fails the test
@@ -29,6 +32,14 @@ private final class LifecycleStub: URLProtocol, @unchecked Sendable {
 
     /// The same requests, each with the `Authorization` it carried.
     private static let authorised = Mutex<[String]>([])
+
+    /// Requests whose answer has been delivered, as "host METHOD path".
+    private static let answered = Mutex<[String]>([])
+
+    /// The requests to `host` that have had their answer.
+    static func answers(to host: String) -> [String] {
+        answered.withLock { $0.filter { $0.hasPrefix(host + " ") } }
+    }
 
     static func requests(to host: String) -> [String] {
         seen.withLock { $0.filter { $0.hasPrefix(host + " ") } }
@@ -65,10 +76,11 @@ private final class LifecycleStub: URLProtocol, @unchecked Sendable {
             answer(401, Data())
         case (_, Endpoint.user):
             answer(200, (try? BookDecodingTests.fixture("user")) ?? Data())
-        case (Self.slowLogout, Endpoint.logout):
+        case (Self.slowLogout, Endpoint.logout), (Self.promptLogout, Endpoint.logout):
             let work = DispatchWorkItem { [self] in answer(200, Data("{}".utf8)) }
             lock.withLock { late = work }
-            DispatchQueue.global().asyncAfter(deadline: .now() + Self.slowAnswer, execute: work)
+            let delay = host == Self.promptLogout ? Self.promptAnswer : Self.slowAnswer
+            DispatchQueue.global().asyncAfter(deadline: .now() + delay, execute: work)
         default:
             answer(200, Data("{}".utf8))
         }
@@ -85,6 +97,9 @@ private final class LifecycleStub: URLProtocol, @unchecked Sendable {
             headerFields: ["Content-Type": "application/json"])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: body)
+        if let host = url.host() {
+            Self.answered.withLock { $0.append("\(host) \(request.httpMethod ?? "GET") \(url.path)") }
+        }
         client?.urlProtocolDidFinishLoading(self)
     }
 }
@@ -241,16 +256,30 @@ struct SessionLifecycleTests {
         }, "sent: \(LifecycleStub.authorisations(to: host))")
     }
 
-    @Test("a logout that answers in time is still awaited before the token goes")
+    /// R-67. Sign-out waits, within its bound, for a logout the server
+    /// answers — the revoke of a thirty-five-year token is not left to a task
+    /// nobody awaits. The token is forgotten locally first, by design; the
+    /// revoke carries it with the request.
+    ///
+    /// A host of its own, whose logout answers a moment late: this used to
+    /// share a host with `refusedDeleteStillSignsOut`, whose concurrent
+    /// logout to the same host could satisfy the check, and it asked only
+    /// whether a POST had been *seen*, so a revoke sent but not awaited
+    /// passed too.
+    @Test("sign-out waits for a logout the server answers in time, and sends it with the token")
     func signOutWaitsForAPromptLogout() async {
-        let host = LifecycleStub.healthy
+        let host = LifecycleStub.promptLogout
         let keychain = MemoryTokens()
         let session = session(host, keychain: keychain)
         await session.adopt(token: "minted")
         await session.signOut()
         #expect(session.state == .signedOut)
         #expect(keychain.token(for: server(host).absoluteString) == nil)
-        #expect(LifecycleStub.requests(to: host).contains("\(host) POST \(Endpoint.logout)"))
+        // Checked the moment sign-out returns, not eventually: the answer had
+        // to be in before it did.
+        #expect(LifecycleStub.answers(to: host).contains("\(host) POST \(Endpoint.logout)"),
+                "sign-out returned before the logout was answered: \(LifecycleStub.answers(to: host))")
+        #expect(LifecycleStub.authorisations(to: host).contains("POST \(Endpoint.logout) | Bearer minted"))
     }
 
     // MARK: F06#4 — a token that dies while the session sits in `.failed`
@@ -325,7 +354,8 @@ struct SessionLifecycleTests {
     /// logged, not turned into a sign-out that does not happen.
     @Test("a delete the device refuses still signs the session out")
     func refusedDeleteStillSignsOut() async {
-        let host = LifecycleStub.healthy
+        // Its own host, so its logout can never answer another test's check.
+        let host = "refused-delete.lifecycle.test"
         let session = session(host, keychain: MemoryTokens(refusesDeletes: true))
         await session.adopt(token: "minted")
         await session.signOut()
