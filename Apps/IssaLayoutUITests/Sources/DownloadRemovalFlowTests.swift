@@ -41,6 +41,18 @@ final class DownloadRemovalFlowTests: XCTestCase {
         manage.tap()
     }
 
+    /// At the largest text sizes the storage summary fills the first screen
+    /// and the first row starts below the fold, where a swipe has nothing to
+    /// land on. What is under test is the gesture, not where the row sits, so
+    /// the list is scrolled until the row can be touched.
+    private func bringIntoView(_ row: XCUIElement, in app: XCUIApplication) {
+        let list = app.collectionViews.firstMatch
+        for _ in 0..<6 where !row.isHittable {
+            list.swipeUp(velocity: .slow)
+        }
+        XCTAssertTrue(row.isHittable, "the row never scrolled into view")
+    }
+
     /// Swipe, then the Delete the swipe reveals.
     ///
     /// The button is deliberately `accessibilityHidden` — VoiceOver gets the
@@ -61,6 +73,7 @@ final class DownloadRemovalFlowTests: XCTestCase {
 
         let dracula = row("Dracula", in: app)
         XCTAssertTrue(dracula.waitForExistence(timeout: 30), "no Dracula row to remove")
+        bringIntoView(dracula, in: app)
         swipeToDelete(dracula)
 
         let undo = app.buttons["Undo"].firstMatch
@@ -86,6 +99,7 @@ final class DownloadRemovalFlowTests: XCTestCase {
 
         let dracula = row("Dracula", in: app)
         XCTAssertTrue(dracula.waitForExistence(timeout: 30), "no Dracula row to remove")
+        bringIntoView(dracula, in: app)
         swipeToDelete(dracula)
 
         XCTAssertTrue(app.buttons["Undo"].firstMatch.waitForExistence(timeout: 5))

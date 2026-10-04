@@ -1,4 +1,4 @@
-#if canImport(FoundationModels)
+#if canImport(FoundationModels) && !os(tvOS)
 import FoundationModels
 #endif
 
@@ -18,7 +18,8 @@ public enum AskAvailability: Sendable, Hashable {
     case modelDownloading
     /// This hardware will never run it.
     case unsupportedDevice
-    /// The framework does not exist here at all — Apple TV.
+    /// Apple TV. The 27 SDK ships the framework, with every symbol in it
+    /// marked unavailable there, so there is nothing to ask either way.
     case unsupportedOnThisPlatform
 
     /// Whether a question can be asked right now. `modelDownloading` is *not*
@@ -26,7 +27,7 @@ public enum AskAvailability: Sendable, Hashable {
     /// have it work later, but a question asked now fails.
     public var isReady: Bool { self == .available }
 
-    #if canImport(FoundationModels)
+    #if canImport(FoundationModels) && !os(tvOS)
     /// Read fresh every time rather than cached: the reader may have gone to
     /// Settings and turned Apple Intelligence on since the app launched, which
     /// is exactly the moment the copy on screen has to change.
@@ -45,7 +46,9 @@ public enum AskAvailability: Sendable, Hashable {
         }
     }
     #else
-    /// tvOS. FoundationModels is not in the SDK, so there is nothing to ask.
+    /// tvOS. The 27 SDK ships the framework, but every symbol in it is marked
+    /// unavailable there, so there is still nothing to ask — and `canImport`
+    /// alone no longer says so, which is why the guard names the platform too.
     public static func current() -> AskAvailability { .unsupportedOnThisPlatform }
     #endif
 }

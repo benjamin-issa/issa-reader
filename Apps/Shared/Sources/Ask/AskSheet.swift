@@ -101,7 +101,13 @@ struct AskSheet: View {
             alignment: .topLeading,
         )
         .background(Palette.paper)
-        .task {
+        // Keyed on whether the book has finished opening. The sparkle opens
+        // this sheet while the book is still laying out, when there is no file
+        // to warm up from, and a bare `.task` ran once, found nothing, and was
+        // never run again: no warm-up for that book at all, so the reader's
+        // question built the index itself — and a warm-up started by the next
+        // opening raced it over the same file.
+        .task(id: model.package != nil) {
             // Availability can have changed since the app launched — the reader
             // may have been to Settings and turned Apple Intelligence on — and
             // this is the moment the copy has to be right.
@@ -138,7 +144,16 @@ struct AskSheet: View {
         } else if let job {
             switch job.state {
             case .working: working(job)
-            case let .answered(answer): answered(job, answer)
+            case let .answered(answer):
+                // An answer with no prose in it is a failure that got this far.
+                // The engine refuses those now, so this is the last line of
+                // defence — and it is the line that would have turned 1.2.0
+                // (41)'s blank card into a sentence the reader could act on.
+                if answer.text.isEmpty {
+                    failed(job, .other(AskFailure.couldNotAnswer))
+                } else {
+                    answered(job, answer)
+                }
             case let .failed(failure): failed(job, failure)
             }
         } else {

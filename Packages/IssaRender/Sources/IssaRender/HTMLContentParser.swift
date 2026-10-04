@@ -14,8 +14,16 @@ import AppKit
 /// It covers what reflowable trade fiction actually uses — block and inline
 /// flow, headings, emphasis, lists, blockquotes, breaks — and reports anything
 /// beyond that so the caller can route the chapter to a web view instead.
-/// Not `Sendable`: it holds an image loader that vends `UIImage`/`NSImage`,
-/// which are not. Parsing happens on one actor at a time, so this costs nothing.
+///
+/// The CSS half is `EPUBStyleSheet`, and it is why a book's italics appear at
+/// all: emphasis in a real trade ebook is very often a class rather than an
+/// `<em>`, and so are the first-line indent and the justification that make a
+/// page look like a page. What that subset will and will not read — and why it
+/// will never read anything that changes *which characters* are rendered — is
+/// written there.
+/// Not `Sendable`: it holds an image loader that vends artwork — `UIImage`,
+/// `NSImage` or `ArchivePlate` — which is not. Parsing happens on one actor at
+/// a time, so this costs nothing.
 public struct HTMLContentParser {
     /// `NSAttributedString` is immutable but predates `Sendable`, and this
     /// struct only ever holds a finished, never-mutated instance.
@@ -29,9 +37,11 @@ public struct HTMLContentParser {
     }
 
     private let style: ReaderStyle
-    private let loadImage: ((String) -> PlatformImage?)?
+    private let loadImage: ((String) -> (any ChapterArtwork)?)?
+    private let loadStyleSheet: ((String) -> EPUBStyleSheet?)?
     private let maxImageWidth: CGFloat
     private let maxImageHeight: CGFloat
+    private let columnWidth: CGFloat
     private let fonts = FontCache()
 
     /// One chapter's fonts, resolved once each.
@@ -71,7 +81,8 @@ public struct HTMLContentParser {
     }
 
     /// - Parameters:
-    ///   - loadImage: given an archive path, the decoded artwork. Supplying it is
+    ///   - loadImage: given an archive path, the artwork: its size is read at
+    ///     once, its pixels only when drawn (`ChapterArtwork`). Supplying it is
     ///     what lets illustrations occupy real space and actually draw; without
     ///     it, images are skipped and an illustrated chapter reads as empty.
     ///     Results are expected to be cached by the caller — a chapter asks once
@@ -84,28 +95,58 @@ public struct HTMLContentParser {
     ///     and the rest of the picture is painted outside it — unreachable on
     ///     every page, with the page turn skipping straight past. A full-page
     ///     cover or map showed only its top.
+    ///   - columnWidth: what a percentage length resolves against — a
+    ///     `text-indent: 4.688%` is 4.688% of *this*. Named separately from
+    ///     `maxImageWidth` even though the reader passes the same number for
+    ///     both: they coincide because a picture is scaled to the column, not
+    ///     because they are the same quantity, and the callers that parse for
+    ///     search or for the Ask index pass neither.
+    ///   - loadStyleSheet: given an archive path, that sheet already parsed.
+    ///     Supplying it is what makes a book's own formatting appear; without
+    ///     it the chapter renders exactly as it did before there was a CSS
+    ///     reader. Expected to be cached by the caller — every chapter of a book
+    ///     links the same two or three sheets.
+    ///
+    ///     Deliberately **not** supplied by the Ask indexer or the in-book
+    ///     search, which parse the same chapters for their text. The rendered
+    ///     *string* must not depend on styling — every passage offset and
+    ///     spoiler boundary is measured in it — so the whitelist in
+    ///     `EPUBStyleSheet` admits only properties that produce attributes, and
+    ///     `IndexOffsetTests` holds that invariant down.
     public init(
         style: ReaderStyle,
         maxImageWidth: CGFloat = 320,
         maxImageHeight: CGFloat = .greatestFiniteMagnitude,
-        loadImage: ((String) -> PlatformImage?)? = nil,
+        columnWidth: CGFloat = 320,
+        loadImage: ((String) -> (any ChapterArtwork)?)? = nil,
+        loadStyleSheet: ((String) -> EPUBStyleSheet?)? = nil,
     ) {
         self.style = style
         self.maxImageWidth = maxImageWidth
         self.maxImageHeight = maxImageHeight
+        self.columnWidth = columnWidth
         self.loadImage = loadImage
+        self.loadStyleSheet = loadStyleSheet
     }
 
     public func parse(xhtml data: Data, baseHref: String) throws -> Result {
-        let sanitised = Self.substituteNamedEntities(in: data)
-        let root = try EPUBXML.parse(sanitised)
+        // A chapter is HTML its author wrote, and routinely says `&nbsp;` or
+        // `&eacute;` — names XML does not define, which `XMLParser` treats as
+        // fatal under the HTML5 DOCTYPE or none. IssaEPUB rewrites the whole
+        // HTML 4.01 set to numeric references first; this renderer used to
+        // keep a table of its own that stopped forty-eight names short, and a
+        // chapter using any of those (`&asymp;`, `&sum;`, the double arrows)
+        // would not open, and dropped out of search and the Ask index.
+        let root = try EPUBXML.parse(data, substitutingHTMLEntities: true)
 
         let output = NSMutableAttributedString()
         var ranges: [String: NSRange] = [:]
         var complexity = ChapterComplexity()
 
         let body = root.firstDescendant(named: "body") ?? root
-        var context = Context(style: style, baseHref: baseHref)
+        var context = Context(
+            style: style, baseHref: baseHref, sheet: Self.styleSheet(
+                for: root, baseHref: baseHref, load: loadStyleSheet))
         render(node: body, into: output, ranges: &ranges, complexity: &complexity, context: &context)
 
         // Trimming the ends shifts every recorded range, so they move with it;
@@ -129,13 +170,56 @@ public struct HTMLContentParser {
         var style: ReaderStyle
         /// Path of the document being parsed, so image srcs resolve correctly.
         var baseHref: String
+        /// This document's cascade, empty when the caller supplied none.
+        var sheet: EPUBStyleSheet
         var bold = false
         var italic = false
         var sizeScale: CGFloat = 1
+        /// Set by `<h1>`–`<h6>` and by nothing else.
+        ///
+        /// The leading and paragraph-spacing rules below used to ask
+        /// `sizeScale > 1.2` instead, which meant the same thing only while
+        /// headings were the one thing that could change the size. A book's own
+        /// `font-size: 1.3em` on an ordinary paragraph would otherwise have
+        /// given it a heading's tight leading and a heading's gap beneath.
+        var isHeading = false
         var blockquoteDepth = 0
         var listDepth = 0
         var isPreformatted = false
         var alignment: NSTextAlignment?
+        /// How far the book asked for the first line of a paragraph to be
+        /// pushed in, past whatever indent a blockquote or list already
+        /// applies. The request rather than a number of points: a percentage
+        /// is of the column, and the column changes when the window does — see
+        /// `ChapterLayout.reindent(forColumnWidth:)`.
+        var textIndent: EPUBStyleSheet.Length?
+        var underlined = false
+    }
+
+    /// The rules in force for one document, in the order it links them.
+    ///
+    /// Document order, not manifest order: CSS breaks a tie between two equally
+    /// specific rules by which came last, and the manifest is sorted by href.
+    /// `<style>` in the document's own head comes after its links, as a browser
+    /// would have it.
+    static func styleSheet(
+        for root: EPUBXMLNode, baseHref: String, load: ((String) -> EPUBStyleSheet?)?,
+    ) -> EPUBStyleSheet {
+        var sheet = EPUBStyleSheet()
+        guard let head = root.firstDescendant(named: "head") else { return sheet }
+        for link in head.children("link") {
+            let relation = (link["rel"] ?? "").lowercased()
+            let type = (link["type"] ?? "").lowercased()
+            guard relation.contains("stylesheet") || type == "text/css",
+                  let href = link["href"], !href.isEmpty,
+                  let linked = load?(EPUBPackage.resolve(href, relativeTo: baseHref))
+            else { continue }
+            sheet.add(linked)
+        }
+        for block in head.children("style") where !block.allText.isEmpty {
+            sheet.add(css: block.allText)
+        }
+        return sheet
     }
 
     private func render(
@@ -163,10 +247,10 @@ public struct HTMLContentParser {
             child.bold = true
         case "i", "em", "cite", "dfn":
             child.italic = true
-        case "h1": child.bold = true; child.sizeScale = 1.9
-        case "h2": child.bold = true; child.sizeScale = 1.6
-        case "h3": child.bold = true; child.sizeScale = 1.35
-        case "h4", "h5", "h6": child.bold = true; child.sizeScale = 1.15
+        case "h1": child.bold = true; child.sizeScale = 1.9; child.isHeading = true
+        case "h2": child.bold = true; child.sizeScale = 1.6; child.isHeading = true
+        case "h3": child.bold = true; child.sizeScale = 1.35; child.isHeading = true
+        case "h4", "h5", "h6": child.bold = true; child.sizeScale = 1.15; child.isHeading = true
         case "blockquote":
             child.blockquoteDepth += 1
         case "ul", "ol":
@@ -181,6 +265,11 @@ public struct HTMLContentParser {
         case "img", "image":
             complexity.imageCount += 1
             appendImage(node: node, to: output, context: child)
+            // Not a bare `return`: an id on the image itself — a contents
+            // entry's `#plate-3`, a hand-made overlay's `<par>` — is as much a
+            // place in the chapter as one on a sentence, and returning before
+            // the bookkeeping below left it pointing nowhere.
+            recordFragment(of: node, from: start, in: output, ranges: &ranges)
             return
 
         case "svg":
@@ -200,26 +289,60 @@ public struct HTMLContentParser {
             break
         }
 
+        // What the book's own stylesheet says about this element, applied over
+        // the tag's meaning rather than under it: an author's rule beats the
+        // browser's default for the same element, which is what `<em>` and
+        // `<strong>` amount to here. An `<em>` *inside* a class-styled
+        // paragraph is unaffected — the class is the paragraph's, and the
+        // emphasis is inherited down to it through `child`.
+        //
+        // An inline `style=` counts on its own. Asking only whether the sheet
+        // had rules made identical markup render styled in one book and plain
+        // in another, depending on whether anything unrelated in its CSS
+        // happened to parse — and the books formatted chiefly by `style=`
+        // (word-processor conversions) are the ones whose sheets say least.
+        if !context.sheet.isEmpty || node["style"] != nil {
+            let asked = context.sheet.declarations(
+                tag: node.name, classes: node["class"], identifier: node["id"],
+                inlineStyle: node["style"])
+            if let italic = asked.italic { child.italic = italic }
+            if let bold = asked.bold { child.bold = bold }
+            if let underlined = asked.underlined { child.underlined = underlined }
+            if let scale = asked.fontScale {
+                // Relative to the parent, replacing the tag's own size rather
+                // than compounding with it: `h1 {font-size: 1.3em}` is a
+                // smaller heading, not a 2.5x one.
+                //
+                // Bounded, because `em` does compound through nesting — two
+                // nested `2em`s are already four — and a line taller than the
+                // page cannot be paged through. That is the same reason
+                // `maxImageHeight` bounds a plate: content drawn outside the
+                // canvas is content the reader can never reach.
+                child.sizeScale = min(context.sizeScale * CGFloat(scale), Self.maximumFontScale)
+            }
+            if let alignment = asked.alignment {
+                child.alignment = Self.alignment(alignment, under: context.style.justification)
+                    ?? child.alignment
+            }
+            if let indent = asked.textIndent {
+                child.textIndent = indent
+            }
+        }
+
         // Text content of this element, before descending. `child`, not
         // `context`: a <pre>'s own preformatted flag was set on `child` just
         // above, and reading the incoming context collapsed the very text the
         // element exists to preserve — nested <pre><code> worked while a bare
         // <pre> (Gutenberg's poetry markup) lost every line break.
         if !node.text.isEmpty {
-            let string = child.isPreformatted ? node.text : Self.collapseWhitespace(node.text)
-            if !string.isEmpty {
-                output.append(NSAttributedString(string: string, attributes: attributes(for: child)))
-            }
+            append(node.text, to: output, context: child)
         }
 
         for sub in node.children {
             render(node: sub, into: output, ranges: &ranges, complexity: &complexity, context: &child)
             // Text following a child element belongs to this element.
             if !sub.tail.isEmpty {
-                let tail = child.isPreformatted ? sub.tail : Self.collapseWhitespace(sub.tail)
-                if !tail.isEmpty {
-                    output.append(NSAttributedString(string: tail, attributes: attributes(for: child)))
-                }
+                append(sub.tail, to: output, context: child)
             }
         }
 
@@ -227,42 +350,48 @@ public struct HTMLContentParser {
             appendParagraphBreak(to: output, context: child)
         }
 
-        // Record the range this element occupies, so a SMIL fragment id maps to
-        // exact characters.
-        //
-        // The attribute is applied only where none is set yet. Children are
-        // rendered first, so this keeps the innermost id — which is the one the
-        // media overlay references. Overwriting blindly would let an outer
-        // wrapper's id replace every sentence span inside it, and the highlight
-        // would then cover a whole chapter instead of one sentence.
-        if let id = node["id"], output.length > start {
-            let range = NSRange(location: start, length: output.length - start)
-            ranges[id] = range
-            // Collect first, then apply: mutating an attributed string while
-            // enumerating it is undefined and silently skips ranges.
-            var unclaimed: [NSRange] = []
-            output.enumerateAttribute(.issaFragmentID, in: range) { existing, subrange, _ in
-                if existing == nil { unclaimed.append(subrange) }
-            }
-            for subrange in unclaimed {
-                output.addAttribute(.issaFragmentID, value: id, range: subrange)
-            }
+        recordFragment(of: node, from: start, in: output, ranges: &ranges)
+    }
+
+    /// Records the range an element occupies, so a SMIL fragment id maps to
+    /// exact characters.
+    ///
+    /// The attribute is applied only where none is set yet. Children are
+    /// rendered first, so this keeps the innermost id — which is the one the
+    /// media overlay references. Overwriting blindly would let an outer
+    /// wrapper's id replace every sentence span inside it, and the highlight
+    /// would then cover a whole chapter instead of one sentence.
+    private func recordFragment(
+        of node: EPUBXMLNode, from start: Int, in output: NSMutableAttributedString,
+        ranges: inout [String: NSRange],
+    ) {
+        guard let id = node["id"], output.length > start else { return }
+        let range = NSRange(location: start, length: output.length - start)
+        ranges[id] = range
+        // Collect first, then apply: mutating an attributed string while
+        // enumerating it is undefined and silently skips ranges.
+        var unclaimed: [NSRange] = []
+        output.enumerateAttribute(.issaFragmentID, in: range) { existing, subrange, _ in
+            if existing == nil { unclaimed.append(subrange) }
+        }
+        for subrange in unclaimed {
+            output.addAttribute(.issaFragmentID, value: id, range: subrange)
         }
     }
 
     /// Reserves space for an illustration and records where to draw it.
     ///
-    /// A U+FFFC object-replacement character carries an attachment whose bounds
-    /// give the image its place in the flow. The renderer draws the picture
-    /// itself from the recorded href, so no text view or attachment view
-    /// provider is involved.
+    /// A U+FFFC object-replacement character carries an `ImageAttachment`
+    /// whose bounds give the image its place in the flow and whose image is
+    /// what TextKit draws there; `.issaImageHref` only names where it came
+    /// from.
     private func appendImage(
         node: EPUBXMLNode, to output: NSMutableAttributedString, context: Context,
     ) {
         guard let src = node["src"] ?? node["href"], !src.isEmpty else { return }
         let href = EPUBPackage.resolve(src, relativeTo: context.baseHref)
         guard let image = loadImage?(href) else { return }
-        let pixelSize = image.size
+        let pixelSize = image.layoutSize
         guard pixelSize.width > 0, pixelSize.height > 0 else { return }
 
         // Both bounds, never up: an upscaled 60px decoration looks worse than a
@@ -272,10 +401,14 @@ public struct HTMLContentParser {
             min(maxImageWidth / pixelSize.width, maxImageHeight / pixelSize.height))
         let displaySize = CGSize(width: pixelSize.width * scale, height: pixelSize.height * scale)
 
-        let attachment = ImageAttachment(displaySize: displaySize, image: image)
+        let attachment = ImageAttachment(displaySize: displaySize, artwork: image)
 
         var attributes = attributes(for: context)
         attributes[.attachment] = attachment
+        // A plate is centred with no indent of its own (below), so it must not
+        // be re-indented when the column changes either.
+        attributes[.issaIndentFraction] = nil
+        attributes[.issaIndentPoints] = nil
         attributes[.issaImageHref] = href
         // Alt text is the only thing a reader using VoiceOver gets from a
         // picture. Dropping it at parse time left an object-replacement
@@ -300,6 +433,41 @@ public struct HTMLContentParser {
         output.append(NSAttributedString(string: "\n", attributes: attributes))
     }
 
+    /// Appends character data, minus the whitespace that is only indentation.
+    ///
+    /// Source markup is pretty-printed, so `</p>\n<p>` puts a newline between
+    /// two blocks. HTML collapses that to a space, and as inline content it is
+    /// a space — but between two *blocks* it is nothing at all, and appending it
+    /// opened every paragraph after the first with a stray space.
+    ///
+    /// Which was not merely untidy. TextKit takes a paragraph's whole
+    /// `NSParagraphStyle` from its **first character**, and that character was
+    /// this space, carrying the enclosing element's attributes rather than the
+    /// paragraph's — so a `<p>`'s own alignment or first-line indent was
+    /// computed correctly and then ignored, and a blockquote's first line lost
+    /// its indent whenever the source had a newline before it.
+    private func append(
+        _ text: String, to output: NSMutableAttributedString, context: Context,
+    ) {
+        if context.isPreformatted {
+            output.append(NSAttributedString(string: text, attributes: attributes(for: context)))
+            return
+        }
+        var collapsed = Self.collapseWhitespace(text)
+        // Only at the start of a block. A lone space between two inline
+        // elements is real, and dropping that one would run two words together.
+        //
+        // Ordinary spaces only: `collapseWhitespace` deliberately spares the
+        // no-break space and its relatives, and a book that opens a line with
+        // one is asking for it.
+        let string = output.string as NSString
+        if string.length == 0 || string.hasSuffix("\n") {
+            collapsed = String(collapsed.drop(while: { $0 == " " }))
+        }
+        guard !collapsed.isEmpty else { return }
+        output.append(NSAttributedString(string: collapsed, attributes: attributes(for: context)))
+    }
+
     private func appendParagraphBreak(to output: NSMutableAttributedString, context: Context) {
         guard output.length > 0 else { return }
         let existing = (output.string as NSString)
@@ -320,27 +488,89 @@ public struct HTMLContentParser {
         let paragraph = NSMutableParagraphStyle()
         // Large type needs proportionally less leading; applying the body
         // multiple to a 1.9x heading leaves it floating in whitespace.
-        let leadingScale = context.sizeScale > 1.2 ? 0.82 : 1.0
+        let leadingScale = context.isHeading ? 0.82 : 1.0
         paragraph.lineHeightMultiple = context.style.lineSpacing.multiple * leadingScale
+        // The book's own alignment, where it asked for one and the reader has
+        // not overruled it; see `Self.alignment(_:under:)`.
         paragraph.alignment = context.alignment
-            ?? (context.style.justified ? .justified : .natural)
+            ?? (context.style.justification == .always ? .justified : .natural)
         // Hyphenation matters far more in a justified column; without it,
         // justified text opens rivers of whitespace.
-        paragraph.hyphenationFactor = context.style.justified ? 1.0 : 0.0
-        paragraph.paragraphSpacing = context.style.fontSize * (context.sizeScale > 1.2 ? 0.55 : 0.30)
+        paragraph.hyphenationFactor = paragraph.alignment == .justified ? 1.0 : 0.0
+        paragraph.paragraphSpacing = context.style.fontSize * (context.isHeading ? 0.55 : 0.30)
         let indent = CGFloat(context.blockquoteDepth + context.listDepth) * context.style.fontSize * 1.2
         paragraph.headIndent = indent
+        // `firstLineHeadIndent` is measured from the column's edge, not from
+        // `headIndent`, so a book's own indent is added to the quoting indent
+        // rather than replacing it. Until a book could ask for one these two
+        // were always equal, which is why no book has ever had an indented
+        // first line.
+        let requested = context.textIndent?.points(
+            columnWidth: columnWidth, fontSize: context.style.fontSize) ?? 0
         paragraph.firstLineHeadIndent = indent
+            + Self.firstLineIndent(requested, columnWidth: columnWidth)
 
         var attributes: [NSAttributedString.Key: Any] = [
             .font: font,
             .foregroundColor: context.style.textColor,
             .paragraphStyle: paragraph,
         ]
+        // What the indent was asked as, so a new column width can be honoured
+        // without parsing the chapter again. A percentage is resolved afresh
+        // against the new column; an `em` indent keeps its size but is bounded
+        // again by the new column's half.
+        switch context.textIndent {
+        case let .fraction(fraction)? where fraction > 0 && fraction.isFinite:
+            attributes[.issaIndentFraction] = fraction
+        case .ems? where requested > 0 && requested.isFinite:
+            attributes[.issaIndentPoints] = Double(requested)
+        default:
+            break
+        }
+        if context.underlined {
+            attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
+        }
         if context.blockquoteDepth > 0 {
             attributes[.issaBlockquoteDepth] = context.blockquoteDepth
         }
         return attributes
+    }
+
+    /// What a book's `text-align` becomes, once the reader has had their say.
+    ///
+    /// Centring and ranging right are structure — an epigraph, a signature, a
+    /// chapter number — and no reading setting is about them, so they are
+    /// honoured whatever it says. Justification is the one the reader has an
+    /// opinion on, and `.never` is that opinion: the paragraph falls back to the
+    /// natural alignment rather than to the book's.
+    static func alignment(
+        _ asked: EPUBStyleSheet.Alignment, under justification: ReaderStyle.Justification,
+    ) -> NSTextAlignment? {
+        switch asked {
+        case .center: .center
+        case .right: .right
+        case .left: justification == .always ? .justified : .left
+        // `.natural`, not `nil`, under `.never`: `nil` means "nothing to say"
+        // and lets the paragraph inherit its parent's alignment, so a justified
+        // paragraph inside a centred title page came out centred line by line.
+        case .justify: justification == .never ? .natural : .justified
+        }
+    }
+
+    /// The first-line indent a paragraph is given, in points past any quoting
+    /// indent, for the indent it asked for.
+    ///
+    /// The one place this is decided, for the parse and for
+    /// `ChapterLayout.reindent(forColumnWidth:)` alike. Bounded at half the
+    /// column because an indent as wide as the column pushes the paragraph's
+    /// whole first line into a zero-width fragment at the right edge, where it
+    /// is clipped — `text-indent: 100%`, `25em` on a phone, or `1e400em`,
+    /// which parses to infinity. Never negative: a hanging indent draws
+    /// outside the column and is clipped too.
+    static func firstLineIndent(_ requested: CGFloat, columnWidth: CGFloat) -> CGFloat {
+        guard requested.isFinite, requested > 0 else { return 0 }
+        let half = columnWidth.isFinite ? max(columnWidth, 0) / 2 : 0
+        return min(requested, half)
     }
 
     // MARK: - Text handling
@@ -355,6 +585,11 @@ public struct HTMLContentParser {
         if drawing.contains(node.name.lowercased()) { return true }
         return node.children.contains { containsVectorDrawing($0) }
     }
+
+    /// The largest a book may make its own text, as a multiple of the reader's
+    /// chosen size. Above `<h1>`'s 1.9 with room to spare, and far below the
+    /// point where one line fills a page.
+    static let maximumFontScale: CGFloat = 3
 
     private static let blockElements: Set<String> = [
         "p", "div", "section", "article", "h1", "h2", "h3", "h4", "h5", "h6",
@@ -396,124 +631,6 @@ public struct HTMLContentParser {
         "\u{202F}", // narrow no-break space
         "\u{2007}", // figure space
         "\u{2060}", // word joiner
-    ]
-
-    /// XHTML may reference HTML named entities that XML itself does not define,
-    /// `&nbsp;` above all. XMLParser treats those as fatal, so they are rewritten
-    /// to numeric references before parsing — otherwise perfectly ordinary books
-    /// fail to open.
-    /// One pass, not one pass per entity.
-    ///
-    /// This used to be `for (name, code) in namedEntities { replacingOccurrences }`
-    /// — a full scan and a whole new String allocated for each of them. At
-    /// sixty-two entities that was merely wasteful on a 400 KB chapter; taking
-    /// the table to two hundred, which is what makes French and German books
-    /// openable, made it slow enough to notice in the test suite. Scanning once
-    /// and looking each name up costs the same for a table of any size, which
-    /// is what lets the table be complete.
-    static func substituteNamedEntities(in data: Data) -> Data {
-        guard let text = String(data: data, encoding: .utf8) else { return data }
-        guard text.contains("&") else { return data }
-
-        var out = String()
-        out.reserveCapacity(text.count)
-        var index = text.startIndex
-
-        while let amp = text[index...].firstIndex(of: "&") {
-            out.append(contentsOf: text[index ..< amp])
-            // A name is letters and digits, then a semicolon. Bail out at a
-            // reasonable width rather than scanning to the end of the document
-            // for a stray `&` — prose is full of them.
-            let after = text.index(after: amp)
-            let limit = text.index(after, offsetBy: 12, limitedBy: text.endIndex) ?? text.endIndex
-            if let semicolon = text[after ..< limit].firstIndex(of: ";") {
-                let name = String(text[after ..< semicolon])
-                if let code = namedEntities[name] {
-                    out.append("&#\(code);")
-                    index = text.index(after: semicolon)
-                    continue
-                }
-            }
-            // Not one of ours: the five XML predefined entities, a numeric
-            // reference, or a bare ampersand. All are the parser's business.
-            out.append("&")
-            index = after
-        }
-        out.append(contentsOf: text[index...])
-        return Data(out.utf8)
-    }
-
-    /// Named entities that are not predefined in XML, mapped to numeric form.
-    ///
-    /// Only `&amp;` `&lt;` `&gt;` `&apos;` `&quot;` are built into XML, and an
-    /// EPUB 3 chapter carries the HTML5 short DOCTYPE, which declares nothing —
-    /// so anything else reaches `XMLParser` as an undefined entity, fails the
-    /// parse with error 111, and `loadChapter` reports "Couldn't open this
-    /// chapter."
-    ///
-    /// The uppercase accented block was missing, and `replacingOccurrences` is
-    /// case-sensitive: a French chapter opening `&Eacute;tait` or a German one
-    /// containing `&szlig;` was simply unopenable. So were `&oelig;`, `&times;`,
-    /// `&divide;` and the Greek block. Books carrying the long XHTML 1.1
-    /// DOCTYPE survived only because libxml2 has that entity set built in.
-    static let namedEntities: [String: Int] = [
-        // Latin-1 punctuation and symbols
-        "nbsp": 160, "iexcl": 161, "cent": 162, "pound": 163, "curren": 164,
-        "yen": 165, "brvbar": 166, "sect": 167, "uml": 168, "copy": 169,
-        "ordf": 170, "laquo": 171, "not": 172, "shy": 173, "reg": 174,
-        "macr": 175, "deg": 176, "plusmn": 177, "sup2": 178, "sup3": 179,
-        "acute": 180, "micro": 181, "para": 182, "middot": 183, "cedil": 184,
-        "sup1": 185, "ordm": 186, "raquo": 187, "frac14": 188, "frac12": 189,
-        "frac34": 190, "iquest": 191, "times": 215, "divide": 247,
-
-        // Latin-1 letters, uppercase — the block whose absence made an accented
-        // capital at the start of a sentence enough to lose the chapter.
-        "Agrave": 192, "Aacute": 193, "Acirc": 194, "Atilde": 195, "Auml": 196,
-        "Aring": 197, "AElig": 198, "Ccedil": 199, "Egrave": 200, "Eacute": 201,
-        "Ecirc": 202, "Euml": 203, "Igrave": 204, "Iacute": 205, "Icirc": 206,
-        "Iuml": 207, "ETH": 208, "Ntilde": 209, "Ograve": 210, "Oacute": 211,
-        "Ocirc": 212, "Otilde": 213, "Ouml": 214, "Oslash": 216, "Ugrave": 217,
-        "Uacute": 218, "Ucirc": 219, "Uuml": 220, "Yacute": 221, "THORN": 222,
-
-        // Latin-1 letters, lowercase
-        "szlig": 223, "agrave": 224, "aacute": 225, "acirc": 226, "atilde": 227,
-        "auml": 228, "aring": 229, "aelig": 230, "ccedil": 231, "egrave": 232,
-        "eacute": 233, "ecirc": 234, "euml": 235, "igrave": 236, "iacute": 237,
-        "icirc": 238, "iuml": 239, "eth": 240, "ntilde": 241, "ograve": 242,
-        "oacute": 243, "ocirc": 244, "otilde": 245, "ouml": 246, "oslash": 248,
-        "ugrave": 249, "uacute": 250, "ucirc": 251, "uuml": 252, "yacute": 253,
-        "thorn": 254, "yuml": 255,
-
-        // Latin Extended-A, the ligatures and carons a European text uses
-        "OElig": 338, "oelig": 339, "Scaron": 352, "scaron": 353, "Yuml": 376,
-        "fnof": 402,
-
-        // Greek, which a classics text or a footnote reaches for
-        "Alpha": 913, "Beta": 914, "Gamma": 915, "Delta": 916, "Epsilon": 917,
-        "Zeta": 918, "Eta": 919, "Theta": 920, "Iota": 921, "Kappa": 922,
-        "Lambda": 923, "Mu": 924, "Nu": 925, "Xi": 926, "Omicron": 927,
-        "Pi": 928, "Rho": 929, "Sigma": 931, "Tau": 932, "Upsilon": 933,
-        "Phi": 934, "Chi": 935, "Psi": 936, "Omega": 937,
-        "alpha": 945, "beta": 946, "gamma": 947, "delta": 948, "epsilon": 949,
-        "zeta": 950, "eta": 951, "theta": 952, "iota": 953, "kappa": 954,
-        "lambda": 955, "mu": 956, "nu": 957, "xi": 958, "omicron": 959,
-        "pi": 960, "rho": 961, "sigmaf": 962, "sigma": 963, "tau": 964,
-        "upsilon": 965, "phi": 966, "chi": 967, "psi": 968, "omega": 969,
-
-        // Punctuation and spaces
-        "ensp": 8194, "emsp": 8195, "thinsp": 8201, "zwnj": 8204, "zwj": 8205,
-        "lrm": 8206, "rlm": 8207, "ndash": 8211, "mdash": 8212, "lsquo": 8216,
-        "rsquo": 8217, "sbquo": 8218, "ldquo": 8220, "rdquo": 8221, "bdquo": 8222,
-        "dagger": 8224, "Dagger": 8225, "bull": 8226, "hellip": 8230,
-        "permil": 8240, "prime": 8242, "Prime": 8243, "lsaquo": 8249,
-        "rsaquo": 8250, "oline": 8254, "frasl": 8260, "euro": 8364,
-
-        // Arrows and maths, which appear in footnotes and technical prose
-        "trade": 8482, "larr": 8592, "uarr": 8593, "rarr": 8594, "darr": 8595,
-        "harr": 8596, "minus": 8722, "lowast": 8727, "radic": 8730,
-        "infin": 8734, "cap": 8745, "cup": 8746, "int": 8747, "ne": 8800,
-        "equiv": 8801, "le": 8804, "ge": 8805, "loz": 9674, "spades": 9824,
-        "clubs": 9827, "hearts": 9829, "diams": 9830,
     ]
 
     /// How many characters `trimTrailingNewlines` removes from the front.

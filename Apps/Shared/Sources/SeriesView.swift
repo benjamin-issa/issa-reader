@@ -22,24 +22,34 @@ struct SeriesView: View {
             if let series {
                 VStack(alignment: .leading, spacing: Metrics.spacing12) {
                     Text("\(series.books.count) books").overlineStyle()
-                    BookGrid(books: series.books, session: app.session) { book in
-                        series.position(of: book).map(BookDetailView.positionText)
+                    // Passing the name is what puts the numeral on these
+                    // covers: this is the one screen a series number answers a
+                    // question on. The caption below spells the same position
+                    // out in words, because a badge on artwork is small.
+                    BookGrid(books: series.books, session: app.session, series: series.name) { book in
+                        series.position(of: book).map(SeriesText.position)
                     }
                 }
                 .padding(Metrics.spacing16)
-            }
-        }
-        .background(Palette.paper)
-        .navigationTitle(name)
-        .overlay {
-            if series == nil {
+            } else {
+                // In the scroll view and the size of what is visible of it.
+                // As an overlay on a scroll view with nothing in it, the
+                // message was laid out in the empty view's own width — a word
+                // per line — over a ground the empty view never painted.
                 PalettePlaceholder(
                     symbol: "books.vertical",
                     title: "Series unavailable",
                     message: "These books are no longer in your library.",
                 )
+                .containerRelativeFrame([.horizontal, .vertical])
             }
         }
+        .accessibilityIdentifier("screen.series")
+        .background(Palette.paper)
+        .navigationTitle(name)
+        // A book's menu here does not offer the way to this series.
+        .bookRoutes(place: .series(name))
+        .libraryPageToolbar()
     }
 }
 

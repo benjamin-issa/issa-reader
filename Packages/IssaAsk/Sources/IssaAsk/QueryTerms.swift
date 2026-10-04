@@ -27,8 +27,9 @@ public struct QueryTerms: Sendable, Hashable {
     /// passage for containing a *group*, not merely more words.
     public var kinshipGroups: [[String]]
     /// Every word in the question that looks like something the book would have
-    /// had to introduce: a tagged name, a name the index recognised, or a
-    /// capitalised word that is not merely starting the sentence.
+    /// had to introduce: a tagged name, a name the index recognised, a
+    /// capitalised word that is not merely starting a sentence, or a
+    /// lower-case word the book's name table uses in a name.
     ///
     /// This is the input to the spoiler short-circuit, and it exists because of
     /// a real answer the on-device model gave during development: asked "Who is
@@ -89,7 +90,13 @@ public struct QueryTerms: Sendable, Hashable {
     ///   `NLTagger` did not tag it — invented names ("Cheshire", "Bilbo") are
     ///   exactly the ones a general-purpose tagger misses, and exactly the ones
     ///   readers ask about.
-    public static func extract(from question: String, knownNames: [String] = []) -> QueryTerms {
+    /// - Parameter bookNames: the folded words of every name in the book's
+    ///   name table, *not* bounded — see `AskIndexStore.nameWords(in:)`. Read
+    ///   only to decide which of the question's lower-case words the spoiler
+    ///   probe checks; never a search term and never a promotion.
+    public static func extract(
+        from question: String, knownNames: [String] = [], bookNames: Set<String> = [],
+    ) -> QueryTerms {
         let sanitised = sanitise(question)
         let known = Set(knownNames.map { $0.lowercased() })
 
@@ -128,7 +135,7 @@ public struct QueryTerms: Sendable, Hashable {
         // Classified from the names already found, rather than running
         // `NLTagger` a second time: one pass over a question is a millisecond,
         // and two is two.
-        let reading = QuestionReader.read(sanitised, vocabulary: Vocabulary(
+        let kind = QuestionReader.kind(of: sanitised, vocabulary: Vocabulary(
             known: known,
             tagged: Set(names.flatMap { tokens(in: $0).map(strippingPossessive) }),
         ))
@@ -137,11 +144,15 @@ public struct QueryTerms: Sendable, Hashable {
             names: names,
             terms: terms,
             kinshipGroups: Kinship.groups(matching: terms),
-            // The text the classifier decided on, not the whole question: the
-            // gate refusing a question for a name in a clause the classifier
-            // discarded is a refusal about excerpts that were never retrieved.
-            nameCandidates: nameCandidates(in: reading.text, names: names),
-            kind: reading.kind,
+            // The whole question, not the clause the classifier decided on.
+            // The gate read only the leading clause for a while, on the ground
+            // that retrieval never looks at an aside — but the answer side
+            // exempted every word of the question on the ground that this side
+            // had ruled on it, so "Who is Alice? Does she ever meet the
+            // Cheshire Cat?" was answered "Yes, she later meets the Cheshire
+            // Cat." with neither guard having looked at the name (R-04).
+            nameCandidates: nameCandidates(in: sanitised, names: names, bookNames: bookNames),
+            kind: kind,
         )
     }
 
@@ -161,8 +172,27 @@ public struct QueryTerms: Sendable, Hashable {
     ///
     /// Capitalisation rather than `NLTagger` alone, because the names readers
     /// ask about are the invented ones — "Cheshire", "Bilbo", "Meursault" — and
-    /// a general-purpose tagger knows none of them. The first word of the
-    /// question is skipped: every question starts with a capital.
+    /// a general-purpose tagger knows none of them.
+    ///
+    /// Every sentence's first word is skipped only when it is a word a question
+    /// opens with anyway — "Who", "Did", "Tell", "Where'd", "Hey" — and checked
+    /// like any other otherwise. It was skipped unconditionally, on the ground
+    /// that every question starts with a capital, while the answer side
+    /// exempted every word the question contained on the ground that this side
+    /// had ruled on it. Together that was a hole exactly the shape of a
+    /// bare-name question: "Cheshire Cat?" at the end of Chapter I probed only
+    /// `cat` (met: Dinah), and an answer describing the Cat was shown because
+    /// its name was in the question.
+    ///
+    /// **Every sentence, and lower case too** (R-04). The answer side no longer
+    /// exempts anything, but this side is still the one that keeps the model
+    /// from being asked at all, so it reads the whole question: a name in a
+    /// second sentence is as much a name as one in the first, and "who is the
+    /// cheshire cat?" names the Cat whether or not the reader reached for the
+    /// shift key. A lower-case word counts when the book's own name table —
+    /// the whole book's, `bookNames` — has it as part of a name: that is the
+    /// signal that survives an invented name, and the probe then decides it
+    /// against what has been read.
     ///
     /// Some ordinary words will be caught by this ("Is Alice British?"), and
     /// the cost of that is a "the story hasn't revealed that yet" for a question
@@ -171,30 +201,50 @@ public struct QueryTerms: Sendable, Hashable {
     /// about a character forty pages ahead is the thing this feature promised
     /// not to do.
     ///
-    /// - Parameter question: the text the classifier decided the question's
-    ///   kind on, which for a multi-sentence question is its leading clause.
-    ///   `names` is tagged over the whole question either way, so it is filtered
-    ///   to the tokens this text actually contains — a no-op when the two are
-    ///   the same, and the difference between checking the clause and checking
-    ///   the clause plus whatever `NLTagger` found in the aside.
-    public static func nameCandidates(in question: String, names: [String]) -> [String] {
+    /// - Parameter question: the whole question.
+    /// - Parameter names: tagged over the whole question, filtered to the tokens
+    ///   it actually contains.
+    /// - Parameter bookNames: see `extract(from:knownNames:bookNames:)`.
+    public static func nameCandidates(
+        in question: String, names: [String], bookNames: Set<String> = [],
+    ) -> [String] {
         let present = Set(tokens(in: question).map(strippingPossessive))
         var candidates = Set(names.flatMap { tokens(in: $0).map(strippingPossessive) })
             .filter(present.contains)
-        for (index, word) in question.split(separator: " ").enumerated() where index > 0 {
-            let bare = word.trimmingCharacters(in: CharacterSet.letters.inverted)
-            guard let initial = bare.first, initial.isUppercase, bare.count > 2 else { continue }
-            guard !capitalisedNonNames.contains(bare.lowercased()) else { continue }
-            // Possessive-stripped, or "Ryn's" is checked against the index as
-            // `ryn's` — a word no book contains as one token, so the spoiler
-            // guard tests something that is not the name.
-            candidates.formUnion(tokens(in: bare).map(strippingPossessive))
+        candidates.formUnion(present.filter { bookNames.contains($0) && !stopWords.contains($0) })
+        let text = question as NSString
+        for sentence in SentenceSplitter.ranges(in: question) {
+            var opening = true
+            for word in text.substring(with: sentence).split(whereSeparator: \.isWhitespace) {
+                let bare = word.trimmingCharacters(in: CharacterSet.letters.inverted)
+                // "Hey, who is…", "Okay so what…": the classifier drops these
+                // from the front of the question, and so does the gate — the
+                // word after them is the one the sentence had to capitalise.
+                if isFiller(bare) { continue }
+                defer { opening = false }
+                guard let initial = bare.first, initial.isUppercase, bare.count > 2 else { continue }
+                if opening, opensAQuestion(bare) { continue }
+                guard !capitalisedNonNames.contains(bare.lowercased()) else { continue }
+                // Possessive-stripped, or "Ryn's" is checked against the index as
+                // `ryn's` — a word no book contains as one token, so the spoiler
+                // guard tests something that is not the name.
+                candidates.formUnion(tokens(in: bare).map(strippingPossessive))
+            }
         }
-        // `bookRoles` filtered last rather than in the loop, because the seed
-        // set above comes from `NLTagger` as well as from the loop, and a
-        // question that capitalises "the Narrator" must not be refused as
-        // naming somebody the book has not introduced.
-        return candidates.filter { $0.count > 2 && !isBookRole($0) }.sorted()
+        // `bookRoles` and the fillers filtered last rather than in the loop,
+        // because the seed set above comes from `NLTagger` as well as from the
+        // loop: a question that capitalises "the Narrator" must not be refused
+        // as naming somebody the book has not introduced, and `NLTagger` tags
+        // the "Hmm" of "Hmm, who is Dinah?" as a person.
+        return candidates.filter { $0.count > 2 && !isBookRole($0) && !isFiller($0) }.sorted()
+    }
+
+    /// Whether this word is the hesitation a reader types before a question —
+    /// `QuestionReader.leadingFillers`, the classifier's own list. Never a
+    /// name, wherever it stands: "Hmm" was probed as one, found unmet, and
+    /// "Hmm, who is Dinah?" was refused without the model being asked (R-15).
+    static func isFiller(_ word: String) -> Bool {
+        QuestionReader.leadingFillers.contains(word.lowercased())
     }
 
     /// Words a sentence capitalises for grammar rather than for a person.
@@ -253,7 +303,8 @@ public struct QueryTerms: Sendable, Hashable {
         "from", "into", "onto", "upon", "over", "under", "above", "below",
         "through", "across", "along", "around", "behind", "beyond", "during",
         "against", "between", "among", "beside", "toward", "towards", "off",
-        "out", "up", "down", "back", "away",
+        "out", "up", "down", "back", "away", "despite", "throughout", "beneath",
+        "inside", "outside", "unlike",
         // Adverbs that open sentences.
         "not", "never", "always", "often", "sometimes", "soon", "now", "later",
         "again", "already", "almost", "nearly", "just", "only", "even",
@@ -262,6 +313,50 @@ public struct QueryTerms: Sendable, Hashable {
         "eventually", "suddenly", "immediately", "still", "here", "there",
         "everywhere", "somewhere", "anywhere", "nowhere", "together", "yes",
         "well", "why", "how", "let", "there's", "it's", "that's", "here's",
+    ]
+
+    /// Whether a question's first word is one it would capitalise anyway.
+    ///
+    /// `sentenceOpeners` — the closed-class words the answer side already
+    /// exempts at the start of a sentence — and the imperatives a reader opens
+    /// a request with, which would otherwise be probed as names and refuse
+    /// "Describe the garden." in any book that never says "describe".
+    ///
+    /// Contractions are read through their stem, so "Who's" is "who", "What'd"
+    /// and "Where'd" are "what" and "where", "Who're" is "who" — and any
+    /// negated auxiliary ("Aren't", "Didn't", "Won't") is one, because no name
+    /// ends in n't. Only the possessive was stripped, so every other
+    /// contraction was probed as a name, found nowhere in the book (`unicode61`
+    /// reads it as "what d"), and the question refused (R-15).
+    static func opensAQuestion(_ word: String) -> Bool {
+        guard let token = tokens(in: word).first else { return false }
+        if token.hasSuffix("n't") { return true }
+        let stem = withoutContraction(token)
+        return sentenceOpeners.contains(token) || sentenceOpeners.contains(stem)
+            || questionImperatives.contains(stem)
+    }
+
+    /// The word a contraction was made from: "what'd" → "what", "who're" →
+    /// "who", "ryn's" → "ryn". Anything else untouched.
+    static func withoutContraction(_ token: String) -> String {
+        for suffix in contractionSuffixes
+            where token.hasSuffix(suffix) && token.count > suffix.count {
+            return String(token.dropLast(suffix.count))
+        }
+        return token
+    }
+
+    static let contractionSuffixes = ["'s", "'d", "'re", "'ve", "'ll", "'m"]
+
+    /// The verbs a request to the book opens with. Imperatives only: nothing
+    /// here could be anybody's name, which is the bar `sentenceOpeners` sets
+    /// too.
+    static let questionImperatives: Set<String> = [
+        "tell", "describe", "explain", "summarise", "summarize", "recap",
+        "remind", "give", "list", "show", "compare", "define", "identify",
+        "outline", "recount", "say", "talk", "remember", "recall", "help",
+        "name", "find", "please", "whats", "whos", "wheres", "hows", "whys", "wait",
+        "okay",
     ]
 
     /// Words that are capitalised in ordinary prose without naming anybody.
@@ -389,6 +484,11 @@ public struct QueryTerms: Sendable, Hashable {
         "what have i read", "so far in the story", "what's the story so far",
         "story so far",
     ]
+
+    /// The interrogatives that say the answer is a person: search tokens for
+    /// the ranker, but never the only thing a passage is required to contain
+    /// beside its subject. See `AskRetriever.optionalTerms(_:subject:)`.
+    static let personWords: Set<String> = ["who", "whom", "whose"]
 
     /// Words that carry no retrieval signal. Deliberately short: an aggressive
     /// stop list throws away "who", which is the one word that says the answer

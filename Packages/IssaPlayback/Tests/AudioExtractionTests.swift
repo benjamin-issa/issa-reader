@@ -95,6 +95,88 @@ struct AudioExtractionTests {
             "the extraction put back the directory the removal had just deleted")
     }
 
+    /// One book's removal and another book's extraction share nothing on disk,
+    /// so they must not share a lock either.
+    ///
+    /// The lock was process-wide, and the removal takes it synchronously on the
+    /// main actor: removing book Y from Downloads while book X's narration was
+    /// being inflated froze the app for the rest of X's extraction, and the
+    /// only cancellations that could cut that short were for X itself.
+    ///
+    /// X is held inside its lock — `isCancelled` is asked under it — for up to
+    /// eight seconds, released on a timer so a regression fails rather than
+    /// hangs.
+    @Test("removing one book's narration does not wait for another book's extraction")
+    func removingOneBookDoesNotWaitForAnother() throws {
+        let (package, timeline) = try Self.fixture()
+        let root = Self.scratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let gate = Gate()
+        // Released on every path, a thrown `#require` included: a gate left
+        // shut parks X's extraction inside its lock for good, and with a lock
+        // shared by every book that took the whole test process with it.
+        //
+        // The deadline release runs on a thread of its own, not a dispatch
+        // queue: with every book behind one lock, the other extraction suites
+        // running beside this one park the shared pools on it, and a release
+        // queued there never ran.
+        defer { gate.release() }
+        Thread {
+            Thread.sleep(forTimeInterval: 8)
+            gate.release()
+        }.start()
+        let finished = DispatchSemaphore(value: 0)
+        let extraction = Thread {
+            _ = try? AudioExtraction.extractAudio(
+                from: package, timeline: timeline, bookID: "book-x",
+                into: AudioExtraction.defaultDirectory(for: "book-x", in: root),
+                isCancelled: {
+                    gate.holdOnce()
+                    return false
+                })
+            finished.signal()
+        }
+        extraction.start()
+        try #require(gate.waitUntilHeld(timeout: 5), "book X's extraction never reached its lock")
+
+        let started = Date()
+        AudioExtraction.removeExtractedAudio(for: "book-y", in: root)
+        let waited = Date().timeIntervalSince(started)
+        gate.release()
+
+        #expect(waited < 1, "removing book Y waited \(waited) s on book X's extraction")
+        #expect(finished.wait(timeout: .now() + 10) == .success, "book X's extraction never finished")
+    }
+
+    /// Narration was read into memory whole and then written out, and the
+    /// archive's whole-in-memory read refuses any member that inflates past
+    /// 256 MB — so a long book cut into few, large audio files lost its
+    /// narration outright, and a smaller one cost its whole size in memory per
+    /// file. Streamed to disk a slice at a time, a member of any honest size
+    /// extracts.
+    ///
+    /// 257 MB of silence, which deflates to a few hundred kilobytes: past the
+    /// in-memory cap, and cheap to build.
+    @Test("an audio member too large to hold in memory still extracts")
+    func aMemberPastTheInMemoryCapExtracts() throws {
+        let size = 257 * 1024 * 1024
+        let data = InTestEPUB.readalong(audio: try InTestEPUB.deflatedZeros("OEBPS/Audio/big.mp3", count: size))
+        let package = try EPUBPackage.open(archive: EPUBArchive(data: data))
+        let timeline = SMILTimeline(entries: [
+            SMILEntry(fragmentID: "s0", textHref: "OEBPS/ch01.xhtml", audioHref: "OEBPS/Audio/big.mp3",
+                      start: 0, end: 5, cumulativeEnd: 5),
+        ])
+        let directory = Self.scratch()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let files = try AudioExtraction.extractAudio(
+            from: package, timeline: timeline, bookID: "big", into: directory)
+
+        let url = try #require(files["OEBPS/Audio/big.mp3"])
+        let written = try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int
+        #expect(written == size)
+    }
+
     /// The default, and every caller in the app relies on it: both of them run
     /// inside `Task.detached`, and nothing passes a closure of its own. An
     /// extraction on a live task must extract.
@@ -111,6 +193,41 @@ struct AudioExtractionTests {
         for url in files.values {
             #expect(FileManager.default.fileExists(atPath: url.path))
         }
+    }
+}
+
+/// Holds the first thread that reaches it until released, and lets another
+/// thread wait — with a deadline — for that to have happened.
+private final class Gate: @unchecked Sendable {
+    private let condition = NSCondition()
+    private var held = false
+    private var released = false
+
+    /// Blocks the first caller until `release()`; every later call passes.
+    func holdOnce() {
+        condition.lock()
+        defer { condition.unlock() }
+        guard !held else { return }
+        held = true
+        condition.broadcast()
+        while !released { condition.wait() }
+    }
+
+    func waitUntilHeld(timeout: TimeInterval) -> Bool {
+        condition.lock()
+        defer { condition.unlock() }
+        let deadline = Date().addingTimeInterval(timeout)
+        while !held {
+            if !condition.wait(until: deadline) { return held }
+        }
+        return true
+    }
+
+    func release() {
+        condition.lock()
+        released = true
+        condition.broadcast()
+        condition.unlock()
     }
 }
 

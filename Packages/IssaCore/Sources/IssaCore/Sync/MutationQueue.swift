@@ -38,7 +38,31 @@ public actor MutationQueue {
     /// the two PUTs raced; whichever landed second won, so the server could
     /// end on the status the reader did not choose. Both also called
     /// `recordFailure` on failure, halving the effective abandon budget.
+    ///
+    /// The lock has more than one kind of holder now. A drain holds it for as
+    /// long as its loop runs; an exit path waits its turn for it
+    /// (`waitToDrain`); a pause holds it across a change of bearer
+    /// (`pauseDraining`), sending nothing. A drain gives it up before its next
+    /// row once anyone is waiting (`shouldYield`), so no holder waits behind
+    /// a backlog, only behind the request already in flight. Retirement never
+    /// takes it: it is a flag the drain reads before each row, and the lock
+    /// keeps passing from holder to holder on a retired queue exactly as
+    /// before, so no caller has to know whether it was handed a live one.
     private var isDraining = false
+
+    /// Set by `retire()`, and never cleared.
+    private var retired = false
+
+    /// Whether a drain holding the lock should stop before its next row.
+    ///
+    /// When someone is waiting — an exit path or a pause — finishing the
+    /// drain's snapshot first would make them wait for the whole backlog,
+    /// each row a request that can take URLSession's sixty seconds, rather
+    /// than for the one request in flight. Nothing is skipped by stopping: an
+    /// exit path reads the queue afresh when it is handed the lock, and the
+    /// rows a pause holds back go with the next drain after it. A retired
+    /// queue's rows are nobody's to send.
+    var shouldYield: Bool { retired || !waiters.isEmpty }
 
     /// Claims the right to drain, or declines because someone else holds it.
     func beginDraining() -> Bool {
@@ -52,7 +76,8 @@ public actor MutationQueue {
 
     /// Claims the right to drain, waiting for it if someone else holds it.
     ///
-    /// For the exit paths — suspend, ⌘Q, the TV button — and nothing else.
+    /// For the exit paths — suspend, ⌘Q, the TV button — and for
+    /// `pauseDraining()`, which waits in the same line; nothing else.
     /// `beginDraining` declining is right for every ordinary caller: the rows
     /// it would have sent are already in flight and the next enqueue drains
     /// again. On the way out there is no next enqueue. The first version of
@@ -62,6 +87,12 @@ public actor MutationQueue {
     ///
     /// The lock is handed over directly rather than released and re-taken, so
     /// a waiter cannot lose it to a `beginDraining` that arrives in between.
+    ///
+    /// An exit path handed the lock with a pause already in line behind it
+    /// sends nothing: its drain yields before the first row as before any
+    /// other (`shouldYield`) and passes the lock straight on. Its rows stay
+    /// queued for the first drain after the pause. It takes ⌘Q or a suspend
+    /// during a sign-in, with a drain in flight ahead of both.
     func waitToDrain() async {
         if !isDraining {
             isDraining = true
@@ -77,6 +108,58 @@ public actor MutationQueue {
         } else {
             isDraining = false
         }
+    }
+
+    /// Takes the drain lock and keeps it until `resumeDraining()`.
+    ///
+    /// For the moment a bearer changes hands. A drain reads the token afresh
+    /// for every request, so a sign-in that swaps it under a running drain
+    /// sends the rows that drain has left — the departed account's — with the
+    /// arriving account's bearer, and a drain that starts during the swap
+    /// does the same from the top. Holding the lock across the swap makes
+    /// that impossible rather than unlikely: no drain can start, and the one
+    /// in flight finishes its current request and stops, because it yields to
+    /// a waiter before each row. The wait is one request at most, never the
+    /// backlog.
+    ///
+    /// Waits in line with the exit paths and is handed the lock directly, so
+    /// nothing can slip in between the drain stopping and the pause holding.
+    public func pauseDraining() async {
+        await waitToDrain()
+    }
+
+    /// Gives back the lock `pauseDraining()` took, and only that: calling it
+    /// without a pause would release a drain's lock from under it. Nothing
+    /// drains on resuming; the rows the pause held back go with whatever
+    /// drain is triggered next. Harmless on a retired queue, which passes the
+    /// lock on as a live one does.
+    public func resumeDraining() {
+        endDraining()
+    }
+
+    /// What `enqueue` throws once the queue is retired.
+    public struct Retired: Error, Sendable {}
+
+    /// Stops this queue for good: every later `enqueue` throws `Retired`, and
+    /// no drain sends another row — the one in flight stops before its next.
+    ///
+    /// For an account switch. The rows belong to the departed account and the
+    /// app is about to empty the table, but emptying it is not enough on its
+    /// own: a write already on its way into the queue could insert its row
+    /// after the DELETE, where the arriving account's drain would find it and
+    /// send it under the new bearer. Retiring first closes that. `enqueue`
+    /// reads the flag and writes its row in one turn on this actor, with no
+    /// suspension between, so an insert either ran before `retire()` — and
+    /// so before any DELETE the caller issues once `retire()` has returned —
+    /// or runs after it and is refused. Which of the two a write already on
+    /// its way in gets is not promised, because an actor is not strictly
+    /// first in, first out, and it does not need to be: either way nothing
+    /// lands after the DELETE, and a refused write was the departed account's.
+    ///
+    /// Only a flag. It never waits for the lock, so it is safe while a pause
+    /// holds it, and it deletes nothing: the rows are the caller's to clear.
+    public func retire() {
+        retired = true
     }
 
     public init(store: LibraryStore) throws {
@@ -109,11 +192,13 @@ public actor MutationQueue {
     ///   `nil` keeps the unconditional collapse, which is right for status and
     ///   rating: there the newest call always wins by definition.
     /// - Returns: whether anything was recorded.
+    /// - Throws: `Retired` once `retire()` has run, before touching the table.
     @discardableResult
     public func enqueue(
         _ kind: Kind, bookUUID: String, payload: Data, supersedes ordering: Double? = nil,
     ) throws -> Bool {
-        try dbQueue.write { db in
+        guard !retired else { throw Retired() }
+        return try dbQueue.write { db in
             let existing = try Row.fetchOne(
                 db,
                 sql: "SELECT ordering, attempts, createdAt, payload FROM mutation WHERE bookUUID = ? AND kind = ?",
@@ -126,23 +211,30 @@ public actor MutationQueue {
                 return false
             }
             // The replacement inherits the failures and the age of what it
-            // replaces. With a fresh count and a fresh timestamp on every
-            // collapse, a position the server kept refusing was re-queued
-            // every page turn as a brand-new item: it could never reach the
-            // abandon limit, and it sat at the back of the drain order while
-            // everything behind it waited on it forever.
+            // replaces. With a fresh count on every collapse, a position the
+            // server kept refusing was re-queued every page turn as a
+            // brand-new item and could never reach the abandon limit.
+            //
+            // Its place in the drain is its own, though. `updatedAt` is now,
+            // and the drain sends in that order — the order the reader made
+            // the writes in. Going by `createdAt`, which the collapse keeps,
+            // a status chosen between two offline page turns was sent after
+            // the second: the server's own rule ran on the position before
+            // the reader's choice arrived, and the book ended on a different
+            // status than it would have with a connection.
+            let now = Date().timeIntervalSince1970
             let attempts = existing?["attempts"] as Int? ?? 0
-            let createdAt = existing?["createdAt"] as Double? ?? Date().timeIntervalSince1970
+            let createdAt = existing?["createdAt"] as Double? ?? now
             try db.execute(
                 sql: "DELETE FROM mutation WHERE bookUUID = ? AND kind = ?",
                 arguments: [bookUUID, kind.rawValue],
             )
             try db.execute(
                 sql: """
-                    INSERT INTO mutation (bookUUID, kind, payload, createdAt, attempts, ordering)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    INSERT INTO mutation (bookUUID, kind, payload, createdAt, updatedAt, attempts, ordering)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
-                arguments: [bookUUID, kind.rawValue, payload, createdAt, attempts, ordering],
+                arguments: [bookUUID, kind.rawValue, payload, createdAt, now, attempts, ordering],
             )
             return true
         }
@@ -182,9 +274,31 @@ public actor MutationQueue {
         }
     }
 
+    /// Inserts a row with the statement 1.3.0 used, which names no
+    /// `updatedAt`. Tests only: it stands for an older build writing to this
+    /// file after a downgrade, which is the one way such a row arises.
+    func enqueueAsOlderBuildForTesting(
+        _ kind: Kind, bookUUID: String, payload: Data, createdAt: Double,
+    ) throws {
+        try dbQueue.write { db in
+            try db.execute(
+                sql: """
+                    INSERT INTO mutation (bookUUID, kind, payload, createdAt, attempts, ordering)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                arguments: [bookUUID, kind.rawValue, payload, createdAt, 0, nil])
+        }
+    }
+
+    /// Everything waiting, in the order to send it: when each write was last
+    /// made, oldest first. A row an older build wrote after a downgrade has no
+    /// `updatedAt`, and its queued time stands in; `id`, which only grows,
+    /// settles a tie in the order the rows went in.
     public func pending() throws -> [Pending] {
         try dbQueue.read { db in
-            try Row.fetchAll(db, sql: "SELECT * FROM mutation ORDER BY createdAt ASC").compactMap { row in
+            try Row.fetchAll(
+                db, sql: "SELECT * FROM mutation ORDER BY COALESCE(updatedAt, createdAt) ASC, id ASC",
+            ).compactMap { row in
                 guard let kind = Kind(rawValue: row["kind"] as String) else { return nil }
                 return Pending(
                     id: row["id"],
@@ -263,6 +377,16 @@ public struct MutationDrain: Sendable {
 
     /// Attempts every pending write, oldest first.
     ///
+    /// Stops before its next row, the first included, once someone is waiting
+    /// for the lock — an exit path or a pause — or the queue is retired
+    /// (`MutationQueue.shouldYield`). A call can therefore return with rows
+    /// still pending: they go with the next drain, or, on a retired queue,
+    /// with none.
+    ///
+    /// A row refused with a 404 or a 403 is dropped only once the same drain
+    /// has seen Storyteller itself answer; until then it stays queued. See
+    /// `settle(_:sent:askingTheServer:)`.
+    ///
     /// - Returns: how many were accepted.
     @discardableResult
     /// - Parameter waitingForInFlight: wait for a drain already running rather
@@ -270,10 +394,12 @@ public struct MutationDrain: Sendable {
     ///   `MutationQueue.waitToDrain`.
     public func drain(waitingForInFlight: Bool = false) async -> Int {
         // One drain at a time. A second caller returning 0 immediately is
-        // correct: the writes it would have sent are the ones already in
-        // flight, and it will be re-triggered by whatever enqueues next —
-        // except on the way out, where nothing enqueues next, which is what
-        // the waiting form is for.
+        // correct because the drain it declines to sends what that caller came
+        // with: the running one reads the queue again after each pass and goes
+        // on while rows it has not tried are waiting — so a write enqueued
+        // mid-drain (whose own drain is this decline) goes with it. On the way
+        // out the waiting form is used instead, because the running drain
+        // yields its remaining rows to whoever waits.
         if waitingForInFlight {
             await queue.waitToDrain()
         } else {
@@ -289,71 +415,168 @@ public struct MutationDrain: Sendable {
     }
 
     private func drainHoldingTheLock() async -> Int {
-        guard let pending = try? await queue.pending(), !pending.isEmpty else { return 0 }
         var sent = 0
+        // Rows refused with a 404 or a 403, held until this drain knows who
+        // refused them. See `settle(_:sent:askingTheServer:)`.
+        var refused: [(item: MutationQueue.Pending, error: StorytellerError)] = []
+        // Whether the loop reached the end of its rows, rather than stopping
+        // at a broken connection, a 401 or someone waiting for the lock.
+        var reachedTheEnd = true
+        // Every row this drain has had a go at, so a pass over the queue read
+        // again sends only what arrived since. Ids only grow (the column is
+        // AUTOINCREMENT), and a collapse is a DELETE and an INSERT, so a write
+        // that replaced one in flight is a new id here.
+        var tried: Set<Int64> = []
 
-        for item in pending {
-            do {
-                try await send(item)
-                try? await queue.remove(item.id)
-                sent += 1
-            } catch StorytellerError.positionConflict {
-                // The server has something newer. Ours is obsolete, not failed.
-                //
-                // Logged, because this and the non-retryable branch below are
-                // the only two places a write is thrown away, and they were the
-                // only two that said nothing — so a server that refused every
-                // position looked exactly like a client that never sent one.
-                IssaLog.info("mutation superseded by server", [
-                    "kind": String(describing: item.kind), "book": item.bookUUID,
-                ])
-                try? await queue.remove(item.id)
-            } catch StorytellerError.notAuthenticated {
-                // Not this item's problem — the whole session is bad, and every
-                // later item would fail identically. Keeping it queued, rather
-                // than falling into the `!isRetryable` branch below and
-                // discarding it, means a write that would have succeeded once
-                // signed in again is not lost. Stopping the loop is what keeps
-                // an expired token from silently emptying the entire backlog in
-                // one pass — the removal below has no `break`, so before this
-                // case existed the first 401 deleted everything behind it too.
-                break
-            } catch let error as StorytellerError where !error.isRetryable {
-                // A refusal specific to this item that will not change on
-                // retry — the book was deleted server-side, or a permission was
-                // revoked for it. Genuinely per-item, unlike the auth case
-                // above, so the rest of the queue still deserves its turn.
-                //
-                // A discarded write is worth a line even when discarding is
-                // correct: this is where a rejected locator shape would go, and
-                // without it the position simply stops moving for no stated
-                // reason.
-                IssaLog.failure("sync mutation discarded", error, [
-                    "kind": String(describing: item.kind), "book": item.bookUUID,
-                ])
-                try? await queue.remove(item.id)
-            } catch {
-                IssaLog.failure("sync mutation", error, ["kind": String(describing: item.kind)])
-                // Anything else is worth another go later — but only a failure
-                // that could implicate the write itself counts toward giving
-                // up on it. Every offline drain used to count, and eight of
-                // them — well under a minute of reading without signal, since
-                // each debounced save triggers one — quietly deleted the head
-                // of the queue.
-                if countsTowardAbandonment(error),
-                   (try? await queue.recordFailure(item.id)) == true {
-                    // The third and last place a write is thrown away, and
-                    // until this line the only one that said nothing.
-                    IssaLog.failure("sync mutation abandoned", error, [
+        // Pass after pass, until one finds nothing new. The rows are read once
+        // per pass, not once per drain: a drain declined while this one runs
+        // (`beginDraining()`) is relying on this one to send its row, and with
+        // a single read a rating tapped 4 then 5 inside one round trip left the
+        // server at 4 and the screen at 5 until some unrelated drain came by.
+        // Each further pass needs a row enqueued during the last one, so this
+        // ends as soon as the reader stops writing for one round trip.
+        while reachedTheEnd {
+            guard let pending = try? await queue.pending() else { break }
+            let fresh = pending.filter { !tried.contains($0.id) }
+            if fresh.isEmpty { break }
+
+            for item in fresh {
+                // Before every row, not once: a pause taken mid-drain waits for
+                // the request in flight, not for everything behind it, and a
+                // queue retired mid-drain sends nothing more.
+                guard await !queue.shouldYield else {
+                    reachedTheEnd = false
+                    break
+                }
+                tried.insert(item.id)
+                do {
+                    try await send(item)
+                    try? await queue.remove(item.id)
+                    sent += 1
+                } catch StorytellerError.positionConflict {
+                    // The server has something newer. Ours is obsolete, not failed.
+                    //
+                    // Logged, because this and the refusals below are where a
+                    // write is thrown away on the server's word, and they were the
+                    // only ones that said nothing — so a server that refused every
+                    // position looked exactly like a client that never sent one.
+                    IssaLog.info("mutation superseded by server", [
                         "kind": String(describing: item.kind), "book": item.bookUUID,
                     ])
+                    try? await queue.remove(item.id)
+                } catch StorytellerError.notAuthenticated {
+                    // Not this item's problem — the whole session is bad, and every
+                    // later item would fail identically. Keeping it queued, rather
+                    // than falling into the `!isRetryable` branch below and
+                    // discarding it, means a write that would have succeeded once
+                    // signed in again is not lost. Stopping the loop is what keeps
+                    // an expired token from silently emptying the entire backlog in
+                    // one pass — the removal below has no `break`, so before this
+                    // case existed the first 401 deleted everything behind it too.
+                    reachedTheEnd = false
+                    break
+                } catch let error as StorytellerError where error == .notFound || error == .forbidden {
+                    // Most likely about this item — the book was deleted
+                    // server-side, or a permission was revoked for it — so the
+                    // rest of the queue still deserves its turn. But only most
+                    // likely: `APIClient` maps a 404 or a 403 from *whatever*
+                    // answered, and a reverse proxy whose Storyteller is down, or
+                    // a path prefix that has changed, answers every route that
+                    // way. Deleted on the spot, one drain emptied the whole
+                    // offline backlog against it. Held until the drain is done.
+                    refused.append((item, error))
+                } catch let error as StorytellerError where !error.isRetryable {
+                    // A refusal that will not change on retry and that no front
+                    // door produces for every route — a payload the server would
+                    // not take. Genuinely per-item, so the rest still goes.
+                    //
+                    // A discarded write is worth a line even when discarding is
+                    // correct: this is where a rejected locator shape would go, and
+                    // without it the position simply stops moving for no stated
+                    // reason.
+                    IssaLog.failure("sync mutation discarded", error, [
+                        "kind": String(describing: item.kind), "book": item.bookUUID,
+                    ])
+                    try? await queue.remove(item.id)
+                } catch {
+                    IssaLog.failure("sync mutation", error, ["kind": String(describing: item.kind)])
+                    // Anything else is worth another go later — but only a failure
+                    // that could implicate the write itself counts toward giving
+                    // up on it. Every offline drain used to count, and eight of
+                    // them — well under a minute of reading without signal, since
+                    // each debounced save triggers one — quietly deleted the head
+                    // of the queue. A proxy's 502s were the same eight drains with
+                    // a status code on them; they do not count either.
+                    if countsTowardAbandonment(error),
+                       (try? await queue.recordFailure(item.id)) == true {
+                        // The one place a write is thrown away on this client's
+                        // own judgement, and until this line it said nothing.
+                        IssaLog.failure("sync mutation abandoned", error, [
+                            "kind": String(describing: item.kind), "book": item.bookUUID,
+                        ])
+                    }
+                    // Stop on the first genuine failure: the connection is probably
+                    // gone, and hammering the rest achieves nothing.
+                    reachedTheEnd = false
+                    break
                 }
-                // Stop on the first genuine failure: the connection is probably
-                // gone, and hammering the rest achieves nothing.
-                break
             }
         }
+        if !refused.isEmpty {
+            await settle(refused, sent: sent, askingTheServer: reachedTheEnd)
+        }
         return sent
+    }
+
+    /// Drops the rows this drain held as refused, once it knows Storyteller
+    /// refused them; otherwise keeps them for the next drain.
+    ///
+    /// The proof is Storyteller answering in this same drain: a row it took,
+    /// or — when every row was refused — one `GET /api/v2/user` that reads as
+    /// a user, which every version this client supports serves, 2.14.21
+    /// included. A front door answers that route as it answers the rest, with
+    /// a 404, a 403 or a page of its own, so its refusals stay queued and go
+    /// again once it lets Storyteller through. A refusal Storyteller made is
+    /// its verdict on the row, and the row goes as it always did — or a write
+    /// for a deleted book would be sent on every drain for ever.
+    ///
+    /// - Parameter askingTheServer: false when the drain stopped short — at a
+    ///   broken connection, which the question would only meet again, or with
+    ///   someone waiting for the lock, who should wait for no more requests
+    ///   than the one in flight.
+    private func settle(
+        _ refused: [(item: MutationQueue.Pending, error: StorytellerError)],
+        sent: Int, askingTheServer: Bool,
+    ) async {
+        var storytellerAnswered = sent > 0
+        if !storytellerAnswered, askingTheServer, await !queue.shouldYield {
+            storytellerAnswered = await storytellerAnswers()
+        }
+        guard storytellerAnswered else {
+            IssaLog.warning("sync refusals kept: nothing showed Storyteller made them", [
+                "count": String(refused.count),
+                "error": String(describing: refused[0].error),
+            ])
+            return
+        }
+        for (item, error) in refused {
+            IssaLog.failure("sync mutation discarded", error, [
+                "kind": String(describing: item.kind), "book": item.bookUUID,
+            ])
+            try? await queue.remove(item.id)
+        }
+    }
+
+    /// Whether Storyteller itself is what answers this client's requests.
+    ///
+    /// A probe, not a request: it never throws and never touches the token,
+    /// because a 401 here — from a proxy or from Storyteller — says nothing the
+    /// refusals did not, and must not sign the reader out on the way.
+    private func storytellerAnswers() async -> Bool {
+        guard let (status, data) = await client.probeResponse(Endpoint.user),
+              (200 ..< 300).contains(status)
+        else { return false }
+        return (try? JSONDecoder().decode(User.self, from: data)) != nil
     }
 
     private func send(_ item: MutationQueue.Pending) async throws {
@@ -384,21 +607,34 @@ public struct MutationDrain: Sendable {
     /// them. A transport failure is not that — the request never reached the
     /// server, and a queue that outlives an offline weekend is the whole point
     /// of a durable one. A 429 is the server explicitly asking to be tried
-    /// later; obeying must not cost the write. A 5xx *does* count — a
-    /// judgement call: the server received exactly this payload and choked,
-    /// and a payload that reliably breaks a route would otherwise sit at the
-    /// head of the queue forever, while a server that is merely down mostly
-    /// presents as transport failures — even behind a proxy's 502s, nothing is
-    /// lost unless eight separate drains all land inside the same outage.
-    /// Anything unrecognised (a payload that no longer decodes, say) fails
-    /// identically every time, which is what poison means.
+    /// later; obeying must not cost the write.
+    ///
+    /// Nor does a 502, 503 or 504. Those are what a reverse proxy says when the
+    /// Storyteller behind it is down — a container restarting — and they say
+    /// nothing about the payload. They are no rarer than eight drains, either:
+    /// every debounced save triggers one, and since the queue orders by
+    /// `updatedAt` a status or rating is the head of each of them, so a
+    /// couple of minutes of restart while reading used to delete it, for the
+    /// next refresh to put the old value back on screen.
+    ///
+    /// Any other 5xx *does* count — a judgement call: the server received
+    /// exactly this payload and choked, and a payload that reliably breaks a
+    /// route would otherwise sit at the head of the queue forever. Anything
+    /// unrecognised (a payload that no longer decodes, say) fails identically
+    /// every time, which is what poison means.
     private func countsTowardAbandonment(_ error: any Error) -> Bool {
         guard let storyteller = error as? StorytellerError else { return true }
         switch storyteller {
         case .transport, .server(status: 429, message: _):
             return false
+        case let .server(status, _) where Self.gatewayStatuses.contains(status):
+            return false
         default:
             return true
         }
     }
+
+    /// Bad Gateway, Service Unavailable, Gateway Timeout: the answers of a
+    /// front door with nothing behind it. See `countsTowardAbandonment(_:)`.
+    static let gatewayStatuses: Set<Int> = [502, 503, 504]
 }

@@ -40,7 +40,18 @@ public enum ChunkDurations {
     /// measurement runs again; there is nothing here that is worth reporting to
     /// a listener or worth refusing to play over.
     public static func load(bookID: String, in root: URL? = nil) -> [String: TimeInterval] {
-        guard let data = try? Data(contentsOf: cacheURL(bookID: bookID, in: root)),
+        decode(cacheURL(bookID: bookID, in: root))
+    }
+
+    /// The same, for an extraction directory named outright rather than by
+    /// book — `ReadaloudSource.load`'s `into:`, and a local book's
+    /// `LocalBookFiles.narration`.
+    public static func load(fromDirectory directory: URL) -> [String: TimeInterval] {
+        decode(directory.appending(path: filename))
+    }
+
+    private static func decode(_ url: URL) -> [String: TimeInterval] {
+        guard let data = try? Data(contentsOf: url),
               let decoded = try? JSONDecoder().decode([String: TimeInterval].self, from: data)
         else { return [:] }
         return decoded
@@ -49,12 +60,34 @@ public enum ChunkDurations {
     public static func save(
         _ durations: [String: TimeInterval], bookID: String, in root: URL? = nil,
     ) throws {
-        let url = cacheURL(bookID: bookID, in: root)
-        try FileManager.default.createDirectory(
-            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        // Atomically, because this is read on the next launch by a path that
-        // cannot tell a half-written file from a short book.
-        try JSONEncoder().encode(durations).write(to: url, options: .atomic)
+        try save(durations, toDirectory: AudioExtraction.defaultDirectory(for: bookID, in: root))
+    }
+
+    /// Writes the cache into the folder the narration was extracted to — and
+    /// only into one that is still there.
+    ///
+    /// The folder is never made here. It is the extraction's, and the cache
+    /// only describes what is in it: a read-along removed while its first
+    /// listen was still measuring had this re-create the folder its removal
+    /// had just deleted, and the next extraction of that book then trusted
+    /// lengths left over from a different edition. Refused as well from a task
+    /// that has been cancelled — the measurement that produced these numbers
+    /// was stopped part-way, by a removal or the listen ending — and under the
+    /// extraction's lock, so a removal is never in the middle of it.
+    public static func save(
+        _ durations: [String: TimeInterval], toDirectory directory: URL,
+    ) throws {
+        guard !Task.isCancelled else { throw CancellationError() }
+        let data = try JSONEncoder().encode(durations)
+        try AudioExtraction.locks.lock(for: directory).withLock {
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: directory.path, isDirectory: &isDirectory),
+                  isDirectory.boolValue
+            else { throw CocoaError(.fileNoSuchFile, userInfo: [NSFilePathErrorKey: directory.path]) }
+            // Atomically, because this is read on the next launch by a path
+            // that cannot tell a half-written file from a short book.
+            try data.write(to: directory.appending(path: filename), options: .atomic)
+        }
     }
 
     /// Measures whatever is not already known, and returns the merged answer.

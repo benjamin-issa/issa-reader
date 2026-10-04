@@ -21,12 +21,15 @@ struct IssaReaderMacApp: App {
     private let services = MacAppServices.shared
 
     var body: some Scene {
-        WindowGroup {
+        // An id, so a menu in a window without a library — Settings' "Show in
+        // Library" — can open one (`ShowInLibrary`).
+        WindowGroup(id: ShowInLibrary.libraryWindowID) {
             MacRootView()
                 .environment(services.app)
                 .environment(services.settings)
                 .environment(services.nowPlaying)
                 .environment(services.ask)
+                .environment(services.local)
                 // Idempotent, and belt-and-braces: the delegate has normally
                 // run by now, but a scene that somehow arrives first must not
                 // find an unstarted app.
@@ -35,9 +38,13 @@ struct IssaReaderMacApp: App {
                 .frame(minWidth: 900, minHeight: 560)
         }
         .commands {
+            // The File menu's one decision is `MacFileMenu`'s, read by the
+            // item itself — and remembered across launches, because macOS
+            // adds no menu to the bar after it is built. See that type.
             IssaCommands(
                 app: services.app, settings: services.settings,
-                nowPlaying: services.nowPlaying)
+                nowPlaying: services.nowPlaying, local: services.local,
+                fileMenu: services.fileMenu)
         }
 
         // A book opens in its own window, which is what a Mac reader should do:
@@ -53,10 +60,42 @@ struct IssaReaderMacApp: App {
                 .environment(services.settings)
                 .environment(services.nowPlaying)
                 .environment(services.ask)
+                .environment(services.local)
                 // No `.task` of its own. It used to repeat the Now Playing
                 // wiring, which is the app's and is done once in
                 // `MacAppServices.start()` — `NowPlayingController.configure`
                 // documents what a scene calling it per window cost.
+                .tint(Palette.tangerine)
+                .frame(minWidth: 520, minHeight: 640)
+        }
+        .defaultSize(width: 760, height: 900)
+
+        // The books the reader added from their own files, in a window of
+        // their own, reached from the sign-in link, Settings › Advanced and
+        // File › Add Book…. Kept out of the Window menu: the feature is
+        // deliberately quiet, and a reader who never looks never sees it.
+        Window("Books on This Mac", id: "LocalBooks") {
+            LocalBooksScreen(placement: .window)
+                .environment(services.app)
+                .environment(services.settings)
+                .environment(services.nowPlaying)
+                .environment(services.ask)
+                .environment(services.local)
+                .tint(Palette.tangerine)
+                .frame(minWidth: 480, minHeight: 420)
+        }
+        .defaultSize(width: 720, height: 640)
+        .commandsRemoved()
+
+        // A book from the reader's files, in its own window like any other,
+        // restorable by uuid.
+        WindowGroup(id: "LocalReader", for: String.self) { $bookID in
+            LocalReaderWindow(bookID: bookID)
+                .environment(services.app)
+                .environment(services.settings)
+                .environment(services.nowPlaying)
+                .environment(services.ask)
+                .environment(services.local)
                 .tint(Palette.tangerine)
                 .frame(minWidth: 520, minHeight: 640)
         }
@@ -70,6 +109,7 @@ struct IssaReaderMacApp: App {
         // is off so a relaunch does not restore an empty one.
         UtilityWindow("Now Playing", id: "NowPlaying") {
             NowPlayingPanel()
+                .environment(services.local)
                 .environment(services.app)
                 .environment(services.settings)
                 .environment(services.nowPlaying)
@@ -88,6 +128,7 @@ struct IssaReaderMacApp: App {
         // ⌘, — the one place a Mac user looks for preferences.
         Settings {
             MacSettingsView()
+                .environment(services.local)
                 .environment(services.app)
                 .environment(services.settings)
                 .environment(services.nowPlaying)
@@ -112,10 +153,19 @@ struct IssaCommands: Commands {
     let app: AppModel
     let settings: PlaybackSettings
     let nowPlaying: NowPlayingController
+    let local: LocalLibrary
+    /// Whether File offers Add Book…, read by `FileMenuAddBook` rather than by
+    /// this body: nothing here reads the library itself, and only the one
+    /// item is rebuilt when the answer turns.
+    let fileMenu: MacFileMenu
 
     var body: some Commands {
-        // Nothing here creates documents, so an enabled New menu would be a lie.
-        CommandGroup(replacing: .newItem) {}
+        // Nothing here creates documents, so an enabled New menu would be a
+        // lie. Add Book… takes its place once the books from Files have been
+        // looked at — never for a server reader who has not.
+        CommandGroup(replacing: .newItem) {
+            FileMenuAddBook(fileMenu: fileMenu, local: local)
+        }
 
         CommandGroup(after: .toolbar) {
             Button("Refresh Library") { Task { await app.refreshLibrary() } }
@@ -153,11 +203,7 @@ struct IssaCommands: Commands {
             // server field toggled playback instead. The reader page handles
             // Space itself while it has the keyboard, which is the right
             // scope for it.
-            Button(nowPlaying.coordinator?.player.isPlaying == true ? "Pause" : "Play") {
-                nowPlaying.coordinator?.player.togglePlayPause()
-                nowPlaying.publish()
-            }
-            .disabled(nowPlaying.coordinator == nil)
+            PlayPauseCommand(nowPlaying: nowPlaying)
 
             Button("Skip Forward") {
                 perform(.skipForward)
@@ -215,18 +261,122 @@ struct IssaCommands: Commands {
     }
 }
 
+/// File's Add Book…, when `MacFileMenu` offers it.
+///
+/// A view, so the answer is observed by the one item it governs. The File menu
+/// itself has to exist when the bar is built for this to show — which is why
+/// `MacFileMenu` remembers a yes.
+struct FileMenuAddBook: View {
+    let fileMenu: MacFileMenu
+    let local: LocalLibrary
+
+    var body: some View {
+        if fileMenu.offersAddBook {
+            AddBookCommand(local: local)
+        }
+    }
+}
+
+/// Playback › Play or Pause.
+///
+/// The player when there is one. Before narration has been started there is
+/// none, and the item was disabled over a narrated book's window (F10): now
+/// the reader in front is asked to start its narration, as the page's own
+/// play button would. A view, so what it reads is observed here and not by
+/// the whole menu bar.
+struct PlayPauseCommand: View {
+    let nowPlaying: NowPlayingController
+    private let keyReader = KeyReaderNarration.shared
+
+    var body: some View {
+        Button(nowPlaying.coordinator?.player.isPlaying == true ? "Pause" : "Play") {
+            if let coordinator = nowPlaying.coordinator {
+                coordinator.player.togglePlayPause()
+                nowPlaying.publish()
+            } else {
+                ReaderCommand.playPause.post()
+            }
+        }
+        .disabled(!KeyReaderNarration.playEnabled(
+            hasCoordinator: nowPlaying.coordinator != nil,
+            narratedReaderIsKey: keyReader.narratedReaderIsKey))
+    }
+}
+
+/// File › Add Book…: brings up Books on This Mac and asks it for the picker.
+///
+/// A view, so it has an environment to open a window from — which a
+/// `Commands` body does not — and it opens the window itself. It used to only
+/// set the library's flag, which only the library window and the list window
+/// listened for: with neither open ⌘O did nothing, and the flag left behind
+/// popped the picker unasked the next time the list was opened.
+struct AddBookCommand: View {
+    let local: LocalLibrary
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Button("Add Book…") {
+            local.requestAdd()
+            openWindow(id: "LocalBooks")
+        }
+        .keyboardShortcut("o", modifiers: .command)
+    }
+}
+
+/// Opens a book from the reader's files that a tapped answer left waiting
+/// (`LocalBookRequests`), from whichever Mac window takes it first.
+struct TakesLocalBookRequests: ViewModifier {
+    @Environment(LocalLibrary.self) private var local
+    @Environment(\.openWindow) private var openWindow
+    private let requests = LocalBookRequests.shared
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: requests.pending, initial: true) { take() }
+            .onChange(of: local.isLoaded) { take() }
+    }
+
+    private func take() {
+        guard local.isLoaded, let uuid = requests.pending, local.book(uuid) != nil,
+              requests.take() == uuid else { return }
+        openWindow(id: "LocalReader", value: uuid)
+    }
+}
+
+extension View {
+    /// Any Mac window can open a local book's own window, so each takes the
+    /// request: with only reader windows open the tap used to be dropped.
+    func takesLocalBookRequests() -> some View { modifier(TakesLocalBookRequests()) }
+}
+
 /// Resolves a book id into a reader, so the window can be restored by the system
 /// after a relaunch without holding a reference to a model.
 struct ReaderWindow: View {
     let bookID: String?
     @Environment(AppModel.self) private var app
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
+        content.takesLocalBookRequests()
+    }
+
+    @ViewBuilder
+    private var content: some View {
         if let bookID,
            let book = app.books.first(where: { $0.uuid == bookID }),
            let session = app.session {
             ReaderScreen(book: book, session: session)
                 .navigationTitle(book.title)
+                // An answer's notification tapped for this book, while it is
+                // the reader on screen: the tap asks for the window, not the
+                // book, so no request is left for the library window to open
+                // again later. `openWindow` with this window's own value
+                // focuses it rather than opening a second one.
+                .onReceive(NotificationCenter.default.publisher(
+                    for: AskNotificationDelegate.bringReaderForward)) { note in
+                    guard note.userInfo?[AskNotifier.bookUUIDKey] as? String == bookID else { return }
+                    openWindow(id: "Reader", value: bookID)
+                }
         } else {
             ContentUnavailableView(
                 "Book unavailable",
@@ -237,47 +387,67 @@ struct ReaderWindow: View {
     }
 }
 
+/// A book from the reader's files, by uuid, so the system can restore the window
+/// after a relaunch without holding a model.
+///
+/// Waits for the library to load before deciding anything: a restored window
+/// that answered before `load()` would say a book was not here when it was.
+struct LocalReaderWindow: View {
+    let bookID: String?
+    @Environment(LocalLibrary.self) private var local
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        content.takesLocalBookRequests()
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if !local.isLoaded {
+            Palette.paper.ignoresSafeArea()
+        } else if let bookID, let book = local.book(bookID), !local.missingFiles.contains(bookID) {
+            ReaderScreen(localBook: book)
+                .navigationTitle(book.title)
+                // An answer tapped for this book while it is the reader on
+                // screen: this window comes forward, as `ReaderWindow` does.
+                .onReceive(NotificationCenter.default.publisher(
+                    for: AskNotificationDelegate.bringReaderForward)) { note in
+                    guard note.userInfo?[AskNotifier.bookUUIDKey] as? String == bookID else { return }
+                    openWindow(id: "LocalReader", value: bookID)
+                }
+        } else {
+            ContentUnavailableView(
+                "Book not on this Mac",
+                systemImage: "book.closed",
+                description: Text("It was removed, or its file is no longer here. Add it again from Books on This Mac."),
+            )
+        }
+    }
+}
+
 /// A real Mac layout: source list on the left, content on the right.
 struct MacRootView: View {
     @Environment(AppModel.self) private var app
+    @Environment(LocalLibrary.self) private var local
     @Environment(\.openWindow) private var openWindow
-    @State private var selection: Destination? = .shelf(.all)
+    /// The sidebar's row and the pages pushed over it, as one value; see
+    /// `MacContentColumn`.
+    @State private var column = MacContentColumn()
     /// Which book the inspector is showing. A cover's click writes it; the
     /// shared cells read it to mark themselves selected.
     @State private var inspected = MacBookSelection()
+    /// This window's "Show in Library" requests, and no other window's.
+    @State private var navigator = LibraryNavigator()
 
-    /// The sidebar's entries. Shelves come from the same definition the phone
-    /// filters by, so the two never drift apart.
-    enum Destination: Hashable {
-        case reading
-        case shelf(LibraryArrangement.Shelf)
-        case listening
-        case downloads
+    /// The sidebar's entries; see `MacSidebar`.
+    typealias Destination = MacSidebar
 
-        var title: String {
-            switch self {
-            case .reading: "Reading"
-            case let .shelf(shelf): shelf.title
-            case .listening: "Listening"
-            case .downloads: "Downloads"
-            }
-        }
+    private var selection: Destination? { column.selection }
 
-        var symbol: String {
-            switch self {
-            // Not `bookmark` or `book`: those are the To read and Reading
-            // shelves' glyphs two rows down.
-            case .reading: "text.book.closed"
-            case .shelf(.all): "books.vertical"
-            case .shelf(.reading): "book"
-            case .shelf(.toRead): "bookmark"
-            case .shelf(.finished): "checkmark.circle"
-            case .shelf(.downloaded): "arrow.down.circle"
-            case .shelf(.withNarration): "waveform"
-            case .listening: "headphones"
-            case .downloads: "internaldrive"
-            }
-        }
+    /// The sidebar's binding: a row picked there goes through
+    /// `MacContentColumn.select`, which takes the pages down in the same write.
+    private var sidebarSelection: Binding<Destination?> {
+        Binding(get: { column.selection }, set: { column.select($0) })
     }
 
     var body: some View {
@@ -301,11 +471,29 @@ struct MacRootView: View {
         .onReceive(NotificationCenter.default.publisher(for: ReaderCommand.player.notification)) { _ in
             openWindow(id: "NowPlaying")
         }
+        // An answer tapped for a book from the reader's files: its own window.
+        .takesLocalBookRequests()
+        // File › Add Book… opens the list window itself now; this stays for a
+        // request made any other way while this window is up.
+        .onChange(of: local.addRequested) { _, requested in
+            if requested { openWindow(id: "LocalBooks") }
+        }
+        // Counted, so "Show in Library" from Settings knows whether there is
+        // a library window to take its request.
+        .onAppear { LibraryWindows.shared.appeared() }
+        .onDisappear { LibraryWindows.shared.disappeared() }
         // The Mac declared the `issareader` scheme in its Info.plist and then
         // handled nothing: a widget, Spotlight or Handoff link brought the app
         // to the front and did nothing else. `AppModel.open` is shared and
         // already parses `issareader://book/{uuid}`.
         .onOpenURL { app.open($0) }
+        // In this window, not a new one. Without a preference SwiftUI answers
+        // an external event by opening another window of the group the
+        // handler is in, so every `issareader://book/…` opened from Finder,
+        // a widget or `open` added a library window (F7). Preferring every
+        // event routes it to the library window already open; with none
+        // open the group still makes one.
+        .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
         // The other half of the Handoff the reader has always advertised. The
         // reader's `.userActivity` runs on macOS too, but nothing here ever
         // listened, so continuing a book from the phone landed on the shelf.
@@ -319,6 +507,14 @@ struct MacRootView: View {
         // re-fire, and consuming clears the request, so this settles.
         .onChange(of: app.pendingBook) { openPendingBook() }
         .onChange(of: app.books) { openPendingBook() }
+        // And once as the window appears, because a request can be waiting
+        // before there is any library window to change: an Ask notification
+        // tapped while only a reader window was open arms one. Neither
+        // `onChange` fires for a value that was already there, so the request
+        // sat until the next change to `books` — a position saved in another
+        // book — and opened its reader then, unasked. iOS has had this `.task`
+        // all along.
+        .task { openPendingBook() }
     }
 
     /// Opens whatever a link, a Handoff or a Spotlight hit asked for.
@@ -333,7 +529,13 @@ struct MacRootView: View {
         // the reader, which is why the comment below used to say every route
         // ends in a window.
         if pending.destination == .details {
-            inspected.bookID = pending.book.uuid
+            // And the book where it can be seen: no page left over the
+            // library, on a shelf that has it, scrolled to. It used to only
+            // select — "Show in Library" from Settings left an author page
+            // standing, or a grid with the book far below the fold (F10).
+            column.revealBook(
+                isOnCurrentShelf: app.arrangedBooks.contains { $0.uuid == pending.book.uuid })
+            inspected.reveal(pending.book.uuid)
             return
         }
         // `consumePendingBook` arms the one-shot reader request for `.read`, and
@@ -355,82 +557,94 @@ struct MacRootView: View {
             // Both directions. The `true` case used to be unreachable, which
             // together with the `.disabled` below made this a switch that could
             // be turned off and never on.
+            // Animated, because `.inspector` animated and a column that
+            // appears between two frames reads as a glitch rather than as a
+            // panel opening.
             set: { shown in
-                if shown {
-                    inspected.bookID = inspected.bookID ?? inspected.lastShownBookID
-                } else {
-                    inspected.bookID = nil
+                withAnimation(.snappy(duration: 0.2)) {
+                    if shown {
+                        inspected.bookID = inspected.bookID ?? inspected.lastShownBookID
+                    } else {
+                        inspected.bookID = nil
+                    }
                 }
             },
         )
     }
 
     private var readyBody: some View {
-        NavigationSplitView {
-            // Three named zones: where you are, what you own, and the two
-            // machinery screens. The rows and their bindings are unchanged —
-            // only the grouping is new, so a shelf still sets the arrangement
-            // and nothing gained a second idea of what a shelf is.
-            List(selection: $selection) {
-                // The phone's Reading tab: where you are, above where you
-                // might look. Its "See all" sets a shelf, and the shelf
-                // observer below moves the sidebar there.
-                Section("Reading") {
-                    Label(Destination.reading.title, systemImage: Destination.reading.symbol)
-                        .tag(Destination.reading)
-                        // "Reading" is also a shelf one zone down, and the
-                        // heading above says it too. VoiceOver would read the
-                        // word three times without this.
-                        .accessibilityLabel("Continue reading")
+        // The book column sits beside the split view, outside it, in a plain
+        // HStack. Two reasons, one per place it has been:
+        //
+        // - It was an `.inspector` until macOS 27, where an inspector inside a
+        //   NavigationSplitView puts AppKit into an update-constraints storm
+        //   the second time the selection changes — "more Update Constraints
+        //   in Window passes than there are views in the window" — and the
+        //   process is killed. The shipped 1.1.1 dies the same way.
+        // - It then sat inside the detail column, beside the stack. But a
+        //   stack in the detail column is the column's own on macOS 27: a
+        //   pushed page replaced the whole column, this with it, so a tag or
+        //   author page opened from the inspector took the inspector away
+        //   while Book Info still said it was on (F4).
+        //
+        // Out here a page replaces only the stack. A conditional trailing
+        // column has no NSSplitView behind it, collapses the same way, and
+        // gives the grid its width back just as the inspector did.
+        HStack(spacing: 0) {
+            NavigationSplitView {
+                sidebar
+            } detail: {
+                // A stack, because the Browse rails and the book detail both
+                // push a series screen, and the inspector's tag chips and a
+                // book menu's "More by" push the tag and author pages. The
+                // pages are a path (`MacContentColumn`), emptied rather than
+                // the stack rebuilt — that type says what rebuilding left
+                // behind.
+                NavigationStack(path: $column.path) {
+                    content
+                        .navigationDestination(for: BookRouter.Route.self) { page in
+                            BookRouter.destination(for: page)
+                        }
                 }
-                Section("Library") {
-                    ForEach(LibraryArrangement.Shelf.allCases) { shelf in
-                        let destination = Destination.shelf(shelf)
-                        Label(destination.title, systemImage: destination.symbol)
-                            .tag(destination)
-                    }
-                }
-                Section("Audio & storage") {
-                    Label(Destination.listening.title, systemImage: Destination.listening.symbol)
-                        .tag(Destination.listening)
-                    Label(Destination.downloads.title, systemImage: Destination.downloads.symbol)
-                        .tag(Destination.downloads)
-                }
+                // The window's undo toast, over the content column: a book's
+                // menu, or the inspector's edition menu, can remove a
+                // download from either. See `downloadRemovalToast`.
+                .downloadRemovalToast()
             }
-            .listStyle(.sidebar)
-            .scrollContentBackground(.hidden)
-            .background(Palette.paper)
-            .navigationSplitViewColumnWidth(min: 200, ideal: 220)
-        } detail: {
-            // A stack, because the Browse rails and the book detail both push a
-            // series screen. Without one those were links to nowhere — which
-            // did not show before, because the Mac never rendered the rails and
-            // could not reach the detail at all.
-            NavigationStack {
-                Group {
-                    switch selection ?? .shelf(.all) {
-                    case .reading:
-                        ReadingView { shelf in selection = .shelf(shelf ?? .all) }
-                    case .shelf: LibraryView()
-                    case .listening: ListeningView()
-                    case .downloads: DownloadsView()
-                    }
-                }
-                .navigationTitle((selection ?? .shelf(.all)).title)
+            if showsInspector.wrappedValue {
+                Divider()
+                // The inspector's old ideal width, and it governs — which it
+                // did not in 1.2.0 (41) through (44). The detail inside was
+                // pinning itself to `containerRelativeFrame`, which walks past
+                // this `HStack`: measured on macOS 27 at a 1114pt window, 894
+                // points of content centred on this 320pt frame.
+                // `BookDetailView.pinnedToContainerWidth` is where that is
+                // fixed, and why.
+                //
+                // It can no longer be dragged either: that needs the
+                // `NSSplitView` behind `.inspector`, which is what crashes on
+                // macOS 27.
+                MacBookInspector(bookID: inspected.bookID)
+                    .frame(width: 320)
+                    .frame(maxHeight: .infinity)
+                    .transition(.move(edge: .trailing))
             }
-            // A fresh stack per sidebar row, so a series pushed under Library
-            // does not survive a switch to Downloads. These links are closures,
-            // not a path, so nothing else can pop them.
-            .id(selection)
-        }
-        // The third column. Applied to the split view rather than inside the
-        // detail's stack, so it is a real trailing column that collapses and
-        // gives the grid its full width back.
-        .inspector(isPresented: showsInspector) {
-            MacBookInspector(bookID: inspected.bookID)
-                .inspectorColumnWidth(min: 280, ideal: 320, max: 440)
         }
         .environment(inspected)
+        .environment(navigator)
+        // The inspector's series and tag links, and a book menu's Go to
+        // Series and More by, ask here (`MacBookSelection.pushed`): none of
+        // them has a stack of its own, and this window's content column is
+        // the one that answers. Taken at once, so the same request made twice
+        // is two requests.
+        .onChange(of: inspected.pushed) { _, page in
+            guard let page else { return }
+            inspected.pushed = nil
+            column.push(page)
+        }
+        // "Show in Library" from a tag or author page: the All books grid,
+        // with the filter or search the page has already set.
+        .onChange(of: navigator.showRequests) { column.showLibrary() }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Toggle(isOn: showsInspector) {
@@ -457,18 +671,78 @@ struct MacRootView: View {
         .toolbarBackground(Palette.paper, for: .windowToolbar)
         // Picking a sidebar shelf sets the same arrangement the phone
         // uses, rather than a second, parallel idea of what a shelf is.
-        .onChange(of: selection) { _, new in
+        .onChange(of: column.selection) { _, new in
             if case let .shelf(shelf) = new { app.arrangement.shelf = shelf }
         }
         // And the other direction: the arrangement is restored from
-        // UserDefaults while `selection` starts at `.shelf(.all)` every
+        // UserDefaults while the sidebar starts at `.shelf(.all)` every
         // launch, so without `initial: true` the sidebar highlighted — and the
         // title claimed — "All books" over a grid filtered to the saved shelf.
         // Equal values do not re-fire `.onChange`, so the two writers settle
         // rather than loop.
         .onChange(of: app.arrangement.shelf, initial: true) { _, shelf in
-            selection = .shelf(shelf)
+            column.select(.shelf(shelf))
         }
+    }
+
+    /// Three named zones: where you are, what you own, and the two machinery
+    /// screens. A shelf sets the arrangement, so nothing gained a second idea
+    /// of what a shelf is.
+    private var sidebar: some View {
+        List(selection: sidebarSelection) {
+            // The phone's Reading tab: where you are, above where you might
+            // look. Its "See all" sets a shelf, and the shelf observer moves
+            // the sidebar there.
+            Section("Reading") {
+                Label(Destination.reading.title, systemImage: Destination.reading.symbol)
+                    .tag(Destination.reading)
+                    // "Reading" is also a shelf one zone down, and the heading
+                    // above says it too. VoiceOver would read the word three
+                    // times without this.
+                    .accessibilityLabel("Continue reading")
+            }
+            Section("Library") {
+                ForEach(LibraryArrangement.Shelf.allCases) { shelf in
+                    let destination = Destination.shelf(shelf)
+                    Label(destination.title, systemImage: destination.symbol)
+                        .tag(destination)
+                }
+            }
+            Section("Audio & storage") {
+                Label(Destination.listening.title, systemImage: Destination.listening.symbol)
+                    .tag(Destination.listening)
+                Label(Destination.downloads.title, systemImage: Destination.downloads.symbol)
+                    .tag(Destination.downloads)
+            }
+        }
+        .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
+        .background(Palette.paper)
+        .navigationSplitViewColumnWidth(min: 200, ideal: 220)
+    }
+
+    /// The sidebar row's own screen, at the root of the content column.
+    private var content: some View {
+        Group {
+            switch selection ?? .shelf(.all) {
+            case .reading:
+                // "See all" is that shelf's grid, "Go to Library" the
+                // library's landing (`LibraryModeSwitch.fromReading`); the
+                // sidebar follows the shelf.
+                ReadingView { shelf in
+                    app.showLibrary(fromReading: shelf)
+                    column.select(.shelf(app.arrangement.shelf))
+                }
+            case .shelf: LibraryView()
+            case .listening: ListeningView()
+            case .downloads: DownloadsView()
+            }
+        }
+        // A fresh screen per row, as the rebuilt stack used to give: one
+        // shelf's search and scroll position are not the next one's. The
+        // root's identity, not the stack's — see `MacContentColumn`.
+        .id(selection)
+        .navigationTitle((selection ?? .shelf(.all)).title)
     }
 }
 

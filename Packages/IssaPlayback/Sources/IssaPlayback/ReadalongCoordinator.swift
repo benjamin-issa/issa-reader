@@ -116,6 +116,12 @@ public final class ReadalongCoordinator {
     ///
     /// Scoped to the current file: clip times restart at zero in each track, so
     /// a book-time search here would land on the wrong sentence.
+    /// How far before the active sentence a sample may fall and still be read
+    /// as clock jitter rather than as a move. One frame of the player's 1/600 s
+    /// timescale is 1.7 ms; twenty is far below the smallest deliberate skip
+    /// and far above any rounding.
+    static let backwardsClockSlack: TimeInterval = 0.02
+
     private func advance(to time: TimeInterval) {
         // Mid-move the clock describes neither where the listener was nor where
         // they asked to go — and worse, it is read against a file the move has
@@ -132,11 +138,56 @@ public final class ReadalongCoordinator {
               let entry = timeline.entry(inFile: href, at: time)
         else { return }
 
-        if entry.fragmentID != activeFragmentID {
+        // A sample a hair before the sentence the listener is already on
+        // resolves to the sentence *before* it — the lookup is half-open — so a
+        // clock that lands a fraction early would step the highlight back one,
+        // and across a document boundary turn the page back and hand the sleep
+        // timer a chapter that had not ended. The seek rounds up so this should
+        // not arise; this is the second lock on the same door, because the cost
+        // of being wrong is a book that pauses itself at bedtime.
+        //
+        // Only a hair: a deliberate move backwards is orders of magnitude
+        // larger than this, and arrives through `move(to:)` rather than here.
+        //
+        // And only *before* the active sentence. A clock at or past its start
+        // is not early, even when the entry it resolves to began earlier: in a
+        // run the CTC aligner left out of order, the clip playing now can start
+        // before the one that played last. v2's clips are ascending, where that
+        // cannot happen, so for them this half changes nothing; without it,
+        // the out-of-order answer was thrown away and the end of the file
+        // advanced from the stale entry back into the same file.
+        if let active = activeEntry, entry.start < active.start,
+           time < active.start, active.start - time < Self.backwardsClockSlack {
+            return
+        }
+
+        // Two questions, which used to be one: has the *entry* changed, and has
+        // the *fragment*? In a v2 book they are the same question. In a v3 book
+        // one sentence owns several entries in a row — the audio-only holes
+        // before and after it, the continuation of a sentence that runs into
+        // the next file — and every one names the sentence's fragment. Asking
+        // only about the fragment left `activeEntry` on the sentence while its
+        // after-hole played, and everything that asks where the audio is reads
+        // `activeEntry`: `currentAnchor` clamped the playhead back into the
+        // sentence, `skipBook` measured from it, and a file that ended in the
+        // hole advanced from the sentence, onto the hole, and replayed it for
+        // ever.
+        //
+        // The highlight and the page still move on the fragment alone — as
+        // the timeline scopes it, to its document. A hole names the sentence
+        // it hangs off, which is what v2 lit for those same seconds, having
+        // folded them into that sentence's clip; repainting it would change
+        // nothing anybody can see, and the reader counts a fragment change as
+        // narration arriving somewhere.
+        if entry != activeEntry {
             let previousDocument = activeEntry?.textHref
-            activeFragmentID = entry.fragmentID
+            let fragmentMoved = entry.fragmentID != activeFragmentID
+                || entry.textHref != previousDocument
             activeEntry = entry
-            onFragmentChange?(entry.fragmentID)
+            if fragmentMoved {
+                activeFragmentID = entry.fragmentID
+                onFragmentChange?(entry.fragmentID)
+            }
             if entry.textHref != previousDocument {
                 onChapterChange?(entry.textHref)
                 // Only a real boundary, not the first fragment of a session.
@@ -152,16 +203,51 @@ public final class ReadalongCoordinator {
     }
 
     private func advanceToNextFile() async {
-        guard let entry = activeEntry, let next = timeline.entry(after: entry) else {
-            player.pause()
+        // An ending that arrives while a move is in flight is not one to act
+        // on: the listener has already gone somewhere else. The ending reaches
+        // here through the Task `init` hops it through, so a scrub or a tap
+        // whose move starts before that Task runs has already put
+        // `activeEntry` on its destination by the time it does. Answering it
+        // advanced from *there*, past the rest of a file the listener had only
+        // just moved into, and reported the chapter they moved into as ended.
+        // Nothing is lost by dropping it: the move owns the playhead, and the
+        // file it lands in posts its own ending when it runs out.
+        //
+        // The hop is the only window. `AudioPlayer.load` removes the replaced
+        // item's end observer before it suspends, and a notification that item
+        // had already queued for the main queue goes with it — tried: posted
+        // from another thread while the main thread was held, it was not
+        // delivered once a load had run — so the player needs no guard of its
+        // own.
+        guard movesInFlight == 0 else { return }
+        // The first entry of the next file, whatever it is — not the next
+        // sentence. When a file runs out, what plays next is whatever audio
+        // the book has next: a hole, the continuation of the sentence just
+        // heard, or a whole audio chapter, which `entry(after:)` would step
+        // over in silence. Nor the next entry: in a file whose clips the
+        // aligner left out of order, the entry playing at its end need not be
+        // its last, and the entry after it was more of the same file — the
+        // advance seeked back into it and the file ended, and seeked back, for
+        // ever. At the end of the book there is nothing, and that is a pause,
+        // including when the book ends on a hole.
+        //
+        // For a file whose clips ascend the two answers are the same, with one
+        // exception: a last clip shorter than a tick of the screen-off clock,
+        // where `activeEntry` is still the one before it. The next entry
+        // replayed that sub-second clip once before moving on; the next file
+        // does not, and the clip has already been heard.
+        guard let entry = activeEntry, let next = timeline.entry(followingFileOf: entry) else {
+            // The end of the book: stopped, and the audio route given back so
+            // whatever the narration interrupted can resume.
+            player.endSession()
             return
         }
         let endedDocument = entry.textHref
         guard await move(to: next) else { return }
         // A chapter that ran out, which is what the end-of-chapter timer is
         // waiting for. `advance(to:)` cannot see this one: `move(to:)` has
-        // already set `activeFragmentID`, so the clock's next tick finds its
-        // own boundary test false. A book with one audio file per chapter
+        // already set `activeEntry`, so the clock's next tick finds its own
+        // boundary test false. A book with one audio file per chapter
         // therefore never reported an ending at all, and a timer set at bedtime
         // played through the night.
         //
@@ -222,8 +308,26 @@ public final class ReadalongCoordinator {
         if await play(from: entry) { onSeek?() }
     }
 
+    /// How far short of an entry's end a move into it may land.
+    ///
+    /// A scrub to the far end of the bar names the very end of the last entry,
+    /// which is the end of its file. A seek that lands exactly on an item's
+    /// end may never be told it played to the end, and without that
+    /// notification `isPlaying` stays true over a player that has stopped —
+    /// the failure `AudioPlayer.load` guards against for an offset of zero.
+    /// Landing a hair short lets the file play out and the book end the
+    /// ordinary way.
+    ///
+    /// Two frames of the player's 1/600 s timescale rather than one, because
+    /// `AudioPlayer.seek` rounds its target *up* to the next frame: a target
+    /// one frame short of an end that sits on a frame boundary comes back up
+    /// onto it about one time in fifty.
+    static let endOfEntryMargin: TimeInterval = 2.0 / 600
+
     /// Moves the playhead and the highlight without touching whether audio is
-    /// playing. False when the entry's audio file is missing and nothing moved.
+    /// playing. False when the entry's audio file is missing and nothing moved,
+    /// or is there and would not open, in which case the highlight has moved
+    /// and the player has stopped.
     ///
     /// Split out of `play(from:)` because `seek(toBookProgress:)` is a protocol
     /// requirement with a neutral contract — the audiobook implementation moves
@@ -231,8 +335,13 @@ public final class ReadalongCoordinator {
     /// `play(from:)` made a paused book start reading itself aloud in a quiet
     /// room, from the scrubber, the skip buttons and the macOS key commands
     /// alike.
+    ///
+    /// - Parameter offset: how far into the entry to land, for a scrub or a
+    ///   skip, which name a time rather than a sentence. Every other move
+    ///   lands at the entry's start. Clamped into the entry, and short of its
+    ///   very end by `endOfEntryMargin`.
     @discardableResult
-    private func move(to entry: SMILEntry) async -> Bool {
+    private func move(to entry: SMILEntry, offset: TimeInterval = 0) async -> Bool {
         // Resolved before a single piece of state moves, exactly as
         // `AudiobookCoordinator.load` resolves its own destination first: a
         // missing audio file is a refusal, not a move, and nothing may be
@@ -246,6 +355,8 @@ public final class ReadalongCoordinator {
         } else {
             destination = nil
         }
+        let within = offset.isFinite
+            ? min(max(0, offset), max(0, entry.duration - Self.endOfEntryMargin)) : 0
 
         // Everything published BEFORE the await, for the reason
         // `AudiobookCoordinator.seek(toBookTime:)` publishes before its own: the
@@ -264,14 +375,14 @@ public final class ReadalongCoordinator {
         // Set here rather than left to the time observer: a paused player's
         // clock does not tick, so without this a paused scrub never reached
         // the scrubber or the Lock Screen.
-        bookProgress = timeline.progression(atBookTime: entry.cumulativeEnd - entry.duration)
+        bookProgress = timeline.progression(atBookTime: entry.cumulativeEnd - entry.duration + within)
         onFragmentChange?(entry.fragmentID)
         // The boundary, announced from the one funnel every seek, skip,
         // sentence, paragraph and chapter command passes through.
         //
         // `advance(to:)` cannot do it for these: this method sets
-        // `activeFragmentID` before returning, so the clock's next tick finds
-        // its `entry.fragmentID != activeFragmentID` test already false, and by
+        // `activeEntry` before returning, so the clock's next tick finds its
+        // `entry != activeEntry` test already false, and by
         // the tick after that `previousDocument` is the new document. A seek
         // across a chapter therefore fired `onChapterChange` *never* — not
         // late — so the page did not turn and `SleepTimer.chapterDidEnd()` was
@@ -297,19 +408,70 @@ public final class ReadalongCoordinator {
         movesInFlight += 1
         defer { movesInFlight -= 1 }
         if let destination {
-            await player.load(url: destination, href: entry.audioHref, startAt: entry.start)
+            // A later move into this same file, made while this load is still
+            // opening it, takes the same-file branch below and owns the
+            // playhead from then on: the player skips this load's trailing
+            // seek rather than running it over the newer one, which is what
+            // left the audio at the first target while the highlight named the
+            // second. Nothing here needs undoing — this move published before
+            // the await, and the newer one published after it.
+            //
+            // A file that will not open is a refusal, as a missing one is: the
+            // player has already stopped, and saying `true` here sent
+            // `play(from:)` on to press play over silence.
+            let outcome = await player.load(
+                url: destination, href: entry.audioHref, startAt: entry.start + within)
+            if outcome == .failed { return false }
         } else {
-            await player.seek(to: entry.start)
+            // The same refusal for an item that turns out to be dead under the
+            // seek: there is nowhere in it to land, and `true` here is what
+            // sent `play(from:)` on to press play over it.
+            await player.seek(to: entry.start + within)
+            if player.itemHasFailed { return false }
         }
         return true
     }
 
+    /// Carries on from where the narration is: the play button, and every
+    /// remote "play".
+    ///
+    /// When the file the player holds would not play, the press is a retry —
+    /// the file is opened again at the sentence the narration is on — rather
+    /// than `AudioPlayer.play()`, which refuses a dead item. Nothing else
+    /// stood that item down: the player had stopped once, when it failed, and
+    /// every later press played over it.
+    ///
+    /// - Returns: whether the narration is playing now. False when the file
+    ///   still will not open, which the caller can tell the reader.
+    @discardableResult
+    public func resume() async -> Bool {
+        if player.itemHasFailed, let entry = activeEntry {
+            return await play(from: entry)
+        }
+        player.play()
+        return player.isPlaying
+    }
+
+    /// Plays from a fragment named by id alone, falling back to the first
+    /// chapter that uses it. Best effort; a caller that knows which document
+    /// the id came from uses `seek(toFragment:inDocument:)`.
     public func seek(toFragment fragmentID: String) async {
         guard let entry = timeline.entry(forFragment: fragmentID) else { return }
         await jump(to: entry)
     }
 
-    /// Seeks by fraction of the whole book, for a scrubber.
+    /// Plays from a fragment in exactly this document, or does nothing.
+    ///
+    /// Ids are unique per document, not per book, and only Storyteller's
+    /// aligner happens to prefix them. Resolved by id alone, a tap in chapter
+    /// twelve of a book that numbers its sentences per chapter played chapter
+    /// one, and turned the page there. `document` is the archive path the
+    /// timeline uses — the reader's spine href.
+    public func seek(toFragment fragmentID: String, inDocument document: String) async {
+        guard let entry = timeline.exactEntry(forFragment: fragmentID, inDocument: document) else { return }
+        await jump(to: entry)
+    }
+
     /// Skips within the BOOK, not within the current audio file.
     ///
     /// `AudioPlayer.skip` moves the playhead inside whichever file is loaded and
@@ -337,6 +499,18 @@ public final class ReadalongCoordinator {
         await seek(toBookProgress: max(0, min(current + delta, total)) / total)
     }
 
+    /// Seeks by fraction of the whole book, for a scrubber, and for
+    /// `skipBook` — to the time that fraction names, not to the start of the
+    /// entry it falls in.
+    ///
+    /// The entry says which file and which fragment; how far into it the time
+    /// falls is the other half of the place, and it used to be thrown away, so
+    /// every scrub and skip landed at the start of the containing entry. On a
+    /// v2 book that is a sentence, a few seconds early. On a v3 book a hole or
+    /// an audio chapter is one entry minutes long: a scrub anywhere inside it
+    /// went back to its start, a thirty-second skip forward from its middle
+    /// went *backwards* — and every skip after it back to the same place — and
+    /// the reader saved that start as a position the listener had chosen.
     public func seek(toBookProgress progress: Double) async {
         // A non-finite progress is not a place in the book. Refusing it is
         // the point: the inline clamp let NaN through, `totalDuration * NaN`
@@ -346,10 +520,13 @@ public final class ReadalongCoordinator {
         guard let place = progress.asProgression else { return }
         let time = timeline.totalDuration * place
         guard let entry = timeline.entry(atBookTime: time) else { return }
+        // Past the entry's end only at the end of the book, where
+        // `entry(atBookTime:)` answers the last entry; `move` clamps it back.
+        let within = time - (entry.cumulativeEnd - entry.duration)
         // A seek is not a play button: it lands paused when paused, playing
         // when playing, exactly as the audiobook implementation of this same
         // protocol method always has.
-        if await move(to: entry) { onSeek?() }
+        if await move(to: entry, offset: within) { onSeek?() }
     }
 
     // MARK: - Actions
@@ -362,7 +539,7 @@ public final class ReadalongCoordinator {
         // Each navigation route announces its own seek, after it has moved.
         switch action {
         case .playPause:
-            player.togglePlayPause()
+            if player.isPlaying { player.pause() } else { await resume() }
         case .skipForward:
             await skipBook(by: map.skipForwardInterval)
         case .skipBackward:
@@ -379,15 +556,17 @@ public final class ReadalongCoordinator {
             await moveChapter(forward: true)
         case .previousChapter:
             await moveChapter(forward: false)
+        // Chosen, not merely set, so the speed is remembered — see
+        // `AudioPlayer.choose(rate:)`.
         case .speedUp:
-            player.rate = Float(PlaybackRate.clamped(Double(player.rate) + PlaybackRate.step))
+            player.choose(rate: Float(PlaybackRate.clamped(Double(player.rate) + PlaybackRate.step)))
         case .speedDown:
-            player.rate = Float(PlaybackRate.clamped(Double(player.rate) - PlaybackRate.step))
+            player.choose(rate: Float(PlaybackRate.clamped(Double(player.rate) - PlaybackRate.step)))
         // Discrete on purpose, never a toggle: the system sends these when it
         // has already decided which one it means, and its idea of the state —
         // the published rate — can lag `isPlaying` through a stall.
         case .play:
-            player.play()
+            await resume()
         case .pause:
             player.pause()
         case .sleepTimer, .none:
@@ -409,15 +588,15 @@ public final class ReadalongCoordinator {
         await jump(to: entry)
     }
 
+    /// From the run of the document the listener is in, to the start of the
+    /// run beside it — refused at either end of the book.
+    ///
+    /// By run, not by document name: a document the timeline visits twice is
+    /// two places, and looking it up by name found its first visit, so "next"
+    /// from the second visit went backwards and "previous" from it was refused.
     private func moveChapter(forward: Bool) async {
-        guard let current = activeEntry else { return }
-        let documents = timeline.entries.map(\.textHref).reduce(into: [String]()) { list, href in
-            if list.last != href { list.append(href) }
-        }
-        guard let index = documents.firstIndex(of: current.textHref) else { return }
-        let target = forward ? index + 1 : index - 1
-        guard documents.indices.contains(target),
-              let entry = timeline.firstEntry(inDocument: documents[target])
+        guard let current = activeEntry,
+              let entry = timeline.firstEntry(ofRunAdjacentTo: current, forward: forward)
         else { return }
         await jump(to: entry)
     }

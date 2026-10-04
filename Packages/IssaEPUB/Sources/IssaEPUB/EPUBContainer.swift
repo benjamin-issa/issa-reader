@@ -11,7 +11,12 @@ public struct EPUBArchive: Sendable {
         public let path: String
         let compressionMethod: UInt16
         let compressedSize: Int
+        /// What the central directory declares, checked against the payload
+        /// whenever the entry is read.
         let uncompressedSize: Int
+        /// The declared size where it is one the entry could have; `nil` where
+        /// it is not. See `plausibleSize`.
+        let knownSize: Int?
         let localHeaderOffset: Int
     }
 
@@ -39,18 +44,139 @@ public struct EPUBArchive: Sendable {
     /// equally made a two-page front-matter wrapper worth as much as a
     /// forty-page chapter, which is fine for a hidden Handoff payload and not
     /// good enough for a percentage on screen.
+    ///
+    /// `nil` for an entry whose declared size it could not have — see
+    /// `plausibleSize` — as well as for one that is not there.
     public func size(of path: String) -> Int? {
-        entries[Self.normalize(path)]?.uncompressedSize
+        entries[Self.normalize(path)]?.knownSize
+    }
+
+    /// What `extract(_:to:)` would write for an entry, from the central
+    /// directory — no inflate.
+    ///
+    /// `size(of:)` answers for `read`, whose whole entry is held in memory and
+    /// so is capped at `Inflate.maximumEntrySize`; a narration track past that
+    /// is streamed to disk on first open instead, up to
+    /// `maximumExtractedSize`, and the room it takes is this. `nil` for an
+    /// entry that could not have its declared size, or is not there.
+    public func extractedSize(of path: String) -> Int? {
+        guard let entry = entries[Self.normalize(path)] else { return nil }
+        return Self.plausibleSize(
+            declared: entry.uncompressedSize, compressed: entry.compressedSize,
+            method: entry.compressionMethod, archiveLength: data.count, cap: Self.maximumExtractedSize)
     }
 
     /// Inflates one entry. Throws rather than returning nil so a corrupt book
     /// reports where it failed.
+    ///
+    /// The whole entry is held in memory, so it is capped at
+    /// `Inflate.maximumEntrySize`, stored or deflated; `extract(_:to:)`
+    /// streams anything bigger.
     public func read(_ path: String) throws -> Data {
+        try read(path, maximumSize: Inflate.maximumEntrySize)
+    }
+
+    /// `read`, with the in-memory cap injectable so a test can reach it.
+    func read(_ path: String, maximumSize: Int) throws -> Data {
         let key = Self.normalize(path)
         guard let entry = entries[key] else {
             throw EPUBError.missingResource(path)
         }
-        return try extract(entry)
+        return try extract(entry, maximumSize: maximumSize)
+    }
+
+    /// The most `extract(_:to:)` will write for one entry: 4 GiB, the most a
+    /// ZIP entry without zip64 sizes can declare.
+    public static let maximumExtractedSize = 4 * 1024 * 1024 * 1024
+
+    /// Writes one entry to `destination`, a slice at a time.
+    ///
+    /// For the members too big to hold in memory — narration audio above all,
+    /// which `read`'s 256 MB cap would otherwise refuse, losing the book its
+    /// narration. Stored members are copied straight out of the mapped file in
+    /// slices of about a megabyte; deflated ones are inflated through a stream
+    /// into a buffer of the same size, under the same declared-size and ratio
+    /// checks as `read` but with `maximumExtractedSize` for a ceiling.
+    ///
+    /// Written to `<destination>.partial` and renamed into place only once
+    /// whole, so a failure — a lying entry, a full disk — never leaves a
+    /// truncated file where a caller would take it for the real one. A file
+    /// already at `destination` is replaced.
+    public func extract(_ path: String, to destination: URL) throws {
+        try extract(path, to: destination, ceiling: Self.maximumExtractedSize, sliceSize: 1 << 20)
+    }
+
+    /// `extract(_:to:)`, with the ceiling and slice size injectable for tests.
+    func extract(_ path: String, to destination: URL, ceiling: Int, sliceSize: Int) throws {
+        guard let entry = entries[Self.normalize(path)] else {
+            throw EPUBError.missingResource(path)
+        }
+        let payload = try payloadRange(of: entry)
+        let manager = FileManager.default
+        let partial = destination.deletingLastPathComponent()
+            .appendingPathComponent(destination.lastPathComponent + ".partial")
+        try? manager.removeItem(at: partial)
+        guard manager.createFile(atPath: partial.path, contents: nil) else {
+            throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: partial.path])
+        }
+        do {
+            let handle = try FileHandle(forWritingTo: partial)
+            do {
+                try write(entry, payload: payload, to: handle, ceiling: ceiling, sliceSize: sliceSize)
+                try handle.close()
+            } catch {
+                try? handle.close()
+                throw error
+            }
+            // rename(2) replaces an existing destination atomically, which
+            // `moveItem` refuses to do at all.
+            guard rename(partial.path, destination.path) == 0 else {
+                throw CocoaError(.fileWriteUnknown, userInfo: [
+                    NSFilePathErrorKey: destination.path,
+                    NSUnderlyingErrorKey: POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO),
+                ])
+            }
+        } catch {
+            try? manager.removeItem(at: partial)
+            throw error
+        }
+    }
+
+    private func write(
+        _ entry: Entry, payload: Range<Int>, to handle: FileHandle, ceiling: Int, sliceSize: Int,
+    ) throws {
+        switch entry.compressionMethod {
+        case 0:
+            // The same rule as `extract(_:maximumSize:)`: a stored entry is its
+            // own size.
+            guard entry.uncompressedSize == payload.count else {
+                throw EPUBError.malformedArchive(
+                    "stored entry declares \(entry.uncompressedSize) bytes but holds \(payload.count)")
+            }
+            guard payload.count <= ceiling else {
+                throw EPUBError.malformedArchive("entry of \(payload.count) bytes is past the ceiling")
+            }
+            var offset = payload.lowerBound
+            while offset < payload.upperBound {
+                let end = min(offset + max(sliceSize, 1), payload.upperBound)
+                // A slice of the mapped file, not a copy of it.
+                try handle.write(contentsOf: data[data.startIndex + offset ..< data.startIndex + end])
+                offset = end
+            }
+        case 8:
+            _ = try data.withUnsafeBytes { buffer in
+                try Inflate.stream(
+                    UnsafeRawBufferPointer(rebasing: buffer[payload]),
+                    expectedSize: entry.uncompressedSize, ceiling: ceiling, sliceSize: sliceSize,
+                ) { slice in
+                    try handle.write(contentsOf: Data(
+                        bytesNoCopy: UnsafeMutableRawPointer(mutating: slice.baseAddress!),
+                        count: slice.count, deallocator: .none))
+                }
+            }
+        default:
+            throw EPUBError.malformedArchive("unsupported compression \(entry.compressionMethod)")
+        }
     }
 
     /// Public because callers outside this package have to agree with it about
@@ -75,7 +201,8 @@ public struct EPUBArchive: Sendable {
 
     // MARK: - ZIP
 
-    private func extract(_ entry: Entry) throws -> Data {
+    /// Where an entry's payload sits, as offsets from the start of the archive.
+    private func payloadRange(of entry: Entry) throws -> Range<Int> {
         // The local header's name and extra-field lengths can differ from the
         // central directory's, so the payload offset must be read from it.
         //
@@ -91,27 +218,40 @@ public struct EPUBArchive: Sendable {
         guard entry.compressedSize >= 0, entry.compressedSize <= data.count - start else {
             throw EPUBError.malformedArchive("truncated entry \(entry.path)")
         }
-        let end = start + entry.compressedSize
+        return start ..< start + entry.compressedSize
+    }
 
-        // Rebased on `startIndex` like `u16`/`u32`/`u64`: `subdata(in:)` takes
-        // absolute indices, and `init(data:)` is public, so a caller handing
-        // over a slice read the wrong bytes — or past the end.
-        let payload = data.subdata(in: data.startIndex + start ..< data.startIndex + end)
+    private func extract(_ entry: Entry, maximumSize: Int) throws -> Data {
+        let range = try payloadRange(of: entry)
+        // A slice of the mapped file, not a copy of it: nothing is copied into
+        // the heap until the cap below has been applied. A book from the
+        // reader's own files can be 4 GB, and copying a multi-gigabyte member
+        // out before asking how big it was got the app killed while it was
+        // still checking the book. Rebased on `startIndex` like `u16`/`u32`/
+        // `u64`: `init(data:)` is public, so `data` may itself be a slice.
+        let payload = data[data.startIndex + range.lowerBound ..< data.startIndex + range.upperBound]
         switch entry.compressionMethod {
         case 0:
-            // A stored entry is its own uncompressed size by definition. The
-            // declared value went unchecked, so a central directory could claim
-            // 0xFFFFFFFE for a ten-byte member and `size(of:)` reported it —
-            // and that feeds `spineWeights`, the denominator of every progress
-            // figure, so one such entry made every real chapter's share round
-            // to zero and pinned the book at 0% throughout.
+            // A stored entry is its own uncompressed size by definition, so a
+            // declared size that disagrees means the archive is lying. Refused
+            // here so the read cannot return what the directory did not
+            // describe; `size(of:)` is kept from reporting the lie by
+            // `plausibleSize`, when the directory is first read, which is the
+            // guard that protects `spineWeights`.
             guard entry.uncompressedSize == payload.count else {
                 throw EPUBError.malformedArchive(
                     "stored entry declares \(entry.uncompressedSize) bytes but holds \(payload.count)")
             }
-            return payload
+            // The same in-memory cap a deflated entry answers to: stored or
+            // not, the whole of it would be held at once.
+            guard payload.count <= maximumSize else {
+                throw EPUBError.malformedArchive("entry of \(payload.count) bytes is past read's cap")
+            }
+            // Copied out here, bounded, so the caller gets bytes indexed from
+            // zero that do not pin the mapping.
+            return Data(payload)
         case 8:
-            return try Inflate.raw(payload, expectedSize: entry.uncompressedSize)
+            return try Inflate.raw(payload, expectedSize: entry.uncompressedSize, maximumSize: maximumSize)
         default:
             throw EPUBError.malformedArchive("unsupported compression \(entry.compressionMethod)")
         }
@@ -224,10 +364,42 @@ public struct EPUBArchive: Sendable {
                 compressionMethod: method,
                 compressedSize: compressed,
                 uncompressedSize: uncompressed,
+                knownSize: plausibleSize(
+                    declared: uncompressed, compressed: compressed, method: method, archiveLength: data.count),
                 localHeaderOffset: localOffset,
             )
         }
         return result
+    }
+
+    /// The declared uncompressed size, if the entry could have it.
+    ///
+    /// `size(of:)` feeds `spineWeights`, the denominator of every progress
+    /// figure, straight from the central directory — before and regardless of
+    /// any read. A directory claiming 0xFFFFFFFE for a ten-byte member made
+    /// every real chapter's share round to zero and pinned the book at 0%
+    /// throughout, and the check that read made came too late to help. So the
+    /// claim is bounded here, when it is first seen: a stored entry is its own
+    /// size; a deflated one cannot exceed what its payload could decode to
+    /// (`Inflate.plausibleCeiling`), nor what `read` would ever return. Past
+    /// either, the size is unknown — and an entry that lies about it fails its
+    /// read anyway, so weighing it as nothing costs nothing real.
+    ///
+    /// And never more than the archive could hold: the payload is inside the
+    /// file or it is nowhere. A zip64 extra field can declare any size up to
+    /// `Int.max` for a stored member, and that claim, reported as the member's
+    /// size, overflowed the import's arithmetic — a trap while the book was
+    /// being checked, where a damaged-book message belonged.
+    ///
+    /// - Parameter cap: the most the caller would ever hold or write: `read`'s
+    ///   in-memory cap by default, `maximumExtractedSize` for `extract`.
+    static func plausibleSize(
+        declared: Int, compressed: Int, method: UInt16, archiveLength: Int,
+        cap: Int = Inflate.maximumEntrySize,
+    ) -> Int? {
+        guard declared >= 0, compressed >= 0, compressed <= archiveLength else { return nil }
+        if method == 0 { return declared == compressed && declared <= cap ? declared : nil }
+        return declared <= Inflate.plausibleCeiling(compressedSize: compressed, cap: cap) ? declared : nil
     }
 
     private static func readZip64Extra(

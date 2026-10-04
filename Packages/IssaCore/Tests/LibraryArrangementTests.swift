@@ -12,13 +12,18 @@ struct LibraryArrangementTests {
         _ title: String, author: String = "Someone", status: String? = nil,
         progress: Double? = nil, tags: [String] = [], duration: Double? = nil,
         positionTimestamp: Double? = nil, createdAt: String? = nil,
-        narrator: String? = nil,
+        narrator: String? = nil, series: [(name: String, position: Double?)] = [],
     ) -> Book {
         var json: [String: Any] = [
             "uuid": title, "title": title,
             "authors": [["uuid": author, "name": author, "fileAs": author]],
             "narrators": narrator.map { [["uuid": $0, "name": $0, "fileAs": $0]] } ?? [],
-            "creators": [], "series": [], "collections": [],
+            "creators": [], "collections": [],
+            "series": series.map { membership -> [String: Any] in
+                var row: [String: Any] = ["uuid": membership.name, "name": membership.name]
+                if let position = membership.position { row["position"] = position }
+                return row
+            },
             "identifiers": [],
             "tags": tags.map { ["uuid": $0, "name": $0] },
         ]
@@ -57,8 +62,10 @@ struct LibraryArrangementTests {
         #expect(sorted.map(\.title) == ["Read today", "Read yesterday", "Never opened"])
     }
 
-    /// Status names belong to the server — an admin can rename them — so the
-    /// shelves match loosely rather than against a fixed vocabulary.
+    /// Status names belong to the server, so the shelves match loosely rather
+    /// than against a fixed vocabulary. 2.14.21 ships only the three built-ins
+    /// and cannot rename them, so there the looseness is defensive; 3.x lets an
+    /// admin add statuses of their own, which is where it earns its keep.
     @Test("shelves match renamed statuses")
     func shelves() {
         let books = [
@@ -95,6 +102,16 @@ struct LibraryArrangementTests {
         #expect(arrangement.apply(to: books).map(\.title) == ["Both"])
         #expect(arrangement.isFiltering)
         #expect(!LibraryArrangement().isFiltering)
+    }
+
+    /// "With audio" promised narration for a book whose audio row has no file
+    /// behind it, or one the server has lost — a book whose own screen then
+    /// offered nothing to listen to.
+    @Test("the audio shelf holds only audio the server can serve")
+    func audioShelfHoldsOnlyServableAudio() throws {
+        let books = try UnservableAudio.books()
+        let shelf = LibraryArrangement(sort: .title, shelf: .withNarration).apply(to: books)
+        #expect(shelf.map(\.title) == [UnservableAudio.playable])
     }
 
     @Test("the downloaded shelf asks the app, which is the only thing that knows")
@@ -245,6 +262,99 @@ struct LibraryArrangementTests {
         ]
         let sorted = LibraryArrangement(sort: .narrator, ascending: true).apply(to: books)
         #expect(sorted.map(\.title) == ["Zeta", "Alpha", "No narrator"])
+    }
+
+    /// What the sort is for: a shelf that reads in the order the books were
+    /// written, with the novella between its neighbours and the books that
+    /// belong to no sequence out of the way at the end.
+    @Test("series sort reads each series in order, standalone books last")
+    func seriesSort() {
+        let books = [
+            book("Alone"),
+            book("Second", series: [(name: "Gothic Horror", position: 2)]),
+            book("Interlude", series: [(name: "Gothic Horror", position: 1.5)]),
+            book("First", series: [(name: "Gothic Horror", position: 1)]),
+            book("Another shelf", series: [(name: "Aviation", position: 1)]),
+            book("A standalone"),
+        ]
+        let sorted = LibraryArrangement(sort: .series).apply(to: books)
+        #expect(sorted.map(\.title) == [
+            "Another shelf", "First", "Interlude", "Second", "Alone", "A standalone",
+        ])
+    }
+
+    /// The bucket with nothing to compare stays put, the rule `.recent` and
+    /// `.narrator` follow: reversing the whole array would have put a
+    /// library's unseried majority ahead of the sequences this sort exists to
+    /// show.
+    @Test("reversed series order still keeps standalone books at the end")
+    func seriesSortReversed() {
+        let books = [
+            book("Alone"),
+            book("Second", series: [(name: "Gothic Horror", position: 2)]),
+            book("First", series: [(name: "Gothic Horror", position: 1)]),
+            book("Another shelf", series: [(name: "Aviation", position: 1)]),
+        ]
+        let sorted = LibraryArrangement(sort: .series, ascending: true).apply(to: books)
+        #expect(sorted.map(\.title) == ["Second", "First", "Another shelf", "Alone"])
+    }
+
+    /// An unnumbered book has no place in the run; it goes after the numbered
+    /// ones rather than ahead of book one.
+    @Test("an unnumbered book sorts after its numbered siblings")
+    func seriesSortPutsUnnumberedLast() {
+        let books = [
+            book("Companion", series: [(name: "Gothic Horror", position: nil)]),
+            book("Second", series: [(name: "Gothic Horror", position: 2)]),
+            book("First", series: [(name: "Gothic Horror", position: 1)]),
+        ]
+        #expect(LibraryArrangement(sort: .series).apply(to: books).map(\.title)
+            == ["First", "Second", "Companion"])
+        #expect(LibraryArrangement(sort: .series, ascending: true).apply(to: books).map(\.title)
+            == ["Second", "First", "Companion"])
+    }
+
+    /// The badge and the caption take the numbered membership, so the sort
+    /// has to file the book under that same series or the shelf and the cover
+    /// would name two different ones.
+    @Test("a book in two series files under the one it is numbered in")
+    func seriesSortFollowsThePrimarySeries() {
+        let books = [
+            book("Omnibus", series: [
+                (name: "Publisher's Library", position: nil), (name: "Gothic Horror", position: 2),
+            ]),
+            book("First", series: [(name: "Gothic Horror", position: 1)]),
+        ]
+        #expect(LibraryArrangement(sort: .series).apply(to: books).map(\.title)
+            == ["First", "Omnibus"])
+    }
+
+    /// A raw value nothing has ever stored: an arrangement written by a build
+    /// that predates this sort has to decode with every other field intact.
+    @Test("an older stored arrangement is untouched by the new sort")
+    func seriesSortIsANewRawValue() throws {
+        let json = #"{"sort":"narrator","ascending":true,"shelf":"reading","tags":[]}"#
+        let restored = try JSONDecoder().decode(LibraryArrangement.self, from: Data(json.utf8))
+        #expect(restored.sort == .narrator)
+        #expect(LibraryArrangement.Sort.allCases.contains(.series))
+        #expect(LibraryArrangement.Sort.series.title == "Series")
+    }
+
+    /// The other direction: a build that has never heard of this sort.
+    ///
+    /// An older binary reading a blob written here decodes field by field and
+    /// treats a sort it does not recognise as absent, so the reader loses the
+    /// sort and keeps the shelf, the tags and the direction. The forward test
+    /// above never checked that, and a synthesised decoder would have failed
+    /// the whole blob and reset all four.
+    @Test("an unknown sort costs the sort and nothing else")
+    func anUnknownSortDoesNotResetEverything() throws {
+        let json = #"{"sort":"chronological","ascending":true,"shelf":"reading","tags":["Gothic"]}"#
+        let restored = try JSONDecoder().decode(LibraryArrangement.self, from: Data(json.utf8))
+        #expect(restored.sort == LibraryArrangement().sort)
+        #expect(restored.shelf == .reading)
+        #expect(restored.tags == ["Gothic"])
+        #expect(restored.ascending)
     }
 
     /// A sort with no sentinel bucket must still actually reverse.

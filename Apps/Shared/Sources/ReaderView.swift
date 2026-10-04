@@ -10,8 +10,8 @@ import IssaRender
 import IssaUI
 import SwiftUI
 #if !os(tvOS)
-// Not on the television: FoundationModels is not in that SDK, and there is no
-// Ask anywhere on it.
+// Not on the television: FoundationModels is unavailable there (the 27 SDK
+// ships it, every symbol marked unavailable), and there is no Ask anywhere on it.
 import IssaAsk
 #endif
 #if canImport(UIKit)
@@ -37,28 +37,64 @@ import UIKit
 /// this screen build a second one.
 public struct ReaderScreen: View {
     @Environment(AppModel.self) private var app
+    @Environment(\.dismiss) private var dismiss
     @Environment(PlaybackSettings.self) private var settings
+    #if !os(tvOS)
+    /// The library a book from the reader's files keeps its writes in. Absent
+    /// on the television, which has no local books.
+    @Environment(LocalLibrary.self) private var local: LocalLibrary?
+    #endif
     @State private var model: ReaderModel?
     private let book: Book
-    private let session: Session
+    /// The server's session, or nil for a book from the reader's files.
+    private let session: Session?
 
     public init(book: Book, session: Session) {
         self.book = book
         self.session = session
     }
 
+    #if !os(tvOS)
+    /// A book the reader added from their own files: its writes go to the
+    /// local library, and nothing about it to any server.
+    public init(localBook book: Book) {
+        self.book = book
+        session = nil
+    }
+    #endif
+
     public var body: some View {
         ZStack {
             // The page's own ground for the one update before the model lands,
             // so a cover that is sliding up is never briefly the wrong colour.
             settings.readerStyle.theme.background.ignoresSafeArea()
-            if let model {
+            // Not a reader an account has left: nothing of the departed
+            // account's book stays on screen while this closes.
+            if let model, !app.hasLeft(model) {
                 ReaderView(model: model)
             }
         }
-        .onAppear {
-            if model == nil { model = app.reader(for: book, session: session) }
+        // Closed when the account it was opened under is left. A same-server
+        // switch keeps the library on screen, and with it the iPhone's cover
+        // and the model it holds: the departed account's book stood open over
+        // the arriving account's library. Its hooks are fenced, so it wrote
+        // nothing, but every page turn went nowhere and it was the departed
+        // account's to read.
+        .onChange(of: model.map { app.hasLeft($0) } ?? false) { _, left in
+            if left { dismiss() }
         }
+        .onAppear {
+            guard model == nil else { return }
+            if let session {
+                model = app.reader(for: book, session: session)
+            } else {
+                #if !os(tvOS)
+                if let local { model = app.reader(for: book, persistence: local) }
+                #endif
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("screen.reader")
     }
 }
 
@@ -152,6 +188,8 @@ public struct ReaderView: View {
     /// rather than presenting a sheet of its own.
     @Environment(\.openWindow) private var openWindow
     private var isActiveScene: Bool { controlActiveState == .key }
+    /// This window, to `KeyReaderNarration`.
+    @State private var narrationToken = UUID()
     /// Whether the page holds the keyboard, which is what the bare arrow keys
     /// below depend on. Tracked rather than left to SwiftUI because a sheet
     /// takes the keyboard and does not hand it back: after closing the player —
@@ -317,7 +355,9 @@ public struct ReaderView: View {
         }
         #if os(iOS) || os(macOS)
         // Handoff: the same book, at the same place, on the Mac or the iPad.
-        .userActivity(BookActivity.type) { activity in
+        // Not for a book from the reader's own files, which is never sent
+        // anywhere — and the other device could not open it anyway.
+        .userActivity(BookActivity.type, isActive: model.publishesToSystem) { activity in
             let made = BookActivity.make(book: model.book, progress: model.bookProgress)
             activity.title = made.title
             activity.userInfo = made.userInfo
@@ -544,6 +584,11 @@ public struct ReaderView: View {
         }
     }
 
+    private func reportNarration() {
+        KeyReaderNarration.shared.update(
+            token: narrationToken, isKey: isActiveScene, isNarrated: model.hasNarration)
+    }
+
     /// What each reading command does, in one place.
     private func perform(_ command: ReaderCommand) {
         switch command {
@@ -565,6 +610,9 @@ public struct ReaderView: View {
         case .ask:
             guard showsAskPill else { return }
             showsAsk = true
+        case .playPause:
+            guard model.hasNarration else { return }
+            Task { await model.togglePlayback() }
         case .volumeUp, .volumeDown:
             guard model.hasNarration else { return }
             VolumeTrimControl.nudge(
@@ -876,6 +924,15 @@ public struct ReaderView: View {
 
             footer
         }
+        // A chapter that would not open, said over the page it left in place.
+        // Below the top bar's reserve, which the bar may be drawn over.
+        .overlay(alignment: .top) {
+            ChapterNoticeBanner(model: model, style: .reader)
+                .padding(.horizontal, Metrics.spacing24)
+                .padding(.top, Metrics.spacing12)
+                .padding(.top, Self.drawsOwnTopBar ? ReaderChrome.barHeight : 0)
+        }
+        .animation(.easeInOut(duration: 0.2), value: model.chapterNotice)
         // Turning the page dismisses a selection left behind on the old one,
         // the way scrolling dismisses a selection anywhere else. But only one
         // left behind: `go(to:)` sets the page and the found text's selection
@@ -936,7 +993,9 @@ public struct ReaderView: View {
         // Land on the page being spoken, if the book carried on while the
         // reader was elsewhere in the app.
         .task { await model.syncToNarration() }
-        .task { model.loadAnnotations(await app.annotations(for: model.book.uuid)) }
+        // From whichever store this book's marks are kept in: the server's
+        // for a server book, the device's for one from the reader's files.
+        .task { model.loadAnnotations(await model.loadStoredAnnotations?() ?? []) }
         #if os(macOS)
         // Menu commands arrive as notifications; only the frontmost reader
         // window is active, so only it responds. Each one routes through
@@ -975,6 +1034,15 @@ public struct ReaderView: View {
         .onReceive(NotificationCenter.default.publisher(for: ReaderCommand.ask.notification)) { _ in
             if isActiveScene { perform(.ask) }
         }
+        .onReceive(NotificationCenter.default.publisher(for: ReaderCommand.playPause.notification)) { _ in
+            if isActiveScene { perform(.playPause) }
+        }
+        // Says whether this is the narrated book in front, for Playback ›
+        // Play — which otherwise had nothing to act on until narration had
+        // been started from the page. Each window clears only itself.
+        .onChange(of: isActiveScene, initial: true) { reportNarration() }
+        .onChange(of: model.hasNarration) { reportNarration() }
+        .onDisappear { KeyReaderNarration.shared.left(narrationToken) }
         #endif
         // A re-resolve, not an assignment: `model.style = settings.readerStyle`
         // would throw away this book's own settings the moment the reader

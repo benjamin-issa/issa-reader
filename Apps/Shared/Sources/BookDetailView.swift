@@ -32,6 +32,9 @@ public struct BookDetailView: View {
     @State private var showsPlayer = false
     #if os(macOS)
     @Environment(\.openWindow) private var openWindow
+    /// Present only inside the Mac's library window, where the inspector
+    /// lives; nil in a reader window and everywhere else.
+    @Environment(MacBookSelection.self) private var selection: MacBookSelection?
     #endif
     /// The book as it was when this screen opened. Identity only — everything
     /// drawn comes from `book` below.
@@ -96,7 +99,7 @@ public struct BookDetailView: View {
                         .textSelection(.enabled)
                         #endif
                 }
-                if !book.tags.isEmpty { tags }
+                if !book.distinctTags.isEmpty { tags }
                 facts
                 // Editions are a fetch-a-file detail, not a reading choice, so
                 // they sit one disclosure down (item 03) rather than competing
@@ -112,13 +115,25 @@ public struct BookDetailView: View {
             .padding(Metrics.screenMargin)
             // The scroll view centres content that overflows its cross axis,
             // which turns one over-wide subview into wrong margins for the
-            // whole screen. Pinning the width to the container makes that
-            // failure visible as clipping inside one row instead.
-            .containerRelativeFrame(.horizontal)
+            // whole screen. Pinning the width makes that failure visible as
+            // clipping inside one row instead — but where the width comes from
+            // depends on whether this view is the screen or a column beside
+            // one, so the two cases ask differently. See `pinnedToContainerWidth`.
+            .pinnedToContainerWidth(layout)
         }
         .accessibilityIdentifier("screen.bookDetail")
         .background(Palette.paper)
-        .navigationTitle(book.title)
+        // A menu on one of this page's rail covers pushes on top of this
+        // page, and does not offer the way back to it.
+        .bookRoutes(place: .book(initialBook.uuid))
+        // Omitted in the inspector, not emptied. There the detail is a sibling
+        // of the library's navigation stack rather than a screen inside it, so
+        // this preference reached the split view's detail column and won the
+        // window title from the shelf — clicking a cover under "Downloads"
+        // retitled the window "Dracula". An empty title would have won it just
+        // as surely and left the window with no name at all. The phone and the
+        // reader window are unaffected: there this view *is* the screen.
+        .navigationTitle(book.title, when: layout != .inspector)
         // Writing a position moves the status server-side, so the shelf shown
         // here is stale after a reading session unless it is re-read.
         .task { await app.refresh(book: book) }
@@ -234,6 +249,7 @@ public struct BookDetailView: View {
                             .foregroundStyle(Palette.inkSecondary)
                     }
                 }
+                seriesLines
                 Text(book.byline)
                     .font(Typography.callout)
                     .foregroundStyle(Palette.inkSecondary)
@@ -254,6 +270,105 @@ public struct BookDetailView: View {
                         .font(Typography.caption)
                         .foregroundStyle(Palette.inkTertiary)
                 }
+        }
+    }
+
+    /// Which series the book belongs to, and where in it.
+    ///
+    /// In the hero rather than among the Details below the description: a
+    /// reader deciding whether this is the one to start with should not have
+    /// to scroll past a synopsis to learn it is the third. The related rail
+    /// further down shows the rest of the series; this is the sentence that
+    /// says there is one.
+    ///
+    /// One line per membership, because a book can be in two and naming only
+    /// the first is silently wrong for it. Each is its own element rather than
+    /// a phrase welded onto the title, for the reason the subtitle above gives:
+    /// the screen's container is `children: .contain`, so VoiceOver reads
+    /// title, subtitle, series, author in that order.
+    ///
+    /// The count comes from the library rather than the book — the server
+    /// numbers a book within a series but never says how long the series is —
+    /// so a book alone in its series has no group, no count, and reads
+    /// "Gothic Horror · Book 1".
+    ///
+    /// The count is the group's `statedCount` — said only when the books held
+    /// are exactly the series' first N — rather than how many it holds, which
+    /// put "Book 2 of 2" beside a "Book 3" in the same library.
+    @ViewBuilder
+    private var seriesLines: some View {
+        let groups = app.rails.series
+        let firstLinked = Self.firstLinkedSeriesID(book.series, groups: groups)
+        ForEach(book.series) { membership in
+            let group = groups.first { $0.name == membership.name }
+            let text = SeriesText.label(for: membership, in: group)
+            if group != nil {
+                // A series with more than one book has a screen; a book alone
+                // in its series has nowhere to go.
+                pageLink(.series(membership.name)) { seriesLine(text, showsLink: true) }
+                    .buttonStyle(.plain)
+                    // On the first link only. A subscript query resolves to
+                    // exactly one element, so a book in two grouped series used
+                    // to raise "multiple matching elements" in the sweep
+                    // instead of tapping.
+                    .accessibilityIdentifier(membership.id == firstLinked ? "bookDetail.series" : "")
+            } else {
+                seriesLine(text, showsLink: false)
+            }
+        }
+    }
+
+    /// The membership whose line is the first *link*, which is the one the
+    /// identifier goes on.
+    ///
+    /// Not simply the first membership: when that one is a series of one —
+    /// plain text, no screen — the identifier sat on no link at all, and a
+    /// book whose second series did have a screen had no element to find.
+    static func firstLinkedSeriesID(
+        _ memberships: [SeriesMembership], groups: [SeriesGroup],
+    ) -> SeriesMembership.ID? {
+        memberships.first { membership in
+            groups.contains { $0.name == membership.name }
+        }?.id
+    }
+
+    /// The control that opens a series or tag screen from this page.
+    ///
+    /// A link into the enclosing stack everywhere but the Mac's inspector,
+    /// which has no stack: there it asks the window to push instead, for the
+    /// reason `MacBookSelection.pushed` gives. One helper for both, building
+    /// the page through `BookRouter.destination(for:)`, where the series line
+    /// and the tag chips each had a copy.
+    @ViewBuilder
+    private func pageLink(_ route: BookRouter.Route, @ViewBuilder label: () -> some View) -> some View {
+        #if os(macOS)
+        if layout == .inspector, let selection {
+            Button { selection.pushed = route } label: { label() }
+        } else {
+            NavigationLink { BookRouter.destination(for: route) } label: { label() }
+        }
+        #else
+        NavigationLink { BookRouter.destination(for: route) } label: { label() }
+        #endif
+    }
+
+    /// The line itself, in the hero's own secondary voice so it reads as one
+    /// of the facts about the book rather than as a second heading.
+    ///
+    /// A chevron rather than the `arrow.up.right` the Details rows use for an
+    /// identifier: that one leaves the app for a web page, this one pushes a
+    /// screen inside it, and a reader should be able to tell those apart before
+    /// tapping. The affordance is the mark alone, with no tint on the value.
+    private func seriesLine(_ text: String, showsLink: Bool) -> some View {
+        HStack(spacing: Metrics.spacing4) {
+            Text(text)
+                .font(Typography.callout)
+                .foregroundStyle(Palette.inkSecondary)
+            if showsLink {
+                Image(systemName: "chevron.forward")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Palette.tangerine)
+            }
         }
     }
 
@@ -513,8 +628,20 @@ public struct BookDetailView: View {
         // five stars") audible on entry, while the individual star buttons stay
         // separately focusable so the rating can still be changed.
         .accessibilityElement(children: .contain)
-        .accessibilityLabel(mine.map { "Your rating, \(Int($0)) star\($0 == 1 ? "" : "s")" }
-            ?? "Your rating, not rated. Rate this book from one to five stars.")
+        .accessibilityLabel(Self.ratingLabel(mine))
+    }
+
+    /// What VoiceOver says on entering the rating row.
+    ///
+    /// The count is clamped to the five stars there are before it becomes an
+    /// `Int`, by `StarRating.wholeStars`, the clamp the rest of the app uses.
+    /// The rating is the server's number, decoded as any `Double`, and
+    /// `Int(1e300)` is not a wrong answer but a crash — every time the book's
+    /// page opened, until a refresh replaced the value.
+    static func ratingLabel(_ mine: Double?) -> String {
+        guard let mine else { return "Your rating, not rated. Rate this book from one to five stars." }
+        let stars = StarRating.wholeStars(mine)
+        return "Your rating, \(stars) star\(stars == 1 ? "" : "s")"
     }
 
     /// Not a control of its own — the stars are — just the cue that makes the
@@ -576,16 +703,59 @@ public struct BookDetailView: View {
     }
 
     /// The shelf this book sits on, changeable in place.
+    ///
+    /// Every word a reader sees or hears here is `displayName`, the server's
+    /// label: a 3.x admin who renamed "Read" to "Finished" sees "Finished" in
+    /// the web app, and the same book saying "Read" here would look like a
+    /// different shelf. On the phone the pill's glyph stays on `name`; see
+    /// `symbol(for:)`. The Mac's pop-up has no glyph and shows the label alone.
     private var statusControl: some View {
+        #if os(macOS)
+        // A pop-up button, not the pill. A Mac `Menu` draws its own bezel and
+        // indicator around its label, so the pill's capsule and chevrons came
+        // out as a second control inside the first. A book has one status, so
+        // this is a one-of choice, and a pop-up is the Mac's control for that:
+        // its title is the current status and its menu checks it.
+        //
+        // The first row is there only while the selection matches no status,
+        // because a pop-up whose selection matches none of its items shows a
+        // blank title. Storyteller 3 lets a book have no status, and a status
+        // the list has not loaded yet is the same case. Tagged with
+        // `book.status?.uuid` — the value `statusSelection` reads, nil when
+        // the book has no status — so it matches in both. Choosing it does
+        // nothing (see `statusSelection`), and there is deliberately no item
+        // that clears a status: the phone has none either.
+        // The title is the spoken label. `.labelsHidden()` keeps it off the
+        // screen but not out of VoiceOver, and a separate `accessibilityLabel`
+        // is appended to it rather than replacing it: the pop-up read out as
+        // "Reading status, Change reading status".
+        Picker(book.status == nil ? "Set reading status" : "Change reading status",
+               selection: statusSelection) {
+            if !app.statuses.contains(where: { $0.uuid == book.status?.uuid }) {
+                Text(book.status?.displayName ?? "Set status").tag(book.status?.uuid)
+            }
+            ForEach(app.statuses) { status in
+                Text(status.displayName).tag(Optional(status.uuid))
+            }
+        }
+        .pickerStyle(.menu)
+        .labelsHidden()
+        .controlSize(.small)
+        // On the control rather than inside a label: `FlowRow` measures what
+        // it is given, and a pop-up left flexible would take the whole row.
+        .fixedSize()
+        .disabled(app.statuses.isEmpty)
+        .accessibilityValue(book.status?.displayName ?? "None")
+        #else
         Menu {
             ForEach(app.statuses) { status in
                 Button {
                     Task { await app.setStatus(status, for: book) }
                 } label: {
                     if status.uuid == book.status?.uuid {
-                        Label(status.name, systemImage: "checkmark")
+                        Label(status.displayName, systemImage: "checkmark")
                     } else {
-                        Text(status.name)
+                        Text(status.displayName)
                     }
                 }
             }
@@ -593,7 +763,7 @@ public struct BookDetailView: View {
             HStack(spacing: Metrics.spacing4) {
                 Image(systemName: Self.symbol(for: book.status?.name))
                     .font(.system(size: 11))
-                Text(book.status?.name ?? "Set status")
+                Text(book.status?.displayName ?? "Set status")
                     .font(Typography.caption)
                 Image(systemName: "chevron.up.chevron.down")
                     .font(.system(size: 8))
@@ -608,9 +778,30 @@ public struct BookDetailView: View {
         // The pill's own text is a bare shelf name; VoiceOver needs the verb.
         // The current shelf is the value, so it is not repeated in the label.
         .accessibilityLabel(book.status == nil ? "Set reading status" : "Change reading status")
-        .accessibilityValue(book.status?.name ?? "None")
+        .accessibilityValue(book.status?.displayName ?? "None")
+        #endif
     }
 
+    #if os(macOS)
+    /// The Mac pop-up's selection: the uuid of the book's status.
+    ///
+    /// Setting it files the book through the same call the phone's menu
+    /// makes. A uuid that names no loaded status — the placeholder row — is
+    /// ignored rather than written, so choosing "Set status" changes nothing.
+    private var statusSelection: Binding<String?> {
+        Binding(
+            get: { book.status?.uuid },
+            set: { uuid in
+                guard let status = app.statuses.first(where: { $0.uuid == uuid }) else { return }
+                Task { await app.setStatus(status, for: book) }
+            },
+        )
+    }
+    #endif
+
+    /// Takes the status's `name`, never its label. 3.x keeps the built-in
+    /// names fixed and puts any rewording in the label, so the name is what
+    /// still says which built-in a status is — "Finished" is still `Read`.
     static func symbol(for status: String?) -> String {
         switch status {
         case Status.readingName: "book"
@@ -651,21 +842,70 @@ public struct BookDetailView: View {
             .foregroundStyle(Palette.inkSecondary)
     }
 
+    /// The book's tags, each once, the ones shared with another book leading
+    /// to that tag's page.
+    ///
+    /// A tag on this book alone stays a plain label: its page would hold this
+    /// book and nothing else. A linked chip is the same quiet capsule with the
+    /// series line's tangerine chevron after the name — the mark that already
+    /// means "goes somewhere in the app" two inches up — so it reads as
+    /// tappable without shouting.
+    ///
+    /// On a touch screen every chip sits in a 44-point frame with no gap
+    /// between rows, so the rows pitch at the tap floor and the capsules keep
+    /// their size; the Mac's inspector is clicked, not tapped, and keeps the
+    /// capsules 8 points apart.
     private var tags: some View {
-        VStack(alignment: .leading, spacing: Metrics.spacing8) {
+        let tags = book.distinctTags
+        let byTag = app.booksByTag
+        let firstLinked = Self.firstLinkedTagID(tags, booksByTag: byTag)
+        return VStack(alignment: .leading, spacing: Self.tagRowSpacing) {
             Text("Tags").overlineStyle()
-            FlowRow(spacing: Metrics.spacing8) {
-                ForEach(book.tags) { tag in
-                    Text(tag.name)
-                        .font(Typography.caption)
-                        .padding(.horizontal, Metrics.spacing8)
-                        .padding(.vertical, 4)
-                        .background(Palette.surface, in: Capsule())
-                        .overlay(Capsule().strokeBorder(Palette.border, lineWidth: 1))
-                        .foregroundStyle(Palette.inkSecondary)
+            FlowRow(spacing: Metrics.spacing8, lineSpacing: Self.tagRowSpacing) {
+                ForEach(tags) { tag in
+                    if Self.isLinked(tag.name, booksByTag: byTag) {
+                        tagLink(to: tag.name)
+                            .accessibilityIdentifier(tag.id == firstLinked ? "bookDetail.tag" : "")
+                    } else {
+                        TagChip(name: tag.name, isLinked: false, isPressed: false)
+                    }
                 }
             }
         }
+    }
+
+    #if os(macOS)
+    private static let tagRowSpacing: CGFloat = Metrics.spacing8
+    #else
+    private static let tagRowSpacing: CGFloat = 0
+    #endif
+
+    /// Whether a tag is shared widely enough to have a page: the floor the
+    /// Browse screen's tag rails use. Never on a television, which has no tag
+    /// page to go to.
+    static func isLinked(_ name: String, booksByTag: [String: [Book]]) -> Bool {
+        #if os(tvOS)
+        false
+        #else
+        (booksByTag[name]?.count ?? 0) >= LibraryRails.minimumBooksPerTag
+        #endif
+    }
+
+    /// The first linked chip, which carries the identifier — the trick the
+    /// series line plays, for the same reason: a query for it must find one
+    /// element.
+    static func firstLinkedTagID(_ tags: [Tag], booksByTag: [String: [Book]]) -> Tag.ID? {
+        tags.first { isLinked($0.name, booksByTag: booksByTag) }?.id
+    }
+
+    /// Opens a tag's page: pushed on the phone, and on the Mac asked of the
+    /// window, as the series line is.
+    @ViewBuilder
+    private func tagLink(to name: String) -> some View {
+        pageLink(.tag(name)) { Text(name) }
+            .buttonStyle(TagChipStyle(name: name))
+        .accessibilityLabel(name)
+        .accessibilityHint("Shows all books with this tag.")
     }
 
     /// Editions and their download state, one disclosure down (items 02 & 03).
@@ -742,6 +982,33 @@ public struct BookDetailView: View {
         _ title: String, format: BookContentService.Format,
         detail: String, size: Int?, missing: Bool,
     ) -> some View {
+        VStack(alignment: .leading, spacing: Metrics.spacing4) {
+            editionLine(title, format: format, detail: detail, size: size, missing: missing)
+            // Why "Save for offline" did nothing. The Wi-Fi-only rule refuses
+            // before any transfer exists, so the status beside the edition
+            // never moved and the tap looked ignored.
+            if !missing, let refusal = Self.refusal(for: book, format: format, in: app.downloadRefusals) {
+                Text(refusal)
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.alert)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(Metrics.spacing12)
+    }
+
+    /// What the app said when this edition's download was refused, if it was.
+    static func refusal(
+        for book: Book, format: BookContentService.Format,
+        in refusals: [DownloadManager.Job: String],
+    ) -> String? {
+        refusals[DownloadManager.Job(bookUUID: book.uuid, format: format)]
+    }
+
+    private func editionLine(
+        _ title: String, format: BookContentService.Format,
+        detail: String, size: Int?, missing: Bool,
+    ) -> some View {
         HStack(spacing: Metrics.spacing8) {
             Text(title).font(Typography.callout).foregroundStyle(Palette.ink)
             Spacer()
@@ -767,7 +1034,6 @@ public struct BookDetailView: View {
                 editionMenu(for: format)
             }
         }
-        .padding(Metrics.spacing12)
     }
 
     private func editionNote(_ text: String) -> some View {
@@ -823,6 +1089,13 @@ public struct BookDetailView: View {
                 }
             }
         } label: {
+            #if os(macOS)
+            // The bare glyph. The Mac's pull-down draws its own bezel and
+            // indicator around the label and is clicked, not tapped, so the
+            // 44pt touch frame and the tint below only built a second button
+            // inside the first. The tooltip names the edition the icon doesn't.
+            Image(systemName: "ellipsis.circle")
+            #else
             Image(systemName: "ellipsis.circle")
                 .font(.system(size: 17))
                 .foregroundStyle(Palette.tangerine)
@@ -830,32 +1103,31 @@ public struct BookDetailView: View {
                 // this the tap target was the glyph's 17pt bounds.
                 .frame(width: 44, height: 44)
                 .contentShape(Rectangle())
+            #endif
         }
+        #if os(macOS)
+        .controlSize(.small)
+        .help("\(format.displayName) options")
+        #endif
         .accessibilityLabel("\(format.displayName) options")
         #endif
+    }
+
+    /// The year a book was published, read in UTC.
+    ///
+    /// Formatted in the device's own zone, a reader west of Greenwich saw
+    /// "Published 1993" here over "1994" in the More by page's caption. Both
+    /// now ask `PublishedYearText`, so the two cannot drift apart again.
+    nonisolated static func publishedYear(_ date: Date) -> String {
+        PublishedYearText.text(date)
     }
 
     private var facts: some View {
         VStack(alignment: .leading, spacing: Metrics.spacing8) {
             Text("Details").overlineStyle()
             VStack(spacing: 1) {
-                if let series = book.series.first {
-                    let text = series.position.map { "\(series.name) · \(Self.positionText($0))" } ?? series.name
-                    if app.rails.series.contains(where: { $0.name == series.name }) {
-                        // A series with more than one book has a screen; a
-                        // book alone in its series has nowhere to go.
-                        NavigationLink {
-                            SeriesView(name: series.name)
-                        } label: {
-                            factRow("Series", text, showsLink: true)
-                        }
-                        .buttonStyle(.plain)
-                    } else {
-                        factRow("Series", text)
-                    }
-                }
                 if let published = book.publicationDate?.value {
-                    factRow("Published", published.formatted(.dateTime.year()))
+                    factRow("Published", Self.publishedYear(published))
                 }
                 if let language = book.language { factRow("Language", language.uppercased()) }
                 if !book.collections.isEmpty {
@@ -948,11 +1220,18 @@ public struct BookDetailView: View {
         let byAuthor = app.booksByAuthor
         let byNarrator = app.booksByNarrator
         return VStack(alignment: .leading, spacing: Metrics.spacing24) {
-            if let series = book.series.first,
+            // `primarySeries`, like the badge, the caption, the sort and the
+            // hero. On `series.first` an omnibus filed first under an unnumbered
+            // publisher's shelf showed a "2" on its cover, "Gothic Horror · Book
+            // 2" beneath it, a hero linking Gothic Horror — and then a rail of
+            // the publisher's shelf, or no rail at all when that shelf held one
+            // book.
+            if let series = book.primarySeries,
                let siblings = app.rails.series.first(where: { $0.name == series.name })?
                    .books.filter({ $0.uuid != book.uuid }),
                !siblings.isEmpty {
-                rail("The \(series.name)", books: siblings)
+                // Named, so these covers carry their number in this series.
+                rail("The \(series.name)", books: siblings, series: series.name)
             }
             if let author = book.authors.first,
                let others = byAuthor[author.name]?.filter({ $0.uuid != book.uuid }),
@@ -967,29 +1246,87 @@ public struct BookDetailView: View {
         }
     }
 
-    private func rail(_ title: String, books: [Book]) -> some View {
-        BookRail(title: title, books: books)
+    private func rail(_ title: String, books: [Book], series: String? = nil) -> some View {
+        BookRail(title: title, books: books, series: series)
     }
+}
 
-    static func positionText(_ position: Double) -> String {
-        position == position.rounded() ? "Book \(Int(position))" : "Book \(position)"
+/// A tag on a book's page: the quiet capsule, and for a tag with a page of its
+/// own, the chevron after the name.
+struct TagChip: View {
+    let name: String
+    let isLinked: Bool
+    let isPressed: Bool
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    var body: some View {
+        HStack(spacing: Metrics.spacing4) {
+            Text(name)
+                .font(Typography.caption)
+                .foregroundStyle(Palette.inkSecondary)
+                // A name longer than the row wraps at the largest sizes rather
+                // than losing its end; otherwise one line, as a chip is.
+                .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
+                .truncationMode(.tail)
+                .fixedSize(horizontal: false, vertical: true)
+            if isLinked {
+                Image(systemName: "chevron.forward")
+                    .font(.system(size: 7, weight: .semibold))
+                    .foregroundStyle(Palette.tangerine)
+                    .accessibilityHidden(true)
+            }
+        }
+        .padding(.horizontal, Metrics.spacing8)
+        .padding(.vertical, 4)
+        .background(isPressed ? Palette.borderStrong.opacity(0.4) : Palette.surface, in: Capsule())
+        .overlay(Capsule().strokeBorder(Palette.border, lineWidth: 1))
+        #if !os(macOS)
+        // The tap floor, around the capsule rather than inside it, and the
+        // whole of it the target.
+        .frame(minHeight: 44)
+        .contentShape(Rectangle())
+        #endif
     }
+}
 
+/// A linked chip's look, pressed included: the capsule's fill goes to the
+/// strong border at 40% under the finger.
+private struct TagChipStyle: ButtonStyle {
+    let name: String
+
+    func makeBody(configuration: Configuration) -> some View {
+        TagChip(name: name, isLinked: true, isPressed: configuration.isPressed)
+    }
 }
 
 /// Wraps its children onto as many lines as needed. Used for tag chips, where
 /// a fixed grid would leave ragged gaps between short and long names.
 struct FlowRow: Layout {
     var spacing: CGFloat = 8
+    /// Between rows, when it differs from the gap between items: the tag chips
+    /// carry their own 44-point frames on a touch screen, so their rows sit
+    /// flush.
+    var lineSpacing: CGFloat?
+
+    private var rowGap: CGFloat { lineSpacing ?? spacing }
+
+    /// A child at its ideal size, or at the row's width when that is wider:
+    /// one long tag name wraps inside its chip rather than running off the
+    /// edge of the screen.
+    private func size(of subview: LayoutSubview, within width: CGFloat) -> CGSize {
+        let ideal = subview.sizeThatFits(.unspecified)
+        guard width.isFinite, ideal.width > width else { return ideal }
+        return subview.sizeThatFits(ProposedViewSize(width: width, height: nil))
+    }
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         let width = proposal.width ?? .infinity
         var x: CGFloat = 0, y: CGFloat = 0, lineHeight: CGFloat = 0
         for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
+            let size = size(of: subview, within: width)
             if x + size.width > width, x > 0 {
                 x = 0
-                y += lineHeight + spacing
+                y += lineHeight + rowGap
                 lineHeight = 0
             }
             x += size.width + spacing
@@ -1001,15 +1338,49 @@ struct FlowRow: Layout {
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         var x = bounds.minX, y = bounds.minY, lineHeight: CGFloat = 0
         for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
+            let size = size(of: subview, within: bounds.width)
             if x + size.width > bounds.maxX, x > bounds.minX {
                 x = bounds.minX
-                y += lineHeight + spacing
+                y += lineHeight + rowGap
                 lineHeight = 0
             }
             subview.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
             x += size.width + spacing
             lineHeight = max(lineHeight, size.height)
+        }
+    }
+}
+
+private extension View {
+    /// `navigationTitle` where a view is sometimes a screen and sometimes a
+    /// column beside one. Applied or not at all, because the modifier has no
+    /// "no title" value: an empty string is a title, and it wins the same
+    /// argument.
+    @ViewBuilder
+    func navigationTitle(_ title: String, when condition: Bool) -> some View {
+        if condition { navigationTitle(title) } else { self }
+    }
+
+    /// Fill the width, asking the right thing for the width.
+    ///
+    /// A screen asks its container, because that is the only honest source
+    /// when the screen *is* the container's content. A column beside one must
+    /// not: `containerRelativeFrame` walks past an `HStack` — which is not a
+    /// container — to the `NavigationSplitView`'s detail column, and on the
+    /// Mac that is the whole window minus the sidebar. Measured on macOS 27 at
+    /// a 1114pt window, the detail laid out 894pt wide inside its 320pt frame
+    /// and drew 287pt over the grid on one side and off the window on the
+    /// other. The column takes the width it is offered instead.
+    ///
+    /// The screen's branch is not `maxWidth: .infinity` and must not become
+    /// it: a flexible frame takes its child's size as a lower bound, so one
+    /// rigid over-wide subview would move the whole screen again, which is the
+    /// phone bug this pin was added to stop.
+    @ViewBuilder
+    func pinnedToContainerWidth(_ layout: BookDetailView.Layout) -> some View {
+        switch layout {
+        case .full: containerRelativeFrame(.horizontal)
+        case .inspector: frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }

@@ -1,6 +1,7 @@
 import AppIntents
 import Foundation
 import IssaCore
+import Observation
 
 // iOS only, though this file compiles into all three app targets. On macOS the
 // sandbox has no App Group entitlement, so `CurrentBookSnapshotStore.read()`
@@ -49,11 +50,31 @@ enum ContinueReadingError: Error, CustomLocalizedStringResourceConvertible {
 /// An intent runs before — or entirely outside — the SwiftUI scene, so it
 /// cannot navigate. It leaves the book here and the root view picks it up the
 /// same way it picks up a widget tap.
+///
+/// Observable, so the library collects a request the moment it is written
+/// rather than at the next time the scene becomes active. It used to be
+/// collected only there, and a cold launch from Siri reaches `.active` before
+/// the library exists — or `perform()` runs after it — so the request sat
+/// here until the reader next left the app and came back, when the book
+/// opened unasked.
+@Observable
 @MainActor
 final class AppIntentInbox {
     static let shared = AppIntentInbox()
     var bookID: String?
-    private init() {}
+    /// Internal rather than private so a test can have an inbox of its own.
+    init() {}
+
+    /// Hands the waiting request to the app, once, and empties the inbox.
+    ///
+    /// Through `requestBook`, which waits for the catalogue: a request made
+    /// before the library has loaded opens the book when it arrives.
+    func deliver(to app: AppModel) {
+        guard let id = bookID else { return }
+        bookID = nil
+        // "Continue reading" means exactly that.
+        app.requestBook(id, .read)
+    }
 }
 
 struct IssaShortcuts: AppShortcutsProvider {

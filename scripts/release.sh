@@ -16,6 +16,9 @@
 
 set -euo pipefail
 
+# Taken before the `cd` to the root: from there a relative BASH_SOURCE names
+# nothing, and `--help` died on sed's error instead of printing the usage.
+SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 ROOT="$PWD"
 
@@ -149,7 +152,7 @@ ARCHIVE_ONLY=0
 WORK=""
 
 usage() {
-    sed -n '3,15p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '3,15p' "$SELF" | sed 's/^# \{0,1\}//'
     exit "${1:-0}"
 }
 

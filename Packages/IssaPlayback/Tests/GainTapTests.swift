@@ -637,7 +637,7 @@ struct AudioPlayerGainTests {
         let url = try Fixture.sine(amplitude: 0.5, in: directory)
 
         let player = AudioPlayer()
-        #expect(await player.load(url: url, href: "sine.wav"))
+        #expect(await player.load(url: url, href: "sine.wav") == .loaded)
         #expect(player.tapCarriesGain == true, "a local float WAV has a track to attach to")
 
         // The gain is in the samples, so the player's own volume is left to the

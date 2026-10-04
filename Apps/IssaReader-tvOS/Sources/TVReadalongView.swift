@@ -107,6 +107,15 @@ private struct TVReadalongContent: View {
                     reading(frames)
                 }
             }
+            // Why a page turn stepped over a chapter, said over the page it
+            // landed on. The phone and the Mac have had this banner since the
+            // reader learned to skip a chapter that will not open; the
+            // television skipped in silence.
+            .overlay(alignment: .top) {
+                ChapterNoticeBanner(model: model, style: .television)
+                    .padding(.top, Self.margin)
+            }
+            .animation(.easeInOut(duration: 0.2), value: model.chapterNotice)
             // Keyed on the page, so a chapter is laid out again only when the
             // size it must fit into actually changes.
             .task(id: frames.pageSize) {

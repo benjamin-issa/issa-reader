@@ -56,6 +56,47 @@ struct AudioExtractionMigrationTests {
                 "the old file was left behind")
     }
 
+    /// A root-level track and a nested one with the same name: under the old
+    /// naming both were `intro.mp3`, so that name counts as claimed twice — an
+    /// ambiguous leftover, to be deleted and re-extracted. But `intro.mp3` is
+    /// also the root-level track's name under the *new* scheme, and when the
+    /// root-level track was written first the rescue for the nested one deleted
+    /// it: the reader was handed a file that was no longer there.
+    @Test("a root-level track is not deleted as another track's legacy name")
+    func aSiblingsLiveFileIsNotRescuedAway() throws {
+        let directory = Self.scratch()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let hrefs = ["intro.mp3", "Audio/intro.mp3"]
+
+        let files = try AudioExtraction.extract(
+            hrefs: hrefs, write: { try Data("bytes of \($0)".utf8).write(to: $1) }, into: directory, isCancelled: { false })
+
+        for href in hrefs {
+            let url = try #require(files[href])
+            #expect(FileManager.default.fileExists(atPath: url.path), "\(href)'s file was deleted")
+            #expect((try? Data(contentsOf: url)) == Data("bytes of \(href)".utf8))
+        }
+    }
+
+    /// The case the rescue exists for, on the same layout: an older build
+    /// extracted both under one name, so whichever won is ambiguous, and both
+    /// have to come out of the archive again.
+    @Test("an ambiguous leftover is replaced by each track's own bytes")
+    func anAmbiguousLeftoverIsReplaced() throws {
+        let directory = Self.scratch()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data("bytes of Audio/intro.mp3".utf8).write(to: directory.appending(path: "intro.mp3"))
+
+        let files = try AudioExtraction.extract(
+            hrefs: ["intro.mp3", "Audio/intro.mp3"], write: { try Data("bytes of \($0)".utf8).write(to: $1) },
+            into: directory, isCancelled: { false })
+
+        let root = try #require(files["intro.mp3"])
+        #expect((try? Data(contentsOf: root)) == Data("bytes of intro.mp3".utf8),
+                "the root-level track kept the nested one's bytes from the old collision")
+    }
+
     @Test("a fresh directory extracts every track once")
     func freshExtraction() throws {
         let (package, timeline) = try Self.fixture()

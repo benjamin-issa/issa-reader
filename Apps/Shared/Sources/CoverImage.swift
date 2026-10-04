@@ -83,17 +83,7 @@ public final class CoverCache {
         for book: Book, session: Session,
         preferring shape: LibraryService.CoverShape,
     ) async -> (data: Data, isSquare: Bool)? {
-        // Its own cache key. The widget asks for 320px and the app asks for
-        // 600px through the same directory, so sharing a key let whichever
-        // landed first serve the other — an upscaled 320px cover in the library
-        // grid for the life of the cache.
-        // Versioned like `image(for:)`'s key (and for the same reason): an
-        // unversioned filename let a cached file shadow the versioned request
-        // below, so a replaced cover never reached the widget. `updatedAt` in
-        // the name means a new cover lands under a new file.
-        let version = book.updatedAt.map { String(Int($0.value.timeIntervalSince1970 * 1000)) } ?? "0"
-        let name = "\(book.uuid)-widget-v\(version)-\(shape == .square ? "square" : "portrait").jpg"
-        let fileURL = diskDirectory.appending(path: name)
+        let fileURL = diskDirectory.appending(path: Self.widgetFileName(for: book, shape: shape))
         if let cached = await Task.detached(priority: .utility, operation: {
             try? Data(contentsOf: fileURL)
         }).value {
@@ -104,19 +94,98 @@ public final class CoverCache {
         // Try what the book wants, then the other one. A square request 404s
         // for a book with no audiobook edition, and portrait can be missing
         // too — either way the previous book's art must not be left in place.
+        // A book that names any art is answered for the other shape from the
+        // book itself, without a request. The publisher hands over the book it
+        // was given when the reading or listening began, which may predate the
+        // refresh; the service decides from that book alone, so one that names
+        // nothing yet is asked for by uuid.
         for candidate in [shape, shape == .square ? .portrait : .square] {
             guard let data = try? await service.coverData(
-                for: book.uuid, shape: candidate, pixelWidth: 320,
-                version: book.updatedAt?.value, fallback: false)
+                for: book, shape: candidate, pixelWidth: Self.widgetPixels, fallback: false)
             else { continue }
-            let url = diskDirectory.appending(
-                path: "\(book.uuid)-widget-v\(version)-\(candidate == .square ? "square" : "portrait").jpg")
+            let url = diskDirectory.appending(path: Self.widgetFileName(for: book, shape: candidate))
             await Task.detached(priority: .utility) {
                 try? data.write(to: url, options: .atomic)
             }.value
             return (data, candidate == .square)
         }
         return nil
+    }
+
+    /// The width the widget's cover is asked for. Named once because the
+    /// request and the file name must agree on it.
+    private nonisolated static let widgetPixels = 320
+
+    /// The file `widgetCover` keeps one shape of a book's art in.
+    ///
+    /// Its own name, never `imageKey`'s. The widget asks for 320px and the app
+    /// asks for 600px through the same directory, so sharing a key let
+    /// whichever landed first serve the other — an upscaled 320px cover in the
+    /// library grid for the life of the cache. A content key carries the size
+    /// for the same reason; the older name carries `-widget-`.
+    ///
+    /// Versioned like `imageKey` (and for the same reason): an unversioned
+    /// filename let a cached file shadow the versioned request, so a replaced
+    /// cover never reached the widget. `updatedAt` or the content hash in the
+    /// name means a new cover lands under a new file.
+    ///
+    /// No portrait-to-square fallback in the key, because `widgetCover` turns
+    /// the service's off: a name that promised portrait art must hold it.
+    nonisolated static func widgetFileName(
+        for book: Book, shape: LibraryService.CoverShape,
+    ) -> String {
+        let key = contentKey(for: book, shape: shape, pixels: widgetPixels, fallback: false)
+            ?? "\(book.uuid)-widget-v\(version(of: book))-\(shape == .square ? "square" : "portrait")"
+        return key + ".jpg"
+    }
+
+    /// The key `image(for:session:shape:maxPixel:)` files a cover under, in
+    /// memory and on disk — and so what `CoverImage` reloads on, which is how
+    /// a refresh that brings a book's cover reference fetches the cover it
+    /// names instead of keeping whatever the old key found.
+    ///
+    /// A content key where the book says which image the fetch will bring
+    /// back (see `contentKey`). Otherwise the uuid and `updatedAt`: the
+    /// network request is versioned precisely so a replaced cover is
+    /// re-fetched, but the disk file and this session's memory entry shadow
+    /// that request, so an unversioned key meant a cover, once cached, was
+    /// never asked for again for the life of the install.
+    nonisolated static func imageKey(
+        for book: Book, shape: LibraryService.CoverShape, maxPixel: CGFloat = 600,
+    ) -> String {
+        contentKey(for: book, shape: shape, pixels: Int(maxPixel), fallback: true)
+            ?? "\(book.uuid)-v\(version(of: book))" + (shape == .square ? "-square" : "")
+    }
+
+    /// The name of the image a fetch for this shape will bring back, when the
+    /// book says which one that is: the content hash `/api/v2/images` serves
+    /// it under, and the size asked for.
+    ///
+    /// Chosen by `Book.coverReference(for:fallback:)`, the function
+    /// `LibraryService.coverData(for:shape:…)` fetches by, and never by an
+    /// order written out here. A key naming one image while the fetch brings
+    /// back another would file the wrong art under a name that looks right
+    /// for as long as the cache lasts.
+    ///
+    /// Keyed by content rather than by book, so a portrait that falls back
+    /// and the square asked for outright share one file, and a replaced cover
+    /// arrives under a new hash with nothing to invalidate.
+    ///
+    /// nil on 2.x, and for a row cached by 1.2.0 until the refresh that brings
+    /// its reference. A cover first fetched under the older key is fetched
+    /// once more under this one after that refresh, and the older file stays
+    /// in `Caches/Covers` until sign-out clears the directory — nothing else
+    /// evicts from it, and the Downloads screen counts it in the total.
+    nonisolated static func contentKey(
+        for book: Book, shape: LibraryService.CoverShape, pixels: Int, fallback: Bool,
+    ) -> String? {
+        book.coverReference(for: shape, fallback: fallback).map { "sha-\($0.sha256)-\(pixels)" }
+    }
+
+    /// `updatedAt` in epoch milliseconds, the same number the uuid route is
+    /// versioned by.
+    private nonisolated static func version(of book: Book) -> String {
+        book.updatedAt.map { String(Int($0.value.timeIntervalSince1970 * 1000)) } ?? "0"
     }
 
     /// Drops everything, for sign-out.
@@ -132,13 +201,8 @@ public final class CoverCache {
         shape: LibraryService.CoverShape = .portrait,
         maxPixel: CGFloat = 600,
     ) async -> Image? {
-        // The key carries updatedAt as well as the uuid. The network request
-        // below is versioned precisely so a replaced cover is re-fetched — but
-        // the disk file (and this session's memory entry) shadow that request,
-        // so an unversioned key meant a cover, once cached, was never asked
-        // for again for the life of the install.
-        let version = book.updatedAt.map { String(Int($0.value.timeIntervalSince1970 * 1000)) } ?? "0"
-        let key = "\(book.uuid)-v\(version)" + (shape == .square ? "-square" : "")
+        // Versioned by content or by updatedAt; see `imageKey`.
+        let key = Self.imageKey(for: book, shape: shape, maxPixel: maxPixel)
         if let hit = memory[key] {
             markUsed(key)
             return hit
@@ -155,13 +219,16 @@ public final class CoverCache {
             }.value
 
             if data == nil {
-                // Ask the server for the size actually drawn, and key the URL on
-                // updatedAt so a replaced cover appears instead of the old one.
+                // Ask the server for the size actually drawn, by the route the
+                // book wants: by content hash where it names one, else by uuid,
+                // versioned on updatedAt so a replaced cover appears instead of
+                // the old one. Decided from the book alone, so the book the
+                // mini player and the player hold from before a refresh, which
+                // no refresh replaces, still gets its art by uuid.
                 data = try? await LibraryService(client: session.client).coverData(
-                    for: book.uuid,
+                    for: book,
                     shape: shape,
                     pixelWidth: Int(maxPixel),
-                    version: book.updatedAt?.value,
                 )
                 if let data {
                     let payload = data
@@ -179,6 +246,26 @@ public final class CoverCache {
         inFlight[key] = nil
         if let result { store(result, at: key) }
         return result
+    }
+
+    /// The cover of a book from the reader's own files: the `cover.jpg` cut
+    /// from it at import, decoded to the size drawn. From memory or the disk
+    /// only — never a request — and nil for a book that had no cover, which
+    /// draws the letter tile.
+    public func localImage(
+        for book: Book, maxPixel: CGFloat = 600, root: URL? = nil,
+    ) async -> Image? {
+        guard book.localCopy?.hasCover == true else { return nil }
+        let key = "local-\(book.uuid)-\(Int(maxPixel))"
+        if let hit = memory[key] {
+            markUsed(key)
+            return hit
+        }
+        let file = LocalBookFiles(bookUUID: book.uuid, root: root).cover
+        let data = await Task.detached(priority: .utility) { try? Data(contentsOf: file) }.value
+        guard let data, let image = await Self.downsample(data, maxPixel: maxPixel) else { return nil }
+        store(image, at: key)
+        return image
     }
 
     /// Decodes straight to the size we will draw, so a 2000px cover never
@@ -206,6 +293,10 @@ public struct CoverImage: View {
     let session: Session?
     var aspect: CGFloat = Metrics.coverAspect
     var shape: LibraryService.CoverShape = .portrait
+    /// The longest side a local book's cover is decoded to, in pixels: the
+    /// size it is drawn at, so a list of thumbnails does not hold a 600-px
+    /// decode per row.
+    var localPixels: CGFloat = 600
 
     @State private var image: Image?
 
@@ -213,11 +304,13 @@ public struct CoverImage: View {
         book: Book, session: Session?,
         aspect: CGFloat = Metrics.coverAspect,
         shape: LibraryService.CoverShape = .portrait,
+        localPixels: CGFloat = 600,
     ) {
         self.book = book
         self.session = session
         self.aspect = aspect
         self.shape = shape
+        self.localPixels = localPixels
     }
 
     public var body: some View {
@@ -243,7 +336,22 @@ public struct CoverImage: View {
             RoundedRectangle(cornerRadius: Metrics.radiusSmall, style: .continuous)
                 .strokeBorder(Palette.ink.opacity(0.10), lineWidth: 0.5),
         )
-        .task(id: book.uuid) {
+        // On the cache key, not the uuid alone. A catalogue cached by 1.2.0
+        // has no cover references, so its covers load under the uuid key; the
+        // refresh that brings the references changes the key without changing
+        // the book, and a task keyed on the uuid would never ask again. A
+        // reused view handed another book still reloads, because the key names
+        // the book or its art — and where the two books share the very same
+        // art, what is on screen is already right.
+        .task(id: CoverCache.imageKey(for: book, shape: shape)) {
+            // A book from the reader's own files has its cover on the disk, cut
+            // at import, and no server to ask: its uuid is not one any server
+            // has, and asking would send it somewhere it must not go.
+            if book.isLocal {
+                let local = await CoverCache.shared.localImage(for: book, maxPixel: localPixels)
+                if !Task.isCancelled { image = local }
+                return
+            }
             guard let session else { return }
             let fetched = await CoverCache.shared.image(for: book, session: session, shape: shape)
             // The cache's await cannot be cancelled mid-flight, so a load
@@ -270,6 +378,12 @@ public struct CoverImage: View {
             Text(initial)
                 .font(Typography.serif(34, weight: .medium))
                 .foregroundStyle(Palette.ink.opacity(0.55))
+                // The ramp follows Dynamic Type, and at the accessibility
+                // sizes a 34-point letter outgrew a small cover and was cut
+                // off; it shrinks to fit instead.
+                .lineLimit(1)
+                .minimumScaleFactor(0.2)
+                .padding(2)
         }
     }
 

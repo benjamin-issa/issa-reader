@@ -19,16 +19,6 @@ import AppKit
 @Observable
 @MainActor
 final class AskCoordinator {
-    /// The kill switch for the model's own `searchBook` tool.
-    ///
-    /// A constant rather than a preference: the choice is whether the 3B model
-    /// may refine the app's search, and the honest concern is that it is only
-    /// moderately reliable at deciding when to — and each round trip is another
-    /// three to six seconds on a phone. If the measurement goes against it,
-    /// this is the one line that changes, and the pipeline is otherwise
-    /// identical with and without it.
-    static let usesSearchTool = true
-
     /// Remembers that the reader has been asked about notifications once, so
     /// they are never asked twice for the same thing.
     static let askedForNotificationsKey = "issa.askNotificationsAsked"
@@ -59,10 +49,10 @@ final class AskCoordinator {
     private let preparer: AskEngine
 
     private let defaults: UserDefaults
-    /// Nil in tests. Everything else about a job can be driven deterministically
-    /// with a scripted model, but a permission prompt is a real system alert in
-    /// front of a real runner, and `UNUserNotificationCenter` has no stand-in.
-    private let notifier: AskNotifier?
+    /// Nil or a counting stand-in in tests: a permission prompt is a real
+    /// system alert in front of a real runner, and `UNUserNotificationCenter`
+    /// has no stand-in of its own.
+    private let notifier: (any AskNotifying)?
 
     /// Books whose index has been built and whose model has been warmed this
     /// session, so opening the sheet a second time costs nothing.
@@ -86,7 +76,7 @@ final class AskCoordinator {
     init(
         store: AskIndexStore = AskIndexStore(),
         model: (any AnswerModel)? = nil,
-        notifier: AskNotifier? = AskNotifier(),
+        notifier: (any AskNotifying)? = AskNotifier(),
         defaults: UserDefaults = .standard,
         // Injectable for the same reason `PlaybackSettings`'s is: this observer
         // registers with `object: nil`, so a sign-out posted by any suite in a
@@ -111,8 +101,10 @@ final class AskCoordinator {
         // `AppModel` either and there is nothing to call it directly.
         signOutObserver.token = centre.addObserver(
             forName: PlaybackSettings.signOutNotification, object: nil, queue: .main,
-        ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.purgeAll() }
+        ) { [weak self] notification in
+            // The device's own books keep theirs: they are not the account's.
+            let kept = PlaybackSettings.keptBookUUIDs(in: notification)
+            MainActor.assumeIsolated { self?.purgeAll(keeping: kept) }
         }
     }
 
@@ -140,13 +132,22 @@ final class AskCoordinator {
             // sheet that opens onto an error before the reader has typed a word
             // is worse than one that quietly retries when they do. The question
             // itself builds the index again and reports properly.
-            try? await preparer.prepareIndex(source: source)
+            let built = (try? await preparer.prepareIndex(source: source)) != nil
             await preparer.prewarm()
             guard !Task.isCancelled else { return }
-            prepared.insert(uuid)
             preparing[uuid] = nil
+            // Only a warm-up that worked is remembered. A failed one was put in
+            // `prepared` all the same, so the guard above turned every later
+            // opening of the sheet away for the rest of the session — no
+            // warm-up was ever tried again, and each question paid for the
+            // whole build itself.
+            if built { prepared.insert(uuid) }
         }
     }
+
+    /// The warm-up in flight for this book, if there is one — for a test to
+    /// wait on, as `suggestions(for:)` does.
+    func warmUp(for bookUUID: String) -> Task<Void, Never>? { preparing[bookUUID] }
 
     /// The reader is looking at this book's answer again, so the banner that
     /// was standing in for it has done its job.
@@ -224,15 +225,11 @@ final class AskCoordinator {
         // `<uuid>.building.sqlite`.
         let preparation = preparing[uuid]
 
-        // Built per question because the tool captures the boundary, which is
-        // what makes it unable to reach past it whatever the model asks for.
-        var tools: [any AskTool] = []
-        #if canImport(FoundationModels)
-        if Self.usesSearchTool {
-            tools = [SearchBookTool(store: store, bookUUID: uuid, boundary: boundary)]
-        }
-        #endif
-        let engine = AskEngine(model: model, store: store, tools: tools, turnstile: turnstile)
+        // Per question, with the `searchBook` tool bound to this boundary: the
+        // same factory `RegressionRun` asks the real model through.
+        let engine = AskEngine.forQuestion(
+            model: model, store: store, bookUUID: uuid, boundary: boundary, turnstile: turnstile,
+        )
 
         job.task = Task { [weak self] in
             // Costs nothing when the sheet's build has already finished, and
@@ -449,19 +446,28 @@ final class AskCoordinator {
         Task { [store] in await store.remove(bookUUID: bookUUID) }
     }
 
-    /// Every index, on sign-out or when downloads are deleted with the account.
-    func purgeAll() {
-        for job in jobs.values { job.task?.cancel() }
-        jobs.removeAll()
-        prepared.removeAll()
-        for task in preparing.values { task.cancel() }
-        preparing.removeAll()
-        reopenRequest = nil
-        releaseAssertion()
+    /// Every index but those of `kept`, on sign-out or when downloads are
+    /// deleted with the account: `kept` is the books the reader added from
+    /// their own files, which belong to the device and outlive the account.
+    /// Their jobs, warm-ups and delivered answers are left as they are.
+    ///
+    /// The one way to purge. A short form that kept nothing had no caller at
+    /// all, and was one more way to sweep the device's books with the account's.
+    func purgeAll(keeping kept: Set<String>) {
+        for (uuid, job) in jobs where !kept.contains(uuid) { job.task?.cancel() }
+        jobs = jobs.filter { kept.contains($0.key) }
+        prepared = prepared.filter { kept.contains($0) }
+        for (uuid, task) in preparing where !kept.contains(uuid) { task.cancel() }
+        preparing = preparing.filter { kept.contains($0.key) }
+        if let request = reopenRequest, !kept.contains(request) { reopenRequest = nil }
+        // Only when nothing kept is still answering: the assertion is what lets
+        // a question finish in the background.
+        if jobs.isEmpty { releaseAssertion() }
         // Including anything already on the lock screen: the account's data is
-        // going, and a banner about one of its answers is that data.
-        if let notifier { Task { await notifier.removeAllDelivered() } }
-        Task { [store] in await store.removeAll() }
+        // going, and a banner about one of its answers is that data. A kept
+        // book's banner is the device's, and stays.
+        if let notifier { Task { await notifier.removeAllDelivered(keeping: kept) } }
+        Task { [store] in await store.removeAll(keeping: kept) }
     }
 }
 

@@ -3,7 +3,7 @@
 A native Apple client suite for **[Storyteller](https://storyteller-platform.dev/)** —
 ebooks, audiobooks, and synchronised read-along on iPhone, iPad, Apple TV and the Mac.
 
-Written in Swift 6 for iOS 26, macOS 26 and tvOS 26.
+Written in Swift 6 for iOS 26, macOS 26 and tvOS 26, built with Xcode 27.
 
 ![Read-along on iPhone](docs/screenshots/ios-09-readalong-highlight.png)
 
@@ -50,6 +50,7 @@ accommodate it.
 | Mac | Sidebar library, each book in its own window, menu-bar transport, `issareader://` links and Handoff |
 | Ask about a book | A question about the story so far, answered on the device by Apple Intelligence from the part you have actually read — never from further on. Off by default; iPhone, iPad and Mac with Apple Intelligence, not Apple TV |
 | Widget | Current book, chapter and progress from a shared App Group snapshot |
+| Books from your files | With or without a server, a DRM-free EPUB chosen from Files or iCloud Drive is copied into the app and read on that device alone, with read-along narration when it has media overlays. Kept apart from the server's library and never sent anywhere; iPhone, iPad and Mac, not Apple TV |
 
 ## Layout
 
@@ -104,7 +105,7 @@ docker compose up -d
 PUBLIC_HOST=$(ipconfig getifaddr en0) node setup.mjs
 ```
 
-`docker compose up` brings up Storyteller `web-v2.14.21` and Keycloak;
+`docker compose up` brings up Storyteller `web-v2.14.23` and Keycloak;
 `setup.mjs` waits for both, creates an admin account, wires Keycloak in as an
 OIDC provider with group-derived permissions, and smoke-tests the endpoints the
 client depends on. It is idempotent, and drives Storyteller's first-run screen
@@ -117,15 +118,117 @@ parsed" — and the LAN address is the only one a phone or Apple TV can reach.
 
 ```bash
 node Tools/docker/verify-device-flow.mjs      # full sign-in round trip
+node Tools/docker/verify-oidc-claims.mjs      # the claims Keycloak issues
 scripts/release.sh --archive-only             # archive all three apps
 ```
 
+The realm in `Tools/docker/keycloak/realm-issa.json` is imported only when
+Keycloak does not already have it, so an edit to it takes
+`docker compose up -d --no-deps --force-recreate keycloak` before anything can
+see it; `verify-oidc-claims.mjs` then says whether the tokens and userinfo
+carry `email_verified` and the reader's group. `--no-deps` because Keycloak
+depends on Storyteller: run from any checkout but the one that started the
+stack, a worktree say, Compose finds Storyteller's data mount changed and
+recreates it too, on that checkout's empty `data/storyteller`. Keycloak's own
+mount follows the checkout it is recreated from, so recreate it from the main
+one once the edit has landed. Two things about that file are easy to
+break. The `reader` user's `id` is pinned, because it becomes the `sub`
+Storyteller links the account by, and a fresh one on re-import gets the sign-in
+refused. And a client scope's `description` holds 255 characters: a longer one
+stops Keycloak starting at all.
+
+Keycloak runs in the `storyteller` container's network namespace, so
+recreating `storyteller` (after moving its pin, say) leaves Keycloak on a
+namespace that no longer exists, with nothing on :8080 and no error. Follow
+it with `docker compose up -d --force-recreate --no-deps keycloak`.
+
+A Storyteller 3 beta can run beside it, on port 8003, for checking the client
+against both generations. It needs its own **copy** of the library: 3.x
+migrates the database one way, the stable server cannot open the result, and
+the copy is tied to the `STORYTELLER_SECRET_KEY` it first boots with.
+
+```bash
+cd Tools/docker
+# Guarded: `cp -R` into a directory that exists copies *inside* it, so a
+# second run would leave the server on the old copy with a nested new one.
+docker compose stop && { [ -e data/storyteller-v3 ] || cp -Rp data/storyteller data/storyteller-v3; } && docker compose up -d
+docker compose --profile v3 up -d
+STORYTELLER_URL=http://$(ipconfig getifaddr en0):8003 PUBLIC_HOST=$(ipconfig getifaddr en0) node setup.mjs
+```
+
+The provisioning scripts take `STORYTELLER_URL` for either server.
+
+The older tags the client must still work with run beside them under
+`--profile legacy`: `web-v2.14.21` on port 8011, the version App Review's
+server runs, and `web-v3.0.0-beta.40` on 8013. Each needs its own copy of the
+data its newer pin started from, taken **before** that pin moved, because a
+newer server migrates the database one way and an older one must never be
+handed data a newer one has migrated.
+
+So the copies below are made once, while `data/storyteller` and
+`data/storyteller-v3` are still the old pins' — at the latest, just before a
+pin moves. After a move, copying them hands the old servers migrated data;
+take the copy from a backup made before the move instead, and if there is
+none, there is no safe copy to make. Make them before the first
+`--profile legacy up`, too: Compose creates a missing bind-mount directory
+empty, and the guards (which keep a second run from nesting a copy inside the
+first) would then keep the empty one.
+
+```bash
+cd Tools/docker
+docker compose --profile v3 stop
+# Only while the pins are still the old ones; see above.
+[ -e data/storyteller-legacy ] || cp -Rp data/storyteller data/storyteller-legacy
+[ -e data/storyteller-v3-legacy ] || cp -Rp data/storyteller-v3 data/storyteller-v3-legacy
+docker compose --profile legacy up -d
+STORYTELLER_URL=http://$(ipconfig getifaddr en0):8011 PUBLIC_HOST=$(ipconfig getifaddr en0) node setup.mjs
+STORYTELLER_URL=http://$(ipconfig getifaddr en0):8013 PUBLIC_HOST=$(ipconfig getifaddr en0) node setup.mjs
+```
+
+They are not restarted on their own; `docker compose --profile legacy stop`
+puts them away after the smoke run.
+
+With a server up, `scripts/live-check.sh` runs the release rule's live checks
+(CLAUDE.md) on an iPhone or iPad simulator:
+
+```bash
+scripts/live-check.sh http://$(ipconfig getifaddr en0):8003 v3-iphone
+scripts/live-check.sh http://$(ipconfig getifaddr en0):8001 v2-ipad --device "iPad Pro 11-inch (M5)"
+```
+
+It installs the app afresh and signs it in by device code, approving the code
+through `approve-device.mjs` as the fixture admin. `Apps/IssaLiveUITests` then
+drives the real app through the library, Settings › Advanced's server version,
+a book's status label and a page read, and the script asks the server whether
+the position arrived and, on 3.x, whether the book was filed. `--audio` adds a
+read-along crossing the end of an audio file, out of the speakers: the script
+puts the book back at its first chapter, and the crossing is judged by the
+server's position reaching a later one, since a player stuck at the file's end
+still shows Pause. `--fresh` clears the simulator's keychain, so the pairing is
+a real one rather than a remembered token. The verdicts, screenshots and the app's log land in
+`.build/live-check/<label>/`. `--platform tvos` runs the television's share on
+the Apple TV simulator, by remote: the pairing, the library, the session and
+the server version.
+
 ## Notes on the server
 
-This client is written against Storyteller `web-v2.14.21`, the latest stable
-tag, and is forward-looking about the rest: it probes for the endpoints the 3.x
-line adds and lights them up when they are present, so a newer server gains
-features without a client update. Settings shows which its server provides.
+This client is written against Storyteller `web-v2.14.21` and still works
+with it, which is what App Review's server runs. It is tested against
+`web-v2.14.23`, the latest stable tag, and the 3.0 beta line at
+`web-v3.0.0-beta.46`, and still checked against `web-v3.0.0-beta.40`. It tells
+the generations apart by feature, not by version string: `GET
+/api/v2/server/public` exists only on 3.x, while a self-built 3.x image
+reports its package version, which is still a 2.x number. Where they differ it
+adjusts. Covers come from 3.x's content-addressed image route rather than the
+cover route, which on 3.x only redirects. A status's label is shown where 3.x
+lets an admin rename one. A book with no status, which 3.x allows and does not
+advance, is shelved and advanced as 2.x would have. Settings › Advanced shows
+the server's version beside the capabilities it offers.
+
+The 3.x aligner also writes audio-only entries into read-along books — music,
+credits, a chapter that is only narration — which share a sentence's place in
+the text. Those are recognised from the book itself rather than the server,
+because books aligned by either generation sit side by side on a 3.x server.
 
 On 2.14.21, `GET /api/v2/books` takes no query parameters and returns the whole
 library in one array, including this user's reading position and status. That

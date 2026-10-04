@@ -21,14 +21,22 @@ private final class StatusQueueProtocol: URLProtocol {
     /// network does, before any response exists.
     static let offline = -1
 
+    /// What `/api/v2/user` sends with its status: a user, the way Storyteller
+    /// answers it, unless a test primes something else.
+    static let storytellerUser = Data(#"{"id":"reader-1","username":"reader"}"#.utf8)
+
     private static let lock = NSLock()
     nonisolated(unsafe) private static var queue: [Int] = []
     nonisolated(unsafe) private static var requestCount = 0
+    nonisolated(unsafe) private static var userRequestCount = 0
+    nonisolated(unsafe) private static var userBody = storytellerUser
 
-    static func prime(_ statuses: [Int]) {
+    static func prime(_ statuses: [Int], userBody: Data = storytellerUser) {
         lock.withLock {
             queue = statuses
             requestCount = 0
+            userRequestCount = 0
+            Self.userBody = userBody
         }
     }
 
@@ -36,13 +44,21 @@ private final class StatusQueueProtocol: URLProtocol {
         lock.withLock { requestCount }
     }
 
+    /// How many of those asked who the reader is — the drain's question of
+    /// whether Storyteller itself is answering.
+    static var userRequestsMade: Int {
+        lock.withLock { userRequestCount }
+    }
+
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
     override func startLoading() {
-        let status = Self.lock.withLock { () -> Int in
+        let asksForUser = request.url?.path == Endpoint.user
+        let (status, userBody) = Self.lock.withLock { () -> (Int, Data) in
             Self.requestCount += 1
-            return Self.queue.isEmpty ? 200 : Self.queue.removeFirst()
+            if asksForUser { Self.userRequestCount += 1 }
+            return (Self.queue.isEmpty ? 200 : Self.queue.removeFirst(), Self.userBody)
         }
         guard status != Self.offline else {
             client?.urlProtocol(self, didFailWithError: URLError(.notConnectedToInternet))
@@ -51,7 +67,7 @@ private final class StatusQueueProtocol: URLProtocol {
         let response = HTTPURLResponse(
             url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: nil)!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: Data("{}".utf8))
+        client?.urlProtocol(self, didLoad: asksForUser ? userBody : Data("{}".utf8))
         client?.urlProtocolDidFinishLoading(self)
     }
 
@@ -127,6 +143,84 @@ struct MutationDrainTests {
         #expect(StatusQueueProtocol.requestsMade == 2, "both items should have been attempted")
     }
 
+    private func enqueueThree(on queue: MutationQueue) async throws {
+        for book in ["a", "b", "c"] {
+            try await queue.enqueue(.status, bookUUID: book, payload: Data(#"{"status":"reading"}"#.utf8))
+        }
+    }
+
+    /// The regression this exists for. A 404 or a 403 from in front of
+    /// Storyteller — a reverse proxy whose container is stopped, a path prefix
+    /// that has changed, an auth proxy — is not Storyteller saying a book is
+    /// gone. Every row was taken for its own refusal and deleted, so one drain
+    /// emptied the whole offline backlog, and the next refresh put the
+    /// server's old statuses and ratings back on screen.
+    @Test("a front door refusing everything keeps the backlog", arguments: [404, 403])
+    func aFrontDoorRefusingEverythingKeepsTheBacklog(status: Int) async throws {
+        let (drain, queue, directory) = try await makeDrain()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try await enqueueThree(on: queue)
+
+        // Three rows, then the question of who is answering — refused alike.
+        StatusQueueProtocol.prime([status, status, status, status])
+        let sent = await drain.drain()
+
+        #expect(sent == 0)
+        #expect(try await queue.count == 3, "nothing proved these refusals were Storyteller's")
+        #expect(StatusQueueProtocol.requestsMade == 4, "every row, then one question about the server")
+        #expect(StatusQueueProtocol.userRequestsMade == 1)
+    }
+
+    /// The other side of it. When Storyteller itself answers, a refusal is its
+    /// verdict on the row, and the row goes as it always did — or one write
+    /// for a deleted book would be sent on every drain for ever.
+    @Test("refusals are dropped once Storyteller is seen to answer")
+    func refusalsDropOnceStorytellerAnswers() async throws {
+        let (drain, queue, directory) = try await makeDrain()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try await enqueueThree(on: queue)
+
+        StatusQueueProtocol.prime([404, 403, 404, 200])
+        let sent = await drain.drain()
+
+        #expect(sent == 0)
+        #expect(try await queue.count == 0, "Storyteller answered, so the refusals were its own")
+        #expect(StatusQueueProtocol.userRequestsMade == 1)
+    }
+
+    /// A front door that answers everything with a page of its own says 200
+    /// and says nothing about a user. Only a body that reads as one is
+    /// Storyteller answering.
+    @Test("a 200 that is not a user is no proof")
+    func aPageInPlaceOfAUserIsNoProof() async throws {
+        let (drain, queue, directory) = try await makeDrain()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try await enqueueThree(on: queue)
+
+        StatusQueueProtocol.prime(
+            [404, 404, 404, 200], userBody: Data("<html><body>Sign in</body></html>".utf8))
+        _ = await drain.drain()
+
+        #expect(try await queue.count == 3)
+        #expect(StatusQueueProtocol.userRequestsMade == 1)
+    }
+
+    /// A drain that stops on a broken connection learns nothing about who
+    /// refused what came before it, and asking would only fail the same way.
+    @Test("a broken connection asks nothing and drops nothing")
+    func aTransportBreakKeepsRefusalsWithoutAsking() async throws {
+        let (drain, queue, directory) = try await makeDrain()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try await enqueueThree(on: queue)
+
+        StatusQueueProtocol.prime([404, StatusQueueProtocol.offline])
+        _ = await drain.drain()
+
+        #expect(try await queue.count == 3, "the refused row went with nothing to show who refused it")
+        #expect(StatusQueueProtocol.requestsMade == 2, "the drain has to stop at the break")
+        #expect(StatusQueueProtocol.userRequestsMade == 0)
+    }
+
     @Test("a genuine transport failure stops the drain but keeps the item for retry")
     func transportFailureStopsAndKeeps() async throws {
         let (drain, queue, directory) = try await makeDrain()
@@ -192,6 +286,31 @@ struct MutationDrainTests {
         #expect(pending.count == 1, "an unreachable server must never cost a queued write")
         #expect(pending.first?.attempts == 0,
                 "a transport failure is no evidence against the item, so it must not even count")
+    }
+
+    /// R-06. A reverse proxy whose Storyteller is down — the container
+    /// restarting — answers every route with a 502, 503 or 504. That is the
+    /// front door saying nothing is behind it, not Storyteller choking on the
+    /// payload, and a reader who keeps listening through a two-minute restart
+    /// drains far more than eight times: since the queue orders by `updatedAt`
+    /// a status or rating is the head of every one of those drains, and it was
+    /// deleted on the eighth, for the next refresh to revert on screen.
+    @Test("a proxy's 502, 503 or 504 never counts toward abandoning a write", arguments: [502, 503, 504])
+    func gatewayFailuresNeverAbandon(status: Int) async throws {
+        let (drain, queue, directory) = try await makeDrain()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        try await queue.enqueue(.status, bookUUID: "kept", payload: Data(#"{"status":"read"}"#.utf8))
+
+        // Comfortably past the abandon limit of 8, each a drain of its own.
+        for _ in 1 ... 12 {
+            StatusQueueProtocol.prime([status])
+            #expect(await drain.drain() == 0)
+        }
+
+        let pending = try await queue.pending()
+        #expect(pending.count == 1, "an outage behind a proxy must never cost a queued write")
+        #expect(pending.first?.attempts == 0, "a gateway's answer is no evidence against the write")
     }
 
     /// The complement: abandonment still exists for writes the server itself

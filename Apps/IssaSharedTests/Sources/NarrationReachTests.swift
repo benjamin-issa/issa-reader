@@ -1,4 +1,7 @@
 import Foundation
+import IssaCore
+import IssaEPUB
+import IssaPlayback
 import Testing
 
 @testable import IssaReader_iOS
@@ -97,5 +100,125 @@ struct NarrationReachTests {
         ))
         #expect(range.location == Self.pageTop)
         #expect(NSMaxRange(range) == Self.chapter)
+    }
+}
+
+/// Which chapter's sentence an id names.
+///
+/// Ids are unique per document, not per book. Storyteller's aligner prefixes
+/// them with the chapter, so its books never showed it; a book from another
+/// toolchain that numbers its sentences afresh in every chapter is still a
+/// legal EPUB, and in one every route from the page into narration resolved
+/// the id to the first chapter that used it — a tap in chapter two played
+/// chapter one, and the play button, measuring chapter one's sentence as half
+/// a book away, refused to start at all.
+@Suite("Narration found in the chapter on screen")
+@MainActor
+struct DocumentScopedNarrationTests {
+    /// Two chapters, each narrating its own `s0` and `s1`.
+    static func chapter(_ id: String, _ name: String) -> TestEPUB.Chapter {
+        TestEPUB.Chapter(
+            id: id, title: "Chapter \(name)",
+            body: "<p><span id=\"s0\">The opening sentence of chapter \(name), long enough to read.</span></p>"
+                + "<p><span id=\"s1\">The second sentence of chapter \(name), which follows it.</span></p>",
+            narrated: ["s0", "s1"])
+    }
+
+    static let one = chapter("one", "One")
+    static let two = chapter("two", "Two")
+
+    /// The book open at chapter two, its narration extracted and hooked up,
+    /// the voice not yet started.
+    static func atChapterTwo() async throws -> (model: ReaderModel, directory: URL) {
+        let model = ReaderModel(
+            book: SharedFixtures.book("Shared ids", uuid: "document-scoped-uuid"),
+            session: Session(
+                serverURL: URL(string: "https://library.example")!,
+                keychain: ScopedTokens(),
+                session: URLSession(configuration: .ephemeral)))
+        model.enqueuePosition = { _, _, _ in true }
+        model.package = try TestEPUB.package(
+            chapters: [one, two], audio: SilentAudio.wav(seconds: 30))
+        let package = try #require(model.package)
+        let timeline = SMILParser.timeline(for: package)
+        #expect(timeline.entries.count == 4, "both chapters' overlays have to be in the book")
+        // `resize` before `go`: it records the page size, and its own relayout
+        // is a no-op while there is no layout yet.
+        await model.resize(to: CGSize(width: 340, height: 560))
+        await model.go(toChapter: 1)
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appending(path: "issa-document-scoped-\(UUID().uuidString)")
+        let files = try AudioExtraction.extractAudio(
+            from: package, timeline: timeline, bookID: "document-scoped", into: directory)
+        model.attachNarration(timeline: timeline, audioFiles: files)
+        return (model, directory)
+    }
+
+    @Test("playing the page plays this chapter's sentence, not the first with its id")
+    func playingThePagePlaysThisChapter() async throws {
+        let (model, directory) = try await Self.atChapterTwo()
+        defer {
+            model.readalong?.player.pause()
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        await model.playFirstSentenceOnPage()
+
+        #expect(model.readalong?.activeEntry?.textHref == TestEPUB.href(of: Self.two))
+        #expect(model.readalong?.activeEntry?.fragmentID == "s0")
+        #expect(model.chapterIndex == 1, "and the page stays in chapter two")
+    }
+
+    /// The play button, which asks where the reader is and then checks the
+    /// answer is near them: chapter one's `s0` is half a book away, so it was
+    /// refused and the button did nothing.
+    @Test("the play button starts in this chapter")
+    func thePlayButtonStartsHere() async throws {
+        let (model, directory) = try await Self.atChapterTwo()
+        defer {
+            model.readalong?.player.pause()
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        await model.togglePlayback()
+
+        #expect(model.readalong?.activeEntry?.textHref == TestEPUB.href(of: Self.two))
+        #expect(model.readalong?.player.isPlaying == true)
+    }
+
+    /// The television's play button, which seeks to the first sentence
+    /// beginning on the page when the voice is somewhere else.
+    @Test("playing from the visible page stays in this chapter")
+    func playingFromTheVisiblePageStaysHere() async throws {
+        let (model, directory) = try await Self.atChapterTwo()
+        defer {
+            model.readalong?.player.pause()
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        await model.playFromVisiblePage()
+
+        #expect(model.readalong?.activeEntry?.textHref == TestEPUB.href(of: Self.two))
+        #expect(model.chapterIndex == 1)
+    }
+}
+
+/// Per file, as every other suite in here keeps it.
+private final class ScopedTokens: TokenPersisting, @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: [String: String] = [:]
+
+    func read(account: String) -> String? { lock.withLock { stored[account] } }
+
+    @discardableResult
+    func write(_ token: String, account: String) -> Bool {
+        lock.withLock { stored[account] = token }
+        return true
+    }
+
+    @discardableResult
+    func delete(account: String) -> Bool {
+        lock.withLock { _ = stored.removeValue(forKey: account) }
+        return true
     }
 }

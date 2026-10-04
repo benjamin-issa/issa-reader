@@ -108,7 +108,11 @@ final class LayoutSweepTests: XCTestCase {
         // UserDefaults, which consults the argument domain first, so an empty
         // one puts the app on the sign-in form with no stub server involved.
         let app = XCUIApplication()
-        app.launchArguments = ["-IssaUITestFixture", "-issa.lastServer", ""]
+        // And not the books-from-Files list, which a reader who has used its
+        // link lands on instead: an earlier test on this device may have.
+        app.launchArguments = [
+            "-IssaUITestFixture", "-issa.lastServer", "", "-issa.local.showsListSignedOut", "NO",
+        ]
         app.launch()
 
         XCTAssertTrue(app.otherElements["screen.signIn"].waitForExistence(timeout: 30))
@@ -126,6 +130,80 @@ final class LayoutSweepTests: XCTestCase {
         capture(app, "signIn")
     }
 
+    // MARK: - Books from the reader's files
+
+    /// The local list, populated and then empty.
+    ///
+    /// Signed out, with the book `scripts/layout-sweep.sh` plants in the app's
+    /// `tmp/` added at launch (`-IssaUITestFixtureLocalImport`) — the picker is
+    /// the system's and cannot be driven. Then the book is removed and, once
+    /// the undo window has closed, the empty state is measured on the same
+    /// screen. No margin assertion, as on sign-in: on iPad the list is a
+    /// centred 640-point column, not a shelf at the screen margin.
+    func testLocalBooksScreen() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-IssaUITestFixture", "-issa.lastServer", "",
+            "-IssaUITestFixtureLocalImport", "local-import.epub",
+            // From sign-in, whatever an earlier run on this device left: the
+            // argument domain is read before the stored choice.
+            "-issa.local.showsListSignedOut", "NO",
+        ]
+        app.launch()
+        XCTAssertTrue(app.otherElements["screen.signIn"].waitForExistence(timeout: 30))
+        // The planted book is added as the app starts; give it the moment.
+        let link = app.buttons["link.readFromFiles"].firstMatch
+        XCTAssertTrue(link.waitForExistence(timeout: 10), "no link to the books from Files")
+        Thread.sleep(forTimeInterval: 3)
+        link.tap()
+
+        let list = app.descendants(matching: .any)["screen.localBooks"]
+        XCTAssertTrue(list.waitForExistence(timeout: 15), "the link did not open the local list")
+        let row = app.descendants(matching: .any)["localBook.row"].firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 15), "the planted book was not added")
+        let reference = try LayoutReference.read(from: app)
+        let root = try app.snapshot()
+        recordReference(reference)
+        assertHorizontallyContained(root, reference, screen: "localBooks")
+        assertScrollContentFits(root, reference)
+        capture(app, "localBooks")
+
+        // Book info, from the row's menu.
+        row.press(forDuration: 1.2)
+        let infoItem = app.buttons["Book Info"].firstMatch
+        XCTAssertTrue(infoItem.waitForExistence(timeout: 10), "the row's menu has no Book Info")
+        infoItem.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["screen.localBookInfo"].waitForExistence(timeout: 10))
+        // Captured, not measured: on iPad a form sheet's dimming layer is an
+        // image wider than the window, and it is the system's, not ours.
+        capture(app, "localBookInfo")
+        app.buttons["Done"].firstMatch.tap()
+
+        // The reduced Settings a reader with no server has.
+        let gear = app.buttons["button.localSettings"].firstMatch
+        XCTAssertTrue(gear.waitForExistence(timeout: 10), "no Settings button on the standalone list")
+        gear.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["screen.localSettings"].waitForExistence(timeout: 10))
+        capture(app, "localSettings")
+        app.buttons["Done"].firstMatch.tap()
+        XCTAssertTrue(row.waitForExistence(timeout: 10))
+
+        // The card's frame slides with the swipe, so the revealed Remove is
+        // tapped where its trailing edge was.
+        let frame = row.frame
+        row.swipeLeft(velocity: .slow)
+        app.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: frame.maxX - 24, dy: frame.midY))
+            .tap()
+        XCTAssertTrue(app.descendants(matching: .any)["localBooks.empty"].waitForExistence(timeout: 15))
+        // Past the undo window, so the toast is not in the picture.
+        Thread.sleep(forTimeInterval: 8)
+        let empty = try app.snapshot()
+        assertHorizontallyContained(empty, reference, screen: "localBooksEmpty")
+        assertScrollContentFits(empty, reference)
+        capture(app, "localBooksEmpty")
+    }
+
     // MARK: - Signed in
 
     func testSignedInScreens() throws {
@@ -140,6 +218,16 @@ final class LayoutSweepTests: XCTestCase {
 
         selectTab("Library", in: app)
         try check(app, screen: "library", root: "screen.library", content: nil)
+
+        // A rail that is not a series numbers nothing. Dracula and its sequel
+        // are both recent arrivals in the fixture, and before the badge was
+        // confined to the series rail a "2" sat on the sequel here.
+        let recent = app.descendants(matching: .any)["rail.recently-added"]
+        XCTAssertTrue(recent.waitForExistence(timeout: 15), "no Recently added rail on Browse")
+        XCTAssertEqual(
+            recent.descendants(matching: .any)
+                .matching(NSPredicate(format: "label CONTAINS %@", " in Gothic Horror")).count,
+            0, "a cut of the library numbered its covers as a series")
 
         // The Library tab opens on Browse — rails, not a grid — so the flat
         // shelf has to be asked for. `libraryMode` is persisted through
@@ -163,15 +251,183 @@ final class LayoutSweepTests: XCTestCase {
             XCTFail("no book cell to open")
         }
 
-        selectTab("Settings", in: grid)
+        // The series screen hangs off a book that is in one, and the shelf puts
+        // the newest arrival first — which is not one of the fixture's Gothic
+        // Horror pair. So this leg walks back and asks for Dracula by name.
+        //
+        // Back, not a cold relaunch. Relaunching cost eight to fifteen seconds
+        // a device, and on a machine under memory pressure the second launch is
+        // where the runner died — XCTest then restarted and re-ran only the
+        // signed-out test, so the suite reported two tests and no failures
+        // while quietly capturing neither this screen nor Settings. A pop needs
+        // no new process and cannot be jetsammed.
+        let shelf = grid
+        shelf.navigationBars.buttons.firstMatch.tap()
+        XCTAssertTrue(shelf.descendants(matching: .any)["screen.library"]
+            .waitForExistence(timeout: 15), "the book screen did not pop back to the shelf")
+        // Found through the library's own search rather than by scrolling: the
+        // grid is lazy, so a cell below the fold does not exist to be waited
+        // for, and the fixture's series books are the oldest arrivals — last on
+        // a shelf ordered by date, and on a 375-point screen further down than
+        // a fixed number of swipes reliably reaches. A search puts the one cell
+        // wanted at the top at every width.
+        //
+        // By label rather than by cell identifier, which would put a second
+        // copy of a fixture UUID in this file: a cell is a button whose label
+        // is everything the cover says, so the title is inside it either way.
+        // The phone's search is a plain text field under the header, not a
+        // `.searchable` bar, so it is found by the placeholder that names the
+        // fields the index covers.
+        let search = shelf.textFields["Title, author, narrator, series, tag"]
+        XCTAssertTrue(search.waitForExistence(timeout: 15), "no library search field")
+        search.tap()
+        search.typeText("Dracula\n")
+        let seriesBook = shelf.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS %@", "Dracula"))
+            .firstMatch
+        XCTAssertTrue(seriesBook.waitForExistence(timeout: 15), "no series book to open")
+        seriesBook.tap()
+
+        // The rest of Dracula's series, on its page, numbered in it: the one
+        // rail whose covers answer "which one of these".
+        let seriesRail = shelf.descendants(matching: .any)["rail.the-gothic-horror"]
+        XCTAssertTrue(seriesRail.waitForExistence(timeout: 15), "no series rail on Dracula's page")
+        XCTAssertTrue(
+            seriesRail.descendants(matching: .any)
+                .matching(NSPredicate(format: "label CONTAINS %@", "Book 2 in Gothic Horror"))
+                .firstMatch.exists,
+            "the series rail's covers carry no number")
+
+        // A tag on every fixture book links to its page, which lays out all
+        // six of them.
+        let tagLink = shelf.descendants(matching: .any)["bookDetail.tag"]
+        XCTAssertTrue(tagLink.waitForExistence(timeout: 15), "no linked tag on Dracula's page")
+        tagLink.tap()
+        try check(shelf, screen: "tag", root: "screen.tag", content: "content.tag")
+        XCTAssertEqual(bookCells(in: shelf).count, 6, "the tag page lost some of its books")
+        shelf.navigationBars.buttons.firstMatch.tap()
+
+        let seriesLink = shelf.descendants(matching: .any)["bookDetail.series"]
+        XCTAssertTrue(seriesLink.waitForExistence(timeout: 15), "no series link in the hero")
+        seriesLink.tap()
+        try check(shelf, screen: "series", root: "screen.series", content: nil)
+
+        selectTab("Settings", in: shelf)
         // No margin assertion: Settings is a `List`, its row insets are UIKit's,
         // and asserting against Apple's private metrics is a test that breaks on
         // the next point release for no benefit. It still gets containment and
         // a screenshot.
-        XCTAssertTrue(grid.descendants(matching: .any)["screen.settings"].waitForExistence(timeout: 15))
-        let reference = try LayoutReference.read(from: grid)
-        assertHorizontallyContained(try grid.snapshot(), reference, screen: "settings")
-        capture(grid, "settings")
+        XCTAssertTrue(shelf.descendants(matching: .any)["screen.settings"].waitForExistence(timeout: 15))
+        let reference = try LayoutReference.read(from: shelf)
+        assertHorizontallyContained(try shelf.snapshot(), reference, screen: "settings")
+        capture(shelf, "settings")
+
+        // Advanced, open, with the row to the books from Files, and the list
+        // it pushes — the signed-in placement, inside the Settings tab.
+        // Near the foot of the list, below the fold on a phone.
+        let advanced = shelf.buttons["Advanced"].firstMatch
+        for _ in 0..<6 where !(advanced.exists && advanced.isHittable) {
+            shelf.collectionViews.firstMatch.swipeUp(velocity: .slow)
+        }
+        XCTAssertTrue(advanced.waitForExistence(timeout: 15), "no Advanced disclosure")
+        advanced.tap()
+        for _ in 0..<4 where !shelf.descendants(matching: .any)["settings.localBooks"].firstMatch.isHittable {
+            shelf.collectionViews.firstMatch.swipeUp(velocity: .slow)
+        }
+        let localRow = shelf.descendants(matching: .any)["settings.localBooks"].firstMatch
+        XCTAssertTrue(localRow.waitForExistence(timeout: 15), "no row to the books from Files in Advanced")
+        assertHorizontallyContained(try shelf.snapshot(), reference, screen: "settingsAdvanced")
+        capture(shelf, "settingsAdvanced")
+        localRow.tap()
+        XCTAssertTrue(shelf.descendants(matching: .any)["screen.localBooks"].waitForExistence(timeout: 15),
+                      "the Advanced row did not push the local list")
+        let pushed = try shelf.snapshot()
+        assertHorizontallyContained(pushed, reference, screen: "localBooksPushed")
+        assertScrollContentFits(pushed, reference)
+        capture(shelf, "localBooksPushed")
+    }
+
+    /// Every book cell's identifier on the screen, scrolling to find them: the
+    /// grid is lazy, so a cell below the fold does not exist until it is near.
+    private func bookCells(in app: XCUIApplication) -> Set<String> {
+        let query = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "cell.book."))
+        var seen = Set(query.allElementsBoundByIndex.map(\.identifier))
+        for _ in 0 ..< 8 {
+            app.scrollViews.firstMatch.swipeUp(velocity: .slow)
+            let now = Set(query.allElementsBoundByIndex.map(\.identifier))
+            if now.isSubset(of: seen) { break }
+            seen.formUnion(now)
+        }
+        return seen
+    }
+
+    // MARK: - The reader
+
+    /// The reader, on the read-along book whose EPUB the sweep script plants.
+    ///
+    /// The plant had been dead setup since it was added: no leg here ever
+    /// opened the reader, so its chrome — the progress readout, the bars, the
+    /// narration controls — had no layout coverage at any width, and a
+    /// generator failure went unnoticed. The script plants the file under the
+    /// read-along's name and the ebook's, so whichever edition Read chooses
+    /// for a book whose read-along the fixture does not call aligned, it is
+    /// on disk; the stub server answers every file request with a 404, so a
+    /// missing plant shows here as a reader that never draws a page.
+    ///
+    /// Reached the way a reader would: the shelf's search, the book screen,
+    /// Read. The window reference is read on the book screen, before the
+    /// reader covers the probe.
+    func testReaderScreen() throws {
+        let app = launch(["-issa.library.mode", "all"])
+        waitForLibrary(app)
+        selectTab("Library", in: app)
+        let search = app.textFields["Title, author, narrator, series, tag"]
+        XCTAssertTrue(search.waitForExistence(timeout: 15), "no library search field")
+        search.tap()
+        search.typeText("Peter and Wendy\n")
+        let book = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@",
+                                  "cell.book.", "Peter and Wendy"))
+            .firstMatch
+        guard book.waitForExistence(timeout: 15) else {
+            return XCTFail("the read-along book is not on the shelf")
+        }
+        book.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["screen.bookDetail"].waitForExistence(timeout: 15))
+        let reference = try LayoutReference.read(from: app)
+        recordReference(reference)
+
+        let read = app.descendants(matching: .any)["action.read"].firstMatch
+        guard read.waitForExistence(timeout: 15) else { return XCTFail("no Read action on the book screen") }
+        read.tap()
+
+        // The first-run guide is modal to accessibility, and takes the first
+        // tap itself without turning a page.
+        let coach = app.descendants(matching: .any)
+            .matching(NSPredicate(
+                format: "label BEGINSWITH %@ OR label BEGINSWITH %@",
+                "Reading gestures", "This book is narrated"))
+            .firstMatch
+        if coach.waitForExistence(timeout: 20) {
+            coach.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        }
+        let page = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "value BEGINSWITH %@", "Page "))
+            .firstMatch
+        guard page.waitForExistence(timeout: 60) else {
+            capture(app, "reader")
+            return XCTFail("the reader never drew a page: is the planted EPUB on disk under this book's name?")
+        }
+        // The bars, so their layout is measured too. The middle of the page
+        // toggles them; the edges would turn it.
+        let back = app.buttons["Back to the book"].firstMatch
+        if !back.waitForExistence(timeout: 3) {
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+            XCTAssertTrue(back.waitForExistence(timeout: 10), "the reader's bars never showed")
+        }
+        assertHorizontallyContained(try app.snapshot(), reference, screen: "reader")
+        capture(app, "reader")
     }
 
     /// `content:` is accepted and ignored, deliberately — see below.

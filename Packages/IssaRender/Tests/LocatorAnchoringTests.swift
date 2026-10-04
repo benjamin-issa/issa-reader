@@ -180,6 +180,211 @@ struct LocatorAnchoringTests {
     }
 }
 
+/// Remembered words, found again in a chapter that has been rendered since.
+///
+/// Positions and highlights are both stored with their text: newlines folded to
+/// spaces, written against one rendering of the chapter and read back against
+/// another. The renderer of 2026-09-17 stopped keeping the stray space at the
+/// start of every paragraph, so text stored before it has two spaces at every
+/// paragraph break, text stored after it has one, and the chapter itself has a
+/// newline — and a plain string search matched none of the three to each other.
+@Suite("Finding remembered words again")
+struct NearestOccurrenceTests {
+    static let paragraphs = [
+        "It was the best of times, it was the worst of times.",
+        "He said nothing.",
+        "She waited, and then the other one spoke at last, quietly.",
+        "Nobody answered the door that night, or the next.",
+    ]
+
+    /// The chapter as rendered now: blocks joined by a newline.
+    static let chapter = paragraphs.joined(separator: "\n")
+    /// The same chapter as the old renderer laid it out: a stray space after
+    /// every newline, which is one character per paragraph break above any
+    /// given place.
+    static let oldChapter = paragraphs.joined(separator: "\n ")
+
+    static func location(of words: String, in text: String) -> Int {
+        (text as NSString).range(of: words).location
+    }
+
+    /// What `annotate` and `quote(from:at:)` both do to text before storing it.
+    static func stored(_ text: String) -> String {
+        text.replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// The case that never matched: a selection across a paragraph break, as
+    /// VoiceOver's whole-page highlight makes on almost every page.
+    @Test("an excerpt across a paragraph break finds the newline it was taken across")
+    func acrossAParagraphBreak() throws {
+        let excerpt = Self.stored("worst of times.\nHe said")
+        let found = try #require(LocatorAnchoring.nearestOccurrence(
+            of: excerpt, in: Self.chapter, near: nil))
+        #expect(found.location == Self.location(of: "worst of times", in: Self.chapter))
+        #expect((Self.chapter as NSString).substring(with: found) == "worst of times.\nHe said")
+    }
+
+    /// A mark made under the old renderer, read back under the new: two spaces
+    /// in the excerpt where the chapter now has one newline. The range found is
+    /// the words' extent *now*, a character shorter than the excerpt, so a
+    /// highlight painted from it does not run on into the next word.
+    @Test("an excerpt stored with the old double space matches the new single break")
+    func oldDoubleSpace() throws {
+        let oldOffset = Self.location(of: "worst of times", in: Self.oldChapter)
+        let excerpt = Self.stored(
+            (Self.oldChapter as NSString).substring(with: NSRange(location: oldOffset, length: 25)))
+        #expect(excerpt.contains("  "), "the fixture has to carry the old renderer's space")
+
+        let found = try #require(LocatorAnchoring.nearestOccurrence(
+            of: excerpt, in: Self.chapter, near: oldOffset))
+        #expect(found.location == Self.location(of: "worst of times", in: Self.chapter))
+        #expect(found.length == (excerpt as NSString).length - 1)
+    }
+
+    /// A one-word highlight, made under the old renderer twelve paragraphs
+    /// down — so its stored offset is twelve characters late, and another "the"
+    /// sits nine characters after the marked one, nearer to that offset than
+    /// the mark itself. The words stored before it say which copy it was.
+    @Test("a short excerpt is placed by the words before it, not by the nearest copy")
+    func shortExcerptUsesItsContext() throws {
+        let paragraphs = (1 ... 12).map { "Line \($0)." }
+            + ["In the hall the dog slept, then the other woke."]
+        let chapter = paragraphs.joined(separator: "\n")
+        let old = paragraphs.joined(separator: "\n ")
+        let marked = Self.location(of: "the hall", in: old)
+        let truth = Self.location(of: "the hall", in: chapter)
+        #expect(marked == truth + 12, "one stray space per paragraph above")
+        let before = (old as NSString).substring(with: NSRange(location: marked - 32, length: 32))
+            .replacingOccurrences(of: "\n", with: " ")
+
+        let found = try #require(LocatorAnchoring.nearestOccurrence(
+            of: "the", in: chapter, near: marked, before: before))
+        #expect(found == NSRange(location: truth, length: 3))
+
+        // What the nearest copy alone gives, which is the failure the context
+        // is there for: the "the" of "the dog".
+        let bare = try #require(LocatorAnchoring.nearestOccurrence(of: "the", in: chapter, near: marked))
+        #expect(bare.location == Self.location(of: "the dog", in: chapter))
+    }
+
+    /// "the" is inside "then" and "other" here; a one-word excerpt is only ever
+    /// found as a whole word.
+    @Test("a short excerpt is matched by whole words only")
+    func shortExcerptIsWholeWords() throws {
+        let then = Self.location(of: "then", in: Self.chapter)
+        let other = Self.location(of: "other", in: Self.chapter) + 1
+        for near in [then, other] {
+            let found = try #require(LocatorAnchoring.nearestOccurrence(
+                of: "the", in: Self.chapter, near: near))
+            #expect(found.location != then && found.location != other)
+            let text = Self.chapter as NSString
+            #expect(text.character(at: NSMaxRange(found)) == UInt16(UnicodeScalar(" ").value),
+                    "a whole word, not the front of one")
+        }
+    }
+
+    /// A short excerpt the chapter only holds inside longer words is not in the
+    /// chapter at all.
+    @Test("a short excerpt found only inside longer words is not found")
+    func shortExcerptInsideWordsOnly() {
+        #expect(LocatorAnchoring.nearestOccurrence(of: "oth", in: Self.chapter, near: 0) == nil)
+    }
+
+    @Test("an occurrence must begin inside the bounds it is given")
+    func bounds() throws {
+        let first = Self.location(of: "of times", in: Self.chapter)
+        let second = (Self.chapter as NSString).range(of: "of times", options: .backwards).location
+        #expect(first != second)
+        let found = try #require(LocatorAnchoring.nearestOccurrence(
+            of: "of times", in: Self.chapter, near: first,
+            startingWithin: NSRange(location: first + 1, length: 40)))
+        #expect(found.location == second)
+        #expect(LocatorAnchoring.nearestOccurrence(
+            of: "It was the best", in: Self.chapter, near: 0,
+            startingWithin: NSRange(location: 10, length: 20)) == nil)
+    }
+
+    @Test("nothing to look for, or nowhere to look, finds nothing")
+    func degenerate() {
+        #expect(LocatorAnchoring.nearestOccurrence(of: "  \n ", in: Self.chapter, near: 3) == nil)
+        #expect(LocatorAnchoring.nearestOccurrence(of: "said", in: "", near: nil) == nil)
+    }
+
+    /// F08#5, through the rung that restores a position: the quote of a place
+    /// taken where the next sixty-four characters cross a paragraph break.
+    @Test("a quote across a newline re-anchors a position")
+    func quoteAcrossANewlineReanchors() throws {
+        let truth = Self.location(of: "the worst of times", in: Self.chapter)
+        let quote = try #require(LocatorAnchoring.quote(from: Self.chapter, at: truth))
+        #expect(quote.highlight?.contains("He said nothing") == true, "the quote has to cross the break")
+        // The recorded offset is from another rendering, a few characters out.
+        let locator = ReadiumLocator(
+            href: "ch01.xhtml", type: "application/xhtml+xml",
+            locations: .init(progression: Double(truth) / Double((Self.chapter as NSString).length),
+                             charOffset: truth + 3),
+            text: quote,
+        )
+        let offset = LocatorAnchoring.characterOffset(for: locator, in: Self.chapter, fragmentRanges: [:])
+        #expect(offset == truth)
+    }
+
+    /// C-07, for a bookmark or a position on a page that opens mid-sentence: the
+    /// sentence id wins, and the recorded offset refines it — but an offset
+    /// recorded under the old renderer is a few characters out and still inside
+    /// a long sentence, so it was returned as it stood and could land a page
+    /// late. The words recorded there say where it is now.
+    @Test("a stale offset inside its sentence is corrected by the words recorded there")
+    func staleOffsetInsideTheSentence() throws {
+        let sentence = Self.paragraphs[2]
+        let oldStart = Self.location(of: sentence, in: Self.oldChapter)
+        // A page break in the middle of the sentence, in the old rendering.
+        let oldOffset = Self.location(of: "the other one", in: Self.oldChapter)
+        let quote = try #require(LocatorAnchoring.quote(from: Self.oldChapter, at: oldOffset))
+
+        let newStart = Self.location(of: sentence, in: Self.chapter)
+        let ranges = ["s2": NSRange(location: newStart, length: (sentence as NSString).length)]
+        let truth = Self.location(of: "the other one", in: Self.chapter)
+        #expect(oldOffset - oldStart == truth - newStart, "the same place in the sentence")
+        #expect(oldOffset != truth && NSLocationInRange(oldOffset, ranges["s2"]!),
+                "and stale, but still inside it — the case the offset was trusted in")
+
+        let locator = ReadiumLocator(
+            href: "ch01.xhtml", type: "application/xhtml+xml",
+            locations: .init(fragments: ["s2"], charOffset: oldOffset),
+            text: quote,
+        )
+        #expect(LocatorAnchoring.characterOffset(
+            for: locator, in: Self.chapter, fragmentRanges: ranges) == truth)
+    }
+
+    /// The same staleness a few characters further on: twelve paragraphs down,
+    /// the old offset of a place near the end of a short sentence is past the
+    /// sentence's end now, so it was set aside for the sentence's start — which
+    /// can be a page back. The words recorded at the place are still inside it.
+    @Test("a stale offset past the end of its sentence still finds the words inside it")
+    func staleOffsetPastTheSentence() throws {
+        let sentence = "A short one, then more."
+        let paragraphs = (1 ... 12).map { "Line \($0)." } + [sentence, "The next paragraph."]
+        let chapter = paragraphs.joined(separator: "\n")
+        let old = paragraphs.joined(separator: "\n ")
+        let range = NSRange(
+            location: Self.location(of: sentence, in: chapter), length: (sentence as NSString).length)
+        let oldOffset = Self.location(of: "then more", in: old)
+        let truth = Self.location(of: "then more", in: chapter)
+        #expect(oldOffset == truth + 12)
+        #expect(oldOffset >= NSMaxRange(range), "past the sentence's end, as the chapter is now")
+
+        let locator = ReadiumLocator(
+            href: "ch01.xhtml", type: "application/xhtml+xml",
+            locations: .init(fragments: ["s12"], charOffset: oldOffset),
+            text: LocatorAnchoring.quote(from: old, at: oldOffset),
+        )
+        #expect(LocatorAnchoring.characterOffset(
+            for: locator, in: chapter, fragmentRanges: ["s12": range]) == truth)
+    }
+}
+
 /// Chapter labelling, which Gutenberg's EPUBs make harder than it looks: a
 /// whole book in one spine file, chapters distinguished only by anchor.
 @Suite("Labelling a place in the book")

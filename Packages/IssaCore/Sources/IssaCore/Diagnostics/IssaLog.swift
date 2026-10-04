@@ -229,9 +229,12 @@ public extension IssaLog {
                 options: .regularExpression,
             )
             // `key=value` and `"key": "value"` for anything named as a secret.
+            // The quote after the key is optional too: without it the JSON
+            // shape — the one a logged body would take — never matched, as
+            // `"token"` puts a quote between the key and its colon.
             for key in secretKeys {
                 result = result.replacingOccurrences(
-                    of: "(?i)\(key)\\s*[=:]\\s*\"?[A-Za-z0-9._~+/=-]+\"?",
+                    of: "(?i)\"?\(key)\"?\\s*[=:]\\s*\"?[A-Za-z0-9._~+/=-]+\"?",
                     with: "\(key)=«redacted»",
                     options: .regularExpression,
                 )

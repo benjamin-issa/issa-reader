@@ -21,10 +21,14 @@
 # is one device, and the trap means a failure still cleans up.
 
 set -euo pipefail
+# Before the `cd`, so usage can find this file from wherever it was run.
+SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 ROOT="$PWD"
 
-RUNTIME="com.apple.CoreSimulator.SimRuntime.iOS-26-5"
+usage() { sed -n '6,10p' "$SELF" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+RUNTIME="com.apple.CoreSimulator.SimRuntime.iOS-27-0"
 SCHEME="IssaReader-iOS"
 # The same file the build reads, so the sweep launches the app it just built
 # rather than a bundle identifier that has drifted from it.
@@ -89,7 +93,11 @@ for arg in "$@"; do
         | python3 -c 'import json,sys;d=json.load(sys.stdin)["devices"];[print(x["udid"]) for v in d.values() for x in v if x["name"].startswith("issa-sweep-")]' \
         | while read -r udid; do echo "  deleting $udid"; xcrun simctl delete "$udid"; done
       exit 0 ;;
-    --*) ;;
+    -h|--help) usage ;;
+    # An option this does not know is an error, not a no-op: `--keep-device`
+    # used to fall through to the defaults and delete every device the run
+    # made, the opposite of what was asked, without a word.
+    -*) echo "error: unknown option $arg" >&2; usage ;;
     *) WANTED="$arg"; MODE=named ;;
   esac
 done
@@ -154,7 +162,10 @@ APP="$PRODUCTS/IssaReader-iOS.app"
 
 # The reader needs a book on disk: DownloadManager uses a background session,
 # which URLProtocol cannot intercept, so the fixture cannot serve one.
-python3 Tools/scripts/make-readalong-fixture.py "$WORK/readalong.epub" >/dev/null 2>&1 || true
+# LayoutSweepTests.testReaderScreen opens it, so a generator that fails is a
+# failed sweep, not a plant quietly skipped.
+python3 Tools/scripts/make-readalong-fixture.py "$WORK/readalong.epub" > "$WORK/readalong.log" 2>&1 \
+  || { echo "error: the reader's book could not be generated — $WORK/readalong.log" >&2; exit 1; }
 
 FAILED=0
 RESULTS=()
@@ -178,12 +189,20 @@ for row in "${SELECTED[@]}"; do
   # Install first: there is no data container before one. xcodebuild's own
   # reinstall of the same bundle id below preserves it.
   xcrun simctl install "$CURRENT_UDID" "$APP"
-  if [ -f "$WORK/readalong.epub" ]; then
-    DATA=$(xcrun simctl get_app_container "$CURRENT_UDID" "$BUNDLE_ID" data)
-    mkdir -p "$DATA/Library/Application Support/Books"
+  # Under both the read-along's name and the ebook's: Read opens the
+  # read-along only when the server calls it aligned, which the fixture's
+  # does not, so the edition the reader asks for is the ebook.
+  DATA=$(xcrun simctl get_app_container "$CURRENT_UDID" "$BUNDLE_ID" data)
+  mkdir -p "$DATA/Library/Application Support/Books"
+  for format in readaloud ebook; do
     cp "$WORK/readalong.epub" \
-       "$DATA/Library/Application Support/Books/$FIXTURE_READALONG_UUID-readaloud.epub"
-  fi
+       "$DATA/Library/Application Support/Books/$FIXTURE_READALONG_UUID-$format.epub"
+  done
+  # And a copy for the books-from-Files screens (LocalBooksFlowTests,
+  # LayoutSweepTests.testLocalBooksScreen), which the app adds at launch under
+  # -IssaUITestFixtureLocalImport: the system picker cannot be driven.
+  mkdir -p "$DATA/tmp"
+  cp "$WORK/readalong.epub" "$DATA/tmp/local-import.epub"
 
   RESULT="$WORK/$slug.xcresult"
   rm -rf "$RESULT"
@@ -193,13 +212,19 @@ for row in "${SELECTED[@]}"; do
   # ran" check below could never fire again — a scheme that dropped the UI
   # target would have run the unit suite on each simulator, copied no
   # screenshots and printed "ok". Restricting the run restores the check's
-  # meaning, and stops the unit suite running once per device width.
+  # meaning, and stops the unit suite running once per device width. It also
+  # keeps out IssaLiveUITests, which is in the same scheme and would only skip.
+  #
+  # `-collect-test-diagnostics never`: without it Xcode 27 runs `simctl
+  # diagnose` once a session ends and waits on it indefinitely, so a sweep
+  # whose tests had all finished would never reach the next device.
   xcodebuild test-without-building \
       -xctestrun "$XCTESTRUN" \
       -only-testing:IssaLayoutUITests \
       -destination "platform=iOS Simulator,id=$CURRENT_UDID" \
       -resultBundlePath "$RESULT" \
       -parallel-testing-enabled NO \
+      -collect-test-diagnostics never \
       TEST_RUNNER_ISSA_SWEEP_DEVICE="$slug" \
       > "$WORK/$slug.log" 2>&1
   status=$?

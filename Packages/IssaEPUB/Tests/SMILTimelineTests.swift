@@ -384,6 +384,56 @@ struct ScopedFragmentTests {
         let line = timeline()
         let entry = try #require(line.entry(forFragment: "s1"))
         #expect(entry.textHref == "OEBPS/ch01.xhtml", "documented as best effort")
+        // And a scoped one that misses still falls back, for the callers that
+        // keep it.
+        #expect(line.entry(forFragment: "s1", inDocument: "OEBPS/ch09.xhtml")?.textHref == "OEBPS/ch01.xhtml")
+    }
+
+    /// The lookup for a caller that knows the document: exact, or nothing.
+    /// The fallback above handed chapter one's sentence to a caller asking
+    /// about chapter nine, and a resume labelled the answer exact.
+    @Test("an exact lookup answers in the document asked about, or not at all")
+    func exactNeverFallsBack() throws {
+        let line = timeline()
+        let third = try #require(line.exactEntry(forFragment: "s2", inDocument: "OEBPS/ch03.xhtml"))
+        #expect(third.textHref == "OEBPS/ch03.xhtml")
+        #expect(line.exactEntry(forFragment: "s1", inDocument: "OEBPS/ch09.xhtml") == nil)
+        #expect(line.exactEntry(forFragment: "s9", inDocument: "OEBPS/ch01.xhtml") == nil)
+        #expect(line.exactEntry(forFragment: "s1", inDocument: "/OEBPS/ch01.xhtml") == nil,
+                "spelled differently is a different key; documentHrefs is how a caller finds the right one")
+    }
+
+    @Test("the documents narrated, each once, in book order")
+    func documentHrefsInOrder() {
+        #expect(timeline().documentHrefs == ["OEBPS/ch01.xhtml", "OEBPS/ch02.xhtml", "OEBPS/ch03.xhtml"])
+    }
+}
+
+/// "Next chapter" over a timeline that visits a document twice.
+@Suite("Stepping between runs of a document")
+struct DocumentRunStepTests {
+    ///      0  a-s0  a   1  b-s0  b   2  a-s1  a (the second visit)   3  c-s0  c
+    static func timeline() -> SMILTimeline {
+        let rows = [("a-s0", "OEBPS/a.xhtml"), ("b-s0", "OEBPS/b.xhtml"),
+                    ("a-s1", "OEBPS/a.xhtml"), ("c-s0", "OEBPS/c.xhtml")]
+        return SMILTimeline(entries: rows.enumerated().map { index, row in
+            SMILEntry(fragmentID: row.0, textHref: row.1, audioHref: "a.mp3",
+                      start: Double(index) * 5, end: Double(index + 1) * 5,
+                      cumulativeEnd: Double(index + 1) * 5)
+        })
+    }
+
+    @Test("the run beside the one an entry is in, either way, and nothing past the ends")
+    func adjacentRuns() {
+        let line = Self.timeline()
+        let entries = line.entries
+        #expect(line.firstEntry(ofRunAdjacentTo: entries[2], forward: true) == entries[3])
+        #expect(line.firstEntry(ofRunAdjacentTo: entries[2], forward: false) == entries[1])
+        #expect(line.firstEntry(ofRunAdjacentTo: entries[1], forward: true) == entries[2],
+                "the second visit to a, not the first")
+        #expect(line.firstEntry(ofRunAdjacentTo: entries[0], forward: false) == nil)
+        #expect(line.firstEntry(ofRunAdjacentTo: entries[3], forward: true) == nil)
+        #expect(line.documentHrefs == ["OEBPS/a.xhtml", "OEBPS/b.xhtml", "OEBPS/c.xhtml"])
     }
 }
 

@@ -130,6 +130,49 @@ struct BoundaryTests {
         #expect(order.elementsEqual(order.sorted { $0 < $1 }, by: ==))
     }
 
+    /// The search, the recap and the unmet-word probe draw one line.
+    ///
+    /// They are three queries in the spoiler-safety path, and the probe once
+    /// wrote its own two-part copy of the boundary clause (R-75). Here every
+    /// word of the passage the reader is standing in — read half and unread half
+    /// — is probed, and the probe has to agree with what the bounded search
+    /// would hand the model: met exactly when some passage the search returns,
+    /// cut where the reader is, contains it.
+    @Test(
+        "the unmet-word probe and the search agree on every word around the reader",
+        arguments: [40, 120, 333],
+    )
+    func probeAndSearchDrawOneLine(cut: Int) async throws {
+        let (store, _, directory) = try await AskFixture.preparedStore()
+        defer { AskFixture.remove(directory) }
+        let spine = AskFixture.Spine.chapterII
+        let passages = PassageChunker.chunk(text: try AskFixture.text(spine: spine), spineIndex: spine)
+        let straddled = try #require(passages.first {
+            ($0.text as NSString).length > cut + 80 && $0.ordinal > 1
+        })
+        let boundary = ReadingBoundary(spineIndex: spine, charOffset: straddled.start + cut)
+        let words = Array(Set(QueryTerms.tokens(in: straddled.text).filter {
+            $0.count > 2 && !$0.contains("'")
+        })).sorted()
+        try #require(words.count > 10)
+
+        let unmet = Set(try await store.unmetWords(words, in: AskFixture.bookUUID, before: boundary))
+        for word in words {
+            let pattern = try #require(FTSQuery.all([word]))
+            let found = try await store.passages(
+                matching: pattern, in: AskFixture.bookUUID, before: boundary,
+                order: .bookOrder, limit: 1_000,
+            )
+            let seen = found.contains { AskIndexStore.contains(phrase: word, in: $0.passage.text) }
+            #expect(seen == !unmet.contains(word), "\(word) at \(cut): searched \(seen)")
+        }
+        // And the recap ends where the search does.
+        let recap = try await store.recapPassages(in: AskFixture.bookUUID, before: boundary, limit: 3)
+        let last = try #require(recap.last)
+        #expect(last.passage.ordinal == straddled.ordinal)
+        #expect(last.passage.end == boundary.charOffset)
+    }
+
     @Test("a name the book has not used yet is reported as unmet")
     func unmetWordsSeesTheGap() async throws {
         let (store, _, directory) = try await AskFixture.preparedStore()
@@ -152,6 +195,44 @@ struct BoundaryTests {
         #expect(later.isEmpty)
     }
 
+    /// The paragraph on screen counts only as far as the reader has got.
+    ///
+    /// The answer side of the guard probes through here, and "met" releases an
+    /// answer — so a name only in the unread tail of the passage the reader is
+    /// standing in, which retrieval cut away from the model, passed when the
+    /// model named it from memory.
+    @Test("a name only in the unread tail of the passage on screen is unmet")
+    func unreadTailIsNotMet() async throws {
+        let opening = "Ryn waited by the gate while the others argued about the road."
+        let (store, _, end, directory) = try AskFixture.syntheticStore(chapters: [[
+            "\(opening) Then Dask arrived from the hills with a lantern and a dog.",
+        ]])
+        defer { AskFixture.remove(directory) }
+        let midway = ReadingBoundary(
+            spineIndex: 0, charOffset: (opening as NSString).length,
+        )
+
+        let early = try await store.unmetWords(
+            ["dask", "ryn", "lantern"], in: AskFixture.bookUUID, before: midway,
+        )
+        #expect(early == ["dask", "lantern"])
+
+        // Once the reader has read the sentence, it is met like any other.
+        let later = try await store.unmetWords(
+            ["dask", "ryn", "lantern"], in: AskFixture.bookUUID, before: end,
+        )
+        #expect(later.isEmpty)
+    }
+
+    @Test("a phrase is matched the way the index tokenises it")
+    func phraseMatchesTheIndex() {
+        #expect(AskIndexStore.contains(phrase: "jean'luc", in: "Captain Jean-Luc stood."))
+        #expect(!AskIndexStore.contains(phrase: "jean'luc", in: "Captain Jean stood by Luc."))
+        #expect(AskIndexStore.contains(phrase: "alice", in: "Alice’s sister read."))
+        #expect(AskIndexStore.contains(phrase: "zoe", in: "Zoë laughed."))
+        #expect(!AskIndexStore.contains(phrase: "rab", in: "The Rabbit ran."))
+    }
+
     @Test("the name table hides a character the reader has not met")
     func namesAreBounded() async throws {
         let (store, _, directory) = try await AskFixture.preparedStore()
@@ -168,17 +249,18 @@ struct BoundaryTests {
 
     // MARK: - The gate and the classifier
 
-    /// The spoiler gate reads the text the classifier decided on, on the book.
+    /// The spoiler gate reads every sentence of the question, on the book.
     ///
-    /// A reader who has lost the thread asks their question and then checks
-    /// their own memory out loud. The classifier already ignores the aside — this
-    /// is an identity question about Dinah, and retrieval is about Dinah — but
-    /// the gate read the whole question, found a capitalised word this book has
-    /// never printed, and refused the question that was asked. The excerpts it
-    /// would have refused could not have contained that word: they were
-    /// retrieved for the clause, which is the whole argument for the change.
-    @Test("an unmet name in an aside no longer refuses the clause that was asked")
-    func theGateReadsTheLeadingClause() async throws {
+    /// The classifier ignores the aside — this is an identity question about
+    /// Dinah, and retrieval is about Dinah — and for a while the gate did too,
+    /// on the ground that excerpts retrieved for the clause could not contain
+    /// the aside's word. But the model answers from memory whatever the
+    /// excerpts hold, and the answer side exempted every word of the question,
+    /// so an unmet name in a second sentence passed both guards (R-04). An
+    /// aside naming somebody the book has not introduced is now refused, and
+    /// an aside naming only people the reader has met is still answered.
+    @Test("an unmet name in an aside refuses the question, and a met one does not")
+    func theGateReadsEverySentence() async throws {
         let (store, _, directory) = try await AskFixture.preparedStore()
         defer { AskFixture.remove(directory) }
         let retriever = AskRetriever(
@@ -186,21 +268,28 @@ struct BoundaryTests {
             boundary: try AskFixture.endOf(spine: AskFixture.Spine.chapterI),
         )
 
-        // "Ministry" is in no spine of *Alice*, so this was `.notYet(["ministry"])`.
-        let asked = try await retriever.retrieve(
+        // "Ministry" is in no spine of *Alice*.
+        let aside = try await retriever.retrieve(
             question: "wait who is Dinah again? Is she one of the Ministry people?",
+        )
+        if case let .notYet(unmet) = aside {
+            #expect(unmet == ["ministry"])
+        } else {
+            Issue.record("an unmet name in the aside was not probed")
+        }
+
+        // The control: the same shape with an aside the reader has met.
+        let asked = try await retriever.retrieve(
+            question: "wait who is Dinah again? Is she Alice's cat?",
         )
         if case let .evidence(ranked, kind) = asked {
             #expect(kind.label == "identity")
-            #expect(!ranked.isEmpty)
             #expect(ranked.contains { $0.passage.text.lowercased().contains("dinah") })
         } else {
             Issue.record("the clause the reader asked about was refused")
         }
 
-        // The control, in the same test: a question the classifier read *whole*
-        // is still gated whole. Nothing here narrows what is checked; the gate
-        // moved to the classifier's own text, and this question's is all of it.
+        // And a question the classifier read whole is gated whole.
         let refused = try await retriever.retrieve(
             question: "i lost track. Who is the Cheshire Cat?",
         )

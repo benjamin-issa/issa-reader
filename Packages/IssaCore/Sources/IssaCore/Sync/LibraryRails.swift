@@ -17,7 +17,24 @@ public struct SeriesGroup: Sendable, Hashable, Identifiable {
     /// Where a book sits in *this* series. A book can belong to two, so the
     /// membership is looked up by name rather than taken from `series.first`.
     public func position(of book: Book) -> Double? {
-        book.series.first { $0.name == name }?.position
+        book.membership(inSeries: name)?.position
+    }
+
+    /// How long the series can be said to be: the number of books held,
+    /// when their positions are exactly 1 to that number, and nil otherwise.
+    ///
+    /// The server numbers a book within its series but never says how many
+    /// there are, so "of N" can only be what the library holds — and the book
+    /// screen said it whatever the positions were: holding books 2 and 3 read
+    /// "Book 2 of 2" beside a "Book 3" the same library holds. With the whole
+    /// run from one, no book held contradicts it. A novella at 1.5, two books
+    /// at one place, or one with no number at all, and it is not said.
+    public var statedCount: Int? {
+        let held = books.compactMap(position(of:)).sorted()
+        guard !held.isEmpty, held.count == books.count,
+              held == (1 ... held.count).map(Double.init)
+        else { return nil }
+        return held.count
     }
 }
 
@@ -44,7 +61,8 @@ public struct LibraryRails: Sendable, Equatable {
     /// its "See all" opens can never disagree about a book.
     public let withAudio: [Book]
     /// The most-used tags, each with the books that carry it. Tags on a single
-    /// book are skipped — a rail of one is a label, not a place to look around.
+    /// book are skipped — a rail of one is a label, not a place to look around
+    /// (`minimumBooksPerTag`, the floor a book page's tag chip links by too).
     public let tagRails: [TagRail]
     /// Books not yet started, newest arrivals first — the Reading tab's
     /// "Up next".
@@ -52,6 +70,11 @@ public struct LibraryRails: Sendable, Equatable {
     /// Books in progress by status, most recently positioned first and the
     /// ones never opened last. Uncapped: the Reading tab lists them all.
     public let reading: [Book]
+    /// Every tag, with each book that carries it once, in catalogue order —
+    /// `LibraryDerivation.byTag`, which the tag rails above are cut from.
+    /// Kept so the app model memoises its tag index from this pass rather
+    /// than grouping the whole library a second time.
+    public let byTag: [String: [Book]]
 
     public struct TagRail: Sendable, Equatable, Identifiable {
         public let tag: String
@@ -65,20 +88,19 @@ public struct LibraryRails: Sendable, Equatable {
         recentlyAdded = Array(Self.byArrival(books.filter { $0.createdAt?.value != nil })
             .prefix(Self.railLength))
 
-        series = LibraryDerivation(books: books).bySeries
+        // Each book once per series and per tag, so "more than one book"
+        // below counts books, not mentions. See `LibraryDerivation.grouped`.
+        let derivation = LibraryDerivation(books: books)
+        series = derivation.bySeries
             .filter { $0.value.count > 1 }
             .map { SeriesGroup(name: $0.key, books: $0.value) }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
 
-        withAudio = Array(books.filter { $0.hasReadalong || $0.audiobook != nil }
-            .prefix(Self.railLength))
+        withAudio = Array(books.filter(\.hasServableAudio).prefix(Self.railLength))
 
-        var byTag: [String: [Book]] = [:]
-        for book in books {
-            for tag in book.tags { byTag[tag.name, default: []].append(book) }
-        }
+        byTag = derivation.byTag
         tagRails = byTag
-            .filter { $0.value.count > 1 }
+            .filter { $0.value.count >= Self.minimumBooksPerTag }
             .sorted { $0.value.count == $1.value.count ? $0.key < $1.key : $0.value.count > $1.value.count }
             .prefix(Self.tagRailCount)
             .map { TagRail(tag: $0.key, books: Array($0.value.prefix(Self.railLength))) }

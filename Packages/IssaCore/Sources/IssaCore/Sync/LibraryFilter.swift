@@ -15,6 +15,7 @@ public struct LibraryArrangement: Codable, Hashable, Sendable {
         case progress
         case duration
         case narrator
+        case series
 
         public var id: String { rawValue }
 
@@ -27,6 +28,7 @@ public struct LibraryArrangement: Codable, Hashable, Sendable {
             case .progress: "Progress"
             case .duration: "Length"
             case .narrator: "Narrator"
+            case .series: "Series"
             }
         }
     }
@@ -157,7 +159,7 @@ public extension LibraryArrangement {
             case .toRead: Self.stage(of: book) == .toRead
             case .finished: Self.stage(of: book) == .finished
             case .downloaded: isDownloaded(book)
-            case .withNarration: book.hasReadalong || book.audiobook != nil
+            case .withNarration: book.hasServableAudio
             }
         }
         if !tags.isEmpty {
@@ -170,30 +172,98 @@ public extension LibraryArrangement {
         return sorted(filtered)
     }
 
-    enum Stage: Sendable { case toRead, reading, finished }
+    /// The three reading stages: the library's shelves, and the sections of
+    /// the tag and "More by" pages (`StagedBooks`), which are the same stages
+    /// rather than a copy of them.
+    public enum Stage: Sendable { case toRead, reading, finished }
 
     /// Which of the three reading stages a book is in.
     ///
-    /// Status names belong to the server and an admin may rename them, so this
-    /// reads the name rather than matching a fixed vocabulary. Order matters:
-    /// "Currently Reading" contains "read", so testing for finished first would
-    /// file every book in progress as done.
+    /// A book with a status is shelved by the status's name,
+    /// `stage(ofStatusNamed:)`.
+    ///
+    /// A book with *no* status is shelved where the server's own rule files a
+    /// book once a position is written for it. With no position it is
+    /// unstarted. With one — any one, 0% and a locator with no progression
+    /// included — it is shelved under the built-in status
+    /// `StatusAdvance.builtInStatusName(after:)` names: "Read" at 98% or more,
+    /// "Reading" short of that. That is the function `StatusAdvance` files a
+    /// book with, so the shelf cannot disagree with the write. It did while
+    /// the shelf read the progress itself: a book at 0% stayed on "To read"
+    /// here, where the server's rule and this device's write both put it on
+    /// "Reading".
+    ///
+    /// 2.x never sends a book without a status: it gives every book a status
+    /// row for every reader — adding a book writes one per user, adding a user
+    /// one per book, and a migration backfilled any gap. 3.x does send one,
+    /// and never moves it — its position write updates a status row the book
+    /// does not have — so a book read to the end in the web reader would
+    /// otherwise sit on "To read" forever. This files it where 2.x would have.
+    /// Display only: nothing is written back; `StatusAdvance` does that for
+    /// positions this device writes.
     static func stage(of book: Book) -> Stage {
-        guard let name = book.status?.name.lowercased(), !name.isEmpty else { return .toRead }
+        if let status = book.status { return stage(ofStatusNamed: status.name) }
+        guard let locator = book.position?.locator else { return .toRead }
+        return stage(ofStatusNamed: StatusAdvance.builtInStatusName(after: locator))
+    }
+
+    /// Which of the three reading stages a status of this name is.
+    ///
+    /// This matches the status name loosely rather than against a fixed
+    /// vocabulary. 2.14.21 ships exactly the three built-ins, with no API to
+    /// add or rename one, so there the looseness is only defensive; 3.x lets an
+    /// admin add statuses of their own, which it files by their wording where
+    /// that says a stage. It reads `name`, never `label`: 3.x fixes the
+    /// built-in names and puts an admin's wording in the label, so "Read"
+    /// relabelled "Finished" is still named "Read".
+    ///
+    /// The bare word "read" says finished only when nothing beside it says
+    /// otherwise. It used to say it whatever surrounded it, so "Read later",
+    /// "Not read" and "Re-read" all filed books under Finished, off Up next
+    /// and Reading. In order:
+    ///
+    /// 1. Put off or turned around — "To read", "Read later", "Up next", "Not
+    ///    read", "Never finished", "Unread", "Did not finish": to read.
+    /// 2. Again or in part — "Re-read", "Half read", "Partially read": reading.
+    /// 3. Said to be over — "Finished", "Finished reading", "Done",
+    ///    "Completed": finished, ahead of the "reading" in the longer ones.
+    /// 4. "Reading", "Currently reading", "In progress": reading.
+    /// 5. "Read" with nothing to qualify it — "Read", "Already read": finished.
+    ///
+    /// Anything else ("Abandoned", "Reference", "DNF") is none of the three,
+    /// and unstarted is the least wrong place for it.
+    static func stage(ofStatusNamed statusName: String) -> Stage {
+        let name = statusName.lowercased()
+        guard !name.isEmpty else { return .toRead }
         // Whole words for the short ones, substrings only for the phrases.
         // "Abandoned" contains "done", so a reader who abandoned a book found
-        // it filed under Finished.
+        // it filed under Finished. Split on anything not a letter, so "Re-read"
+        // and "Half-read" are two words each.
         let words = Set(name.split { !$0.isLetter }.map(String.init))
-        if words.contains("reading") || name.contains("in progress") { return .reading }
-        if name.contains("to read") || words.contains("unread")
-            || words.contains("want") || name.contains("not started") { return .toRead }
-        if words.contains("read") || words.contains("finished") || words.contains("done") {
-            return .finished
-        }
-        // An entirely custom status ("Abandoned", "Reference") is not one of
-        // the three; treating it as unstarted is the least wrong answer.
+        let says: (String) -> Bool = { words.contains($0) }
+
+        let putOff = name.contains("to read") || name.contains("not started")
+            || says("later") || says("next") || says("want")
+        let turnedAround = says("not") || says("never") || says("un")
+            || words.contains { $0.hasPrefix("un") && Self.stageWords.contains(String($0.dropFirst(2))) }
+        if putOff || turnedAround { return .toRead }
+
+        let readWords = says("read") || says("reading")
+        let again = (says("re") && readWords) || says("reread") || says("rereading") || (says("again") && readWords)
+        let inPart = says("half") || says("partially") || says("partly")
+        if again || inPart { return .reading }
+
+        if says("finished") || says("done") || says("completed") || says("complete") { return .finished }
+        if says("reading") || name.contains("in progress") { return .reading }
+        if says("read") { return .finished }
         return .toRead
     }
+
+    /// What follows "un" in a status that turns a stage around: "Unread",
+    /// "Unfinished", "Unstarted".
+    private static let stageWords: Set<String> = [
+        "read", "reading", "finished", "started", "done", "completed",
+    ]
 
     private func sorted(_ books: [Book]) -> [Book] {
         let ordered: [Book]
@@ -260,8 +330,48 @@ public extension LibraryArrangement {
                 case (nil, nil): return false
                 }
             }
+        case .series:
+            // Standalone books sort after every series either way, the rule
+            // `.recent` and `.narrator` follow for the bucket that has nothing
+            // to compare — so the direction lives in the comparator, and the
+            // blanket reversal below cannot lift a library's unseried majority
+            // above the sequences this sort exists to show.
+            return books.sorted { Self.inSeriesOrder($0, $1, ascending: ascending) }
         }
         return ascending ? ordered.reversed() : ordered
+    }
+
+    /// Reading order across a whole shelf: series first, each in its own order,
+    /// standalone books after them.
+    ///
+    /// Its own function because the rule is three comparisons deep — series
+    /// name, then position within it, then title — and each has to flip with
+    /// the direction while the two buckets that carry no value at all, an
+    /// unnumbered book and an unseried one, stay where they are.
+    static func inSeriesOrder(_ left: Book, _ right: Book, ascending: Bool) -> Bool {
+        // The same spelling `.narrator` uses: a comparison that reads forward
+        // is `.orderedAscending` unless the reader asked for the reverse.
+        let forward: ComparisonResult = ascending ? .orderedDescending : .orderedAscending
+        switch (left.primarySeries, right.primarySeries) {
+        case let (l?, r?):
+            let byName = l.name.localizedCaseInsensitiveCompare(r.name)
+            if byName != .orderedSame { return byName == forward }
+            switch (l.position, r.position) {
+            case let (lp?, rp?) where lp != rp: return ascending ? lp > rp : lp < rp
+            // A book the server never numbered has no place in the run, so it
+            // sits after the numbered ones whichever way the series is read.
+            case (nil, _?): return false
+            case (_?, nil): return true
+            // Same series, same position, or neither numbered: the title
+            // decides, below.
+            default: break
+            }
+        case (nil, _?): return false
+        case (_?, nil): return true
+        case (nil, nil): break
+        }
+        return sortKey(left.title)
+            .localizedCaseInsensitiveCompare(sortKey(right.title)) == forward
     }
 
     static func duration(of book: Book) -> Double {

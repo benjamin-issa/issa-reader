@@ -117,7 +117,9 @@ struct TVRootView: View {
                 }
             }
             Tab("Settings", systemImage: "gearshape", value: TVTab.settings) {
-                NavigationStack { SettingsView() }
+                // Downloads & storage lists posters that push a `Book`, and a
+                // stack with no destination for one makes them do nothing.
+                NavigationStack { SettingsView().tvBookDestination(session: app.session) }
             }
         }
     }
@@ -267,9 +269,14 @@ struct TVLibraryView: View {
                     section("Continue reading") {
                         // A row rather than a grid, so the shelf reads as
                         // "these first" rather than as more of the same.
+                        // Built by hand rather than through `BookGrid`, which
+                        // is why it takes the poster's defaults — and now that
+                        // no caption line is reserved under a poster, those
+                        // defaults are the same height for every book in it.
+                        let continuing = Array(app.derivation.continueReading.prefix(8))
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(alignment: .top, spacing: Metrics.spacing32) {
-                                ForEach(app.derivation.continueReading.prefix(8)) { book in
+                                ForEach(continuing) { book in
                                     TVPosterItem(book: book, session: app.session)
                                 }
                             }
@@ -294,6 +301,11 @@ struct TVLibraryView: View {
         }
         .background(Palette.paper)
         .accessibilityIdentifier("screen.tvLibrary")
+        // The router a poster's menu says a refusal through. Reading and
+        // Listening install theirs; this shelf had none, so a Save or Resume
+        // the Wi-Fi rule held back wrote its alert to nowhere and the press
+        // looked ignored.
+        .bookRoutes(place: .shelf)
     }
 
     /// The overscan-safe gutter, which `Metrics` now owns for every screen.

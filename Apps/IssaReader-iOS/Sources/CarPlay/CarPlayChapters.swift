@@ -1,3 +1,4 @@
+import Foundation
 import IssaEPUB
 
 /// Chapter titles and jump targets for CarPlay's Up Next list, derived from an
@@ -36,5 +37,37 @@ enum CarPlayChapters {
             }
         }
         return result
+    }
+
+    /// The row being read: the last entry in the reader's spine item that
+    /// starts at or before the page.
+    ///
+    /// By offset, the way `ReaderModel.title(inSpineItem:atOffset:)` names
+    /// the chapter on screen, not by spine index alone. The rows are one per
+    /// nav point, and a book that packs several chapters into one file
+    /// distinguishes them only by fragment, so matching the spine index put
+    /// the "now playing" mark on the file's first chapter whichever of them
+    /// was being narrated.
+    ///
+    /// - Parameters:
+    ///   - offset: where the page starts in the spine item's text.
+    ///   - location: where a fragment starts in the laid-out spine item, or
+    ///     nil when it is not laid out or not found. An entry with no
+    ///     fragment starts at the top of its file.
+    static func currentIndex(
+        in entries: [Entry], spineIndex: Int, offset: Int,
+        location: (String) -> Int?,
+    ) -> Int? {
+        var best: (index: Int, location: Int)?
+        var first: Int?
+        for (index, entry) in entries.enumerated() where entry.spineIndex == spineIndex {
+            if first == nil { first = index }
+            let start: Int? = entry.fragment.map(location) ?? 0
+            guard let start, start <= offset else { continue }
+            // `>=`, so of two entries at one place the later wins, as it does
+            // in the reader's own title.
+            if start >= (best?.location ?? -1) { best = (index, start) }
+        }
+        return best?.index ?? first
     }
 }

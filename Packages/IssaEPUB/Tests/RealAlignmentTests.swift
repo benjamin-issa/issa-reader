@@ -6,24 +6,31 @@ import Testing
 /// Runs against a readaloud EPUB produced by a real Storyteller alignment.
 ///
 /// The synthetic fixture proves the parser handles the format as documented;
-/// this proves it handles what the server actually emits. The file is large
+/// this proves it handles what the server actually emits. The book is
+/// Barrie's *Peter and Wendy*, aligned by `web-v2.14.21`. The file is large
 /// (~79 MB for five hours of narration, since the aligner embeds the audio), so
-/// it is not committed. Produce one with:
+/// it is not committed: it is kept in the local stack's store, one folder per
+/// server tag, at `Tools/docker/data/real-alignment/web-v2.14.21/pw2.epub` —
+/// `web-v2.14.23/` holds the same file — and copied to `/tmp/pw2.epub` for a
+/// run. Produce a fresh one with:
 ///
 ///   cd Tools/docker && PUBLIC_HOST=$(ipconfig getifaddr en0) node setup.mjs
 ///   # import a book with audio, POST /api/v2/books/{id}/process, then
 ///   curl -H "Authorization: Bearer $TOKEN" \
 ///     "$SERVER/api/v2/books/$UUID/files?format=readaloud" -o /tmp/pw2.epub
 ///
-/// Skipped when the file is absent so the suite stays green on a clean checkout.
+/// Skipped when the file is absent so the suite stays green on a clean checkout
+/// — except on a release run (`ISSA_RELEASE_RUN=1`, see `ReleaseRun`), where an
+/// absent file fails every test that needed it instead.
 struct RealAlignmentTests {
     static let path = "/tmp/pw2.epub"
 
-    static var available: Bool { FileManager.default.fileExists(atPath: path) }
+    static var available: Bool { ReleaseRun.shouldRun(needing: [path]) }
 
     @Test("parses a real aligned EPUB into a usable timeline",
           .enabled(if: RealAlignmentTests.available))
     func parsesRealAlignment() throws {
+        guard ReleaseRun.require([Self.path]) else { return }
         let package = try EPUBPackage.open(url: URL(fileURLWithPath: Self.path))
         let timeline = SMILParser.timeline(for: package)
 
@@ -41,6 +48,7 @@ struct RealAlignmentTests {
     @Test("every entry is coherent and the timeline is monotonic",
           .enabled(if: RealAlignmentTests.available))
     func entriesAreCoherent() throws {
+        guard ReleaseRun.require([Self.path]) else { return }
         let package = try EPUBPackage.open(url: URL(fileURLWithPath: Self.path))
         let timeline = SMILParser.timeline(for: package)
 
@@ -53,11 +61,28 @@ struct RealAlignmentTests {
             #expect(package.archive.contains(entry.audioHref), "missing audio \(entry.audioHref)")
             #expect(package.archive.contains(entry.textHref), "missing text \(entry.textHref)")
         }
+        // The server aligns by the sentence, so no entry is a word of one: the
+        // timeline is exactly the one it was before words were read.
+        #expect(timeline.entries.allSatisfy { $0.sentenceID == nil })
+
+        // Every track's clips ascend, so the entry playing when a track runs
+        // out is its last, and the next file's first entry is the next entry:
+        // the end of a file advances exactly as it did.
+        let entries = timeline.entries
+        let trackEnds = entries.indices.filter { index in
+            index == entries.count - 1 || entries[index + 1].audioHref != entries[index].audioHref
+        }
+        #expect(trackEnds.count > 1)
+        for index in trackEnds {
+            #expect(timeline.entry(followingFileOf: entries[index]) == timeline.entry(following: entries[index]),
+                    "at the end of \(entries[index].audioHref)")
+        }
     }
 
     @Test("clips are contiguous within each track",
           .enabled(if: RealAlignmentTests.available))
     func clipsAreGaplessWithinTracks() throws {
+        guard ReleaseRun.require([Self.path]) else { return }
         let package = try EPUBPackage.open(url: URL(fileURLWithPath: Self.path))
         let timeline = SMILParser.timeline(for: package)
 
@@ -79,6 +104,7 @@ struct RealAlignmentTests {
     @Test("every fragment resolves back to its own position",
           .enabled(if: RealAlignmentTests.available))
     func lookupsRoundTrip() throws {
+        guard ReleaseRun.require([Self.path]) else { return }
         let package = try EPUBPackage.open(url: URL(fileURLWithPath: Self.path))
         let timeline = SMILParser.timeline(for: package)
 
@@ -97,6 +123,7 @@ struct RealAlignmentTests {
     @Test("the text fragments the SMIL references really exist in the markup",
           .enabled(if: RealAlignmentTests.available))
     func fragmentsExistInMarkup() throws {
+        guard ReleaseRun.require([Self.path]) else { return }
         let package = try EPUBPackage.open(url: URL(fileURLWithPath: Self.path))
         let timeline = SMILParser.timeline(for: package)
 

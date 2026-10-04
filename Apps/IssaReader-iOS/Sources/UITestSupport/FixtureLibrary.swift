@@ -15,8 +15,9 @@ import IssaCore
 /// this app — a title that wraps to three lines, an author list longer than the
 /// cell, a description with no paragraph breaks, a book at 99%.
 enum FixtureLibrary {
-    /// The readalong book, whose EPUB the sweep script plants on disk so the
-    /// reader screen opens without a download.
+    /// The readalong book, whose EPUB the sweep script plants on disk — under
+    /// its read-along name and its ebook name — so the reader screen opens
+    /// without a download. `LayoutSweepTests.testReaderScreen` opens it.
     static let readalongUUID = "11111111-1111-4111-8111-111111111111"
 
     private struct Row {
@@ -25,11 +26,16 @@ enum FixtureLibrary {
         let author: String
         let progress: Double?
         let formats: [String]
-        /// The server's shelf name. Without one, `LibraryFilter.stage(of:)`
-        /// files a book as `.toRead` — it never consults position — so a
+        /// The server's shelf name. Before 1.3.0, `LibraryArrangement.stage(of:)`
+        /// filed a book with none as `.toRead` whatever its position, so a
         /// fixture with no statuses put all six books on one shelf, the chips
         /// read "Reading 0 · To read 6 · Finished 0" beside a book at 99%, and
-        /// the Reading tab's "Also reading" block was empty at every width.
+        /// the Reading tab's "Also reading" block was empty at every width. It
+        /// now shelves a book with no status where the server's position rule
+        /// would file it — no position unstarted, any position "Reading" up to
+        /// 98% and "Read" from there — as Storyteller 3.x allows one; every
+        /// book here still carries a status, so the shelves are fixed by name
+        /// and the sweep does not depend on that rule.
         var status: String? = nil
         /// Drives the Recently-added rail, which filters on a non-nil value and
         /// so never rendered at all.
@@ -206,8 +212,8 @@ enum FixtureLibrary {
                     "locator": [
                         // What make-readalong-fixture.py actually writes. It was
                         // OEBPS/text/ch01.xhtml, a path in no generated archive —
-                        // invisible only because no sweep destination opened the
-                        // reader, so the cost of planting the EPUB bought nothing.
+                        // invisible for as long as no sweep destination opened
+                        // the reader; `testReaderScreen` now does.
                         "href": "OEBPS/ch01.xhtml",
                         "type": "application/xhtml+xml",
                         "locations": ["totalProgression": progress, "progression": progress],

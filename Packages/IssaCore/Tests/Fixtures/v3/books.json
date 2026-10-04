@@ -1,0 +1,3775 @@
+[
+  {
+    "uuid": "020cd17b-9649-4947-ba58-9d9120c16519",
+    "title": "Little Women",
+    "id": 6478045564755886,
+    "language": "en",
+    "createdAt": "2026-09-05 18:25:16",
+    "updatedAt": "2026-09-05 18:25:16",
+    "publicationDate": "1996-05-01T00:00:00.000Z",
+    "alignedByStorytellerVersion": null,
+    "alignedAt": null,
+    "alignedWith": null,
+    "description": null,
+    "rating": null,
+    "subtitle": null,
+    "duration": null,
+    "pageCount": null,
+    "assetDir": "Little Women",
+    "coverColorsOverride": null,
+    "authors": [
+      {
+        "uuid": "7ece3252-eff0-44b9-a50a-78aa2d511f2a",
+        "id": null,
+        "name": "Louisa May Alcott",
+        "fileAs": "Alcott, Louisa May",
+        "createdAt": "2026-09-05 18:25:16",
+        "updatedAt": "2026-09-05 18:25:16"
+      }
+    ],
+    "narrators": [],
+    "creators": [],
+    "series": [],
+    "tags": [
+      {
+        "uuid": "c70c4788-7f0d-45d2-b8d3-fcf26ca4fa96",
+        "name": "Autobiographical fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:16",
+        "updatedAt": "2026-09-05 18:25:16"
+      },
+      {
+        "uuid": "e4562f0f-29d5-4bf0-be57-cd57436fd23b",
+        "name": "Young women -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      },
+      {
+        "uuid": "004424e4-e764-498f-8b13-24701012119b",
+        "name": "Sisters -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      },
+      {
+        "uuid": "d555bccb-5792-47bf-9ecd-f75cc491bcc9",
+        "name": "Domestic fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      },
+      {
+        "uuid": "bd2ca40a-c471-443d-bafa-9ba715992a53",
+        "name": "Family life -- New England -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:16",
+        "updatedAt": "2026-09-05 18:25:16"
+      },
+      {
+        "uuid": "9d37cbaf-8ad0-4984-bb0f-027f67e511b1",
+        "name": "New England -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:16",
+        "updatedAt": "2026-09-05 18:25:16"
+      },
+      {
+        "uuid": "18ca93bf-83bb-4e6f-b0d4-5598822276b3",
+        "name": "Bildungsromans",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:00",
+        "updatedAt": "2026-09-05 18:25:00"
+      },
+      {
+        "uuid": "f58b06be-dd9b-4dcf-89da-2e0e27083fe2",
+        "name": "Mothers and daughters -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:16",
+        "updatedAt": "2026-09-05 18:25:16"
+      },
+      {
+        "uuid": "8718ad6b-b5ce-43af-8890-eb15e3142546",
+        "name": "March family (Fictitious characters) -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:16",
+        "updatedAt": "2026-09-05 18:25:16"
+      }
+    ],
+    "collections": [],
+    "identifiers": [],
+    "externalData": [],
+    "status": {
+      "uuid": "eaecefa1-7c25-42c8-b93a-89bdd35ba6e3",
+      "name": "To read",
+      "label": "To read",
+      "createdAt": "2026-08-30 03:43:25",
+      "updatedAt": "2026-09-24 12:33:51"
+    },
+    "position": null,
+    "userBookRating": null,
+    "alignmentSummary": null,
+    "ebook": {
+      "uuid": "82ddb89e-8e0e-4cc9-9324-7a1745f67dc8",
+      "filepath": "/data/assets/Little Women/text/Little Women.epub",
+      "missing": false,
+      "coverOrigin": "extracted",
+      "cover": {
+        "sha256": "fc2152feaa60835967dc5bef9634a9278f1662f52276b3f4bd0b45f564d79da8",
+        "width": 1600,
+        "height": 2400,
+        "blurhash": "L^G--4WobXog}^afaiof-Xa_bXk9",
+        "colors": [
+          {
+            "r": 9,
+            "g": 207,
+            "b": 42
+          },
+          {
+            "r": 0,
+            "g": 41,
+            "b": 229
+          },
+          {
+            "r": 254,
+            "g": 254,
+            "b": 254
+          },
+          {
+            "r": 57,
+            "g": 57,
+            "b": 57
+          }
+        ]
+      },
+      "isEpub2": false,
+      "createdAt": "2026-09-05 18:25:16",
+      "updatedAt": "2026-09-24 12:33:51",
+      "fingerprint": "f:548401:1788632716",
+      "pageCount": 490,
+      "fileSize": 548401,
+      "identifiers": []
+    },
+    "audiobook": null,
+    "readaloud": null,
+    "processingJob": null
+  },
+  {
+    "uuid": "0b8392d7-ea81-4056-b5f7-23073a9057e4",
+    "title": "The Adventures of Sherlock Holmes",
+    "id": 5294414641322598,
+    "language": "en",
+    "createdAt": "2026-09-05 18:25:24",
+    "updatedAt": "2026-09-05 18:25:24",
+    "publicationDate": "1999-03-01T00:00:00.000Z",
+    "alignedByStorytellerVersion": null,
+    "alignedAt": null,
+    "alignedWith": null,
+    "description": null,
+    "rating": null,
+    "subtitle": null,
+    "duration": null,
+    "pageCount": null,
+    "assetDir": "The Adventures of Sherlock Holmes",
+    "coverColorsOverride": null,
+    "authors": [
+      {
+        "uuid": "2907286a-f333-4d28-8209-a77760577f52",
+        "id": null,
+        "name": "Arthur Conan Doyle",
+        "fileAs": "Doyle, Arthur Conan",
+        "createdAt": "2026-09-05 18:25:24",
+        "updatedAt": "2026-09-05 18:25:24"
+      }
+    ],
+    "narrators": [],
+    "creators": [],
+    "series": [],
+    "tags": [
+      {
+        "uuid": "c909b9f1-90eb-42e3-93a3-a8fbe040a04e",
+        "name": "Holmes, Sherlock (Fictitious character) -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:24",
+        "updatedAt": "2026-09-05 18:25:24"
+      },
+      {
+        "uuid": "dc0ff5fb-304a-42df-b2c1-4f110d729900",
+        "name": "Private investigators -- England -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:24",
+        "updatedAt": "2026-09-05 18:25:24"
+      },
+      {
+        "uuid": "b7840055-6f1f-48d1-bbcc-13bf3d1456a0",
+        "name": "Detective and mystery stories, English",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:24",
+        "updatedAt": "2026-09-05 18:25:24"
+      }
+    ],
+    "collections": [],
+    "identifiers": [],
+    "externalData": [],
+    "status": {
+      "uuid": "eaecefa1-7c25-42c8-b93a-89bdd35ba6e3",
+      "name": "To read",
+      "label": "To read",
+      "createdAt": "2026-08-30 03:43:25",
+      "updatedAt": "2026-09-24 12:33:51"
+    },
+    "position": null,
+    "userBookRating": null,
+    "alignmentSummary": null,
+    "ebook": {
+      "uuid": "e7c4d81f-8dd1-42c9-9df4-e8241410f42d",
+      "filepath": "/data/assets/The Adventures of Sherlock Holmes/text/The Adventures of Sherlock Holmes.epub",
+      "missing": false,
+      "coverOrigin": "extracted",
+      "cover": {
+        "sha256": "138a70f9f583ec0076c0a90e8f3d2dab546c17b531c9eb08357482cb9aeee57c",
+        "width": 668,
+        "height": 1000,
+        "blurhash": "L55jB%McX8VC%$jDV[bJysVXVrks",
+        "colors": [
+          {
+            "r": 56,
+            "g": 107,
+            "b": 141
+          },
+          {
+            "r": 41,
+            "g": 86,
+            "b": 117
+          },
+          {
+            "r": 23,
+            "g": 37,
+            "b": 50
+          }
+        ]
+      },
+      "isEpub2": false,
+      "createdAt": "2026-09-05 18:25:24",
+      "updatedAt": "2026-09-24 12:33:51",
+      "fingerprint": "f:379177:1788632724",
+      "pageCount": 247,
+      "fileSize": 379177,
+      "identifiers": []
+    },
+    "audiobook": null,
+    "readaloud": null,
+    "processingJob": null
+  },
+  {
+    "uuid": "0d2f74f2-95b5-426d-a651-ce98e74623fe",
+    "title": "The Picture of Dorian Gray",
+    "id": 2757018804252216,
+    "language": "en",
+    "createdAt": "2026-09-05 18:25:32",
+    "updatedAt": "2026-09-05 18:25:32",
+    "publicationDate": "1994-10-01T00:00:00.000Z",
+    "alignedByStorytellerVersion": null,
+    "alignedAt": null,
+    "alignedWith": null,
+    "description": null,
+    "rating": null,
+    "subtitle": null,
+    "duration": null,
+    "pageCount": null,
+    "assetDir": "The Picture of Dorian Gray",
+    "coverColorsOverride": null,
+    "authors": [
+      {
+        "uuid": "9a111c00-4e46-4b22-b27c-84c23a7e2fe9",
+        "id": null,
+        "name": "Oscar Wilde",
+        "fileAs": "Wilde, Oscar",
+        "createdAt": "2026-09-05 18:25:32",
+        "updatedAt": "2026-09-05 18:25:32"
+      }
+    ],
+    "narrators": [],
+    "creators": [],
+    "series": [],
+    "tags": [
+      {
+        "uuid": "5908fa55-3d6a-4c62-86ed-ff294f60730d",
+        "name": "Didactic fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:32",
+        "updatedAt": "2026-09-05 18:25:32"
+      },
+      {
+        "uuid": "a7d11715-968a-425f-b173-ec46eb31561f",
+        "name": "Supernatural -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:32",
+        "updatedAt": "2026-09-05 18:25:32"
+      },
+      {
+        "uuid": "a5252ce2-c943-43c4-a366-d9fc3db36f5b",
+        "name": "Conduct of life -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:32",
+        "updatedAt": "2026-09-05 18:25:32"
+      },
+      {
+        "uuid": "ca452e31-5807-4d1c-8f05-03dd4f758228",
+        "name": "Portraits -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:32",
+        "updatedAt": "2026-09-05 18:25:32"
+      },
+      {
+        "uuid": "73a4cd9f-a68f-4eb3-8c1e-5195b208dcca",
+        "name": "Great Britain -- History -- Victoria, 1837-1901 -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:32",
+        "updatedAt": "2026-09-05 18:25:32"
+      },
+      {
+        "uuid": "71b74682-7900-4f63-8021-ae07388ad947",
+        "name": "London (England) -- History -- 1800-1950 -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:32",
+        "updatedAt": "2026-09-05 18:25:32"
+      },
+      {
+        "uuid": "5208d3cd-b580-46b6-9023-b3bf6e8c7333",
+        "name": "Appearance (Philosophy) -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:32",
+        "updatedAt": "2026-09-05 18:25:32"
+      },
+      {
+        "uuid": "17c7c5ef-8992-4e40-b838-41655d05881a",
+        "name": "Paranormal fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:32",
+        "updatedAt": "2026-09-05 18:25:32"
+      }
+    ],
+    "collections": [],
+    "identifiers": [],
+    "externalData": [],
+    "status": {
+      "uuid": "eaecefa1-7c25-42c8-b93a-89bdd35ba6e3",
+      "name": "To read",
+      "label": "To read",
+      "createdAt": "2026-08-30 03:43:25",
+      "updatedAt": "2026-09-24 12:33:51"
+    },
+    "position": null,
+    "userBookRating": null,
+    "alignmentSummary": null,
+    "ebook": {
+      "uuid": "10739b04-3a17-4641-90a7-9a6317d4b503",
+      "filepath": "/data/assets/The Picture of Dorian Gray/text/The Picture of Dorian Gray.epub",
+      "missing": false,
+      "coverOrigin": "extracted",
+      "cover": {
+        "sha256": "75c3797c724fb0000281d114df0eaab252790050a2faf879af4ae1cea76033ee",
+        "width": 1736,
+        "height": 2992,
+        "blurhash": "L7F}}z4p0#NbVZxtWofi0+M|}=Rl",
+        "colors": [
+          {
+            "r": 183,
+            "g": 164,
+            "b": 119
+          },
+          {
+            "r": 131,
+            "g": 123,
+            "b": 101
+          },
+          {
+            "r": 102,
+            "g": 93,
+            "b": 72
+          },
+          {
+            "r": 74,
+            "g": 63,
+            "b": 59
+          }
+        ]
+      },
+      "isEpub2": false,
+      "createdAt": "2026-09-05 18:25:32",
+      "updatedAt": "2026-09-24 12:33:51",
+      "fingerprint": "f:460926:1788632732",
+      "pageCount": 210,
+      "fileSize": 460926,
+      "identifiers": []
+    },
+    "audiobook": null,
+    "readaloud": null,
+    "processingJob": null
+  },
+  {
+    "uuid": "153bc301-9413-44fe-ad70-72cddbe20b9e",
+    "title": "The Secret Garden",
+    "id": 1332437352793592,
+    "language": "en",
+    "createdAt": "2026-09-05 18:25:34",
+    "updatedAt": "2026-09-05 18:25:34",
+    "publicationDate": "1994-03-01T00:00:00.000Z",
+    "alignedByStorytellerVersion": null,
+    "alignedAt": null,
+    "alignedWith": null,
+    "description": null,
+    "rating": null,
+    "subtitle": null,
+    "duration": null,
+    "pageCount": null,
+    "assetDir": "The Secret Garden",
+    "coverColorsOverride": null,
+    "authors": [
+      {
+        "uuid": "25ebd7fc-b11c-4cbd-94f0-f650db310244",
+        "id": null,
+        "name": "Frances Hodgson Burnett",
+        "fileAs": "Burnett, Frances Hodgson",
+        "createdAt": "2026-09-05 18:25:34",
+        "updatedAt": "2026-09-05 18:25:34"
+      }
+    ],
+    "narrators": [],
+    "creators": [],
+    "series": [],
+    "tags": [
+      {
+        "uuid": "4dd144dd-3070-4541-be48-b1d62359397a",
+        "name": "Orphans -- Juvenile fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:34",
+        "updatedAt": "2026-09-05 18:25:34"
+      },
+      {
+        "uuid": "8cefb49c-9823-45f9-9470-5c67843dd8fb",
+        "name": "People with disabilities -- Juvenile fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:34",
+        "updatedAt": "2026-09-05 18:25:34"
+      },
+      {
+        "uuid": "584f527a-b894-435b-80f2-5ca70c6e81a6",
+        "name": "Gardens -- Juvenile fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:34",
+        "updatedAt": "2026-09-05 18:25:34"
+      },
+      {
+        "uuid": "45642152-33bc-4542-969a-963093b4a2d7",
+        "name": "Yorkshire (England) -- Juvenile fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:34",
+        "updatedAt": "2026-09-05 18:25:34"
+      }
+    ],
+    "collections": [],
+    "identifiers": [],
+    "externalData": [],
+    "status": {
+      "uuid": "eaecefa1-7c25-42c8-b93a-89bdd35ba6e3",
+      "name": "To read",
+      "label": "To read",
+      "createdAt": "2026-08-30 03:43:25",
+      "updatedAt": "2026-09-24 12:33:51"
+    },
+    "position": null,
+    "userBookRating": null,
+    "alignmentSummary": null,
+    "ebook": {
+      "uuid": "cff260df-8b96-44df-8a8a-2dcfd95dcf47",
+      "filepath": "/data/assets/The Secret Garden/text/The Secret Garden.epub",
+      "missing": false,
+      "coverOrigin": "extracted",
+      "cover": {
+        "sha256": "6f9d6c17e4dab93b0bff9fc2654c433c3e0257158d38c14a824eba4344651965",
+        "width": 1600,
+        "height": 2400,
+        "blurhash": "L,LDQ+XRXQoz_Ii{nloL.4aefQoL",
+        "colors": [
+          {
+            "r": 153,
+            "g": 3,
+            "b": 230
+          },
+          {
+            "r": 46,
+            "g": 227,
+            "b": 228
+          },
+          {
+            "r": 255,
+            "g": 254,
+            "b": 255
+          },
+          {
+            "r": 58,
+            "g": 58,
+            "b": 58
+          }
+        ]
+      },
+      "isEpub2": false,
+      "createdAt": "2026-09-05 18:25:34",
+      "updatedAt": "2026-09-24 12:33:51",
+      "fingerprint": "f:271763:1788632734",
+      "pageCount": 213,
+      "fileSize": 271763,
+      "identifiers": []
+    },
+    "audiobook": null,
+    "readaloud": null,
+    "processingJob": null
+  },
+  {
+    "uuid": "2f57d8c4-d6df-4555-99f6-d09a99b9fd58",
+    "title": "Pride and Prejudice",
+    "id": 6813837505486968,
+    "language": "en",
+    "createdAt": "2026-08-30 03:51:47",
+    "updatedAt": "2026-08-30 15:56:57",
+    "publicationDate": "1998-06-01T00:00:00.000Z",
+    "alignedByStorytellerVersion": null,
+    "alignedAt": null,
+    "alignedWith": null,
+    "description": "<p>It is a truth <i>universally acknowledged</i>, that a single man in possession of a good fortune, must be in want of a wife.</p><p>Austen&#39;s sharpest comedy of manners &amp; the novel that made her name.<br>First published 1813.</p><p>See <a href=\"https://example.com/austen\">more by this author</a>.</p>",
+    "rating": null,
+    "subtitle": null,
+    "duration": null,
+    "pageCount": null,
+    "assetDir": "Pride and Prejudice",
+    "coverColorsOverride": null,
+    "authors": [
+      {
+        "uuid": "cbf61007-6bb2-4da8-adc0-a2e014475fb3",
+        "id": null,
+        "name": "Jane Austen",
+        "fileAs": "Austen, Jane",
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      }
+    ],
+    "narrators": [],
+    "creators": [],
+    "series": [],
+    "tags": [
+      {
+        "uuid": "3e4c334d-f4db-4187-9155-d42b107f84d3",
+        "name": "England -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      },
+      {
+        "uuid": "e4562f0f-29d5-4bf0-be57-cd57436fd23b",
+        "name": "Young women -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      },
+      {
+        "uuid": "6d4f7339-bf60-4fe8-83ef-d10226b9f55a",
+        "name": "Love stories",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      },
+      {
+        "uuid": "004424e4-e764-498f-8b13-24701012119b",
+        "name": "Sisters -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      },
+      {
+        "uuid": "d555bccb-5792-47bf-9ecd-f75cc491bcc9",
+        "name": "Domestic fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      },
+      {
+        "uuid": "5eb80884-1f65-4b90-a7d2-15d94a0ec982",
+        "name": "Courtship -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      },
+      {
+        "uuid": "9cd42332-977a-4748-b31f-046b10584abc",
+        "name": "Social classes -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      }
+    ],
+    "collections": [],
+    "identifiers": [
+      {
+        "uuid": "551a2459-fe31-4ae0-8438-777f72a424b8",
+        "kind": "isbn-13",
+        "name": "ISBN-13",
+        "urlTemplate": null,
+        "externalSourceUuid": null,
+        "value": "9780141439518"
+      },
+      {
+        "uuid": "b4531ffc-e718-4eb1-b615-217afbe2ca35",
+        "kind": "audible",
+        "name": "Audible ASIN",
+        "urlTemplate": null,
+        "externalSourceUuid": null,
+        "value": "B000FC1PJI"
+      }
+    ],
+    "externalData": [
+      {
+        "uuid": "bbbbbbbb-1111-4111-8111-bbbbbbbbbbbb",
+        "rating": 4.31,
+        "fetchedAt": "2026-08-30 10:04:25",
+        "sourceUuid": "a89a7213-4921-4a35-8528-431318e36105",
+        "sourceName": "Hardcover",
+        "sourceColor": "#7C3AED",
+        "sourceUrl": "https://hardcover.app",
+        "sourceRatingIcon": "star",
+        "sourceRatingMin": 0,
+        "sourceRatingMax": 5
+      }
+    ],
+    "status": {
+      "uuid": "b593ceab-563b-4639-8d83-494d007ee19a",
+      "name": "Reading",
+      "label": "Reading",
+      "createdAt": "2026-08-30 03:43:25",
+      "updatedAt": "2026-09-24 12:33:51"
+    },
+    "position": {
+      "uuid": "f0101156-b465-40f0-8394-69263d306126",
+      "locator": {
+        "href": "OEBPS/3848306453376289450_1342-h-0.htm.xhtml",
+        "title": "PRIDE. and PREJUDICE",
+        "locations": {
+          "fragments": [
+            "pg-header-heading"
+          ],
+          "totalProgression": 0.0006379999678126142,
+          "charOffset": 0,
+          "progression": 0
+        },
+        "type": "application/xhtml+xml",
+        "text": {
+          "highlight": "The Project Gutenberg eBook of Pride and Prejudice  This eBook i"
+        }
+      },
+      "timestamp": 1788294541524,
+      "createdAt": "2026-09-01 20:29:01",
+      "updatedAt": "2026-09-01 20:29:01"
+    },
+    "userBookRating": null,
+    "alignmentSummary": null,
+    "ebook": {
+      "uuid": "d1f34ee6-361c-44fc-90ca-dd5aae64d649",
+      "filepath": "/data/library/pride-and-prejudice.epub",
+      "missing": false,
+      "coverOrigin": "extracted",
+      "cover": {
+        "sha256": "f5906d62e81d6c91a91ba4e8979206f3f5dbdccf8a5ee7ce1d08804a46636d58",
+        "width": 1500,
+        "height": 2114,
+        "blurhash": "L2BfnL00Si0N^$580ht59vk9-nt6",
+        "colors": [
+          {
+            "r": 167,
+            "g": 145,
+            "b": 105
+          },
+          {
+            "r": 110,
+            "g": 98,
+            "b": 77
+          },
+          {
+            "r": 64,
+            "g": 62,
+            "b": 55
+          },
+          {
+            "r": 36,
+            "g": 35,
+            "b": 34
+          }
+        ]
+      },
+      "isEpub2": false,
+      "createdAt": "2026-08-30 03:51:47",
+      "updatedAt": "2026-09-24 12:33:51",
+      "fingerprint": "f:24835567:1788061885",
+      "pageCount": 300,
+      "fileSize": 24835567,
+      "identifiers": []
+    },
+    "audiobook": null,
+    "readaloud": null,
+    "processingJob": null
+  },
+  {
+    "uuid": "2f65a98c-acd1-46b7-bc63-2a8f41cdfad2",
+    "title": "Peter and Wendy",
+    "id": 262551997068005,
+    "language": "en",
+    "createdAt": "2026-08-30 04:43:00",
+    "updatedAt": "2026-09-24 12:33:51",
+    "publicationDate": "2008-09-18T00:00:00.000Z",
+    "alignedByStorytellerVersion": "2.14.21",
+    "alignedAt": "2026-08-30T05:01:37.000Z",
+    "alignedWith": "whisper.cpp",
+    "description": null,
+    "rating": null,
+    "subtitle": null,
+    "duration": null,
+    "pageCount": null,
+    "assetDir": "Peter and Wendy",
+    "coverColorsOverride": null,
+    "authors": [
+      {
+        "uuid": "765b504e-f06b-420f-8a7b-14fca3ade257",
+        "id": null,
+        "name": "J. M. Barrie",
+        "fileAs": "J. M. Barrie",
+        "createdAt": "2026-08-30 04:43:00",
+        "updatedAt": "2026-08-30 04:43:00"
+      }
+    ],
+    "narrators": [],
+    "creators": [],
+    "series": [],
+    "tags": [
+      {
+        "uuid": "b075328a-17d6-412c-8cdc-a51c6192c5b5",
+        "name": "Fantasy literature",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-08-30 04:38:08",
+        "updatedAt": "2026-08-30 04:38:08"
+      },
+      {
+        "uuid": "2b245f67-4ae5-4c0d-868c-647acaae7997",
+        "name": "Peter Pan (Fictitious character) -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-08-30 04:38:08",
+        "updatedAt": "2026-08-30 04:38:08"
+      },
+      {
+        "uuid": "b88e783f-3491-47c3-93d6-d05a8e8593a2",
+        "name": "Never-Never Land (Imaginary place) -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-08-30 04:38:08",
+        "updatedAt": "2026-08-30 04:38:08"
+      },
+      {
+        "uuid": "399bd55b-8d07-4bcd-b174-cc62d769e54e",
+        "name": "Pirates -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-08-30 04:38:08",
+        "updatedAt": "2026-08-30 04:38:08"
+      },
+      {
+        "uuid": "1292cd8b-d8fa-415d-9ea3-ecb218a17dd5",
+        "name": "Fairies -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-08-30 04:38:08",
+        "updatedAt": "2026-08-30 04:38:08"
+      }
+    ],
+    "collections": [],
+    "identifiers": [],
+    "externalData": [],
+    "status": {
+      "uuid": "030f4277-3fd4-4a09-a4cb-0a46812f529a",
+      "name": "Read",
+      "label": "Finished",
+      "createdAt": "2026-08-30 03:43:25",
+      "updatedAt": "2026-09-24 12:41:12"
+    },
+    "position": {
+      "uuid": "66665b09-a560-4971-98fc-cc37ae498a78",
+      "locator": {
+        "locations": {
+          "totalProgression": 0.45147373109469313,
+          "progression": 0.1476536804558299,
+          "fragments": [
+            "item4-s169"
+          ],
+          "charOffset": 15937
+        },
+        "title": "THE HOME UNDER THE GROUND",
+        "href": "OEBPS/896097814813368718_26654-h-1.htm.xhtml",
+        "type": "application/xhtml+xml",
+        "text": {
+          "highlight": "her eggs, and Peter gave orders that she was not to be disturbed",
+          "before": "ater, and still the bird sat on "
+        }
+      },
+      "timestamp": 1789233762639,
+      "createdAt": "2026-09-01 20:20:55",
+      "updatedAt": "2026-09-12 17:22:42"
+    },
+    "userBookRating": null,
+    "alignmentSummary": null,
+    "ebook": {
+      "uuid": "ba611039-f06d-46a5-99bb-74f39f46794f",
+      "filepath": "/data/library/peter-and-wendy/Peter and Wendy.epub",
+      "missing": false,
+      "coverOrigin": "extracted",
+      "cover": {
+        "sha256": "59965a29b5d464a02877c179a65183efefe8bec52fd55b8df86e4394c675f7e2",
+        "width": 1444,
+        "height": 2200,
+        "blurhash": "L3CF|Oxs0ixs?GoJM|oeAbay}?oe",
+        "colors": [
+          {
+            "r": 77,
+            "g": 76,
+            "b": 36
+          },
+          {
+            "r": 197,
+            "g": 168,
+            "b": 107
+          },
+          {
+            "r": 142,
+            "g": 120,
+            "b": 77
+          }
+        ]
+      },
+      "isEpub2": false,
+      "createdAt": "2026-08-30 04:43:00",
+      "updatedAt": "2026-09-24 12:33:51",
+      "fingerprint": "f:4543710:1788064672",
+      "pageCount": 118,
+      "fileSize": 4543710,
+      "identifiers": []
+    },
+    "audiobook": {
+      "uuid": "e38522db-4d5d-4658-88e2-49c2420ffd0f",
+      "filepath": "/data/library/peter-and-wendy",
+      "missing": false,
+      "coverOrigin": "extracted",
+      "cover": {
+        "sha256": "35480043e658db2732bcfd22d98a8e990b287973cbf568f85306fb0e2e0cef3b",
+        "width": 300,
+        "height": 300,
+        "blurhash": "LCEV4dKjD+~9~nE*r?=]obxXw{kU",
+        "colors": [
+          {
+            "r": 230,
+            "g": 204,
+            "b": 106
+          },
+          {
+            "r": 183,
+            "g": 137,
+            "b": 75
+          },
+          {
+            "r": 85,
+            "g": 81,
+            "b": 66
+          },
+          {
+            "r": 21,
+            "g": 6,
+            "b": 3
+          }
+        ]
+      },
+      "createdAt": "2026-08-30 04:43:00",
+      "updatedAt": "2026-09-24 12:33:51",
+      "fingerprint": "d:17:76315202:10513436756416405565",
+      "duration": 18254.492,
+      "fileSize": 76315202,
+      "identifiers": []
+    },
+    "readaloud": {
+      "uuid": "d626e9f1-fc56-4c38-938f-f991a7ce7612",
+      "filepath": "/data/library/peter-and-wendy/Peter and Wendy (readaloud).epub",
+      "missing": false,
+      "coverOrigin": "extracted",
+      "cover": {
+        "sha256": "59965a29b5d464a02877c179a65183efefe8bec52fd55b8df86e4394c675f7e2",
+        "width": 1444,
+        "height": 2200,
+        "blurhash": "L3CF|Oxs0ixs?GoJM|oeAbay}?oe",
+        "colors": [
+          {
+            "r": 77,
+            "g": 76,
+            "b": 36
+          },
+          {
+            "r": 197,
+            "g": 168,
+            "b": 107
+          },
+          {
+            "r": 142,
+            "g": 120,
+            "b": 77
+          }
+        ]
+      },
+      "isEpub2": false,
+      "status": "ALIGNED",
+      "currentStage": "SYNC_CHAPTERS",
+      "stageProgress": 1,
+      "queuePosition": 0,
+      "restartPending": null,
+      "createdAt": "2026-08-30 04:43:09",
+      "updatedAt": "2026-09-24 12:33:51",
+      "fingerprint": "f:78874202:1788066098",
+      "pageCount": 118,
+      "duration": 18254.492,
+      "fileSize": 78874202,
+      "identifiers": []
+    },
+    "processingJob": null
+  },
+  {
+    "uuid": "30122ac5-c96a-4f0b-b6ab-e5e4077df622",
+    "title": "Treasure Island",
+    "id": 6706687321070707,
+    "language": "en",
+    "createdAt": "2026-09-05 18:25:40",
+    "updatedAt": "2026-09-05 18:25:41",
+    "publicationDate": "2006-02-26T00:00:00.000Z",
+    "alignedByStorytellerVersion": null,
+    "alignedAt": null,
+    "alignedWith": null,
+    "description": null,
+    "rating": null,
+    "subtitle": null,
+    "duration": null,
+    "pageCount": null,
+    "assetDir": "Treasure Island",
+    "coverColorsOverride": null,
+    "authors": [
+      {
+        "uuid": "480fd233-2d2a-498b-ad89-d73e5a30872b",
+        "id": null,
+        "name": "Robert Louis Stevenson",
+        "fileAs": "Stevenson, Robert Louis",
+        "createdAt": "2026-09-05 18:25:40",
+        "updatedAt": "2026-09-05 18:25:40"
+      }
+    ],
+    "narrators": [],
+    "creators": [],
+    "series": [],
+    "tags": [
+      {
+        "uuid": "77d10ca0-d3af-4185-b68c-d6479b5f4c80",
+        "name": "Sea stories",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:21",
+        "updatedAt": "2026-09-05 18:25:21"
+      },
+      {
+        "uuid": "399bd55b-8d07-4bcd-b174-cc62d769e54e",
+        "name": "Pirates -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-08-30 04:38:08",
+        "updatedAt": "2026-08-30 04:38:08"
+      },
+      {
+        "uuid": "7875396e-17a6-4ce3-a6b0-5ee6ba053abe",
+        "name": "Treasure troves -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:40",
+        "updatedAt": "2026-09-05 18:25:40"
+      },
+      {
+        "uuid": "3b06a50b-e712-4216-8207-180721d55065",
+        "name": "Treasure Island (Imaginary place) -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:40",
+        "updatedAt": "2026-09-05 18:25:40"
+      }
+    ],
+    "collections": [],
+    "identifiers": [],
+    "externalData": [],
+    "status": {
+      "uuid": "b593ceab-563b-4639-8d83-494d007ee19a",
+      "name": "Reading",
+      "label": "Reading",
+      "createdAt": "2026-08-30 03:43:25",
+      "updatedAt": "2026-09-24 12:33:51"
+    },
+    "position": {
+      "uuid": "d8dc6705-7df5-4c8a-8b72-0cd453a34bf5",
+      "locator": {
+        "type": "application/xhtml+xml",
+        "href": "OEBPS/4617627152053876883_120-h-3.htm.xhtml",
+        "title": "I The Old Sea-dog at the “Admiral Benbow”",
+        "locations": {
+          "charOffset": 7037,
+          "progression": 0.6068995256576111,
+          "totalProgression": 0.04063574419594778
+        },
+        "text": {
+          "highlight": "In one way, indeed, he bade fair to ruin us, for he kept on st",
+          "before": " made England terrible at sea.  "
+        }
+      },
+      "timestamp": 1788719111329,
+      "createdAt": "2026-09-05 18:57:46",
+      "updatedAt": "2026-09-06 18:25:11"
+    },
+    "userBookRating": null,
+    "alignmentSummary": null,
+    "ebook": {
+      "uuid": "4eaef703-af32-4543-9442-7560cc7edef0",
+      "filepath": "/data/assets/Treasure Island/text/Treasure Island.epub",
+      "missing": false,
+      "coverOrigin": "extracted",
+      "cover": {
+        "sha256": "e04df97cde416e24ee515c6f8f1419b30199c74988e96fba17a2ff94e028aeb6",
+        "width": 671,
+        "height": 1000,
+        "blurhash": "LKI:~+a|M{4=~Ut7NHE2^%R+NIoe",
+        "colors": [
+          {
+            "r": 224,
+            "g": 181,
+            "b": 117
+          },
+          {
+            "r": 127,
+            "g": 89,
+            "b": 57
+          },
+          {
+            "r": 59,
+            "g": 44,
+            "b": 33
+          },
+          {
+            "r": 16,
+            "g": 14,
+            "b": 12
+          }
+        ]
+      },
+      "isEpub2": false,
+      "createdAt": "2026-09-05 18:25:40",
+      "updatedAt": "2026-09-24 12:33:51",
+      "fingerprint": "f:49451997:1788632740",
+      "pageCount": 260,
+      "fileSize": 49451997,
+      "identifiers": []
+    },
+    "audiobook": null,
+    "readaloud": null,
+    "processingJob": null
+  },
+  {
+    "uuid": "3152634f-d1c4-4311-9777-5cf026ec77e1",
+    "title": "Moby Dick; Or, The Whale",
+    "id": 4674201709500573,
+    "language": "en",
+    "createdAt": "2026-09-05 18:25:21",
+    "updatedAt": "2026-09-05 18:25:21",
+    "publicationDate": "2001-07-01T00:00:00.000Z",
+    "alignedByStorytellerVersion": null,
+    "alignedAt": null,
+    "alignedWith": null,
+    "description": null,
+    "rating": null,
+    "subtitle": null,
+    "duration": null,
+    "pageCount": null,
+    "assetDir": "Moby Dick; Or, The Whale",
+    "coverColorsOverride": null,
+    "authors": [
+      {
+        "uuid": "e9ca0bd7-a95d-4523-98a3-06e98f07ce4d",
+        "id": null,
+        "name": "Herman Melville",
+        "fileAs": "Melville, Herman",
+        "createdAt": "2026-09-05 18:25:21",
+        "updatedAt": "2026-09-05 18:25:21"
+      }
+    ],
+    "narrators": [],
+    "creators": [],
+    "series": [],
+    "tags": [
+      {
+        "uuid": "85881f38-0b04-4b9f-b841-fedc99822e47",
+        "name": "Whaling -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:21",
+        "updatedAt": "2026-09-05 18:25:21"
+      },
+      {
+        "uuid": "77d10ca0-d3af-4185-b68c-d6479b5f4c80",
+        "name": "Sea stories",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:21",
+        "updatedAt": "2026-09-05 18:25:21"
+      },
+      {
+        "uuid": "f8e7b7e9-df90-452d-b639-50c6e07cf38c",
+        "name": "Psychological fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:10",
+        "updatedAt": "2026-09-05 18:25:10"
+      },
+      {
+        "uuid": "548b7f18-8262-4781-ba9d-d10859256926",
+        "name": "Ship captains -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:21",
+        "updatedAt": "2026-09-05 18:25:21"
+      },
+      {
+        "uuid": "756fe624-c8fa-4d5b-902f-8d38694fe56f",
+        "name": "Adventure stories",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:02",
+        "updatedAt": "2026-09-05 18:25:02"
+      },
+      {
+        "uuid": "3c40e030-2d3a-4d1e-9b52-50de1837bc4c",
+        "name": "Mentally ill -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:21",
+        "updatedAt": "2026-09-05 18:25:21"
+      },
+      {
+        "uuid": "d060b16f-8193-422c-b834-6737e46b3d17",
+        "name": "Ahab, Captain (Fictitious character) -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:21",
+        "updatedAt": "2026-09-05 18:25:21"
+      },
+      {
+        "uuid": "81d32bd9-7a01-48d5-b80f-1007157eac1d",
+        "name": "Whales -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:21",
+        "updatedAt": "2026-09-05 18:25:21"
+      },
+      {
+        "uuid": "b6c1f263-ef2b-41d5-bdae-31d5c138cb9f",
+        "name": "Whaling ships -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:21",
+        "updatedAt": "2026-09-05 18:25:21"
+      }
+    ],
+    "collections": [],
+    "identifiers": [],
+    "externalData": [],
+    "status": {
+      "uuid": "eeedc4f3-354d-45c5-9a4d-f6bed0b9eb57",
+      "name": "Abandoned",
+      "label": "Abandoned",
+      "createdAt": "2026-09-24 12:41:12",
+      "updatedAt": "2026-09-24 12:41:12"
+    },
+    "position": null,
+    "userBookRating": null,
+    "alignmentSummary": null,
+    "ebook": {
+      "uuid": "d110c980-9a33-489a-844a-56994a99191e",
+      "filepath": "/data/assets/Moby Dick; Or, The Whale/text/Moby Dick; Or, The Whale.epub",
+      "missing": false,
+      "coverOrigin": "extracted",
+      "cover": {
+        "sha256": "895be4467e62bf6b796e1ea8504eb9df2ca31267de64918b13ba570590f02323",
+        "width": 780,
+        "height": 1227,
+        "blurhash": "L6Frt:_NV?-;=YRiadIo9Z%L%LIU",
+        "colors": [
+          {
+            "r": 148,
+            "g": 143,
+            "b": 137
+          },
+          {
+            "r": 179,
+            "g": 175,
+            "b": 169
+          },
+          {
+            "r": 110,
+            "g": 104,
+            "b": 99
+          },
+          {
+            "r": 37,
+            "g": 31,
+            "b": 29
+          }
+        ]
+      },
+      "isEpub2": false,
+      "createdAt": "2026-09-05 18:25:21",
+      "updatedAt": "2026-09-24 12:33:51",
+      "fingerprint": "f:812374:1788632721",
+      "pageCount": 536,
+      "fileSize": 812374,
+      "identifiers": []
+    },
+    "audiobook": null,
+    "readaloud": null,
+    "processingJob": null
+  },
+  {
+    "uuid": "35f8896e-58f1-48b6-9c3d-d79725f38071",
+    "title": "Alice's Adventures in Wonderland",
+    "id": 1740004741486781,
+    "language": "en",
+    "createdAt": "2026-08-30 03:51:47",
+    "updatedAt": "2026-08-30 03:51:47",
+    "publicationDate": "2008-06-27T00:00:00.000Z",
+    "alignedByStorytellerVersion": null,
+    "alignedAt": null,
+    "alignedWith": null,
+    "description": null,
+    "rating": null,
+    "subtitle": null,
+    "duration": null,
+    "pageCount": null,
+    "assetDir": "Alice's Adventures in Wonderland",
+    "coverColorsOverride": null,
+    "authors": [
+      {
+        "uuid": "aa41e962-8289-4389-8040-1b039fbb4379",
+        "id": null,
+        "name": "Lewis Carroll",
+        "fileAs": "Carroll, Lewis",
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      }
+    ],
+    "narrators": [],
+    "creators": [],
+    "series": [],
+    "tags": [
+      {
+        "uuid": "ad880a53-61b1-4ff5-ae1c-13e99705ef1c",
+        "name": "Fantasy fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-08-30 03:51:35",
+        "updatedAt": "2026-08-30 03:51:35"
+      },
+      {
+        "uuid": "b4dea7a4-c054-4168-b3b1-4899e6584f19",
+        "name": "Children's stories",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-08-30 03:51:35",
+        "updatedAt": "2026-08-30 03:51:35"
+      },
+      {
+        "uuid": "338024f3-b3cd-47be-ad99-e4bdbad8fb8a",
+        "name": "Imaginary places -- Juvenile fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-08-30 03:51:35",
+        "updatedAt": "2026-08-30 03:51:35"
+      },
+      {
+        "uuid": "0b52519b-0c53-4fae-801b-b6a26ceb3ede",
+        "name": "Alice (Fictitious character from Carroll) -- Juvenile fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-08-30 03:51:35",
+        "updatedAt": "2026-08-30 03:51:35"
+      }
+    ],
+    "collections": [],
+    "identifiers": [],
+    "externalData": [],
+    "status": {
+      "uuid": "030f4277-3fd4-4a09-a4cb-0a46812f529a",
+      "name": "Read",
+      "label": "Finished",
+      "createdAt": "2026-08-30 03:43:25",
+      "updatedAt": "2026-09-24 12:41:12"
+    },
+    "position": null,
+    "userBookRating": {
+      "rating": 4,
+      "review": null,
+      "dimensions": null
+    },
+    "alignmentSummary": null,
+    "ebook": {
+      "uuid": "f584dfe5-0c3f-4e17-a8e6-0accc0567e00",
+      "filepath": "/data/library/alice-in-wonderland.epub",
+      "missing": false,
+      "coverOrigin": "extracted",
+      "cover": {
+        "sha256": "2a34efaa254af4e36d509c64dc4ca5483c163da89414a3a2dcaaf3e80b331eef",
+        "width": 800,
+        "height": 1104,
+        "blurhash": "LBJ7gfwh.m.P0~of$$V@yYtQv}R6",
+        "colors": [
+          {
+            "r": 198,
+            "g": 82,
+            "b": 48
+          },
+          {
+            "r": 192,
+            "g": 171,
+            "b": 145
+          },
+          {
+            "r": 121,
+            "g": 111,
+            "b": 80
+          },
+          {
+            "r": 50,
+            "g": 47,
+            "b": 43
+          }
+        ]
+      },
+      "isEpub2": false,
+      "createdAt": "2026-08-30 03:51:47",
+      "updatedAt": "2026-09-24 12:33:51",
+      "fingerprint": "f:189231:1788061882",
+      "pageCount": 83,
+      "fileSize": 189231,
+      "identifiers": []
+    },
+    "audiobook": null,
+    "readaloud": null,
+    "processingJob": null
+  },
+  {
+    "uuid": "39ef2ef6-a306-430c-86dc-0b23feca7aae",
+    "title": "The war of the worlds",
+    "id": 2475753316315765,
+    "language": "en",
+    "createdAt": "2026-09-05 18:25:37",
+    "updatedAt": "2026-09-05 18:25:37",
+    "publicationDate": "2004-10-01T00:00:00.000Z",
+    "alignedByStorytellerVersion": null,
+    "alignedAt": null,
+    "alignedWith": null,
+    "description": null,
+    "rating": null,
+    "subtitle": null,
+    "duration": null,
+    "pageCount": null,
+    "assetDir": "The war of the worlds",
+    "coverColorsOverride": null,
+    "authors": [
+      {
+        "uuid": "881a537b-a9fe-49a3-85b6-21948f4701e9",
+        "id": null,
+        "name": "H. G. Wells",
+        "fileAs": "Wells, H. G. (Herbert George)",
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      }
+    ],
+    "narrators": [],
+    "creators": [],
+    "series": [],
+    "tags": [
+      {
+        "uuid": "8b5dcdae-cb9a-44d8-9693-5b3b12a2047e",
+        "name": "Science fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      },
+      {
+        "uuid": "1e474626-d739-45b7-bb28-5f1ad8392ec3",
+        "name": "War stories",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:24:57",
+        "updatedAt": "2026-09-05 18:24:57"
+      },
+      {
+        "uuid": "bc4a94fc-835d-4cf5-90e0-799b10790e61",
+        "name": "Martians -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:37",
+        "updatedAt": "2026-09-05 18:25:37"
+      },
+      {
+        "uuid": "f515eb9f-45d0-47c4-b6f1-2290d3b06ff0",
+        "name": "Mars (Planet) -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:37",
+        "updatedAt": "2026-09-05 18:25:37"
+      },
+      {
+        "uuid": "a28680b4-cc0f-4190-a78b-89cbb2e519c1",
+        "name": "Space warfare -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:37",
+        "updatedAt": "2026-09-05 18:25:37"
+      },
+      {
+        "uuid": "e0478e33-434e-4ea4-8361-ee7e615dd427",
+        "name": "Imaginary wars and battles -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:37",
+        "updatedAt": "2026-09-05 18:25:37"
+      },
+      {
+        "uuid": "724e86a4-eff9-4f03-a144-5ba67685c3c5",
+        "name": "Life on other planets -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:37",
+        "updatedAt": "2026-09-05 18:25:37"
+      }
+    ],
+    "collections": [],
+    "identifiers": [],
+    "externalData": [],
+    "status": {
+      "uuid": "eaecefa1-7c25-42c8-b93a-89bdd35ba6e3",
+      "name": "To read",
+      "label": "To read",
+      "createdAt": "2026-08-30 03:43:25",
+      "updatedAt": "2026-09-24 12:33:51"
+    },
+    "position": null,
+    "userBookRating": null,
+    "alignmentSummary": null,
+    "ebook": {
+      "uuid": "63764b27-1e79-4c2d-8bb9-3d529eb93e27",
+      "filepath": "/data/assets/The war of the worlds/text/The war of the worlds.epub",
+      "missing": false,
+      "coverOrigin": "extracted",
+      "cover": {
+        "sha256": "c17abe756899a326078dc3b3faa672b09bd22c3f3931abee55ca4cefd69d7842",
+        "width": 551,
+        "height": 700,
+        "blurhash": "LLIqZ1xtM|-.~U%LazRkRkRkxtxt",
+        "colors": [
+          {
+            "r": 197,
+            "g": 174,
+            "b": 142
+          },
+          {
+            "r": 152,
+            "g": 131,
+            "b": 109
+          },
+          {
+            "r": 103,
+            "g": 85,
+            "b": 71
+          },
+          {
+            "r": 51,
+            "g": 37,
+            "b": 31
+          }
+        ]
+      },
+      "isEpub2": false,
+      "createdAt": "2026-09-05 18:25:37",
+      "updatedAt": "2026-09-24 12:33:51",
+      "fingerprint": "f:291744:1788632737",
+      "pageCount": 180,
+      "fileSize": 291744,
+      "identifiers": []
+    },
+    "audiobook": null,
+    "readaloud": null,
+    "processingJob": null
+  },
+  {
+    "uuid": "3fd4494b-01d6-4611-aee7-03abed1908d5",
+    "title": "The Time Machine",
+    "id": 4574227902062259,
+    "language": "en",
+    "createdAt": "2026-08-30 03:51:47",
+    "updatedAt": "2026-08-30 03:51:47",
+    "publicationDate": "2004-10-02T00:00:00.000Z",
+    "alignedByStorytellerVersion": null,
+    "alignedAt": null,
+    "alignedWith": null,
+    "description": null,
+    "rating": null,
+    "subtitle": null,
+    "duration": null,
+    "pageCount": null,
+    "assetDir": "The Time Machine",
+    "coverColorsOverride": null,
+    "authors": [
+      {
+        "uuid": "881a537b-a9fe-49a3-85b6-21948f4701e9",
+        "id": null,
+        "name": "H. G. Wells",
+        "fileAs": "Wells, H. G. (Herbert George)",
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      }
+    ],
+    "narrators": [],
+    "creators": [],
+    "series": [],
+    "tags": [
+      {
+        "uuid": "8b5dcdae-cb9a-44d8-9693-5b3b12a2047e",
+        "name": "Science fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      },
+      {
+        "uuid": "55284a03-574e-416f-a9e1-ca38527fb9ae",
+        "name": "Time travel -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      },
+      {
+        "uuid": "62ba5e2a-a1f2-4534-9806-66349f78a83d",
+        "name": "Dystopias -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      }
+    ],
+    "collections": [],
+    "identifiers": [],
+    "externalData": [],
+    "status": null,
+    "position": {
+      "uuid": "17769d86-9e04-4cac-9fc5-4a8710a20e1f",
+      "locator": {
+        "href": "OEBPS/chapter-3.xhtml",
+        "type": "application/xhtml+xml",
+        "locations": {
+          "progression": 0.5,
+          "totalProgression": 0.3
+        }
+      },
+      "timestamp": 1790253681067,
+      "createdAt": "2026-09-24 12:41:21",
+      "updatedAt": "2026-09-24 12:41:21"
+    },
+    "userBookRating": null,
+    "alignmentSummary": null,
+    "ebook": {
+      "uuid": "a7eebcdf-8d94-4863-a78b-761dea23cf86",
+      "filepath": "/data/library/the-time-machine.epub",
+      "missing": false,
+      "coverOrigin": "extracted",
+      "cover": {
+        "sha256": "cc66afbe2f63a33d4482181cf00790baf81f1f52926ebcdbae9c9bb102ec2e80",
+        "width": 650,
+        "height": 1000,
+        "blurhash": "L3H1h=;U$c~BDjt5t6NGWBs:M}R*",
+        "colors": [
+          {
+            "r": 148,
+            "g": 123,
+            "b": 93
+          }
+        ]
+      },
+      "isEpub2": false,
+      "createdAt": "2026-08-30 03:51:47",
+      "updatedAt": "2026-09-24 12:33:51",
+      "fingerprint": "f:306944:1788061883",
+      "pageCount": 103,
+      "fileSize": 306944,
+      "identifiers": []
+    },
+    "audiobook": null,
+    "readaloud": null,
+    "processingJob": null
+  },
+  {
+    "uuid": "6bbe7da6-d79b-4dd8-a93d-0ab8a31b7b63",
+    "title": "Wuthering Heights",
+    "id": 2248689870712037,
+    "language": "en",
+    "createdAt": "2026-09-05 18:25:42",
+    "updatedAt": "2026-09-05 18:25:43",
+    "publicationDate": "1996-12-01T00:00:00.000Z",
+    "alignedByStorytellerVersion": null,
+    "alignedAt": null,
+    "alignedWith": null,
+    "description": null,
+    "rating": null,
+    "subtitle": null,
+    "duration": null,
+    "pageCount": null,
+    "assetDir": "Wuthering Heights",
+    "coverColorsOverride": null,
+    "authors": [
+      {
+        "uuid": "f8b6dc40-4180-4517-b0ea-5cf89b101f8b",
+        "id": null,
+        "name": "Emily Brontë",
+        "fileAs": "Brontë, Emily",
+        "createdAt": "2026-09-05 18:25:42",
+        "updatedAt": "2026-09-05 18:25:42"
+      }
+    ],
+    "narrators": [],
+    "creators": [],
+    "series": [],
+    "tags": [
+      {
+        "uuid": "2f1c21f0-266e-49e5-bc6e-454064f1cba8",
+        "name": "Revenge -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:08",
+        "updatedAt": "2026-09-05 18:25:08"
+      },
+      {
+        "uuid": "f8e7b7e9-df90-452d-b639-50c6e07cf38c",
+        "name": "Psychological fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:10",
+        "updatedAt": "2026-09-05 18:25:10"
+      },
+      {
+        "uuid": "7ff0108e-c359-461f-b67c-bcfd45f564f8",
+        "name": "Rejection (Psychology) -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:42",
+        "updatedAt": "2026-09-05 18:25:42"
+      },
+      {
+        "uuid": "6d4f7339-bf60-4fe8-83ef-d10226b9f55a",
+        "name": "Love stories",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      },
+      {
+        "uuid": "d555bccb-5792-47bf-9ecd-f75cc491bcc9",
+        "name": "Domestic fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      },
+      {
+        "uuid": "9db91c9e-c362-48f1-b998-1df55813d5f0",
+        "name": "Yorkshire (England) -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:42",
+        "updatedAt": "2026-09-05 18:25:42"
+      },
+      {
+        "uuid": "9836bc60-97e7-4094-8eef-726934019f1d",
+        "name": "Foundlings -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:42",
+        "updatedAt": "2026-09-05 18:25:42"
+      },
+      {
+        "uuid": "1fb4d046-e57a-4afd-9cf0-990051ab227d",
+        "name": "Rural families -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:42",
+        "updatedAt": "2026-09-05 18:25:42"
+      },
+      {
+        "uuid": "69b16c03-0219-4b2e-8f5c-72a9b51a1daf",
+        "name": "Heathcliff (Fictitious character : Brontë) -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:42",
+        "updatedAt": "2026-09-05 18:25:42"
+      },
+      {
+        "uuid": "7501d506-71f1-4253-a0fe-587daa076611",
+        "name": "Triangles (Interpersonal relations) -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:42",
+        "updatedAt": "2026-09-05 18:25:42"
+      }
+    ],
+    "collections": [],
+    "identifiers": [],
+    "externalData": [],
+    "status": {
+      "uuid": "eaecefa1-7c25-42c8-b93a-89bdd35ba6e3",
+      "name": "To read",
+      "label": "To read",
+      "createdAt": "2026-08-30 03:43:25",
+      "updatedAt": "2026-09-24 12:33:51"
+    },
+    "position": null,
+    "userBookRating": null,
+    "alignmentSummary": null,
+    "ebook": {
+      "uuid": "085f4248-677f-48d9-a8c8-666d7fad385d",
+      "filepath": "/data/assets/Wuthering Heights/text/Wuthering Heights.epub",
+      "missing": false,
+      "coverOrigin": "extracted",
+      "cover": {
+        "sha256": "8fbfeab048e217e16811940e37b07d7b3d06995874c0e1c10aaf4d8d7cf9b5e4",
+        "width": 1576,
+        "height": 2366,
+        "blurhash": "L#KxJ4ofNIj]~qj[xtoejYfQoejs",
+        "colors": [
+          {
+            "r": 86,
+            "g": 109,
+            "b": 129
+          },
+          {
+            "r": 213,
+            "g": 214,
+            "b": 210
+          },
+          {
+            "r": 250,
+            "g": 251,
+            "b": 253
+          },
+          {
+            "r": 11,
+            "g": 16,
+            "b": 22
+          }
+        ]
+      },
+      "isEpub2": false,
+      "createdAt": "2026-09-05 18:25:42",
+      "updatedAt": "2026-09-24 12:33:51",
+      "fingerprint": "f:587132:1788632742",
+      "pageCount": 333,
+      "fileSize": 587132,
+      "identifiers": []
+    },
+    "audiobook": null,
+    "readaloud": null,
+    "processingJob": null
+  },
+  {
+    "uuid": "72cc74cd-2ceb-42e6-a43a-aee41cc5086f",
+    "title": "Heart of Darkness",
+    "id": 8075247183362039,
+    "language": "en",
+    "createdAt": "2026-09-05 18:25:10",
+    "updatedAt": "2026-09-05 18:25:10",
+    "publicationDate": "2006-01-09T00:00:00.000Z",
+    "alignedByStorytellerVersion": null,
+    "alignedAt": null,
+    "alignedWith": null,
+    "description": null,
+    "rating": null,
+    "subtitle": null,
+    "duration": null,
+    "pageCount": null,
+    "assetDir": "Heart of Darkness",
+    "coverColorsOverride": null,
+    "authors": [
+      {
+        "uuid": "9351478a-4c00-4106-8569-34b22d4f9102",
+        "id": null,
+        "name": "Joseph Conrad",
+        "fileAs": "Conrad, Joseph",
+        "createdAt": "2026-09-05 18:25:10",
+        "updatedAt": "2026-09-05 18:25:10"
+      }
+    ],
+    "narrators": [],
+    "creators": [],
+    "series": [],
+    "tags": [
+      {
+        "uuid": "3f4fa360-f567-47c2-bebb-4389249a5cd5",
+        "name": "Africa -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:10",
+        "updatedAt": "2026-09-05 18:25:10"
+      },
+      {
+        "uuid": "a92d77b7-ec88-4422-9f8c-b818007c5bb2",
+        "name": "Europeans -- Africa -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:10",
+        "updatedAt": "2026-09-05 18:25:10"
+      },
+      {
+        "uuid": "801655d5-1fa3-411a-83cf-a8cb1833893c",
+        "name": "Trading posts -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:10",
+        "updatedAt": "2026-09-05 18:25:10"
+      },
+      {
+        "uuid": "e43b632a-0a15-49dd-915a-9fff7229c9c2",
+        "name": "Degeneration -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:10",
+        "updatedAt": "2026-09-05 18:25:10"
+      },
+      {
+        "uuid": "baceb65e-a15f-41d2-a167-6bcc78c4be6f",
+        "name": "Imperialism -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:10",
+        "updatedAt": "2026-09-05 18:25:10"
+      },
+      {
+        "uuid": "f8e7b7e9-df90-452d-b639-50c6e07cf38c",
+        "name": "Psychological fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:10",
+        "updatedAt": "2026-09-05 18:25:10"
+      }
+    ],
+    "collections": [],
+    "identifiers": [],
+    "externalData": [],
+    "status": {
+      "uuid": "eaecefa1-7c25-42c8-b93a-89bdd35ba6e3",
+      "name": "To read",
+      "label": "To read",
+      "createdAt": "2026-08-30 03:43:25",
+      "updatedAt": "2026-09-24 12:33:51"
+    },
+    "position": null,
+    "userBookRating": null,
+    "alignmentSummary": null,
+    "ebook": {
+      "uuid": "6bb018fb-7b61-4c81-b226-eddf5a0930ac",
+      "filepath": "/data/assets/Heart of Darkness/text/Heart of Darkness.epub",
+      "missing": false,
+      "coverOrigin": "extracted",
+      "cover": {
+        "sha256": "750d32981892cf458852e9a6f71889f89a3b8461ec0b3cb21ae4286538f0c052",
+        "width": 1600,
+        "height": 2400,
+        "blurhash": "L^G]X|aQaiox~UbWf7oe--ayf#jd",
+        "colors": [
+          {
+            "r": 0,
+            "g": 20,
+            "b": 230
+          },
+          {
+            "r": 16,
+            "g": 203,
+            "b": 57
+          },
+          {
+            "r": 254,
+            "g": 254,
+            "b": 254
+          },
+          {
+            "r": 57,
+            "g": 57,
+            "b": 57
+          }
+        ]
+      },
+      "isEpub2": false,
+      "createdAt": "2026-09-05 18:25:10",
+      "updatedAt": "2026-09-24 12:33:51",
+      "fingerprint": "f:164182:1788632710",
+      "pageCount": 98,
+      "fileSize": 164182,
+      "identifiers": []
+    },
+    "audiobook": null,
+    "readaloud": null,
+    "processingJob": null
+  },
+  {
+    "uuid": "75560bcc-057b-43ae-8a3e-3dc1afc698dc",
+    "title": "Frankenstein; or, the modern prometheus",
+    "id": 2299845667450587,
+    "language": "en",
+    "createdAt": "2026-08-30 03:51:47",
+    "updatedAt": "2026-08-30 03:51:47",
+    "publicationDate": "1993-10-01T00:00:00.000Z",
+    "alignedByStorytellerVersion": null,
+    "alignedAt": null,
+    "alignedWith": null,
+    "description": null,
+    "rating": null,
+    "subtitle": null,
+    "duration": null,
+    "pageCount": null,
+    "assetDir": "Frankenstein; or, the modern prometheus",
+    "coverColorsOverride": null,
+    "authors": [
+      {
+        "uuid": "47f13ed9-057c-420d-a6ba-1d0f1305fe2b",
+        "id": null,
+        "name": "Mary Wollstonecraft Shelley",
+        "fileAs": "Shelley, Mary Wollstonecraft",
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      }
+    ],
+    "narrators": [],
+    "creators": [],
+    "series": [],
+    "tags": [
+      {
+        "uuid": "8b5dcdae-cb9a-44d8-9693-5b3b12a2047e",
+        "name": "Science fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      },
+      {
+        "uuid": "a645f797-ee9e-4fc1-8489-ac9fb0a6a328",
+        "name": "Horror tales",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      },
+      {
+        "uuid": "aee41985-1442-4b93-abec-9367c2c1167e",
+        "name": "Gothic fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      },
+      {
+        "uuid": "7449d67a-bf8c-4c46-8561-7a0941245563",
+        "name": "Scientists -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      },
+      {
+        "uuid": "c9b2e308-ef85-4943-8cce-aea7e076355f",
+        "name": "Monsters -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      },
+      {
+        "uuid": "3a09375e-50c2-4a52-a235-5e440599be54",
+        "name": "Frankenstein, Victor (Fictitious character) -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      },
+      {
+        "uuid": "fb643328-6bc1-4cd6-9bbf-3e7e427c1926",
+        "name": "Frankenstein's monster (Fictitious character) -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      }
+    ],
+    "collections": [],
+    "identifiers": [],
+    "externalData": [],
+    "status": {
+      "uuid": "b593ceab-563b-4639-8d83-494d007ee19a",
+      "name": "Reading",
+      "label": "Reading",
+      "createdAt": "2026-08-30 03:43:25",
+      "updatedAt": "2026-09-24 12:33:51"
+    },
+    "position": {
+      "uuid": "faacb94b-b168-4743-a361-bbb83f4f80ba",
+      "locator": {
+        "type": "application/xhtml+xml",
+        "title": "Letter 1",
+        "href": "OEBPS/6955210388878302455_84-h-2.htm.xhtml",
+        "text": {
+          "highlight": "Letter 1   To Mrs. Saville, England.    St. Petersburgh, Dec. 11"
+        },
+        "locations": {
+          "totalProgression": 0.014310428490052533,
+          "charOffset": 0,
+          "progression": 0
+        }
+      },
+      "timestamp": 1788758568421,
+      "createdAt": "2026-09-02 17:37:18",
+      "updatedAt": "2026-09-07 05:22:48"
+    },
+    "userBookRating": null,
+    "alignmentSummary": null,
+    "ebook": {
+      "uuid": "434adc45-39c8-4137-a5df-726457481ae8",
+      "filepath": "/data/library/frankenstein.epub",
+      "missing": false,
+      "coverOrigin": "extracted",
+      "cover": {
+        "sha256": "a4ef2ebf3d047ff57427ed5fc450ac3447b8fc78838915cf9bc9a8ca64b1f652",
+        "width": 1824,
+        "height": 2726,
+        "blurhash": "L%IrZtofxtof~qj[ahj[%Mj[Rkju",
+        "colors": [
+          {
+            "r": 126,
+            "g": 142,
+            "b": 89
+          },
+          {
+            "r": 184,
+            "g": 195,
+            "b": 162
+          },
+          {
+            "r": 42,
+            "g": 46,
+            "b": 31
+          },
+          {
+            "r": 243,
+            "g": 244,
+            "b": 234
+          }
+        ]
+      },
+      "isEpub2": false,
+      "createdAt": "2026-08-30 03:51:47",
+      "updatedAt": "2026-09-24 12:33:51",
+      "fingerprint": "f:474401:1788061882",
+      "pageCount": 212,
+      "fileSize": 474401,
+      "identifiers": []
+    },
+    "audiobook": null,
+    "readaloud": null,
+    "processingJob": null
+  },
+  {
+    "uuid": "76c7d783-3fac-4799-b18b-850432c3486d",
+    "title": "A Doll's House : a play",
+    "id": 5291100425788112,
+    "language": "en",
+    "createdAt": "2026-09-05 18:22:12",
+    "updatedAt": "2026-09-05 18:22:12",
+    "publicationDate": "2001-03-01T00:00:00.000Z",
+    "alignedByStorytellerVersion": null,
+    "alignedAt": null,
+    "alignedWith": null,
+    "description": null,
+    "rating": null,
+    "subtitle": null,
+    "duration": null,
+    "pageCount": null,
+    "assetDir": "A Doll's House - a play",
+    "coverColorsOverride": null,
+    "authors": [
+      {
+        "uuid": "10cdd940-afad-41b2-acbc-c283d37f596a",
+        "id": null,
+        "name": "Henrik Ibsen",
+        "fileAs": "Ibsen, Henrik",
+        "createdAt": "2026-09-05 18:22:12",
+        "updatedAt": "2026-09-05 18:22:12"
+      }
+    ],
+    "narrators": [],
+    "creators": [],
+    "series": [],
+    "tags": [
+      {
+        "uuid": "9876f0bf-6e7a-4d47-af23-d761da0300a3",
+        "name": "Marriage -- Drama",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:22:12",
+        "updatedAt": "2026-09-05 18:22:12"
+      },
+      {
+        "uuid": "1e7e4053-9563-4a4d-9952-49a31f2c9d29",
+        "name": "Man-woman relationships -- Drama",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:22:12",
+        "updatedAt": "2026-09-05 18:22:12"
+      },
+      {
+        "uuid": "c8d6c457-47a1-4c97-ad16-2d787f4283ba",
+        "name": "Norwegian drama -- Translations into English",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:22:12",
+        "updatedAt": "2026-09-05 18:22:12"
+      },
+      {
+        "uuid": "302ffce5-551e-4e21-9564-1d708c8ffa59",
+        "name": "Wives -- Drama",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:22:12",
+        "updatedAt": "2026-09-05 18:22:12"
+      }
+    ],
+    "collections": [],
+    "identifiers": [],
+    "externalData": [],
+    "status": {
+      "uuid": "eaecefa1-7c25-42c8-b93a-89bdd35ba6e3",
+      "name": "To read",
+      "label": "To read",
+      "createdAt": "2026-08-30 03:43:25",
+      "updatedAt": "2026-09-24 12:33:51"
+    },
+    "position": null,
+    "userBookRating": null,
+    "alignmentSummary": null,
+    "ebook": {
+      "uuid": "2a7e37b7-76bf-4441-8430-fe4eb452ce80",
+      "filepath": "/data/assets/A Doll's House - a play/text/A Doll's House - a play.epub",
+      "missing": false,
+      "coverOrigin": "extracted",
+      "cover": {
+        "sha256": "a62a6aa3fc9d5439ed0bd4e31369b66d3208563f16e58b62d977f0b2054506e8",
+        "width": 1582,
+        "height": 2370,
+        "blurhash": "LvO.I5s:#mso?^j[b^kCO=fkf+a|",
+        "colors": [
+          {
+            "r": 220,
+            "g": 108,
+            "b": 117
+          },
+          {
+            "r": 216,
+            "g": 180,
+            "b": 187
+          },
+          {
+            "r": 252,
+            "g": 238,
+            "b": 238
+          },
+          {
+            "r": 40,
+            "g": 18,
+            "b": 19
+          }
+        ]
+      },
+      "isEpub2": false,
+      "createdAt": "2026-09-05 18:22:12",
+      "updatedAt": "2026-09-24 12:33:51",
+      "fingerprint": "f:305702:1788632532",
+      "pageCount": 66,
+      "fileSize": 305702,
+      "identifiers": []
+    },
+    "audiobook": null,
+    "readaloud": null,
+    "processingJob": null
+  },
+  {
+    "uuid": "7bb4f286-565f-41e2-88b0-452dab9d6939",
+    "title": "Metamorphosis",
+    "id": 8630814771601398,
+    "language": "en",
+    "createdAt": "2026-09-05 18:25:18",
+    "updatedAt": "2026-09-05 18:25:18",
+    "publicationDate": "2005-08-17T00:00:00.000Z",
+    "alignedByStorytellerVersion": null,
+    "alignedAt": null,
+    "alignedWith": null,
+    "description": null,
+    "rating": null,
+    "subtitle": null,
+    "duration": null,
+    "pageCount": null,
+    "assetDir": "Metamorphosis",
+    "coverColorsOverride": null,
+    "authors": [
+      {
+        "uuid": "7ab5c468-348a-4957-a373-f20b669338bb",
+        "id": null,
+        "name": "Franz Kafka",
+        "fileAs": "Kafka, Franz",
+        "createdAt": "2026-09-05 18:25:18",
+        "updatedAt": "2026-09-05 18:25:18"
+      }
+    ],
+    "narrators": [],
+    "creators": [],
+    "series": [],
+    "tags": [
+      {
+        "uuid": "f8e7b7e9-df90-452d-b639-50c6e07cf38c",
+        "name": "Psychological fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:10",
+        "updatedAt": "2026-09-05 18:25:10"
+      },
+      {
+        "uuid": "6e7ec352-09a6-4feb-9daf-06308a3ae363",
+        "name": "Metamorphosis -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:18",
+        "updatedAt": "2026-09-05 18:25:18"
+      }
+    ],
+    "collections": [],
+    "identifiers": [],
+    "externalData": [],
+    "status": {
+      "uuid": "eaecefa1-7c25-42c8-b93a-89bdd35ba6e3",
+      "name": "To read",
+      "label": "To read",
+      "createdAt": "2026-08-30 03:43:25",
+      "updatedAt": "2026-09-24 12:33:51"
+    },
+    "position": null,
+    "userBookRating": null,
+    "alignmentSummary": null,
+    "ebook": {
+      "uuid": "abfd5126-5a0c-43b7-9a87-d87dc06fc4ad",
+      "filepath": "/data/assets/Metamorphosis/text/Metamorphosis.epub",
+      "missing": false,
+      "coverOrigin": "extracted",
+      "cover": {
+        "sha256": "861c2a4b1aed0b7a51db2a337c481fe5873eae54adb3ca53c8e6862b820ae521",
+        "width": 1576,
+        "height": 2366,
+        "blurhash": "L+Kw|Mofj]of~qoft6j[t8azWBj[",
+        "colors": [
+          {
+            "r": 187,
+            "g": 182,
+            "b": 168
+          },
+          {
+            "r": 81,
+            "g": 81,
+            "b": 75
+          },
+          {
+            "r": 248,
+            "g": 248,
+            "b": 247
+          },
+          {
+            "r": 1,
+            "g": 1,
+            "b": 1
+          }
+        ]
+      },
+      "isEpub2": false,
+      "createdAt": "2026-09-05 18:25:18",
+      "updatedAt": "2026-09-24 12:33:51",
+      "fingerprint": "f:317123:1788632718",
+      "pageCount": 58,
+      "fileSize": 317123,
+      "identifiers": []
+    },
+    "audiobook": null,
+    "readaloud": null,
+    "processingJob": null
+  },
+  {
+    "uuid": "893377f2-c1cc-4275-9dfa-57884ce213d0",
+    "title": "Emma",
+    "id": 4653418323282908,
+    "language": "en",
+    "createdAt": "2026-09-05 18:25:05",
+    "updatedAt": "2026-09-05 18:25:05",
+    "publicationDate": "1994-08-01T00:00:00.000Z",
+    "alignedByStorytellerVersion": null,
+    "alignedAt": null,
+    "alignedWith": null,
+    "description": null,
+    "rating": null,
+    "subtitle": null,
+    "duration": null,
+    "pageCount": null,
+    "assetDir": "Emma",
+    "coverColorsOverride": null,
+    "authors": [
+      {
+        "uuid": "cbf61007-6bb2-4da8-adc0-a2e014475fb3",
+        "id": null,
+        "name": "Jane Austen",
+        "fileAs": "Austen, Jane",
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      }
+    ],
+    "narrators": [],
+    "creators": [],
+    "series": [],
+    "tags": [
+      {
+        "uuid": "dcf773a6-b0b9-4726-835b-fec91290f432",
+        "name": "Humorous stories",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:05",
+        "updatedAt": "2026-09-05 18:25:05"
+      },
+      {
+        "uuid": "3e4c334d-f4db-4187-9155-d42b107f84d3",
+        "name": "England -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      },
+      {
+        "uuid": "e4562f0f-29d5-4bf0-be57-cd57436fd23b",
+        "name": "Young women -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      },
+      {
+        "uuid": "6d4f7339-bf60-4fe8-83ef-d10226b9f55a",
+        "name": "Love stories",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      },
+      {
+        "uuid": "320ab116-76c7-4d0f-a54f-ebb9c4ebd851",
+        "name": "Fathers and daughters -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:05",
+        "updatedAt": "2026-09-05 18:25:05"
+      },
+      {
+        "uuid": "18ca93bf-83bb-4e6f-b0d4-5598822276b3",
+        "name": "Bildungsromans",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:00",
+        "updatedAt": "2026-09-05 18:25:00"
+      },
+      {
+        "uuid": "6dbd27eb-4b71-4c27-86c9-83fa9f7d2a95",
+        "name": "Mate selection -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:05",
+        "updatedAt": "2026-09-05 18:25:05"
+      },
+      {
+        "uuid": "1fba485d-ff09-4452-9eb2-fa1c26df286d",
+        "name": "Female friendship -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:05",
+        "updatedAt": "2026-09-05 18:25:05"
+      }
+    ],
+    "collections": [],
+    "identifiers": [],
+    "externalData": [],
+    "status": null,
+    "position": null,
+    "userBookRating": null,
+    "alignmentSummary": null,
+    "ebook": {
+      "uuid": "66ce0bcc-a09c-455b-bd71-d0cf8ef4ac82",
+      "filepath": "/data/assets/Emma/text/Emma.epub",
+      "missing": false,
+      "coverOrigin": "extracted",
+      "cover": {
+        "sha256": "3f58e788c7902cf895187e5107c607ef8735d21a93fa3e9bc55b8512df0ce4c7",
+        "width": 1600,
+        "height": 2400,
+        "blurhash": "L*Li6$r=aebv}_S$WVni%PjFjFfk",
+        "colors": [
+          {
+            "r": 166,
+            "g": 191,
+            "b": 3
+          },
+          {
+            "r": 19,
+            "g": 230,
+            "b": 184
+          },
+          {
+            "r": 255,
+            "g": 255,
+            "b": 255
+          },
+          {
+            "r": 54,
+            "g": 54,
+            "b": 54
+          }
+        ]
+      },
+      "isEpub2": false,
+      "createdAt": "2026-09-05 18:25:05",
+      "updatedAt": "2026-09-24 12:33:51",
+      "fingerprint": "f:474719:1788632705",
+      "pageCount": 428,
+      "fileSize": 474719,
+      "identifiers": []
+    },
+    "audiobook": null,
+    "readaloud": null,
+    "processingJob": null
+  },
+  {
+    "uuid": "96bc0e87-c693-4cf7-bf89-8e37bc3b9b9d",
+    "title": "Dracula",
+    "id": 4529815857472389,
+    "language": "en",
+    "createdAt": "2026-08-30 03:51:47",
+    "updatedAt": "2026-08-30 15:56:57",
+    "publicationDate": "1995-10-01T00:00:00.000Z",
+    "alignedByStorytellerVersion": null,
+    "alignedAt": null,
+    "alignedWith": null,
+    "description": "Plain description with an unescaped & ampersand and an <b>unclosed bold tag",
+    "rating": null,
+    "subtitle": null,
+    "duration": null,
+    "pageCount": null,
+    "assetDir": "Dracula",
+    "coverColorsOverride": null,
+    "authors": [
+      {
+        "uuid": "58685781-29a4-4045-9211-ca4037218b29",
+        "id": null,
+        "name": "Bram Stoker",
+        "fileAs": "Stoker, Bram",
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      }
+    ],
+    "narrators": [],
+    "creators": [],
+    "series": [],
+    "tags": [
+      {
+        "uuid": "a645f797-ee9e-4fc1-8489-ac9fb0a6a328",
+        "name": "Horror tales",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      },
+      {
+        "uuid": "bde6b488-a866-4e67-89c0-008654fbc156",
+        "name": "Epistolary fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      },
+      {
+        "uuid": "aee41985-1442-4b93-abec-9367c2c1167e",
+        "name": "Gothic fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      },
+      {
+        "uuid": "2bd3f2b6-19ed-4853-96db-9c397506299f",
+        "name": "Vampires -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      },
+      {
+        "uuid": "6bcd32b2-5542-43ee-be1a-ef1ffdab20cf",
+        "name": "Dracula, Count (Fictitious character) -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      },
+      {
+        "uuid": "8e8fa951-85bc-429f-8be6-0322b16e2905",
+        "name": "Transylvania (Romania) -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      },
+      {
+        "uuid": "c823badf-7a90-44a8-a16a-b6f816433ea3",
+        "name": "Whitby (England) -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      }
+    ],
+    "collections": [],
+    "identifiers": [],
+    "externalData": [],
+    "status": {
+      "uuid": "b593ceab-563b-4639-8d83-494d007ee19a",
+      "name": "Reading",
+      "label": "Reading",
+      "createdAt": "2026-08-30 03:43:25",
+      "updatedAt": "2026-09-24 12:33:51"
+    },
+    "position": {
+      "uuid": "1fa98539-50ee-4d19-861e-97423ed43a25",
+      "locator": {
+        "type": "application/xhtml+xml",
+        "title": "Contents",
+        "text": {
+          "highlight": "TO  MY DEAR FRIEND  HOMMY-BEG  Contents CHAPTER I. Jonathan Hark"
+        },
+        "href": "OEBPS/2675126572851338424_345-h-1.htm.xhtml",
+        "locations": {
+          "progression": 0,
+          "totalProgression": 0.00363622120236844,
+          "charOffset": 0,
+          "fragments": [
+            "pgepubid00001"
+          ]
+        }
+      },
+      "timestamp": 1789867207376,
+      "createdAt": "2026-09-01 21:38:34",
+      "updatedAt": "2026-09-20 01:20:07"
+    },
+    "userBookRating": null,
+    "alignmentSummary": null,
+    "ebook": {
+      "uuid": "1138c503-126a-4b2f-9b20-9a0ccda008e9",
+      "filepath": "/data/library/dracula.epub",
+      "missing": false,
+      "coverOrigin": "extracted",
+      "cover": {
+        "sha256": "e831a3217319448b54892848ec2eb771155cc497973f673e34169d52c65c37e9",
+        "width": 1000,
+        "height": 1000,
+        "blurhash": "L25~O%o#~mo#o#fQj[fQ~mj[M}j[",
+        "colors": [
+          {
+            "r": 30,
+            "g": 58,
+            "b": 95
+          },
+          {
+            "r": 239,
+            "g": 217,
+            "b": 145
+          },
+          {
+            "r": 207,
+            "g": 193,
+            "b": 142
+          },
+          {
+            "r": 122,
+            "g": 125,
+            "b": 118
+          }
+        ]
+      },
+      "isEpub2": false,
+      "createdAt": "2026-08-30 03:51:47",
+      "updatedAt": "2026-09-24 12:33:51",
+      "fingerprint": "f:602409:1788061885",
+      "pageCount": 387,
+      "fileSize": 602409,
+      "identifiers": []
+    },
+    "audiobook": null,
+    "readaloud": null,
+    "processingJob": null
+  },
+  {
+    "uuid": "9bc3c8e2-4d47-416f-8735-9b6e534f42a8",
+    "title": "Great Expectations",
+    "id": 5599534893395750,
+    "language": "en",
+    "createdAt": "2026-09-05 18:25:08",
+    "updatedAt": "2026-09-05 18:25:08",
+    "publicationDate": "1998-07-01T00:00:00.000Z",
+    "alignedByStorytellerVersion": null,
+    "alignedAt": null,
+    "alignedWith": null,
+    "description": null,
+    "rating": null,
+    "subtitle": null,
+    "duration": null,
+    "pageCount": null,
+    "assetDir": "Great Expectations",
+    "coverColorsOverride": null,
+    "authors": [
+      {
+        "uuid": "ae6d5ae1-4bf2-4595-9eb2-ee3968e90426",
+        "id": null,
+        "name": "Charles Dickens",
+        "fileAs": "Dickens, Charles",
+        "createdAt": "2026-09-05 18:24:57",
+        "updatedAt": "2026-09-05 18:24:57"
+      }
+    ],
+    "narrators": [],
+    "creators": [],
+    "series": [],
+    "tags": [
+      {
+        "uuid": "650936f0-461d-4e73-880d-6be79d13592c",
+        "name": "Orphans -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:00",
+        "updatedAt": "2026-09-05 18:25:00"
+      },
+      {
+        "uuid": "3e4c334d-f4db-4187-9155-d42b107f84d3",
+        "name": "England -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      },
+      {
+        "uuid": "2f1c21f0-266e-49e5-bc6e-454064f1cba8",
+        "name": "Revenge -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:08",
+        "updatedAt": "2026-09-05 18:25:08"
+      },
+      {
+        "uuid": "18ca93bf-83bb-4e6f-b0d4-5598822276b3",
+        "name": "Bildungsromans",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:00",
+        "updatedAt": "2026-09-05 18:25:00"
+      },
+      {
+        "uuid": "83f1b93d-f6e6-49c6-9df9-0f368944d3b0",
+        "name": "Young men -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:08",
+        "updatedAt": "2026-09-05 18:25:08"
+      },
+      {
+        "uuid": "0bfa97be-79d5-466b-81fa-6a9dc1a3108f",
+        "name": "Man-woman relationships -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:08",
+        "updatedAt": "2026-09-05 18:25:08"
+      },
+      {
+        "uuid": "28828805-c110-4016-a22c-6c059f97d718",
+        "name": "Ex-convicts -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:08",
+        "updatedAt": "2026-09-05 18:25:08"
+      },
+      {
+        "uuid": "42e6b109-0c6b-4495-8c1f-342ad953d25a",
+        "name": "Benefactors -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:08",
+        "updatedAt": "2026-09-05 18:25:08"
+      }
+    ],
+    "collections": [],
+    "identifiers": [],
+    "externalData": [],
+    "status": {
+      "uuid": "eaecefa1-7c25-42c8-b93a-89bdd35ba6e3",
+      "name": "To read",
+      "label": "To read",
+      "createdAt": "2026-08-30 03:43:25",
+      "updatedAt": "2026-09-24 12:33:51"
+    },
+    "position": null,
+    "userBookRating": null,
+    "alignmentSummary": null,
+    "ebook": {
+      "uuid": "1ca8fa36-a5e1-4467-a0ea-93bfdfd59c34",
+      "filepath": "/data/assets/Great Expectations/text/Great Expectations.epub",
+      "missing": false,
+      "coverOrigin": "extracted",
+      "cover": {
+        "sha256": "8e382fae1e9eb7f10168300c719e233732cc3db0e7eb359d0ad5b78dcbec6fc3",
+        "width": 500,
+        "height": 700,
+        "blurhash": "L3A,dr~U^%-n_0WB?Fxt009a9aRl",
+        "colors": [
+          {
+            "r": 153,
+            "g": 144,
+            "b": 119
+          },
+          {
+            "r": 99,
+            "g": 92,
+            "b": 74
+          },
+          {
+            "r": 47,
+            "g": 40,
+            "b": 27
+          },
+          {
+            "r": 0,
+            "g": 0,
+            "b": 0
+          }
+        ]
+      },
+      "isEpub2": false,
+      "createdAt": "2026-09-05 18:25:08",
+      "updatedAt": "2026-09-24 12:33:51",
+      "fingerprint": "f:14384077:1788632708",
+      "pageCount": 510,
+      "fileSize": 14384077,
+      "identifiers": []
+    },
+    "audiobook": null,
+    "readaloud": null,
+    "processingJob": null
+  },
+  {
+    "uuid": "ad6308d4-3127-46de-a3cb-d521d1adbe14",
+    "title": "The call of the wild",
+    "id": 8786342047334464,
+    "language": "en",
+    "createdAt": "2026-09-05 18:25:29",
+    "updatedAt": "2026-09-05 18:25:29",
+    "publicationDate": "2008-07-02T00:00:00.000Z",
+    "alignedByStorytellerVersion": null,
+    "alignedAt": null,
+    "alignedWith": null,
+    "description": null,
+    "rating": null,
+    "subtitle": null,
+    "duration": null,
+    "pageCount": null,
+    "assetDir": "The call of the wild",
+    "coverColorsOverride": null,
+    "authors": [
+      {
+        "uuid": "46bfb1b5-5db2-4b56-98b6-30b8f3a6f0a8",
+        "id": null,
+        "name": "Jack London",
+        "fileAs": "London, Jack",
+        "createdAt": "2026-09-05 18:25:29",
+        "updatedAt": "2026-09-05 18:25:29"
+      }
+    ],
+    "narrators": [],
+    "creators": [],
+    "series": [],
+    "tags": [
+      {
+        "uuid": "109e6c67-9cb1-48c0-9ec0-6405056f1738",
+        "name": "Dogs -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:29",
+        "updatedAt": "2026-09-05 18:25:29"
+      },
+      {
+        "uuid": "756fe624-c8fa-4d5b-902f-8d38694fe56f",
+        "name": "Adventure stories",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:02",
+        "updatedAt": "2026-09-05 18:25:02"
+      },
+      {
+        "uuid": "0e6d1ab5-c822-452b-91ca-56bf488dc80f",
+        "name": "Nature stories",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:29",
+        "updatedAt": "2026-09-05 18:25:29"
+      },
+      {
+        "uuid": "5dbbdd55-b346-41e1-a6dc-455b26eaef5b",
+        "name": "Klondike River Valley (Yukon) -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:29",
+        "updatedAt": "2026-09-05 18:25:29"
+      },
+      {
+        "uuid": "0655ee23-edd4-4490-b3f1-a39d09999e3c",
+        "name": "Sled dogs -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:29",
+        "updatedAt": "2026-09-05 18:25:29"
+      },
+      {
+        "uuid": "97962548-f26b-4dbd-8533-7b2e58298197",
+        "name": "Pet theft -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:29",
+        "updatedAt": "2026-09-05 18:25:29"
+      },
+      {
+        "uuid": "30922e2e-93cd-46cb-8584-fd378c622118",
+        "name": "Feral dogs -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:29",
+        "updatedAt": "2026-09-05 18:25:29"
+      },
+      {
+        "uuid": "44246e0b-46d9-4a5d-98bf-f04d98649158",
+        "name": "Animal welfare -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:29",
+        "updatedAt": "2026-09-05 18:25:29"
+      }
+    ],
+    "collections": [],
+    "identifiers": [],
+    "externalData": [],
+    "status": {
+      "uuid": "eaecefa1-7c25-42c8-b93a-89bdd35ba6e3",
+      "name": "To read",
+      "label": "To read",
+      "createdAt": "2026-08-30 03:43:25",
+      "updatedAt": "2026-09-24 12:33:51"
+    },
+    "position": null,
+    "userBookRating": null,
+    "alignmentSummary": null,
+    "ebook": {
+      "uuid": "cb0ecd96-53a9-409f-a7ce-1d68e0cab3f5",
+      "filepath": "/data/assets/The call of the wild/text/The call of the wild.epub",
+      "missing": false,
+      "coverOrigin": "extracted",
+      "cover": {
+        "sha256": "899ba98c1c7f4acad120069b77a7d87b0d4ca4664aa4a465df4437d1f952c642",
+        "width": 463,
+        "height": 700,
+        "blurhash": "L0BWr80000~q4T%N9]tQ0gMe~BNH",
+        "colors": [
+          {
+            "r": 81,
+            "g": 91,
+            "b": 61
+          },
+          {
+            "r": 106,
+            "g": 114,
+            "b": 87
+          },
+          {
+            "r": 86,
+            "g": 51,
+            "b": 41
+          },
+          {
+            "r": 156,
+            "g": 157,
+            "b": 142
+          }
+        ]
+      },
+      "isEpub2": false,
+      "createdAt": "2026-09-05 18:25:29",
+      "updatedAt": "2026-09-24 12:33:51",
+      "fingerprint": "f:228279:1788632729",
+      "pageCount": 90,
+      "fileSize": 228279,
+      "identifiers": []
+    },
+    "audiobook": null,
+    "readaloud": null,
+    "processingJob": null
+  },
+  {
+    "uuid": "b5698588-db09-448c-ae70-53b5b0a65d80",
+    "title": "The Adventures of Tom Sawyer, Complete",
+    "id": 721839177547718,
+    "language": "en",
+    "createdAt": "2026-09-05 18:25:27",
+    "updatedAt": "2026-09-05 18:25:27",
+    "publicationDate": "2004-07-01T00:00:00.000Z",
+    "alignedByStorytellerVersion": null,
+    "alignedAt": null,
+    "alignedWith": null,
+    "description": null,
+    "rating": null,
+    "subtitle": null,
+    "duration": null,
+    "pageCount": null,
+    "assetDir": "The Adventures of Tom Sawyer, Complete",
+    "coverColorsOverride": null,
+    "authors": [
+      {
+        "uuid": "9b780dc2-2f46-4dd9-a936-0216fa2f7f1e",
+        "id": null,
+        "name": "Mark Twain",
+        "fileAs": "Twain, Mark",
+        "createdAt": "2026-09-05 18:25:27",
+        "updatedAt": "2026-09-05 18:25:27"
+      }
+    ],
+    "narrators": [],
+    "creators": [],
+    "series": [],
+    "tags": [
+      {
+        "uuid": "dcf773a6-b0b9-4726-835b-fec91290f432",
+        "name": "Humorous stories",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:05",
+        "updatedAt": "2026-09-05 18:25:05"
+      },
+      {
+        "uuid": "18ca93bf-83bb-4e6f-b0d4-5598822276b3",
+        "name": "Bildungsromans",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:00",
+        "updatedAt": "2026-09-05 18:25:00"
+      },
+      {
+        "uuid": "5e5f2c41-9433-4bc9-ba1d-50bfef8c7e6c",
+        "name": "Boys -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:27",
+        "updatedAt": "2026-09-05 18:25:27"
+      },
+      {
+        "uuid": "d8d1f0da-f64c-4c68-8931-15cdc7c29cf4",
+        "name": "Male friendship -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:27",
+        "updatedAt": "2026-09-05 18:25:27"
+      },
+      {
+        "uuid": "756fe624-c8fa-4d5b-902f-8d38694fe56f",
+        "name": "Adventure stories",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:02",
+        "updatedAt": "2026-09-05 18:25:02"
+      },
+      {
+        "uuid": "3e59d8bf-9f90-4bdf-81c0-7a0297531d12",
+        "name": "Missouri -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:27",
+        "updatedAt": "2026-09-05 18:25:27"
+      },
+      {
+        "uuid": "5097d3a9-bcbb-4a79-ae2e-be1d01d989bd",
+        "name": "Sawyer, Tom (Fictitious character) -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:27",
+        "updatedAt": "2026-09-05 18:25:27"
+      },
+      {
+        "uuid": "47973e04-6234-45a9-a4ec-664c34f6dbf4",
+        "name": "Child witnesses -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:27",
+        "updatedAt": "2026-09-05 18:25:27"
+      },
+      {
+        "uuid": "cd18c377-9442-4c1a-a548-e903f72dae5c",
+        "name": "Runaway children -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:27",
+        "updatedAt": "2026-09-05 18:25:27"
+      },
+      {
+        "uuid": "bc099482-3696-4450-9da9-dd9e9a4c360c",
+        "name": "Mississippi River Valley -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:27",
+        "updatedAt": "2026-09-05 18:25:27"
+      }
+    ],
+    "collections": [],
+    "identifiers": [],
+    "externalData": [],
+    "status": {
+      "uuid": "eaecefa1-7c25-42c8-b93a-89bdd35ba6e3",
+      "name": "To read",
+      "label": "To read",
+      "createdAt": "2026-08-30 03:43:25",
+      "updatedAt": "2026-09-24 12:33:51"
+    },
+    "position": null,
+    "userBookRating": null,
+    "alignmentSummary": null,
+    "ebook": {
+      "uuid": "10672849-698d-4e20-be8e-f111792b6d82",
+      "filepath": "/data/assets/The Adventures of Tom Sawyer, Complete/text/The Adventures of Tom Sawyer, Complete.epub",
+      "missing": false,
+      "coverOrigin": "extracted",
+      "cover": {
+        "sha256": "573250f0e8fda0088d94ea6054e8e220193262764791c83632dda2cb66140c88",
+        "width": 784,
+        "height": 1000,
+        "blurhash": "L07UVy%j00_3?Se+j]t706xU~Xo$",
+        "colors": [
+          {
+            "r": 60,
+            "g": 67,
+            "b": 106
+          },
+          {
+            "r": 49,
+            "g": 52,
+            "b": 70
+          },
+          {
+            "r": 90,
+            "g": 90,
+            "b": 108
+          },
+          {
+            "r": 132,
+            "g": 123,
+            "b": 111
+          }
+        ]
+      },
+      "isEpub2": false,
+      "createdAt": "2026-09-05 18:25:27",
+      "updatedAt": "2026-09-24 12:33:51",
+      "fingerprint": "f:16671581:1788632727",
+      "pageCount": 234,
+      "fileSize": 16671581,
+      "identifiers": []
+    },
+    "audiobook": null,
+    "readaloud": null,
+    "processingJob": null
+  },
+  {
+    "uuid": "bd8084ba-a4a3-4d42-b1ce-14a5c7536d8a",
+    "title": "Around the World in Eighty Days",
+    "id": 7614990500766864,
+    "language": "en",
+    "createdAt": "2026-09-05 18:25:02",
+    "updatedAt": "2026-09-05 18:25:02",
+    "publicationDate": "1994-01-01T00:00:00.000Z",
+    "alignedByStorytellerVersion": null,
+    "alignedAt": null,
+    "alignedWith": null,
+    "description": null,
+    "rating": null,
+    "subtitle": null,
+    "duration": null,
+    "pageCount": null,
+    "assetDir": "Around the World in Eighty Days",
+    "coverColorsOverride": null,
+    "authors": [
+      {
+        "uuid": "a832a3f1-139c-47be-a52a-e6915a4ba27a",
+        "id": null,
+        "name": "Jules Verne",
+        "fileAs": "Verne, Jules",
+        "createdAt": "2026-09-05 18:25:02",
+        "updatedAt": "2026-09-05 18:25:02"
+      }
+    ],
+    "narrators": [],
+    "creators": [],
+    "series": [],
+    "tags": [
+      {
+        "uuid": "756fe624-c8fa-4d5b-902f-8d38694fe56f",
+        "name": "Adventure stories",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:02",
+        "updatedAt": "2026-09-05 18:25:02"
+      },
+      {
+        "uuid": "0fdcc5b7-23fb-464d-a4f8-951fc45fd52a",
+        "name": "Voyages around the world -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:02",
+        "updatedAt": "2026-09-05 18:25:02"
+      }
+    ],
+    "collections": [],
+    "identifiers": [],
+    "externalData": [],
+    "status": {
+      "uuid": "eaecefa1-7c25-42c8-b93a-89bdd35ba6e3",
+      "name": "To read",
+      "label": "To read",
+      "createdAt": "2026-08-30 03:43:25",
+      "updatedAt": "2026-09-24 12:33:51"
+    },
+    "position": null,
+    "userBookRating": null,
+    "alignmentSummary": null,
+    "ebook": {
+      "uuid": "934ba5d6-9800-4b5c-91a0-72584688b1d7",
+      "filepath": "/data/assets/Around the World in Eighty Days/text/Around the World in Eighty Days.epub",
+      "missing": false,
+      "coverOrigin": "extracted",
+      "cover": {
+        "sha256": "c5dacbe14c61090e9c9cb7bdaa7a8cb1d132974f3ad91862821ea01672852cba",
+        "width": 686,
+        "height": 1000,
+        "blurhash": "L9CZ,r4V8}x@OYxYaeR,}ro{WVRR",
+        "colors": [
+          {
+            "r": 87,
+            "g": 125,
+            "b": 87
+          },
+          {
+            "r": 216,
+            "g": 192,
+            "b": 126
+          },
+          {
+            "r": 59,
+            "g": 90,
+            "b": 61
+          },
+          {
+            "r": 30,
+            "g": 44,
+            "b": 29
+          }
+        ]
+      },
+      "isEpub2": false,
+      "createdAt": "2026-09-05 18:25:02",
+      "updatedAt": "2026-09-24 12:33:51",
+      "fingerprint": "f:442070:1788632702",
+      "pageCount": 208,
+      "fileSize": 442070,
+      "identifiers": []
+    },
+    "audiobook": null,
+    "readaloud": null,
+    "processingJob": null
+  },
+  {
+    "uuid": "c42c908d-e412-4507-9fa0-0bd1e86a135e",
+    "title": "A Tale of Two Cities",
+    "id": 2465290395470805,
+    "language": "en",
+    "createdAt": "2026-09-05 18:24:57",
+    "updatedAt": "2026-09-05 18:24:57",
+    "publicationDate": "1994-01-01T00:00:00.000Z",
+    "alignedByStorytellerVersion": null,
+    "alignedAt": null,
+    "alignedWith": null,
+    "description": null,
+    "rating": null,
+    "subtitle": null,
+    "duration": null,
+    "pageCount": null,
+    "assetDir": "A Tale of Two Cities",
+    "coverColorsOverride": null,
+    "authors": [
+      {
+        "uuid": "ae6d5ae1-4bf2-4595-9eb2-ee3968e90426",
+        "id": null,
+        "name": "Charles Dickens",
+        "fileAs": "Dickens, Charles",
+        "createdAt": "2026-09-05 18:24:57",
+        "updatedAt": "2026-09-05 18:24:57"
+      }
+    ],
+    "narrators": [],
+    "creators": [],
+    "series": [],
+    "tags": [
+      {
+        "uuid": "de540f9e-1db3-47bc-bef3-013c674e266d",
+        "name": "Historical fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:24:57",
+        "updatedAt": "2026-09-05 18:24:57"
+      },
+      {
+        "uuid": "9d997b87-b506-4624-8834-51e835c010f5",
+        "name": "France -- History -- Revolution, 1789-1799 -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:24:57",
+        "updatedAt": "2026-09-05 18:24:57"
+      },
+      {
+        "uuid": "5b2f62a2-42d2-465d-b82d-3dc9b4e1b36e",
+        "name": "London (England) -- History -- 18th century -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:24:57",
+        "updatedAt": "2026-09-05 18:24:57"
+      },
+      {
+        "uuid": "1e474626-d739-45b7-bb28-5f1ad8392ec3",
+        "name": "War stories",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:24:57",
+        "updatedAt": "2026-09-05 18:24:57"
+      },
+      {
+        "uuid": "f16eb1c0-45b5-4e55-9129-b576e1878c30",
+        "name": "Executions and executioners -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:24:57",
+        "updatedAt": "2026-09-05 18:24:57"
+      },
+      {
+        "uuid": "9a3a6c35-3311-4339-8a9e-ef65c0bfb918",
+        "name": "French -- England -- London -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:24:57",
+        "updatedAt": "2026-09-05 18:24:57"
+      },
+      {
+        "uuid": "1f0eaed4-4849-44b5-b900-e0047044cda9",
+        "name": "Lookalikes -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:24:57",
+        "updatedAt": "2026-09-05 18:24:57"
+      },
+      {
+        "uuid": "336aca96-7a95-469c-bc59-15d15d0dbb03",
+        "name": "British -- France -- Paris -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:24:57",
+        "updatedAt": "2026-09-05 18:24:57"
+      },
+      {
+        "uuid": "1029797a-c14b-455b-a4d7-a716690aba32",
+        "name": "Paris (France) -- History -- 1789-1799 -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:24:57",
+        "updatedAt": "2026-09-05 18:24:57"
+      }
+    ],
+    "collections": [],
+    "identifiers": [],
+    "externalData": [],
+    "status": {
+      "uuid": "eaecefa1-7c25-42c8-b93a-89bdd35ba6e3",
+      "name": "To read",
+      "label": "To read",
+      "createdAt": "2026-08-30 03:43:25",
+      "updatedAt": "2026-09-24 12:33:51"
+    },
+    "position": null,
+    "userBookRating": null,
+    "alignmentSummary": null,
+    "ebook": {
+      "uuid": "a54b8263-f2e8-4309-a35d-a240fecbd3b1",
+      "filepath": "/data/assets/A Tale of Two Cities/text/A Tale of Two Cities.epub",
+      "missing": false,
+      "coverOrigin": "extracted",
+      "cover": {
+        "sha256": "f68d17e862bcd24c9887796a86d4bffb06758d3da06e7e03ad6421b08ad2d5cc",
+        "width": 1576,
+        "height": 2366,
+        "blurhash": "L+M@WAofs8of_4j[o#j]WFfQf+fk",
+        "colors": [
+          {
+            "r": 165,
+            "g": 150,
+            "b": 110
+          },
+          {
+            "r": 239,
+            "g": 240,
+            "b": 234
+          },
+          {
+            "r": 47,
+            "g": 39,
+            "b": 27
+          },
+          {
+            "r": 0,
+            "g": 0,
+            "b": 0
+          }
+        ]
+      },
+      "isEpub2": false,
+      "createdAt": "2026-09-05 18:24:57",
+      "updatedAt": "2026-09-24 12:33:51",
+      "fingerprint": "f:7922028:1788632697",
+      "pageCount": 401,
+      "fileSize": 7922028,
+      "identifiers": []
+    },
+    "audiobook": null,
+    "readaloud": null,
+    "processingJob": null
+  },
+  {
+    "uuid": "d47d9454-5ff0-47b3-a8a8-e3f2f7779591",
+    "title": "Anne of Green Gables",
+    "id": 754910735175404,
+    "language": "en",
+    "createdAt": "2026-09-05 18:25:00",
+    "updatedAt": "2026-09-05 18:25:00",
+    "publicationDate": "2008-06-27T00:00:00.000Z",
+    "alignedByStorytellerVersion": null,
+    "alignedAt": null,
+    "alignedWith": null,
+    "description": null,
+    "rating": null,
+    "subtitle": null,
+    "duration": null,
+    "pageCount": null,
+    "assetDir": "Anne of Green Gables",
+    "coverColorsOverride": null,
+    "authors": [
+      {
+        "uuid": "0d3fd903-8057-477d-9818-b5d1d2c1f7c9",
+        "id": null,
+        "name": "L. M. Montgomery",
+        "fileAs": "Montgomery, L. M. (Lucy Maud)",
+        "createdAt": "2026-09-05 18:25:00",
+        "updatedAt": "2026-09-05 18:25:00"
+      }
+    ],
+    "narrators": [],
+    "creators": [],
+    "series": [],
+    "tags": [
+      {
+        "uuid": "650936f0-461d-4e73-880d-6be79d13592c",
+        "name": "Orphans -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:00",
+        "updatedAt": "2026-09-05 18:25:00"
+      },
+      {
+        "uuid": "86408ca0-8bbf-4b6d-80e2-49af26d4e6df",
+        "name": "Islands -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:00",
+        "updatedAt": "2026-09-05 18:25:00"
+      },
+      {
+        "uuid": "6c853138-1dff-4b1d-b440-fdfd0c55ca51",
+        "name": "Friendship -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:00",
+        "updatedAt": "2026-09-05 18:25:00"
+      },
+      {
+        "uuid": "18ca93bf-83bb-4e6f-b0d4-5598822276b3",
+        "name": "Bildungsromans",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:00",
+        "updatedAt": "2026-09-05 18:25:00"
+      },
+      {
+        "uuid": "c341e97a-3bed-484b-bdb5-531a71f2f4bb",
+        "name": "Girls -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:00",
+        "updatedAt": "2026-09-05 18:25:00"
+      },
+      {
+        "uuid": "e0d52240-31f2-4edc-b143-f47c518c6567",
+        "name": "Country life -- Prince Edward Island -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:00",
+        "updatedAt": "2026-09-05 18:25:00"
+      },
+      {
+        "uuid": "fc6f9ae1-7b43-44e6-badd-26e4cefb0f6c",
+        "name": "Prince Edward Island -- History -- 20th century -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:00",
+        "updatedAt": "2026-09-05 18:25:00"
+      },
+      {
+        "uuid": "5ecb18cb-4ead-4434-a83d-d71e480ac2ac",
+        "name": "Canada -- History -- 1867-1914 -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:00",
+        "updatedAt": "2026-09-05 18:25:00"
+      },
+      {
+        "uuid": "8aa41c82-387d-4c07-ae12-d2d2dfebd093",
+        "name": "Shirley, Anne (Fictitious character) -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:00",
+        "updatedAt": "2026-09-05 18:25:00"
+      }
+    ],
+    "collections": [],
+    "identifiers": [],
+    "externalData": [],
+    "status": {
+      "uuid": "eaecefa1-7c25-42c8-b93a-89bdd35ba6e3",
+      "name": "To read",
+      "label": "To read",
+      "createdAt": "2026-08-30 03:43:25",
+      "updatedAt": "2026-09-24 12:33:51"
+    },
+    "position": null,
+    "userBookRating": null,
+    "alignmentSummary": null,
+    "ebook": {
+      "uuid": "b118a8a5-fd40-4078-99c9-17feb62fe15e",
+      "filepath": "/data/assets/Anne of Green Gables/text/Anne of Green Gables.epub",
+      "missing": false,
+      "coverOrigin": "extracted",
+      "cover": {
+        "sha256": "e0e1b91a866adb18c933667b8bd3bb75bc8c071a37cff038153e9a56c71ca7d2",
+        "width": 1183,
+        "height": 1415,
+        "blurhash": "L7I3?i0201~T?unOIW%K90x@.5IW",
+        "colors": [
+          {
+            "r": 155,
+            "g": 108,
+            "b": 87
+          },
+          {
+            "r": 217,
+            "g": 185,
+            "b": 133
+          },
+          {
+            "r": 123,
+            "g": 80,
+            "b": 55
+          }
+        ]
+      },
+      "isEpub2": false,
+      "createdAt": "2026-09-05 18:25:00",
+      "updatedAt": "2026-09-24 12:33:51",
+      "fingerprint": "f:548600:1788632700",
+      "pageCount": 290,
+      "fileSize": 548600,
+      "identifiers": []
+    },
+    "audiobook": null,
+    "readaloud": null,
+    "processingJob": null
+  },
+  {
+    "uuid": "ec8f5c89-84cc-4912-af4b-937d9e61abff",
+    "title": "Jane Eyre: An Autobiography",
+    "id": 8014737895291133,
+    "language": "en",
+    "createdAt": "2026-09-05 18:25:13",
+    "updatedAt": "2026-09-05 18:25:13",
+    "publicationDate": "1998-03-01T00:00:00.000Z",
+    "alignedByStorytellerVersion": null,
+    "alignedAt": null,
+    "alignedWith": null,
+    "description": null,
+    "rating": null,
+    "subtitle": null,
+    "duration": null,
+    "pageCount": null,
+    "assetDir": "Jane Eyre- An Autobiography",
+    "coverColorsOverride": null,
+    "authors": [
+      {
+        "uuid": "bf363741-acf5-4a85-a3ec-9d8cfe7b8855",
+        "id": null,
+        "name": "Charlotte Brontë",
+        "fileAs": "Brontë, Charlotte",
+        "createdAt": "2026-09-05 18:25:13",
+        "updatedAt": "2026-09-05 18:25:13"
+      }
+    ],
+    "narrators": [],
+    "creators": [],
+    "series": [],
+    "tags": [
+      {
+        "uuid": "650936f0-461d-4e73-880d-6be79d13592c",
+        "name": "Orphans -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:00",
+        "updatedAt": "2026-09-05 18:25:00"
+      },
+      {
+        "uuid": "3e4c334d-f4db-4187-9155-d42b107f84d3",
+        "name": "England -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      },
+      {
+        "uuid": "e4562f0f-29d5-4bf0-be57-cd57436fd23b",
+        "name": "Young women -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      },
+      {
+        "uuid": "6d4f7339-bf60-4fe8-83ef-d10226b9f55a",
+        "name": "Love stories",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-08-30 03:51:47",
+        "updatedAt": "2026-08-30 03:51:47"
+      },
+      {
+        "uuid": "59e53317-ade4-43b9-b506-a38f275b8675",
+        "name": "Governesses -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:13",
+        "updatedAt": "2026-09-05 18:25:13"
+      },
+      {
+        "uuid": "320ab116-76c7-4d0f-a54f-ebb9c4ebd851",
+        "name": "Fathers and daughters -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:05",
+        "updatedAt": "2026-09-05 18:25:05"
+      },
+      {
+        "uuid": "9e87bb93-eaf9-4962-8bbf-b1174480bcc3",
+        "name": "Mentally ill women -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:13",
+        "updatedAt": "2026-09-05 18:25:13"
+      },
+      {
+        "uuid": "9bd26b98-35ce-400c-ae52-8efbfc9dff17",
+        "name": "Charity-schools -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:13",
+        "updatedAt": "2026-09-05 18:25:13"
+      },
+      {
+        "uuid": "6453d2ac-b4a6-4b13-91f5-d7a7db477f96",
+        "name": "Married people -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:13",
+        "updatedAt": "2026-09-05 18:25:13"
+      },
+      {
+        "uuid": "591cbd21-8bdb-479e-94ee-1cdf16838c06",
+        "name": "Country homes -- Fiction",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:13",
+        "updatedAt": "2026-09-05 18:25:13"
+      },
+      {
+        "uuid": "18ca93bf-83bb-4e6f-b0d4-5598822276b3",
+        "name": "Bildungsromans",
+        "icon": null,
+        "color": null,
+        "createdAt": "2026-09-05 18:25:00",
+        "updatedAt": "2026-09-05 18:25:00"
+      }
+    ],
+    "collections": [],
+    "identifiers": [],
+    "externalData": [],
+    "status": {
+      "uuid": "eaecefa1-7c25-42c8-b93a-89bdd35ba6e3",
+      "name": "To read",
+      "label": "To read",
+      "createdAt": "2026-08-30 03:43:25",
+      "updatedAt": "2026-09-24 12:33:51"
+    },
+    "position": null,
+    "userBookRating": null,
+    "alignmentSummary": null,
+    "ebook": {
+      "uuid": "f3b67dce-3f09-4fd2-b32f-f699d9542295",
+      "filepath": "/data/assets/Jane Eyre- An Autobiography/text/Jane Eyre- An Autobiography.epub",
+      "missing": false,
+      "coverOrigin": "extracted",
+      "cover": {
+        "sha256": "7bdd676e8d4051a765ffad1f88223f3ae7fe4a8ce0458f30414a2f5a31951f93",
+        "width": 1280,
+        "height": 2026,
+        "blurhash": "L3B1JO5kEy#:}ZjuR+j?1dxCxGSg",
+        "colors": [
+          {
+            "r": 116,
+            "g": 36,
+            "b": 47
+          },
+          {
+            "r": 88,
+            "g": 18,
+            "b": 30
+          },
+          {
+            "r": 202,
+            "g": 155,
+            "b": 121
+          },
+          {
+            "r": 20,
+            "g": 6,
+            "b": 8
+          }
+        ]
+      },
+      "isEpub2": false,
+      "createdAt": "2026-09-05 18:25:13",
+      "updatedAt": "2026-09-24 12:33:51",
+      "fingerprint": "f:3094887:1788632713",
+      "pageCount": 508,
+      "fileSize": 3094887,
+      "identifiers": []
+    },
+    "audiobook": null,
+    "readaloud": null,
+    "processingJob": null
+  }
+]

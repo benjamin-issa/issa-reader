@@ -4,7 +4,7 @@ import Foundation
 ///
 /// A protocol rather than a direct call into FoundationModels, for two reasons
 /// that are both about being able to prove the feature is safe. FoundationModels
-/// does not exist on tvOS and is unavailable on a Mac without Apple
+/// is unavailable on tvOS and on a Mac without Apple
 /// Intelligence, so the pipeline would otherwise be untestable under
 /// `swift test`; and the spoiler defence — the boundary, the trimming, the
 /// short-circuit, the retry — is exactly the part that must be tested
@@ -42,12 +42,20 @@ public protocol AnswerModel: Sendable {
     /// has watched a spinner for eight seconds — and it is the one failure that
     /// will never come right on a retry.
     func supportsLanguage(_ bcp47: String?) -> Bool
+
+    /// Which model this is, for the log and the scorecard — never for a reader.
+    ///
+    /// Apple's answers with the variant name the framework reports on 27, so a
+    /// scorecard run says which model it measured.
+    var modelDescription: String { get }
 }
 
 public extension AnswerModel {
     /// A model that has no opinion about languages answers about any book: the
     /// scripted model in the tests, and anything a later OS adds.
     func supportsLanguage(_: String?) -> Bool { true }
+
+    var modelDescription: String { "an answer model" }
 }
 
 // MARK: -
@@ -94,7 +102,7 @@ public extension AskTool {
     ///
     /// Defaulted rather than required so a tool that only computes — and the
     /// stand-ins in the tests — are untouched, and so this file still builds
-    /// where FoundationModels does not exist and `SearchBookTool` is not
+    /// where FoundationModels is unavailable and `SearchBookTool` is not
     /// compiled at all.
     func passagesShown() async -> [Int: Passage] { [:] }
 }
@@ -170,6 +178,12 @@ public enum AskEvent: Sendable, Hashable {
 /// in the view: every one of them has to say what happened, whether it is worth
 /// trying again, and — where the answer is "turn something on" — where.
 public enum AskFailure: Error, Sendable, Hashable {
+    /// The sentence for a generation that produced nothing usable, wherever it
+    /// was noticed. Here rather than on `SystemAnswerModel` because the engine
+    /// reaches the same conclusion on its own, and that file is not compiled on
+    /// every platform.
+    public static let couldNotAnswer = "Apple Intelligence couldn't answer that one. Try again."
+
     /// The model refused, or the guardrails did.
     case declined
     /// Busy, or asked twice at once.
@@ -180,6 +194,9 @@ public enum AskFailure: Error, Sendable, Hashable {
     case unsupportedLanguage
     /// The prompt would not fit even after both retries.
     case tooMuchContext
+    /// The model gave up before it finished — a 27 failure with its own case,
+    /// because the advice is "try again", not "wait".
+    case timedOut
     /// The device or the OS cannot run the model at all.
     case unavailable
     /// The index could not be built or read.
@@ -204,6 +221,8 @@ public enum AskFailure: Error, Sendable, Hashable {
             "Apple Intelligence doesn't support this book's language yet."
         case .tooMuchContext:
             "That question needed more of the book than fits. Try asking something narrower."
+        case .timedOut:
+            "Apple Intelligence took too long to answer. Try again."
         case .unavailable:
             "This \(deviceNoun) doesn't support Apple Intelligence, so asking isn't available here."
         case .indexFailed:

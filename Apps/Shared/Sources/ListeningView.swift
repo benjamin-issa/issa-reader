@@ -40,6 +40,7 @@ public struct ListeningView: View {
             .padding(Metrics.screenMargin)
         }
         .background(Palette.paper)
+        .bookRoutes(place: .shelf)
         .overlay {
             if readalongs.isEmpty, audiobooks.isEmpty {
                 // Styled from the palette: on this tab it is the entire screen

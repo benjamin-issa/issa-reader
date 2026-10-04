@@ -20,6 +20,7 @@ struct IssaReaderApp: App {
                 .environment(services.settings)
                 .environment(services.nowPlaying)
                 .environment(services.ask)
+                .environment(services.local)
                 // Idempotent, and belt-and-braces: the delegate has normally
                 // run by now, but a scene that somehow arrives first must not
                 // find an unstarted app.
@@ -48,7 +49,11 @@ struct IssaReaderApp: App {
 
 struct RootView: View {
     @Environment(AppModel.self) private var app
+    @Environment(LocalLibrary.self) private var local
     @Environment(\.scenePhase) private var scenePhase
+    /// This window's place in the local books' flow; see `LocalBooksRoute`.
+    @State private var localRoute = LocalBooksRoute()
+    private let localRequests = LocalBookRequests.shared
 
     var body: some View {
         content
@@ -58,21 +63,73 @@ struct RootView: View {
         #endif
     }
 
+    /// Whether this window's cover is open on a book no longer in the list.
+    private var openBookIsGone: Bool {
+        guard let open = localRoute.openBook else { return false }
+        return local.book(open.uuid) == nil
+    }
+
+    private func takeLocalRequest() {
+        guard local.isLoaded, let uuid = localRequests.pending, local.book(uuid) != nil,
+              localRequests.take() == uuid else { return }
+        localRoute.open(uuid)
+    }
+
     @ViewBuilder
     private var content: some View {
         Group {
-            switch app.phase {
+            // One sign-in screen for every signed-out phase, so the view a tap
+            // started in is the one still on screen when that tap's task
+            // finishes; see `RootScreen`.
+            switch RootScreen.for(phase: app.phase, showsListSignedOut: localRoute.showsListSignedOut) {
             case .launching:
                 // Deliberately no content — but painted in the app's own ground
                 // so the launch image, this, and the library are one continuous
                 // colour. A returning reader never sees the sign-in form flash
                 // past on the way to their shelf.
                 Palette.paper.ignoresSafeArea()
-            case .chooseServer, .signingIn, .expired:
+            case .signIn:
                 SignInView()
-            case .ready:
+            case .localBooks:
+                // A reader with no server who has used the link lands on their
+                // books, on this launch and every later one, until they choose
+                // to connect.
+                NavigationStack { LocalBooksScreen(placement: .standalone) }
+            case .library:
                 LibraryTabs()
             }
+        }
+        .environment(localRoute)
+        // An answer's notification tapped for a book from the reader's files:
+        // its reader is this window's cover, not a screen in the library.
+        // Taken, so of two iPad windows only one opens it, and only once the
+        // books are loaded, so a cold launch from the banner finds it.
+        .onChange(of: localRequests.pending, initial: true) { takeLocalRequest() }
+        .onChange(of: local.isLoaded) { takeLocalRequest() }
+        // Above the phase switch, so a session expiring mid-chapter swaps the
+        // screen underneath the book rather than the book itself, and per
+        // window, so an iPad's other window is left alone.
+        .fullScreenCover(item: $localRoute.openBook) { open in
+            if let book = local.book(open.uuid) {
+                ReaderScreen(localBook: book)
+                    .environment(localRoute)
+            }
+        }
+        // A book removed while this window has it open — from the list in
+        // another window — takes its reader with it. A full-screen cover has
+        // no swipe to dismiss, and the reader that owned the close button went
+        // with the book, so the window was left on a blank cover nothing could
+        // close. As soon as it leaves the list, not when its undo runs out:
+        // the cover's content is the list's book, and that is gone at once.
+        .onChange(of: openBookIsGone) {
+            if openBookIsGone { localRoute.openBook = nil }
+        }
+        // When the list is the root: the rule is `LocalBooksRoute`'s.
+        .onChange(of: local.isLoaded, initial: true) { _, loaded in
+            if loaded { localRoute.libraryLoaded(hasBooks: local.hasAnything) }
+        }
+        .onChange(of: app.phase) { old, new in
+            localRoute.phaseChanged(from: old, to: new, hasBooks: local.hasAnything)
         }
         // The session is restored by `AppServices.start()`, so that a car
         // connecting to a never-foregrounded app finds one.
@@ -90,6 +147,50 @@ struct RootView: View {
         // which also explains why `.inactive` counts as foreground.
         .onChange(of: scenePhase, initial: true) { _, phase in
             app.setForeground(SceneForeground.isAnyForeground(asking: phase))
+            // Signed in, `LibraryTabs` flushes on its own way out. Signed out,
+            // a book from the reader's files can still be open — and its last
+            // page turn is still two seconds of debounce from being kept.
+            // And an answer about it may still be on its way.
+            guard app.phase != .ready else { return }
+            if phase == .background {
+                SuspendFlush.run(app)
+                AppServices.shared.ask.appDidEnterBackground()
+            } else if phase == .active {
+                AppServices.shared.ask.appDidBecomeActive()
+            }
+        }
+    }
+}
+
+/// Saves the open books and sends the backlog while the app is suspended.
+///
+/// Inside a background task, because the point is the network call: without
+/// one the system suspends the process the moment the frame is committed and
+/// the POST never leaves. The expiration handler must end the assertion, or
+/// iOS kills the app for holding it too long.
+@MainActor
+enum SuspendFlush {
+    static func run(_ app: AppModel) {
+        // A box, not a captured `var`. The expiration handler and the Task both
+        // closed over one boxed local and are not mutually exclusive: on a slow
+        // network iOS ran the handler at ~30s, it ended the real assertion and
+        // zeroed the identifier, and the Task then called endBackgroundTask on
+        // `.invalid`. In the reverse race the handler ended `.invalid` and the
+        // real assertion was never ended, which is what iOS kills the app for —
+        // the outcome the comment above says this exists to prevent.
+        let assertion = BackgroundAssertion()
+        assertion.begin(name: "issa.flushPosition")
+
+        Task {
+            // Not gated on the assertion. `beginBackgroundTask` returns
+            // `.invalid` when background execution is unavailable — Background
+            // App Refresh off, Low Power Mode — and returning there skipped
+            // `flushOpenReaders()` altogether, including the on-device
+            // `saveProgress()` for every open reader. The network half is what
+            // needs the assertion; the local save needs nothing and is the part
+            // that must not be lost.
+            await app.flushOpenReaders()
+            assertion.end()
         }
     }
 }
@@ -104,12 +205,21 @@ struct RootView: View {
 struct LibraryTabs: View {
     @Environment(AppModel.self) private var app
     @Environment(\.scenePhase) private var scenePhase
+    /// The window's local reader cover, which a server book's deep link has
+    /// to take down to be seen.
+    @Environment(LocalBooksRoute.self) private var localRoute: LocalBooksRoute?
+    /// This window's "Show in Library" requests, and no other window's.
+    @State private var navigator = LibraryNavigator()
     @State private var libraryPath = NavigationPath()
     @State private var readingPath = NavigationPath()
     /// Opens on Reading: the tab is where you left off, and a launch is
     /// almost always to carry on. Library stays first in the bar.
     @State private var selectedTab = Destination.reading
     @State private var showsPlayer = false
+    /// Bumped to rebuild the Library tab's stack from its root. Emptying the
+    /// path is not enough: most screens are pushed by
+    /// `NavigationLink(destination:)` and never appear in it.
+    @State private var libraryStackGeneration = 0
 
     /// No Playing tab. There used to be one, and the mini player was removed
     /// while it was showing so the same transport was not on screen twice —
@@ -149,6 +259,12 @@ struct LibraryTabs: View {
         // below while the one-shot reader request was spent behind it — and
         // the reader's own cover cannot present while it is showing.
         showsPlayer = false
+        // So is a book from the reader's files, open in this window's cover
+        // above the whole tab view: the request was consumed and the server
+        // book pushed underneath it, where nothing could be seen and its own
+        // reader could not present. The local book's page turns are saved as
+        // its reader closes, as they are for Back.
+        if localRoute?.openBook != nil { localRoute?.openBook = nil }
         // Presented on whichever book stack is showing. The Reading tab's own
         // Continue card takes this route, and a Continue that flipped the app
         // to the Library tab would be answering a question nobody asked; a
@@ -169,11 +285,21 @@ struct LibraryTabs: View {
         }
     }
 
-    /// What the Reading tab does when it points at the Library: the flat grid
-    /// on a shelf, or, with no shelf, just the tab.
-    private func showLibrary(_ shelf: LibraryArrangement.Shelf?) {
-        if let shelf { app.showAllBooks(shelf: shelf) }
+    /// The Library tab with nothing pushed on it.
+    private func showLibraryRoot() {
         selectedTab = .library
+        libraryPath = NavigationPath()
+        libraryStackGeneration &+= 1
+    }
+
+    /// What the Reading tab does when it points at the Library: the flat grid
+    /// on a shelf for a "See all", the library's landing for "Go to Library"
+    /// (`LibraryModeSwitch.fromReading`) — from the tab's root either way, so
+    /// a page pushed there earlier or a search left in its field does not
+    /// stand in front of what was asked for.
+    private func showLibrary(_ shelf: LibraryArrangement.Shelf?) {
+        app.showLibrary(fromReading: shelf)
+        showLibraryRoot()
     }
 
     /// The modern `Tab` builder rather than `.tabItem` + `.tag`: the legacy
@@ -189,7 +315,12 @@ struct LibraryTabs: View {
                             BookDetailView(book: book)
                         }
                 }
+                .id(libraryStackGeneration)
                 .background(AccessoryBandReservation(height: reservedBand))
+                // Per tab, on the stack: a book's menu can remove a download
+                // from any screen in it, and the undo has to be where the
+                // reader is. See `downloadRemovalToast`.
+                .downloadRemovalToast()
             }
 
             Tab("Reading", systemImage: "bookmark", value: Destination.reading) {
@@ -201,6 +332,7 @@ struct LibraryTabs: View {
                         }
                 }
                 .background(AccessoryBandReservation(height: reservedBand))
+                .downloadRemovalToast()
             }
 
             Tab("Settings", systemImage: "gearshape", value: Destination.settings) {
@@ -208,6 +340,7 @@ struct LibraryTabs: View {
                     SettingsView().navigationTitle("Settings")
                 }
                 .background(AccessoryBandReservation(height: reservedBand))
+                .downloadRemovalToast()
             }
         }
     }
@@ -283,27 +416,7 @@ struct LibraryTabs: View {
     /// and the POST never leaves. The expiration handler must end the
     /// assertion, or iOS kills the app for holding it too long.
     private func flushOnSuspend() {
-        // A box, not a captured `var`. The expiration handler and the Task both
-        // closed over one boxed local and are not mutually exclusive: on a slow
-        // network iOS ran the handler at ~30s, it ended the real assertion and
-        // zeroed the identifier, and the Task then called endBackgroundTask on
-        // `.invalid`. In the reverse race the handler ended `.invalid` and the
-        // real assertion was never ended, which is what iOS kills the app for —
-        // the outcome the comment above says this exists to prevent.
-        let assertion = BackgroundAssertion()
-        assertion.begin(name: "issa.flushPosition")
-
-        Task {
-            // Not gated on the assertion. `beginBackgroundTask` returns
-            // `.invalid` when background execution is unavailable — Background
-            // App Refresh off, Low Power Mode — and returning there skipped
-            // `flushOpenReaders()` altogether, including the on-device
-            // `saveProgress()` for every open reader. The network half is what
-            // needs the assertion; the local save needs nothing and is the part
-            // that must not be lost.
-            await app.flushOpenReaders()
-            assertion.end()
-        }
+        SuspendFlush.run(app)
     }
 
     private var miniPlayer: some View {
@@ -333,12 +446,28 @@ struct LibraryTabs: View {
         // the book to exist rather than dropping the request on the floor.
         .onChange(of: app.pendingBook) { openPendingBook() }
         .onChange(of: app.books) { openPendingBook() }
+        // "Show in Library" on a tag or author page: the Library tab, at its
+        // root, where the page has already set the filter or the search.
+        // This window's, from its own environment: one navigator for the
+        // process reset every iPad window to its library root and sent the
+        // author search to whichever window's library appeared first.
+        .onChange(of: navigator.showRequests) { showLibraryRoot() }
+        .environment(navigator)
         // Indexed off the main path: a large library should not delay the
-        // first frame to make itself searchable.
-        .task(id: app.books.count) { await SpotlightIndex.index(app.books) }
-        .task { openPendingBook() }
-        // An intent runs outside the scene and cannot navigate, so it leaves
-        // the book in an inbox for the scene to collect when it appears.
+        // first frame to make itself searchable. Keyed on the same version the
+        // index compares, not on the count: a title corrected on the server,
+        // or one book swapped for another, keeps the count and left Spotlight
+        // naming the old library until the next launch.
+        .task(id: SpotlightIndex.version(of: app.books)) { await SpotlightIndex.index(app.books) }
+        .task {
+            // An intent runs outside the scene and cannot navigate, so it
+            // leaves the book in an inbox. Collected here, as the library
+            // appears — a cold launch from Siri writes it before this view
+            // exists — and below, whenever it is written while it does.
+            AppIntentInbox.shared.deliver(to: app)
+            openPendingBook()
+        }
+        .onChange(of: AppIntentInbox.shared.bookID) { AppIntentInbox.shared.deliver(to: app) }
         .onChange(of: scenePhase) { _, phase in
             if phase == .background {
                 flushOnSuspend()
@@ -352,10 +481,7 @@ struct LibraryTabs: View {
             // A download can finish while the app is in the background, and the
             // finish hook only fires in-process.
             app.refreshDownloadedSet()
-            guard let id = AppIntentInbox.shared.bookID else { return }
-            AppIntentInbox.shared.bookID = nil
-            // "Continue reading" means exactly that.
-            app.requestBook(id, .read)
+            AppIntentInbox.shared.deliver(to: app)
         }
     }
 }

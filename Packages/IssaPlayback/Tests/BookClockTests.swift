@@ -33,7 +33,9 @@ struct BookClockTests {
     func coordinator(_ manifest: AudiobookManifest) -> AudiobookCoordinator {
         AudiobookCoordinator(
             manifest: manifest,
-            source: .local(URL(fileURLWithPath: "/dev/null")),
+            // Real, silent audio: `/dev/null` will not open, which a load now
+            // reports as the failure it is. See `SilentAudio`.
+            source: .local(SilentAudio.url),
         )
     }
 
@@ -109,13 +111,51 @@ struct BookClockTests {
         #expect(subject.trackIndex == 2, "should be in the previous track")
     }
 
+    /// Through the clock, which is the only path that can put `bookTime`
+    /// outside the book: a seek goes through `locate`, which clamps its input,
+    /// so seeking to -500 and to ten million proved nothing about the clamp in
+    /// `progress`. A tick past the last track's stated duration — a duration is
+    /// an estimate, and the file runs on — and a negative one do reach it.
     @Test("progress is clamped to 0...1 even for an out-of-range clock")
-    func progressStaysInRange() async {
+    func progressStaysInRange() async throws {
         let subject = coordinator(manifest())
-        await subject.seek(toBookTime: -500)
-        #expect(subject.progress >= 0)
+        let tick = try #require(subject.player.onTimeUpdate)
+        subject.player.onTimeUpdate = nil
+
         await subject.seek(toBookTime: 10_000_000)
-        #expect(subject.progress <= 1)
+        tick(1_612.5)
+        #expect(subject.bookTime > subject.totalDuration, "the clock has to be past the end to test the clamp")
+        #expect(subject.progress == 1)
+
+        await subject.seek(toBookTime: 0)
+        tick(-5)
+        #expect(subject.bookTime < 0, "the clock has to be before the start to test the clamp")
+        #expect(subject.progress == 0)
+    }
+
+    /// The end of the last track is not somewhere to land.
+    ///
+    /// `locate` answers a time at or past the end of the book with the last
+    /// track and its full duration, so a thirty-second skip in the last half
+    /// minute — or a scrub to the far end of the bar — seeked exactly onto the
+    /// end of the file and restored the rate. The read-along has always landed
+    /// `endOfEntryMargin` short of an end for this reason; the audiobook had no
+    /// counterpart.
+    @Test("a skip or a scrub to the very end lands just short of the last track's end")
+    func theEndOfTheBookIsNotALandingPlace() async {
+        let subject = coordinator(manifest(trackCount: 3, each: 1_000))
+        subject.player.onTimeUpdate = nil
+        let total = subject.totalDuration
+
+        await subject.seek(toBookTime: total - 10)
+        await subject.skip(by: 30)
+        #expect(subject.trackIndex == 2)
+        #expect(subject.bookTime < total, "the skip landed on the end of the file itself")
+        #expect(subject.bookTime >= total - 0.01, "and only a hair short of it")
+
+        await subject.seek(toProgress: 1)
+        #expect(subject.bookTime < total, "nor may a scrub to the end of the bar")
+        #expect(subject.bookTime >= total - 0.01)
     }
 
     /// `previousChapter()`'s restart-the-current-track branch used to seek the

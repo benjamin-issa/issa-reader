@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import IssaCore
 import Observation
 
 /// Plays a book's narration.
@@ -85,7 +86,14 @@ public final class AudioPlayer {
 
     public var rate: Float = 1.0 {
         didSet {
-            player.rate = isPlaying ? rate : 0
+            // Stopping is always safe; starting waits while a load is still
+            // placing its item — see `placementPending`, and the placement
+            // restores whatever `rate` is by then.
+            if !isPlaying {
+                player.rate = 0
+            } else if !placementPending {
+                player.rate = rate
+            }
             // The effective rate, not the requested one. Observers treat a
             // non-zero rate as "playing" — the widget publishes `isPlaying`
             // from exactly this number — so choosing 1.5× on a paused book
@@ -188,6 +196,45 @@ public final class AudioPlayer {
         #if os(iOS) || os(tvOS)
         try? AVAudioSession.sharedInstance().setActive(true)
         #endif
+    }
+
+    /// Stops, and gives the audio route back so whatever this interrupted can
+    /// carry on.
+    ///
+    /// For the ends of listening — the book running out, the sleep timer
+    /// expiring — and for nothing else. The session is non-mixable, so going
+    /// active stopped the listener's music, and nothing ever went inactive:
+    /// without `.notifyOthersOnDeactivation` the app that was interrupted is
+    /// never told it may resume. An ordinary pause keeps the route, as Apple's
+    /// own players do, and the hand-off from the car to the reader must too —
+    /// the book is still being listened to there.
+    public func endSession() {
+        pause()
+        sessionsEnded += 1
+        #if os(iOS) || os(tvOS)
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        #endif
+    }
+
+    /// How many times `endSession` has run, for tests: the deactivation itself
+    /// is a no-op off a device.
+    private(set) var sessionsEnded = 0
+
+    /// Called when a rate is *chosen* through `choose(rate:)` — a bound speed
+    /// control — so it can be remembered as the listener's speed.
+    public var onRateChosen: ((Float) -> Void)?
+
+    /// Sets the rate as the listener's own choice.
+    ///
+    /// `rate` is also written by things that are not a choice — restoring the
+    /// saved speed when a book opens, the hand-off carrying it across — so
+    /// persisting from `rate`'s observer would write back what was just read.
+    /// The bound speed-up and speed-down actions used to set `rate` and nothing
+    /// else, so a speed picked from a steering-wheel or headphone button was
+    /// lost at the next book, the next launch, and the car-to-reader hand-off.
+    public func choose(rate chosen: Float) {
+        rate = chosen
+        onRateChosen?(rate)
     }
 
     /// Handles the two things that stop audio without the app asking.
@@ -296,30 +343,64 @@ public final class AudioPlayer {
         }
     }
 
-    /// Loads an audio file, local or streamed.
+    /// What became of a `load`, which decides what its caller may write.
+    ///
+    /// A `Bool` said only whether a later *load* had replaced this one. It
+    /// could not say that a later *seek* had taken the playhead — a scrub into
+    /// the file this load was still opening — so the load went on to run its
+    /// own trailing seek over the newer one, and `AudiobookCoordinator` then
+    /// restated its clock from the load's offset: the audio and the clock both
+    /// ended up where the listener had just left.
+    public enum LoadOutcome: Equatable, Sendable {
+        /// The item is this call's, and the playhead is where it asked.
+        case loaded
+        /// The item is this call's, but a seek made while it was opening owns
+        /// the playhead. The load ran no trailing seek and left the rate to that
+        /// seek. Nothing is wrong with the audio; a caller must simply not
+        /// restate a clock from this call's offset.
+        case overtaken
+        /// A later load replaced the item while this one was awaiting
+        /// AVFoundation, and owns everything now.
+        case superseded
+        /// The file would not open: its duration could not be loaded. The
+        /// player has paused, so nothing claims to be playing over silence.
+        ///
+        /// A missing file, a chunk deleted from disk under a paused book, a
+        /// streamed track whose request failed or whose token expired. Every
+        /// one of these used to come back as success, with `isPlaying` left
+        /// true and every surface drawing a pause glyph over silence while the
+        /// sleep timer counted down.
+        case failed
+    }
+
+    /// Loads an audio file, local or streamed, and says what became of it.
     ///
     /// Readaloud audio lives inside the EPUB, so the caller extracts it first;
     /// this never sees the archive. A streamed audiobook track instead needs
     /// credentials, and `cookies` is how they travel: Storyteller accepts its
     /// session token as an `st_token` cookie, and `AVURLAssetHTTPCookiesKey` is
     /// public API, unlike the header field key everyone reaches for first.
-    /// Loads a file, and says whether this call is still the current one.
     ///
-    /// The guard lives here rather than only in `AudiobookCoordinator`, where it
-    /// sat *after* the damage: everything past the `await` below writes player
-    /// state, so two overlapping loads — a scrub racing an end-of-track advance,
-    /// two remote commands in a burst — left `duration` describing one file
-    /// while the queue held another, and seeked the new item to the old one's
-    /// clip time. The read-along path had no guard at all.
-    ///
-    /// - Returns: false when a later `load` superseded this one, in which case
-    ///   the caller must not write its own state either.
+    /// The guards live here rather than only in `AudiobookCoordinator`, where
+    /// one sat *after* the damage: everything past the `await` below writes
+    /// player state, so two overlapping loads — a scrub racing an end-of-track
+    /// advance, two remote commands in a burst — left `duration` describing one
+    /// file while the queue held another, and seeked the new item to the old
+    /// one's clip time. Two guards, because two things can overtake a load: a
+    /// later load takes the item (`itemGeneration`), and a later seek takes
+    /// only the playhead (`playheadGeneration`).
     @discardableResult
     public func load(
         url: URL, href: String, startAt offset: TimeInterval = 0, cookies: [HTTPCookie] = [],
-    ) async -> Bool {
-        loadGeneration &+= 1
-        let generation = loadGeneration
+    ) async -> LoadOutcome {
+        itemGeneration &+= 1
+        playheadGeneration &+= 1
+        let item = itemGeneration
+        let playhead = playheadGeneration
+        // Until this load or a seek that overtakes it has put the playhead
+        // where it belongs, nothing may start the engine — see
+        // `placementPending`.
+        placementPending = true
         currentAudioHref = href
         // The clock belongs to the file being replaced. Left alone it kept
         // reporting the previous file's position until the periodic observer
@@ -331,24 +412,50 @@ public final class AudioPlayer {
             url: url,
             options: cookies.isEmpty ? nil : [AVURLAssetHTTPCookiesKey: cookies],
         )
-        let item = AVPlayerItem(asset: asset)
-        item.audioTimePitchAlgorithm = .timeDomain
+        let playerItem = AVPlayerItem(asset: asset)
+        playerItem.audioTimePitchAlgorithm = .timeDomain
 
-        observers.removeEndObserver()
+        observers.removeItemObservers()
         observers.end = NotificationCenter.default.addObserver(
-            forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main,
+            forName: .AVPlayerItemDidPlayToEndTime, object: playerItem, queue: .main,
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.onFinishedFile?() }
         }
+        // The two ways an item says it has stopped for good rather than reached
+        // its end: it never became playable, or it stopped part-way — a stream
+        // that lost its network, a file that went from under it. Neither was
+        // observed, so the player went on claiming to play.
+        observers.failedToEnd = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemFailedToPlayToEndTime, object: playerItem, queue: .main,
+        ) { [weak self] note in
+            let reason = (note.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? any Error)
+                .map { String(describing: $0) } ?? "unknown"
+            MainActor.assumeIsolated { self?.itemDidFail(generation: item, reason: reason) }
+        }
+        observers.status = playerItem.observe(\.status, options: [.new]) { [weak self] observed, _ in
+            guard observed.status == .failed else { return }
+            let reason = observed.error.map { String(describing: $0) } ?? "unknown"
+            Task { @MainActor [weak self] in self?.itemDidFail(generation: item, reason: reason) }
+        }
 
+        // Stopped explicitly before the item changes hands, rather than trusting
+        // the queue to drop its rate when it empties: the new item must not
+        // start until it has been placed — see `placementPending`.
+        player.rate = 0
+        // A seek still waiting on the outgoing item is released before the
+        // item goes. Measured: a seek pending on an item that has failed is
+        // never called back, and removing the item does not change that — the
+        // coordinator's in-flight counter around it would never come down, and
+        // the clock would be ignored for the rest of the session.
+        player.currentItem?.cancelPendingSeeks()
         player.removeAllItems()
-        player.insert(item, after: nil)
+        player.insert(playerItem, after: nil)
         // Both asked for at once: the tracks are wanted for the gain tap, and
         // asking for them one after the other would be a second network round
         // trip on every streamed track — and a second window in which a later
         // `load` could overtake this one. Both requests are in flight before
         // either is awaited, so this stays one round trip and one window, and
-        // the generation is re-checked exactly once below.
+        // the generations are checked once both answers are in.
         //
         // Two of them rather than `load(.duration, .tracks)`, though, because
         // that form is all-or-nothing: a track list that will not load — an
@@ -359,9 +466,23 @@ public final class AudioPlayer {
         // time, a `.tracks` failure costs the gain tap and nothing else.
         async let loadingDuration = asset.load(.duration)
         async let loadingTracks = asset.load(.tracks)
-        let loadedDuration = try? await loadingDuration
+        if let hook = whileLoadingAsset {
+            whileLoadingAsset = nil
+            await hook()
+        }
+        let loadedDuration: CMTime?
+        var failure: (any Error)?
+        do {
+            loadedDuration = try await loadingDuration
+        } catch {
+            loadedDuration = nil
+            failure = error
+        }
         let loadedTracks = try? await loadingTracks
-        guard generation == loadGeneration else { return false }
+        guard item == itemGeneration else { return .superseded }
+        // Item-scoped, so written even when a seek has since taken the
+        // playhead: the item is still this load's, and these describe it.
+        //
         // `?? 0` cannot catch NaN, and a streamed asset with an indefinite
         // duration reports exactly that.
         let seconds = loadedDuration?.seconds ?? 0
@@ -371,34 +492,122 @@ public final class AudioPlayer {
         // audiobook track passes through here, which is why a chapter change
         // needs no separate hook.
         let audioTracks = (loadedTracks ?? []).filter { $0.mediaType == .audio }
-        item.audioMix = gainTap.makeAudioMix(for: audioTracks)
-        tapCarriesGain = item.audioMix != nil
+        playerItem.audioMix = gainTap.makeAudioMix(for: audioTracks)
+        tapCarriesGain = playerItem.audioMix != nil
         applyPlayerVolume()
-        if offset > 0 {
-            await seek(to: offset)
-            guard generation == loadGeneration else { return false }
-        } else if isPlaying {
-            // Replacing the queue item drops AVPlayer's rate to 0, and the
-            // seek above is the only path in this method that restores it. An
-            // offset of exactly 0 — a scrub back to the start of the book —
-            // skipped it, leaving the audio silent while `isPlaying` stayed
-            // true, so the transport drew a pause glyph over a stopped player.
-            player.rate = rate
+        // A file that will not open is not a place to be. Stopped here, before
+        // anything is told it landed: `isPlaying` is what the transport, the
+        // sleep timer and the widget all read.
+        if let failure {
+            itemDidFail(generation: item, reason: String(describing: failure))
+            return .failed
         }
-        return true
+        // Playhead-scoped from here on. A seek made while this load was
+        // opening its file — a scrub, the next sentence tapped, a held remote
+        // button — has already put the playhead where the listener asked, and
+        // restored the rate; seeking back to this load's own offset now is the
+        // write that lost it.
+        // The item can also fail without its duration throwing: the status
+        // observer above stands it down, and nothing past here can place it.
+        guard failedItem != item else { return .failed }
+        guard playhead == playheadGeneration else { return .overtaken }
+        if offset > 0 {
+            beforeTrailingSeek?()
+            guard await seekPlayhead(offset, generation: playhead) else {
+                guard item == itemGeneration else { return .superseded }
+                return failedItem == item ? .failed : .overtaken
+            }
+        } else {
+            // Replacing the queue item drops AVPlayer's rate to 0, and a seek is
+            // the other path that restores it. An offset of exactly 0 — a scrub
+            // back to the start of the book — has no seek, and skipping the
+            // restore left the audio silent while `isPlaying` stayed true, so
+            // the transport drew a pause glyph over a stopped player.
+            placementPending = false
+            if isPlaying { player.rate = rate }
+        }
+        // Asked once more on the way out, because both ways an item says it
+        // failed can arrive while it is being placed. The status observer hops
+        // through a Task, so with no trailing seek to wait on this method
+        // returned before that Task ran; and a failure that lands while the
+        // trailing seek is pending releases the seek through
+        // `cancelPendingSeeks` without taking the playhead from it, so the seek
+        // came back owning the playhead and this said `.loaded` for a dead item
+        // — and its caller pressed play over it.
+        if playerItem.status == .failed {
+            itemDidFail(
+                generation: item, reason: playerItem.error.map { String(describing: $0) } ?? "unknown")
+        }
+        guard failedItem != item else { return .failed }
+        return .loaded
     }
 
-    /// Bumped by every `load`, so a superseded one can decline to write.
-    private var loadGeneration = 0
+    /// Bumped by every `load`. Guards what belongs to the *item*: its
+    /// duration, its audio mix, the volume fallback that depends on the mix.
+    private var itemGeneration = 0
+    /// Bumped by every `load` and every `seek(to:)`. Guards what belongs to the
+    /// *playhead*: `currentTime`, a load's trailing seek, and the rate restore
+    /// that follows a seek. Readable for tests.
+    private(set) var playheadGeneration = 0
+    /// Whether the newest load's item has yet to be put where it belongs.
+    ///
+    /// Between `load` inserting a new item and that item's seek landing,
+    /// starting the engine plays the new file from its first second — and for
+    /// a streamed track that window is a network round trip. `play()` and
+    /// `rate` both used to set the engine's rate straight away, as did a
+    /// superseded load's seek completing late. They now record the intent and
+    /// leave the engine alone; whatever places the item — the load's own tail,
+    /// or a seek that overtook it — restores the rate when it lands.
+    ///
+    /// A flag for the newest item rather than a count of loads in flight: a
+    /// load a newer one superseded can stay suspended in AVFoundation for a
+    /// network round trip after the newer one has finished, and counting it
+    /// held a listener's play button down that whole time.
+    private var placementPending = false
+
+    /// Called from inside `load` once its item is in the queue and the asset has
+    /// been asked for its duration and tracks, before either answer is awaited.
+    ///
+    /// `AudiobookCoordinator.whileLoading`'s counterpart one layer down, and a
+    /// test seam for the same reason: a seek or a load made inside it lands in
+    /// the window a real overtaking command lands in, deterministically. Nil on
+    /// every path a listener can reach, spent when it fires, and behind an
+    /// `if let`, so a shipping build adds no suspension point.
+    var whileLoadingAsset: (@MainActor () async -> Void)?
+
+    /// Called from inside `load` just before its own trailing seek is issued:
+    /// the window in which an item that fails leaves that seek to land on a
+    /// dead item. A test seam, nil on every path a listener can reach, and
+    /// synchronous, so it adds no suspension point.
+    var beforeTrailingSeek: (@MainActor () -> Void)?
+
+    /// The rate the engine is set to, for tests: the interesting cases are the
+    /// ones where it is not `rate`.
+    var engineRate: Float { player.rate }
+    /// Where the engine's playhead is, for tests: `currentTime` is what this
+    /// class last *said*, and the two disagreeing is the bug class above.
+    var engineTime: TimeInterval { player.currentTime().seconds }
 
     public func play() {
+        // Nothing is claimed over an item that would not play. The session is
+        // non-mixable, so activating it stopped the listener's music — or the
+        // car's working stream — and `isPlaying` drew a pause glyph over
+        // silence that nothing ever stood down, because `itemDidFail` fires
+        // once per item. The coordinators reopen the file instead; see their
+        // `resume()`. The next `load` is a new item, and plays.
+        guard !itemHasFailed else {
+            IssaLog.info("play refused: the loaded audio would not play", [:])
+            return
+        }
         // Activated here, not in `init`: a non-mixable session interrupts
         // whatever else is playing the moment it goes active, which is right
         // when the listener asks for narration and wrong when they only
         // opened the book.
         Self.activateAudioSession()
         isPlaying = true
-        player.rate = rate
+        // Intent only, while a load is still placing its item: see
+        // `placementPending`.
+        if !placementPending { player.rate = rate }
         // The rate hook fires only from `rate`'s didSet, and this does not touch
         // it — so without this the lock screen kept the old rate for up to five
         // seconds and extrapolated a clock the audio was not following.
@@ -418,17 +627,122 @@ public final class AudioPlayer {
         notifyRateObservers(0)
     }
 
+    /// An item that stopped for good: paused, its seeks released, and logged.
+    ///
+    /// Only for the item the player still holds — a failure reported for one a
+    /// later load replaced is about audio nobody is listening to.
+    func itemDidFail(generation: Int, reason: String) {
+        // Once per item: the duration load throwing and the status turning
+        // `.failed` are usually the same failure, reported twice.
+        guard generation == itemGeneration, failedItem != generation else { return }
+        failedItem = generation
+        placementPending = false
+        player.currentItem?.cancelPendingSeeks()
+        if isPlaying { pause() }
+        IssaLog.warning("audio would not play", [
+            "href": currentAudioHref ?? "", "error": reason,
+        ])
+        // The dead file is no longer the one loaded. Left named, every
+        // coordinator's "is this file already in the player?" test said yes:
+        // a tap on another sentence in the same file took the seek-only branch
+        // over a dead item and played, `currentAnchor` named a file that never
+        // opened, and the car's "nothing loaded" check passed. Cleared, the
+        // next move into this file opens it again.
+        currentAudioHref = nil
+    }
+
+    /// The item `itemDidFail` last stood down, so it does so once.
+    private var failedItem: Int?
+
+    /// Whether the item the player holds is one that would not play: the
+    /// newest load failed, or its item stopped for good. `play()` refuses
+    /// while it is true, and the next `load` clears it. Observable, so a
+    /// surface can say why nothing is playing.
+    public var itemHasFailed: Bool { failedItem != nil && failedItem == itemGeneration }
+    /// The current item's generation, for tests that report a failure on it.
+    var itemGenerationForTests: Int { itemGeneration }
+
     public func togglePlayPause() {
         isPlaying ? pause() : play()
     }
 
-    public func seek(to seconds: TimeInterval) async {
-        let target = CMTime(seconds: max(0, seconds), preferredTimescale: 600)
+    /// Moves the playhead, and owns it until something newer does.
+    ///
+    /// A load still opening this file loses its trailing seek to this one —
+    /// see `LoadOutcome.overtaken`.
+    ///
+    /// - Returns: whether the playhead landed there and this seek still owns
+    ///   it. False when the item would not play — `itemHasFailed` then says
+    ///   so — or when something newer took the playhead. It used to answer
+    ///   nothing, so a seek on a dead item read as a move that had happened.
+    @discardableResult
+    public func seek(to seconds: TimeInterval) async -> Bool {
+        playheadGeneration &+= 1
+        return await seekPlayhead(seconds, generation: playheadGeneration)
+    }
+
+    /// The tail every seek shares, a load's own trailing seek included.
+    ///
+    /// The clock and the rate are written only if nothing has taken the
+    /// playhead since `generation` was issued. They were written regardless:
+    /// a load's seek interrupted by the next load completes — AVFoundation
+    /// calls an interrupted seek back with `finished == false` — and went on to
+    /// set the clock to the old file's offset and start the *new* item from
+    /// its first second, before that load's own seek had landed.
+    ///
+    /// - Returns: whether this seek still owned the playhead when it landed.
+    @discardableResult
+    func seekPlayhead(_ seconds: TimeInterval, generation: Int) async -> Bool {
+        // Not asked of an item that has failed: AVFoundation never calls such
+        // a seek back — measured — and whoever awaits it would wait for good.
+        // There is nowhere in that item to go.
+        if let current = player.currentItem, current.status == .failed {
+            itemDidFail(
+                generation: itemGeneration,
+                reason: current.error.map { String(describing: $0) } ?? "unknown")
+            return false
+        }
+        let target = Self.cmTime(forSeconds: seconds)
         // Exact seeking: a read-along highlight lands on the wrong sentence if
         // the player rounds to the nearest keyframe.
         await player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
-        currentTime = seconds
+        guard generation == playheadGeneration else { return false }
+        // The time asked for, unless it is not a time at all; then where the
+        // engine was actually sent, so the clock never holds an infinity.
+        currentTime = seconds.isFinite ? seconds : target.seconds
+        // Placed: the engine may run, and this is what restores it.
+        placementPending = false
         if isPlaying { player.rate = rate }
+        return true
+    }
+
+    /// The engine's target for a time in seconds: the 1/600 s timescale,
+    /// rounded up, and saturating rather than trapping.
+    ///
+    /// Rounded *up* rather than to nearest. A sentence rarely begins on an
+    /// exact 1/600 of a second, so half of all targets used to quantise a
+    /// fraction of a millisecond *below* the sentence they name — and the
+    /// fragment lookup is half-open, so the next tick resolved to the sentence
+    /// before, dragged the highlight back, and across a document turned the
+    /// page back and told the sleep timer a chapter had ended. Up to 1/600 s
+    /// late is inaudible; early is visible.
+    ///
+    /// Saturating, because a seek target is whatever a book says. `SMILClock`
+    /// refuses only the non-finite and the negative, so a `clipBegin` of
+    /// `1e20s` reaches here, and so does a manifest track claiming `1e300`
+    /// seconds; `CMTimeValue(Double)` traps past `Int64.max / 600` seconds —
+    /// about 1.5e16 — and on infinity, which crashed the app every time such a
+    /// book was opened at that place. Anything past the largest value the
+    /// timescale can hold is a seek to the end of the item, which is where
+    /// AVFoundation puts a seek past it anyway. NaN is no place, and goes to
+    /// the start, as `max(0, .nan)` always sent it.
+    static func cmTime(forSeconds seconds: TimeInterval) -> CMTime {
+        guard !seconds.isNaN else { return .zero }
+        let ticks = (max(0, seconds) * 600).rounded(.up)
+        guard let value = CMTimeValue(exactly: ticks) else {
+            return CMTime(value: .max, timescale: 600)
+        }
+        return CMTime(value: value, timescale: 600)
     }
 
     public func skip(by delta: TimeInterval) async {
@@ -445,6 +759,8 @@ public final class AudioPlayer {
 private final class ObserverTokens: @unchecked Sendable {
     var time: Any?
     var end: (any NSObjectProtocol)?
+    var failedToEnd: (any NSObjectProtocol)?
+    var status: NSKeyValueObservation?
     var interruption: (any NSObjectProtocol)?
     var route: (any NSObjectProtocol)?
 
@@ -453,14 +769,19 @@ private final class ObserverTokens: @unchecked Sendable {
         time = nil
     }
 
-    func removeEndObserver() {
+    /// Everything observed on the current item.
+    func removeItemObservers() {
         if let end { NotificationCenter.default.removeObserver(end) }
         end = nil
+        if let failedToEnd { NotificationCenter.default.removeObserver(failedToEnd) }
+        failedToEnd = nil
+        status?.invalidate()
+        status = nil
     }
 
     func tearDown(player: AVPlayer) {
         removeTimeObserver(from: player)
-        removeEndObserver()
+        removeItemObservers()
         for token in [interruption, route].compactMap({ $0 }) {
             NotificationCenter.default.removeObserver(token)
         }

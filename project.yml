@@ -22,8 +22,8 @@ settings:
     DEVELOPMENT_TEAM: "$(ISSA_TEAM_ID)"
     CODE_SIGN_STYLE: Automatic
     ENABLE_USER_SCRIPT_SANDBOXING: YES
-    MARKETING_VERSION: "1.1.1"
-    CURRENT_PROJECT_VERSION: "40"
+    MARKETING_VERSION: "1.4.0"
+    CURRENT_PROJECT_VERSION: "49"
 
 packages:
   IssaReaderKit:
@@ -48,7 +48,8 @@ targets:
         product: IssaRender
       - package: IssaReaderKit
         product: IssaPlayback
-      # Not the tvOS target: FoundationModels is not in that SDK at all, and
+      # Not the tvOS target: FoundationModels is unavailable on tvOS (the 27
+      # SDK ships the framework with every symbol marked unavailable), and
       # there is no Ask anywhere on the television.
       - package: IssaReaderKit
         product: IssaAsk
@@ -147,6 +148,45 @@ targets:
         # an iPad destination, and the sweep runs on both.
         TARGETED_DEVICE_FAMILY: "1,2"
 
+  # The release rule's live checks, against a running Storyteller. A target of
+  # its own, not a class in IssaLayoutUITests: the sweep runs that whole
+  # target on every width, and this needs a server, a pairing and minutes of
+  # waiting. It skips unless scripts/live-check.sh has set it up.
+  IssaLiveUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: Apps/IssaLiveUITests/Sources
+    dependencies:
+      - target: IssaReader-iOS
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: "$(ISSA_BUNDLE_ID).liveuitests"
+        # As for IssaLayoutUITests: XcodeGen does not write it, and without it
+        # there is no host app to launch.
+        TEST_TARGET_NAME: IssaReader-iOS
+        GENERATE_INFOPLIST_FILE: YES
+        # iPhone and iPad, since the live checks run on both.
+        TARGETED_DEVICE_FAMILY: "1,2"
+
+  # The television's share of the live checks, driven by XCUIRemote: the
+  # pairing, the library, the session and the server version. Skips unless
+  # scripts/live-check.sh --platform tvos has set it up. It needs no scheme
+  # entry: the tvOS scheme is the one xcodebuild makes for the app, and that
+  # takes in a UI-test target hosted by the app, so -only-testing finds it.
+  IssaLiveTVUITests:
+    type: bundle.ui-testing
+    platform: tvOS
+    sources:
+      - path: Apps/IssaLiveTVUITests/Sources
+    dependencies:
+      - target: IssaReader-tvOS
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: "$(ISSA_BUNDLE_ID).livetvuitests"
+        TEST_TARGET_NAME: IssaReader-tvOS
+        GENERATE_INFOPLIST_FILE: YES
+
   IssaWidgets:
     type: app-extension
     platform: iOS
@@ -181,7 +221,8 @@ targets:
         product: IssaRender
       - package: IssaReaderKit
         product: IssaPlayback
-      # Not the tvOS target: FoundationModels is not in that SDK at all, and
+      # Not the tvOS target: FoundationModels is unavailable on tvOS (the 27
+      # SDK ships the framework with every symbol marked unavailable), and
       # there is no Ask anywhere on the television.
       - package: IssaReaderKit
         product: IssaAsk
@@ -198,19 +239,25 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
       configs:
-        # Signed with the Apple Development certificate, not ad-hoc, and with
-        # no provisioning profile — which works because the Debug entitlements
-        # deliberately ask for nothing that needs one. Ad-hoc cost two real
-        # things: the sandbox could not be turned on (an ad-hoc bundle has a
-        # hash identifier, and the sandbox cannot make a container from that),
-        # so the configuration that ships was never the one that ran; and every
-        # rebuild produced a different code identity, so the keychain refused
-        # the saved token and prompted for the login password on each launch.
+        # Signed with the Developer ID Application certificate and a Developer
+        # ID provisioning profile, never ad-hoc. Ad-hoc cost two real things:
+        # the sandbox could not be turned on (an ad-hoc bundle has a hash
+        # identifier, and the sandbox cannot make a container from that), so the
+        # configuration that ships was never the one that ran; and every rebuild
+        # produced a different code identity. A profile is what gives the build
+        # an application identifier, and the data-protection keychain refuses a
+        # write without one (errSecMissingEntitlement, -34018) — so with no
+        # profile the token could not be saved, and since a sign-in whose token
+        # is not saved now fails, Debug could not sign in at all. A Developer ID
+        # profile lists no devices, where a Mac development profile would need
+        # this Mac registered. Both values come from Signing.xcconfig, so a
+        # fork without such a profile can go back to "Apple Development" and no
+        # profile in Signing.local.xcconfig.
         Debug:
           CODE_SIGN_ENTITLEMENTS: Apps/IssaReader-macOS/IssaReader-Debug.entitlements
           CODE_SIGN_STYLE: Manual
-          CODE_SIGN_IDENTITY: "Apple Development"
-          PROVISIONING_PROFILE_SPECIFIER: ""
+          CODE_SIGN_IDENTITY: "$(ISSA_MACOS_DEBUG_IDENTITY)"
+          PROVISIONING_PROFILE_SPECIFIER: "$(ISSA_MACOS_DEBUG_PROFILE)"
           DEVELOPMENT_TEAM: "$(ISSA_TEAM_ID)"
         # Real Mac App Store signing, pinned the same way tvOS is and for the
         # same reason: Automatic archiving mints a Development profile first,
@@ -272,6 +319,7 @@ schemes:
         IssaReader-iOS: all
         IssaLayoutUITests: [test]
         IssaSharedTests: [test]
+        IssaLiveUITests: [test]
     run:
       config: Debug
     test:
@@ -280,11 +328,15 @@ schemes:
       # one result bundle and race the fixture's URLProtocol registration.
       parallelizable: false
       targets:
-        # Both, and listed explicitly. A target missing from here runs zero
-        # tests while the build still succeeds — the failure this block exists
-        # to prevent.
+        # Every one, and listed explicitly. A target missing from here runs
+        # zero tests while the build still succeeds — the failure this block
+        # exists to prevent — and cannot be picked out with -only-testing.
+        # IssaLiveUITests is here for that reason: it skips unless
+        # scripts/live-check.sh points it at a server, so a plain test run of
+        # the scheme stays offline.
         - IssaSharedTests
         - IssaLayoutUITests
+        - IssaLiveUITests
     profile:
       config: Release
     analyze:

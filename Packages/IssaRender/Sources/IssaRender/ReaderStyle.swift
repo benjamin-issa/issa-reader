@@ -101,7 +101,34 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
     public var fontSize: CGFloat
     public var lineSpacing: LineSpacing
     public var theme: ReaderTheme
-    public var justified: Bool
+
+    /// Who decides whether a page is justified: the book, or the reader.
+    ///
+    /// This was a `Bool`, and a `Bool` cannot tell "I want ragged text" from "I
+    /// have never touched this" — which matters now that a book's own
+    /// `text-align` is read. Most trade fiction asks to be justified, and a
+    /// reader who has expressed no view should see the book as its publisher
+    /// set it; a reader who has expressed one should be obeyed everywhere.
+    ///
+    /// Only justification. Where a book centres an epigraph or ranges a
+    /// signature line right, that is structure rather than taste and is honoured
+    /// under every case here — see `HTMLContentParser.attributes(for:)`.
+    public enum Justification: String, Codable, Sendable, CaseIterable {
+        /// The book's own `text-align`, and ragged where it asks for nothing.
+        case followBook
+        case always
+        case never
+
+        public var title: String {
+            switch self {
+            case .followBook: "Follow the book"
+            case .always: "Always"
+            case .never: "Never"
+            }
+        }
+    }
+
+    public var justification: Justification
     public var pageMargin: CGFloat
     public var highlightGranularity: HighlightGranularity
     /// Keep the narrated sentence on screen while audio plays.
@@ -145,7 +172,7 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
         fontSize: CGFloat = 18,
         lineSpacing: LineSpacing = .normal,
         theme: ReaderTheme = .paper,
-        justified: Bool = false,
+        justification: Justification = .followBook,
         pageMargin: CGFloat = 24,
         highlightGranularity: HighlightGranularity = .sentence,
         followNarration: Bool = true,
@@ -159,7 +186,7 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
         self.fontSize = fontSize
         self.lineSpacing = lineSpacing
         self.theme = theme
-        self.justified = justified
+        self.justification = justification
         self.pageMargin = pageMargin
         self.highlightGranularity = highlightGranularity
         self.followNarration = followNarration
@@ -171,7 +198,7 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
 
     // Spelled out rather than synthesised, because the decoder below names them.
     enum CodingKeys: String, CodingKey {
-        case typeface, fontFamily, fontSize, lineSpacing, theme, justified, pageMargin
+        case typeface, fontFamily, fontSize, lineSpacing, theme, justified, justification, pageMargin
         case highlightGranularity, followNarration, turnPagesMidSentence
         case tapToPlay, progressDisplay, highlighters
     }
@@ -212,20 +239,39 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
         } else {
             typeface = fallback.typeface
         }
-        fontSize = try container.decodeIfPresent(CGFloat.self, forKey: .fontSize) ?? fallback.fontSize
+        // `try?` on every field, these five included: a value of the wrong
+        // type — `"fontSize": "18"`, `"tapToPlay": "yes"` — costs that field
+        // its default, not every preference the reader has. And the two
+        // lengths are bounded, because nothing downstream is: a stored
+        // `1e300` laid every page out at that size and trapped the Text size
+        // stepper's label on every open of the sheet.
+        fontSize = Self.decodeLength(from: container, key: .fontSize, in: Self.fontSizeRange)
+            ?? fallback.fontSize
         lineSpacing = Self.decodeCase(LineSpacing.self, from: container, key: .lineSpacing)
             ?? fallback.lineSpacing
         theme = Self.decodeCase(ReaderTheme.self, from: container, key: .theme) ?? fallback.theme
-        justified = try container.decodeIfPresent(Bool.self, forKey: .justified) ?? fallback.justified
-        pageMargin = try container.decodeIfPresent(CGFloat.self, forKey: .pageMargin) ?? fallback.pageMargin
+        // `justification` replaced `justified`. A reader who deliberately
+        // turned justification on keeps it everywhere; a stored `false` is the
+        // untouched default of a control that only ever had two positions, so
+        // it becomes "follow the book" rather than a standing refusal.
+        if let stored = Self.decodeCase(Justification.self, from: container, key: .justification) {
+            justification = stored
+        } else if let legacy = try? container.decodeIfPresent(Bool.self, forKey: .justified) {
+            justification = legacy ? .always : .followBook
+        } else {
+            justification = fallback.justification
+        }
+        pageMargin = Self.decodeLength(from: container, key: .pageMargin, in: Self.pageMarginRange)
+            ?? fallback.pageMargin
         highlightGranularity = Self.decodeCase(
             HighlightGranularity.self, from: container, key: .highlightGranularity)
             ?? fallback.highlightGranularity
-        followNarration = try container.decodeIfPresent(
-            Bool.self, forKey: .followNarration) ?? fallback.followNarration
-        turnPagesMidSentence = try container.decodeIfPresent(
-            Bool.self, forKey: .turnPagesMidSentence) ?? fallback.turnPagesMidSentence
-        tapToPlay = try container.decodeIfPresent(Bool.self, forKey: .tapToPlay) ?? fallback.tapToPlay
+        followNarration = (try? container.decodeIfPresent(
+            Bool.self, forKey: .followNarration)) ?? fallback.followNarration
+        turnPagesMidSentence = (try? container.decodeIfPresent(
+            Bool.self, forKey: .turnPagesMidSentence)) ?? fallback.turnPagesMidSentence
+        tapToPlay = (try? container.decodeIfPresent(Bool.self, forKey: .tapToPlay))
+            ?? fallback.tapToPlay
         progressDisplay = Self.decodeCase(
             ProgressDisplay.self, from: container, key: .progressDisplay) ?? fallback.progressDisplay
         highlighters = Self.decodeHighlighters(from: container)
@@ -268,7 +314,16 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
         try container.encode(fontSize, forKey: .fontSize)
         try container.encode(lineSpacing, forKey: .lineSpacing)
         try container.encode(theme, forKey: .theme)
-        try container.encode(justified, forKey: .justified)
+        try container.encode(justification, forKey: .justification)
+        // The key this replaced, written as well as the new one for a release.
+        // A build that predates the three-position setting reads only this, and
+        // without it a reader who moves back a build finds their justification
+        // silently gone. That build had a switch, so it can be told "justified"
+        // or "not", and both `.never` and `.followBook` are honestly "not" —
+        // following the book is a thing it cannot do. Coming back up reads
+        // `.followBook` rather than the `.never` someone may have chosen, which
+        // is the most an older writer can say.
+        try container.encode(justification == .always, forKey: .justified)
         try container.encode(pageMargin, forKey: .pageMargin)
         try container.encode(highlightGranularity, forKey: .highlightGranularity)
         try container.encode(followNarration, forKey: .followNarration)
@@ -292,6 +347,30 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
     /// been corrupted, would fail the whole decode and reset every preference.
     /// A value this build does not understand should cost that one setting,
     /// not all of them.
+    /// The text sizes a stored setting may hold. Wider than the Text size
+    /// stepper's 12...32 and the television's fixed 40, so no size anyone
+    /// chose is moved; narrow enough that a page always has a line on it.
+    public static let fontSizeRange: ClosedRange<CGFloat> = 8 ... 96
+
+    /// The page margins a stored setting may hold.
+    public static let pageMarginRange: ClosedRange<CGFloat> = 0 ... 200
+
+    /// A stored length, bounded to `range`, or `nil` when there is none to
+    /// use — absent, of the wrong type, or not a finite number.
+    static func clampedLength(_ value: CGFloat?, to range: ClosedRange<CGFloat>) -> CGFloat? {
+        guard let value, value.isFinite else { return nil }
+        return min(max(value, range.lowerBound), range.upperBound)
+    }
+
+    private static func decodeLength(
+        from container: KeyedDecodingContainer<CodingKeys>,
+        key: CodingKeys,
+        in range: ClosedRange<CGFloat>,
+    ) -> CGFloat? {
+        // `try?` flattens the doubly-optional result, as in `decodeCase`.
+        clampedLength(try? container.decodeIfPresent(CGFloat.self, forKey: key), to: range)
+    }
+
     private static func decodeCase<T: RawRepresentable & Decodable>(
         _ type: T.Type,
         from container: KeyedDecodingContainer<CodingKeys>,

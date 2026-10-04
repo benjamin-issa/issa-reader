@@ -43,8 +43,8 @@ struct LibraryFacetsTests {
         #expect(facets.count(.reading) + facets.count(.toRead) + facets.count(.finished) == 5)
     }
 
-    /// `stage(of:)` files a book with no status, and any status it does not
-    /// recognise, as unstarted. The count has to agree with the filter, or the
+    /// `stage(of:)` files a book with no status and no progress, and any
+    /// status it does not recognise, as unstarted. The count has to agree with the filter, or the
     /// chip says 3 and the grid shows 5.
     @Test("a book with no status is counted where the filter puts it")
     func unknownStatusCountsAsToRead() {
@@ -67,6 +67,20 @@ struct LibraryFacetsTests {
         let facets = LibraryFacets(books: books, downloadedUUIDs: [])
 
         #expect(facets.count(.withNarration) == 3)
+        #expect(facets.count(.withNarration)
+            == LibraryArrangement(shelf: .withNarration).apply(to: books).count)
+    }
+
+    /// A row is not a file. The server keeps an audiobook row with no file
+    /// behind it, or marks a file missing, and the cover, the detail screen
+    /// and CarPlay all read `servableFormats` and offer nothing to listen to —
+    /// while the audio chip counted the row.
+    @Test("the audio shelf counts only audio the server can serve")
+    func audioShelfCountsOnlyServableAudio() throws {
+        let books = try UnservableAudio.books()
+        let facets = LibraryFacets(books: books, downloadedUUIDs: [])
+
+        #expect(facets.count(.withNarration) == 1, "only the book with a file to play")
         #expect(facets.count(.withNarration)
             == LibraryArrangement(shelf: .withNarration).apply(to: books).count)
     }
@@ -129,5 +143,33 @@ struct SeriesDerivationTests {
 
         #expect(derivation.bySeries["Death"]?.map(\.title) == ["X", "Y"])
         #expect(derivation.bySeries["Discworld"]?.map(\.title) == ["Z", "X"])
+    }
+}
+
+/// Books whose audio row has nothing the server can serve, beside one that
+/// has. Shared by the facet, rail and shelf tests, which have to agree.
+enum UnservableAudio {
+    /// The one book of these that belongs on "With audio".
+    static let playable = "Playable"
+
+    static func books() throws -> [Book] {
+        let rows: [(title: String, extra: [String: Any])] = [
+            (playable, ["audiobook": ["uuid": "a1", "filepath": "a.m4b", "missing": false, "identifiers": []]]),
+            // A row the server made with no file behind it.
+            ("No file", ["audiobook": ["uuid": "a2", "filepath": NSNull(), "identifiers": []]]),
+            // A file the server has lost.
+            ("Lost audiobook", ["audiobook": ["uuid": "a3", "filepath": "a.m4b", "missing": true, "identifiers": []]]),
+            ("Lost read-along", ["readaloud": ["uuid": "r4", "filepath": "r.epub", "missing": true, "identifiers": []]]),
+            ("Text only", ["ebook": ["uuid": "e5", "filepath": "e.epub", "identifiers": []]]),
+        ]
+        return try rows.map { row in
+            var json: [String: Any] = [
+                "uuid": row.title, "title": row.title,
+                "authors": [], "narrators": [], "creators": [], "series": [],
+                "collections": [], "identifiers": [], "tags": [],
+            ]
+            json.merge(row.extra) { _, new in new }
+            return try JSONDecoder().decode(Book.self, from: JSONSerialization.data(withJSONObject: json))
+        }
     }
 }

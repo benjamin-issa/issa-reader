@@ -123,6 +123,16 @@ struct LibraryRailsTests {
         #expect(rails.withAudio.count == 2)
     }
 
+    /// The rail offered books with nothing to listen to: an audiobook row with
+    /// no file, or a file the server marks missing. Their covers carry no audio
+    /// mark and their screens no Listen button.
+    @Test("the audio rail holds only audio the server can serve")
+    func audioRailHoldsOnlyServableAudio() throws {
+        let books = try UnservableAudio.books()
+        let rails = LibraryRails(books: books)
+        #expect(rails.withAudio.map(\.title) == [UnservableAudio.playable])
+    }
+
     @Test("tag rails skip single-book tags and lead with the most used")
     func tagRails() {
         let rails = LibraryRails(books: [
@@ -144,6 +154,22 @@ struct LibraryRailsTests {
         }
         let rails = LibraryRails(books: books)
         #expect(rails.tagRails.map(\.tag) == ["A", "B", "C", "D"])
+    }
+
+    /// The whole tag index, single-book tags and all, which the app model
+    /// memoises from this pass rather than grouping the library again.
+    @Test("the rails carry every tag's books, as the derivation groups them")
+    func everyTagIsKept() {
+        let books = [
+            book("A", tags: ["Fiction", "Rare", "Fiction"]),
+            book("B", tags: ["Fiction", "History"]),
+        ]
+        let rails = LibraryRails(books: books)
+        #expect(rails.byTag.mapValues { $0.map(\.uuid) }
+            == LibraryDerivation(books: books).byTag.mapValues { $0.map(\.uuid) })
+        #expect(rails.byTag["Rare"]?.map(\.uuid) == ["A"])
+        #expect(rails.byTag["Fiction"]?.map(\.uuid) == ["A", "B"])
+        #expect(LibraryRails.empty.byTag.isEmpty)
     }
 
     // MARK: - Reading and to-read
@@ -173,6 +199,83 @@ struct LibraryRailsTests {
     func emptyLibrary() {
         #expect(LibraryRails(books: []) == .empty)
         #expect(ReadingHome.empty.isEmpty)
+    }
+}
+
+/// A catalogue row can name the same creator, series or tag twice — an EPUB
+/// whose metadata repeats a `dc:creator` is enough — and every grouping put
+/// the book in once per mention: two cells with one identity in a rail, "3
+/// books" for two on a series screen, a "More by" rail listing a book twice,
+/// and a tag on one book passing for a tag on two.
+@Suite("Each book once in each group")
+struct RepeatedNamesTests {
+    private func book(
+        _ title: String, authors: [String] = [], narrators: [String] = [],
+        series: [(name: String, position: Double?)] = [], tags: [String] = [],
+    ) -> Book {
+        let creators: ([String]) -> [[String: Any]] = { names in
+            names.enumerated().map { ["uuid": "\(title)-\($0.offset)", "name": $0.element] }
+        }
+        let json: [String: Any] = [
+            "uuid": title, "title": title,
+            "authors": creators(authors), "narrators": creators(narrators), "creators": [],
+            "collections": [], "identifiers": [],
+            "tags": tags.enumerated().map { ["uuid": "\(title)-tag-\($0.offset)", "name": $0.element] },
+            "series": series.enumerated().map { membership -> [String: Any] in
+                var row: [String: Any] = ["uuid": "\(title)-series-\(membership.offset)", "name": membership.element.name]
+                if let position = membership.element.position { row["position"] = position }
+                return row
+            },
+        ]
+        let data = try! JSONSerialization.data(withJSONObject: json)
+        return try! JSONDecoder().decode(Book.self, from: data)
+    }
+
+    @Test("a repeated author or narrator lists the book once")
+    func creators() {
+        let twice = book("Twice", authors: ["Jane Austen", "Jane Austen"], narrators: ["Reader", "Reader"])
+        let other = book("Other", authors: ["Jane Austen"], narrators: ["Reader"])
+        let derivation = LibraryDerivation(books: [twice, other])
+
+        #expect(derivation.byAuthor["Jane Austen"]?.map(\.title) == ["Twice", "Other"])
+        #expect(derivation.byNarrator["Reader"]?.map(\.title) == ["Twice", "Other"])
+    }
+
+    @Test("a repeated series lists the book once, and does not make a series of one")
+    func series() {
+        let twice = book("Twice", series: [(name: "Saga", position: 1), (name: "Saga", position: 1)])
+        let other = book("Other", series: [(name: "Saga", position: 2)])
+        let alone = book("Alone", series: [(name: "Solo", position: 1), (name: "Solo", position: 1)])
+        let rails = LibraryRails(books: [twice, other, alone])
+
+        #expect(LibraryDerivation(books: [twice, other]).bySeries["Saga"]?.map(\.title) == ["Twice", "Other"])
+        #expect(rails.series.map(\.name) == ["Saga"], "one book named twice is not a series")
+        #expect(rails.series.first?.books.map(\.title) == ["Twice", "Other"])
+    }
+
+    @Test("a repeated tag lists the book once, and does not make a rail of one")
+    func tags() {
+        let twice = book("Twice", tags: ["Gothic", "Gothic"])
+        let other = book("Other", tags: ["Gothic"])
+        let alone = book("Alone", tags: ["Rare", "Rare"])
+        let rails = LibraryRails(books: [twice, other, alone])
+
+        #expect(rails.tagRails.map(\.tag) == ["Gothic"], "a tag on one book is a label, not a rail")
+        #expect(rails.tagRails.first?.books.map(\.title) == ["Twice", "Other"])
+        #expect(LibraryDerivation(books: [twice, other, alone]).byTag["Gothic"]?.map(\.title) == ["Twice", "Other"])
+    }
+
+    /// The chip beside a tag counts books, as the filter it applies does.
+    @Test("a repeated tag counts its book once on the chip")
+    func tagCounts() {
+        let books = [book("Twice", tags: ["Gothic", "Gothic"]), book("Other", tags: ["Gothic"])]
+        let facets = LibraryFacets(books: books, downloadedUUIDs: [])
+
+        #expect(facets.tagCounts == [LibraryFacets.TagCount(name: "Gothic", count: 2)])
+        #expect(LibraryArrangement(tags: ["Gothic"]).apply(to: books).count == 2)
+        // And as the tag's own page lists them (`booksByTag` is the
+        // derivation's `byTag`): one grouping behind the chip and the page.
+        #expect(LibraryDerivation(books: books).byTag["Gothic"]?.count == 2)
     }
 }
 

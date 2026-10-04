@@ -44,6 +44,13 @@ final class MacAppServices {
     /// Above every window, because a Mac reader has several books open and an
     /// answer must outlive the window that asked for it.
     let ask = AskCoordinator()
+    /// The books the reader added from their own files, one library for every
+    /// window: the list window, each book's reader window, and the account's
+    /// exit, which keeps these books.
+    let local = LocalLibrary()
+    /// Whether the File menu offers Add Book…, followed as the library loads
+    /// and changes; see `MacFileMenu`.
+    let fileMenu = MacFileMenu()
 
     /// Held because `UNUserNotificationCenter` keeps its delegate weakly, and a
     /// delegate nobody owns is a notification tap that does nothing.
@@ -90,9 +97,16 @@ final class MacAppServices {
         // Set at launch rather than when the first question is asked: a
         // notification tapped from a cold launch arrives before any panel has
         // ever been opened, and a delegate set later would miss it.
-        let delegate = AskNotificationDelegate(coordinator: ask, app: app)
+        let delegate = AskNotificationDelegate(coordinator: ask, app: app, local: local)
         askNotifications = delegate
         UNUserNotificationCenter.current().delegate = delegate
+
+        // The local library, handed to whatever keeps state per book — the
+        // same wiring as the phone's, from the same place.
+        LocalBooksWiring.connect(app: app, local: local, ask: ask, settings: settings)
+        // The File menu's Add Book…, decided as the library changes rather
+        // than once at launch; see `MacFileMenu`.
+        fileMenu.track(local)
 
         // Nothing else moves `phase` to `.expired`, and the device-grant token
         // goes stale on every install eventually.

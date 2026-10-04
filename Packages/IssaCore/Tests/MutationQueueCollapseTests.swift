@@ -32,7 +32,7 @@ struct MutationQueueCollapseTests {
         #expect(pending.count == 1)
         #expect(pending.first?.attempts == 3)
         #expect(pending.first?.payload == Data("2".utf8), "the newer payload still wins")
-        #expect(pending.first?.createdAt == first.createdAt, "and it keeps its place in the drain order")
+        #expect(pending.first?.createdAt == first.createdAt, "and the age of the write it replaced")
     }
 
     @Test("the inherited count still reaches the abandon limit")
@@ -73,6 +73,46 @@ struct MutationQueueCollapseTests {
         try await queue.enqueue(.status, bookUUID: "b", payload: Data("{}".utf8))
         let item = try #require(await queue.pending().first)
         #expect(item.attempts == 0)
+    }
+
+    /// Offline: a page read, "To read" chosen, then read on. Online the server
+    /// applied those in that order and ended on Reading. The second position
+    /// replaced the first and kept its queued time, and the drain went by
+    /// queued time, so the position went first and the status after it: the
+    /// server's own rule ran before the reader's choice arrived, and it ended
+    /// on To read.
+    @Test("a write replaced after a later one is sent after it")
+    func aReplacedWriteGoesBehindTheOnesBeforeIt() async throws {
+        let (queue, directory) = try makeQueue()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        try await queue.enqueue(.position, bookUUID: "b", payload: Data("page".utf8), supersedes: 1)
+        try await queue.enqueue(.status, bookUUID: "b", payload: Data("to read".utf8))
+        try await queue.enqueue(.position, bookUUID: "b", payload: Data("read on".utf8), supersedes: 3)
+
+        let pending = try await queue.pending()
+        #expect(pending.map(\.kind) == [.status, .position],
+                "the status was chosen before the reader read on, so it goes first")
+        #expect(pending.last?.payload == Data("read on".utf8))
+    }
+
+    /// A row an older build wrote has no `updatedAt`: it runs on the same file
+    /// after a downgrade, and knows nothing of the column. Its queued time
+    /// stands in, so it still takes its place in the order rather than
+    /// failing to insert or sorting to one end.
+    @Test("a row an older build wrote is ordered by when it was queued")
+    func anOlderBuildsRowKeepsItsPlace() async throws {
+        let (queue, directory) = try makeQueue()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let now = Date().timeIntervalSince1970
+        try await queue.enqueueAsOlderBuildForTesting(
+            .status, bookUUID: "early", payload: Data("{}".utf8), createdAt: now - 60)
+        try await queue.enqueue(.status, bookUUID: "current", payload: Data("{}".utf8))
+        try await queue.enqueueAsOlderBuildForTesting(
+            .status, bookUUID: "late", payload: Data("{}".utf8), createdAt: now + 60)
+
+        #expect(try await queue.pending().map(\.bookUUID) == ["early", "current", "late"])
     }
 }
 
@@ -188,6 +228,11 @@ private actor StubTokens: TokenProviding {
 /// to, which is the only way the lock's two behaviours — declining for an
 /// ordinary caller, waiting for the exit path — are observable at all.
 ///
+/// The same holds for what came after: a pause that must wait for the request
+/// in flight and no more, and a retired queue that must stop mid-backlog. Both
+/// are here rather than in a file of their own because the gate is static and
+/// only `.serialized` within one suite keeps two tests off it at once.
+///
 /// `.serialized`: `BlockingProtocol` keeps its gate in static state.
 @Suite("Only one drain runs at a time", .serialized)
 struct DrainExclusionTests {
@@ -232,6 +277,34 @@ struct DrainExclusionTests {
         #expect(await first.value == 1)
     }
 
+    /// R-55. The decline above is only right if the drain it declines to
+    /// sends what the declining caller came with. A rating tapped twice inside
+    /// one round trip — 4, then 5 — collapses the queued 4 into a new row
+    /// for 5 while the 4 is on the wire; the drain that enqueue triggers
+    /// declines, and the running drain worked from a list read before the 5
+    /// existed. The server kept 4, the screen said 5, until some unrelated
+    /// drain came along.
+    @Test("a write queued while a drain runs goes with that drain")
+    func aWriteQueuedMidDrainGoesWithIt() async throws {
+        let (drain, queue, directory) = try await makeDrain()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try await queue.enqueue(.rating, bookUUID: "a", payload: Data(#"{"rating":4}"#.utf8))
+
+        let first = Task { await drain.drain() }
+        await settle { BlockingProtocol.requestsStarted == 1 }
+        #expect(BlockingProtocol.requestsStarted == 1, "the first drain has to be mid-request")
+
+        // The second tap: the queued 4 becomes a row for 5, and the drain this
+        // enqueue triggers declines.
+        try await queue.enqueue(.rating, bookUUID: "a", payload: Data(#"{"rating":5}"#.utf8))
+        #expect(await drain.drain() == 0)
+
+        BlockingProtocol.release()
+        #expect(await first.value == 2, "the 5 was left for some later drain")
+        #expect(BlockingProtocol.requestsStarted == 2)
+        #expect(try await queue.count == 0)
+    }
+
     /// My regression: the exit path passed through the same decline, so
     /// `flushOpenReaders()` on ⌘Q sent nothing whenever a background drain
     /// happened to be blocked — and on the way out there is no next enqueue.
@@ -265,6 +338,98 @@ struct DrainExclusionTests {
         #expect(await waiting.value == 1, "the row queued during the first drain was never sent")
         #expect(BlockingProtocol.requestsStarted == 2)
         #expect(try await queue.count == 0)
+    }
+
+    /// Yields until someone is in line for the lock, so a request is released
+    /// only once the waiter it is meant to make way for is really waiting.
+    private func settleUntilWaiting(on queue: MutationQueue) async {
+        for _ in 0 ..< 200 {
+            if await queue.shouldYield { return }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+    }
+
+    /// Finding #5: a sign-in swapped the bearer under a running drain, which
+    /// went on sending the departed account's rows with the arriving
+    /// account's token. The pause that closes that has to wait for the request
+    /// already on the wire — it cannot be recalled — but for nothing behind
+    /// it: a drain that finished its snapshot first would hold a sign-in for
+    /// a whole backlog of sixty-second timeouts. And once it has the lock, it
+    /// has to keep it: an ordinary drain declines until the pause is lifted.
+    @Test("a pause waits for the request in flight, not the backlog, then holds the lock")
+    func pauseWaitsForTheItemInFlightThenHolds() async throws {
+        let (drain, queue, directory) = try await makeDrain()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try await queue.enqueue(.status, bookUUID: "a", payload: Data(#"{"status":"reading"}"#.utf8))
+        try await queue.enqueue(.status, bookUUID: "b", payload: Data(#"{"status":"reading"}"#.utf8))
+
+        let first = Task { await drain.drain() }
+        await settle { BlockingProtocol.requestsStarted == 1 }
+        #expect(BlockingProtocol.requestsStarted == 1, "the drain has to be mid-request")
+
+        let paused = Completion()
+        let pausing = Task {
+            await queue.pauseDraining()
+            paused.mark()
+        }
+        await settleUntilWaiting(on: queue)
+        // The settle gives up quietly. Without this, a pause that never got in
+        // line leaves the check below passing for nothing, and the failure
+        // lands further down on the drain, for sending a row it had no one to
+        // yield to.
+        #expect(await queue.shouldYield, "the pause never got in line for the lock")
+        #expect(!paused.done, "the pause took the lock from under a request in flight")
+
+        BlockingProtocol.release()
+        await pausing.value
+        #expect(await first.value == 1, "the drain sent the rest of its backlog with a pause waiting")
+        #expect(BlockingProtocol.requestsStarted == 1)
+
+        // Held: nothing goes out until the pause is lifted.
+        #expect(await drain.drain() == 0, "a drain started while the pause held the lock")
+        #expect(BlockingProtocol.requestsStarted == 1)
+
+        await queue.resumeDraining()
+        #expect(await drain.drain() == 1, "the row the pause held back was not sent after it")
+        #expect(BlockingProtocol.requestsStarted == 2)
+        #expect(try await queue.count == 0)
+    }
+
+    /// Emptying the table on an account switch is not enough on its own: a
+    /// write already on its way in could insert its row after the DELETE, for
+    /// the arriving account's drain to send, and a drain caught mid-backlog
+    /// would go on sending the departed account's rows. A retired queue
+    /// refuses the one and stops the other before its next row — and says so
+    /// at once, without waiting for the lock the drain is holding.
+    @Test("a retired queue refuses new rows and sends nothing more")
+    func aRetiredQueueRefusesRowsAndSendsNothing() async throws {
+        let (drain, queue, directory) = try await makeDrain()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try await queue.enqueue(.status, bookUUID: "a", payload: Data(#"{"status":"reading"}"#.utf8))
+        try await queue.enqueue(.status, bookUUID: "b", payload: Data(#"{"status":"reading"}"#.utf8))
+
+        let first = Task { await drain.drain() }
+        await settle { BlockingProtocol.requestsStarted == 1 }
+        #expect(BlockingProtocol.requestsStarted == 1, "the drain has to be mid-request")
+
+        let retired = Completion()
+        Task {
+            await queue.retire()
+            retired.mark()
+        }
+        await settle { retired.done }
+        #expect(retired.done, "retiring waited for the lock a drain was holding")
+        await #expect(throws: MutationQueue.Retired.self, "a retired queue took a row") {
+            try await queue.enqueue(.status, bookUUID: "c", payload: Data(#"{"status":"read"}"#.utf8))
+        }
+
+        BlockingProtocol.release()
+        #expect(await first.value == 1, "the drain went on to the next row of a retired queue")
+        #expect(await drain.drain() == 0)
+        #expect(await drain.drain(waitingForInFlight: true) == 0)
+        #expect(BlockingProtocol.requestsStarted == 1, "a retired queue sent a row")
+        #expect(try await queue.pending().map(\.bookUUID) == ["b"],
+                "retiring clears nothing; the refused row was never written")
     }
 }
 

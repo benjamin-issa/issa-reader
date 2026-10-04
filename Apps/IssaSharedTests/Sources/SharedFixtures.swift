@@ -31,6 +31,10 @@ enum SharedFixtures {
         ebook: Bool = true,
         authors: [String] = [],
         narrators: [String] = [],
+        /// Tag names, each its own row: a name given twice is two rows with
+        /// one name, which is how a catalogue repeats a tag.
+        tags: [String] = [],
+        series: [(name: String, position: Double?)] = [],
     ) -> Book {
         var json: [String: Any] = [
             "uuid": uuid ?? title,
@@ -38,7 +42,13 @@ enum SharedFixtures {
             "authors": authors.map { ["uuid": $0, "name": $0] },
             "narrators": narrators.map { ["uuid": $0, "name": $0] },
             "creators": [], "collections": [],
-            "identifiers": [], "tags": [], "series": [],
+            "identifiers": [],
+            "tags": tags.enumerated().map { ["uuid": "\($0.element)-\($0.offset)", "name": $0.element] },
+            "series": series.map { membership -> [String: Any] in
+                var row: [String: Any] = ["uuid": membership.name, "name": membership.name]
+                if let position = membership.position { row["position"] = position }
+                return row
+            },
         ]
         if let status { json["status"] = ["uuid": status, "name": status] }
         if let progress {
@@ -88,17 +98,37 @@ struct SharedTestBundleTests {
         #expect(abs(progression - 0.99) < 0.0001)
     }
 
-    /// The classifier that made the sweep's fixture file every book as unread:
-    /// it reads `status` and never consults position, so a book at 99% with no
-    /// status is "to read".
-    @Test("a book with no status is filed as unread however far into it the reader is")
-    func statusNotProgressDecidesTheShelf() {
-        let unlabelled = SharedFixtures.book("Dracula", progress: 0.99)
-        #expect(LibraryArrangement.stage(of: unlabelled) == .toRead)
+    /// The classifier the sweep's fixture is built against. A status decides
+    /// the shelf whenever there is one; only a book with none — which 3.x
+    /// sends and never advances — is filed by its position, where the
+    /// server's rule files a book once a position is written for it and 2.x
+    /// would have put it: any position at all is past "To read", 0% included,
+    /// and 98% is "Read".
+    @Test("a status decides the shelf, and the position decides only when there is none")
+    func statusNotPositionDecidesTheShelf() {
+        let finishedUnlabelled = SharedFixtures.book("Dracula", progress: 0.99)
+        #expect(LibraryArrangement.stage(of: finishedUnlabelled) == .finished)
+
+        // Opened and not yet moved. The shelf used to keep this on "To read",
+        // where the rule — the server's, and this device's write that stands
+        // in for it on 3.x — files it "Reading".
+        let openedUnlabelled = SharedFixtures.book("Dracula", progress: 0)
+        #expect(LibraryArrangement.stage(of: openedUnlabelled) == .reading)
+
+        let unopenedUnlabelled = SharedFixtures.book("Dracula")
+        #expect(LibraryArrangement.stage(of: unopenedUnlabelled) == .toRead)
+
+        let midwayUnlabelled = SharedFixtures.book("Dracula", progress: 0.4)
+        #expect(LibraryArrangement.stage(of: midwayUnlabelled) == .reading)
 
         let labelled = SharedFixtures.book("Dracula", status: "Finished", progress: 0.99)
         #expect(
             LibraryArrangement.stage(of: labelled) == .finished,
             "the shelf must follow the server's status once there is one")
+
+        let rereading = SharedFixtures.book("Dracula", status: "To read", progress: 0.99)
+        #expect(
+            LibraryArrangement.stage(of: rereading) == .toRead,
+            "progress must not override a status the reader chose")
     }
 }

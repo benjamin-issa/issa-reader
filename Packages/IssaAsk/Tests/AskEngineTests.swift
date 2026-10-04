@@ -24,6 +24,50 @@ struct AskEngineTests {
         }
     }
 
+    /// Collects a whole run, recording each event as it lands so a test can
+    /// wait on one mid-stream.
+    static func drain(
+        _ stream: AsyncThrowingStream<AskEvent, any Error>, into seen: Collected,
+    ) async -> (events: [AskEvent], failure: (any Error)?) {
+        var events: [AskEvent] = []
+        do {
+            for try await event in stream {
+                events.append(event)
+                await seen.append(event)
+            }
+            return (events, nil)
+        } catch {
+            return (events, error)
+        }
+    }
+
+    /// Asserts that the second question is queued at the turnstile while the
+    /// first holds the model — the thing a 50 ms sleep used to infer.
+    ///
+    /// `.thinking` first, because the engine yields it just before it asks for
+    /// the turn: the question has finished retrieving and is on its way to the
+    /// model. Then a bounded wait for one of the two outcomes, so neither
+    /// direction depends on timing: a working turnstile queues it, and a
+    /// broken one lets it reach the model, which fails here rather than
+    /// passing because the sleep landed early. The bound only matters when the
+    /// turnstile is broken *and* the call never arrives, which is a failure
+    /// either way.
+    static func expectQueued(
+        behind turnstile: AskTurnstile, model: ScriptedAnswerModel, seen: Collected,
+        sourceLocation: SourceLocation = #_sourceLocation,
+    ) async throws {
+        await seen.waitForThinking()
+        let deadline = ContinuousClock.now + .seconds(10)
+        while await turnstile.waiting == 0, await model.received.count < 2,
+              ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(await turnstile.waiting == 1, "the second question must be queued",
+                sourceLocation: sourceLocation)
+        #expect(await model.received.count == 1, "and must not have reached the model",
+                sourceLocation: sourceLocation)
+    }
+
     static func partials(_ events: [AskEvent]) -> [String] {
         events.compactMap { if case let .partial(text) = $0 { text } else { nil } }
     }
@@ -51,8 +95,11 @@ struct AskEngineTests {
             boundary: try AskFixture.endOf(spine: AskFixture.Spine.chapterI),
         ))
         #expect(failure == nil)
+        // Whole words only, each vetted before it is drawn: "Alice" has no
+        // whitespace after it yet, so it is not known to be finished, and the
+        // last word of a snapshot waits for the next one (R-16).
         #expect(Self.partials(events) == [
-            "Alice", "Alice follows a white rabbit",
+            "Alice follows a white",
             "Alice follows a white rabbit down a hole.",
         ])
         let answer = try #require(Self.answer(events))
@@ -473,7 +520,8 @@ struct AskEngineTests {
         consumer.cancel()
         _ = await consumer.value
 
-        #expect(Self.partials(await seen.events) == ["Alice foll"])
+        // Cut back to the last whole word, which is what is drawn.
+        #expect(Self.partials(await seen.events) == ["Alice"])
         #expect(Self.answer(await seen.events) == nil)
     }
 
@@ -483,11 +531,23 @@ struct AskEngineTests {
         var events: [AskEvent] = []
         private var waiters: [CheckedContinuation<Void, Never>] = []
 
+        private var thinkingWaiters: [CheckedContinuation<Void, Never>] = []
+
         func append(_ event: AskEvent) {
             events.append(event)
+            if event == .phase(.thinking) {
+                for waiter in thinkingWaiters { waiter.resume() }
+                thinkingWaiters.removeAll()
+            }
             guard case .partial = event else { return }
             for waiter in waiters { waiter.resume() }
             waiters.removeAll()
+        }
+
+        /// Until the engine says it is about to ask the model.
+        func waitForThinking() async {
+            guard !events.contains(.phase(.thinking)) else { return }
+            await withCheckedContinuation { thinkingWaiters.append($0) }
         }
 
         func waitForAPartial() async {
@@ -563,6 +623,55 @@ struct AskEngineTests {
         #expect(answer.origin == .withheld)
     }
 
+    /// The hedge: the sentinel, then the answer anyway. As a substring match the
+    /// parser called this a refusal, the vetting pass skips refusals, and the
+    /// Cat went to the reader whole — with its excerpts under it.
+    @Test("the sentinel followed by a spoiler is still vetted, and withheld with no sources")
+    func sentinelThenSpoilerIsWithheld() async throws {
+        let (store, source, directory) = try await AskFixture.preparedStore()
+        defer { AskFixture.remove(directory) }
+        let model = ScriptedAnswerModel(turns: [
+            .answer("The story hasn't revealed that yet. However, Alice is later guided by the Cheshire Cat, who grins and vanishes.\nSources: 1, 2"),
+        ])
+        let engine = AskEngine(model: model, store: store)
+
+        let (events, failure) = await Self.drain(engine.ask(
+            question: "What did Alice follow down the hole?", source: source,
+            boundary: try AskFixture.endOf(spine: AskFixture.Spine.chapterI),
+        ))
+        #expect(failure == nil)
+        #expect(await model.received.count == 1)
+        let answer = try #require(Self.answer(events))
+        #expect(answer.notYetRevealed)
+        #expect(answer.text == AskAnswerParser.notYetSentinel)
+        #expect(!answer.text.contains("Cheshire"))
+        #expect(answer.citations.isEmpty)
+        #expect(answer.sources.isEmpty)
+        #expect(answer.origin == .withheld)
+    }
+
+    /// The bare sentinel with a footer under it: a refusal, and one that shows
+    /// no excerpts — `notYet`'s own branch has always promised that, and the
+    /// model's typed refusal broke it.
+    @Test("the model's own refusal shows no sources even when it cited some")
+    func modelRefusalShowsNoSources() async throws {
+        let (store, source, directory) = try await AskFixture.preparedStore()
+        defer { AskFixture.remove(directory) }
+        let model = ScriptedAnswerModel(turns: [
+            .answer("The story hasn't revealed that yet.\nSources: 1, 2"),
+        ])
+        let engine = AskEngine(model: model, store: store)
+
+        let (events, _) = await Self.drain(engine.ask(
+            question: "What did Alice follow down the hole?", source: source,
+            boundary: try AskFixture.endOf(spine: AskFixture.Spine.chapterI),
+        ))
+        let answer = try #require(Self.answer(events))
+        #expect(answer.notYetRevealed)
+        #expect(answer.sources.isEmpty)
+        #expect(answer.origin == .withheld)
+    }
+
     /// The same answer past the chapter that introduces the Cat is ordinary
     /// prose. Without this the guard could be passing by refusing everything.
     @Test("the same answer stands once the book has introduced the name")
@@ -592,40 +701,47 @@ struct AskEngineTests {
             // probe arbitrates, and "Rome" is in *Alice* Chapter II — "London
             // is the capital of Paris, and Paris is the capital of Rome" — so
             // it is cleared from there onwards and refused before it.
-            ("Rome fell.", "What happens next?", ["rome"]),
+            ("Rome fell.", ["rome"]),
             // The bug. Both spoilers opened a sentence, so both went through.
-            ("Aldric dies. Ryn escapes.", "What happens next?", ["aldric", "ryn"]),
+            ("Aldric dies. Ryn escapes.", ["aldric", "ryn"]),
             // A headline spoiler is very often the first word of the answer.
-            ("Bilbo found the ring in the dark.", "What happened in the tunnel?", ["bilbo"]),
+            ("Bilbo found the ring in the dark.", ["bilbo"]),
             // `Mr.` used to end a sentence, which exempted every name that
             // followed an honorific.
-            ("She met Mr. Darcy at the ball.", "Who did she meet?", ["darcy"]),
-            // Both "Alice"s open sentences and "Alice" is in the question
-            // besides; "the" and "who" are function words. What is left is the
-            // pair a reader could be spoiled by.
-            (
-                "Alice met the Duchess, who knew Bilbo. Alice waved.",
-                "Who is Alice?", ["bilbo", "duchess"]
-            ),
+            ("She met Mr. Darcy at the ball.", ["darcy"]),
+            // Both "Alice"s open sentences, and a name is not a function
+            // word; "the" and "who" are. A question that asked about Alice no
+            // longer exempts her: the probe clears her on page one (R-04).
+            ("Alice met the Duchess, who knew Bilbo. Alice waved.", ["alice", "bilbo", "duchess"]),
             // A colon introduces a continuation, not a sentence.
-            ("The note said: Aldric is alive.", "What did the note say?", ["aldric"]),
+            ("The note said: Aldric is alive.", ["aldric"]),
             // The row that earns the list: four sentences, four openers, and
             // not one of them a person.
             (
                 "The rabbit ran. She followed it. There was a door. "
                     + "Then everything went dark.",
-                "What happened?", []
+                []
+            ),
+            // Measured on the 27 model (1.4.0 Ask review): three correct
+            // answers about the garden opened "Despite her efforts, …", and
+            // *Alice* never says "despite" in its first two chapters, so all
+            // three were refused. A preposition is closed-class; a name is
+            // still caught after it.
+            (
+                "Despite her efforts, she cannot get in. Throughout, Aldric waits. "
+                    + "Inside, it is dark. Unlike Ryn, she stays.",
+                ["aldric", "ryn"]
             ),
             // The honest worst case. "Cooks" is a plural noun opening a
             // sentence, and it costs a refusal on a book that never uses the
             // word. A test that hid this would be a bad test.
-            ("Cooks use pepper.", "Why is the soup peppery?", ["cooks"]),
+            ("Cooks use pepper.", ["cooks"]),
         ],
     )
     func capitalisedWordsAreNamesUnlessGrammarCapitalisedThem(
-        answer: String, question: String, expected: [String],
+        answer: String, expected: [String],
     ) {
-        #expect(AskEngine.unvettedNames(in: answer, question: question) == expected)
+        #expect(AskEngine.unvettedNames(in: answer) == expected)
     }
 
     @Test("a sentence-opening name the book has used is answered, not refused")
@@ -649,9 +765,7 @@ struct AskEngineTests {
         #expect(!answer.notYetRevealed)
         #expect(answer.text.contains("Alice"))
         // And the guard really was offered her, rather than skipping the check.
-        #expect(AskEngine.unvettedNames(
-            in: answer.text, question: "What happened at the start?",
-        ) == ["alice"])
+        #expect(AskEngine.unvettedNames(in: answer.text) == ["alice"])
     }
 
     // MARK: - The kinship fast path
@@ -751,7 +865,9 @@ struct AskEngineTests {
         let sent = try #require(await model.received.first)
         let excerpts = sent.prompt.components(separatedBy: "] (Section ").count - 1
         #expect(excerpts > 0)
-        #expect(excerpts <= EvidenceFinder.Limits.identityExcerpts)
+        // The identity sentences, and behind them the recency top-up's
+        // passages from the pages just read.
+        #expect(excerpts <= EvidenceFinder.Limits.identityExcerpts + AskRetriever.Limits.recencyPassages)
         // Sentence windows rather than whole paragraphs: the measured prompt on
         // the real book was 45% smaller for the same question.
         //
@@ -782,7 +898,10 @@ struct AskEngineTests {
             Turn(partials: ["first"], holdsAfterPartials: 1),
             Turn.answer("Second answer.\nSources: 1"),
         ])
-        let engine = AskEngine(model: model, store: store)
+        // Passed rather than defaulted only so the test can see the queue; one
+        // engine with its own turnstile is exactly what the default builds.
+        let turnstile = AskTurnstile()
+        let engine = AskEngine(model: model, store: store, turnstile: turnstile)
         let boundary = try AskFixture.endOf(spine: AskFixture.Spine.chapterI)
 
         let first = Task {
@@ -793,16 +912,16 @@ struct AskEngineTests {
         }
         await model.waitUntilHolding()
 
+        let seen = Collected()
         let second = Task {
             await Self.drain(engine.ask(
                 question: "Where did Alice land at the bottom?",
                 source: source, boundary: boundary,
-            ))
+            ), into: seen)
         }
         // The on-device model rejects a second concurrent session outright, so
         // the second question must be waiting rather than racing.
-        try await Task.sleep(for: .milliseconds(50))
-        #expect(await model.received.count == 1)
+        try await Self.expectQueued(behind: turnstile, model: model, seen: seen)
 
         await model.release()
         let (firstEvents, _) = await first.value
@@ -839,14 +958,14 @@ struct AskEngineTests {
         }
         await model.waitUntilHolding()
 
+        let seen = Collected()
         let secondTask = Task {
             await Self.drain(second.ask(
                 question: "Where did Alice land at the bottom?",
                 source: source, boundary: boundary,
-            ))
+            ), into: seen)
         }
-        try await Task.sleep(for: .milliseconds(50))
-        #expect(await model.received.count == 1)
+        try await Self.expectQueued(behind: turnstile, model: model, seen: seen)
 
         await model.release()
         _ = await firstTask.value
@@ -989,6 +1108,83 @@ struct AskEngineTests {
             #expect(smaller.map(\.passage.ordinal) == smaller.map(\.passage.ordinal).sorted())
             #expect(Set(smaller).isSubset(of: Set(larger)))
         }
+    }
+
+    // MARK: - An answer with no prose in it
+
+    /// The bug a reader hit on 1.2.0 (41): a card with three sources and
+    /// nothing above them. The parser no longer eats the prose, and these two
+    /// pin what happens when a generation genuinely produces none.
+    @Test("a generation that is only a footer reaches the reader as a failure")
+    func footerOnlyGenerationFails() async throws {
+        let (store, source, directory) = try await AskFixture.preparedStore()
+        defer { AskFixture.remove(directory) }
+        let model = ScriptedAnswerModel(turns: [Turn(partials: ["Sources: 1, 2"])])
+        let engine = AskEngine(model: model, store: store)
+
+        let (events, failure) = await Self.drain(engine.ask(
+            question: "What did Alice follow?",
+            source: source,
+            boundary: try AskFixture.endOf(spine: AskFixture.Spine.chapterI),
+        ))
+        // Not an answer with a hole in it — a sentence the reader can retry.
+        #expect(Self.answer(events) == nil)
+        #expect(AskEngine.failure(for: try #require(failure)) == .other(AskFailure.couldNotAnswer))
+    }
+
+    /// A snapshot is the answer so far, and the next token can extend the last
+    /// grapheme rather than start a new one. `Character`-wise, "Cafe" is not a
+    /// prefix of "Café" once the combining accent lands, and the merge that
+    /// appended non-prefix snapshots doubled the whole answer.
+    @Test("a snapshot that extends the last grapheme is not appended to itself")
+    func graphemeExtendingSnapshotIsNotDoubled() async throws {
+        let (store, source, directory) = try await AskFixture.preparedStore()
+        defer { AskFixture.remove(directory) }
+        let model = ScriptedAnswerModel(turns: [Turn(partials: [
+            "Alice drinks from a bottle at the cafe",
+            "Alice drinks from a bottle at the cafe\u{301}",
+            "Alice drinks from a bottle at the cafe\u{301}.\nSources: 1",
+        ])])
+        let engine = AskEngine(model: model, store: store)
+
+        let (events, failure) = await Self.drain(engine.ask(
+            question: "What did Alice drink?",
+            source: source,
+            boundary: try AskFixture.endOf(spine: AskFixture.Spine.chapterI),
+        ))
+        #expect(failure == nil)
+        let answer = try #require(Self.answer(events))
+        #expect(answer.text == "Alice drinks from a bottle at the cafe\u{301}.")
+        #expect(answer.citations == [1])
+        // And never on the way there either: a partial that showed the answer
+        // twice is a flash the reader sees.
+        for case let .partial(text) in events {
+            #expect(text.components(separatedBy: "Alice drinks").count <= 2, "\(text)")
+        }
+    }
+
+    /// The stream is cumulative, so a snapshot that does not start with the
+    /// text before it is the model's whole answer now — never a segment to
+    /// glue onto the old one.
+    @Test("a snapshot that does not carry the text before it replaces it")
+    func nonPrefixSnapshotReplaces() async throws {
+        let (store, source, directory) = try await AskFixture.preparedStore()
+        defer { AskFixture.remove(directory) }
+        let model = ScriptedAnswerModel(turns: [Turn(partials: [
+            "Alice follows a rabbit",
+            "Alice follows a white rabbit down a hole.\nSources: 1, 2",
+        ])])
+        let engine = AskEngine(model: model, store: store)
+
+        let (events, failure) = await Self.drain(engine.ask(
+            question: "What did Alice follow?",
+            source: source,
+            boundary: try AskFixture.endOf(spine: AskFixture.Spine.chapterI),
+        ))
+        #expect(failure == nil)
+        let answer = try #require(Self.answer(events))
+        #expect(answer.text == "Alice follows a white rabbit down a hole.")
+        #expect(answer.citations == [1, 2])
     }
 }
 

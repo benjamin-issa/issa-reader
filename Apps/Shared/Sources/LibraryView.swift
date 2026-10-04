@@ -10,11 +10,36 @@ public struct LibraryView: View {
     @Environment(AppModel.self) private var app
     @State private var search = ""
     @State private var results: [Book] = []
+    /// This window's "Show in Library" requests; see `LibraryNavigator`.
+    @Environment(LibraryNavigator.self) private var navigator: LibraryNavigator?
+    #if os(macOS)
+    /// The inspector's book, and a request to scroll to it.
+    @Environment(MacBookSelection.self) private var selection: MacBookSelection?
+    #endif
 
     public init() {}
 
     @ViewBuilder
     private var scrollContent: some View {
+        #if os(macOS)
+        ScrollViewReader { proxy in
+            scrollView
+                // A book asked for from outside — Settings' "Show in Library",
+                // a link — is scrolled to, not only ringed. `initial`, because
+                // the request can be what built this grid.
+                .onChange(of: selection?.pendingReveal, initial: true) { _, bookID in
+                    guard let bookID else { return }
+                    selection?.pendingReveal = nil
+                    guard books.contains(where: { $0.uuid == bookID }) else { return }
+                    withAnimation(.snappy) { proxy.scrollTo(bookID, anchor: .center) }
+                }
+        }
+        #else
+        scrollView
+        #endif
+    }
+
+    private var scrollView: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: Metrics.spacing32, pinnedViews: []) {
                 #if os(iOS)
@@ -26,11 +51,10 @@ public struct LibraryView: View {
                     shelf
                 }
                 #elseif os(macOS)
-                // Rails only on All books. The sidebar is the Mac's shelf
-                // control, so picking a shelf there means "show me that cut of
-                // the library", which is the grid. Rails are what the wide
-                // window is for when no cut has been asked for.
-                if app.libraryMode == .browse, search.isEmpty, app.arrangement.shelf == .all {
+                // Rails only on All books, which `LibraryModeSwitch` decides
+                // and says why. Rails are what the wide window is for when no
+                // cut has been asked for.
+                if LibraryModeSwitch.showsRails(switchState) {
                     BrowseView()
                 } else {
                     shelf
@@ -68,6 +92,12 @@ public struct LibraryView: View {
     }
 
     #if os(macOS)
+    /// What the toolbar switch decides from.
+    private var switchState: LibraryModeSwitch.State {
+        LibraryModeSwitch.State(
+            mode: app.libraryMode, shelf: app.arrangement.shelf, isSearching: !search.isEmpty)
+    }
+
     /// The toolbar switch.
     ///
     /// Reads as "All Books" whenever rails are not what is on screen, so the
@@ -76,14 +106,23 @@ public struct LibraryView: View {
     /// which is what "with all its controls intact" has to mean.
     private var modeBinding: Binding<AppModel.LibraryMode> {
         Binding(
-            get: {
-                guard app.arrangement.shelf == .all, search.isEmpty else { return .all }
-                return app.libraryMode
+            get: { LibraryModeSwitch.shown(switchState) },
+            set: { picked in
+                let now = switchState
+                let next = LibraryModeSwitch.picking(picked, in: now)
+                if now.isSearching, !next.isSearching { search = "" }
+                if next.shelf != now.shelf { app.arrangement.shelf = next.shelf }
+                app.libraryMode = next.mode
             },
-            set: { app.libraryMode = $0 },
         )
     }
     #endif
+
+    private func takePendingSearch() {
+        guard let navigator, let pending = navigator.pendingSearch else { return }
+        search = pending
+        navigator.pendingSearch = nil
+    }
 
     /// Search results are already the answer to a question; re-sorting them by
     /// title would bury the best match. Arrangement applies to the shelf only.
@@ -106,15 +145,27 @@ public struct LibraryView: View {
         // it, so the strip behind the tab bar's glass accessory was the host's
         // own white — the one place in the app where that showed.
         .background(Palette.paper.ignoresSafeArea())
+        .bookRoutes(place: .shelf)
+        // An author page's "Show in Library" is a search: the library has no
+        // author filter, and its search already looks through authors. Taken
+        // as the view appears, because the request rebuilds the library's
+        // stack (`LibraryNavigator`): a view that took it on change was the
+        // old one, about to be replaced by one with an empty field.
+        .task { takePendingSearch() }
+        // And as it changes. The Mac's content column is no longer rebuilt
+        // for "Show in Library" — its pages are popped (`MacContentColumn`) —
+        // so on All books the grid it returns to is this one, already up, and
+        // the author's search was never typed in.
+        .onChange(of: navigator?.pendingSearch) { takePendingSearch() }
         #if !os(iOS)
         // The Mac keeps its toolbar search — the sidebar is already its shelf
         // control — and tvOS renders TVLibraryView, so this only has to compile.
         .searchable(text: $search, prompt: "Search your library")
         #endif
         #if os(macOS)
-        // Browse or the sortable grid, in the window's own toolbar. Disabled
-        // where rails would be a lie: on a named shelf, and while a search is
-        // showing results.
+        // Browse or the sortable grid, in the window's own toolbar. Never
+        // disabled: Browse takes the reader to All books' rails from any shelf
+        // or search, which is what `LibraryModeSwitch.picking` says and why.
         .toolbar {
             ToolbarItem(placement: .principal) {
                 Picker("Library view", selection: modeBinding) {
@@ -122,7 +173,6 @@ public struct LibraryView: View {
                     Text("All Books").tag(AppModel.LibraryMode.all)
                 }
                 .pickerStyle(.segmented)
-                .disabled(app.arrangement.shelf != .all || !search.isEmpty)
                 .accessibilityLabel("Library view")
             }
         }
@@ -170,6 +220,9 @@ public struct BookGrid: View {
     /// Off where every book already has audio, so the mark says nothing.
     let showsFormatMark: Bool
 
+    /// Which series this grid is about, if it is about one.
+    let series: String?
+
     /// A line under the title in place of the byline — a series screen says
     /// "Book 2" where the author's name would say nothing new.
     let caption: ((Book) -> String?)?
@@ -178,12 +231,14 @@ public struct BookGrid: View {
         books: [Book], session: Session?,
         shape: LibraryService.CoverShape = .portrait,
         showsFormatMark: Bool = true,
+        series: String? = nil,
         caption: ((Book) -> String?)? = nil,
     ) {
         self.books = books
         self.session = session
         self.shape = shape
         self.showsFormatMark = showsFormatMark
+        self.series = series
         self.caption = caption
     }
 
@@ -201,7 +256,8 @@ public struct BookGrid: View {
             ForEach(books) { book in
                 BookGridItem(
                     book: book, session: session, shape: shape,
-                    showsFormatMark: showsFormatMark, caption: caption?(book))
+                    showsFormatMark: showsFormatMark, series: series,
+                    caption: caption?(book))
                     // Rows size to their tallest cell and centre vertically —
                     // LazyVGrid's alignment is horizontal only — so a title
                     // wrapping to two lines pushed its neighbours down.
@@ -220,18 +276,20 @@ struct BookGridItem: View {
     let session: Session?
     var shape: LibraryService.CoverShape = .portrait
     var showsFormatMark = true
+    /// Which series this grid is about, if it is about one; see `BookCell`.
+    var series: String?
     var caption: String?
 
     var body: some View {
         #if os(tvOS)
         TVPosterItem(
             book: book, session: session, shape: shape,
-            showsFormatMark: showsFormatMark, caption: caption)
+            showsFormatMark: showsFormatMark, series: series, caption: caption)
         #else
         BookLink(book: book, session: session) {
             BookCell(
                 book: book, session: session, shape: shape,
-                showsFormatMark: showsFormatMark, caption: caption)
+                showsFormatMark: showsFormatMark, series: series, caption: caption)
         }
         #endif
     }
@@ -259,6 +317,7 @@ struct TVPosterItem: View {
     let session: Session?
     var shape: LibraryService.CoverShape = .portrait
     var showsFormatMark = true
+    var series: String?
     var caption: String?
 
     @FocusState private var focused: Bool
@@ -277,6 +336,9 @@ struct TVPosterItem: View {
                 // layout space reserved for both.
                 .buttonStyle(.card)
                 .focused($focused)
+                // On the button, which is what takes focus: hold Select on the
+                // poster the remote is on.
+                .bookMenu(book)
             } else {
                 cell.coverBlock
             }
@@ -292,7 +354,7 @@ struct TVPosterItem: View {
     private var cell: BookCell {
         BookCell(
             book: book, session: session, shape: shape,
-            showsFormatMark: showsFormatMark, caption: caption)
+            showsFormatMark: showsFormatMark, series: series, caption: caption)
     }
 }
 #endif
@@ -304,6 +366,14 @@ public struct BookCell: View {
     /// Off on a screen made entirely of audiobooks, where marking every cover
     /// marks nothing.
     var showsFormatMark = true
+    /// The series this screen is about, if it is about one.
+    ///
+    /// A numeral on a cover answers "which one of these", and that question is
+    /// only being asked on a series screen. Everywhere else — the library, a
+    /// search, a rail of recently added books — the covers have no series in
+    /// common, so a numeral on one of them answers a question nobody asked and
+    /// reads as a badge on an arbitrary book.
+    var series: String?
     /// Shown instead of the byline when given.
     var caption: String?
     #if os(macOS)
@@ -341,17 +411,16 @@ public struct BookCell: View {
                     .overlay(alignment: .topTrailing) {
                         if showsFormatMark { formatMark }
                     }
+                    // Opposite corner to the format mark, so a book that is
+                    // both the second of a series and a read-along shows both
+                    // rather than one on top of the other.
+                    .overlay(alignment: .topLeading) {
+                        SeriesMark(membership: series.flatMap(book.membership(inSeries:)))
+                    }
                     // The Mac's selection ring: a click selects into the
                     // inspector rather than opening a window, so the cover has
                     // to say which book the column is describing.
-                    #if os(macOS)
-                    .overlay {
-                        if selection?.bookID == book.uuid {
-                            RoundedRectangle(cornerRadius: Metrics.radiusSmall)
-                                .strokeBorder(Palette.tangerine, lineWidth: 3)
-                        }
-                    }
-                    #endif
+                    .overlay { MacSelectionRing(bookID: book.uuid) }
                 if let progress = book.progress, progress > 0 {
                     ProgressBar(value: progress)
                         .padding(Metrics.spacing4)
@@ -407,6 +476,51 @@ public struct BookCell: View {
     }
 }
 
+/// Which book of its series a cover is, on the cover.
+///
+/// A numeral rather than "Book 2": on a series screen the title has already
+/// said which series, so the cover only has to say which one of them — and at
+/// cover size there is room for a digit and not for a sentence. Only for a book
+/// the server actually numbered; an unnumbered membership has no number to draw.
+///
+/// Drawn on a series screen and the book page's series rail, and nowhere else.
+/// It used to be on every cover in the app, and a numeral among books with no
+/// series in common reads as a badge on an arbitrary book rather than as its
+/// place in anything.
+struct SeriesMark: View {
+    let membership: SeriesMembership?
+
+    var body: some View {
+        if let series = membership, let position = series.position {
+            NumberBadge(SeriesText.ordinal(position))
+                .padding(Metrics.spacing4)
+                .accessibilityLabel("\(SeriesText.position(position)) in \(series.name)")
+        }
+    }
+}
+
+/// The Mac's mark on the cover the inspector is describing; nothing elsewhere.
+///
+/// Its own view, reading the selection itself, so a cover drawn outside its
+/// cell — the tag page's accessibility-size rows reuse `BookCell.coverBlock` —
+/// still finds the selection in the environment rather than asking a cell that
+/// was never placed in a view tree for it.
+struct MacSelectionRing: View {
+    let bookID: String
+    #if os(macOS)
+    @Environment(MacBookSelection.self) private var selection: MacBookSelection?
+    #endif
+
+    var body: some View {
+        #if os(macOS)
+        if selection?.bookID == bookID {
+            RoundedRectangle(cornerRadius: Metrics.radiusSmall)
+                .strokeBorder(Palette.tangerine, lineWidth: 3)
+        }
+        #endif
+    }
+}
+
 /// The corner glyph on a cover, which is the one mark small enough that the
 /// television needs it stated rather than scaled with the type.
 enum FormatMarkSize {
@@ -451,10 +565,11 @@ public struct ProgressBar: View {
 /// app's most prominent control now opens a book to read rather than describing
 /// one. VoiceOver reads the two as separate elements.
 ///
-/// The Mac keeps opening its own Reader window, which is already resume-first,
-/// and its grid has no detail route to add a chevron for; the signed-out
-/// placeholder stays inert. tvOS renders `TVLibraryView`, whose poster Continue
-/// already pushes straight into the reader, so this card is an iOS concern.
+/// The Mac keeps opening its own Reader window, which is already resume-first;
+/// its route to the book's page is the card's menu, "View details", which
+/// selects the book into the inspector. The signed-out placeholder stays
+/// inert. tvOS renders `TVLibraryView`, whose poster Continue already pushes
+/// straight into the reader, so this card is an iOS concern.
 struct ContinueCardLink: View {
     @Environment(AppModel.self) private var app
     let book: Book
@@ -472,6 +587,9 @@ struct ContinueCardLink: View {
                 ContinueCard(book: book, session: session)
             }
             .buttonStyle(.plain)
+            // The Mac's only way from this card to the book's page: "View
+            // details" selects it into the inspector.
+            .bookMenu(book)
             #elseif os(tvOS)
             // See `ResumeLink`: the television has no consumer for a pending
             // book, so the card has to push like everything else does here. It
@@ -481,6 +599,7 @@ struct ContinueCardLink: View {
                 ContinueCard(book: book, session: session)
             }
             .buttonStyle(.plain)
+            .bookMenu(book)
             .accessibilityIdentifier("card.continue")
             #else
             ContinueCard(book: book, session: session) {
@@ -488,6 +607,7 @@ struct ContinueCardLink: View {
                 // on open when the file is absent (item 02).
                 app.requestBook(book.uuid, .read)
             }
+            .bookMenu(book)
             // Exists only once the library has arrived and something is in
             // progress, which is what the layout sweep waits on: the Reading
             // tab renders its empty state first, and measuring that instead of

@@ -47,13 +47,15 @@ public struct LibraryFacets: Sendable, Equatable {
             }
             // The same predicate the shelf filter uses, so a chip's number can
             // never disagree with the grid beneath it.
-            if book.hasReadalong || book.audiobook != nil {
+            if book.hasServableAudio {
                 shelves[.withNarration, default: 0] += 1
             }
             if downloadedUUIDs.contains(book.uuid) {
                 shelves[.downloaded, default: 0] += 1
             }
-            for tag in book.tags { tags[tag.name, default: 0] += 1 }
+            // Once per book: the tag filter keeps a book or does not, so a row
+            // that names a tag twice counted two books the grid shows as one.
+            for tag in Set(book.tags.map(\.name)) { tags[tag, default: 0] += 1 }
         }
 
         shelfCounts = shelves

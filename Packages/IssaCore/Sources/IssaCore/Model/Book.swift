@@ -2,8 +2,11 @@ import Foundation
 
 /// A book as returned by `GET /api/v2/books` and `GET /api/v2/books/{uuid}`.
 ///
-/// Modelled against live JSON from a `web-v2.14.21` server. Two things about the
-/// list endpoint shape the whole client:
+/// Modelled against live JSON from `web-v2.14.21` and `web-v3.0.0-beta.40`
+/// servers. 3.x only adds to the shape — a cover reference on each format, a
+/// `label` on each status, and a status that may be `null` — so one type decodes
+/// both, and the additions are optional. Two things about the list endpoint
+/// shape the whole client:
 ///
 /// 1. It takes no query parameters and returns the entire library in one
 ///    unpaginated array. We ingest it wholesale and derive search, facets and
@@ -59,6 +62,15 @@ public struct Book: Codable, Hashable, Sendable, Identifiable {
     ///
     /// The server also changes this on its own when a reading position is
     /// written, so a locally-set value can be superseded by simply reading on.
+    /// On 3.x it can also be `null` — a reader may clear it, deleting a custom
+    /// status clears it from every book that had it, and a library with no
+    /// default status never sets one — and 3.x never advances a book out of
+    /// that state: its position write updates a status row, and a book with no
+    /// status has no row to update. `StatusAdvance` is the client doing what
+    /// the server meant to; `LibraryArrangement.stage(of:)` shelves such a book
+    /// where that rule would file it in the meantime — unstarted with no
+    /// position, "Reading" with any position short of 98%, "Read" at 98% or
+    /// past it.
     public var status: Status?
     /// Per-user reading position. Present only when authenticated, and `nil`
     /// until the book has been opened at least once.
@@ -67,6 +79,12 @@ public struct Book: Codable, Hashable, Sendable, Identifiable {
     public var ebook: EbookFormat?
     public var audiobook: AudiobookFormat?
     public var readaloud: ReadaloudFormat?
+
+    /// Set only on a book the reader added from their own files, and never by
+    /// a server: `LibraryService` strips it from everything it decodes, so a
+    /// catalogue cannot make one of its books look like a file on this device.
+    /// See `LocalCopy` and `Book.local(uuid:metadata:narrationDuration:copy:)`.
+    public var localCopy: LocalCopy?
 
     public var id: String { uuid }
 
@@ -81,6 +99,9 @@ public struct Book: Codable, Hashable, Sendable, Identifiable {
         case series, tags, collections, identifiers, externalData
         case status, position
         case ebook, audiobook, readaloud
+        // A name no Storyteller version sends, so a server's own field can
+        // never land here by coincidence; one sent on purpose is stripped.
+        case localCopy = "issaLocal"
     }
 }
 
@@ -114,6 +135,19 @@ public extension Book {
         return formats
     }
 
+    /// Whether the server can serve narration for this book: a read-along or
+    /// an audiobook with a file behind it that the server has not lost.
+    ///
+    /// What "With audio" means — the shelf, the count on its chip and the
+    /// Browse rail. They read the rows instead (`hasReadalong` or any
+    /// audiobook row), while the cover's mark, the Listen button and CarPlay
+    /// read `servableFormats`, so a book whose audio row had no file sat on
+    /// the shelf with nothing on its screen to play.
+    var hasServableAudio: Bool {
+        let formats = servableFormats
+        return formats.contains(.readaloud) || formats.contains(.audiobook)
+    }
+
     /// Whether opening this book leads to the reader at all. An audiobook-only
     /// book has no on-screen text, so a "resume reading" request for it lands on
     /// the detail screen instead — callers use this to keep that promise honest.
@@ -137,19 +171,31 @@ public extension Book {
     }
 
     /// Takes everything the server says about this book except a reading
-    /// position older than the one already held.
+    /// position older than the one already held — and, when asked, the status.
     ///
     /// The catalogue is refetched wholesale, and a refetch that predates a write
     /// still sitting in the mutation queue carries a stale `position`. Assigning
     /// it verbatim walks the Continue card — and the place the reader resumes at
     /// — backwards by however long the queue has been holding.
     ///
-    /// Position only. Title, formats, alignment, tags and page counts are all
-    /// newer server truth and are taken as given; a `status` one refresh stale is
-    /// cosmetic, where a position one refresh stale is the bug this exists for.
-    func reconciled(with fresh: Book) -> Book {
-        guard let mine = position else { return fresh }
+    /// Title, formats, alignment, tags and page counts are all newer server
+    /// truth and are taken as given. The position is kept by its timestamp,
+    /// which the book carries. The status carries nothing to compare, so the
+    /// caller says whether this copy's is one the server may not hold yet.
+    ///
+    /// - Parameter keepingStatus: keep this copy's `status` over the server's.
+    ///   A stale status is not cosmetic when this device set it: a refresh
+    ///   that puts the server's older value back shows the reader a choice
+    ///   undone, and on 3.x an empty one invites the next position write to
+    ///   file the book again over what the reader chose. Whether the write is
+    ///   still unsent is the app's to know — the queue and the writes on their
+    ///   way into it — so this only applies the answer, the same way at every
+    ///   merge. It is applied before the position rule returns early, because
+    ///   a book with no position of its own can still have a status set on it.
+    func reconciled(with fresh: Book, keepingStatus: Bool = false) -> Book {
         var merged = fresh
+        if keepingStatus { merged.status = status }
+        guard let mine = position else { return merged }
         // A server that has never heard of our position must not clear it: the
         // write may simply not have drained yet.
         if fresh.position.map({ mine.timestamp > $0.timestamp }) ?? true {
@@ -162,6 +208,19 @@ public extension Book {
     var byline: String {
         let names = authors.isEmpty ? narrators.map(\.name) : authors.map(\.name)
         return names.joined(separator: ", ")
+    }
+
+    /// The series to name where there is only room for one.
+    ///
+    /// A book can belong to two — an omnibus sits in its own series and in the
+    /// publisher's — and a cover badge or a one-line caption has to pick one.
+    /// The first membership carrying a position wins, because it is the only
+    /// one that can say *which* book this is; an unnumbered membership is a
+    /// shelf label, and naming it in place of "Book 2" loses the number the
+    /// reader was after. Screens with room for every membership — the book
+    /// screen's hero — read `series` directly instead.
+    var primarySeries: SeriesMembership? {
+        series.first { $0.position != nil } ?? series.first
     }
 
     /// The subtitle worth putting on a screen, or nil when there is none.
@@ -258,12 +317,36 @@ public struct Collection: Codable, Hashable, Sendable, Identifiable {
 
 public struct Status: Codable, Hashable, Sendable, Identifiable {
     public var uuid: String
+    /// What the status *is*. 2.14.21 ships exactly the three built-ins, with no
+    /// API to add or rename one, so there this is also what it says. 3.x keeps
+    /// the built-in names fixed — the server keys its own rules on them — lets
+    /// an admin add statuses named as they like, and puts any rewording in
+    /// `label`, which makes this the steadier of the two to classify by.
     public var name: String
+    /// What the status *says*, on 3.x: "Read" relabelled "Finished" still has
+    /// the name "Read". nil on 2.x, which has no such field.
+    public var label: String?
     public var isDefault: Bool?
     public var createdAt: FlexibleDate?
     public var updatedAt: FlexibleDate?
 
     public var id: String { uuid }
+
+    /// What to show a reader: the label where the server has one, as its own
+    /// web UI does, and the name everywhere else.
+    ///
+    /// A blank label counts as none. 3.x's admin dialog accepts a label of
+    /// spaces and its API accepts `""`, and `label ?? name` passed either one
+    /// straight through: a status pill with nothing in it, a menu entry with
+    /// no words, and an accessibility value VoiceOver reads as silence. The
+    /// name is always there to fall back on, as `Identifier.label` falls back
+    /// to its slug. A label with words in it is shown as the server sent it.
+    public var displayName: String {
+        guard let label, !label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return name
+        }
+        return label
+    }
 
     /// The three statuses a default install ships with. Compared by name because
     /// the uuids are generated per-server and an admin may add their own.
@@ -380,6 +463,56 @@ public struct StoredPosition: Codable, Hashable, Sendable {
 
 // MARK: - Formats
 
+/// A 3.x cover: the content hash `/api/v2/images/{sha256}` serves it under.
+///
+/// Each format carries its own, because each format has its own art — the
+/// audiobook's is square. The server sends `width`, `height`, `blurhash` and
+/// `colors` beside the hash; decoding ignores them, since drawing a placeholder
+/// from them would be new functionality rather than parity.
+public struct CoverReference: Codable, Hashable, Sendable {
+    public var sha256: String
+
+    // Spelled out rather than synthesised, because the decoder below names them.
+    enum CodingKeys: String, CodingKey {
+        case sha256
+    }
+
+    /// Whether this is 64 lowercase hex characters, which is all the server
+    /// ever writes.
+    ///
+    /// The value is interpolated into a URL path and, by the app, a cache file
+    /// name — the same exposure that makes the catalogue refuse a uuid that is
+    /// not a uuid (`LibraryService.refusingUnsafeIdentifiers`). A reference
+    /// that fails this is treated as absent, not repaired.
+    public var isUsable: Bool {
+        sha256.utf8.count == 64 && sha256.utf8.allSatisfy { byte in
+            (UInt8(ascii: "0") ... UInt8(ascii: "9")).contains(byte)
+                || (UInt8(ascii: "a") ... UInt8(ascii: "f")).contains(byte)
+        }
+    }
+}
+
+// In an extension so the memberwise initialiser survives beside it.
+extension CoverReference {
+    /// Decoded leniently: a `cover` that is not an object with a string
+    /// `sha256` becomes an unusable reference, which every reader of this type
+    /// already treats as no cover at all.
+    ///
+    /// Throwing would not stay local. It would fail the format, the format
+    /// would fail its `Book`, and one book fails the single `[Book]` decode
+    /// behind `LibraryService.allBooks()` — so one reshaped cover would stop
+    /// the whole catalogue refreshing, where 1.2.0 ignored the key and read
+    /// on. beta.40 always sends a string hash, but this client follows a beta
+    /// line, and an unreadable cover already has an answer: the placeholder.
+    /// That is the opposite trade from `FlexibleDate`, which throws because a
+    /// wrong date is silent; a missing cover is visible and costs one image.
+    public init(from decoder: any Decoder) throws {
+        let container = try? decoder.container(keyedBy: CodingKeys.self)
+        // `try?` flattens the doubly-optional decodeIfPresent result.
+        sha256 = (try? container?.decodeIfPresent(String.self, forKey: .sha256)) ?? ""
+    }
+}
+
 public struct EbookFormat: Codable, Hashable, Sendable {
     public var uuid: String
     public var filepath: String?
@@ -391,6 +524,8 @@ public struct EbookFormat: Codable, Hashable, Sendable {
     public var identifiers: [Identifier]
     public var createdAt: FlexibleDate?
     public var updatedAt: FlexibleDate?
+    /// 3.x only, and `null` when the format has no image. See `Book.coverReference(for:)`.
+    public var cover: CoverReference?
 }
 
 public struct AudiobookFormat: Codable, Hashable, Sendable {
@@ -404,6 +539,8 @@ public struct AudiobookFormat: Codable, Hashable, Sendable {
     public var identifiers: [Identifier]
     public var createdAt: FlexibleDate?
     public var updatedAt: FlexibleDate?
+    /// 3.x only: the square art. See `Book.coverReference(for:)`.
+    public var cover: CoverReference?
 }
 
 /// The aligned EPUB: text plus embedded audio plus SMIL media overlays.
@@ -425,6 +562,8 @@ public struct ReadaloudFormat: Codable, Hashable, Sendable {
     public var identifiers: [Identifier]
     public var createdAt: FlexibleDate?
     public var updatedAt: FlexibleDate?
+    /// 3.x only. See `Book.coverReference(for:)`.
+    public var cover: CoverReference?
 
     /// Only an `ALIGNED` readaloud has finished the pipeline; the rest are
     /// mid-flight or failed.
@@ -450,5 +589,54 @@ public extension Book {
     /// disagree about the length of one book.
     var narrationDuration: Double? {
         readaloud?.duration ?? audiobook?.duration
+    }
+
+    /// The 3.x cover for a shape, when the book carries a usable one.
+    ///
+    /// The same choice 3.x's own cover route makes and its web UI draws:
+    /// square is the audiobook's art; portrait is the ebook's, else the
+    /// read-along's — and an unusable ebook reference falls through to the
+    /// read-along's rather than ending the search.
+    ///
+    /// The one place the order is written. `LibraryService.coverData(for:…)`
+    /// fetches by it and `CoverCache` names its files by it, and the two used
+    /// to spell it out separately: a key naming one image while the fetch
+    /// brought back another would file the wrong art under a name that looks
+    /// right for as long as the cache lasts.
+    ///
+    /// nil on 2.x, whose JSON has no `cover` keys, and on a row cached by
+    /// 1.2.0 until the next refresh: `LibraryStore` keeps a re-encoding of
+    /// this struct rather than the server's bytes, so a field this version
+    /// added is absent from every older row.
+    ///
+    /// - Parameter fallback: whether a portrait with no art of its own may be
+    ///   answered with the square art — the uuid route's portrait-to-square
+    ///   404 fallback, decided from the book instead of a round trip. Ignored
+    ///   for a square, which the uuid route never answers with a portrait.
+    func coverReference(
+        for shape: LibraryService.CoverShape, fallback: Bool = false,
+    ) -> CoverReference? {
+        let candidates = switch shape {
+        case .square: [audiobook?.cover]
+        case .portrait: [ebook?.cover, readaloud?.cover] + (fallback ? [audiobook?.cover] : [])
+        }
+        return candidates.lazy.compactMap(\.self).first(where: \.isUsable)
+    }
+
+    /// Whether the book names a usable cover for either shape.
+    ///
+    /// Proof the row came from a 3.x catalogue: 2.x JSON has no `cover` keys,
+    /// and a row cached by 1.2.0 lost them to the re-encoding. So a book that
+    /// names art for one shape and not the other already carries the server's
+    /// answer for the other — 3.x's uuid route chooses exactly as
+    /// `coverReference(for:)` does and 404s where that finds nothing — and
+    /// `LibraryService` gives that answer without asking. Decided from the
+    /// book alone, so it is as right for a row held from before the refresh as
+    /// for a fresh one, whatever detection has or has not said.
+    ///
+    /// An unusable hash names nothing. It is never fetched, so it cannot stand
+    /// for the server having spoken, and such a book is asked for by uuid.
+    var namesAnyCover: Bool {
+        coverReference(for: .portrait) != nil || coverReference(for: .square) != nil
     }
 }

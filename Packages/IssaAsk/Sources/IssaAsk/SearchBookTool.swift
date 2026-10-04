@@ -1,4 +1,4 @@
-#if canImport(FoundationModels)
+#if canImport(FoundationModels) && !os(tvOS)
 import Foundation
 import FoundationModels
 import IssaCore
@@ -96,9 +96,13 @@ public final class SearchBookTool: AskTool, Tool {
         //
         // `allowsFastPath: false`: the model has already been called, and
         // handing it a finished sentence in place of excerpts is not a search
-        // result.
+        // result. `recencyPassages: 0`: the pages just read are already in the
+        // prompt, and a search should return what matched it — without this a
+        // search with one hit came back padded with a recent passage that did
+        // not mention the word at all.
         let retriever = AskRetriever(
             store: store, bookUUID: bookUUID, boundary: boundary, allowsFastPath: false,
+            recencyPassages: 0,
         )
         let retrieval = try? await retriever.retrieve(
             question: arguments.query, limit: Self.passageLimit,

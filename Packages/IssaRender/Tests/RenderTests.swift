@@ -3,6 +3,12 @@ import Foundation
 import IssaEPUB
 import Testing
 
+#if canImport(UIKit)
+import UIKit
+#elseif canImport(AppKit)
+import AppKit
+#endif
+
 @testable import IssaRender
 
 struct HTMLContentParserTests {
@@ -297,6 +303,29 @@ struct FragmentNestingTests {
         #expect(secondAttribute == "pg-header-s1")
     }
 
+    /// The image case returned before the id bookkeeping, so a contents entry
+    /// or an overlay addressed to `<img id>` resolved to nothing.
+    @Test("an id on an image itself is a place in the chapter")
+    func imageIDIsRecorded() throws {
+        let plate = PlatformImage.solid(width: 40, height: 40)
+        let html = Data("""
+        <html xmlns="http://www.w3.org/1999/xhtml"><body>
+        <p>Before.</p><img id="plate-3" src="p.png" alt="A plate"/><p>After.</p>
+        </body></html>
+        """.utf8)
+        let result = try HTMLContentParser(style: ReaderStyle(), loadImage: { _ in plate })
+            .parse(xhtml: html, baseHref: "c.xhtml")
+        let range = try #require(result.fragmentRanges["plate-3"])
+        let string = result.text.string as NSString
+        #expect(string.substring(with: range).hasPrefix("\u{FFFC}"))
+        #expect(
+            result.text.attribute(.issaFragmentID, at: range.location, effectiveRange: nil)
+                as? String == "plate-3")
+        // And nothing else moved: the paragraphs either side are as they were.
+        #expect(!string.substring(with: range).contains("Before"))
+        #expect(!string.substring(with: range).contains("After"))
+    }
+
     @Test("an outer id still covers text no inner span claims")
     func outerIDFillsGaps() throws {
         let html = Data("""
@@ -545,7 +574,7 @@ struct SegmentLineTests {
         let package = try EPUBPackage.open(url: url)
         var found: HTMLContentParser.Result?
         for item in package.spine {
-            let parsed = try HTMLContentParser(style: ReaderStyle(justified: true))
+            let parsed = try HTMLContentParser(style: ReaderStyle(justification: .always))
                 .parse(xhtml: try package.archive.read(item.href), baseHref: item.href)
             if parsed.text.length > 4000 { found = parsed; break }
         }
@@ -681,6 +710,50 @@ struct NamedEntityTests {
         #expect(try parse(input) == expected)
     }
 
+    /// The forty-eight HTML 4.01 names the renderer's own table lacked. Any one
+    /// of them failed the parse under the HTML5 DOCTYPE, so the chapter would
+    /// not open and search and the Ask index skipped it.
+    @Test("the names the old table lacked", arguments: [
+        ("alefsym", 8501), ("and", 8743), ("ang", 8736), ("asymp", 8776), ("circ", 710),
+        ("cong", 8773), ("crarr", 8629), ("dArr", 8659), ("empty", 8709), ("exist", 8707),
+        ("forall", 8704), ("hArr", 8660), ("image", 8465), ("isin", 8712), ("lArr", 8656),
+        ("lang", 9001), ("lceil", 8968), ("lfloor", 8970), ("nabla", 8711), ("ni", 8715),
+        ("notin", 8713), ("nsub", 8836), ("oplus", 8853), ("or", 8744), ("otimes", 8855),
+        ("part", 8706), ("perp", 8869), ("piv", 982), ("prod", 8719), ("prop", 8733),
+        ("rArr", 8658), ("rang", 9002), ("rceil", 8969), ("real", 8476), ("rfloor", 8971),
+        ("sdot", 8901), ("sim", 8764), ("sub", 8834), ("sube", 8838), ("sum", 8721),
+        ("sup", 8835), ("supe", 8839), ("there4", 8756), ("thetasym", 977), ("tilde", 732),
+        ("uArr", 8657), ("upsih", 978), ("weierp", 8472),
+    ])
+    func formerlyMissing(_ name: String, _ code: Int) throws {
+        let expected = String(try #require(Unicode.Scalar(UInt32(code))))
+        #expect(try parse("a &\(name); b") == "a \(expected) b")
+    }
+
+    /// And all of HTML 4.01, in one chapter: the renderer reads IssaEPUB's
+    /// table now rather than keeping a shorter one of its own.
+    @Test("every HTML 4.01 name opens")
+    func everyName() throws {
+        let table = EPUBXML.htmlNamedEntities.sorted { $0.key < $1.key }
+        #expect(table.count == 248)
+        // One chapter, each name between bars, compared name by name in
+        // scalars so a failure says which one.
+        let body = table.map { "&\($0.key);" }.joined(separator: "|")
+        // Split in scalars, not characters: a bar followed by `&zwj;` is one
+        // grapheme, and would not split.
+        let parts = try parse(body).unicodeScalars
+            .split(separator: "|", omittingEmptySubsequences: false)
+        try #require(parts.count == table.count)
+        for ((name, code), part) in zip(table, parts) {
+            let scalar = try #require(Unicode.Scalar(UInt32(code)))
+            // A lone space-like entity is collapsed to a space, as HTML would.
+            let expected = HTMLContentParser.collapseWhitespace(String(scalar))
+            #expect(
+                Array(part) == Array(expected.unicodeScalars),
+                "&\(name); gave \(part.map { String($0.value, radix: 16) })")
+        }
+    }
+
     @Test("the five XML predefined entities are left to the parser")
     func predefinedStillWork() throws {
         #expect(try parse("a &amp; b &lt; c") == "a & b < c")
@@ -780,5 +853,307 @@ struct TallImageTests {
         ).parse(xhtml: xhtml, baseHref: "c.xhtml").text
         let size = try #require(attachmentSize(in: text))
         #expect(size == CGSize(width: 60, height: 60))
+    }
+}
+
+/// What a book's own stylesheet asks for, once the renderer reads one.
+///
+/// The bug these were written for: a reader reported that italics never
+/// appeared, and every italic passage in the book was a `<p class="…">` against
+/// a `font-style: italic` rule — which the renderer did not read. So was the
+/// first-line indent, and so was the justification.
+@Suite("A book's own formatting")
+struct StyledChapterTests {
+    /// The parser with one sheet linked, as a chapter would link it.
+    func parse(
+        _ body: String, css: String, style: ReaderStyle = ReaderStyle(),
+        columnWidth: CGFloat = 320,
+    ) throws -> HTMLContentParser.Result {
+        var sheet = EPUBStyleSheet()
+        sheet.add(css: css)
+        let html = Data("""
+        <html xmlns="http://www.w3.org/1999/xhtml">
+        <head><link rel="stylesheet" type="text/css" href="style.css"/></head>
+        \(body)
+        </html>
+        """.utf8)
+        return try HTMLContentParser(
+            style: style, columnWidth: columnWidth,
+            loadStyleSheet: { $0 == "style.css" ? sheet : nil },
+        ).parse(xhtml: html, baseHref: "c.xhtml")
+    }
+
+    func font(_ result: HTMLContentParser.Result, at index: Int) throws -> PlatformFont {
+        try #require(
+            result.text.attribute(.font, at: index, effectiveRange: nil) as? PlatformFont)
+    }
+
+    func paragraphStyle(_ result: HTMLContentParser.Result, at index: Int) throws -> NSParagraphStyle {
+        try #require(
+            result.text.attribute(.paragraphStyle, at: index, effectiveRange: nil)
+                as? NSParagraphStyle)
+    }
+
+    func isItalic(_ font: PlatformFont) -> Bool {
+        #if canImport(UIKit)
+        font.fontDescriptor.symbolicTraits.contains(.traitItalic)
+        #else
+        font.fontDescriptor.symbolicTraits.contains(.italic)
+        #endif
+    }
+
+    @Test("a class that asks for italic is set in italic")
+    func classItalic() throws {
+        // The reported bug exactly: no <em> anywhere, and the whole paragraph
+        // is meant to be italic.
+        let result = try parse(
+            "<body><p class=\"quiet\">Oh, me?</p></body>", css: ".quiet {font-style: italic}")
+        #expect(isItalic(try font(result, at: 0)))
+    }
+
+    @Test("a paragraph with no rule of its own is left upright")
+    func unstyledParagraph() throws {
+        let result = try parse(
+            "<body><p class=\"quiet\">Quiet.</p><p>Plain.</p></body>",
+            css: ".quiet {font-style: italic}")
+        let plain = (result.text.string as NSString).range(of: "Plain.")
+        #expect(!isItalic(try font(result, at: plain.location)))
+    }
+
+    @Test("emphasis inside a styled paragraph is still emphasis")
+    func inheritedThenTagged() throws {
+        let result = try parse(
+            "<body><p class=\"lead\">A <em>word</em>.</p></body>", css: ".lead {font-weight: bold}")
+        let word = (result.text.string as NSString).range(of: "word")
+        let face = try font(result, at: word.location)
+        #expect(isItalic(face))
+        // Still bold: the class is the paragraph's, and it reaches the <em>
+        // through the same inheritance a browser would give it.
+        #if canImport(UIKit)
+        #expect(face.fontDescriptor.symbolicTraits.contains(.traitBold))
+        #else
+        #expect(face.fontDescriptor.symbolicTraits.contains(.bold))
+        #endif
+    }
+
+    @Test("the body's indent reaches a paragraph that never mentions one")
+    func inheritedIndent() throws {
+        // How a real book indents: one rule on <body>'s class, inherited.
+        let result = try parse(
+            "<body class=\"text\"><p>First.</p><p class=\"flush\">Second.</p></body>",
+            css: ".text {text-indent: 5%} .flush {text-indent: 0}",
+            columnWidth: 400)
+        #expect(try paragraphStyle(result, at: 0).firstLineHeadIndent == 20)
+        let second = (result.text.string as NSString).range(of: "Second.")
+        #expect(try paragraphStyle(result, at: second.location).firstLineHeadIndent == 0)
+    }
+
+    @Test("an indent is measured from the column, not from a quotation's margin")
+    func indentInsideBlockquote() throws {
+        let result = try parse(
+            "<body class=\"text\"><blockquote><p>Quoted.</p></blockquote></body>",
+            css: ".text {text-indent: 5%}", columnWidth: 400)
+        let paragraph = try paragraphStyle(result, at: 0)
+        // The quotation's own indent still applies to every line; the book's
+        // first-line indent is added to it rather than replacing it.
+        #expect(paragraph.headIndent > 0)
+        #expect(paragraph.firstLineHeadIndent == paragraph.headIndent + 20)
+    }
+
+    @Test("the reader can overrule the book's justification, but not its centring")
+    func justificationPolicy() throws {
+        let body = """
+        <body class="text"><p>Running text.</p><p class="epigraph">An epigraph.</p></body>
+        """
+        let css = ".text {text-align: justify} .epigraph {text-align: center}"
+        let epigraph = "An epigraph."
+
+        for (setting, expected) in [
+            (ReaderStyle.Justification.followBook, NSTextAlignment.justified),
+            (.never, .natural),
+            (.always, .justified),
+        ] {
+            let result = try parse(body, css: css, style: ReaderStyle(justification: setting))
+            #expect(try paragraphStyle(result, at: 0).alignment == expected, "\(setting)")
+            // Centring is structure, not taste: it survives every setting.
+            let centred = (result.text.string as NSString).range(of: epigraph)
+            #expect(try paragraphStyle(result, at: centred.location).alignment == .center)
+        }
+    }
+
+    /// `.never` used to answer `nil` for a justified paragraph, which means
+    /// "nothing to say" — so the paragraph inherited a centred parent's
+    /// alignment and a body paragraph on a title page was centred line by line.
+    @Test("under Never, justification nested in a centred element is natural", arguments: [
+        "center", "right",
+    ])
+    func neverInsideCentred(_ outer: String) throws {
+        let result = try parse(
+            "<body><div class=\"c\"><p class=\"j\">Body text.</p></div></body>",
+            css: ".c {text-align: \(outer)} .j {text-align: justify}",
+            style: ReaderStyle(justification: .never))
+        #expect(try paragraphStyle(result, at: 0).alignment == .natural)
+    }
+
+    /// Inline `style=` used to be read only when the chapter's sheet had at
+    /// least one rule, so the same markup rendered styled in one book and plain
+    /// in another. Both shapes the reader hands the parser: no loader at all,
+    /// and a loader whose sheets have nothing in them (`@page` only, margins
+    /// only — what a word-processor export links).
+    @Test("an inline style is honoured when the book has no stylesheet rules", arguments: [
+        false, true,
+    ])
+    func inlineStyleWithoutRules(_ withEmptySheet: Bool) throws {
+        let empty = EPUBStyleSheet()
+        let head = withEmptySheet
+            ? "<head><link rel=\"stylesheet\" type=\"text/css\" href=\"style.css\"/></head>" : ""
+        let html = Data("""
+        <html xmlns="http://www.w3.org/1999/xhtml">\(head)<body>
+        <p style="text-align:center">Centred.</p><p>Plain <span style="font-style:italic">slanted</span> text.</p>
+        </body></html>
+        """.utf8)
+        let result = try HTMLContentParser(
+            style: ReaderStyle(),
+            loadStyleSheet: withEmptySheet ? { _ in empty } : nil,
+        ).parse(xhtml: html, baseHref: "c.xhtml")
+        #expect(try paragraphStyle(result, at: 0).alignment == .center)
+        let slanted = (result.text.string as NSString).range(of: "slanted")
+        #expect(isItalic(try font(result, at: slanted.location)))
+        let plain = (result.text.string as NSString).range(of: "Plain")
+        #expect(!isItalic(try font(result, at: plain.location)))
+    }
+
+    @Test("a book's font-size sizes the type without making a heading of it")
+    func relativeSize() throws {
+        let plain = try parse("<body><p>Plain.</p></body>", css: "")
+        let larger = try parse(
+            "<body><p class=\"big\">Plain.</p></body>", css: ".big {font-size: 1.3em}")
+        #expect(try font(larger, at: 0).pointSize == font(plain, at: 0).pointSize * 1.3)
+        // The leading and the gap beneath belong to headings, and this is not
+        // one — the test that used to decide it was `sizeScale > 1.2`.
+        #expect(
+            try paragraphStyle(larger, at: 0).lineHeightMultiple
+                == paragraphStyle(plain, at: 0).lineHeightMultiple)
+        #expect(
+            try paragraphStyle(larger, at: 0).paragraphSpacing
+                == paragraphStyle(plain, at: 0).paragraphSpacing)
+    }
+
+    /// Nesting compounds, so a book can reach an enormous size without ever
+    /// declaring one — and a line taller than the page cannot be paged through.
+    @Test("a book cannot set its text larger than the page can carry")
+    func sizeIsBounded() throws {
+        let plain = try parse("<body><p>Plain.</p></body>", css: "")
+        let nested = try parse(
+            "<body class=\"big\"><div class=\"big\"><p class=\"big\">Plain.</p></div></body>",
+            css: ".big {font-size: 2em}")
+        let base = try font(plain, at: 0).pointSize
+        #expect(try font(nested, at: 0).pointSize == base * HTMLContentParser.maximumFontScale)
+    }
+
+    @Test("a chapter with no stylesheet renders as it always did")
+    func noStyleSheet() throws {
+        let html = Data("""
+        <html xmlns="http://www.w3.org/1999/xhtml"><body>
+        <p class="quiet">Oh, me?</p>
+        </body></html>
+        """.utf8)
+        let result = try HTMLContentParser(style: ReaderStyle())
+            .parse(xhtml: html, baseHref: "c.xhtml")
+        #expect(result.text.string == "Oh, me?")
+        #expect(!isItalic(try font(result, at: 0)))
+    }
+
+    /// The rendered *string* must not depend on styling: every Ask passage
+    /// offset, every spoiler boundary and every saved highlight is measured in
+    /// it, and the indexer parses without a stylesheet while the page parses
+    /// with one. `IndexOffsetTests` holds the other end of this.
+    @Test("a stylesheet changes how a chapter looks and never what it says")
+    func styleDoesNotMoveCharacters() throws {
+        let body = """
+        <body class="text"><h1>One</h1><p class="quiet">Oh, me?</p>
+        <p>Plain <em>enough</em>.</p></body>
+        """
+        let css = """
+        .text {text-align: justify; text-indent: 5%}
+        .quiet {font-style: italic}
+        h1 {font-size: 1.1em}
+        """
+        #expect(try parse(body, css: css).text.string == parse(body, css: "").text.string)
+    }
+}
+
+/// The whitespace between two blocks, which is not content.
+@Suite("Pretty-printed markup")
+struct BlockWhitespaceTests {
+    func parse(_ html: String) throws -> String {
+        try HTMLContentParser(style: ReaderStyle())
+            .parse(xhtml: Data(html.utf8), baseHref: "c.xhtml").text.string
+    }
+
+    /// The shipped bug, visible in the reader as a stray space before every
+    /// paragraph but the first.
+    @Test("a newline between two paragraphs is not a space")
+    func betweenBlocks() throws {
+        let text = try parse("""
+        <html xmlns="http://www.w3.org/1999/xhtml"><body>
+        <p>First.</p>
+        <p>Second.</p>
+        </body></html>
+        """)
+        #expect(text == "First.\nSecond.")
+    }
+
+    @Test("nor is a newline inside the paragraph's own opening")
+    func insideTheBlock() throws {
+        // The other half: source that wraps the opening tag onto its own line.
+        let text = try parse("""
+        <html xmlns="http://www.w3.org/1999/xhtml"><body>
+        <p>
+          First.
+        </p>
+        <p>
+          Second.
+        </p>
+        </body></html>
+        """)
+        #expect(text == "First. \nSecond.")
+    }
+
+    @Test("a space between two inline elements is content and stays")
+    func betweenInlines() throws {
+        let text = try parse("""
+        <html xmlns="http://www.w3.org/1999/xhtml"><body>
+        <p><span>One</span> <span>two</span> <em>three</em></p>
+        </body></html>
+        """)
+        #expect(text == "One two three")
+    }
+
+    @Test("a preformatted block keeps every space it was given")
+    func preformatted() throws {
+        // A paragraph first, because the whole chapter's leading whitespace is
+        // trimmed at the end of the parse — which would eat the indentation
+        // this is about if the <pre> opened the document.
+        let text = try parse(
+            "<html xmlns=\"http://www.w3.org/1999/xhtml\"><body>\n<p>Before.</p>\n"
+                + "<pre>  indented\n  again</pre>\n</body></html>")
+        #expect(text.contains("  indented\n  again"))
+    }
+
+    @Test("no paragraph in a real chapter opens with a space")
+    func realChapter() throws {
+        let package = try EPUBPackage.open(url: HTMLContentParserTests.fixture("alice"))
+        for item in package.spine.prefix(6) {
+            guard let data = try? package.archive.read(item.href),
+                  // Alice sets her shaped verse — the Mouse's Tale, the address
+                  // on the parcel of boots — in <pre>, whose indentation is the
+                  // point of it and is preserved on purpose.
+                  !(String(data: data, encoding: .utf8) ?? "").contains("<pre")
+            else { continue }
+            let text = try HTMLContentParser(style: ReaderStyle())
+                .parse(xhtml: data, baseHref: item.href).text.string
+            #expect(!text.contains("\n "), "\(item.href) opens a line with a space")
+        }
     }
 }

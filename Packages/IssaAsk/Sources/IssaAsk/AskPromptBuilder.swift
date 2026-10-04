@@ -72,9 +72,10 @@ public enum AskPromptBuilder {
         /// whatever the framework adds around a prompt. Cheap insurance: the
         /// cost of being wrong is a full retry, several seconds each.
         public static let margin = 256
-        /// The ceiling on passages regardless of what is left over, so a bigger
-        /// context window in a later OS does not silently start sending a
-        /// quarter of the book.
+        /// The ceiling on passages at the window this was measured on, and the
+        /// number `passageCeiling(contextSize:hasTool:)` grows from — to at
+        /// most twice this, so a bigger window in a later OS does not silently
+        /// start sending a quarter of the book.
         ///
         /// Raised with the excerpt count, and it had to be: fifteen 90-word
         /// excerpts are about 7,530 characters, which the cheap `/3.6` pass
@@ -93,6 +94,24 @@ public enum AskPromptBuilder {
         /// `.tooMuchContext` retry. If that shows up, the levers are
         /// `SearchBookTool.tokenCap` and its call limit, in that order.
         public static let passageCeilingWithTool = 2_400
+        /// The window both ceilings were measured against: the on-device
+        /// model's 4,096 tokens, which every device running 26 reports.
+        public static let tunedContextSize = 4_096
+        /// The ceiling for a window this size.
+        ///
+        /// Exactly `passageCeiling` or `passageCeilingWithTool` at 4,096, so a
+        /// 26 device packs the prompt it packed yesterday, and every token past
+        /// that goes to passages — up to twice the tuned ceiling. The cap is
+        /// deliberate: the excerpt count grows with this number
+        /// (`AskRetriever.Limits.excerpts(for:)`), twenty excerpts is the most
+        /// any trial has scored, and past thirty nobody has measured whether
+        /// more is better. A smaller window than 4,096 is not shrunk here; the
+        /// subtraction in `build` already handles that.
+        public static func passageCeiling(contextSize: Int, hasTool: Bool) -> Int {
+            let tuned = hasTool ? passageCeilingWithTool : passageCeiling
+            let extra = max(0, contextSize - tunedContextSize)
+            return min(tuned * 2, tuned + extra)
+        }
         /// Characters per token. Measured against English prose with the
         /// on-device tokeniser; used only to avoid asking the model to count
         /// something obviously far too large.
@@ -144,7 +163,7 @@ public enum AskPromptBuilder {
         hasTool: Bool,
         tokenCount: TokenCounter,
     ) async -> Built {
-        let ceiling = hasTool ? Budget.passageCeilingWithTool : Budget.passageCeiling
+        let ceiling = Budget.passageCeiling(contextSize: contextSize, hasTool: hasTool)
         let instructionTokens = (try? await tokenCount(instructions))
             ?? estimatedTokens(instructions)
         let emptyFrame = frame(question: question, excerpts: "")

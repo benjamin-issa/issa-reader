@@ -29,9 +29,17 @@ public actor TokenStore: TokenProviding {
 
     public func currentToken() async -> String? { token }
 
-    public func set(_ newToken: String) {
+    /// Holds a new token, and says whether it reached storage.
+    ///
+    /// A token storage refused is not held either. Memory mirrors storage, so
+    /// `hasToken` never vouches for a credential the next launch will not
+    /// find; what a refusal means is the caller's to decide, and `Session`
+    /// fails the sign-in on it rather than reporting one that will not last.
+    @discardableResult
+    public func set(_ newToken: String) -> Bool {
+        guard keychain.write(newToken, account: serverKey) else { return false }
         token = newToken
-        keychain.write(newToken, account: serverKey)
+        return true
     }
 
     /// Called on any 401. Drops the token so the UI can prompt for a new sign-in;
@@ -41,11 +49,29 @@ public actor TokenStore: TokenProviding {
     /// and the server offers no refresh, so every install reaches this path
     /// eventually. Announcing it is the difference between "sign in again" and
     /// an app where nothing loads and nothing says why.
+    ///
+    /// Returns nothing because it is `TokenProviding`'s requirement, which
+    /// every request path and test double shares; a refused delete is logged
+    /// here instead. `forget()` is the path that reports one.
     public func invalidate() async {
         guard token != nil else { return }
         token = nil
-        keychain.delete(account: serverKey)
+        if !keychain.delete(account: serverKey) {
+            IssaLog.error("rejected token could not be deleted", ["server": serverKey])
+        }
         onInvalidated?()
+    }
+
+    /// Drops the token on purpose — signing out — and says whether storage
+    /// confirmed it gone.
+    ///
+    /// Unlike `invalidate()`, it asks storage even when nothing is held in
+    /// memory (a 401 may have dropped the token over a delete that failed),
+    /// and it announces nothing: a sign-out is not an expiry.
+    @discardableResult
+    public func forget() -> Bool {
+        token = nil
+        return keychain.delete(account: serverKey)
     }
 
     public var hasToken: Bool { token != nil }

@@ -242,11 +242,17 @@ public enum HTMLText {
     }
 
     /// Collapses runs of whitespace, the way a browser lays out HTML.
+    ///
+    /// Except the non-breaking spaces, which a browser collapses no more than
+    /// it would a letter. `Character.isWhitespace` is true for them, so
+    /// `Vol.&nbsp;II` became a space a line could break at, and a leading run
+    /// of `&nbsp;` — a description's own indent — collapsed to one space that
+    /// the leading trim then removed.
     private static func collapse(_ text: String) -> String {
         var out = ""
         var lastWasSpace = false
         for character in text {
-            let isSpace = character.isWhitespace
+            let isSpace = character.isWhitespace && !nonBreaking.contains(character)
             if isSpace {
                 if !lastWasSpace { out.append(" ") }
             } else {
@@ -256,6 +262,12 @@ public enum HTMLText {
         }
         return out
     }
+
+    /// The spaces that mean "do not break here", which collapsing must keep.
+    private static let nonBreaking: Set<Character> = [
+        "\u{00A0}", // no-break space, `&nbsp;`
+        "\u{202F}", // narrow no-break space
+    ]
 
     /// Decodes the entity forms that actually appear in book metadata.
     ///
@@ -296,13 +308,15 @@ public enum HTMLText {
             }
             return value.flatMap(Unicode.Scalar.init).map(Character.init)
         }
-        return named[name.lowercased()]
+        // All of HTML's names, the table the chapters decode with, and
+        // case-sensitive as HTML is: a table of nineteen looked up in lower
+        // case left `&ntilde;` raw and made `&Eacute;mile` "émile".
+        if let character = HTMLEntities.character(named: name) { return character }
+        // `&AMP;` and `&QUOT;` are how some feeds write XML's five, and they
+        // always decoded here.
+        let lower = name.lowercased()
+        return Self.caseInsensitive.contains(lower) ? HTMLEntities.character(named: lower) : nil
     }
 
-    private static let named: [String: Character] = [
-        "amp": "&", "lt": "<", "gt": ">", "quot": "\"", "apos": "'",
-        "nbsp": "\u{00A0}", "mdash": "—", "ndash": "–", "hellip": "…",
-        "lsquo": "‘", "rsquo": "’", "ldquo": "“", "rdquo": "”",
-        "copy": "©", "reg": "®", "trade": "™", "deg": "°", "eacute": "é",
-    ]
+    private static let caseInsensitive: Set<String> = ["amp", "lt", "gt", "quot", "apos"]
 }

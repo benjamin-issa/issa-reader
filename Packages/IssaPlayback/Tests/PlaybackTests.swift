@@ -207,13 +207,21 @@ struct CommandMapTests {
         #expect(map.usesTrackCommands(on: .headphones))
     }
 
+    /// A binding the migration *would* move, chosen on purpose: the wheel's
+    /// "next" on the phone set to next chapter, which is its legacy value and
+    /// which `migrated` strips back to nothing. The tap control this used to
+    /// bind was not on its legacy value, so it survived whether or not the
+    /// version gate ran, and the gate went untested.
     @Test("a map already on the current version is not migrated again")
     func doesNotRemigrate() throws {
         var map = CommandMap()
-        map.bind(.nextChapter, to: .tapForward, on: .phone)
+        map.bind(.nextChapter, to: .wheelNext, on: .phone)
+        #expect(CommandMap.migrated(map.bindings)[.phone]?[.wheelNext] == nil,
+                "the binding has to be one a migration would remove, or this proves nothing")
         let decoded = try JSONDecoder().decode(
             CommandMap.self, from: JSONEncoder().encode(map))
-        #expect(decoded.action(for: .tapForward, on: .phone) == .nextChapter)
+        #expect(decoded.action(for: .wheelNext, on: .phone) == .nextChapter,
+                "a reader's own wheel binding was stripped on relaunch")
     }
 }
 
@@ -345,11 +353,17 @@ struct RemoteCommandRegistrationTests {
 
     /// Leaves no enabled commands behind for a later test — or a later run — to
     /// trip over.
+    ///
+    /// The skip pair too: they are enabled in a fresh process and nothing else
+    /// ever turns them off, so without this the assertions that `activate()`
+    /// enables them held whether or not it did.
     static func reset() {
         let remote = RemoteCommandCenter()
         remote.tearDown()
         center.nextTrackCommand.isEnabled = false
         center.previousTrackCommand.isEnabled = false
+        center.skipForwardCommand.isEnabled = false
+        center.skipBackwardCommand.isEnabled = false
     }
 
     @Test("by default the system draws the skip buttons, not the track buttons")
@@ -468,6 +482,50 @@ struct ReadalongCoordinatorTests {
         return (ReadalongCoordinator(timeline: timeline, audioFiles: files), timeline, directory)
     }
 
+    /// The clock is allowed to jitter; it is not allowed to turn the page back.
+    ///
+    /// `SMIL.entry(inFile:at:)` is a half-open search, so a sample one frame
+    /// before the active sentence resolves to the sentence *before* it. Seek
+    /// targets used to quantise below the sentence they named — `CMTime` rounds
+    /// to nearest, and a sentence rarely begins on an exact 1/600 s — so this
+    /// fired after an ordinary tap: the highlight stepped back one, and where
+    /// the sentence before belonged to the previous document the reader's page
+    /// turned back and the sleep timer was told a chapter had ended.
+    @Test("a tick a hair before the current sentence does not step back")
+    func anEarlyTickDoesNotStepBack() async throws {
+        let (subject, timeline, directory) = try Self.make()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        // Any sentence with one before it inside the same audio file: that is
+        // what an early sample can resolve to.
+        let entries = timeline.entries
+        let index = try #require(
+            entries.indices.dropFirst().first { i in
+                entries[i].audioHref == entries[i - 1].audioHref
+            },
+            "the fixture needs two sentences in one audio file")
+
+        await subject.play(from: entries[index])
+        // Take the clock, then drive exactly one tick by hand.
+        // Required, not optional: an absent clock made the tick below a no-op,
+        // and every assertion after it held on the untouched state.
+        let tick = try #require(subject.player.onTimeUpdate)
+        subject.player.onTimeUpdate = nil
+        subject.player.rate = 0
+        var fragments: [String] = []
+        var chapters: [String] = []
+        var endings = 0
+        subject.onFragmentChange = { fragments.append($0) }
+        subject.onChapterChange = { chapters.append($0) }
+        subject.onChapterChangeObserved = { endings += 1 }
+
+        tick(entries[index].start - 0.0005)
+
+        #expect(subject.activeEntry?.fragmentID == entries[index].fragmentID)
+        #expect(fragments.isEmpty, "the highlight moved backwards")
+        #expect(chapters.isEmpty, "the page turned backwards")
+        #expect(endings == 0, "a chapter that did not end was reported as ended")
+    }
+
     /// An end-of-chapter sleep timer pauses inside `onChapterChangeObserved`.
     /// The first version of the end-of-file guard latched `isPlaying` *before*
     /// `move(to:)`, then called `play()` after the callback — undoing the pause
@@ -492,23 +550,26 @@ struct ReadalongCoordinatorTests {
             "the fixture needs a chapter boundary that is also a file boundary")
         await subject.play(from: entries[index])
         #expect(subject.player.isPlaying)
-        // The test owns the clock from here. `play(from:)` starts genuine
-        // playback of a short fixture file, and two things then race the
-        // manual end-of-file below: the periodic observer's first tick can
-        // report a time a hair *before* the entry's start — seek tolerance —
-        // and `advance(to:)` then moves `activeEntry` back one sentence, so
-        // the advance seeks within the file instead of loading the next one
-        // and no chapter callback fires; and the real
-        // `AVPlayerItemDidPlayToEndTime` can arrive on its own and run a
-        // second advance. Both happened; the first version of this test was
-        // green twice and red the third time. Silencing the observer and
-        // freezing the underlying player leaves `isPlaying` — the intent flag
-        // the guard reads — true, with nothing else able to move.
+        // The test owns the clock from here, and deliberately not before it.
+        // A tick that arrives between the play and the freeze is the product
+        // path this file's own fix is about: one reporting a hair *before* the
+        // entry's start used to step `activeEntry` back a sentence, so the
+        // advance below seeked inside the file instead of loading the next one
+        // and no chapter callback fired. Freezing first would hide that, which
+        // is exactly what a previous version of this test did. The seek now
+        // rounds up and `advance(to:)` refuses a micro-step backwards, so the
+        // race is gone and the honest ordering is safe again.
         subject.player.onTimeUpdate = nil
         subject.player.rate = 0
         #expect(subject.player.isPlaying, "freezing the rate must not read as a pause")
+        try #require(subject.activeEntry?.fragmentID == entries[index].fragmentID,
+                     "a tick between the play and the freeze moved the sentence")
 
-        subject.onChapterChangeObserved = { subject.player.pause() }
+        var reported = false
+        subject.onChapterChangeObserved = {
+            reported = true
+            subject.player.pause()
+        }
         subject.player.onFinishedFile?()
         // The advance hops through a Task and then awaits a real
         // `AVURLAsset.load(.duration)`. Under a parallel full-suite run that
@@ -516,13 +577,21 @@ struct ReadalongCoordinatorTests {
         // on "the advance did not happen" after passing twice in isolation — a
         // flake that shipped in a commit claiming the suite green. Bounded at
         // ten seconds and asserted separately, so a timeout reads as a timeout.
+        //
+        // Waited for the callback, not for `activeEntry`: `move(to:)` publishes
+        // the entry *before* it awaits the load, so the entry changes while the
+        // advance is still in flight, and under the 27 SDK the load outlasts
+        // one poll below — the test then read `isPlaying` before the pause it
+        // was asserting had been given the chance to happen. The guard that
+        // decides whether to resume runs in the same synchronous stretch as
+        // the callback, so once it has been reported the decision is made.
         let deadline = ContinuousClock.now + .seconds(10)
-        while subject.activeEntry?.fragmentID == entries[index].fragmentID,
-              ContinuousClock.now < deadline {
+        while !reported, ContinuousClock.now < deadline {
             try? await Task.sleep(for: .milliseconds(20))
         }
+        try #require(reported, "the chapter ending was not reported within ten seconds")
         try #require(subject.activeEntry?.fragmentID != entries[index].fragmentID,
-                     "the advance did not complete within ten seconds")
+                     "the advance did not move off the ended sentence")
 
         #expect(subject.activeEntry?.textHref == entries[index + 1].textHref, "the advance landed in the wrong document")
         #expect(subject.player.isPlaying == false,
@@ -755,6 +824,142 @@ struct ReadalongCoordinatorTests {
         #expect(seen.progress > 0, "and the scrubber has already been told")
         #expect(turned.contains(places.destination.textHref),
                 "and the page turned, rather than being lost to a mid-move sample")
+    }
+
+    /// An extracted file that has gone from disk since — the book removed, the
+    /// extraction torn. The map still names it, so the move went ahead, the
+    /// load reported success and `play(from:)` pressed play over silence.
+    @Test("a sentence whose file will not open does not start playing")
+    func aFileThatWillNotOpenDoesNotPlay() async throws {
+        let (timeline, _) = try ReadalongLookupTests.timeline()
+        let missing = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appending(path: "issa-missing-narration-\(UUID().uuidString).mp3")
+        let files = Dictionary(uniqueKeysWithValues: Set(timeline.entries.map(\.audioHref)).map {
+            ($0, missing)
+        })
+        let subject = ReadalongCoordinator(timeline: timeline, audioFiles: files)
+        subject.player.onTimeUpdate = nil
+        let first = try #require(timeline.entries.first)
+
+        let played = await subject.play(from: first)
+
+        #expect(played == false, "a file that would not open was reported as played")
+        #expect(subject.player.isPlaying == false)
+    }
+
+    /// Two moves in a burst, the second into the file the first is opening: a
+    /// held remote button, a sentence tapped while the next file loads.
+    ///
+    /// The first move's load had set the player's file before it awaited
+    /// AVFoundation, so the second move took the same-file branch and seeked.
+    /// Then the load woke up, still the newest *load*, and ran its trailing
+    /// seek over the newer one: the audio sat at the first target while the
+    /// highlight, the scrubber and the position writer all said the second.
+    ///
+    /// Enqueued on the main actor before the first move begins, so it runs at
+    /// that move's own suspension inside AVFoundation — the window the race
+    /// lives in, as `aMidMoveSampleIsNotAChapterEnding` arranges its sample.
+    @Test("a seek made while a load is opening its file owns the playhead")
+    func aSeekDuringALoadOwnsThePlayhead() async throws {
+        let (timeline, _) = try ReadalongLookupTests.timeline()
+        // The fixture's own audio is a tenth of a second long, so a seek to a
+        // clip time would land on its end; a file long enough to hold every
+        // clip lets the engine go where it is sent, and be checked there.
+        let files = Dictionary(uniqueKeysWithValues: Set(timeline.entries.map(\.audioHref)).map {
+            ($0, SilentAudio.url)
+        })
+        let subject = ReadalongCoordinator(timeline: timeline, audioFiles: files)
+        subject.player.onTimeUpdate = nil
+        subject.player.onFinishedFile = nil
+        let entries = timeline.entries
+        // Two sentences of one file, neither at its very start — a load resets
+        // the clock to zero, so a target of zero could not tell the seek from
+        // nothing — and the first well into it, so its load has a trailing
+        // seek of its own to run.
+        let first = try #require(entries.last { $0.audioHref == entries[0].audioHref })
+        let second = try #require(
+            entries.first { $0.audioHref == first.audioHref && $0.start > 0 && $0 != first })
+        try #require(first.start > 0 && second.start != first.start)
+
+        let racing = Task { @MainActor in await subject.prepare(at: second) }
+        await subject.prepare(at: first)
+        await racing.value
+
+        #expect(subject.activeEntry == second, "the second move published last")
+        #expect(abs(subject.player.currentTime - second.start) < 0.01,
+                "the clock is at \(subject.player.currentTime), not at the sentence the highlight names")
+        #expect(abs(subject.player.engineTime - second.start) < 0.01,
+                "the audio is at \(subject.player.engineTime), not at the sentence the highlight names")
+    }
+
+    /// A document the timeline visits twice — a spine that comes back to a
+    /// page, or an overlay whose pars point into another document — is two
+    /// places, and the chapter commands have to move from the one the listener
+    /// is in. They looked the document up by its first run, so "next" from the
+    /// second visit went back to the document after the *first* one.
+    ///
+    ///      0  a-s0  OEBPS/a.xhtml   track1  0–5
+    ///      1  b-s0  OEBPS/b.xhtml   track1  5–10
+    ///      2  a-s1  OEBPS/a.xhtml   track1  10–15   the second run of a
+    ///      3  c-s0  OEBPS/c.xhtml   track2a 0–5
+    @Test("the chapter commands move between runs of a document, not between documents")
+    func chapterCommandsMoveBetweenRuns() async throws {
+        let shapes = ReadalongV3ShapesTests.self
+        let timeline = shapes.narration([
+            ("a-s0", "OEBPS/a.xhtml", shapes.track1, 0, 5, false),
+            ("b-s0", "OEBPS/b.xhtml", shapes.track1, 5, 10, false),
+            ("a-s1", "OEBPS/a.xhtml", shapes.track1, 10, 15, false),
+            ("c-s0", "OEBPS/c.xhtml", shapes.track2, 0, 5, false),
+        ])
+        let (subject, directory) = try shapes.make(timeline)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        // The commands play from where they land; neither the real clock nor a
+        // real end of file may move the entry before it is looked at.
+        subject.player.onTimeUpdate = nil
+        subject.player.onFinishedFile = nil
+        let entries = timeline.entries
+        let map = CommandMap()
+
+        #expect(await subject.prepare(at: entries[2]))
+        await subject.perform(.nextChapter, using: map)
+        #expect(subject.activeEntry == entries[3], "next from the second visit to a is c, not b")
+
+        #expect(await subject.prepare(at: entries[2]))
+        await subject.perform(.previousChapter, using: map)
+        #expect(subject.activeEntry == entries[1], "previous from the second visit to a is b")
+
+        #expect(await subject.prepare(at: entries[1]))
+        await subject.perform(.nextChapter, using: map)
+        #expect(subject.activeEntry == entries[2], "next from b is the second visit to a, not the first")
+    }
+
+    /// A sentence id two chapters share — legal, and what an aligner other
+    /// than Storyteller's writes. A tap in chapter twelve resolved by id alone
+    /// and played chapter one. The reader's routes switch to this call once
+    /// it exists; this is the call.
+    @Test("a sentence id two chapters share plays in the chapter that named it")
+    func aSharedIDPlaysInTheChapterThatNamedIt() async throws {
+        let shapes = ReadalongV3ShapesTests.self
+        let timeline = shapes.narration([
+            ("s5", "OEBPS/ch01.xhtml", shapes.track1, 0, 5, false),
+            ("s5", "OEBPS/ch12.xhtml", shapes.track2, 0, 5, false),
+        ])
+        let (subject, directory) = try shapes.make(timeline)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        subject.player.onTimeUpdate = nil
+        subject.player.onFinishedFile = nil
+        var seeks = 0
+        subject.onSeek = { seeks += 1 }
+
+        await subject.seek(toFragment: "s5", inDocument: "OEBPS/ch12.xhtml")
+        #expect(subject.activeEntry == timeline.entries[1], "chapter one's s5 played instead")
+        #expect(seeks == 1)
+
+        // A document that does not narrate it names nowhere, and moves nothing.
+        await subject.seek(toFragment: "s5", inDocument: "OEBPS/ch09.xhtml")
+        #expect(subject.activeEntry == timeline.entries[1])
+        #expect(seeks == 1)
+        subject.player.pause()
     }
 
     /// The one ending that is real still gets through. `advanceToNextFile`

@@ -41,14 +41,9 @@ public actor AskEngine {
     /// `false` — including from the test written to prove the seed works.
     private let usesNucleusSampling: Bool
 
-    /// - Parameter tools: the `searchBook` tool, or nothing.
-    ///
-    ///   It is a constructor argument rather than a constant so it can be
-    ///   switched off with one flag: the 3B model is only moderately reliable at
-    ///   deciding when to search, and every round trip is another three to six
-    ///   seconds on a phone. If the measurement goes against it, this is the
-    ///   line that changes — and the engine is otherwise identical with and
-    ///   without it, which is what makes the comparison worth anything.
+    /// - Parameter tools: the `searchBook` tool, or nothing. The app's engine
+    ///   is built by `forQuestion(model:store:bookUUID:boundary:turnstile:)`,
+    ///   which decides; this parameter is how a test builds one without it.
     /// - Parameter turnstile: the process's one turn at the on-device model.
     ///   Defaulted so a test that only cares about one question writes nothing,
     ///   and so an engine on its own behaves exactly as it did; the app passes
@@ -71,6 +66,41 @@ public actor AskEngine {
         self.tools = tools
         self.turnstile = turnstile
         self.usesNucleusSampling = usesNucleusSampling
+    }
+
+    // MARK: - The app's engine
+
+    /// Whether the model is offered the `searchBook` tool.
+    ///
+    /// On, as 1.3.0 shipped it, by the reader's decision in 1.4.0. The 1.4.0
+    /// Ask review measured the 27 model calling it 0 times in 180 asks once
+    /// the prompt carried the excerpts, at about half a second's cost before
+    /// the first word; it stays as the model's way to look further when the
+    /// excerpts fall short. This is the one line that turns it off.
+    public static let usesSearchTool = true
+
+    /// The engine a reader's question is answered by — the one place it is
+    /// built, so the app and `RegressionRun` cannot drift apart again. Until
+    /// 1.4.0 the app registered the tool and the regression suite did not, so
+    /// the suite measured a configuration no reader was answered with.
+    ///
+    /// Per question, because the tool captures the book and the boundary,
+    /// which is what makes it unable to reach past the reader whatever the
+    /// model asks for.
+    public static func forQuestion(
+        model: any AnswerModel,
+        store: AskIndexStore,
+        bookUUID: String,
+        boundary: ReadingBoundary,
+        turnstile: AskTurnstile = AskTurnstile(),
+    ) -> AskEngine {
+        var tools: [any AskTool] = []
+        #if canImport(FoundationModels) && !os(tvOS)
+        if usesSearchTool {
+            tools = [SearchBookTool(store: store, bookUUID: bookUUID, boundary: boundary)]
+        }
+        #endif
+        return AskEngine(model: model, store: store, tools: tools, turnstile: turnstile)
     }
 
     // MARK: - Index
@@ -187,7 +217,11 @@ public actor AskEngine {
             store: store, bookUUID: source.bookUUID, boundary: boundary,
             allowsFastPath: Self.usesKinshipFastPath,
         )
-        let retrieval = try await retriever.retrieve(question: question)
+        // Fifteen on the window the number was measured against, more on a
+        // larger one: the builder packs to the ceiling, and the ceiling grows.
+        let retrieval = try await retriever.retrieve(
+            question: question, limit: AskRetriever.Limits.excerpts(for: model.contextSize),
+        )
         let sanitised = QueryTerms.sanitise(question)
 
         switch retrieval {
@@ -226,7 +260,6 @@ public actor AskEngine {
                         answer, among: Self.numbered(evidence.map(\.passage)),
                         priorities: Self.priorities(of: evidence),
                     ),
-                    question: sanitised,
                     bookUUID: source.bookUUID, boundary: boundary,
                 ),
             ))
@@ -239,14 +272,12 @@ public actor AskEngine {
                 options: generationOptions(
                     question: sanitised, bookUUID: source.bookUUID, boundary: boundary,
                 ),
+                bookUUID: source.bookUUID, boundary: boundary,
                 into: continuation,
             )
             try Task.checkCancellation()
             continuation.yield(.answered(
-                try await vetted(
-                    generated, question: sanitised,
-                    bookUUID: source.bookUUID, boundary: boundary,
-                ),
+                try await vetted(generated, bookUUID: source.bookUUID, boundary: boundary),
             ))
         }
     }
@@ -357,9 +388,17 @@ public actor AskEngine {
     /// the answer is held to the same test the question is: every name in it
     /// must be a name the book has already used.
     ///
-    /// Words already in the question are exempt, because the question-side
-    /// guard has ruled on those. A word that merely begins a sentence is exempt
-    /// only when it is a function word — see `unvettedNames`.
+    /// **Nothing is exempt for being in the question.** Words already in the
+    /// question used to be, on the premise that the question-side guard had
+    /// ruled on them — but that guard never probed a recap-shaped question, a
+    /// second sentence or a name in lower case, so "What has happened to the
+    /// Cheshire Cat?", "Who is Alice? Does she ever meet the Cheshire Cat?" and
+    /// "who is the cheshire cat?" each let the model's from-memory answer about
+    /// the Cat through both guards (R-04). A word the question side did probe
+    /// and found met is met here too, so exempting it saved one indexed lookup;
+    /// a word it did not probe is exactly the hole. A word that merely begins
+    /// a sentence is exempt only when it is a function word — see
+    /// `unvettedNames`.
     ///
     /// The sources are deliberately **not** filtered. Every one of them is book
     /// text the reader has already passed: an excerpt exists only because
@@ -367,10 +406,10 @@ public actor AskEngine {
     /// second check here would be a check on something true by construction —
     /// and one that could only ever go wrong by dropping honest evidence.
     private func vetted(
-        _ answer: AskAnswer, question: String, bookUUID: String, boundary: ReadingBoundary,
+        _ answer: AskAnswer, bookUUID: String, boundary: ReadingBoundary,
     ) async throws -> AskAnswer {
         guard !answer.notYetRevealed else { return answer }
-        let candidates = Self.unvettedNames(in: answer.text, question: question)
+        let candidates = Self.unvettedNames(in: answer.text)
         guard !candidates.isEmpty else { return answer }
         let unmet = try await store.unmetWords(candidates, in: bookUUID, before: boundary)
         guard !unmet.isEmpty else { return answer }
@@ -388,8 +427,8 @@ public actor AskEngine {
         )
     }
 
-    /// Capitalised words in an answer that the question did not already ask
-    /// about and that a sentence did not have to capitalise.
+    /// Capitalised words in an answer that a sentence did not have to
+    /// capitalise.
     ///
     /// Deliberately the same crude test as `QueryTerms.nameCandidates`, and for
     /// the same reason: the names readers get spoiled by are invented ones no
@@ -401,8 +440,8 @@ public actor AskEngine {
     /// premise that "Alice went home" and "Rome fell" cannot be told apart
     /// without a tagger. The conclusion drawn from it was wrong. Every sentence
     /// starts with a capital, so exempting them all exempted the spoiler:
-    /// `unvettedNames(in: "Aldric dies. Ryn escapes.", question: "What happens
-    /// next?")` returned `[]`, and both names went to the reader. So did
+    /// `unvettedNames(in: "Aldric dies. Ryn escapes.")` returned `[]`, and
+    /// both names went to the reader. So did
     /// "Bilbo found the ring in the dark." — a headline spoiler is very often
     /// the first word.
     ///
@@ -416,12 +455,7 @@ public actor AskEngine {
     /// precisely where place names are the spoiler: "Mordor lies to the east."
     /// Using its silence to exempt is worse still, because invented names are
     /// what it misses and invented names are what readers get spoiled by.
-    static func unvettedNames(in answer: String, question: String) -> [String] {
-        // Possessive-stripped on both sides, so "Dask's" in the answer is
-        // checked against the index as `dask` — the word the book actually
-        // contains — and a name the question already asked about is still
-        // recognised when the answer inflects it.
-        let asked = Set(QueryTerms.tokens(in: question).map(QueryTerms.strippingPossessive))
+    static func unvettedNames(in answer: String) -> [String] {
         var candidates: Set<String> = []
         // The first word of the answer opens a sentence like any other.
         var opensSentence = true
@@ -443,8 +477,10 @@ public actor AskEngine {
             // than for a person. No special case for the first word of the
             // answer: "Aldric dies." puts the spoiler there.
             if opensSentence, QueryTerms.sentenceOpeners.contains(bare.lowercased()) { continue }
+            // Possessive-stripped, so "Dask's" is checked against the index as
+            // `dask` — the word the book actually contains.
             for token in QueryTerms.tokens(in: bare).map(QueryTerms.strippingPossessive)
-                where token.count > 2 && !asked.contains(token) {
+                where token.count > 2 {
                 candidates.insert(token)
             }
         }
@@ -492,6 +528,8 @@ public actor AskEngine {
         question: String,
         ranked: [PassageRanker.Ranked],
         options: AskGenerationOptions,
+        bookUUID: String,
+        boundary: ReadingBoundary,
         into continuation: AsyncThrowingStream<AskEvent, any Error>.Continuation,
     ) async throws -> AskAnswer {
         try await turnstile.withTurn { () async throws -> AskAnswer in
@@ -512,7 +550,10 @@ public actor AskEngine {
                 }
 
                 do {
-                    let answer = try await self.stream(built, options: options, into: continuation)
+                    let answer = try await self.stream(
+                        built, options: options, bookUUID: bookUUID, boundary: boundary,
+                        into: continuation,
+                    )
                     // Resolved here, inside the attempt that survived: the retry
                     // loop means the prompt whose numbering the citations refer
                     // to is whichever one did not throw `.tooMuchContext`, and
@@ -562,14 +603,39 @@ public actor AskEngine {
         return sizes.map { PassageRanker.best(ranked, count: $0) }
     }
 
+    /// Streams one attempt, drawing only what has been vetted.
+    ///
+    /// Every snapshot used to go to the sheet as it arrived, and the vetting
+    /// ran once the stream had ended — so a hedge the vetting then refused,
+    /// "The story hasn't revealed that yet. However, Alice is later guided by
+    /// the Cheshire Cat…", had been read word by word, seconds before it was
+    /// replaced (R-16). Now a partial is the answer so far cut back to its last
+    /// whole word, put through the same test the finished answer gets: every
+    /// name in it must be one the book has used before the boundary. The first
+    /// partial that names one it has not stops the drawing for the rest of the
+    /// attempt — the sheet keeps the last vetted words, and the finished answer
+    /// is then refused whole by `vetted` exactly as before.
+    ///
+    /// Streaming survives: a safe answer still arrives a word at a time, one
+    /// token behind the model, and each name costs one indexed lookup the first
+    /// time it appears and nothing after. Whole words only, because a name is
+    /// not a name until it is finished — "Du" is too short to probe and "Ali"
+    /// is not a word the book uses, so a cut mid-word would either show the
+    /// first letters of a spoiler or hold back a met name.
     private func stream(
         _ built: AskPromptBuilder.Built,
         options: AskGenerationOptions,
+        bookUUID: String,
+        boundary: ReadingBoundary,
         into continuation: AsyncThrowingStream<AskEvent, any Error>.Continuation,
     ) async throws -> AskAnswer {
         var raw = ""
         var shown = ""
         var hasAnswered = false
+        // Names already probed and met, so a name repeated in every snapshot
+        // is looked up once; and whether an unmet one has stopped the drawing.
+        var met: Set<String> = []
+        var isHeld = false
         let snapshots = model.answer(
             instructions: AskPromptBuilder.instructions,
             prompt: built.prompt,
@@ -580,9 +646,43 @@ public actor AskEngine {
             // Per snapshot: the reader who taps Cancel expects the words to
             // stop arriving, not to finish and then be thrown away.
             try Task.checkCancellation()
+            // Each snapshot is the answer so far — the shape `streamResponse`
+            // documents, `ScriptedAnswerModel` mirrors, and every live probe of
+            // the 27 model has shown — so it replaces what came before.
+            //
+            // This once appended a snapshot that did not start with the text
+            // before it, on the theory that a tool round trip could restart the
+            // stream as a fresh segment. No stream was ever seen doing that, and
+            // the guess cost more than it bought. `hasPrefix` compares
+            // `Character`s, so a snapshot whose next token extended the last
+            // grapheme — a combining accent, an emoji modifier, the second half
+            // of a flag — did not count as carrying the old text, and the whole
+            // answer was appended to itself; a snapshot equal to a prefix of the
+            // old one was dropped outright. A non-cumulative snapshot is logged,
+            // by length and never by text, so the next one is evidence rather
+            // than a theory.
+            if !snapshot.unicodeScalars.starts(with: raw.unicodeScalars) {
+                IssaLog.info("ask snapshot was not cumulative", [
+                    "previousLength": String(raw.utf16.count),
+                    "snapshotLength": String(snapshot.utf16.count),
+                ])
+            }
             raw = snapshot
-            let visible = AskAnswerParser.visible(snapshot)
+            guard !isHeld else { continue }
+            let visible = AskAnswerParser.visible(Self.wholeWords(raw))
             guard visible != shown else { continue }
+            let unprobed = Self.unvettedNames(in: visible).filter { !met.contains($0) }
+            if !unprobed.isEmpty {
+                let unmet = try await store.unmetWords(unprobed, in: bookUUID, before: boundary)
+                guard unmet.isEmpty else {
+                    // Never the words: an unmet name is a spoiler, and the log
+                    // is exported by the reader and pasted into an email.
+                    IssaLog.info("ask held a streamed answer back", ["unmet": String(unmet.count)])
+                    isHeld = true
+                    continue
+                }
+                met.formUnion(unprobed)
+            }
             shown = visible
             if !hasAnswered, !visible.isEmpty {
                 hasAnswered = true
@@ -591,9 +691,37 @@ public actor AskEngine {
             continuation.yield(.partial(visible))
         }
         try Task.checkCancellation()
+        let answer = AskAnswerParser.parse(raw)
+        // A generation that produced tokens but no prose is a failure, not an
+        // answer. Without this the sheet drew the sources under nothing at all,
+        // which is how 1.2.0 (41) shipped: a reader saw a question, a blank, and
+        // three excerpts. A sentence they can retry is worth more than a card
+        // with a hole in it.
+        //
+        // The shape is logged and never the text: `PRIVACY.md` promises a
+        // question and its answer are never written down, and the log is
+        // exported by the reader and pasted into an email.
+        guard !answer.text.isEmpty else {
+            IssaLog.error("ask answer had no prose", [
+                "rawLength": String(raw.count),
+                "citations": String(answer.citations.count),
+            ])
+            throw AskFailure.other(AskFailure.couldNotAnswer)
+        }
         // Returned rather than yielded: the answer still has to be vetted
         // against the boundary before the reader sees it as final.
-        return AskAnswerParser.parse(raw)
+        return answer
+    }
+
+    /// The answer so far, up to its last whole word.
+    ///
+    /// A snapshot ends wherever the model's last token did, which is as often
+    /// the middle of a word as the end of one; the whitespace after a word
+    /// arrives with the next token. Nothing before the first whitespace is
+    /// whole, so nothing is shown until there is.
+    static func wholeWords(_ raw: String) -> String {
+        guard let last = raw.lastIndex(where: \.isWhitespace) else { return "" }
+        return String(raw[..<last])
     }
 
     // MARK: - Failures

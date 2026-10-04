@@ -36,6 +36,14 @@ public struct SignInView: View {
     }
 
     @Environment(AppModel.self) private var app
+    /// The books the reader added from their own files, and this window's way
+    /// to them: the foot link's whole business.
+    @Environment(LocalLibrary.self) private var localLibrary: LocalLibrary?
+    @Environment(LocalBooksRoute.self) private var localRoute: LocalBooksRoute?
+    #if os(macOS)
+    @Environment(\.openWindow) private var openWindow
+    #endif
+    @State private var choosingLocalBooks = false
     @State private var route: Route = .address
     @State private var address: String = ""
     @State private var connecting = false
@@ -57,6 +65,15 @@ public struct SignInView: View {
         }
         .accessibilityIdentifier("screen.signIn")
         .onAppear { if address.isEmpty { address = app.serverAddress } }
+        .fileImporter(
+            isPresented: $choosingLocalBooks, allowedContentTypes: [.epub], allowsMultipleSelection: true,
+        ) { result in
+            // Cancelling the picker leaves the reader here; choosing books
+            // makes the list this window's root, with their rows on it.
+            guard case let .success(urls) = result, !urls.isEmpty else { return }
+            localLibrary?.importBooks(urls)
+            localRoute?.showsListSignedOut = true
+        }
     }
 
     private var isAtAddress: Bool {
@@ -69,6 +86,15 @@ public struct SignInView: View {
     /// would undo that.
     private var serverURL: URL? {
         app.session?.serverURL ?? AppModel.normalizeServerURL(app.serverAddress)
+    }
+
+    /// Whether the address in the field would be spoken to in the clear.
+    ///
+    /// A bare address counts: it is tried over HTTPS first, but what
+    /// `normalize` makes of it — and what a LAN server answers on — is plain
+    /// HTTP, and the field's own hint suggests exactly that form.
+    static func isCleartext(typed address: String) -> Bool {
+        AppModel.normalizeServerURL(address)?.scheme?.lowercased() == "http"
     }
 
     private var serverLabel: String {
@@ -150,6 +176,8 @@ public struct SignInView: View {
                     .foregroundStyle(.white)
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier("button.signInAgain")
+            localBooksLink
         }
     }
 
@@ -215,7 +243,13 @@ public struct SignInView: View {
                 // while the address that causes it is being typed. It is about
                 // the connection, not the route: both ways in send the same
                 // credential to the same server over the same wire.
-                if serverURL?.scheme?.lowercased() == "http" {
+                //
+                // From the field, not from `serverURL`. That is the session's
+                // or the stored server's, so while a new address was typed
+                // the line described the previous one: no warning for a fresh
+                // `http://` address, and a red one under an `https://` address
+                // typed over a stored LAN server.
+                if Self.isCleartext(typed: address) {
                     Text("Not encrypted — this server is on http://.")
                         .font(Typography.footnote)
                         .foregroundStyle(Palette.alert)
@@ -241,8 +275,64 @@ public struct SignInView: View {
 
             primaryAction
             separator
-            deviceCodeLink
+            // The two quiet links touch: two 44-point targets, one above the
+            // other, neither competing with the button.
+            VStack(spacing: 0) {
+                deviceCodeLink
+                localBooksLink
+            }
         }
+    }
+
+    /// The only way in for someone without a server: read a book from their
+    /// own files on this device.
+    ///
+    /// The same quiet link as the device code's, and enabled whatever the
+    /// address field says — it has nothing to do with a server. With no books
+    /// yet it opens the picker at once; with some, it opens the list.
+    @ViewBuilder
+    private var localBooksLink: some View {
+        if localLibrary != nil {
+            Button(action: openLocalBooks) {
+                Text("Read a book from your files")
+                    .font(Typography.subhead.weight(.medium))
+                    .foregroundStyle(Palette.inkTertiary)
+                    .underline(true, color: Palette.borderStrong)
+                    .frame(maxWidth: .infinity, minHeight: Self.quietLinkHeight)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Read a book from your files")
+            .accessibilityAddTraits(.isLink)
+            .accessibilityHint(
+                "Opens \(LocalBooksCopy.originalsPlace) to choose an EPUB to read on this \(LocalDevice.noun) without a server.")
+            .accessibilityIdentifier("link.readFromFiles")
+        }
+    }
+
+    /// 44 points on touch; a 28-point row on the Mac, where the link takes
+    /// Tab focus and the system draws the ring.
+    private static var quietLinkHeight: CGFloat {
+        #if os(macOS)
+        28
+        #else
+        44
+        #endif
+    }
+
+    private func openLocalBooks() {
+        guard let localLibrary else { return }
+        let hasBooks = !localLibrary.books.isEmpty
+        #if os(macOS)
+        openWindow(id: "LocalBooks")
+        if !hasBooks { localLibrary.requestAdd() }
+        #else
+        if hasBooks {
+            localRoute?.showsListSignedOut = true
+        } else {
+            choosingLocalBooks = true
+        }
+        #endif
     }
 
     /// The one way in the design puts forward.
@@ -322,6 +412,10 @@ public struct SignInView: View {
         connecting = true
         defer { connecting = false }
         signInNote = nil
+        // A sign-in the reader started is the screen they asked for. The
+        // books-from-Files flag is this window's root while signed out, and
+        // left set it would put the list over the sign-in as the phase moves.
+        if localRoute?.showsListSignedOut == true { localRoute?.showsListSignedOut = false }
         if address.isEmpty { address = app.serverAddress }
         await app.connect(to: address)
         // A stored token may have signed us straight in.

@@ -22,6 +22,10 @@ struct MacSettingsView: View {
                 .tabItem { Label("Advanced", systemImage: "wrench.and.screwdriver") }
         }
         .background(Palette.paper)
+        // The window's own undo toast: the Downloads tab's rows and their
+        // menus remove downloads here, where the library window's toast
+        // cannot be seen. See `downloadRemovalToast`.
+        .downloadRemovalToast()
     }
 }
 
@@ -30,6 +34,9 @@ struct AccountSettingsView: View {
     @Environment(AppModel.self) private var app
     @Environment(NowPlayingController.self) private var nowPlaying
     @State private var confirmingSignOut = false
+    /// True from the confirmation until the sign-out has finished, for the
+    /// app rather than this pane: see `SignOutProgress`.
+    private var isSigningOut: Bool { SignOutProgress.shared.isRunning }
 
     var body: some View {
         Form {
@@ -37,8 +44,26 @@ struct AccountSettingsView: View {
                 LabeledContent("Signed in as", value: user.username ?? user.name ?? "—")
                 LabeledContent("Server", value: session.serverURL.absoluteString)
             }
-            Section {
-                Button("Sign Out…", role: .destructive) { confirmingSignOut = true }
+            // Only with a session to leave. The pane is a Settings tab, up
+            // whatever the library window shows, and it went on offering an
+            // enabled Sign Out… to a reader already signed out (F6).
+            if AccountPane.offersSignOut(hasSession: app.session != nil, isSigningOut: isSigningOut) {
+                Section {
+                    // Held off while one is under way, as on the phone:
+                    // signing out tells the server first and waits up to the
+                    // logout's own limit for an answer, and in those seconds
+                    // nothing here changed and Sign Out could start a second
+                    // sign-out behind the first.
+                    Button(isSigningOut ? "Signing Out…" : "Sign Out…", role: .destructive) {
+                        confirmingSignOut = true
+                    }
+                    .disabled(isSigningOut)
+                }
+            } else {
+                Section {
+                    Text("Not signed in. Connect to your server from the library window.")
+                        .foregroundStyle(Palette.inkSecondary)
+                }
             }
         }
         .formStyle(.grouped)
@@ -48,15 +73,23 @@ struct AccountSettingsView: View {
             "Sign out of Issa Reader?",
             isPresented: $confirmingSignOut, titleVisibility: .visible,
         ) {
-            Button("Sign Out and Keep Downloads") {
-                Task { await app.signOut(keepDownloads: true, nowPlaying: nowPlaying) }
-            }
+            Button("Sign Out and Keep Downloads") { signOut(keepDownloads: true) }
+                .disabled(isSigningOut)
             Button("Sign Out and Delete Downloads", role: .destructive) {
-                Task { await app.signOut(nowPlaying: nowPlaying) }
+                signOut(keepDownloads: false)
             }
+            .disabled(isSigningOut)
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Downloaded books stay on this Mac unless you remove them.")
+        }
+    }
+
+    private func signOut(keepDownloads: Bool) {
+        Task { [app, nowPlaying] in
+            await SignOutProgress.shared.run {
+                await app.signOut(keepDownloads: keepDownloads, nowPlaying: nowPlaying)
+            }
         }
     }
 }

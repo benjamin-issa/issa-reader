@@ -71,6 +71,14 @@ public actor AskTurnstile {
         return true
     }
 
+    /// How many callers are queued for the turn.
+    ///
+    /// For a test to see that a question is *waiting*, rather than infer it from
+    /// how far a sleep happened to let it get: a turnstile that let the second
+    /// question straight through passed a 50 ms sleep whenever that question's
+    /// retrieval was slower than the sleep.
+    var waiting: Int { queue.count }
+
     // MARK: - The turn itself
 
     private func acquire() async {

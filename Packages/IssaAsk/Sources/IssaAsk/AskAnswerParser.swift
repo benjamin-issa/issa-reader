@@ -141,15 +141,40 @@ public enum AskAnswerParser {
     public static func parse(_ raw: String) -> AskAnswer {
         let (body, citations) = splitSources(raw)
         let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
-        let notYet = isNotYet(trimmed)
+        let prose = withoutSentinel(trimmed)
+        guard prose.isEmpty, !trimmed.isEmpty else {
+            // Prose, with any sentinel sentence taken out of it. The sentinel
+            // followed by an answer is the hedge a 3B model writes — "The story
+            // hasn't revealed that yet. However, …" — and the answer after it
+            // is an answer like any other: it goes to the vetting pass, which
+            // a refusal skips, and is shown only if every name in it is one
+            // the reader has met.
+            return AskAnswer(text: prose, citations: citations, notYetRevealed: false)
+        }
+        // Nothing but the sentinel. A refusal even when a model typed it, so
+        // there is no generated prose under it to disclose, and no citations:
+        // excerpts under "the story hasn't revealed that yet" would be proof
+        // offered of an absence — and the model cites them under its refusal
+        // often enough that they cannot be passed through.
         return AskAnswer(
-            text: trimmed,
-            citations: citations,
-            notYetRevealed: notYet,
-            // The sentinel is a refusal even when a model typed it: there is no
-            // generated prose under it to disclose.
-            origin: notYet ? .withheld : .model,
+            text: notYetSentinel, citations: [], notYetRevealed: true, origin: .withheld,
         )
+    }
+
+    /// The text with every sentence that is exactly the sentinel removed.
+    ///
+    /// Sentence by sentence, because the sentinel is a whole sentence and the
+    /// hedge puts it either side of an answer. A sentence that merely
+    /// *contains* it — "The story hasn't revealed that yet, but Alice meets the
+    /// Duchess." — is prose and is kept whole: that is an answer, and it is
+    /// what the vetting pass is for.
+    static func withoutSentinel(_ text: String) -> String {
+        guard !text.isEmpty else { return text }
+        let string = text as NSString
+        let sentences = SentenceSplitter.ranges(in: text).map { string.substring(with: $0) }
+        let kept = sentences.filter { !isNotYet($0) }
+        guard kept.count != sentences.count else { return text }
+        return kept.joined().trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     // MARK: - Resolving citations
@@ -207,11 +232,19 @@ public enum AskAnswerParser {
         // ordinary prose and shown.
         if let lastBreak = text.range(of: "\n", options: .backwards) {
             let tail = String(text[lastBreak.upperBound...])
-            if isPrefixOfSourcesLabel(tail) {
+            if opensFooter(tail) {
                 text = String(text[..<lastBreak.lowerBound])
             }
-        } else if isPrefixOfSourcesLabel(text) {
+        } else if opensFooter(text) {
             return ""
+        }
+        // The same hold for a footer begun on the prose's own line, after its
+        // last full stop — where the 27 model puts it.
+        if let sentenceEnd = lastSentenceEnd(in: text) {
+            let tail = String(text[sentenceEnd...])
+            if opensFooter(tail) {
+                text = String(text[..<sentenceEnd])
+            }
         }
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -226,33 +259,139 @@ public enum AskAnswerParser {
         return sourcesLabel.lowercased().hasPrefix(trimmed.lowercased())
     }
 
+    /// Whether a fragment could be a footer being typed — either still shorter
+    /// than the label, or already past it.
+    ///
+    /// The second half is what `isPrefixOfSourcesLabel` alone misses: by the
+    /// time the stream has reached "Sources: 1 a" the fragment has stopped being
+    /// a prefix of the label, so the hold released and the half-typed footer
+    /// flashed under the answer — the exact flicker `visible` exists to prevent.
+    static func opensFooter(_ candidate: some StringProtocol) -> Bool {
+        let trimmed = candidate.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return false }
+        let label = sourcesLabel.lowercased()
+        return label.hasPrefix(trimmed.lowercased()) || trimmed.lowercased().hasPrefix(label)
+    }
+
+    /// The characters a sentence can end on, for telling a footer written after
+    /// the prose from the word "sources" written inside it.
+    ///
+    /// `SentenceSplitter.terminators` also counts `:` and `;`, which end a
+    /// clause rather than a sentence — and "he named the following: Sources: 1"
+    /// is the shape that has to stay prose. Its closing marks are reused as they
+    /// stand, and that is what stops a bare quote or bracket from ending a
+    /// sentence on its own: a title quoted as "Sources: 3" is not a footer.
+    static let sentenceEnds: Set<UInt16> = [0x2E, 0x21, 0x3F, 0x2026]
+
+    /// Whether this text ends a sentence, looking past whatever quotes or
+    /// brackets close after the full stop.
+    static func endsSentence(_ text: some StringProtocol) -> Bool {
+        var units = Array(text.utf16)
+        while let last = units.last, SentenceSplitter.isSkippable(last) {
+            units.removeLast()
+        }
+        guard let last = units.last else { return false }
+        return sentenceEnds.contains(last)
+    }
+
+    /// The index just past the last sentence end, or nil when there is none.
+    static func lastSentenceEnd(in text: String) -> String.Index? {
+        var index = text.endIndex
+        while index > text.startIndex {
+            let previous = text.index(before: index)
+            if text[previous].isWhitespace, endsSentence(text[..<previous]) {
+                return index
+            }
+            index = previous
+        }
+        return nil
+    }
+
+    /// The words that may stand among the ordinals in a footer.
+    ///
+    /// "none" because the 27 model writes "Sources: none" under a refusal,
+    /// and a footer the parser did not recognise stayed in the text as prose:
+    /// the sentinel was stripped from in front of it and "Sources: none" was
+    /// left as the answer.
+    static let citationWords: Set<String> = ["and", "section", "sections", "none"]
+
+    /// …and the ones that introduce a chapter rather than a citation, so the
+    /// number after them is not an ordinal. One list, read by both
+    /// `isCitationTail` and `ordinals`, because when they disagreed a footer
+    /// reading "(Sections 3)" was accepted whole and its 3 became a citation.
+    static let chapterWords: Set<String> = ["section", "sections"]
+
+    /// Whether what follows the label reads as citations and nothing else.
+    static func isCitationTail(_ tail: some StringProtocol) -> Bool {
+        let words = tail.lowercased()
+            .split { !$0.isLetter && !$0.isNumber }
+            .map(String.init)
+        return words.allSatisfy { $0.allSatisfy(\.isNumber) || citationWords.contains($0) }
+    }
+
+    static func isBlank(_ text: some StringProtocol) -> Bool {
+        text.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    /// A footer inside one line: the prose before it, and what it names.
+    ///
+    /// A line carries one when the label begins it — the shape the instructions
+    /// ask for — or when the label follows the end of a sentence, which is where
+    /// the 27 model writes it. Either way nothing but citations may follow, so
+    /// "the sources: he said" stays prose.
+    static func footer(
+        inLine line: some StringProtocol,
+    ) -> (beforeLabel: String, citations: [Int])? {
+        let text = String(line)
+        var search = text.startIndex ..< text.endIndex
+        while !search.isEmpty, let found = text.range(
+            of: sourcesLabel, options: [.caseInsensitive, .backwards], range: search,
+        ) {
+            let before = text[..<found.lowerBound]
+            let tail = text[found.upperBound...]
+            if isCitationTail(tail), isBlank(before) || endsSentence(before) {
+                return (String(before), ordinals(inCitationLine: String(tail)))
+            }
+            search = text.startIndex ..< found.lowerBound
+        }
+        return nil
+    }
+
     /// Splits the prose from the citation line, wherever the model put it.
     ///
-    /// Searched from the end: a passage quoted in the answer can contain the
-    /// word, and the line that counts is the last one.
+    /// One rule: **a footer is a run of citations at one end of the answer, and
+    /// it never swallows prose.**
+    ///
+    /// The form this replaces searched backwards for the label and, whenever it
+    /// began a line, took everything from there to the end of the *string* as
+    /// the citation line — without ever checking what that was. A model that
+    /// wrote its footer first and its answer after it therefore had the whole
+    /// answer eaten, and the reader was shown a card with three sources and
+    /// nothing above them. It shipped in 1.2.0 (41), and it is deterministic
+    /// rather than occasional: sampling is greedy, so a question that provokes
+    /// the shape provokes it every single time.
     static func splitSources(_ raw: String) -> (body: String, citations: [Int]) {
-        let string = raw as NSString
-        var best: NSRange?
-        var searchRange = NSRange(location: 0, length: string.length)
-        while searchRange.length > 0 {
-            let found = string.range(
-                of: sourcesLabel, options: [.caseInsensitive, .backwards], range: searchRange,
-            )
-            guard found.location != NSNotFound else { break }
-            // Only when it begins a line: "the sources: he said" inside prose is
-            // not a citation line.
-            let lineStart = string.lineRange(for: NSRange(location: found.location, length: 0)).location
-            let prefix = string.substring(
-                with: NSRange(location: lineStart, length: found.location - lineStart),
-            )
-            if prefix.trimmingCharacters(in: .whitespaces).isEmpty {
-                best = NSRange(location: lineStart, length: string.length - lineStart)
-                break
-            }
-            searchRange = NSRange(location: 0, length: found.location)
+        let lines = raw.split(separator: "\n", omittingEmptySubsequences: false)
+        let content = lines.indices.filter { !isBlank(lines[$0]) }
+        guard let first = content.first, let last = content.last else { return (raw, []) }
+
+        // The shape the instructions ask for: a footer on the final line.
+        if let footer = footer(inLine: lines[last]) {
+            let body = (lines[..<last].map(String.init) + [footer.beforeLabel])
+                .joined(separator: "\n")
+            if !isBlank(body) { return (body, footer.citations) }
+            // A footer with no prose before it and none after it is not an
+            // answer at all. Said plainly, so the engine can tell the reader so
+            // rather than drawing an empty card at them.
+            if first == last { return ("", footer.citations) }
         }
-        guard let best else { return (raw, []) }
-        return (string.substring(to: best.location), ordinals(inCitationLine: string.substring(with: best)))
+
+        // The shape that blanked the answer: a footer first, the answer after.
+        if first != last, let footer = footer(inLine: lines[first]), isBlank(footer.beforeLabel) {
+            return (lines[(first + 1)...].joined(separator: "\n"), footer.citations)
+        }
+
+        return (raw, [])
     }
 
     /// The ordinals in a citation line, and only the ordinals.
@@ -279,7 +418,12 @@ public enum AskAnswerParser {
             defer { current = "" }
             guard !current.isEmpty else { return }
             guard isDigits else { lastWord = current; return }
-            guard lastWord != "section", let value = Int(current) else { return }
+            // Only the word *immediately* before a number introduces it. Kept
+            // past the number, "section" went on silencing every ordinal after
+            // it until the next word came along, so "[1] (Section 3), [2]
+            // (Section 5)" cited only the first excerpt.
+            defer { lastWord = "" }
+            guard !chapterWords.contains(lastWord), let value = Int(current) else { return }
             ordinals.append(value)
         }
 
@@ -300,25 +444,33 @@ public enum AskAnswerParser {
         return ordinals
     }
 
-    /// Whether the answer is the "not yet" sentinel.
+    /// Whether this text is the "not yet" sentinel, and nothing else.
     ///
     /// Compared on letters only. The model reliably produces the sentence and
     /// unreliably produces its punctuation — a straight apostrophe for a curly
     /// one, a full stop dropped, "has not" for "hasn't" — and a strict match
     /// would show that as an ordinary answer, losing the one state the reader
     /// most needs to see.
+    ///
+    /// **Equal, not contained.** This was a substring test, so an answer that
+    /// merely *included* the sentence — "The story hasn't revealed that yet.
+    /// However, Alice is later guided by the Cheshire Cat" — was a refusal
+    /// that kept its prose and its citations, and the vetting pass skips a
+    /// refusal: the spoiler was shown in full, with excerpts under it and no
+    /// disclosure. `parse` now takes the sentinel sentence out and treats what
+    /// is left as the answer it is.
     static func isNotYet(_ text: String) -> Bool {
         let needle = letters(notYetSentinel)
         let haystack = letters(text)
         guard !haystack.isEmpty else { return false }
-        if haystack.contains(needle) { return true }
+        if haystack == needle { return true }
         // "has not" where the sentinel says "hasn't". Compared with the spaces
         // taken out as well, because the contraction the model expanded also
         // added a word boundary that was not there before.
         let expanded = needle
             .replacingOccurrences(of: " ", with: "")
             .replacingOccurrences(of: "hasnt", with: "hasnot")
-        return haystack.replacingOccurrences(of: " ", with: "").contains(expanded)
+        return haystack.replacingOccurrences(of: " ", with: "") == expanded
     }
 
     static func letters(_ text: String) -> String {

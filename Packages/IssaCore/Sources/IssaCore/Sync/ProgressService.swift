@@ -10,7 +10,10 @@ import Foundation
 ///   milliseconds. Second resolution causes avoidable conflicts.
 /// - Writing a position silently moves the book's reading status: to "Reading"
 ///   below 98% and to "Read" at or above it. Callers should not also set status
-///   by hand, and should expect it to change underneath them.
+///   by hand, and should expect it to change underneath them. The exception is
+///   a 3.x book with no status at all, which the server means to advance but
+///   cannot — its UPDATE finds no status row — so there, and only there, the
+///   client sets it; see `StatusAdvance`.
 public struct ProgressService: Sendable {
     private let client: APIClient
 

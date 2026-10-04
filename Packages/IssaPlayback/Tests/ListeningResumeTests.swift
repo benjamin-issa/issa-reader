@@ -292,6 +292,44 @@ struct ListeningResumeTests {
         #expect(later.start > 0)
     }
 
+    /// A book whose overlay numbers its sentences per chapter — legal, and what
+    /// any aligner other than Storyteller's writes — read on in chapter two by
+    /// a client that stores absolute hrefs, which is what the official one
+    /// does. The rung looked the locator's raw href up as a document key,
+    /// missed, and fell back to the first chapter using that id: chapter one,
+    /// labelled exact, so nothing held the audio clock and the next write put
+    /// chapter one over a reader two chapters on.
+    @Test("a sentence id two chapters share resolves in the locator's own chapter, or not at all")
+    func aSharedSentenceIDResolvesInTheLocatorsOwnChapter() {
+        let timeline = SMILTimeline(entries: [
+            SMILEntry(fragmentID: "sentence0", textHref: "OEBPS/ch01.xhtml",
+                      audioHref: "OEBPS/Audio/a.mp3", start: 0, end: 5, cumulativeEnd: 5),
+            SMILEntry(fragmentID: "sentence0", textHref: "OEBPS/ch02.xhtml",
+                      audioHref: "OEBPS/Audio/b.mp3", start: 2, end: 7, cumulativeEnd: 10),
+        ])
+        let tracks = [
+            (href: "OEBPS/Audio/a.mp3", duration: 6.0),
+            (href: "OEBPS/Audio/b.mp3", duration: 8.0),
+        ]
+
+        let resolution = ListeningResume.resolve(
+            anchor: nil,
+            stored: stored(textLocator("/OEBPS/ch02.xhtml", 0.6, fragment: "sentence0")),
+            timeline: timeline, manifest: manifest(tracks))
+        let expected: TimeInterval = 6 + 2
+        #expect(resolution.bookTime == expected, "chapter two's sentence, two seconds into the second file")
+        #expect(resolution.reason == .readingPositionViaOverlay)
+
+        // A chapter the overlay does not narrate names no sentence at all.
+        let elsewhere = ListeningResume.resolve(
+            anchor: nil,
+            stored: stored(textLocator("/OEBPS/ch09.xhtml", 0.9, fragment: "sentence0")),
+            timeline: timeline, manifest: manifest(tracks))
+        #expect(elsewhere.reason != .readingPositionViaOverlay,
+                "an exact rung must not answer with another chapter's sentence")
+        #expect(elsewhere.bookTime == nil)
+    }
+
     /// The cold CarPlay launch: nothing is open, so there is no overlay to
     /// convert through. The text fraction is still not an answer.
     @Test("a reading position without a timeline resolves to nothing")

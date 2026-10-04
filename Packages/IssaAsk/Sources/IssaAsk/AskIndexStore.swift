@@ -105,27 +105,81 @@ public actor AskIndexStore {
         source: BookSource,
         progress: (@Sendable (AskPhase) -> Void)? = nil,
     ) async throws -> Bool {
-        let url = indexURL(for: source.bookUUID)
+        let uuid = source.bookUUID
+        let url = indexURL(for: uuid)
         let key = source.indexKey
 
-        // `try?`, matching `isPrepared` twelve lines down. A bare `try` threw
-        // straight past the repair three lines below — and `queue(for:)` had
-        // already cached the handle to the broken file, so the next attempt read
-        // the same broken index and failed identically, for ever. A zero-length
-        // `.sqlite` is the case: SQLite opens it happily as an empty database
-        // and `storedKey` then throws "no such table: meta".
-        if let queue = try? queue(for: source.bookUUID),
-           (try? Self.storedKey(in: queue)) == key {
-            return false
+        while true {
+            // `try?`, matching `isPrepared` below. A bare `try` threw straight
+            // past the repair — and `queue(for:)` had already cached the handle
+            // to the broken file, so the next attempt read the same broken
+            // index and failed identically, for ever. A zero-length `.sqlite`
+            // is the case: SQLite opens it happily as an empty database and
+            // `storedKey` then throws "no such table: meta".
+            if let queue = try? queue(for: uuid), (try? Self.storedKey(in: queue)) == key {
+                return false
+            }
+            // One build per book at a time. Two name the same
+            // `<uuid>.building.sqlite`, and this actor is reentrant at every
+            // chapter: the second unlinked the first's open file, and whichever
+            // finished first renamed the *other's* half-written file over the
+            // index — so a question was answered from a fraction of the book —
+            // or found its own gone and failed. The sheet's warm-up and a
+            // question's own build meet exactly like that when the sheet is
+            // opened while the book is still laying out. So a second caller
+            // waits for the build in flight and then looks again: the index it
+            // finds is the one it wanted, or that build failed or was
+            // cancelled and this one runs.
+            guard building[uuid] != nil else { break }
+            try await waitForBuild(of: uuid)
         }
 
-        // Stale, corrupt or absent — all three are the same repair.
-        open[source.bookUUID] = nil
+        // Stale, corrupt or absent — all three are the same repair. Claimed
+        // before the first suspension, so nothing can slip in between the
+        // check above and the build.
+        open[uuid] = nil
+        building[uuid] = [:]
+        defer { finishBuild(of: uuid) }
         try await build(source: source, key: key, destination: url, progress: progress)
         // Opened here so a question asked immediately afterwards finds a handle
         // rather than silently retrieving nothing.
         _ = try queue(for: source.bookUUID)
         return true
+    }
+
+    /// Books with a build in flight, and whoever is waiting for it to end.
+    ///
+    /// The build belongs to the caller that started it, so its cancellation is
+    /// still that caller's to make; a waiter only learns that it ended.
+    private var building: [String: [UUID: CheckedContinuation<Void, Never>]] = [:]
+
+    /// Suspends until this book's build in flight ends, however it ends.
+    ///
+    /// Cancellable: a waiter whose own task is cancelled stops waiting at once
+    /// and throws, rather than sitting out somebody else's build.
+    private func waitForBuild(of uuid: String) async throws {
+        let ticket = UUID()
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                // Already over, or already cancelled: no reason to wait.
+                guard building[uuid] != nil, !Task.isCancelled else {
+                    continuation.resume()
+                    return
+                }
+                building[uuid]?[ticket] = continuation
+            }
+        } onCancel: {
+            Task { await self.stopWaiting(ticket, for: uuid) }
+        }
+        try Task.checkCancellation()
+    }
+
+    private func stopWaiting(_ ticket: UUID, for uuid: String) {
+        building[uuid]?.removeValue(forKey: ticket)?.resume()
+    }
+
+    private func finishBuild(of uuid: String) {
+        for waiter in (building.removeValue(forKey: uuid) ?? [:]).values { waiter.resume() }
     }
 
     /// Whether a usable, current index already exists — the question the sheet
@@ -470,10 +524,11 @@ public actor AskIndexStore {
     /// Every passage matching this pattern from before the boundary, in the
     /// order the caller needs them.
     ///
-    /// The one bounded query. Everything else in this file that reads passages
-    /// goes through it, so the boundary clause and the truncation of the
-    /// straddling passage exist in exactly one place — a second copy of them
-    /// is a second thing that can be got wrong, and getting it wrong shows the
+    /// The public face of `bounded(_:before:order:limit:in:)`, which every read
+    /// of a passage in this file goes through — the search, the recap and the
+    /// unmet-word probe — so the boundary clause and the truncation of the
+    /// straddling passage exist in exactly one place. A second copy of them is
+    /// a second thing that can be got wrong, and getting it wrong shows the
     /// reader a page they have not read.
     public func passages(
         matching pattern: FTS5Pattern,
@@ -496,30 +551,91 @@ public actor AskIndexStore {
         in queue: DatabaseQueue,
     ) throws -> [RetrievedPassage] {
         try queue.read { db in
-            let rows = try Row.fetchAll(db, sql: """
-                SELECT passage.spineIndex AS spineIndex, passage.ordinal AS ordinal,
-                       passage.start AS start, passage.end AS end,
-                       passage.words AS words, passage.text AS text,
-                       \(order.score) AS score
-                FROM passage
-                JOIN passage_fts ON passage_fts.rowid = passage.rowid
-                WHERE passage_fts MATCH :pattern
-                  AND (passage.spineIndex < :spine
-                       OR (passage.spineIndex = :spine AND passage.start < :offset))
-                ORDER BY \(order.clause)
-                LIMIT :limit
-                """, arguments: [
-                "pattern": pattern, "spine": boundary.spineIndex,
-                "offset": boundary.charOffset, "limit": limit,
-            ])
-            return rows.compactMap { truncated($0, at: boundary) }
+            try bounded(pattern, before: boundary, order: Scan(order), limit: limit, in: db)
         }
+    }
+
+    /// The reading boundary, as SQL: everything in an earlier spine item, and
+    /// in the reader's own spine item whatever starts before their offset.
+    ///
+    /// The top spoiler invariant, written once. The passage queries and the
+    /// name table both read it — the name table with its first mention in
+    /// place of a passage's start, which is the same question asked of a
+    /// person rather than a paragraph. Binds `:spine` and `:offset`.
+    static func readClause(spine: String, offset: String) -> String {
+        "(\(spine) < :spine OR (\(spine) = :spine AND \(offset) < :offset))"
+    }
+
+    /// The orders a bounded read can come back in: the two a caller can ask
+    /// for, and the recap's newest-first, which is how it takes the *last*
+    /// passages before the boundary under a `LIMIT`.
+    enum Scan {
+        case relevance, bookOrder, newestFirst
+
+        init(_ order: PassageOrder) {
+            switch order {
+            case .relevance: self = .relevance
+            case .bookOrder: self = .bookOrder
+            }
+        }
+
+        var clause: String {
+            switch self {
+            case .relevance: PassageOrder.relevance.clause
+            case .bookOrder: PassageOrder.bookOrder.clause
+            case .newestFirst: "passage.spineIndex DESC, passage.ordinal DESC"
+            }
+        }
+
+        var score: String {
+            switch self {
+            case .relevance: PassageOrder.relevance.score
+            case .bookOrder, .newestFirst: "0.0"
+            }
+        }
+    }
+
+    /// The one bounded read of the passage table.
+    ///
+    /// `readClause` decides which rows come back and `truncated` cuts the one
+    /// the reader is standing in, and nothing in this file reads a passage any
+    /// other way: the search, the recap (no pattern) and the unmet-word probe
+    /// (`.bookOrder`, limit 1) are all this. Cached, because the probe runs it
+    /// once per word of a question and an answer.
+    ///
+    /// - Parameter pattern: nil for every passage, which is a recap.
+    static func bounded(
+        _ pattern: FTS5Pattern?, before boundary: ReadingBoundary, order: Scan, limit: Int,
+        in db: Database,
+    ) throws -> [RetrievedPassage] {
+        precondition(pattern != nil || order != .relevance, "bm25 needs a pattern")
+        let matching = pattern == nil ? "" : """
+            JOIN passage_fts ON passage_fts.rowid = passage.rowid
+            WHERE passage_fts MATCH :pattern AND
+            """
+        let statement = try db.cachedStatement(sql: """
+            SELECT passage.spineIndex AS spineIndex, passage.ordinal AS ordinal,
+                   passage.start AS start, passage.end AS end,
+                   passage.words AS words, passage.text AS text,
+                   \(order.score) AS score
+            FROM passage
+            \(pattern == nil ? "WHERE" : matching)
+              \(readClause(spine: "passage.spineIndex", offset: "passage.start"))
+            ORDER BY \(order.clause)
+            LIMIT :limit
+            """)
+        var arguments: StatementArguments = [
+            "spine": boundary.spineIndex, "offset": boundary.charOffset, "limit": limit,
+        ]
+        if let pattern { arguments += ["pattern": pattern] }
+        return try Row.fetchAll(statement, arguments: arguments)
+            .compactMap { truncated($0, at: boundary) }
     }
 
     /// Turns a row into a passage, cutting the straddling one to what has
     /// actually been read.
     ///
-    /// `start < :offset` in the clause above is the whole boundary: `start` is
+    /// `start < :offset` in `readClause` is the whole boundary: `start` is
     /// always below `end`, so it admits exactly the passages that end at or
     /// before the position plus the single one the position falls inside, and
     /// nothing later in the book whatever the query says. That one is then cut
@@ -571,18 +687,8 @@ public actor AskIndexStore {
         before boundary: ReadingBoundary, limit: Int, in queue: DatabaseQueue,
     ) throws -> [RetrievedPassage] {
         try queue.read { db in
-            let rows = try Row.fetchAll(db, sql: """
-                SELECT spineIndex, ordinal, start, end, words, text, 0.0 AS score
-                FROM passage
-                WHERE spineIndex < :spine
-                   OR (spineIndex = :spine AND start < :offset)
-                ORDER BY spineIndex DESC, ordinal DESC
-                LIMIT :limit
-                """, arguments: [
-                "spine": boundary.spineIndex, "offset": boundary.charOffset, "limit": limit,
-            ])
             // Back into reading order: a recap read backwards is a worse recap.
-            return rows.compactMap { truncated($0, at: boundary) }
+            try bounded(nil, before: boundary, order: .newestFirst, limit: limit, in: db)
                 .sorted { ($0.passage.spineIndex, $0.passage.ordinal)
                     < ($1.passage.spineIndex, $1.passage.ordinal) }
         }
@@ -598,10 +704,17 @@ public actor AskIndexStore {
     /// is given the chance.
     ///
     /// One indexed lookup per word, and a question has three or four at most.
-    /// Truncation is not applied: a word that occurs only in the unread half of
-    /// the straddling passage is vanishingly rare, and counting it as met is the
-    /// conservative direction — it lets the question through to retrieval, which
-    /// is itself bounded.
+    ///
+    /// **The passage the reader is standing in counts only up to where they
+    /// stand.** It once counted whole, on the argument that a word found only
+    /// in its unread tail was rare and that "met" was the conservative answer
+    /// for a question. It is not conservative for an *answer*: `AskEngine`
+    /// vets the model's prose through this same probe, and there "met" releases
+    /// the answer — so a character introduced in the next sentence of the
+    /// paragraph on screen, which retrieval had cut away from the model, was
+    /// waved through when the model named them from memory. So a word whose
+    /// only match before the boundary is that one passage is checked again
+    /// against the part of it that has been read.
     /// - Parameter bookUUID: which book to probe. No index for it means every
     ///   word is unmet — the conservative direction, and the opposite of the
     ///   one the other retrieval methods take: unknown means unmet means refuse.
@@ -616,33 +729,50 @@ public actor AskIndexStore {
         _ words: [String], before boundary: ReadingBoundary, in queue: DatabaseQueue,
     ) throws -> [String] {
         try queue.read { db in
-            // One preparation, N probes. Prepared inside the filter, SQLite
-            // parsed and planned the same statement once per candidate — and
-            // the answer-side guard now offers it more candidates than it used
-            // to, because the sentence-opener exemption became conditional.
-            let statement = try db.cachedStatement(sql: """
-                SELECT 1
-                FROM passage
-                JOIN passage_fts ON passage_fts.rowid = passage.rowid
-                WHERE passage_fts MATCH :pattern
-                  AND (passage.spineIndex < :spine
-                       OR (passage.spineIndex = :spine AND passage.start < :offset))
-                LIMIT 1
-                """)
-            return try words.filter { word in
+            try words.filter { word in
                 // `FTSQuery.all`, not `FTS5Pattern(matchingAnyTokenIn:)`, which
                 // probed "jean'luc" as `jean OR luc` and called the name met
                 // when only one half of it had appeared — an unmet name walking
                 // straight past the spoiler guard. Quoted, it is a phrase, and
                 // only the whole name counts as met.
                 guard let pattern = FTSQuery.all([word]) else { return false }
-                let found = try Int.fetchOne(statement, arguments: [
-                    "pattern": pattern, "spine": boundary.spineIndex,
-                    "offset": boundary.charOffset,
-                ])
-                return found == nil
+                // The earliest match before the boundary, through the same
+                // bounded read the search uses. In book order the passage the
+                // reader is standing in comes after every whole one, so the
+                // first match is a whole passage — met — whenever there is
+                // one, and is the straddling passage only when nothing earlier
+                // matches. No match at all, or one the cut emptied, is unmet.
+                guard let first = try bounded(
+                    pattern, before: boundary, order: .bookOrder, limit: 1, in: db,
+                ).first else { return true }
+                guard first.isTruncated else { return false }
+                // The match may sit in the unread tail the cut removed.
+                return !Self.contains(phrase: word, in: first.passage.text)
             }
         }
+    }
+
+    /// Whether `phrase` occurs in `text` the way the FTS index would find it.
+    ///
+    /// The index's tokeniser, restated: `unicode61` with diacritics removed
+    /// splits on everything that is not a letter or a digit and folds case, and
+    /// a quoted pattern is a phrase — its tokens, adjacent and in order. So
+    /// "jean'luc" is met by "Jean-Luc" and not by "Jean" alone, exactly as the
+    /// SQL probe above decides it for a passage read to its end.
+    static func contains(phrase: String, in text: String) -> Bool {
+        let needle = ftsTokens(phrase)
+        guard !needle.isEmpty else { return false }
+        let haystack = ftsTokens(text)
+        guard haystack.count >= needle.count else { return false }
+        return (0 ... haystack.count - needle.count).contains { start in
+            haystack[start ..< start + needle.count].elementsEqual(needle)
+        }
+    }
+
+    static func ftsTokens(_ text: String) -> [String] {
+        text.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: nil)
+            .split { !$0.isLetter && !$0.isNumber }
+            .map { $0.lowercased() }
     }
 
     /// The people this book has introduced before the boundary, most mentioned
@@ -664,8 +794,7 @@ public actor AskIndexStore {
         let rows = try queue.read { db in
             try Row.fetchAll(db, sql: """
                 SELECT name, nameKey, SUM(mentions) AS mentions FROM name
-                WHERE spineIndex < :spine
-                   OR (spineIndex = :spine AND firstOffset < :offset)
+                WHERE \(readClause(spine: "spineIndex", offset: "firstOffset"))
                 GROUP BY nameKey, name
                 """, arguments: [
                 "spine": boundary.spineIndex, "offset": boundary.charOffset,
@@ -677,6 +806,30 @@ public actor AskIndexStore {
             )
         }
         return NameFinder.merge(names).prefix(limit).map(\.name)
+    }
+
+    /// Every word of every name in this book's name table — **the whole book,
+    /// not bounded by the reader's position.**
+    ///
+    /// The one read in this file that does not go through `readClause`, and on
+    /// purpose: it never chooses what the model or the reader sees. It answers
+    /// "could this lower-case word in the question be somebody?", so the spoiler
+    /// probe — which is bounded — can be asked about it. "who is the cheshire
+    /// cat?" at the end of Chapter I has no capital to go on, and the name it
+    /// asks about is by definition one the bounded table does not hold yet
+    /// (R-04). What a reader can learn from it is that the question is refused,
+    /// which is exactly what the capitalised spelling of the same question gets
+    /// whether or not the book ever names the Cat.
+    ///
+    /// Folded and possessive-stripped the way `QueryTerms` folds a question, so
+    /// the two compare directly. No index means no words — and `unmetWords`
+    /// then calls every candidate unmet, which is the conservative direction.
+    public func nameWords(in bookUUID: String) throws -> Set<String> {
+        guard let queue = try queue(for: bookUUID) else { return [] }
+        let keys = try queue.read { db in
+            try String.fetchAll(db, sql: "SELECT DISTINCT nameKey FROM name")
+        }
+        return Set(keys.flatMap { QueryTerms.tokens(in: $0).map(QueryTerms.strippingPossessive) })
     }
 
     // MARK: - Deletion
@@ -698,6 +851,34 @@ public actor AskIndexStore {
     public func removeAll() {
         open.removeAll()
         try? FileManager.default.removeItem(at: directory)
+    }
+
+    /// Everything except the indexes of `kept`.
+    ///
+    /// For sign-out on a device that also holds books the reader added from
+    /// their own files: those belong to the device, not to the account leaving,
+    /// and their indexes are kept with them. Every other file in the directory
+    /// goes — finished indexes, half-built ones and their journals alike.
+    public func removeAll(keeping kept: Set<String>) {
+        guard !kept.isEmpty else { return removeAll() }
+        open = open.filter { kept.contains($0.key) }
+        var keptNames: Set<String> = []
+        for uuid in kept {
+            let url = indexURL(for: uuid)
+            for candidate in [url, Self.buildingURL(for: url)] {
+                let name = candidate.lastPathComponent
+                // SQLite's own companions are `-wal`, `-shm` and `-journal`;
+                // `remove(bookUUID:)` names `.wal` and `.shm`, so both spellings.
+                for suffix in ["", "-wal", "-shm", "-journal", ".wal", ".shm"] {
+                    keptNames.insert(name + suffix)
+                }
+            }
+        }
+        let entries = (try? FileManager.default.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: nil)) ?? []
+        for entry in entries where !keptNames.contains(entry.lastPathComponent) {
+            try? FileManager.default.removeItem(at: entry)
+        }
     }
 
     // MARK: - Opening

@@ -329,6 +329,31 @@ struct SignOutCleanupTests {
         #expect(try await store.annotations(for: books[0].uuid).count == 1)
     }
 
+    /// An anchor is keyed by book alone, and the file it lives in outlives the
+    /// account: the next reader on the same server is handed the same book
+    /// uuids. Kept, the departed reader's place in an audiobook became the
+    /// arriving reader's starting point — trusted as exact, so the first tick
+    /// of playback wrote it to the arriving account — and, being newer, it
+    /// refused every anchor the arriving reader wrote until theirs passed it.
+    @Test("the audio anchors go with the account")
+    func clearsAudioAnchors() async throws {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appending(path: "issa-signout-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try LibraryStore(serverKey: "http://example.test", directory: directory)
+        try await store.setAudioAnchor(
+            AudioAnchor(audioHref: "chapter09.mp3", offset: 1_200, writtenAt: 2_000), forBook: "b1")
+
+        try await store.clearAccountData()
+
+        #expect(try await store.audioAnchor(forBook: "b1") == nil,
+                "the departed reader's place would be the next reader's start")
+        let arriving = AudioAnchor(audioHref: "chapter01.mp3", offset: 30, writtenAt: 1_000)
+        try await store.setAudioAnchor(arriving, forBook: "b1")
+        #expect(try await store.audioAnchor(forBook: "b1") == arriving,
+                "the departed reader's newer anchor refused the arriving reader's")
+    }
+
     /// The store is per server and the server serves more than one reader:
     /// a second account on a shared device was handed the first one's
     /// highlights and quoted excerpts.

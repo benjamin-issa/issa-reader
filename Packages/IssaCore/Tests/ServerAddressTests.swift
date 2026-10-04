@@ -91,27 +91,33 @@ struct ServerAddressTests {
 
     @Test("a cleartext fallback remembers what was typed, so HTTPS is retried")
     func cleartextFallbackKeepsTypedText() throws {
-        let http = try #require(URL(string: "http://library.example.com:8001"))
-        #expect(ServerAddress.isCleartextFallback(http, forTyped: "library.example.com"))
-        #expect(ServerAddress.addressToStore(for: " library.example.com ", connectedTo: http)
-            == "library.example.com")
+        // A host of this run's own. The log store is the real one and keeps
+        // six hours, so a fixed phrase was matched by the line any earlier
+        // run had written, and this passed with the warning deleted.
+        let host = "library-\(UUID().uuidString.lowercased()).example.com"
+        let http = try #require(URL(string: "http://\(host):8001"))
+        #expect(ServerAddress.isCleartextFallback(http, forTyped: host))
+        #expect(ServerAddress.addressToStore(for: " \(host) ", connectedTo: http) == host)
         // What is stored must re-derive the very URL that just answered, or
         // keeping raw text would break the session that stored it…
-        #expect(ServerAddress.normalize("library.example.com")?.absoluteString
-            == "http://library.example.com:8001")
+        #expect(ServerAddress.normalize(host)?.absoluteString == "http://\(host):8001")
         // …and the next connect from it must still lead with HTTPS.
-        #expect(ServerAddress.candidates(for: "library.example.com").first?.scheme == "https")
+        #expect(ServerAddress.candidates(for: host).first?.scheme == "https")
         // The downgrade may only ever happen visibly: recording the address
-        // is also what writes the warning a diagnostics export shows.
-        #expect(IssaLog.export().contains("cleartext HTTP"))
+        // is also what writes the warning a diagnostics export shows — this
+        // one, for this host.
+        let warned = IssaLog.export().split(separator: "\n").contains {
+            $0.contains("cleartext HTTP") && $0.contains(host)
+        }
+        #expect(warned, "the downgrade to \(host) left no warning in the log")
     }
 
     @Test("an explicit http:// is not treated as a downgrade")
     func explicitHTTPIsNotADowngrade() throws {
-        let url = try #require(URL(string: "http://192.168.68.125:8001"))
-        #expect(!ServerAddress.isCleartextFallback(url, forTyped: "http://192.168.68.125:8001"))
-        #expect(ServerAddress.addressToStore(for: "http://192.168.68.125:8001", connectedTo: url)
-            == "http://192.168.68.125:8001")
+        let url = try #require(URL(string: "http://192.168.1.10:8001"))
+        #expect(!ServerAddress.isCleartextFallback(url, forTyped: "http://192.168.1.10:8001"))
+        #expect(ServerAddress.addressToStore(for: "http://192.168.1.10:8001", connectedTo: url)
+            == "http://192.168.1.10:8001")
     }
 }
 

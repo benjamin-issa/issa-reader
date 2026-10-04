@@ -49,6 +49,29 @@ struct AskAnswerParserTests {
         #expect(parsed.citations == [1, 2])
     }
 
+    /// Only the word right before a number introduces it. "section" was
+    /// remembered past its own number, so every citation after a "(Section N)"
+    /// was read as a chapter too, until a word came along to reset it.
+    @Test("a citation after a section parenthetical is still a citation")
+    func citationsAfterASectionAreKept() {
+        #expect(AskAnswerParser.ordinals(inCitationLine: " [1] (Section 3), [2] (Section 5)")
+            == [1, 2])
+        #expect(AskAnswerParser.ordinals(inCitationLine: " 1 (Section 2), 3 (Section 4), 5")
+            == [1, 3, 5])
+        #expect(AskAnswerParser.ordinals(inCitationLine: " 1 (Section 2); 3 (Section 4)")
+            == [1, 3])
+        // The shapes that already worked still do.
+        #expect(AskAnswerParser.ordinals(inCitationLine: " 1 and 2 (Section 4)") == [1, 2])
+        #expect(AskAnswerParser.ordinals(inCitationLine: " 1 (Sections 3)") == [1])
+        // End to end, through the footer the reader's sources row is built from.
+        let parsed = AskAnswerParser.parse("""
+        His father was Josiah Franklin.
+        Sources: [1] (Section 3), [2] (Section 5)
+        """)
+        #expect(parsed.text == "His father was Josiah Franklin.")
+        #expect(parsed.citations == [1, 2])
+    }
+
     // MARK: - Resolving citations
 
     /// Six excerpts, numbered the way the prompt numbers them.
@@ -192,6 +215,56 @@ struct AskAnswerParserTests {
         #expect(!AskAnswerParser.parse("").notYetRevealed)
     }
 
+    /// The hedge a 3B model writes: the sentinel, then the answer anyway. As a
+    /// substring match this was a refusal that kept its prose and its
+    /// citations — and the engine's vetting skips refusals, so the prose was
+    /// never checked for names the reader has not met.
+    @Test("the sentinel followed by prose is prose, with the sentinel taken out")
+    func sentinelThenProseIsProse() {
+        let parsed = AskAnswerParser.parse("""
+        The story hasn't revealed that yet. However, Alice is later guided by the \
+        Cheshire Cat, who grins and vanishes.
+        Sources: 1
+        """)
+        #expect(!parsed.notYetRevealed)
+        #expect(parsed.origin == .model)
+        #expect(parsed.text
+            == "However, Alice is later guided by the Cheshire Cat, who grins and vanishes.")
+        #expect(parsed.citations == [1])
+
+        // Wherever the sentence falls, and however it is punctuated.
+        let after = AskAnswerParser.parse(
+            "Alice falls down a hole. The story has not revealed that yet",
+        )
+        #expect(!after.notYetRevealed)
+        #expect(after.text == "Alice falls down a hole.")
+
+        // A clause, not a sentence, is not the sentinel at all: the whole of it
+        // is prose, and it goes to the vetting as it stands.
+        let clause = AskAnswerParser.parse(
+            "The story hasn't revealed that yet, but Alice meets the Duchess.",
+        )
+        #expect(!clause.notYetRevealed)
+        #expect(clause.text == "The story hasn't revealed that yet, but Alice meets the Duchess.")
+    }
+
+    /// A refusal shows no excerpts. "The story hasn't revealed that yet" with
+    /// sources under it is proof offered of an absence.
+    @Test("the bare sentinel carries no citations, even when the model wrote some")
+    func sentinelDropsItsCitations() {
+        let parsed = AskAnswerParser.parse("The story hasn't revealed that yet.\nSources: 1, 2")
+        #expect(parsed.notYetRevealed)
+        #expect(parsed.origin == .withheld)
+        #expect(parsed.text == AskAnswerParser.notYetSentinel)
+        #expect(parsed.citations.isEmpty)
+        // Twice over is still only the sentinel.
+        let twice = AskAnswerParser.parse(
+            "The story hasn't revealed that yet. The story hasn't revealed that yet.",
+        )
+        #expect(twice.notYetRevealed)
+        #expect(twice.citations.isEmpty)
+    }
+
     // MARK: - Streaming
 
     @Test("a half-typed Sources line never reaches the screen")
@@ -227,5 +300,157 @@ struct AskAnswerParserTests {
         }
         // And what is finally shown is the answer without its footer.
         #expect(seen.last == "Alice follows a white rabbit down a hole.")
+    }
+}
+
+/// The footer as the 27 model writes it: after the last sentence, on the same
+/// line, rather than underneath. The first run on that model withheld a correct
+/// answer about a rabbit because "Sources" read as a name nobody had introduced.
+@Suite("A footer on the prose's own line")
+struct InlineFooterTests {
+    @Test("a footer written straight after the last sentence still counts")
+    func inlineFooterIsParsed() {
+        let answer = AskAnswerParser.parse(
+            "She ran after it and saw it pop down a large rabbit-hole. Sources: 2, 3")
+        #expect(answer.text == "She ran after it and saw it pop down a large rabbit-hole.")
+        #expect(answer.citations == [2, 3])
+    }
+
+    @Test("the word inside a sentence is still prose")
+    func midSentenceIsProse() {
+        let answer = AskAnswerParser.parse("She checked the sources: he said nothing. Then she left.")
+        #expect(answer.citations.isEmpty)
+        #expect(answer.text.hasSuffix("Then she left."))
+    }
+
+    @Test("a footer followed by more prose is not a footer")
+    func footerMustEndTheAnswer() {
+        let answer = AskAnswerParser.parse("She left. Sources: 2 say she was tired.")
+        #expect(answer.citations.isEmpty)
+    }
+
+    @Test("a half-typed inline footer never reaches the screen")
+    func inlinePrefixIsHeld() {
+        #expect(AskAnswerParser.visible("She fell down the well. Sour") == "She fell down the well.")
+        #expect(AskAnswerParser.visible("She fell down the well. Sources: 2,") == "She fell down the well.")
+        #expect(AskAnswerParser.visible("She fell down the well. Soon") == "She fell down the well. Soon")
+    }
+}
+
+/// The shapes that blanked an answer in 1.2.0 (41), and the ones around them.
+///
+/// The reader tapped a suggested question and got a card with three sources and
+/// no answer above them. The model had written prose; the parser had eaten it,
+/// because a `Sources:` line was allowed to swallow everything after it without
+/// anyone checking that what followed was citations.
+@Suite("A footer never swallows the answer")
+struct FooterNeverEatsProseTests {
+    @Test("a footer written first does not eat the answer")
+    func leadingFooterKeepsTheProse() {
+        let answer = AskAnswerParser.parse("""
+        Sources: 1, 2, 3
+        Laurence Arne-Sayles is a scholar the Journal names among the Dead.
+        """)
+        #expect(answer.text == "Laurence Arne-Sayles is a scholar the Journal names among the Dead.")
+        #expect(answer.citations == [1, 2, 3])
+    }
+
+    @Test("a footer written first does not turn the prose's numbers into citations")
+    func leadingFooterDoesNotScanTheProse() {
+        let answer = AskAnswerParser.parse("Sources: 1, 2\nThere are fifteen of them, and 12 remain.")
+        #expect(answer.citations == [1, 2])
+    }
+
+    @Test("a footer and nothing else is not an answer")
+    func footerAloneIsNotAnAnswer() {
+        #expect(AskAnswerParser.parse("Sources: 1, 2, 3").text.isEmpty)
+    }
+
+    @Test("prose after a mid-answer footer is still part of the answer")
+    func proseAfterAFooterSurvives() {
+        let answer = AskAnswerParser.parse("""
+        Sources: 2
+        He is a scholar.
+        He is also called the Prophet.
+        """)
+        #expect(answer.text.contains("Prophet"))
+    }
+
+    @Test("no raw with prose in it ever parses to an empty answer")
+    func theInvariant() {
+        let shapes = [
+            "Sources: 1\nAlice ran.",
+            "Alice ran.\nSources: 1",
+            "Alice ran. Sources: 1",
+            "  \n\nSources: 1, 2\n\nAlice ran.\n",
+            "sources: 1\nAlice ran.",
+            "Alice ran.",
+            "Sources are what she followed.",
+        ]
+        for shape in shapes {
+            #expect(!AskAnswerParser.parse(shape).text.isEmpty, "\(shape)")
+        }
+    }
+}
+
+/// The four faults found beside the one that blanked the answer.
+@Suite("What counts as a footer")
+struct FooterBoundaryTests {
+    @Test("a quoted title beginning Sources: is not a footer")
+    func aQuotedTitleIsProse() {
+        let answer = AskAnswerParser.parse("He read the chapter titled \"Sources: 3\"")
+        #expect(answer.citations.isEmpty)
+        #expect(answer.text.hasSuffix("\"Sources: 3\""))
+    }
+
+    @Test("a clause ending in a colon does not end a sentence")
+    func aColonIsNotASentenceEnd() {
+        let answer = AskAnswerParser.parse("He named the following: Sources: 1")
+        #expect(answer.citations.isEmpty)
+    }
+
+    @Test("an answer ending in an ellipsis keeps its citations")
+    func anEllipsisEndsASentence() {
+        let answer = AskAnswerParser.parse("She trailed off… Sources: 2, 4")
+        #expect(answer.citations == [2, 4])
+        #expect(answer.text == "She trailed off…")
+    }
+
+    @Test("a full stop inside quotation marks still ends the sentence")
+    func aQuotedSentenceEnds() {
+        let answer = AskAnswerParser.parse("She said \"I saw her.\" Sources: 1")
+        #expect(answer.citations == [1])
+    }
+
+    @Test("a plural Sections is a chapter, not a citation")
+    func pluralSectionsAreNotCitations() {
+        let answer = AskAnswerParser.parse("She left. Sources: 1 (Sections 3)")
+        #expect(answer.citations == [1])
+    }
+
+    @Test("a half-typed footer never reaches the screen, however far it got")
+    func theHoldSurvivesTheLabel() {
+        #expect(AskAnswerParser.visible("She fell. Sour") == "She fell.")
+        #expect(AskAnswerParser.visible("She fell. Sources: 1 a") == "She fell.")
+        #expect(AskAnswerParser.visible("She fell. Sources: 1 and 2 (Sec") == "She fell.")
+        #expect(AskAnswerParser.visible("She fell. Soon after, she stood.")
+            == "She fell. Soon after, she stood.")
+    }
+
+    /// Measured on the 27 model (1.4.0 Ask review): under a refusal it writes
+    /// "Sources: none". "none" was not a citation word, so the footer was kept
+    /// as prose, the sentinel stripped from in front of it, and "Sources: none"
+    /// went on as the answer — hidden only because the vetting refused the
+    /// capital S in a book that never says "sources".
+    @Test("a footer that cites nothing is a footer, not the answer")
+    func footerCitingNothing() {
+        let refusal = AskAnswerParser.parse("The story hasn't revealed that yet.\n\nSources: none")
+        #expect(refusal.notYetRevealed)
+        #expect(refusal.text == AskAnswerParser.notYetSentinel)
+        #expect(refusal.citations.isEmpty)
+
+        let answer = AskAnswerParser.parse("Dinah is Alice's cat.\nSources: none")
+        #expect(answer.text == "Dinah is Alice's cat.")
+        #expect(answer.citations.isEmpty)
     }
 }

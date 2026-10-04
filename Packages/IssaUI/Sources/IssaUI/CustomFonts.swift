@@ -65,6 +65,19 @@ public enum CustomFonts {
             return known
         }
         guard isReadable(url) else { return nil }
+        // Read before registering — CoreText answers from the file alone —
+        // so a file it cannot name is never registered at all.
+        guard let family = familyName(in: url) else { return nil }
+        // A copy of a family the app already ships is answered with the
+        // bundled family and not registered. Registered beside the bundled
+        // files, which copy CoreText handed back for that family name became
+        // unstable for the rest of the session: a book embedding a subsetted
+        // or older Literata could set its emphasis, or its whole body, in
+        // every *other* book. Not recorded either, so `families()` never
+        // offers it under "Your fonts" — it is already among the app's own.
+        if let bundled = bundledFamily(matching: family) {
+            return bundled
+        }
 
         var error: Unmanaged<CFError>?
         let added = CTFontManagerRegisterFontsForURL(url as CFURL, .process, &error)
@@ -72,10 +85,21 @@ public enum CustomFonts {
            CFErrorGetCode(cfError) != CTFontManagerError.alreadyRegistered.rawValue {
             return nil
         }
-        guard let family = familyName(in: url) else { return nil }
         registered[url] = family
         if imported { importedURLs.insert(url) }
         return family
+    }
+
+    /// The family the app ships under this name, if it ships one — spelled
+    /// the way the app spells it, whatever case `family` arrived in.
+    ///
+    /// Public for the typeface picker, which must not offer one of these under
+    /// "Your fonts": the family is already listed among the app's own, and
+    /// choosing it there named a face as the reader's that is not theirs.
+    public static func bundledFamily(matching family: String) -> String? {
+        IssaFonts.allFaces.first {
+            $0.family.caseInsensitiveCompare(family) == .orderedSame
+        }?.family
     }
 
     /// Reads the family name out of the file, rather than trusting its name.
@@ -167,6 +191,15 @@ public enum CustomFonts {
         prepared(extractedDirectory(bookUUID: bookUUID))
     }
 
+    /// A directory the caller names, created and excluded from backup.
+    ///
+    /// For a book added from the reader's own files, whose face lives in that
+    /// book's own folder (`LocalBookFiles.fonts`) so that removing the book —
+    /// one folder — takes it, and no sweep of `Fonts/` can.
+    public static func prepareExtractedDirectory(at directory: URL) -> URL? {
+        prepared(directory)
+    }
+
     /// Drops the faces extracted from one book, when its download goes.
     ///
     /// `ReaderModel.resolvePublisherFont` writes a publisher's embedded face to
@@ -197,7 +230,10 @@ public enum CustomFonts {
     /// `extractedDirectory` hashes it a second time and names a directory that
     /// has never existed — so "sign out and delete my downloads" would have
     /// walked straight past the very faces the guard above was protecting.
-    private static func removeExtracted(at directory: URL) {
+    ///
+    /// Public for a book added from the reader's own files, whose faces are
+    /// in its own folder: they are unregistered here before the folder goes.
+    public static func removeExtracted(at directory: URL) {
         lock.lock()
         for url in registered.keys where url.path.hasPrefix(directory.path + "/") {
             CTFontManagerUnregisterFontsForURL(url as CFURL, .process, nil)

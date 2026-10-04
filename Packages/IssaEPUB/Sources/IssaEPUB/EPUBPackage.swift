@@ -31,6 +31,73 @@ public struct EPUBPackage: Sendable {
         /// `-epub-media-overlay-active`, with a leading hyphen, which differs
         /// from the spec's usual example — so this must be read, not assumed.
         public var mediaActiveClass: String?
+
+        // What a book read from the reader's own files is described by. A
+        // server book carries all of this in its catalogue row, so nothing
+        // that opens one reads these; a local book has nothing else.
+
+        /// Every `dc:creator` and `dc:contributor`, in document order, with
+        /// the role and sort name each was given.
+        ///
+        /// Beside `authors` rather than replacing it: `authors` is every
+        /// creator's name whatever its role, which is what it has always
+        /// been, and changing what it means would change it for every reader
+        /// of a server book.
+        public var contributors: [Contributor] = []
+        /// The title the book marks as its subtitle (`title-type`), if any.
+        public var subtitle: String?
+        public var description: String?
+        public var publisher: String?
+        /// `dc:date` as written: a year, a day or a timestamp.
+        public var date: String?
+        /// The `dc:identifier` the package names as its unique identifier,
+        /// falling back to the first one. What makes two copies of a book the
+        /// same book when their bytes differ.
+        public var uniqueIdentifier: String?
+        /// The series the book declares — an EPUB 3 collection of type
+        /// `series`, else Calibre's `calibre:series`.
+        public var series: Series?
+        /// The `version` attribute of `<package>`: "2.0", "3.0", "3.3".
+        public var version: String?
+        /// Whether the book is laid out as fixed pages (`rendition:layout`
+        /// of `pre-paginated`, or the older `fixed-layout` meta).
+        public var isFixedLayout = false
+        /// The manifest id an EPUB 2 `<meta name="cover">` names.
+        public var coverID: String?
+
+        /// Whether this is an EPUB 2 book, by its declared version.
+        public var isEPUB2: Bool { version.map { $0.hasPrefix("2") } ?? false }
+    }
+
+    /// A creator or contributor, as the package declares them.
+    public struct Contributor: Sendable, Hashable {
+        public var name: String
+        /// The name as it sorts: "Barrie, J. M.".
+        public var fileAs: String?
+        /// The MARC relator code — `aut`, `nrt`, `trl`, `ill` — when one is
+        /// given, lowercased.
+        public var role: String?
+        /// `dc:creator` rather than `dc:contributor`. A creator with no role is
+        /// an author by the spec's own reading; a contributor with none is not.
+        public var isCreator: Bool
+
+        public init(name: String, fileAs: String? = nil, role: String? = nil, isCreator: Bool = true) {
+            self.name = name
+            self.fileAs = fileAs
+            self.role = role
+            self.isCreator = isCreator
+        }
+    }
+
+    public struct Series: Sendable, Hashable {
+        public var name: String
+        /// Where in the series, when the book says.
+        public var position: Double?
+
+        public init(name: String, position: Double? = nil) {
+            self.name = name
+            self.position = position
+        }
     }
 
     public struct ManifestItem: Sendable, Hashable {
@@ -41,6 +108,9 @@ public struct EPUBPackage: Sendable {
         public let properties: [String]
         /// Manifest id of this item's SMIL overlay, when it has one.
         public let mediaOverlay: String?
+        /// Where it sits in the manifest, first at 0: `manifest` is keyed by
+        /// id, and a rule that takes "the first" has to mean the book's order.
+        public var documentOrder: Int = 0
     }
 
     public struct SpineItem: Sendable, Hashable {
@@ -148,10 +218,14 @@ public extension EPUBPackage {
         // Read here rather than inside each parse: the contents and the
         // landmarks are two `<nav>` elements of one document, and inflating and
         // parsing that document twice to read one of each buys nothing.
+        // With HTML entities substituted, as a chapter's are: the nav document
+        // is XHTML an author wrote, and one `&nbsp;` in a title failed the
+        // parse and left the book with no contents.
         let navigationDocument = manifest.values
             .first { $0.properties.contains("nav") }
             .flatMap { item in
-                (try? EPUBXML.parse(archive.read(item.href))).map { (document: $0, href: item.href) }
+                (try? EPUBXML.parse(archive.read(item.href), substitutingHTMLEntities: true))
+                    .map { (document: $0, href: item.href) }
             }
         let navigation = (try? parseNavigation(
             archive: archive, manifest: manifest, navigationDocument: navigationDocument,
@@ -216,8 +290,9 @@ public extension EPUBPackage {
 
     // MARK: - Parsing
 
-    private static func parseMetadata(_ opf: EPUBXMLNode) -> Metadata {
+    static func parseMetadata(_ opf: EPUBXMLNode) -> Metadata {
         var metadata = Metadata()
+        metadata.version = opf["version"]?.trimmingCharacters(in: .whitespaces)
         guard let node = opf.firstChild("metadata") ?? opf.descendants("metadata").first else {
             return metadata
         }
@@ -226,24 +301,119 @@ public extension EPUBPackage {
         metadata.identifier = node.descendants("identifier").first?.trimmedText
         metadata.authors = node.descendants("creator").map(\.trimmedText).filter { !$0.isEmpty }
 
+        // EPUB 3 says everything about an element through `<meta refines>`,
+        // keyed by the element's id; collected first so the elements below can
+        // look themselves up in one pass.
+        var refinements: [String: [String: String]] = [:]
         for meta in node.descendants("meta") {
+            guard let property = meta["property"], let refines = meta["refines"],
+                  refines.hasPrefix("#") else { continue }
+            let value = meta.trimmedText
+            guard !value.isEmpty else { continue }
+            // The first one wins, as a reading system takes it.
+            refinements[String(refines.dropFirst()), default: [:]][property] =
+                refinements[String(refines.dropFirst())]?[property] ?? value
+        }
+        func refined(_ element: EPUBXMLNode, _ property: String) -> String? {
+            element["id"].flatMap { refinements[$0]?[property] }
+        }
+
+        // Both element names in one walk, so the order is the document's: a
+        // contributor written between two creators stays between them.
+        func people(in parent: EPUBXMLNode) -> [EPUBXMLNode] {
+            parent.children.flatMap { child in
+                ["creator", "contributor"].contains(child.name) ? [child] : people(in: child)
+            }
+        }
+        for element in people(in: node) {
+            let text = element.trimmedText
+            guard !text.isEmpty else { continue }
+            // `opf:role` and `opf:file-as` are EPUB 2's spelling; the XML
+            // helper indexes a prefixed attribute under its local name too.
+            let role = (refined(element, "role") ?? element["role"])?
+                .trimmingCharacters(in: .whitespaces).lowercased()
+            metadata.contributors.append(Contributor(
+                name: text,
+                fileAs: refined(element, "file-as") ?? element["file-as"],
+                role: role?.isEmpty == false ? role : nil,
+                isCreator: element.name == "creator"))
+        }
+
+        metadata.subtitle = node.descendants("title")
+            .first { refined($0, "title-type")?.lowercased() == "subtitle" }?
+            .trimmedText
+        metadata.description = node.descendants("description").first?.allText
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .nonEmpty
+        metadata.publisher = node.descendants("publisher").first?.trimmedText.nonEmpty
+        metadata.date = node.descendants("date").first?.trimmedText.nonEmpty
+
+        // The unique identifier is the one `<package unique-identifier>` names
+        // by id. The first identifier is often an ISBN while the unique one is
+        // a uuid, or the other way round, so the attribute is read rather than
+        // the order assumed.
+        let identifiers = node.descendants("identifier")
+        metadata.uniqueIdentifier = (opf["unique-identifier"].flatMap { id in
+            identifiers.first { $0["id"] == id }
+        } ?? identifiers.first)?.trimmedText.nonEmpty
+
+        var calibreSeries: String?
+        var calibreIndex: Double?
+        for meta in node.descendants("meta") {
+            // EPUB 2's `<meta name content>`, which EPUB 3 books keep for older
+            // reading systems: the cover's id, Calibre's series and the
+            // fixed-layout flag several retailers wrote before EPUB 3 had one.
+            if let name = meta["name"], let content = meta["content"] {
+                switch name {
+                case "cover": metadata.coverID = metadata.coverID ?? content.trimmingCharacters(in: .whitespaces)
+                case "calibre:series": calibreSeries = content.trimmingCharacters(in: .whitespaces).nonEmpty
+                case "calibre:series_index": calibreIndex = Self.seriesPosition(content)
+                case "fixed-layout": if content.lowercased() == "true" { metadata.isFixedLayout = true }
+                default: break
+                }
+            }
             guard let property = meta["property"] else { continue }
             switch property {
             case "media:duration" where meta["refines"] == nil:
                 metadata.mediaDuration = SMILClock.seconds(from: meta.trimmedText)
             case "media:active-class":
                 metadata.mediaActiveClass = meta.trimmedText
+            case "rendition:layout" where meta["refines"] == nil:
+                if meta.trimmedText == "pre-paginated" { metadata.isFixedLayout = true }
+            case "belongs-to-collection" where meta["refines"] == nil && metadata.series == nil:
+                // A collection is a series only when it says so; one with no
+                // type is a set the publisher grouped, which is the next best
+                // thing and what reading systems show for it.
+                let type = refined(meta, "collection-type")?.lowercased()
+                guard type == nil || type == "series", !meta.trimmedText.isEmpty else { continue }
+                metadata.series = Series(
+                    name: meta.trimmedText,
+                    position: refined(meta, "group-position").flatMap(Self.seriesPosition))
             default:
                 continue
             }
         }
+        if metadata.series == nil, let calibreSeries {
+            metadata.series = Series(name: calibreSeries, position: calibreIndex)
+        }
         return metadata
+    }
+
+    /// A series position, or nil when the text is not a finite number.
+    ///
+    /// `Double(_:)` accepts "NaN", "inf", "Infinity" and "1e999", and some
+    /// tools write "NaN" for a book with no number. A non-finite position
+    /// reached the stored row, whose JSON encoder refuses it, so the book
+    /// could never be added: "Couldn't copy this book", and a Try Again that
+    /// could never succeed.
+    static func seriesPosition(_ text: String) -> Double? {
+        Double(text.trimmingCharacters(in: .whitespaces)).flatMap { $0.isFinite ? $0 : nil }
     }
 
     private static func parseManifest(_ opf: EPUBXMLNode, rootDirectory: String) -> [String: ManifestItem] {
         guard let manifestNode = opf.descendants("manifest").first else { return [:] }
         var items: [String: ManifestItem] = [:]
-        for item in manifestNode.children("item") {
+        for (order, item) in manifestNode.children("item").enumerated() {
             guard let id = item["id"], let rawHref = item["href"] else { continue }
             // A URI, like every href — see `resolve` for why it is decoded.
             let href = rawHref.removingPercentEncoding ?? rawHref
@@ -256,6 +426,7 @@ public extension EPUBPackage {
                 mediaType: item["media-type"] ?? "application/octet-stream",
                 properties: (item["properties"] ?? "").split(separator: " ").map(String.init),
                 mediaOverlay: item["media-overlay"],
+                documentOrder: order,
             )
         }
         return items
@@ -333,7 +504,8 @@ public extension EPUBPackage {
             }
         }
         if let ncx = manifest.values.first(where: { $0.mediaType == ncxMediaType }) {
-            let document = try EPUBXML.parse(archive.read(ncx.href))
+            // Substituted for the same reason as the nav document above.
+            let document = try EPUBXML.parse(archive.read(ncx.href), substitutingHTMLEntities: true)
             return document.descendants("navPoint").compactMap { point in
                 guard let label = point.descendants("text").first?.trimmedText,
                       let href = point.descendants("content").first?["src"] else { return nil }

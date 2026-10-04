@@ -26,12 +26,37 @@ struct ReaderStyleMigrationTests {
     }
     """
 
+    @Test("a blob this build writes is still readable by the build before it")
+    func aBlobThisBuildWritesIsReadableByTheBuildBeforeIt() throws {
+        // A reader who moves back a build must not silently lose their
+        // justification: the old build reads only `justified`, so this one
+        // keeps writing it. `.always` is the only case that build can express.
+        func legacyBool(of justification: ReaderStyle.Justification) throws -> Bool? {
+            var style = ReaderStyle()
+            style.justification = justification
+            let data = try JSONEncoder().encode(style)
+            let blob = try #require(
+                try JSONSerialization.jsonObject(with: data) as? [String: Any])
+            return blob["justified"] as? Bool
+        }
+        #expect(try legacyBool(of: .always) == true)
+        #expect(try legacyBool(of: .never) == false)
+        #expect(try legacyBool(of: .followBook) == false)
+
+        // And the new key is still there, so this build round-trips exactly.
+        var style = ReaderStyle()
+        style.justification = .never
+        let restored = try JSONDecoder().decode(
+            ReaderStyle.self, from: JSONEncoder().encode(style))
+        #expect(restored.justification == .never)
+    }
+
     @Test("a blob saved before the new field still decodes, keeping every setting")
     func legacyBlobSurvives() throws {
         let style = try JSONDecoder().decode(ReaderStyle.self, from: Data(legacy.utf8))
         #expect(style.fontSize == 22)
         #expect(style.theme == .night)
-        #expect(style.justified)
+        #expect(style.justification == .always)
         #expect(style.pageMargin == 32)
         #expect(style.lineSpacing == .roomy)
         #expect(style.highlightGranularity == .word)
@@ -41,6 +66,57 @@ struct ReaderStyleMigrationTests {
         // And the new fields take their defaults rather than failing the decode.
         #expect(style.progressDisplay == .book)
         #expect(style.highlighters == [:])
+    }
+
+    /// Five fields read with a bare `try`, so one value of the wrong type threw
+    /// the whole blob away and `PlaybackSettings` reset every preference.
+    @Test("a field of the wrong type costs that field, not the blob", arguments: [
+        ("fontSize", #""18""#),
+        ("pageMargin", #""wide""#),
+        ("followNarration", #""yes""#),
+        ("turnPagesMidSentence", #""no""#),
+        ("tapToPlay", "{}"),
+    ])
+    func wrongTypeIsForgiven(_ key: String, _ damaged: String) throws {
+        // Every other field set away from its default, so a reset shows.
+        var fields = [
+            #""theme": "night""#, #""lineSpacing": "roomy""#, #""fontSize": 22"#,
+            #""pageMargin": 32"#, #""followNarration": false"#,
+            #""turnPagesMidSentence": true"#, #""tapToPlay": false"#,
+        ].filter { !$0.hasPrefix("\"\(key)\"") }
+        fields.append("\"\(key)\": \(damaged)")
+        let blob = "{" + fields.joined(separator: ", ") + "}"
+        let style = try JSONDecoder().decode(ReaderStyle.self, from: Data(blob.utf8))
+        #expect(style.theme == .night)
+        #expect(style.lineSpacing == .roomy)
+        let fallback = ReaderStyle()
+        #expect(style.fontSize == (key == "fontSize" ? fallback.fontSize : 22))
+        #expect(style.pageMargin == (key == "pageMargin" ? fallback.pageMargin : 32))
+        #expect(style.followNarration == (key == "followNarration" ? fallback.followNarration : false))
+        #expect(style.turnPagesMidSentence
+            == (key == "turnPagesMidSentence" ? fallback.turnPagesMidSentence : true))
+        #expect(style.tapToPlay == (key == "tapToPlay" ? fallback.tapToPlay : false))
+    }
+
+    /// Nothing downstream bounds these: the page lays out at whatever size it
+    /// is given, and the Text size stepper's label does `Int(size)`, which
+    /// traps on anything past `Int.max`.
+    @Test("an absurd size or margin is brought into range")
+    func lengthsAreClamped() throws {
+        let huge = try JSONDecoder().decode(
+            ReaderStyle.self, from: Data(#"{"fontSize": 1e300, "pageMargin": 1e300}"#.utf8))
+        #expect(huge.fontSize == ReaderStyle.fontSizeRange.upperBound)
+        #expect(huge.pageMargin == ReaderStyle.pageMarginRange.upperBound)
+        let tiny = try JSONDecoder().decode(
+            ReaderStyle.self, from: Data(#"{"fontSize": -4, "pageMargin": -50}"#.utf8))
+        #expect(tiny.fontSize == ReaderStyle.fontSizeRange.lowerBound)
+        #expect(tiny.pageMargin == 0)
+        // Every size the app can set is inside the range and left exactly.
+        for size: CGFloat in [12, 18, 32, 40] {
+            #expect(ReaderStyle.clampedLength(size, to: ReaderStyle.fontSizeRange) == size)
+        }
+        #expect(ReaderStyle.clampedLength(.infinity, to: ReaderStyle.fontSizeRange) == nil)
+        #expect(ReaderStyle.clampedLength(.nan, to: ReaderStyle.fontSizeRange) == nil)
     }
 
     @Test("an empty object decodes to the defaults rather than throwing")
@@ -109,7 +185,7 @@ struct ReaderStyleMigrationTests {
         #expect(style.highlighters == [.night: .preset(.sage)])
         #expect(style.fontSize == 23)
         #expect(style.theme == .slate)
-        #expect(style.justified)
+        #expect(style.justification == .always)
     }
 
     /// And a `highlighters` that is not an object at all must not reset the

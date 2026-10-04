@@ -39,9 +39,9 @@ public struct RenderedPage: Sendable, Hashable, Identifiable {
 /// again.
 @MainActor
 public final class ChapterLayout {
-    /// `private(set) var` rather than `let` because of `recolour(to:)`, which
-    /// is the one thing that changes it — and changes nothing about its
-    /// metrics.
+    /// `private(set) var` rather than `let` because of `recolour(to:)` and
+    /// `reindent(forColumnWidth:)`, the two things that change it — an ink and
+    /// a first-line indent, never a character.
     public private(set) var attributedText: NSAttributedString
     public private(set) var pages: [RenderedPage] = []
     public private(set) var pageSize: CGSize = .zero
@@ -67,6 +67,7 @@ public final class ChapterLayout {
     public func layout(pageSize size: CGSize) {
         guard size.width > 0, size.height > 0 else { return }
         pageSize = size
+        reindent(forColumnWidth: size.width)
         container.size = CGSize(width: size.width, height: CGFloat.greatestFiniteMagnitude)
         layoutManager.textViewportLayoutController.layoutViewport()
         // Force layout of the whole chapter; pagination needs total height, and
@@ -162,6 +163,59 @@ public final class ChapterLayout {
         // runs per audio tick. Paying for the layout once, now, is cheaper than
         // finding out which caller happens to come first.
         layoutManager.ensureLayout(for: contentStorage.documentRange)
+    }
+
+    /// The column width the first-line indents were last resolved against;
+    /// `nil` until the first layout.
+    private var indentedWidth: CGFloat?
+
+    /// Resolves the book's first-line indents again for a new column width.
+    ///
+    /// A `text-indent: 4.688%` is a fraction of the column, and the parser can
+    /// only resolve it against the column it was given. A resize — rotation, a
+    /// split-view drag, a Mac window — only lays the chapter out again; it does
+    /// not parse it again. So every paragraph kept an indent sized for the old
+    /// column until the next chapter, when it jumped. The parser tags each run
+    /// with what was asked (`.issaIndentFraction`, `.issaIndentPoints`), and
+    /// this applies it in place, the way `recolour(to:)` applies a new ink:
+    /// one attribute, the same characters, before the layout pass that
+    /// follows. `HTMLContentParser.firstLineIndent` decides the number for
+    /// both, so the bound on an over-wide indent holds at every width.
+    ///
+    /// Leaves the storage alone when nothing moves, which is every layout of a
+    /// chapter at the width it was parsed for.
+    private func reindent(forColumnWidth width: CGFloat) {
+        guard width != indentedWidth else { return }
+        indentedWidth = width
+        let whole = NSRange(location: 0, length: attributedText.length)
+        var edits: [(NSRange, NSParagraphStyle)] = []
+        attributedText.enumerateAttributes(in: whole) { attributes, range, _ in
+            let requested: CGFloat
+            if let fraction = attributes[.issaIndentFraction] as? Double {
+                requested = width * CGFloat(fraction)
+            } else if let points = attributes[.issaIndentPoints] as? Double {
+                requested = CGFloat(points)
+            } else {
+                return
+            }
+            guard let paragraph = attributes[.paragraphStyle] as? NSParagraphStyle else { return }
+            let first = paragraph.headIndent
+                + HTMLContentParser.firstLineIndent(requested, columnWidth: width)
+            guard first != paragraph.firstLineHeadIndent,
+                  let edited = paragraph.mutableCopy() as? NSMutableParagraphStyle
+            else { return }
+            edited.firstLineHeadIndent = first
+            edits.append((range, edited))
+        }
+        guard !edits.isEmpty else { return }
+        let reindented = NSMutableAttributedString(attributedString: attributedText)
+        for (range, paragraph) in edits {
+            reindented.addAttribute(.paragraphStyle, value: paragraph, range: range)
+        }
+        attributedText = reindented
+        contentStorage.performEditingTransaction {
+            contentStorage.attributedString = reindented
+        }
     }
 
     // MARK: - Highlighting

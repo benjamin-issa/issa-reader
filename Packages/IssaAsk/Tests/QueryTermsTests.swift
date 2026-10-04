@@ -56,15 +56,32 @@ struct QueryTermsTests {
             "Why does she say \"curiouser and curiouser\"?",
             "Who lives in the Rabbit-Hole — and why?",
             "Alice's sister's book?",
-            "'''",
-            "-- OR 1=1 --",
             "NEAR(a b) AND *",
         ]
         for question in questions {
             let terms = QueryTerms.extract(from: question)
-            guard !terms.searchTokens.isEmpty else { continue }
-            let joined = terms.searchTokens.joined(separator: " ")
-            #expect(FTS5Pattern(matchingAnyTokenIn: joined) != nil, "\(question)")
+            #expect(!terms.searchTokens.isEmpty, "\(question)")
+            // The builders production actually uses, not GRDB's
+            // `FTS5Pattern(matchingAnyTokenIn:)` — which production stopped
+            // using because it splits "ryn's" into `ryn OR s`, and which only
+            // needs one plain word to succeed. A nil here is retrieval
+            // returning nothing and the reader being told "not yet".
+            let any = FTSQuery.any(terms.searchTokens)
+            let all = FTSQuery.all(terms.searchTokens)
+            #expect(any != nil, "\(question)")
+            #expect(all != nil, "\(question)")
+            // Every token survives into the pattern, apostrophes and all: a
+            // token dropped on the way is a word of the question nobody
+            // searched for.
+            for token in FTSQuery.usable(terms.searchTokens) {
+                #expect(any?.rawPattern.contains(FTSQuery.quoted(token)) == true,
+                        "\(question): \(token)")
+            }
+        }
+        // Nothing but punctuation and operators: no tokens, said rather than
+        // skipped past, so a change that tokenised them would show up here.
+        for degenerate in ["'''", "-- OR 1=1 --"] {
+            #expect(QueryTerms.extract(from: degenerate).searchTokens.isEmpty, "\(degenerate)")
         }
     }
 
@@ -118,6 +135,25 @@ struct QueryTermsTests {
         #expect(QueryTerms.extract(from: "What has happened so far?").nameCandidates.isEmpty)
     }
 
+    /// A bare-name question has the name first. The first word was skipped
+    /// unconditionally, and the answer side exempts every word the question
+    /// contains, so "Cheshire Cat?" at the end of Chapter I probed only `cat`
+    /// — met, through Dinah — and the model's description of the Cat went to
+    /// the reader.
+    @Test("a name the question opens with is checked like any other")
+    func firstWordNameIsACandidate() {
+        #expect(QueryTerms.extract(from: "Cheshire Cat?").nameCandidates == ["cat", "cheshire"])
+        #expect(QueryTerms.extract(from: "Bilbo?").nameCandidates == ["bilbo"])
+        #expect(QueryTerms.extract(from: "Mordor is where?").nameCandidates == ["mordor"])
+        // The words a question opens with anyway are still not names.
+        #expect(QueryTerms.extract(from: "Who is Alice?").nameCandidates == ["alice"])
+        #expect(QueryTerms.extract(from: "Does Alice cry?").nameCandidates == ["alice"])
+        #expect(QueryTerms.extract(from: "Who's Dinah?").nameCandidates == ["dinah"])
+        #expect(QueryTerms.extract(from: "Describe the garden.").nameCandidates.isEmpty)
+        #expect(QueryTerms.extract(from: "Tell me about the Duchess.").nameCandidates
+            == ["duchess"])
+    }
+
     @Test("structural capitals are not mistaken for characters")
     func ignoresCapitalisedNonNames() {
         // "Who is Chapter?" is not a question anyone asks, and treating it as a
@@ -126,26 +162,27 @@ struct QueryTermsTests {
         #expect(QueryTerms.extract(from: "Did it happen on Tuesday?").nameCandidates.isEmpty)
     }
 
-    /// The gate reads exactly the text the classifier decided on.
+    /// The gate reads every sentence, whichever one the classifier decided on.
     ///
-    /// The classifier decides on the leading clause whenever that clause claims
-    /// a kind, and the aside after it is thrown away — but `nameCandidates` read
-    /// the whole question, so a capitalised word out of the discarded aside
-    /// could refuse the question that was actually asked. Retrieval for this one
-    /// is about Marek and nothing else; no excerpt it returns can contain the
-    /// name in the aside, so there is nothing there to be spoiled.
-    @Test("the spoiler gate reads what the classifier read")
-    func nameCandidatesFollowTheClassifier() {
+    /// For a while it read only the classifier's leading clause, on the ground
+    /// that retrieval for this question is about Marek and an excerpt could not
+    /// contain the aside's name. But the excerpts were never the leak — the
+    /// model's memory is — and the answer side exempted the aside's words as
+    /// already ruled on, so "Who is Alice? Does she ever meet the Cheshire
+    /// Cat?" was answered about the Cat with neither guard having looked (R-04).
+    /// The classifier still reads the clause; the gate reads the question.
+    @Test("the spoiler gate reads every sentence, not only the classifier's clause")
+    func nameCandidatesReadEverySentence() {
         let aside = QueryTerms.extract(
             from: "wait who is Marek again? Is he one of the Wardens?",
             knownNames: ["marek"],
         )
         #expect(aside.kind.label == "identity")
-        #expect(aside.nameCandidates == ["marek"])
+        // "Is" opens its sentence and is a function word; "Wardens" is a name.
+        #expect(aside.nameCandidates == ["marek", "wardens"])
 
-        // The counterpart, and the reason the rule is not "always the clause".
-        // This question's opening clause claims nothing, so it is decided on the
-        // whole question — and the gate has to see the whole question with it.
+        // A question whose opening clause claims nothing is decided on the
+        // whole question, and gated whole as before.
         let fellThrough = QueryTerms.extract(
             from: "i lost track. Is Dask Ryn's brother?", knownNames: ["ryn", "dask"],
         )
@@ -189,9 +226,7 @@ struct QueryTermsTests {
         // `unmetWords` looks each of these up in the index. `dask's` is a word
         // no book contains as one token, so without the strip the guard checks
         // something that is not the name.
-        #expect(AskEngine.unvettedNames(
-            in: "She trusted Dask's word.", question: "Who is Ryn?",
-        ) == ["dask"])
+        #expect(AskEngine.unvettedNames(in: "She trusted Dask's word.") == ["dask"])
     }
 
     @Test("search tokens are unique and lead with the question's own words")

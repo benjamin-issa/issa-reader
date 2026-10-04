@@ -118,11 +118,13 @@ public struct ReadingSettingsView: View {
             allowsMultipleSelection: false,
         ) { result in
             guard case let .success(urls) = result, let picked = urls.first else { return }
+            // A refusal says itself, under "Add a font…" — see `FontImport`.
             if let family = FontImport.adopt(picked) {
                 customFamilies = CustomFonts.families()
                 // Selected straight away: importing a font and then having to
-                // find it in a list is a step with no purpose.
-                settings.readerStyle.typeface = .custom(family)
+                // find it in a list is a step with no purpose. As the app's own
+                // face when the file was a copy of one.
+                settings.readerStyle.typeface = FontImport.typeface(for: family)
             }
         }
         #endif

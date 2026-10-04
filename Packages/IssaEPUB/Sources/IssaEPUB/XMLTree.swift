@@ -1,4 +1,5 @@
 import Foundation
+import IssaCore
 
 /// A minimal XML tree, built on the system parser.
 ///
@@ -96,6 +97,67 @@ public enum EPUBXML {
         }
         return root
     }
+
+    /// Parses XHTML that may name HTML entities XML does not define.
+    ///
+    /// For anything a book's author wrote as HTML — a chapter, a navigation
+    /// document, an NCX — rather than a package file a tool generated. Those
+    /// routinely say `&nbsp;`, and an XHTML file under the HTML5 short DOCTYPE
+    /// (or none, which is nearly all of them) declares no entities at all, so
+    /// `XMLParser` fails the whole document with error 111. With
+    /// `substitutingHTMLEntities` false this is exactly `parse(_:)`.
+    public static func parse(_ data: Data, substitutingHTMLEntities: Bool) throws -> EPUBXMLNode {
+        try parse(substitutingHTMLEntities ? Self.substitutingHTMLEntities(in: data) : data)
+    }
+
+    /// Rewrites every HTML 4.01 named entity XML does not predefine as a
+    /// numeric reference, in one pass.
+    ///
+    /// One pass, not one per entity: the first version was
+    /// `for (name, code) in table { replacingOccurrences }`, a full scan and a
+    /// new String per name, which on a 400 KB chapter was slow enough to notice
+    /// once the table was complete. Scanning once and looking each name up
+    /// costs the same for a table of any size.
+    ///
+    /// Data that is not UTF-8, or holds no `&`, is returned untouched.
+    public static func substitutingHTMLEntities(in data: Data) -> Data {
+        guard let text = String(data: data, encoding: .utf8) else { return data }
+        guard text.contains("&") else { return data }
+
+        var out = String()
+        out.reserveCapacity(text.count)
+        var index = text.startIndex
+
+        while let amp = text[index...].firstIndex(of: "&") {
+            out.append(contentsOf: text[index ..< amp])
+            // A name is letters and digits, then a semicolon. Bail out at a
+            // reasonable width rather than scanning to the end of the document
+            // for a stray `&` — prose is full of them.
+            let after = text.index(after: amp)
+            let limit = text.index(after, offsetBy: 12, limitedBy: text.endIndex) ?? text.endIndex
+            if let semicolon = text[after ..< limit].firstIndex(of: ";") {
+                let name = String(text[after ..< semicolon])
+                if let code = htmlNamedEntities[name] {
+                    out.append("&#\(code);")
+                    index = text.index(after: semicolon)
+                    continue
+                }
+            }
+            // Not one of ours: the five XML predefined entities, a numeric
+            // reference, or a bare ampersand. All are the parser's business.
+            out.append("&")
+            index = after
+        }
+        out.append(contentsOf: text[index...])
+        return Data(out.utf8)
+    }
+
+    /// Every HTML 4.01 named entity that XML does not predefine, mapped to its
+    /// code point. The table is `HTMLEntities.named` in IssaCore, shared with
+    /// the descriptions `HTMLText` renders, so a book's chapters and its
+    /// description decode the same names; why it has to be complete is
+    /// written there.
+    public static let htmlNamedEntities: [String: Int] = HTMLEntities.named
 
     /// How deeply an element may nest before the document is refused.
     ///

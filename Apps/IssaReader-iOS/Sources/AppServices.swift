@@ -29,6 +29,10 @@ final class AppServices {
     /// `ReaderModel` the moment its screen goes away and an answer has to
     /// outlive that — including all the way into the background.
     let ask = AskCoordinator()
+    /// The books the reader added from their own files, for the whole process
+    /// like `ask`: every window's list and reader, and an account's exit, use
+    /// this one.
+    let local = LocalLibrary()
 
     /// Held because `UNUserNotificationCenter` keeps its delegate weakly, and a
     /// delegate nobody owns is a notification tap that does nothing.
@@ -87,11 +91,24 @@ final class AppServices {
         // Set at launch rather than when the first question is asked: a
         // notification tapped from a cold launch arrives before any sheet has
         // ever been opened, and a delegate set later would miss it.
-        let delegate = AskNotificationDelegate(coordinator: ask, app: app)
+        let delegate = AskNotificationDelegate(coordinator: ask, app: app, local: local)
         askNotifications = delegate
         UNUserNotificationCenter.current().delegate = delegate
+        connectLocalBooks()
         connectCarPlay()
         app.startRestore()
+    }
+
+    /// Hands the local library to the objects that keep state per book: an
+    /// account's exit keeps these books' (`AppModel.localBookUUIDs`), a book
+    /// leaving the list lets its reader go at once, and one that is gone for
+    /// good takes its question index, reader style and level with it.
+    private func connectLocalBooks() {
+        LocalBooksWiring.connect(app: app, local: local, ask: ask, settings: settings) { local in
+            #if ISSA_UITEST_FIXTURE
+            LocalImportFixture.importIfRequested(into: local)
+            #endif
+        }
     }
 
     /// Hands CarPlay the things it cannot reach on its own: the library,
@@ -168,7 +185,13 @@ final class AppServices {
         bridge.currentChapter = { [app] in
             if let coordinator = app.listening { return coordinator.chapterIndex }
             guard let reader = app.reader, let package = reader.package else { return nil }
-            return CarPlayChapters.entries(for: package).firstIndex { $0.spineIndex == reader.chapterIndex }
+            // By the page's place in its file, not the file alone: several
+            // chapters can share one, and each has its own row.
+            let layout = reader.layout
+            return CarPlayChapters.currentIndex(
+                in: CarPlayChapters.entries(for: package), spineIndex: reader.chapterIndex,
+                offset: reader.currentPage?.characterRange.location ?? 0,
+            ) { layout?.fragmentRange(for: $0)?.location }
         }
         bridge.onPlayChapter = { [app] index in
             if let coordinator = app.listening {
@@ -188,10 +211,20 @@ final class AppServices {
 
         bridge.cover = { [app] bookUUID in
             guard let session = app.session else { return nil }
+            let service = LibraryService(client: session.client)
             // Square, and small: this is a list row in a car, not the Lock
             // Screen tile.
-            return try? await LibraryService(client: session.client)
-                .coverData(for: bookUUID, shape: .square, pixelWidth: 240)
+            //
+            // By the book wherever the catalogue has it, so a 3.x server is
+            // asked for the art by content hash rather than through its
+            // redirecting uuid route. The uuid route is kept for a row the
+            // catalogue no longer holds — the car's list can outlive a refresh
+            // that dropped the book — because a missing book is no reason to
+            // show a car no art at all.
+            guard let book = app.bookByUUID[bookUUID] else {
+                return try? await service.coverData(for: bookUUID, shape: .square, pixelWidth: 240)
+            }
+            return try? await service.coverData(for: book, shape: .square, pixelWidth: 240)
         }
     }
 
@@ -203,9 +236,11 @@ final class AppServices {
         withObservationTracking {
             _ = app.books
             _ = app.downloadedUUIDs
-        } onChange: {
+        } onChange: { [weak self] in
             // `onChange` fires on willSet and off the main actor; the hop is
             // also what defers the read until the new values have landed.
+            // Weak here as well as on the task: a strong outer capture would
+            // make the inner one a formality.
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 CarPlayBridge.shared.update(books: app.books, downloaded: app.downloadedUUIDs)

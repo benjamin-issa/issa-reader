@@ -1,4 +1,4 @@
-#if canImport(FoundationModels)
+#if canImport(FoundationModels) && !os(tvOS)
 import Foundation
 import FoundationModels
 import IssaCore
@@ -7,7 +7,7 @@ import IssaCore
 ///
 /// Everything specific to FoundationModels is here and nowhere else, which is
 /// what lets the whole pipeline be tested without it — and what keeps the tvOS
-/// target compiling, since the framework is not in that SDK at all.
+/// target compiling, since every symbol in the framework is unavailable there.
 ///
 /// Three choices in here are not incidental:
 ///
@@ -48,6 +48,13 @@ public struct SystemAnswerModel: AnswerModel {
 
     public var contextSize: Int { model.contextSize }
 
+    public var modelDescription: String {
+        if #available(iOS 27.0, macOS 27.0, visionOS 27.0, *) {
+            return "\(model.variant.displayName), \(model.contextSize)-token window"
+        }
+        return "Apple on-device model, \(model.contextSize)-token window"
+    }
+
     public func tokenCount(for text: String) async throws -> Int {
         // Back-deployed to 26.0 for `contextSize`, but `tokenCount` genuinely
         // arrived in 26.4, and the deployment target is 26.0. The estimate is
@@ -70,14 +77,35 @@ public struct SystemAnswerModel: AnswerModel {
     }
 
     public func supportsLanguage(_ bcp47: String?) -> Bool {
-        // An EPUB with no `dc:language` is common enough — and guessing wrong
-        // would refuse a book the model could have answered about — so an
-        // unknown language is allowed through and the framework decides.
+        Self.supports(bcp47, among: Array(model.supportedLanguages))
+    }
+
+    /// The decision itself, apart from the model, so it can be tested on a
+    /// machine without one.
+    ///
+    /// An EPUB with no `dc:language` is common enough — and guessing wrong
+    /// would refuse a book the model could have answered about — so an unknown
+    /// language is allowed through and the framework decides.
+    ///
+    /// "Unknown" includes a language written as a *name*. `Locale.Language`
+    /// does not reject `English`: it returns the non-ISO code `english`, which
+    /// no model language matches, so a book whose `dc:language` says
+    /// "English" — invalid, and in the wild — was refused on every question,
+    /// before the index was touched and with nothing the reader could do. The
+    /// codes that say "no particular language" (`und`, `mul`, `zxx`) are ISO
+    /// and match nothing either, and are unknown in the same sense.
+    static func supports(
+        _ bcp47: String?, among supported: [Locale.Language],
+    ) -> Bool {
         guard let bcp47, !bcp47.isEmpty else { return true }
         let asked = Locale.Language(identifier: bcp47)
-        guard let code = asked.languageCode else { return true }
-        return model.supportedLanguages.contains { $0.languageCode == code }
+        guard let code = asked.languageCode, code.isISOLanguage,
+              !unspecifiedLanguages.contains(code.identifier)
+        else { return true }
+        return supported.contains { $0.languageCode == code }
     }
+
+    static let unspecifiedLanguages: Set<String> = ["und", "mul", "zxx"]
 
     public func answer(
         instructions: String,
@@ -96,7 +124,7 @@ public struct SystemAnswerModel: AnswerModel {
                     let snapshots = session.streamResponse(
                         to: prompt,
                         options: GenerationOptions(
-                            sampling: Self.sampling(for: options.sampling),
+                            samplingMode: Self.sampling(for: options.sampling),
                             temperature: options.temperature,
                             maximumResponseTokens: options.maximumResponseTokens,
                         ),
@@ -104,6 +132,7 @@ public struct SystemAnswerModel: AnswerModel {
                     for try await snapshot in snapshots {
                         continuation.yield(snapshot.content)
                     }
+                    Self.logUsage(of: session, model: model)
                     continuation.finish()
                 } catch is CancellationError {
                     continuation.finish()
@@ -135,22 +164,135 @@ public struct SystemAnswerModel: AnswerModel {
         }
     }
 
+    // MARK: - Accounting
+
+    /// What a generation cost, in the model's own count. Debug level: it is
+    /// there for the scorecard and for the next prompt revision, not for a
+    /// reader — and it is the number the token estimate in the builder is
+    /// checked against when a new model version arrives.
+    static func logUsage(of session: LanguageModelSession, model: SystemLanguageModel) {
+        if #available(iOS 27.0, macOS 27.0, visionOS 27.0, *) {
+            let usage = session.usage
+            IssaLog.debug("ask generation usage", [
+                "model": model.variant.displayName,
+                "inputTokens": String(usage.input.totalTokenCount),
+                "cachedTokens": String(usage.input.cachedTokenCount),
+                "outputTokens": String(usage.output.totalTokenCount),
+            ])
+        }
+    }
+
     // MARK: - Failures
 
-    /// The plan's error table, and the only place a `GenerationError` is ever
+    static let couldNotAnswer = AskFailure.couldNotAnswer
+
+    /// A case a later OS added to a family this table already reads.
+    ///
+    /// Logged rather than folded silently into "couldn't answer": the whole
+    /// point of keeping these tables is to know when the framework grows a case
+    /// they do not cover, and four `@unknown default` arms that returned without
+    /// a word would have made the next revision look like a model that simply
+    /// failed.
+    static func unrecognised(_ family: String) -> AskFailure {
+        IssaLog.error("ask model returned an unrecognised failure", ["family": family])
+        return .other(couldNotAnswer)
+    }
+
+    /// The plan's error table, and the only place a framework error is ever
     /// looked at.
     ///
-    /// `exceededContextWindowSize` becomes `.tooMuchContext` rather than a
-    /// message, because that is the one the engine acts on: it retries with
-    /// half the passages and then with two, and only a failure that survives
-    /// both reaches the reader.
+    /// Two tables, because the deployment target is 26.0 and the 27 SDK
+    /// replaced the whole error family: a 27 device throws `LanguageModelError`
+    /// and its two siblings, a 26 device still throws the now-deprecated
+    /// `GenerationError`. Both are consulted on every OS rather than one per
+    /// branch, because the framework does not say which family a back-deployed
+    /// binary sees, and an error that matched neither would read as "couldn't
+    /// answer" when it was really "too much context" — the one case the engine
+    /// retries instead of reporting.
+    ///
+    /// `contextSizeExceeded` becomes `.tooMuchContext` rather than a message,
+    /// because that is the one the engine acts on: it retries with half the
+    /// passages and then with two, and only a failure that survives both
+    /// reaches the reader.
     static func failure(for error: any Error) -> AskFailure {
         if let call = error as? LanguageModelSession.ToolCallError {
             return failure(for: call.underlyingError)
         }
+        if #available(iOS 27.0, macOS 27.0, visionOS 27.0, *),
+           let current = currentFailure(for: error) {
+            return current
+        }
+        if let legacy = legacyFailure(for: error) {
+            return legacy
+        }
+        IssaLog.error("ask model failed", ["kind": String(describing: type(of: error))])
+        return .other(couldNotAnswer)
+    }
+
+    /// The 27 table. Nil for an error from another family, so the caller can
+    /// try the older one.
+    @available(iOS 27.0, macOS 27.0, visionOS 27.0, *)
+    static func currentFailure(for error: any Error) -> AskFailure? {
+        if let failure = error as? LanguageModelError {
+            switch failure {
+            case .contextSizeExceeded:
+                return .tooMuchContext
+            case .guardrailViolation, .refusal:
+                return .declined
+            case .unsupportedLanguageOrLocale:
+                return .unsupportedLanguage
+            case .rateLimited:
+                return .busy
+            case .timeout:
+                // New in 27, and worth its own sentence: "try again" is the
+                // right advice, and "busy" would send the reader to wait for
+                // something that is not busy.
+                return .timedOut
+            case .unsupportedCapability, .unsupportedTranscriptContent,
+                .unsupportedGenerationGuide:
+                // None should be reachable: the prompt is text, the output a
+                // plain string, and nothing here asks for a guide. Logged rather
+                // than swallowed, so a later OS changing that shows up as
+                // something other than silence.
+                IssaLog.error("ask model returned an unexpected shape")
+                return .other(couldNotAnswer)
+            @unknown default:
+                return unrecognised("LanguageModelError")
+            }
+        }
+        if let failure = error as? SystemLanguageModel.Error {
+            switch failure {
+            case .assetsUnavailable:
+                return .modelDownloading
+            @unknown default:
+                return unrecognised("SystemLanguageModel.Error")
+            }
+        }
+        if let failure = error as? LanguageModelSession.Error {
+            switch failure {
+            case .concurrentRequests:
+                return .busy
+            case .transcriptMutationWhileResponding:
+                // Impossible here — nothing touches a transcript — and logged
+                // for the same reason as the unexpected shapes above.
+                IssaLog.error("ask session transcript changed mid-response")
+                return .other(couldNotAnswer)
+            @unknown default:
+                return unrecognised("LanguageModelSession.Error")
+            }
+        }
+        return nil
+    }
+
+    /// The 26 table, verbatim. Deprecated to the version the framework
+    /// deprecated its enum in, which keeps the build warning-free without
+    /// silencing anything else in this file.
+    @available(iOS, deprecated: 27.0)
+    @available(macOS, deprecated: 27.0)
+    @available(visionOS, deprecated: 27.0)
+    static func legacyFailure(for error: any Error) -> AskFailure? {
         guard let generation = error as? LanguageModelSession.GenerationError else {
-            IssaLog.error("ask model failed", ["kind": String(describing: type(of: error))])
-            return .other("Apple Intelligence couldn't answer that one. Try again.")
+            return nil
         }
         switch generation {
         case .exceededContextWindowSize:
@@ -164,13 +306,10 @@ public struct SystemAnswerModel: AnswerModel {
         case .rateLimited, .concurrentRequests:
             return .busy
         case .unsupportedGuide, .decodingFailure:
-            // Neither should be reachable: nothing here generates a guide, and
-            // the output is a plain string. Logged rather than swallowed, so a
-            // later OS changing that shows up as something other than silence.
             IssaLog.error("ask model returned an unexpected shape")
-            return .other("Apple Intelligence couldn't answer that one. Try again.")
+            return .other(couldNotAnswer)
         @unknown default:
-            return .other("Apple Intelligence couldn't answer that one. Try again.")
+            return unrecognised("LanguageModelSession.GenerationError")
         }
     }
 }

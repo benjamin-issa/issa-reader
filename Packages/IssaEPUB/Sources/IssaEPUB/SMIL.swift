@@ -62,6 +62,43 @@ public struct SMILEntry: Sendable, Hashable {
     /// a gapless virtual timeline for the whole book. This is NOT an offset into
     /// any single audio file.
     public let cumulativeEnd: TimeInterval
+    /// Audio with no words behind it: a par Storyteller types
+    /// `storyteller:audio-only`.
+    ///
+    /// Storyteller 3 writes one wherever more than five seconds of audio carry
+    /// no text — music, a long pause, an interlude read with nothing to show —
+    /// and points it at the sentence it hangs off (`…-s12-before0`,
+    /// `…-s12-after0`) or, for a whole audio chapter, at that chapter's
+    /// heading. v2 folded the same seconds into that sentence's own clip, so
+    /// the fragment an audio-only entry names is the one v2 lit while they
+    /// played, and it is lit the same way now. What the flag changes is what
+    /// counts as a *sentence* to step to: `SMILTimeline.entry(after:)` passes
+    /// over these, as it never saw them in a v2 book.
+    ///
+    /// The other states a par carries — matched, interpolated, unmatched,
+    /// dropped — are not kept, and neither is the par's own id: nothing in the
+    /// reader acts on them.
+    public let isAudioOnly: Bool
+    /// The sentence this entry is a word of, in a book aligned word by word:
+    /// the fragment the enclosing `text-range-small` seq names in its
+    /// `epub:textref`.
+    ///
+    /// Only the CLI aligns that finely, and it nests each sentence's word
+    /// pars inside a seq that names the sentence. Nothing else in the book
+    /// does: a word-granular sentence's own id is carried by its holes alone,
+    /// so a sentence with a hole only after its words resolved to that hole,
+    /// and one with no holes resolved to nothing. Tapping between two words —
+    /// where the reader's markup still names the sentence — played the music
+    /// after the sentence, or fell back to whichever word was nearest. And
+    /// every word was a sentence of its own to "next sentence", so it stepped
+    /// by the word. `SMILTimeline` reads this field for both.
+    ///
+    /// Nil whenever it would say nothing `fragmentID` does not: every
+    /// sentence par, every hole, every audio-chapter par. That is every entry
+    /// a 2.x server wrote and every entry a 3.x server writes — both align by
+    /// the sentence — so for any book a server aligned, the timeline is
+    /// exactly the one it was before this field existed.
+    public let sentenceID: String?
 
     public var duration: TimeInterval { max(0, end - start) }
 
@@ -75,6 +112,11 @@ public struct SMILEntry: Sendable, Hashable {
     /// entry built with the wrong one is not a bad number in one place — it is
     /// a book timeline that disagrees with itself from that point on. See
     /// `SMILParser.timeline(for:)` for how the parser accumulates it.
+    ///
+    /// `isAudioOnly` defaults to false because that is every entry a v2 book
+    /// has, and every entry a hand-built narration has meant so far.
+    /// `sentenceID` defaults to nil for the same reason: only a word-granular
+    /// book has one.
     public init(
         fragmentID: String,
         textHref: String,
@@ -82,6 +124,8 @@ public struct SMILEntry: Sendable, Hashable {
         start: TimeInterval,
         end: TimeInterval,
         cumulativeEnd: TimeInterval,
+        isAudioOnly: Bool = false,
+        sentenceID: String? = nil,
     ) {
         self.fragmentID = fragmentID
         self.textHref = textHref
@@ -89,6 +133,8 @@ public struct SMILEntry: Sendable, Hashable {
         self.start = start
         self.end = end
         self.cumulativeEnd = cumulativeEnd
+        self.isAudioOnly = isAudioOnly
+        self.sentenceID = sentenceID
     }
 }
 
@@ -107,12 +153,33 @@ public struct SMILTimeline: Sendable {
     /// chapter that used that id: tapping a word in chapter 12 seeked to
     /// chapter 1, and `advanceToNextFile` looped back there forever instead of
     /// advancing.
+    ///
+    /// A key names a *sentence*, not an entry. In a v2 book the two coincide.
+    /// In a v3 book one sentence can own several entries — the audio-only
+    /// holes before and after it, and a continuation par for each further file
+    /// it runs into — and every one of them names this key. They need not be
+    /// neighbours: at word granularity the words between a sentence's holes
+    /// each name a key of their own, and name the sentence only through
+    /// `SMILEntry.sentenceID`.
     struct FragmentKey: Hashable {
         let document: String
         let fragment: String
     }
 
-    /// Fragment to entry index, exact.
+    /// Fragment to the first entry that names it, or that is a word of it.
+    ///
+    /// Exact about the document, and the first of the sentence's entries: for
+    /// a v3 sentence with a hole in front, that is the hole. Tap and seek
+    /// resolve here on purpose, because v2 started that sentence's clip at the
+    /// same place — the hole's seconds were the front of it.
+    ///
+    /// A word claims its sentence as well as its own fragment, first claim
+    /// winning, so a word-granular sentence resolves to its before-hole when
+    /// it has one and otherwise to its first word. Its after-hole can never
+    /// win, because the words come before it. Answering with the first entry
+    /// that *named* the fragment handed a sentence with only an after-hole to
+    /// that hole — the tap played the music after the sentence — and a
+    /// sentence with no holes to nothing at all.
     private let indexByFragment: [FragmentKey: Int]
     /// The same by id alone, first occurrence winning, for a caller that has a
     /// tapped id and no document to scope it with. Best effort by construction
@@ -130,6 +197,19 @@ public struct SMILTimeline: Sendable {
     /// entry entirely for a `time` that happens to fall inside both — silently
     /// mis-highlighting or mis-seeking while the correct audio keeps playing.
     private let fileRanges: [String: [Range<Int>]]
+    /// The runs in `fileRanges` whose clips do not ascend, by first index.
+    ///
+    /// `entry(inFile:at:)` binary-searches a run on the assumption that each
+    /// clip starts where the one before it ended, which is true of everything
+    /// v2 wrote. Storyteller 3's CTC aligner can break it: a sentence it placed
+    /// late followed by two it placed earlier, or a hole spanning audio that
+    /// the next pars go on to narrate. A binary search over that run halves
+    /// straight past the clip that is playing, and the highlight goes dark or
+    /// lands on the wrong sentence while the audio carries on.
+    ///
+    /// Recorded rather than sorted away, so a run that does ascend — every run
+    /// of a v2 book — keeps exactly the search it has always had.
+    private let nonAscendingRuns: Set<Int>
     /// The same, per text document — which is what a reader calls a chapter.
     ///
     /// A list of runs, exactly like `fileRanges`, and for the same reason its
@@ -141,12 +221,37 @@ public struct SMILTimeline: Sendable {
     /// lock-screen drag landed in a different chapter, and it is also what
     /// `spineProgress` reports to the server.
     private let documentRanges: [String: [Range<Int>]]
+    /// Every run of one text document, in book order — the same runs as
+    /// `documentRanges`, laid end to end. What "the next chapter" walks: a
+    /// document the timeline visits twice is two places, and stepping from the
+    /// second visit has to start from the second visit.
+    private let documentRuns: [Range<Int>]
+
+    /// The text documents the narration covers, each once, in the order the
+    /// book first reaches them.
+    ///
+    /// For a caller holding a document href from somewhere else — a stored
+    /// position, which another client may have spelled differently — to find
+    /// which of the timeline's own documents it means before asking for a
+    /// fragment in it. See `exactEntry(forFragment:inDocument:)`.
+    public let documentHrefs: [String]
 
     public var totalDuration: TimeInterval { entries.last?.cumulativeEnd ?? 0 }
     public var isEmpty: Bool { entries.isEmpty }
 
-    public init(entries: [SMILEntry]) {
+    /// The audio files whose last clip states no end and was not given the
+    /// file's length, so it holds `SMILParser.openClipPlaceholder` and the
+    /// book clock is short by the rest of that file.
+    ///
+    /// Empty for every book either Storyteller generation aligned, which state
+    /// every end. A reader that finds files here measures them — once, and
+    /// caches the answer beside the narration — and builds the timeline again
+    /// with their lengths.
+    public let filesNeedingLength: Set<String>
+
+    public init(entries: [SMILEntry], filesNeedingLength: Set<String> = []) {
         self.entries = entries
+        self.filesNeedingLength = filesNeedingLength
         var index: [FragmentKey: Int] = [:]
         index.reserveCapacity(entries.count)
         var byIDOnly: [String: Int] = [:]
@@ -156,11 +261,20 @@ public struct SMILTimeline: Sendable {
             // First occurrence wins here, as it always did — but this map is now
             // only the fallback, not what navigation resolves through.
             if byIDOnly[entry.fragmentID] == nil { byIDOnly[entry.fragmentID] = i }
+            // And a word answers for its sentence, in the same loop so that
+            // "first" means first in the book, holes and words alike. See
+            // `indexByFragment`.
+            if let sentence = entry.sentenceID {
+                let sentenceKey = FragmentKey(document: entry.textHref, fragment: sentence)
+                if index[sentenceKey] == nil { index[sentenceKey] = i }
+                if byIDOnly[sentence] == nil { byIDOnly[sentence] = i }
+            }
         }
         indexByFragment = index
         firstIndexByFragmentID = byIDOnly
 
         var ranges: [String: [Range<Int>]] = [:]
+        var unordered: Set<Int> = []
         var start = 0
         while start < entries.count {
             let href = entries[start].audioHref
@@ -170,23 +284,34 @@ public struct SMILTimeline: Sendable {
             // a separate range each time rather than widened into one — see
             // the property's doc comment for why widening is the bug.
             ranges[href, default: []].append(start ..< end)
+            let run = entries[start ..< end]
+            if !zip(run, run.dropFirst()).allSatisfy({ $1.start >= $0.end }) {
+                unordered.insert(start)
+            }
             start = end
         }
         fileRanges = ranges
+        nonAscendingRuns = unordered
 
         // The same shape again, keyed by text document. Built here rather than
         // filtered on demand because a progress bar scoped to the chapter asks
         // for this on every tick, and `entries.filter` walks the whole book.
         var documents: [String: [Range<Int>]] = [:]
+        var runs: [Range<Int>] = []
+        var order: [String] = []
         start = 0
         while start < entries.count {
             let href = entries[start].textHref
             var end = start + 1
             while end < entries.count, entries[end].textHref == href { end += 1 }
+            if documents[href] == nil { order.append(href) }
             documents[href, default: []].append(start ..< end)
+            runs.append(start ..< end)
             start = end
         }
         documentRanges = documents
+        documentRuns = runs
+        documentHrefs = order
     }
 
     /// Where one text document's narration sits on the virtual book timeline.
@@ -284,6 +409,22 @@ public struct SMILTimeline: Sendable {
         resolve(fragmentID, in: document).map { entries[$0] }
     }
 
+    /// The fragment in exactly this document, or nothing.
+    ///
+    /// `entry(forFragment:inDocument:)` falls back to the first chapter that
+    /// uses the id when the document key misses, which is the right answer for
+    /// a caller with no document to offer and the wrong one for a caller that
+    /// has one: in a book that numbers its sentences per chapter, a tap in
+    /// chapter twelve played chapter one, and a resume declared exact landed
+    /// chapters away from the reader. This one never guesses.
+    ///
+    /// `document` is matched exactly, as the timeline spells it — the archive
+    /// path `EPUBPackage.resolve` produces. A caller holding a differently
+    /// spelled href resolves it against `documentHrefs` first.
+    public func exactEntry(forFragment fragmentID: String, inDocument document: String) -> SMILEntry? {
+        indexByFragment[FragmentKey(document: document, fragment: fragmentID)].map { entries[$0] }
+    }
+
     private func resolve(_ fragmentID: String, in document: String?) -> Int? {
         if let document,
            let exact = indexByFragment[FragmentKey(document: document, fragment: fragmentID)] {
@@ -298,8 +439,45 @@ public struct SMILTimeline: Sendable {
     /// fragment id alone, which is how a book that numbers sentences per
     /// chapter sent "next sentence" in chapter 12 to chapter 1's second
     /// sentence, and made end-of-file advance loop back there forever.
+    ///
+    /// Scoping by document was not enough for Storyteller 3, which gives one
+    /// sentence several entries under one key — see `FragmentKey`. Resolving
+    /// the key alone turned a sentence's after-hole back into the sentence, so
+    /// the entry "after" the hole was the hole, and a file that ended in one
+    /// replayed it for ever.
+    ///
+    /// Nor can the key's entries be walked as a run from the first. In a
+    /// word-granular book the sentence's words, each under an id of its own,
+    /// sit between its before-hole and its after-hole, so a walk stopped at
+    /// the first word and answered with the before-hole: the entry following
+    /// a file-ending after-hole was the sentence's first word, and the same
+    /// loop came back one granularity down.
+    ///
+    /// So this finds the entry by where it ends. `cumulativeEnd` rises through
+    /// the timeline — `index(atBookTime:)` searches it the same way — and
+    /// strictly, since the parser keeps no clip shorter than five
+    /// milliseconds, so one binary search reaches the only entry that can be
+    /// this one, whatever its neighbours are called. A tie, which only a
+    /// timeline built by hand can hold, is walked.
+    ///
+    /// An entry built by hand that is not one of this timeline's answers with
+    /// the first entry for its key, as it always did.
     private func index(of entry: SMILEntry) -> Int? {
-        indexByFragment[FragmentKey(document: entry.textHref, fragment: entry.fragmentID)]
+        var low = 0
+        var high = entries.count
+        while low < high {
+            let mid = (low + high) / 2
+            if entries[mid].cumulativeEnd < entry.cumulativeEnd {
+                low = mid + 1
+            } else {
+                high = mid
+            }
+        }
+        while low < entries.count, entries[low].cumulativeEnd == entry.cumulativeEnd {
+            if entries[low] == entry { return low }
+            low += 1
+        }
+        return indexByFragment[FragmentKey(entry)]
     }
 
     /// Fraction of the book narrated, 0...1.
@@ -324,9 +502,15 @@ public struct SMILTimeline: Sendable {
     public func entry(inFile audioHref: String, at time: TimeInterval) -> SMILEntry? {
         // Entries within one run are contiguous and ordered, so each run is
         // bound and binary searched on its own — never across a gap that might
-        // hold another file's entries. See `fileRanges`.
+        // hold another file's entries. See `fileRanges`. A run whose clips do
+        // not ascend cannot be binary searched at all, and is scanned instead;
+        // see `nonAscendingRuns`.
         guard let runs = fileRanges[audioHref], !runs.isEmpty else { return nil }
         for range in runs {
+            if nonAscendingRuns.contains(range.lowerBound) {
+                if let index = latestClip(in: range, containing: time) { return entries[index] }
+                continue
+            }
             var low = range.lowerBound
             var high = range.upperBound - 1
             while low <= high {
@@ -344,12 +528,44 @@ public struct SMILTimeline: Sendable {
         // A time past the last clip belongs to the final entry rather than
         // nothing: clips are gapless within a file, so this only happens at the
         // very end — of the file's last run, in the rare case it has more than
-        // one.
+        // one. For a run whose clips do not ascend, the very end is wherever
+        // its latest-ending clip ends, which need not be its last entry — so
+        // what plays when the file runs out is asked of the run, not of the
+        // entry: `entry(followingFileOf:)`.
         let lastRun = runs[runs.count - 1]
-        if time >= entries[lastRun.upperBound - 1].end {
-            return entries[lastRun.upperBound - 1]
+        let tail = nonAscendingRuns.contains(lastRun.lowerBound)
+            ? latestEnding(in: lastRun) : lastRun.upperBound - 1
+        if time >= entries[tail].end {
+            return entries[tail]
         }
         return nil
+    }
+
+    /// The clip playing at `time` in a run whose clips do not ascend: of those
+    /// that contain it, the one that began most recently.
+    ///
+    /// Linear, because nothing about such a run is sorted, and rare enough to
+    /// afford it. "Most recently began" is what makes an overlap come out
+    /// right: a hole that spans audio the next pars go on to narrate contains
+    /// every one of their times too, and the sentence being read is the one
+    /// that started inside it, not the hole. On a tie the later entry wins, for
+    /// the same reason.
+    private func latestClip(in range: Range<Int>, containing time: TimeInterval) -> Int? {
+        var found: Int?
+        for index in range where entries[index].start <= time && time < entries[index].end {
+            if let current = found, entries[current].start > entries[index].start { continue }
+            found = index
+        }
+        return found
+    }
+
+    /// The entry in `range` whose clip ends last, the later one on a tie.
+    private func latestEnding(in range: Range<Int>) -> Int {
+        var found = range.lowerBound
+        for index in range where entries[index].end >= entries[found].end {
+            found = index
+        }
+        return found
     }
 
     /// The first entry narrated from this audio file, whatever the offset.
@@ -366,18 +582,139 @@ public struct SMILTimeline: Sendable {
         return entries[first.lowerBound]
     }
 
-    /// The entry that follows `entry` in reading order, if any.
+    /// The next sentence: the nearest entry after `entry` that has words and
+    /// belongs to a different sentence.
+    ///
+    /// Not simply the next entry. A v3 book gives one sentence a run of them —
+    /// the holes before and after it, a continuation for each file it runs
+    /// into — and an audio chapter is nothing but holes. v2 folded all of that
+    /// audio into a neighbouring sentence's clip, so "next sentence" never
+    /// stopped on any of it: a press that landed on a hole would replay the
+    /// music behind the sentence just heard, and one that landed on a
+    /// continuation would restart nothing anybody asked for. In a v2 book every
+    /// entry qualifies, and this is the next entry, as it always was.
+    ///
+    /// A different *sentence*, not a different fragment — see `sentenceKey`.
+    ///
+    /// Stepping by sentence is what this is for. The end of a file wants the
+    /// next audio instead — `entry(followingFileOf:)`.
     public func entry(after entry: SMILEntry) -> SMILEntry? {
+        guard let index = index(of: entry) else { return nil }
+        let key = sentenceKey(entry)
+        var next = index + 1
+        while next < entries.count {
+            let candidate = entries[next]
+            if !candidate.isAudioOnly, sentenceKey(candidate) != key { return candidate }
+            next += 1
+        }
+        return nil
+    }
+
+    /// The previous sentence, from its beginning.
+    ///
+    /// The mirror of `entry(after:)`, with one step more: walking backwards,
+    /// the first entry of another sentence met is its *last* — a continuation,
+    /// for a sentence that runs across files, or its last word, in a book
+    /// aligned word by word. Landing there started the previous sentence
+    /// part-way through, so this returns the first entry of that sentence that
+    /// has words — its own par or its first word, which is where v2's clip for
+    /// it began once the hole in front is set aside.
+    public func entry(before entry: SMILEntry) -> SMILEntry? {
+        guard let index = index(of: entry) else { return nil }
+        let key = sentenceKey(entry)
+        var previous = index - 1
+        while previous >= 0 {
+            let candidate = entries[previous]
+            if !candidate.isAudioOnly, sentenceKey(candidate) != key {
+                return firstSpokenEntry(ofSentenceAt: previous)
+            }
+            previous -= 1
+        }
+        return nil
+    }
+
+    /// The earliest entry with words in the same-sentence run that `index`
+    /// belongs to, looking back from it.
+    private func firstSpokenEntry(ofSentenceAt index: Int) -> SMILEntry {
+        let key = sentenceKey(entries[index])
+        var first = index
+        var earlier = index - 1
+        while earlier >= 0, sentenceKey(entries[earlier]) == key {
+            if !entries[earlier].isAudioOnly { first = earlier }
+            earlier -= 1
+        }
+        return entries[first]
+    }
+
+    /// The sentence an entry belongs to, which is what the three calls above
+    /// step by.
+    ///
+    /// Its fragment's key, except for a word, which belongs to the sentence
+    /// its seq names. Stepping on the fragment treated every word of a
+    /// word-granular book as a sentence of its own: "next sentence" moved one
+    /// word, "previous sentence" landed on the last word of the sentence
+    /// before and played on into its after-hole, and a paragraph was three
+    /// words. For every entry a server writes `sentenceID` is nil and this is
+    /// `FragmentKey(entry)`, so those books step exactly as they did.
+    ///
+    /// Resolving and the highlight stay on the fragment: a word is still its
+    /// own place, and still what lights up.
+    private func sentenceKey(_ entry: SMILEntry) -> FragmentKey {
+        FragmentKey(document: entry.textHref, fragment: entry.sentenceID ?? entry.fragmentID)
+    }
+
+    /// The entry after `entry` in the book, whatever kind it is: positional,
+    /// the next one in `entries`, whichever file it is in.
+    ///
+    /// Not what the end of an audio file wants, though it used to be what
+    /// that asked: see `entry(followingFileOf:)`.
+    public func entry(following entry: SMILEntry) -> SMILEntry? {
         guard let index = index(of: entry), index + 1 < entries.count else { return nil }
         return entries[index + 1]
     }
 
-    public func entry(before entry: SMILEntry) -> SMILEntry? {
-        guard let index = index(of: entry), index > 0 else { return nil }
-        return entries[index - 1]
+    /// The entry that plays when `entry`'s audio file runs out: the first
+    /// entry after the run of that file which holds `entry`. Nil at the end of
+    /// the book.
+    ///
+    /// What the end of an audio file needs, and deliberately neither of the
+    /// two steps above. `entry(after:)` steps over holes and whole audio
+    /// chapters, which is right for a listener skipping a sentence and wrong
+    /// for audio that has simply run out — it would drop an interlude the book
+    /// means to play; the end-of-file advance once called it, and on a file
+    /// ending in an after-hole it resolved the hole to its sentence and was
+    /// handed the hole back, for ever. `entry(following:)`, which replaced it,
+    /// is positional, and the entry active when a file runs out need not be
+    /// the last of its file: in a run whose clips do not ascend, the clip that
+    /// ends last — what `entry(inFile:at:)` answers past the end — can sit
+    /// anywhere in it. Its successor was another clip of the same file, so the
+    /// end of the file seeked back into that file, played it out, ended on the
+    /// same clip and seeked back again, for ever. The chapter never changed,
+    /// so an end-of-chapter sleep timer never fired.
+    ///
+    /// Runs are maximal stretches of one file, so the answer is always in
+    /// another file, and the advance always loads it. Where `entry` is the
+    /// last of its run, as the entry playing at the end of an ascending file
+    /// is, this is the same entry as `entry(following:)`.
+    ///
+    /// Not handled: a file the spine plays more than once, with other files
+    /// between, has a run for each. Past that file's end `entry(inFile:at:)`
+    /// answers from its *last* run, so the end of an earlier playing advances
+    /// from there, past everything in between. `entry(following:)` did the
+    /// same from the same active entry; this does not make it worse.
+    public func entry(followingFileOf entry: SMILEntry) -> SMILEntry? {
+        guard let index = index(of: entry),
+              let run = fileRanges[entries[index].audioHref]?.first(where: { $0.contains(index) }),
+              run.upperBound < entries.count
+        else { return nil }
+        return entries[run.upperBound]
     }
 
     /// The run of entries around `entry`, and where in that run it sits.
+    ///
+    /// Entries, not sentences: in a v3 book the window includes the holes and
+    /// continuations around the spoken sentence, exactly as `entries` holds
+    /// them.
     ///
     /// A window rather than repeated `entry(before:)` calls: the ten-foot
     /// read-along screen shows several sentences either side of the spoken one,
@@ -400,6 +737,27 @@ public struct SMILTimeline: Sendable {
         entries.first { $0.textHref == href }
     }
 
+    /// The first entry of the document run after — or before — the run that
+    /// holds `entry`: the next or previous chapter, as narration reaches it.
+    ///
+    /// By run rather than by document. A document the timeline visits twice —
+    /// a spine that comes back to a page, an overlay whose pars point into
+    /// another document — is two places, and looking a document up by name
+    /// always found its *first* visit: "next chapter" from the second visit
+    /// went back to whatever followed the first, and "previous" from it was
+    /// refused outright.
+    ///
+    /// Nil at either end of the book, and for an entry this timeline does not
+    /// hold.
+    public func firstEntry(ofRunAdjacentTo entry: SMILEntry, forward: Bool) -> SMILEntry? {
+        guard let index = index(of: entry),
+              let run = documentRuns.firstIndex(where: { $0.contains(index) })
+        else { return nil }
+        let target = forward ? run + 1 : run - 1
+        guard documentRuns.indices.contains(target) else { return nil }
+        return entries[documentRuns[target].lowerBound]
+    }
+
     /// The first narrated entry belonging to any of `documents`.
     ///
     /// Entries are built by walking the spine in order, so passing the spine
@@ -415,6 +773,16 @@ public struct SMILTimeline: Sendable {
     }
 }
 
+extension SMILTimeline.FragmentKey {
+    /// The fragment an entry names: its sentence, except for a word of a
+    /// word-granular book, whose sentence is `SMILTimeline.sentenceKey`'s. In
+    /// an extension so the memberwise initialiser `resolve` builds keys with
+    /// survives.
+    init(_ entry: SMILEntry) {
+        self.init(document: entry.textHref, fragment: entry.fragmentID)
+    }
+}
+
 public enum SMILParser {
     /// Clips shorter than this are structural padding, not narration.
     ///
@@ -423,84 +791,240 @@ public enum SMILParser {
     /// fragment that is never actually spoken, so they are dropped.
     static let minimumMeaningfulDuration: TimeInterval = 0.005
 
-    /// Parses one SMIL document into entries.
+    /// One `par` as the document states it: before the timeline drops the
+    /// fillers and before anything is accumulated across the book.
+    ///
+    /// A struct rather than the tuple it was, because a tuple is relabelled at
+    /// every hop and a field added to it is silently dropped by any hop that
+    /// was not told — which is what a test's own relabelling would have done
+    /// to `sentenceID`.
+    public struct Row: Sendable, Equatable {
+        public let fragmentID: String
+        public let textHref: String
+        public let audioHref: String
+        public let start: TimeInterval
+        public let end: TimeInterval
+        public let isAudioOnly: Bool
+        /// See `SMILEntry.sentenceID`.
+        public let sentenceID: String?
+        /// The par's `<audio>` stated no `clipEnd` at all, which SMIL defines
+        /// as "to the end of the media". `end` then holds `start`, as it always
+        /// did, and the timeline resolves the real end — see
+        /// `SMILParser.timeline(from:fileDurations:)`.
+        ///
+        /// Never true for a book either Storyteller generation aligned: both
+        /// write `clipEnd` on every par. A `clipEnd` that is present and
+        /// unreadable is not this either; that par is refused, as before.
+        public let isOpenEnded: Bool
+    }
+
+    /// Parses one SMIL document into rows.
     ///
     /// Handles the three nesting depths the format allows: the chapter `seq`,
     /// an optional `text-range-large` seq per block, an optional
     /// `text-range-small` seq per sentence, and finally `par` elements. A
     /// server-aligned book is always a flat list of sentence `par`s, but books
     /// aligned by the CLI can be word-granular.
-    public static func parse(
-        data: Data, overlayHref: String,
-    ) throws -> [(fragmentID: String, textHref: String, audioHref: String, start: TimeInterval, end: TimeInterval)] {
+    ///
+    /// A `text-range-small` seq is the one level that says something the pars
+    /// inside it do not: which sentence they are the words of. Its textref is
+    /// carried down to them as `sentenceID`. The chapter seq and a
+    /// `text-range-large` seq pass through whatever is already being carried,
+    /// because their textrefs name a document or a block, not a sentence.
+    public static func parse(data: Data, overlayHref: String) throws -> [Row] {
         let root = try EPUBXML.parse(data)
-        var results: [(String, String, String, TimeInterval, TimeInterval)] = []
+        var results: [Row] = []
 
-        func walk(_ node: EPUBXMLNode) {
+        func walk(_ node: EPUBXMLNode, sentence: String?) {
             for child in node.children {
                 switch child.name {
                 case "par":
                     guard let textNode = child.firstChild("text"),
                           let src = textNode["src"],
                           let audioNode = child.firstChild("audio"),
-                          let audioSrc = audioNode["src"]
+                          let audioSrc = audioNode["src"],
+                          let fragment = fragmentID(in: src)
                     else { continue }
-
-                    let fragment = src.split(separator: "#", maxSplits: 1).dropFirst().first.map(String.init) ?? ""
-                    guard !fragment.isEmpty else { continue }
 
                     let start = SMILClock.seconds(from: audioNode["clipBegin"] ?? "") ?? 0
                     let end = SMILClock.seconds(from: audioNode["clipEnd"] ?? "") ?? start
 
-                    results.append((
-                        fragment,
-                        EPUBPackage.resolve(src, relativeTo: overlayHref),
-                        EPUBPackage.resolve(audioSrc, relativeTo: overlayHref),
-                        start,
-                        end,
+                    results.append(Row(
+                        fragmentID: fragment,
+                        textHref: EPUBPackage.resolve(src, relativeTo: overlayHref),
+                        audioHref: EPUBPackage.resolve(audioSrc, relativeTo: overlayHref),
+                        start: start,
+                        end: end,
+                        isAudioOnly: isAudioOnly(child),
+                        sentenceID: sentence == fragment ? nil : sentence,
+                        isOpenEnded: audioNode["clipEnd"] == nil,
                     ))
-                case "seq", "body":
-                    walk(child)
+                case "seq" where typeTokens(child).contains("text-range-small"):
+                    walk(child, sentence: (child["epub:textref"] ?? child["textref"]).flatMap(fragmentID(in:)))
                 default:
-                    walk(child)
+                    walk(child, sentence: sentence)
                 }
             }
         }
-        walk(root)
-        return results.map {
-            (fragmentID: $0.0, textHref: $0.1, audioHref: $0.2, start: $0.3, end: $0.4)
-        }
+        walk(root, sentence: nil)
+        return results
+    }
+
+    /// The fragment a `src` or `textref` names, or nil when it names none.
+    private static func fragmentID(in reference: String) -> String? {
+        let fragment = reference.split(separator: "#", maxSplits: 1).dropFirst().first.map(String.init) ?? ""
+        return fragment.isEmpty ? nil : fragment
+    }
+
+    /// Whether a `par` is audio with no words: Storyteller 3 types its holes
+    /// and audio-chapter pars `storyteller:audio-only`.
+    ///
+    /// A par with no type at all, which is every par v2 wrote, has words.
+    static func isAudioOnly(_ par: EPUBXMLNode) -> Bool {
+        typeTokens(par).contains("storyteller:audio-only")
+    }
+
+    /// An element's `epub:type`, as the token list it is.
+    ///
+    /// The aligner's word-granular seqs carry
+    /// `"text-range-small storyteller:matched"`, so this splits rather than
+    /// compares. `EPUBXML` indexes a prefixed attribute under its local name
+    /// as well, and either spelling is read.
+    private static func typeTokens(_ node: EPUBXMLNode) -> [Substring] {
+        (node["epub:type"] ?? node["type"] ?? "").split(whereSeparator: \.isWhitespace)
     }
 
     /// Builds the whole-book timeline by walking the spine in order.
     ///
     /// Spine items with no overlay are skipped silently — a book may have
     /// narration for only some chapters, and the front matter usually has none.
-    public static func timeline(for package: EPUBPackage) -> SMILTimeline {
-        var entries: [SMILEntry] = []
-        var cumulative: TimeInterval = 0
-
+    ///
+    /// - Parameter fileDurations: measured lengths of the audio files, by
+    ///   archive href, where the caller already has them. Only a clip with no
+    ///   stated end reads them; see `timeline(from:fileDurations:)`.
+    public static func timeline(
+        for package: EPUBPackage, fileDurations: [String: TimeInterval] = [:],
+    ) -> SMILTimeline {
+        var rows: [Row] = []
         for item in package.spine {
             guard let overlayID = item.mediaOverlayID,
                   let overlay = package.manifest[overlayID],
                   let data = try? package.archive.read(overlay.href),
                   let parsed = try? parse(data: data, overlayHref: overlay.href)
             else { continue }
-
-            for row in parsed {
-                let duration = max(0, row.end - row.start)
-                guard duration >= minimumMeaningfulDuration else { continue }
-                cumulative += duration
-                entries.append(SMILEntry(
-                    fragmentID: row.fragmentID,
-                    textHref: row.textHref,
-                    audioHref: row.audioHref,
-                    start: row.start,
-                    end: row.end,
-                    cumulativeEnd: cumulative,
-                ))
-            }
+            rows += parsed
         }
-        return SMILTimeline(entries: entries)
+        return timeline(from: rows, fileDurations: fileDurations)
+    }
+
+    /// How long a clip with no stated end is taken to be when nothing says
+    /// where it ends: long enough to be kept, and no more.
+    ///
+    /// A guess with a purpose. Dropped, as such a clip used to be, its file
+    /// had no entry at all when it was the file's only clip — the whole file's
+    /// audio left the book — and otherwise its sentence never lit and could
+    /// not be tapped. Kept at this length it is still the last clip of its
+    /// file, which `entry(inFile:at:)` answers for everything past its start,
+    /// so it lights for as long as the file plays on and the end of the file
+    /// moves to the next one. What the guess costs is the book clock: the
+    /// clip's real length is not on it until a file length is supplied.
+    static let openClipPlaceholder: TimeInterval = minimumMeaningfulDuration
+
+    /// Where each clip with no stated end does end: at the next clip that
+    /// starts later in the same audio file, else at that file's measured
+    /// length, else after `openClipPlaceholder`.
+    static func resolvingOpenEnds(
+        _ rows: [Row], fileDurations: [String: TimeInterval],
+    ) -> [Row] {
+        resolveOpenEnds(rows, fileDurations: fileDurations).rows
+    }
+
+    /// The same, and which files were left waiting on their length — the
+    /// files `SMILTimeline.filesNeedingLength` names.
+    ///
+    /// The next start is found by binary search over the file's sorted
+    /// starts. It was a linear scan per open clip, which is quadratic in the
+    /// clips one file holds: a third-party book that gives thirty thousand
+    /// clips a `clipBegin` and no `clipEnd` in one long file spent most of a
+    /// second here, on the main actor, at every open.
+    static func resolveOpenEnds(
+        _ rows: [Row], fileDurations: [String: TimeInterval],
+    ) -> (rows: [Row], filesNeedingLength: Set<String>) {
+        guard rows.contains(where: \.isOpenEnded) else { return (rows, []) }
+        var startsByFile: [String: [TimeInterval]] = [:]
+        for row in rows { startsByFile[row.audioHref, default: []].append(row.start) }
+        for href in startsByFile.keys { startsByFile[href]?.sort() }
+        var waiting: Set<String> = []
+        let resolved = rows.map { row in
+            guard row.isOpenEnded else { return row }
+            let starts = startsByFile[row.audioHref] ?? []
+            let end: TimeInterval
+            if let next = firstStart(after: row.start, in: starts) {
+                end = next
+            } else if let length = fileDurations[row.audioHref], length.isFinite, length > row.start {
+                end = length
+            } else {
+                end = row.start + openClipPlaceholder
+                waiting.insert(row.audioHref)
+            }
+            return Row(
+                fragmentID: row.fragmentID, textHref: row.textHref, audioHref: row.audioHref,
+                start: row.start, end: end, isAudioOnly: row.isAudioOnly,
+                sentenceID: row.sentenceID, isOpenEnded: true)
+        }
+        return (resolved, waiting)
+    }
+
+    /// The first value in `sorted` strictly greater than `value`, by binary
+    /// search: an upper bound.
+    static func firstStart(after value: TimeInterval, in sorted: [TimeInterval]) -> TimeInterval? {
+        var low = 0
+        var high = sorted.count
+        while low < high {
+            let mid = (low + high) / 2
+            if sorted[mid] > value { high = mid } else { low = mid + 1 }
+        }
+        return low < sorted.count ? sorted[low] : nil
+    }
+
+    /// The timeline for rows already parsed, in book order: the fillers
+    /// dropped and `cumulativeEnd` accumulated.
+    ///
+    /// Split out of `timeline(for:)` so a narration stated as SMIL markup — a
+    /// test's, with no EPUB around it — becomes exactly the timeline the app
+    /// would build from it, rather than one assembled by a second copy of this
+    /// loop that could disagree with it.
+    ///
+    /// A clip with no stated end — `Row.isOpenEnded`, which SMIL defines as
+    /// "to the end of the media" — used to come out as long as nothing and be
+    /// dropped as padding. It now ends where the next clip in its file begins,
+    /// or at the end of the file when `fileDurations` knows it, or else is
+    /// kept at `openClipPlaceholder`. Rows that state their end, which is
+    /// every row either Storyteller generation writes, are untouched.
+    public static func timeline(
+        from rows: [Row], fileDurations: [String: TimeInterval] = [:],
+    ) -> SMILTimeline {
+        var entries: [SMILEntry] = []
+        var cumulative: TimeInterval = 0
+        let resolved = resolveOpenEnds(rows, fileDurations: fileDurations)
+        for row in resolved.rows {
+            let duration = max(0, row.end - row.start)
+            // Measured the way it is built, so a placeholder survives however
+            // the subtraction rounds: an open clip is never padding.
+            guard duration >= minimumMeaningfulDuration || (row.isOpenEnded && duration > 0)
+            else { continue }
+            cumulative += duration
+            entries.append(SMILEntry(
+                fragmentID: row.fragmentID,
+                textHref: row.textHref,
+                audioHref: row.audioHref,
+                start: row.start,
+                end: row.end,
+                cumulativeEnd: cumulative,
+                isAudioOnly: row.isAudioOnly,
+                sentenceID: row.sentenceID,
+            ))
+        }
+        return SMILTimeline(entries: entries, filesNeedingLength: resolved.filesNeedingLength)
     }
 }

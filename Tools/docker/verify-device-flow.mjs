@@ -46,8 +46,11 @@ async function approveInBrowser(url) {
 
     if (MODE === "oidc") {
       // The login page renders one submit button per configured provider BEFORE
-      // the credentials form, so target it by its label, never by type.
-      await page.click('button:has-text("Continue with Keycloak")')
+      // the credentials form, so target it by its label, never by type. 2.x
+      // labels it "Continue with Keycloak"; 3.x prints "Or continue with" as a
+      // separate caption and the button carries only the provider's name, so
+      // match the name, not the phrase.
+      await page.getByRole("button", { name: /keycloak/i }).first().click()
       await page.waitForURL(/\/realms\/issa\/protocol\/openid-connect\/auth/, { timeout: 30_000 })
       log("redirected to Keycloak")
       await page.fill("#username", OIDC_USER.username)
@@ -56,7 +59,9 @@ async function approveInBrowser(url) {
     } else {
       await page.fill('input[name="usernameOrEmail"]', ADMIN.username)
       await page.fill('input[name="password"]', ADMIN.password)
-      await page.click('button:has-text("Login")')
+      // The credentials form's own submit button rather than its wording,
+      // which 2.x and 3.x need not share.
+      await page.locator('form:has(input[name="password"]) button[type="submit"]').first().click()
     }
 
     await page.waitForURL((u) => !u.pathname.startsWith("/login") && !u.href.includes("/realms/"), { timeout: 45_000 })
@@ -67,12 +72,23 @@ async function approveInBrowser(url) {
     const heading = await page.locator("h1,h2,h3").first().textContent()
     log("approval page:", heading?.trim())
 
-    // The page offers "Approve device" (the manual user-code form), "Deny", and
-    // "Approve" (this pre-identified request). Match the exact label — a loose
+    // Up to beta.40 the page offers "Approve device" (the manual user-code
+    // form), "Deny", and "Approve" (this pre-identified request). From
+    // beta.41 the code is looked up first, with "Find request", and the
+    // request found is then approved. Match the exact label — a loose
     // selector picks up the manual-entry form or a provider button instead.
-    await page.getByRole("button", { name: "Approve", exact: true }).click()
+    const approve = page.getByRole("button", { name: "Approve", exact: true })
+    const find = page.getByRole("button", { name: /^\s*find request\s*$/i })
+    await approve.or(find).first().waitFor({ timeout: 30_000 })
+    if (!(await approve.count()) && (await find.count())) {
+      log("looking the request up (Find request)")
+      await find.first().click()
+      await approve.first().waitFor({ timeout: 30_000 })
+    }
+    await approve.first().click()
     await page.waitForTimeout(1500)
-    log("after approval:", (await page.textContent("body")).replace(/\s+/g, " ").trim().slice(0, 160))
+    // innerText, not textContent, which also returns the pages' inline styles.
+    log("after approval:", (await page.innerText("body")).replace(/\s+/g, " ").trim().slice(0, 160))
     await page.screenshot({ path: "/tmp/device-approval.png" })
   } finally {
     await browser.close()
@@ -104,6 +120,7 @@ async function main() {
       const me = await fetch(`${STORYTELLER}/api/v2/user`, {
         headers: { Authorization: `Bearer ${body.access_token}` },
       })
+      if (me.status !== 200) throw new Error(`the granted token does not work: GET /api/v2/user -> ${me.status}`)
       log(`token works: GET /api/v2/user -> ${me.status}`, (await me.json()).username)
 
       // The grant is single-use: a second exchange must fail.

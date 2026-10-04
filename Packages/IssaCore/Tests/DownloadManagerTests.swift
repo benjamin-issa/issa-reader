@@ -56,9 +56,10 @@ struct DownloadManagerTests {
 struct DownloadInterruptionTests {
     func manager() -> DownloadManager {
         DownloadManager(
-            baseURL: URL(string: "http://example.test")!,
+            baseURL: unreachableServer,
             tokens: StubTokens(),
             identifier: "test.\(UUID().uuidString)",
+            fenceStore: nil,
             destinationFor: { _ in URL(fileURLWithPath: "/dev/null") },
         )
     }
@@ -169,9 +170,10 @@ struct DownloadInterruptionTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let books = root.appending(path: "Books", directoryHint: .isDirectory)
         let subject = DownloadManager(
-            baseURL: URL(string: "http://example.test")!,
+            baseURL: unreachableServer,
             tokens: StubTokens(),
             identifier: "test.\(UUID().uuidString)",
+            fenceStore: nil,
             destinationFor: { job in books.appending(path: "\(job.bookUUID).epub") },
         )
         let job = DownloadManager.Job(bookUUID: "b", format: .ebook)
@@ -267,9 +269,10 @@ struct DownloadInterruptionTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let books = root.appending(path: "Books", directoryHint: .isDirectory)
         let subject = DownloadManager(
-            baseURL: URL(string: "http://example.test")!,
+            baseURL: unreachableServer,
             tokens: StubTokens(),
             identifier: "test.\(UUID().uuidString)",
+            fenceStore: nil,
             destinationFor: { job in books.appending(path: "\(job.bookUUID).epub") },
         )
         let job = DownloadManager.Job(bookUUID: "b", format: .readaloud)
@@ -463,9 +466,10 @@ struct CancelBeforeStartTests {
     func cancelDuringTokenFetchStopsTheTask() async {
         let tokens = GatedTokens()
         let manager = DownloadManager(
-            baseURL: URL(string: "http://example.test")!,
+            baseURL: unreachableServer,
             tokens: tokens,
             identifier: "test.\(UUID().uuidString)",
+            fenceStore: nil,
             destinationFor: { _ in URL(fileURLWithPath: "/dev/null") },
         )
         let job = DownloadManager.Job(bookUUID: "b", format: .ebook)
@@ -498,9 +502,10 @@ struct CancelBeforeStartTests {
     func shutDownDuringTokenFetchDoesNotCreateATask() async {
         let tokens = GatedTokens()
         let manager = DownloadManager(
-            baseURL: URL(string: "http://example.test")!,
+            baseURL: unreachableServer,
             tokens: tokens,
             identifier: "test.\(UUID().uuidString)",
+            fenceStore: nil,
             destinationFor: { _ in URL(fileURLWithPath: "/dev/null") },
         )
         let job = DownloadManager.Job(bookUUID: "b", format: .ebook)
@@ -520,17 +525,20 @@ struct CancelBeforeStartTests {
     /// server and credential a request is built with are the new ones.
     @Test("reconfiguring a manager keeps it usable")
     func reconfigureKeepsTheManager() async {
+        // Two addresses from the same unrouted documentation block, so the
+        // real task this starts waits rather than failing under the test.
         let manager = DownloadManager(
-            baseURL: URL(string: "http://old.test")!,
+            baseURL: unreachableServer,
             tokens: StubTokens(),
             identifier: "test.\(UUID().uuidString)",
+            fenceStore: nil,
             destinationFor: { _ in URL(fileURLWithPath: "/dev/null") },
         )
-        manager.reconfigure(baseURL: URL(string: "http://new.test")!, tokens: StubTokens())
+        manager.reconfigure(baseURL: URL(string: "http://192.0.2.2")!, tokens: StubTokens())
         let job = DownloadManager.Job(bookUUID: "b", format: .ebook)
         await manager.start(job)
         #expect(manager.state(for: job) == .queued)
-        #expect(manager.request(for: job)?.url?.host() == "new.test")
+        #expect(manager.request(for: job)?.url?.host() == "192.0.2.2")
         await manager.shutDown()
     }
 
@@ -544,9 +552,10 @@ struct CancelBeforeStartTests {
     @Test("stopping for a sign-out leaves the manager able to download again")
     func stopThenReconfigureStillDownloads() async {
         let manager = DownloadManager(
-            baseURL: URL(string: "http://first.test")!,
+            baseURL: unreachableServer,
             tokens: StubTokens(),
             identifier: "test.\(UUID().uuidString)",
+            fenceStore: nil,
             destinationFor: { _ in URL(fileURLWithPath: "/dev/null") },
         )
         let job = DownloadManager.Job(bookUUID: "b", format: .ebook)
@@ -560,10 +569,10 @@ struct CancelBeforeStartTests {
         #expect(manager.pending.isEmpty)
 
         // Sign in as someone else: same manager, same session, new server.
-        manager.reconfigure(baseURL: URL(string: "http://second.test")!, tokens: StubTokens())
+        manager.reconfigure(baseURL: URL(string: "http://192.0.2.2")!, tokens: StubTokens())
         await manager.start(job)
         #expect(manager.state(for: job) == .queued)
-        #expect(manager.request(for: job)?.url?.host() == "second.test")
+        #expect(manager.request(for: job)?.url?.host() == "192.0.2.2")
         await manager.shutDown()
     }
 
@@ -573,9 +582,10 @@ struct CancelBeforeStartTests {
     func cancelAfterTaskExistsIsUnaffected() async {
         let tokens = GatedTokens()
         let manager = DownloadManager(
-            baseURL: URL(string: "http://example.test")!,
+            baseURL: unreachableServer,
             tokens: tokens,
             identifier: "test.\(UUID().uuidString)",
+            fenceStore: nil,
             destinationFor: { _ in URL(fileURLWithPath: "/dev/null") },
         )
         let job = DownloadManager.Job(bookUUID: "b", format: .ebook)
@@ -597,9 +607,10 @@ struct CancelBeforeStartTests {
         let tokens = GatedTokens()
         await tokens.release()
         let manager = DownloadManager(
-            baseURL: URL(string: "http://example.test")!,
+            baseURL: unreachableServer,
             tokens: tokens,
             identifier: "test.\(UUID().uuidString)",
+            fenceStore: nil,
             destinationFor: { _ in URL(fileURLWithPath: "/dev/null") },
         )
         let job = DownloadManager.Job(bookUUID: "b", format: .ebook)
@@ -608,5 +619,300 @@ struct CancelBeforeStartTests {
         await manager.start(job)
         #expect(manager.hasTask(for: job), "a later, real start must not be swallowed by a stale cancel marker")
         await manager.shutDown()
+    }
+}
+
+/// The fence across a relaunch.
+///
+/// A task's stamp is kept by the daemon, but the numbers it is checked against
+/// lived only in the process: every launch began again at nothing, so a
+/// transfer stamped after a sign-out or a cancel-and-restart in the last
+/// process — and finished while the app was away — was thrown out the moment
+/// the next launch heard of it. The file was deleted by the system, no row
+/// appeared, and the book offered "Download" again.
+@Suite("The download fence across a relaunch")
+@MainActor
+struct DownloadFenceTests {
+    private func temporary() -> URL {
+        FileManager.default.temporaryDirectory
+            .appending(path: "issa-fence-\(UUID().uuidString)", directoryHint: .isDirectory)
+    }
+
+    private func manager(books: URL, fenceStore: UserDefaults? = nil) -> DownloadManager {
+        DownloadManager(
+            baseURL: unreachableServer,
+            tokens: StubTokens(),
+            identifier: "test.\(UUID().uuidString)",
+            fenceStore: fenceStore,
+            destinationFor: { job in
+                BookContentService.localURL(in: books, bookUUID: job.bookUUID, format: job.format)
+            },
+        )
+    }
+
+    /// Defaults of the test's own, standing for the app's across a relaunch.
+    private func defaults() throws -> (UserDefaults, String) {
+        let suite = "issa-fence-\(UUID().uuidString)"
+        return (try #require(UserDefaults(suiteName: suite)), suite)
+    }
+
+    /// What the daemon replays as a session is built: a transfer that
+    /// finished while the app was away, stamped as the given description.
+    private func deliverFinished(
+        _ description: String, to subject: DownloadManager, in root: URL,
+    ) async throws {
+        let task = await DownloadStubProtocol.finishedTask(.epub)
+        task.taskDescription = description
+        let arrived = try DownloadStubProtocol.arrivedFile(.epub, in: root)
+        subject.urlSession(URLSession.shared, downloadTask: task, didFinishDownloadingTo: arrived)
+    }
+
+    /// The fix itself. The last launch signed out and cancelled a download,
+    /// and its fence was kept; this launch judges that launch's transfers by
+    /// the same numbers — taking the ones started afterwards, and still
+    /// refusing the ones those calls stopped.
+    @Test("a fence kept by the last launch lets its transfers finish, and still refuses what it stopped")
+    func aKeptFenceJudgesTheLastLaunchesTransfers() async throws {
+        let root = temporary()
+        let (store, suite) = try defaults()
+        defer {
+            store.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: root)
+        }
+        let books = root.appending(path: "Books", directoryHint: .isDirectory)
+        let restarted = DownloadManager.Job(bookUUID: "r", format: .ebook)
+
+        // The last launch: a sign-out, then a download cancelled.
+        let last = manager(books: books, fenceStore: store)
+        last.stop()
+        last.cancel(restarted)
+        await last.shutDown()
+
+        let subject = manager(books: books, fenceStore: store)
+        var finished: [DownloadManager.Job] = []
+        subject.onFinished = { finished.append($0) }
+        let afterSignOut = DownloadManager.Job(bookUUID: "b", format: .readaloud)
+        let beforeSignOut = DownloadManager.Job(bookUUID: "c", format: .readaloud)
+
+        // The stale ones first: let through, they would publish ahead of the
+        // live ones, which is what the exact comparison below would catch.
+        try await deliverFinished(DownloadManager.encode(beforeSignOut), to: subject, in: root)
+        try await deliverFinished(
+            DownloadManager.encode(restarted, generation: 1), to: subject, in: root)
+        try await deliverFinished(
+            DownloadManager.encode(afterSignOut, generation: 1), to: subject, in: root)
+        try await deliverFinished(
+            DownloadManager.encode(restarted, generation: 1, epoch: 1), to: subject, in: root)
+        await settle { finished.count >= 2 }
+
+        #expect(finished == [afterSignOut, restarted],
+                "only the transfers started after the sign-out and the cancel are wanted")
+        #expect(subject.state(for: afterSignOut) == .finished)
+        #expect(subject.state(for: restarted) == .finished)
+        #expect(subject.state(for: beforeSignOut) == nil, "the sign-out stopped this one")
+        #expect(!FileManager.default.fileExists(
+            atPath: BookContentService.localURL(in: books, bookUUID: "c", format: .readaloud).path))
+        await subject.shutDown()
+    }
+
+    /// Written on every call that moves it, so a launch that ends without
+    /// warning has already kept what the next one needs.
+    @Test("every stop and cancel writes the fence down")
+    func theFenceIsKeptAsItMoves() async throws {
+        let (store, suite) = try defaults()
+        defer { store.removePersistentDomain(forName: suite) }
+        let subject = manager(books: temporary(), fenceStore: store)
+        let job = DownloadManager.Job(bookUUID: "b", format: .ebook)
+        #expect(DownloadManager.loadFence(from: store) == nil, "nothing to keep before anything moved it")
+
+        subject.cancel(job)
+        #expect(DownloadManager.loadFence(from: store)
+            == DownloadManager.Fence(global: 0, perJob: [job: 1], armed: true))
+        subject.stop()
+        #expect(DownloadManager.loadFence(from: store)
+            == DownloadManager.Fence(global: 1, perJob: [:], armed: true))
+        await subject.shutDown()
+    }
+
+    /// The finding's own trigger. A download removed before the daemon's list
+    /// of transfers came back had no task here to stop, so `cancel` could only
+    /// advance the fence — and reattaching then re-stamped the transfer with
+    /// the advanced number and adopted it: tracked, shown as downloading, and
+    /// moved into the place the removal had just emptied when it finished.
+    @Test("a job cancelled before the system's transfers are reattached stays cancelled")
+    func aCancelledJobIsNotAdoptedBack() async {
+        let subject = manager(books: temporary())
+        let cancelled = DownloadManager.Job(bookUUID: "b", format: .readaloud)
+        let untouched = DownloadManager.Job(bookUUID: "c", format: .ebook)
+        subject.cancel(cancelled)
+
+        let stale = URLSession.shared.downloadTask(with: unreachableServer.appending(path: "b"))
+        stale.taskDescription = DownloadManager.encode(cancelled)
+        let carried = URLSession.shared.downloadTask(with: unreachableServer.appending(path: "c"))
+        carried.taskDescription = DownloadManager.encode(untouched)
+        subject.adopt([stale, carried])
+
+        #expect(!subject.hasTask(for: cancelled), "the cancelled job was adopted back into life")
+        #expect(subject.state(for: cancelled) == nil)
+        #expect(stale.state == .canceling || stale.state == .completed, "and its transfer has to stop")
+        #expect(subject.hasTask(for: untouched), "a transfer nobody cancelled is still taken on")
+        #expect(subject.state(for: untouched)?.isActive == true)
+        await subject.shutDown()
+    }
+
+    /// Unarmed — the first launch after upgrading — nothing can be judged, so
+    /// a transfer the system carried on with is re-stamped as this launch's
+    /// own and adopted, and stays live once the fence arms for another job.
+    @Test("unarmed, a transfer the system carried on with is taken on as this launch's own")
+    func unarmedAdoptionRestamps() async throws {
+        let root = temporary()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let books = root.appending(path: "Books", directoryHint: .isDirectory)
+        let subject = manager(books: books)
+        let job = DownloadManager.Job(bookUUID: "b", format: .readaloud)
+        var finished: [DownloadManager.Job] = []
+        subject.onFinished = { finished.append($0) }
+
+        let carried = await DownloadStubProtocol.finishedTask(.epub)
+        carried.taskDescription = DownloadManager.encode(job, generation: 4, epoch: 2)
+        subject.adopt([carried])
+        #expect(subject.hasTask(for: job))
+        #expect(carried.taskDescription == DownloadManager.encode(job))
+
+        subject.cancel(DownloadManager.Job(bookUUID: "other", format: .ebook))
+        let arrived = try DownloadStubProtocol.arrivedFile(.epub, in: root)
+        subject.urlSession(URLSession.shared, downloadTask: carried, didFinishDownloadingTo: arrived)
+        await settle { !finished.isEmpty }
+
+        #expect(finished == [job], "arming for another job stranded an adopted transfer")
+        #expect(subject.state(for: job) == .finished)
+        await subject.shutDown()
+    }
+
+    /// The first launch after upgrading from a build that kept no fence. It
+    /// has no record of the numbers the last process reached, so it cannot
+    /// tell a stale stamp from a live one — and throwing a finished book away
+    /// is the worse of the two mistakes.
+    @Test(
+        "a transfer finished while the app was away is kept on the first launch after upgrading",
+        arguments: [(1, 0), (0, 1), (3, 2)])
+    func anUpgradeKeepsWhatFinishedWhileAway(generation: Int, epoch: Int) async throws {
+        let root = temporary()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let books = root.appending(path: "Books", directoryHint: .isDirectory)
+        let subject = manager(books: books)
+        var finished: [DownloadManager.Job] = []
+        subject.onFinished = { finished.append($0) }
+        let job = DownloadManager.Job(bookUUID: "b", format: .readaloud)
+
+        // What the daemon replays as the session is built: a transfer the last
+        // process stamped after a sign-out, or after a cancel and a restart.
+        let task = await DownloadStubProtocol.finishedTask(.epub)
+        task.taskDescription = DownloadManager.encode(job, generation: generation, epoch: epoch)
+        let arrived = try DownloadStubProtocol.arrivedFile(.epub, in: root)
+        subject.urlSession(URLSession.shared, downloadTask: task, didFinishDownloadingTo: arrived)
+        await settle { subject.state(for: job) != nil }
+
+        #expect(subject.state(for: job) == .finished, "the finished transfer was thrown away")
+        #expect(FileManager.default.fileExists(
+            atPath: BookContentService.localURL(in: books, bookUUID: "b", format: .readaloud).path))
+        #expect(finished == [job])
+        await subject.shutDown()
+    }
+
+    /// `cancel` marked the job as pausing so its own cancellation would not
+    /// read as a failure, and then advanced the job's epoch — which fences out
+    /// exactly that cancellation, so nothing ever consumed the marker. The
+    /// same job downloaded again then took the next cancellation it did not
+    /// ask for — the system reclaiming the transfer — for a pause, and the row
+    /// sat at "downloading" with no task behind it and every control dead.
+    @Test("a download cancelled and started again still reports an interruption it did not ask for")
+    func aRestartAfterCancelStillReportsInterruption() async {
+        let subject = manager(books: temporary())
+        let job = DownloadManager.Job(bookUUID: "b", format: .ebook)
+        await subject.start(job)
+        #expect(subject.hasTask(for: job), "the cancel has to find a live task")
+
+        subject.cancel(job)
+        await subject.start(job)
+        let restarted = URLSession.shared.downloadTask(with: unreachableServer.appending(path: "file"))
+        restarted.taskDescription = subject.liveTaskDescription(for: job)
+        subject.urlSession(
+            URLSession.shared, downloadTask: restarted,
+            didWriteData: 512, totalBytesWritten: 512, totalBytesExpectedToWrite: 1_024)
+        await settle { subject.state(for: job)?.fraction == 0.5 }
+        #expect(subject.state(for: job)?.fraction == 0.5, "the restarted transfer is under way")
+
+        // The system reclaims it: a cancellation nobody here asked for.
+        subject.urlSession(
+            URLSession.shared, task: restarted,
+            didCompleteWithError: NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled))
+        await settle { subject.state(for: job)?.isFailure == true }
+
+        #expect(subject.state(for: job)?.isFailure == true,
+                "swallowed as a pause, the row stays at downloading with nothing behind it")
+        #expect(!subject.hasTask(for: job))
+        await subject.shutDown()
+    }
+
+    /// R-56. Pause, then the X beside it before the daemon hands the paused
+    /// task's resume data back. The cancel cleared the row; the pause's own
+    /// callback, arriving after, wrote `.paused` and the resume data straight
+    /// back, so the row the reader had just cancelled returned as "Paused",
+    /// offering to resume it.
+    @Test("a pause's late callback does not bring back a download cancelled after it")
+    func aCancelAfterAPauseStaysCancelled() async {
+        let subject = manager(books: temporary())
+        let job = DownloadManager.Job(bookUUID: "b", format: .ebook)
+        await subject.start(job)
+        #expect(subject.hasTask(for: job), "the pause has to find a live task")
+
+        subject.pause(job)
+        subject.cancel(job)
+        #expect(subject.state(for: job) == nil)
+
+        // The real task's cancellation callback, whenever the daemon sends it.
+        await settle { subject.pauseCallbacksDelivered > 0 }
+        #expect(subject.pauseCallbacksDelivered == 1, "the pause's callback never came")
+
+        #expect(subject.state(for: job) == nil, "the cancelled download came back as \(String(describing: subject.state(for: job)))")
+        #expect(!subject.hasResumeData(for: job))
+        await subject.shutDown()
+    }
+
+    /// R-57. The same pause-then-cancel left the pause's marker behind: the
+    /// cancel advanced the epoch, which fences out the paused task's own
+    /// cancellation — the only thing that consumed the marker. The next
+    /// download of the job then took the system's cancellation of its transfer
+    /// for that pause, and froze at "downloading" with no task behind it.
+    @Test("a download paused, cancelled and started again still reports an interruption it did not ask for")
+    func aRestartAfterPauseAndCancelStillReportsInterruption() async {
+        let subject = manager(books: temporary())
+        let job = DownloadManager.Job(bookUUID: "b", format: .ebook)
+        await subject.start(job)
+        #expect(subject.hasTask(for: job), "the pause has to find a live task")
+
+        subject.pause(job)
+        subject.cancel(job)
+        await settle { subject.pauseCallbacksDelivered > 0 }
+
+        await subject.start(job)
+        let restarted = URLSession.shared.downloadTask(with: unreachableServer.appending(path: "file"))
+        restarted.taskDescription = subject.liveTaskDescription(for: job)
+        subject.urlSession(
+            URLSession.shared, downloadTask: restarted,
+            didWriteData: 512, totalBytesWritten: 512, totalBytesExpectedToWrite: 1_024)
+        await settle { subject.state(for: job)?.fraction == 0.5 }
+        #expect(subject.state(for: job)?.fraction == 0.5, "the restarted transfer is under way")
+
+        // The system reclaims it: a cancellation nobody here asked for.
+        subject.urlSession(
+            URLSession.shared, task: restarted,
+            didCompleteWithError: NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled))
+        await settle { subject.state(for: job)?.isFailure == true }
+
+        #expect(subject.state(for: job)?.isFailure == true,
+                "swallowed as the old pause, the row stays at downloading with nothing behind it")
+        await subject.shutDown()
     }
 }

@@ -40,6 +40,7 @@ struct AskCoordinatorTests {
     ///   was asked to do, and when.
     static func coordinator(
         turns: [ScriptedAnswerModel.Turn] = [.answer("Alice followed a white rabbit.\nSources: 1")],
+        notifier: (any AskNotifying)? = nil,
     ) throws -> (AskCoordinator, ScriptedAnswerModel, URL, UserDefaults, String) {
         let directory = URL.temporaryDirectory
             .appending(path: "issa-ask-coordinator-\(UUID().uuidString)")
@@ -49,12 +50,30 @@ struct AskCoordinatorTests {
         let coordinator = AskCoordinator(
             store: AskIndexStore(directory: directory),
             model: model,
-            // No notifier: a permission prompt is a real system alert in front
-            // of a real runner.
-            notifier: nil,
+            // No real notifier: a permission prompt is a real system alert in
+            // front of a real runner. A test that needs to see what was asked
+            // passes a counting one.
+            notifier: notifier,
             defaults: defaults,
         )
         return (coordinator, model, directory, defaults, name)
+    }
+
+    /// Counts what the coordinator asks of the notification centre, and asks
+    /// the real one nothing.
+    @MainActor
+    final class CountingNotifier: AskNotifying {
+        private(set) var authorizationRequests = 0
+        private(set) var posted = 0
+
+        func requestAuthorizationIfNeeded() async { authorizationRequests += 1 }
+        func postAnswerReady(job: AskJob) async { posted += 1 }
+        /// What each purge asked to keep, so a sign-out that swept the
+        /// device's own banners shows here.
+        private(set) var removedAllKeeping: [Set<String>] = []
+
+        func removeDelivered(bookUUID: String) async {}
+        func removeAllDelivered(keeping kept: Set<String>) async { removedAllKeeping.append(kept) }
     }
 
     static func cleanUp(_ directory: URL, _ suite: String) {
@@ -324,6 +343,76 @@ struct AskCoordinatorTests {
         coordinator.sheetDismissed(bookUUID: source.bookUUID)
         #expect(defaults.bool(forKey: AskCoordinator.askedForNotificationsKey))
         await Self.settle(job)
+    }
+
+    /// Once means once across dismissals, not one flag set.
+    ///
+    /// The test above can only see the remembered flag, and the flag is set
+    /// whether or not the guard in front of it works: with the once-only guard
+    /// deleted, every dismissal of a working sheet asked again and that test
+    /// stayed green.
+    @Test("closing two sheets on working questions asks about notifications once")
+    func twoDismissalsAskOnce() async throws {
+        let notifier = CountingNotifier()
+        let (coordinator, model, directory, _, suite) = try Self.coordinator(
+            turns: [.init(partials: ["Alice"], holdsAfterPartials: 1)], notifier: notifier,
+        )
+        defer { Self.cleanUp(directory, suite) }
+        let source = try Self.source()
+
+        let job = try #require(coordinator.ask("What did Alice follow?", source: source,
+                                               boundary: Self.boundary()))
+        await model.waitUntilHolding()
+        #expect(job.state.isWorking)
+
+        coordinator.sheetDismissed(bookUUID: source.bookUUID)
+        coordinator.sheetDismissed(bookUUID: source.bookUUID)
+        // The request goes out on a task of its own. Bounded, so a broken
+        // coordinator that never asks fails here rather than hanging.
+        let deadline = ContinuousClock.now + .seconds(10)
+        while notifier.authorizationRequests == 0, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        // Main-actor tasks run in the order they were made, so a second request
+        // made by the second dismissal has run by the time these have.
+        for _ in 0 ..< 5 { await Task { @MainActor in }.value }
+        #expect(notifier.authorizationRequests == 1)
+
+        await model.release()
+        await Self.settle(job)
+    }
+
+    // MARK: - Getting ready
+
+    /// A warm-up that failed was remembered as done, so no later opening of the
+    /// sheet tried again and every question built the index itself.
+    @Test("a warm-up that failed is tried again the next time the sheet opens")
+    func failedWarmUpIsNotRemembered() async throws {
+        // A file where the index directory should be: the build cannot create
+        // it, so the first warm-up fails.
+        let blocked = URL.temporaryDirectory
+            .appending(path: "issa-ask-blocked-\(UUID().uuidString)")
+        try Data("not a directory".utf8).write(to: blocked)
+        defer { try? FileManager.default.removeItem(at: blocked) }
+        let (defaults, suite) = SharedFixtures.scratchDefaults()
+        defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
+        let store = AskIndexStore(directory: blocked)
+        let coordinator = AskCoordinator(
+            store: store, model: ScriptedAnswerModel(), notifier: nil, defaults: defaults,
+        )
+        let source = try Self.source()
+
+        coordinator.prepare(source: source)
+        await coordinator.warmUp(for: source.bookUUID)?.value
+        #expect(!(await store.isPrepared(source: source)))
+
+        // Whatever was in the way is gone; the next opening warms up for real.
+        try FileManager.default.removeItem(at: blocked)
+        coordinator.prepare(source: source)
+        let retry = coordinator.warmUp(for: source.bookUUID)
+        #expect(retry != nil, "the failed warm-up must not count as done")
+        await retry?.value
+        #expect(await store.isPrepared(source: source))
     }
 
     // MARK: - The setting

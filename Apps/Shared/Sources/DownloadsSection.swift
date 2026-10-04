@@ -8,7 +8,8 @@ import SwiftUI
 /// of the downloads list is an edit to this file and to nothing else. The
 /// Reading tab shows four rows and a link to the rest; the Downloads screen
 /// shows every row plus the transfers still arriving. Both get the same row,
-/// the same menu and the same removal.
+/// the same menu — the book's own (`.bookMenu`), with this row's removal last —
+/// and the same removal.
 ///
 /// **Nothing here starts a download.** This is a management surface: it lists
 /// what a reader has already chosen to keep and lets them stop keeping it. A
@@ -45,6 +46,9 @@ struct DownloadsSection: View {
     /// shelf the library already has, so this is not a second list of the same
     /// books with its own rules.
     var showAll: (() -> Void)?
+    /// The Mac Downloads list's selected row, by item id, when that list
+    /// draws this section as its own rows (`DownloadsView`).
+    var selectedRow: String?
 
     @State private var scanned: DownloadsInventory = .empty
     /// Which row has its Delete button revealed. One at a time: two open rows
@@ -101,6 +105,53 @@ struct DownloadsSection: View {
     }
 
     var body: some View {
+        #if os(macOS)
+        if placement == .manage {
+            listRows
+        } else {
+            stacked
+        }
+        #else
+        stacked
+        #endif
+    }
+
+    #if os(macOS)
+    /// The Mac's Downloads screen: the same parts, each its own row of the
+    /// screen's `List` rather than all of them stacked inside one.
+    ///
+    /// Inside one row they were one row to AppKit, which attaches a context
+    /// menu to a table row — so a right-click on any card showed the first
+    /// card's `.bookMenu`, and its "Remove download" removed the first book
+    /// (F1). As rows, each card is tagged with its item's id, selectable, and
+    /// the list's own menu, double-click and ⌫ act on the row they name
+    /// (`DownloadsView`, `DownloadsRowCommands`).
+    @ViewBuilder
+    private var listRows: some View {
+        if showsTransfers {
+            Text("Downloading").overlineStyle()
+            ForEach(app.downloadsPending, id: \.job) { item in
+                transferRow(item.job, state: item.state)
+            }
+        }
+        header
+        if items.isEmpty {
+            if !showsTransfers { emptyState }
+        } else {
+            hint
+            ForEach(visibleItems) { item in
+                row(item)
+                    .tag(item.id)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel(accessibilityLabel(item))
+                    .bookDetailsAccessibilityAction(item.book)
+                    .accessibilityAction(named: "Remove download") { remove(item) }
+            }
+        }
+    }
+    #endif
+
+    private var stacked: some View {
         VStack(alignment: .leading, spacing: Metrics.spacing8) {
             if showsTransfers {
                 // The heading the rewire onto this shared component dropped.
@@ -231,13 +282,17 @@ struct DownloadsSection: View {
 
     #if os(tvOS)
     /// A shelf of posters, like every other shelf on the television. Hold
-    /// Select for the menu; a press opens the book, which is what a press does
-    /// everywhere else here and is why the menu does not repeat it.
+    /// Select for the book's menu, whose last item removes this edition; a
+    /// press opens the book, which is what a press does everywhere else here
+    /// and is why the menu does not repeat it.
     private var posterRail: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(alignment: .top, spacing: Metrics.spacing12) {
                 ForEach(visibleItems) { item in
-                    BookLink(book: item.book, session: app.session) {
+                    BookLink(
+                        book: item.book, session: app.session,
+                        focusEdition: item.format, onRemoveFocused: { remove(item) },
+                    ) {
                         VStack(alignment: .leading, spacing: Metrics.spacing4) {
                             CoverImage(book: item.book, session: app.session)
                                 .frame(width: 220)
@@ -252,9 +307,6 @@ struct DownloadsSection: View {
                                 .lineLimit(2)
                                 .frame(width: 220, alignment: .leading)
                         }
-                    }
-                    .contextMenu {
-                        removeButton(item)
                     }
                 }
             }
@@ -281,18 +333,20 @@ struct DownloadsSection: View {
         ) {
             row(item)
         }
-        .contextMenu { rowMenu(item) }
+        .bookMenu(item.book, focusEdition: item.format, onRemoveFocused: { remove(item) })
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilityLabel(item))
         .accessibilityAction(named: "Open") { open(item.book) }
+        .bookDetailsAccessibilityAction(item.book)
         .accessibilityAction(named: "Remove download") { remove(item) }
         #else
         row(item)
             .contentShape(Rectangle())
             .onTapGesture { select(item.book) }
-            .contextMenu { rowMenu(item) }
+            .bookMenu(item.book, focusEdition: item.format, onRemoveFocused: { remove(item) })
             .accessibilityElement(children: .combine)
             .accessibilityLabel(accessibilityLabel(item))
+            .bookDetailsAccessibilityAction(item.book)
             .accessibilityAction(named: "Remove download") { remove(item) }
         #endif
     }
@@ -324,7 +378,7 @@ struct DownloadsSection: View {
         .background(Palette.surface, in: RoundedRectangle(cornerRadius: Metrics.radiusMedium))
         .overlay(
             RoundedRectangle(cornerRadius: Metrics.radiusMedium)
-                .strokeBorder(isSelected(item.book) ? Palette.tangerine : Palette.border, lineWidth: 1),
+                .strokeBorder(isSelected(item) ? Palette.tangerine : Palette.border, lineWidth: 1),
         )
         .contentShape(Rectangle())
     }
@@ -342,41 +396,16 @@ struct DownloadsSection: View {
         "\(item.book.title), \(metaLine(item)), \(ByteCountText.text(item.bytes))"
     }
 
-    private func isSelected(_ book: Book) -> Bool {
+    private func isSelected(_ item: DownloadsInventory.DownloadedItem) -> Bool {
         #if os(macOS)
-        selection?.bookID == book.uuid
+        // The list's own row on the Downloads screen; the inspector's book in
+        // the Reading screen's stack, which has no list to select in.
+        placement == .manage ? selectedRow == item.id : selection?.bookID == item.book.uuid
         #else
         false
         #endif
     }
     #endif
-
-    /// The hold menu, and on the Mac the right-click menu. Modelled on
-    /// `BookDetailView.editionMenu`: the destructive item last, with `role`
-    /// rather than a red tint, so every platform draws it the way it draws
-    /// deletion.
-    @ViewBuilder
-    private func rowMenu(_ item: DownloadsInventory.DownloadedItem) -> some View {
-        #if os(macOS)
-        Button("Open in reader", systemImage: "book") { open(item.book) }
-        #else
-        Button("Open", systemImage: "book") { open(item.book) }
-        #endif
-        removeButton(item)
-    }
-
-    @ViewBuilder
-    private func removeButton(_ item: DownloadsInventory.DownloadedItem) -> some View {
-        let button = Button("Remove download", systemImage: "trash", role: .destructive) {
-            remove(item)
-        }
-        #if os(macOS)
-        // ⌫ beside the item, which is what a Mac reader will try first.
-        button.keyboardShortcut(.delete, modifiers: [])
-        #else
-        button
-        #endif
-    }
 
     // MARK: - Transfers
 
@@ -566,12 +595,31 @@ struct DownloadsSection: View {
 /// The gesture only takes over once the drag is more horizontal than vertical.
 /// Claiming every drag would break scrolling in the tab this row lives in,
 /// which is a far worse bug than a swipe that occasionally has to be repeated.
-private struct SwipeToRemove<Content: View>: View {
+///
+/// Shared with the list of books from the reader's files, whose button says
+/// Remove — its book's original stays in Files — rather than Delete.
+struct SwipeToRemove<Content: View>: View {
     let id: String
     @Binding var openRow: String?
+    /// The revealed button's word.
+    let label: String
     let onRemove: () -> Void
     let onTap: () -> Void
     @ViewBuilder let content: () -> Content
+
+    /// Spelled out: the memberwise one is private, because `drag` is.
+    init(
+        id: String, openRow: Binding<String?>, label: String = "Delete",
+        onRemove: @escaping () -> Void, onTap: @escaping () -> Void,
+        @ViewBuilder content: @escaping () -> Content,
+    ) {
+        self.id = id
+        _openRow = openRow
+        self.label = label
+        self.onRemove = onRemove
+        self.onTap = onTap
+        self.content = content
+    }
 
     /// The revealed button's width, and the distance past which the swipe
     /// means it without being tapped.
@@ -632,7 +680,7 @@ private struct SwipeToRemove<Content: View>: View {
             openRow = nil
             onRemove()
         } label: {
-            Text("Delete")
+            Text(label)
                 .font(Typography.callout.weight(.semibold))
                 // Paper on alert, not white. `Palette.alert` is a foreground
                 // colour everywhere else in this app — a deep maroon in light
@@ -649,14 +697,42 @@ private struct SwipeToRemove<Content: View>: View {
 }
 #endif
 
+// MARK: - The Mac list's rows
+
+/// The Downloads list's rows, as AppKit reports them.
+///
+/// The Mac's Downloads screen — the sidebar's and Settings' — is a `List`, and
+/// its rows used to be one row: the whole `DownloadsSection` drawn inside a
+/// single list row, with a `.contextMenu` on each card inside it. AppKit
+/// attaches a context menu to a table row, so a right-click anywhere in that
+/// one tall row showed the first card's menu, and its "Remove download"
+/// removed the first book (F1). Each card is its own row now, tagged with its
+/// item's id, and the list's own menu and Delete ask here which item the
+/// click or the selection names.
+enum DownloadsRowCommands {
+    /// The item a right-click, a double-click or ⌫ is about: the one row
+    /// named, if it is still listed. Several, or none, is no one row.
+    static func target(
+        of ids: Set<String>, in items: [DownloadsInventory.DownloadedItem],
+    ) -> DownloadsInventory.DownloadedItem? {
+        guard ids.count == 1, let id = ids.first else { return nil }
+        return items.first { $0.id == id }
+    }
+}
+
 // MARK: - The undo toast
 
 extension View {
     /// The undo toast for a removal still inside its window.
     ///
-    /// A modifier applied by the screen rather than a view inside the section,
-    /// because a toast in the scroll content scrolls away from the reader it
-    /// is addressed to.
+    /// Applied once per container — each iPhone tab's stack, the Mac's detail
+    /// column and its Settings window — rather than by the screens that list
+    /// downloads: a book's menu can remove a download from any screen, and
+    /// the toast has to be wherever the reader is. Never inside scroll
+    /// content, which would scroll it away from the reader it is addressed
+    /// to. It says nothing itself; `AppModel.removeDownload(bookUUID:format:
+    /// title:)` announces each removal once, where a toast per tab would have
+    /// announced it once per tab.
     func downloadRemovalToast() -> some View {
         modifier(DownloadRemovalToast())
     }
@@ -712,14 +788,5 @@ private struct DownloadRemovalToast: ViewModifier {
             #endif
         }
         .animation(.snappy, value: app.pendingRemoval)
-        // Said out loud, because the row simply vanished and nothing announced
-        // why. `.isModal` moved the cursor onto the toast, which was the only
-        // thing making it noticeable at all — so removing the trait without
-        // this would have made the removal silent.
-        .onChange(of: app.pendingRemoval) { _, pending in
-            guard let pending else { return }
-            AccessibilityNotification.Announcement("Removed \(pending.title). Undo is available.")
-                .post()
-        }
     }
 }

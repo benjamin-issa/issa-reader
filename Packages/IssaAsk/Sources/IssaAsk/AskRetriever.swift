@@ -4,12 +4,6 @@ import IssaCore
 
 /// Everything between a reader's question and the excerpts the model is shown.
 ///
-/// One type rather than two, because there were two: the engine had its own
-/// retrieval and `SearchBookTool` called `QueryTerms.extract` with no known
-/// names at all, so the model's own follow-up searches could not recognise a
-/// name the book had invented. They now differ in exactly one thing — the tool
-/// may not answer a question outright — and that is a constructor argument.
-///
 /// The shape is "FTS narrows, sentences decide". The store returns a bounded,
 /// book-ordered set of passages that must contain the subject; `EvidenceFinder`
 /// splits only those and keeps the sentences that say something; the kinship
@@ -55,12 +49,33 @@ public struct AskRetriever: Sendable {
         /// constant and identity and kinship ignored it outright, so the
         /// number anybody tuned was not the number a reader was answered with.
         public static let excerpts = 15
+        /// The most excerpts any window is given, however large. Twenty is the
+        /// most any trial has scored; thirty leaves room to measure past it
+        /// without letting a future window send a quarter of the book.
+        public static let excerptsCeiling = 30
+        /// Excerpts for a window this size: `excerpts` at the 4,096 tokens the
+        /// number was measured against, growing in proportion above it, and
+        /// never fewer — a smaller window is trimmed by the prompt builder,
+        /// which is the layer that can count.
+        public static func excerpts(for contextSize: Int) -> Int {
+            let tuned = AskPromptBuilder.Budget.tunedContextSize
+            let scaled = excerpts * max(contextSize, tuned) / tuned
+            return min(excerptsCeiling, scaled)
+        }
         /// The BM25 pool a general question ranks. Raised from 40, which is
         /// where the sentence naming Ryn's brother was sitting at rank 50.
         public static let generalPool = 120
         /// The evidence scan's ceiling. In book order, so the three hundred it
         /// keeps are the earliest — where introductions live.
         public static let evidencePool = 300
+        /// The passages just before the reader's position that every
+        /// non-recap question is also shown, behind what the search found.
+        /// Twelve passages is about 1,100 words — the page or two the reader
+        /// has just turned. Measured in the 1.4.0 Ask review: on the
+        /// regression set and an invented novella it took hand-graded
+        /// answers from 19.5 to 23.5 of 26, with no spoiler and no passage
+        /// past the boundary.
+        public static let recencyPassages = 12
         /// Below this a kinship question is topped up with ordinary passages,
         /// so a book that states a relationship once is not answered from one
         /// sentence with no context around it. It is topped up to `limit`.
@@ -74,21 +89,28 @@ public struct AskRetriever: Sendable {
     /// answered from a different one than its first.
     private let bookUUID: String
     private let boundary: ReadingBoundary
-    /// Whether the deterministic kinship table may answer without the model.
-    /// False for the tool: the model has already been called, and handing it a
+    /// Whether the deterministic kinship table may answer without the model:
+    /// `AskEngine.usesKinshipFastPath` for the engine, and false for the
+    /// `searchBook` tool — the model has already been called, and handing it a
     /// finished sentence in place of excerpts is not a search result.
     private let allowsFastPath: Bool
+    /// How many of the passages just read to add behind what the search found.
+    /// Zero for the `searchBook` tool: the recent pages are already in the
+    /// prompt, and a search result is what matched the search.
+    private let recencyPassages: Int
 
     public init(
         store: AskIndexStore,
         bookUUID: String,
         boundary: ReadingBoundary,
         allowsFastPath: Bool = true,
+        recencyPassages: Int = Limits.recencyPassages,
     ) {
         self.store = store
         self.bookUUID = bookUUID
         self.boundary = boundary
         self.allowsFastPath = allowsFastPath
+        self.recencyPassages = recencyPassages
     }
 
     // MARK: - Asking
@@ -100,9 +122,24 @@ public struct AskRetriever: Sendable {
         let known = (try? await store.topNames(
             in: bookUUID, before: boundary, limit: Limits.knownNames,
         )) ?? []
-        let terms = QueryTerms.extract(from: question, knownNames: known)
+        // Thrown rather than defaulted: these decide which of the reader's
+        // lower-case words the probe below checks, and an empty set would
+        // quietly check fewer.
+        let bookNames = try await store.nameWords(in: bookUUID)
+        let terms = QueryTerms.extract(from: question, knownNames: known, bookNames: bookNames)
 
-        // A recap names nobody in particular, so it has nothing to be unmet.
+        // Every question, a recap's included. "What has happened so far?" names
+        // nobody and probes nothing — but "What has happened to the Cheshire
+        // Cat?" is a recap by its pattern, and skipping the probe for it took
+        // the recap passages and let the model describe the Cat from memory
+        // (R-04).
+        let unmet = try await store.unmetWords(
+            terms.nameCandidates, in: bookUUID, before: boundary,
+        )
+        // Retrieval is skipped when the answer is already known to be "not
+        // yet": it would only cost a query whose results are thrown away.
+        guard unmet.isEmpty else { return .notYet(unmet: unmet) }
+
         guard !terms.isRecap else {
             let recap = try await store.recapPassages(
                 in: bookUUID, before: boundary, limit: limit,
@@ -117,13 +154,6 @@ public struct AskRetriever: Sendable {
             guard !recap.isEmpty else { return .notYet(unmet: []) }
             return .evidence(Self.recapRanked(recap), kind: .recap)
         }
-
-        let unmet = try await store.unmetWords(
-            terms.nameCandidates, in: bookUUID, before: boundary,
-        )
-        // Retrieval is skipped when the answer is already known to be "not
-        // yet": it would only cost a query whose results are thrown away.
-        guard unmet.isEmpty else { return .notYet(unmet: unmet) }
 
         var found = try await evidence(for: terms, limit: limit)
         if found.isEmpty, terms.kind.subject != nil {
@@ -141,7 +171,64 @@ public struct AskRetriever: Sendable {
             IssaLog.info("ask answered from the book's own sentence")
             return .answered(answer, evidence: EvidenceFinder.ranked(found))
         }
-        return .evidence(EvidenceFinder.ranked(found), kind: terms.kind)
+        let ranked = EvidenceFinder.ranked(found)
+        guard recencyPassages > 0 else { return .evidence(ranked, kind: terms.kind) }
+        let recent = try await store.recapPassages(
+            in: bookUUID, before: boundary, limit: recencyPassages,
+        )
+        return .evidence(
+            Self.withRecency(ranked, recent: Self.inReadersChapter(recent, boundary: boundary)),
+            kind: terms.kind,
+        )
+    }
+
+    /// The recent passages that are in the spine item the reader is in.
+    ///
+    /// The recap query walks back across spine items, which for a recap is the
+    /// point. For the top-up it is not: on the first pages of a book the twelve
+    /// passages before the reader reach past Chapter 1 into whatever came
+    /// before it, and a title page or copyright page the book never tagged is
+    /// indexed like any chapter — so every question asked there sent the title
+    /// and the author's name, which the prompt never sends (R-26). The book's
+    /// structural tags cannot say where the story starts (see
+    /// `EPUBPackage.frontMatter`), but the spine item the reader is standing
+    /// in is story by definition. The cost is a reader on the first page of a
+    /// later chapter, who loses the end of the previous one from the top-up;
+    /// the search still reaches it.
+    static func inReadersChapter(
+        _ recent: [RetrievedPassage], boundary: ReadingBoundary,
+    ) -> [RetrievedPassage] {
+        recent.filter { $0.passage.spineIndex == boundary.spineIndex }
+    }
+
+    /// What the search found, with the pages just read behind it.
+    ///
+    /// The search finds the sentences that name the question's words; the
+    /// answer is very often in the paragraphs around where the reader is,
+    /// which name none of them. "What did Alice drink?" from the end of
+    /// Chapter I retrieved her deciding the bottle was not marked poison and
+    /// not the paragraph where she drinks it, and the model answered that she
+    /// had not. The recent passages come from the same bounded query a recap
+    /// uses, so they cannot reach past the reader.
+    ///
+    /// They rank behind everything the search found, so a small window drops
+    /// them first, and a recent passage that overlaps a found excerpt is left
+    /// out rather than sent twice. Book order, which is what the builder
+    /// numbers and the model reads.
+    static func withRecency(
+        _ found: [PassageRanker.Ranked], recent: [RetrievedPassage],
+    ) -> [PassageRanker.Ranked] {
+        let offset = (found.map(\.priority).max() ?? -1) + 1
+        let extra = recapRanked(recent).filter { candidate in
+            !found.contains {
+                $0.passage.spineIndex == candidate.passage.spineIndex
+                    && $0.passage.start < candidate.passage.end
+                    && candidate.passage.start < $0.passage.end
+            }
+        }.map { PassageRanker.Ranked(retrieved: $0.retrieved, priority: $0.priority + offset) }
+        return (found + extra).sorted {
+            ($0.passage.spineIndex, $0.passage.start) < ($1.passage.spineIndex, $1.passage.start)
+        }
     }
 
     /// The sentences, before they are packaged. Public so a test can assert on
@@ -333,7 +420,7 @@ public struct AskRetriever: Sendable {
     ) async throws -> [Evidence] {
         var candidates: [RetrievedPassage] = []
         if let subject {
-            let others = terms.searchTokens.filter { !subject.tokens.contains($0) }
+            let others = Self.optionalTerms(terms, subject: subject)
             if let pattern = FTSQuery.all(subject.tokens, andAnyOf: others) {
                 candidates = try await store.passages(
                     matching: pattern, in: bookUUID, before: boundary, order: .relevance,
@@ -350,6 +437,36 @@ public struct AskRetriever: Sendable {
         return EvidenceFinder.passages(
             PassageRanker.rank(candidates, terms: terms, limit: max(1, limit)),
         )
+    }
+
+    /// The words a passage about the subject must have at least one of, beside
+    /// the subject itself.
+    ///
+    /// **Not the subject's own family.** A subject that is a family word drags
+    /// its whole group into the search tokens — "father" brings "mother",
+    /// "parents", "papa" — and those are other ways of saying the subject, not
+    /// further things a passage about it has to say.
+    ///
+    /// **And not "who" on its own.** "who", "whom" and "whose" stay search
+    /// tokens because the ranker reads them as the sign that the answer is a
+    /// person, and beside a content word they only widen the net. But when
+    /// nothing else is left to require, requiring one of them asks every
+    /// passage for a relative pronoun, so the subject is required alone.
+    ///
+    /// Together they lost a reported case. *Autobiography of Benjamin
+    /// Franklin*'s name table holds "Father Abraham", so "Who is the author's
+    /// father?" took `father` as its subject, and every passage had to contain
+    /// "father" and one of "who", "mother", "parents"… — which "Josiah, my
+    /// father, married young, and carried his wife with three children into
+    /// New England" does not. Four passages came back, none saying who the
+    /// father was, and the answer was assembled from an apprenticeship, a
+    /// cutler and an epitaph.
+    static func optionalTerms(_ terms: QueryTerms, subject: Subject) -> [String] {
+        let family = Set(Kinship.groups(matching: subject.tokens).flatMap { $0 })
+        let others = terms.searchTokens.filter {
+            !subject.tokens.contains($0) && !family.contains($0)
+        }
+        return others.allSatisfy(QueryTerms.personWords.contains) ? [] : others
     }
 
     // MARK: - Logging

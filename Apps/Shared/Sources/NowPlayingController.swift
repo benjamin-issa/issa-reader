@@ -29,6 +29,9 @@ public final class NowPlayingController {
     /// Cover art for the Lock Screen, CarPlay and AirPlay receivers.
     private var artwork: MPMediaItemArtwork?
     private var session: Session?
+    /// The cover on disk, for a book from the reader's own files: there is no
+    /// server to fetch one from, and the one cut at import is the art.
+    private var artworkFile: URL?
 
     private let remote = RemoteCommandCenter()
     private var settings: PlaybackSettings?
@@ -143,6 +146,7 @@ public final class NowPlayingController {
         coordinator: (any PlaybackDriving)?,
         book: Book?,
         session: Session? = nil,
+        artworkFile: URL? = nil,
         chapterTitle: @escaping () -> String? = { nil },
     ) {
         // Identity for the engine, uuid for the book: the `Book` value is
@@ -167,6 +171,7 @@ public final class NowPlayingController {
         self.coordinator = coordinator
         self.book = book
         self.session = session
+        self.artworkFile = artworkFile
         currentChapterTitle = chapterTitle
         refreshTask?.cancel()
         artwork = nil
@@ -181,9 +186,12 @@ public final class NowPlayingController {
         }
 
         // The timer pauses playback and fades the last seconds rather than
-        // cutting off mid-word.
+        // cutting off mid-word — and, being the end of listening for the
+        // night, gives the audio route back, so whatever the book interrupted
+        // is told it may resume. A pause alone kept the session active with
+        // nothing playing.
         let timer = SleepTimer(
-            onExpire: { [weak coordinator] in coordinator?.player.pause() },
+            onExpire: { [weak coordinator] in coordinator?.player.endSession() },
             fade: { [weak coordinator] level in coordinator?.player.volume = level },
         )
         // A duration timer counts time spent *listening*, not wall-clock time.
@@ -217,6 +225,14 @@ public final class NowPlayingController {
         // Publish the moment anything changes, rather than waiting up to five
         // seconds for the poll — a lock screen that lags a play tap looks broken.
         coordinator.player.setRateObserver(for: self) { [weak self] _ in self?.publish() }
+        // A speed chosen from a bound control — a wheel, headphone or CarPlay
+        // button mapped to speed up or down — is the listener's speed, the same
+        // as one picked from a menu or the lock screen. It used to change the
+        // player and nothing else, so the next book, the next launch and the
+        // car-to-reader hand-off all went back to the saved one.
+        coordinator.player.onRateChosen = { [weak self] rate in
+            self?.settings?.playbackRate = Double(rate)
+        }
 
         // A sleep timer set before the engine changed hands, carried across.
         //
@@ -334,17 +350,44 @@ public final class NowPlayingController {
     /// Storyteller keeps two covers; the square one is the right shape for a
     /// Now Playing tile, where the portrait ebook cover would be letterboxed.
     private func loadArtwork(for book: Book) {
+        if let artworkFile {
+            loadArtwork(from: artworkFile)
+            return
+        }
         guard let session else { return }
         artworkGeneration += 1
         let generation = artworkGeneration
+        // By the book rather than its uuid, so a 3.x server is asked for the
+        // art by content hash instead of through its redirecting uuid route.
+        // This runs once per attach, and `attach` ignores the same book again,
+        // so a book taken before the first refresh brought its references is
+        // never handed over twice. The service decides from the book alone,
+        // so such a book is asked for by uuid, which 3.x redirects to the
+        // same art.
         Task { [weak self] in
             guard let data = try? await LibraryService(client: session.client)
-                .coverData(for: book.uuid, shape: .square, pixelWidth: 600),
+                .coverData(for: book, shape: .square, pixelWidth: 600),
                 let image = PlatformImage(data: data) else { return }
             let size = image.size
             // A slow fetch for a previous book must not overwrite the current
             // one — the lock screen and CarPlay would show this book's title
             // over that book's jacket until the next attach.
+            guard let self, self.artworkGeneration == generation else { return }
+            self.artwork = Self.artwork(from: image, size: size)
+            self.publish()
+        }
+    }
+
+    /// The cover cut from a local book at import, read off the disk. Never a
+    /// request: a book from the reader's files has no server, and its uuid
+    /// means nothing to one.
+    private func loadArtwork(from file: URL) {
+        artworkGeneration += 1
+        let generation = artworkGeneration
+        Task { [weak self] in
+            let data = await Task.detached(priority: .utility) { try? Data(contentsOf: file) }.value
+            guard let data, let image = PlatformImage(data: data) else { return }
+            let size = image.size
             guard let self, self.artworkGeneration == generation else { return }
             self.artwork = Self.artwork(from: image, size: size)
             self.publish()

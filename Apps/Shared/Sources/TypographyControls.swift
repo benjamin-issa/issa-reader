@@ -1,3 +1,4 @@
+import IssaCore
 import IssaRender
 import IssaUI
 import SwiftUI
@@ -45,9 +46,9 @@ struct TypographyControls: View {
                 Text("Accessibility")
             }
 
-            if !customFamilies.isEmpty {
+            if !listedCustomFamilies.isEmpty {
                 Section {
-                    ForEach(customFamilies, id: \.self) { family in
+                    ForEach(listedCustomFamilies, id: \.self) { family in
                         Text(family).tag(ReaderStyle.Typeface.custom(family))
                     }
                 } header: {
@@ -74,9 +75,17 @@ struct TypographyControls: View {
 
         if let onImport {
             Button {
+                FontImport.notice.clear()
                 onImport()
             } label: {
                 Label("Add a font…", systemImage: "plus.circle")
+            }
+            // Said, because the picker closing with nothing changed looked
+            // exactly like an import that worked and had not refreshed.
+            if let failure = FontImport.notice.message {
+                Text(failure)
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.alert)
             }
         }
 
@@ -98,7 +107,34 @@ struct TypographyControls: View {
         }
         .pickerStyle(.segmented)
 
-        Toggle("Justified", isOn: $style.justified)
+        // Three positions rather than two, because a book has an opinion here
+        // and a switch could not say whose wins. "Follow the book" is the
+        // default and does what the publisher set; the other two are the
+        // reader overruling it either way.
+        //
+        // A row with the choice on the right, like "Progress bar" in Settings,
+        // rather than the segmented control the line spacing above uses:
+        // "Follow the book" is a phrase, and three of those do not fit across a
+        // 375pt screen without one of them becoming "Follow the…".
+        Picker("Justify text", selection: $style.justification) {
+            ForEach(ReaderStyle.Justification.allCases, id: \.self) { justification in
+                Text(justification.title).tag(justification)
+            }
+        }
+    }
+
+    /// The imported faces worth listing under "Your fonts".
+    private var listedCustomFamilies: [String] {
+        Self.listedCustomFamilies(customFamilies)
+    }
+
+    /// Imported faces less any family the app ships.
+    ///
+    /// A copy of Literata imported by the reader registers as Literata — the
+    /// app's own — and listing it again under "Your fonts" offered one face
+    /// twice, the second time as though it were the reader's file.
+    static func listedCustomFamilies(_ families: [String]) -> [String] {
+        families.filter { CustomFonts.bundledFamily(matching: $0) == nil }
     }
 
     /// Keeps a selection that is no longer offered from clearing the picker.
@@ -112,9 +148,14 @@ struct TypographyControls: View {
                 if case .publisher = style.typeface, publisherFamily == nil {
                     return .bundled(ReaderStyle.defaultFamily)
                 }
-                if case let .custom(family) = style.typeface,
-                   !customFamilies.contains(family) {
-                    return .bundled(ReaderStyle.defaultFamily)
+                if case let .custom(family) = style.typeface {
+                    // A bundled family chosen as an import is the bundled row.
+                    if let bundled = CustomFonts.bundledFamily(matching: family) {
+                        return .bundled(bundled)
+                    }
+                    if !listedCustomFamilies.contains(family) {
+                        return .bundled(ReaderStyle.defaultFamily)
+                    }
                 }
                 return style.typeface
             },
@@ -141,16 +182,24 @@ enum FontImport {
     /// loan from another app's container, and it is not there on the next
     /// launch — a face that vanished would leave the book set in a font the
     /// picker still listed.
+    ///
+    /// A failure is said, in `notice`, and logged. It used to be neither: the
+    /// picker closed, "Your fonts" was unchanged, and nothing anywhere told a
+    /// damaged or unreadable file from an import that had quietly worked.
+    @MainActor
     @discardableResult
     static func adopt(_ picked: URL) -> String? {
-        guard let directory = CustomFonts.importedDirectory else { return nil }
+        notice.clear()
+        guard let directory = CustomFonts.importedDirectory else {
+            return refuse(picked, "That font couldn't be saved on this device.", reason: "no font directory")
+        }
         let scoped = picked.startAccessingSecurityScopedResource()
         defer { if scoped { picked.stopAccessingSecurityScopedResource() } }
         let destination = destinationFor(picked, in: directory)
         let existedBefore = FileManager.default.fileExists(atPath: destination.path)
         if !existedBefore {
             guard (try? FileManager.default.copyItem(at: picked, to: destination)) != nil
-            else { return nil }
+            else { return refuse(picked, "That file couldn't be opened.", reason: "copy failed") }
         }
         guard let family = CustomFonts.register(destination, imported: true) else {
             // A file CoreText rejects must not stay behind: `registerAll`
@@ -158,9 +207,56 @@ enum FontImport {
             // this import just made is removed; a file that was already there
             // belongs to an earlier import.
             if !existedBefore { try? FileManager.default.removeItem(at: destination) }
-            return nil
+            return refuse(picked, unreadableSentence(for: picked), reason: "not a readable font")
+        }
+        // A copy of a family the app ships is answered with the app's own,
+        // and `register` never registers it — so the copy did nothing but sit
+        // in the fonts folder, never listed under "Your fonts" and so with no
+        // way to remove it (F9). It goes now; the bundled row is chosen.
+        // Unregistering first is not needed: it was never registered.
+        if CustomFonts.bundledFamily(matching: family) != nil {
+            try? FileManager.default.removeItem(at: destination)
         }
         return family
+    }
+
+    /// The typeface to choose for a family an import answered with: the
+    /// app's own row when the file was a copy of a family it ships.
+    static func typeface(for family: String) -> ReaderStyle.Typeface {
+        CustomFonts.bundledFamily(matching: family).map { .bundled($0) } ?? .custom(family)
+    }
+
+    /// What to say about a file CoreText would not take.
+    static func unreadableSentence(for picked: URL) -> String {
+        switch picked.pathExtension.lowercased() {
+        case "woff", "woff2":
+            "WOFF fonts can't be used on this device. Try the OTF or TTF version of the font."
+        default:
+            "That file isn't a font this device can read."
+        }
+    }
+
+    @MainActor
+    private static func refuse(_ picked: URL, _ sentence: String, reason: String) -> String? {
+        IssaLog.warning("font import refused", [
+            "reason": reason,
+            "extension": picked.pathExtension.lowercased(),
+        ])
+        notice.message = sentence
+        return nil
+    }
+
+    /// What the last import could not do, for the controls to say under
+    /// "Add a font…". One for the app, because the two screens that import —
+    /// Settings and a book's own sheet — share the controls that say it.
+    @MainActor static let notice = Notice()
+
+    @Observable
+    @MainActor
+    final class Notice {
+        fileprivate(set) var message: String?
+
+        func clear() { message = nil }
     }
 
     /// Where the picked file should land, without trusting its name.

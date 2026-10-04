@@ -10,14 +10,25 @@ import SwiftUI
 /// beside the grid rather than as a modal, so choosing a book and reading about
 /// it do not interrupt each other.
 ///
-/// Its own navigation stack, because the detail's Series row pushes; without
-/// one that row would be a link to nowhere.
+/// Nothing in here may size itself against its *container*, because the only
+/// container above this column is the split view's detail area — the whole
+/// window minus the sidebar. That is what `containerRelativeFrame` found in
+/// builds 41 to 44, and the column drew hundreds of points wider than the 320
+/// its caller gives it. Width comes from the proposal here, never from a
+/// lookup.
+///
+/// No navigation stack of its own, deliberately. It had one so the detail's
+/// series link could push, and on macOS 27 that stack re-vended the window's
+/// toolbar on every layout pass until AppKit raised and the app died on the
+/// second cover clicked. Its series and tag links now ask the window to push
+/// instead: `MacBookSelection.pushed`, answered by the library's own stack —
+/// the same request a book's menu makes for "Go to Series" and "More by".
 struct MacBookInspector: View {
     @Environment(AppModel.self) private var app
     let bookID: String?
 
     var body: some View {
-        NavigationStack {
+        Group {
             if let bookID, let book = app.books.first(where: { $0.uuid == bookID }) {
                 BookDetailView(book: book, layout: .inspector)
                     // Identity, so selecting another book is a different view.
