@@ -2490,8 +2490,8 @@ public final class AppModel {
             "atOffset": String(format: "%.1f", target.anchor.offset),
             "wasPlaying": String(target.wasPlaying),
         ])
-        // The read-along may now be narrating a visible page, which is the one
-        // combination that holds the display awake.
+        // The read-along may now be narrating a visible page, which is what
+        // holds the television's display awake.
         updateScreenAwake()
         return decision
     }
@@ -2548,7 +2548,15 @@ public final class AppModel {
     /// view appears and cleared as it goes away, so a deep link that arrives for
     /// the book already being read can avoid resetting the navigation stack out
     /// from under the open reader.
-    public private(set) var visibleReaderUUID: String?
+    ///
+    /// A book on screen is what holds the display awake, so every write
+    /// recomputes — including the two that clear it without going through
+    /// `setReaderVisible`: an account exit, and a local book being removed
+    /// with its page up. Either would otherwise leave the phone unable to
+    /// sleep with no reader anywhere.
+    public private(set) var visibleReaderUUID: String? {
+        didSet { if visibleReaderUUID != oldValue { updateScreenAwake() } }
+    }
 
     /// An appearing reader claims the slot; a disappearing one releases it only
     /// if it still holds it, so an appear-before-disappear crossover during a
@@ -2561,11 +2569,14 @@ public final class AppModel {
             // model as the screen appears and must have no side effects on
             // observed state — see `ReaderScreen`.
             closedWhileNarrating.remove(uuid)
+            // A book opened after the sleep timer ran out is the reader awake
+            // again, not the end of the night carrying on.
+            sleepTimerRanOut = false
         } else if visibleReaderUUID == uuid {
             visibleReaderUUID = nil
         }
-        // Both directions: a reader appearing over running narration is what
-        // takes the hold, and one being dismissed is what gives it back.
+        // Both directions: a reader appearing is what takes the hold, and one
+        // being dismissed is what gives it back.
         updateScreenAwake()
         // A reader arriving on the book the car is playing is the commonest way
         // a drive ends.
@@ -2587,22 +2598,44 @@ public final class AppModel {
     /// applies.
     private let screenAwake = ScreenAwakeAssertion()
 
-    /// Whether the display is being held awake for a read-along right now.
+    /// Whether the display is being held awake for an open book right now.
     ///
     /// Internal rather than private so `IssaSharedTests` can assert the release
     /// paths — a keep-awake nothing releases is a flat battery, which is the
     /// worse of the two bugs on offer here.
     var keepsScreenAwake: Bool { screenAwake.isHeld }
 
+    /// Whether the sleep timer has run out since the reader last opened a
+    /// book, pressed play or picked the phone up.
+    ///
+    /// Storyteller's one exception to keeping an open book's screen awake, and
+    /// the answer to a book left open on the nightstand: a reader who set a
+    /// timer has said they want the device to stop, so its running out lets the
+    /// phone lock with the page still up. Cleared by any sign of the reader
+    /// being back — the equivalent of Storyteller's "Sleep timer ended" prompt
+    /// being answered.
+    private var sleepTimerRanOut = false
+
+    /// Told by `NowPlayingController` when its sleep timer runs out.
+    ///
+    /// Internal rather than private so `IssaSharedTests` can step through the
+    /// release without a timer's worth of audio.
+    func sleepTimerDidExpire() {
+        sleepTimerRanOut = true
+        updateScreenAwake()
+    }
+
     /// Told when the app goes to and comes back from the background.
     ///
     /// The reader is a full-screen cover on iOS and being backgrounded does not
     /// dismiss it — the same fact `flushOpenReaders()` exists for — so without
-    /// this a phone pocketed mid-read-along would go on holding its own display
-    /// awake until the book ended.
+    /// this a phone pocketed with a book open would go on holding its own
+    /// display awake until the book was closed.
     public func setForeground(_ foreground: Bool) {
         guard isForeground != foreground else { return }
         isForeground = foreground
+        // Picked up again after the timer ran out: the night is over.
+        if foreground { sleepTimerRanOut = false }
         updateScreenAwake()
         // The phone being picked up, with the reader already where it was left.
         if foreground { considerListeningHandoff(trigger: .foreground) }
@@ -2611,9 +2644,9 @@ public final class AppModel {
     /// Recomputes whether the display should be held awake, and holds or
     /// releases it.
     ///
-    /// Called from every place any of the four inputs can move:
-    /// `setReaderVisible`, `setForeground`, `stopNarration`,
-    /// `narrationDidStart`, and the rate observer installed in
+    /// Called from every place any of the inputs can move:
+    /// `setReaderVisible`, `setForeground`, `sleepTimerDidExpire`,
+    /// `stopNarration`, `narrationDidStart`, and the rate observer installed in
     /// `reader(for:session:)` — which is the one that catches a pause,
     /// whichever surface asked for it, the sleep timer included.
     private func updateScreenAwake() {
@@ -2623,10 +2656,12 @@ public final class AppModel {
         // somewhere else in the file.
         let narrated = listening == nil ? narratingBookUUID : nil
         screenAwake.apply(ScreenAwake.shouldKeepAwake(
+            policy: ScreenAwake.platformPolicy,
             isPlaying: playback?.player.isPlaying ?? false,
             isReaderVisible: visibleReaderUUID != nil,
             followsText: narrated != nil && narrated == visibleReaderUUID,
             isForeground: isForeground,
+            sleepTimerRanOut: sleepTimerRanOut,
         ))
     }
 
@@ -2667,7 +2702,14 @@ public final class AppModel {
     /// Weak, and a property rather than a parameter, because playback now
     /// starts and stops from places that have no view context to thread it
     /// through — a CarPlay list item, the end of a book, the reader closing.
-    public weak var nowPlayingController: NowPlayingController?
+    public weak var nowPlayingController: NowPlayingController? {
+        // Here rather than in each target's services, so no platform can be
+        // wired without it: the sleep timer running out is what lets an open
+        // book's screen lock.
+        didSet {
+            nowPlayingController?.onSleepTimerExpired = { [weak self] in self?.sleepTimerDidExpire() }
+        }
+    }
 
     #if !os(tvOS)
     /// The question machinery, handed over at launch for the same reason and on
@@ -2904,7 +2946,12 @@ public final class AppModel {
                     coordinator?.player.pause()
                     return
                 }
-                if rate > 0 { narrationDidStart(for: bookUUID) }
+                if rate > 0 {
+                    // Play pressed after the sleep timer ran out: the reader
+                    // is back, and so is their open book's screen.
+                    sleepTimerRanOut = false
+                    narrationDidStart(for: bookUUID)
+                }
                 // Not inside the `rate > 0` branch, which is what this observer
                 // used to be entirely: a rate of zero is the *release* signal,
                 // and it is the only one that reaches every way a read-along

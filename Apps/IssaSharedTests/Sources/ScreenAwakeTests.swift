@@ -1,127 +1,167 @@
 import Foundation
+import IssaCore
 import Testing
 import UIKit
 
+@testable import IssaPlayback
 @testable import IssaReader_iOS
 
-/// The screen going dark in the middle of a read-along.
+/// The screen going dark in the middle of a page.
 ///
-/// `isIdleTimerDisabled` appeared **nowhere** in this app, so a reader
-/// following the narration down a page watched the screen dim and lock at the
-/// device's Auto-Lock interval — thirty seconds at its shortest setting.
-/// Nothing about a read-along touches the screen, so the one thing the reader
-/// was actually doing never reset the idle timer once.
+/// 1.1.1 held the display only while a read-along was playing with its own
+/// page on screen, so a reader with no narration — or a read-along paused to
+/// take a page in at their own pace — watched the phone lock at the device's
+/// Auto-Lock interval, thirty seconds at its shortest. A page turn is a touch
+/// and resets the idle timer, so it struck exactly the pages that took longest
+/// to read.
 ///
-/// The fix is a held assertion, and a held assertion nobody gives back is a
-/// flat battery — a worse bug than the one being fixed. So this suite is not
-/// about the row that holds the display awake; it is about the fifteen that
-/// must not, and about each named route out of the one that does.
-@Suite("When the display may be held awake for a read-along")
+/// The reader asked for Storyteller's behaviour: the display stays awake for as
+/// long as a book is open, and the sleep timer running out is what lets it go.
+/// On the phone and the iPad only. The television keeps the narrower rule,
+/// which is also Storyteller's own there, and its screen saver keeps a paused
+/// page off the panel.
+///
+/// A held assertion nobody gives back is a flat battery, so most of what follows
+/// is about the rows that must not hold and each named route out of the ones
+/// that do.
+@Suite("When the display may be held awake")
 @MainActor
 struct ScreenAwakeTests {
     private static let bothWays: [Bool] = [false, true]
 
-    /// Sixteen rows, one of which may hold the display. Asserted as "exactly
-    /// one", rather than by recomputing the same conjunction the function
-    /// computes — which would pass whatever the function did.
-    @Test("the display is held only when all four conditions hold at once")
-    func exhaustiveTruthTable() {
+    /// Every row of one policy that holds the display, as
+    /// `[isPlaying, isReaderVisible, followsText, isForeground, sleepTimerRanOut]`.
+    /// Stated as the rows that hold rather than by recomputing the same
+    /// conjunction the function computes, which would pass whatever it did.
+    private static func holdingRows(_ policy: ScreenAwake.Policy) -> [[Bool]] {
         var holding: [[Bool]] = []
-        for isPlaying in Self.bothWays {
-            for isReaderVisible in Self.bothWays {
-                for followsText in Self.bothWays {
-                    for isForeground in Self.bothWays {
-                        guard ScreenAwake.shouldKeepAwake(
-                            isPlaying: isPlaying,
-                            isReaderVisible: isReaderVisible,
-                            followsText: followsText,
-                            isForeground: isForeground,
-                        ) else { continue }
-                        holding.append([isPlaying, isReaderVisible, followsText, isForeground])
+        for isPlaying in bothWays {
+            for isReaderVisible in bothWays {
+                for followsText in bothWays {
+                    for isForeground in bothWays {
+                        for sleepTimerRanOut in bothWays {
+                            guard ScreenAwake.shouldKeepAwake(
+                                policy: policy,
+                                isPlaying: isPlaying,
+                                isReaderVisible: isReaderVisible,
+                                followsText: followsText,
+                                isForeground: isForeground,
+                                sleepTimerRanOut: sleepTimerRanOut,
+                            ) else { continue }
+                            holding.append([
+                                isPlaying, isReaderVisible, followsText, isForeground, sleepTimerRanOut,
+                            ])
+                        }
                     }
                 }
             }
         }
-        #expect(
-            holding.count == 1,
-            "sixteen rows, and only one of them may hold the display awake")
-        #expect(holding.first == [true, true, true, true])
+        return holding
     }
 
-    /// The one row that holds, stated on its own so the fix cannot be reduced
-    /// to "never keep the screen awake" and still pass.
-    @Test("narration playing with its own page on screen in the foreground holds the display")
-    func theReadingCaseHolds() {
+    /// Thirty-two rows. The four that hold are a book on screen in the
+    /// foreground with the sleep timer not run out — playing or paused,
+    /// narrated or not, which is the whole of the request.
+    @Test("on the phone, a book on screen in the foreground holds the display, whatever is playing")
+    func readerOpenTruthTable() {
+        let holding = Self.holdingRows(.whileReaderOpen)
+        #expect(holding.count == 4, "thirty-two rows, and only four of them may hold the display awake")
+        for row in holding {
+            #expect(row[1] && row[3] && !row[4], "\(row) holds without a page on screen, in front, before the timer ran out")
+        }
+    }
+
+    /// The television's rule is the 1.1.1 rule, unchanged: of thirty-two rows,
+    /// only narration playing for its own page, in front, holds.
+    @Test("on the television, only narration playing for its own page holds the display")
+    func narratingTruthTable() {
+        #expect(Self.holdingRows(.whileNarrating) == [[true, true, true, true, false]])
+    }
+
+    @Test("this platform keeps the display awake for as long as a book is open")
+    func thePhoneUsesTheReaderOpenPolicy() {
+        #expect(ScreenAwake.platformPolicy == .whileReaderOpen)
+    }
+
+    /// The case the request was made about, stated on its own so the change
+    /// cannot be reduced to "only while narrating" and still pass.
+    @Test("a book with no narration holds the display while its page is on screen")
+    func plainReadingHolds() {
         #expect(ScreenAwake.shouldKeepAwake(
-            isPlaying: true, isReaderVisible: true, followsText: true, isForeground: true,
+            policy: .whileReaderOpen, isPlaying: false, isReaderVisible: true, followsText: false,
+            isForeground: true, sleepTimerRanOut: false,
         ))
     }
 
-    /// Three different mechanisms, one input: the audio stopped. The sleep
-    /// timer is the one that matters most — a reader who set one has said in as
-    /// many words that they want the device to stop — and it reaches this by
-    /// calling `AudioPlayer.pause()`, which notifies the rate observer
-    /// `AppModel` recomputes from.
-    @Test(
-        "every way narration stops lets the screen sleep again",
-        arguments: [
-            "the reader pressed pause",
-            "the sleep timer ran out and faded the book down",
-            "playback reached the end of the book",
-            "a phone call interrupted the audio session",
-        ],
-    )
-    func stoppingReleasesTheHold(route: String) {
-        #expect(
-            !ScreenAwake.shouldKeepAwake(
-                isPlaying: false, isReaderVisible: true, followsText: true, isForeground: true,
-            ),
-            "\(route): the hold has to go with the audio")
+    @Test("a read-along paused on its page still holds the display")
+    func pausedReadalongHolds() {
+        #expect(ScreenAwake.shouldKeepAwake(
+            policy: .whileReaderOpen, isPlaying: false, isReaderVisible: true, followsText: true,
+            isForeground: true, sleepTimerRanOut: false,
+        ))
+    }
+
+    /// A reader who set a sleep timer has said in as many words that they want
+    /// the device to stop, so its running out lets the phone lock even with the
+    /// page still up — Storyteller's one exception, and the answer to a book
+    /// left open on the nightstand.
+    @Test("the sleep timer running out lets the screen sleep with the book still open", arguments: [
+        ScreenAwake.Policy.whileReaderOpen, .whileNarrating,
+    ])
+    func anExpiredSleepTimerReleases(policy: ScreenAwake.Policy) {
+        #expect(!ScreenAwake.shouldKeepAwake(
+            policy: policy, isPlaying: false, isReaderVisible: true, followsText: true,
+            isForeground: true, sleepTimerRanOut: true,
+        ))
     }
 
     /// The reader is a full-screen cover on iOS, and being backgrounded does
     /// not dismiss it — the same fact `flushOpenReaders()` exists for. Without
     /// this leg a phone pocketed mid-chapter would hold its own display awake
     /// for the rest of the book.
-    @Test("a phone put in a pocket mid-chapter stops holding its display awake")
-    func leavingTheForegroundReleasesTheHold() {
+    @Test("a phone put in a pocket mid-chapter stops holding its display awake", arguments: [
+        ScreenAwake.Policy.whileReaderOpen, .whileNarrating,
+    ])
+    func leavingTheForegroundReleasesTheHold(policy: ScreenAwake.Policy) {
         #expect(!ScreenAwake.shouldKeepAwake(
-            isPlaying: true, isReaderVisible: true, followsText: true, isForeground: false,
+            policy: policy, isPlaying: true, isReaderVisible: true, followsText: true,
+            isForeground: false, sleepTimerRanOut: false,
         ))
     }
 
     /// Audio outliving its screen is the point of this app's player, so the
     /// reader closing is not the audio stopping — and the display must go back
-    /// to sleeping normally the moment there is no text to follow.
-    @Test("dismissing the reader lets the screen sleep while the book plays on")
-    func dismissingTheReaderReleasesTheHold() {
+    /// to sleeping normally the moment there is no page on screen.
+    @Test("dismissing the reader lets the screen sleep while the book plays on", arguments: [
+        ScreenAwake.Policy.whileReaderOpen, .whileNarrating,
+    ])
+    func dismissingTheReaderReleasesTheHold(policy: ScreenAwake.Policy) {
         #expect(!ScreenAwake.shouldKeepAwake(
-            isPlaying: true, isReaderVisible: false, followsText: true, isForeground: true,
+            policy: policy, isPlaying: true, isReaderVisible: false, followsText: true,
+            isForeground: true, sleepTimerRanOut: false,
         ))
     }
 
     /// The whole point of an audiobook is that it plays with the screen off.
     /// The player sheet, the Lock Screen and CarPlay all reach playback with no
     /// page anywhere, and none of them may hold the display.
-    @Test("listening to an audiobook never holds the display awake")
-    func audioOnlyPlaybackHoldsNothing() {
-        for isReaderVisible in Self.bothWays {
-            #expect(!ScreenAwake.shouldKeepAwake(
-                isPlaying: true,
-                isReaderVisible: isReaderVisible,
-                followsText: false,
-                isForeground: true,
-            ))
-        }
+    @Test("listening to an audiobook with no page on screen never holds the display", arguments: [
+        ScreenAwake.Policy.whileReaderOpen, .whileNarrating,
+    ])
+    func audioOnlyPlaybackHoldsNothing(policy: ScreenAwake.Policy) {
+        #expect(!ScreenAwake.shouldKeepAwake(
+            policy: policy, isPlaying: true, isReaderVisible: false, followsText: false,
+            isForeground: true, sleepTimerRanOut: false,
+        ))
     }
 
-    /// macOS can have several reader windows open at once, and only one book
-    /// narrates. A page nobody's narration belongs to is not being read along
-    /// with, whatever else is audible.
-    @Test("one book's narration does not hold the display for another book's page")
-    func narrationForAnotherBookHoldsNothing() {
+    /// The television's rule: narration stopping is what gives the display
+    /// back, by every route — the sleep timer, the end of the book, a pause.
+    @Test("on the television, narration stopping lets the screen sleep")
+    func onTheTelevisionStoppingReleases() {
         #expect(!ScreenAwake.shouldKeepAwake(
-            isPlaying: true, isReaderVisible: true, followsText: false, isForeground: true,
+            policy: .whileNarrating, isPlaying: false, isReaderVisible: true, followsText: true,
+            isForeground: true, sleepTimerRanOut: false,
         ))
     }
 }
@@ -167,30 +207,111 @@ struct ScreenAwakeAssertionTests {
     }
 }
 
-/// That `AppModel` — the one object that can see all four inputs — is wired to
-/// the decision at all.
+/// That `AppModel` — the one object that can see every input — holds the
+/// display while a book is on screen, and that each way out lets it go.
 ///
-/// It cannot be driven as far as *holding* the display from here: that needs a
-/// live `ReadalongCoordinator`, which needs a downloaded book. What it can be
-/// driven to is the half that matters more, which is releasing.
-@Suite("The app model holds the display awake for nothing else", .serialized)
+/// Driven against the real `UIApplication`, because the assertion is a global
+/// there and a release that only moved `keepsScreenAwake` would still leave
+/// the phone unable to sleep.
+@Suite("The app model holds the display while a book is open", .serialized)
 @MainActor
 struct AppModelScreenAwakeTests {
     private static let bookUUID = "11111111-1111-4111-8111-111111111111"
 
-    @Test("a reader merely being on screen does not hold the display awake")
-    func aVisibleReaderWithNoNarrationHoldsNothing() {
+    /// Holding and the platform agreeing, said once so every step below reads
+    /// as one line.
+    private static func held(_ app: AppModel) -> Bool {
+        app.keepsScreenAwake && UIApplication.shared.isIdleTimerDisabled
+    }
+
+    private static func released(_ app: AppModel) -> Bool {
+        !app.keepsScreenAwake && !UIApplication.shared.isIdleTimerDisabled
+    }
+
+    @Test("a reader on screen holds the display, and every way out of it lets go")
+    func aVisibleReaderHoldsTheDisplay() {
         let app = AppModel()
-        #expect(!app.keepsScreenAwake)
+        #expect(Self.released(app))
 
         app.setReaderVisible(Self.bookUUID, true)
         #expect(app.visibleReaderUUID == Self.bookUUID, "the reader has to be up for this to mean anything")
-        #expect(
-            !app.keepsScreenAwake,
-            "a page with no narration running behind it is an ordinary page")
+        #expect(Self.held(app), "a page on screen is being read, narrated or not")
+
+        app.setForeground(false)
+        #expect(Self.released(app), "a phone put away lets go")
+        app.setForeground(true)
+        #expect(Self.held(app), "and picked up again, on the same page, holds again")
+
+        app.sleepTimerDidExpire()
+        #expect(Self.released(app), "the sleep timer running out lets the phone lock with the book open")
+        app.setForeground(false)
+        app.setForeground(true)
+        #expect(Self.held(app), "the phone picked up again after the timer is back to normal")
+
+        app.sleepTimerDidExpire()
+        app.setReaderVisible(Self.bookUUID, false)
+        #expect(Self.released(app))
+        app.setReaderVisible(Self.bookUUID, true)
+        #expect(Self.held(app), "a book opened after the timer ran out holds again")
 
         app.setReaderVisible(Self.bookUUID, false)
-        #expect(!app.keepsScreenAwake)
+        #expect(Self.released(app), "closing the book lets go")
+    }
+
+    /// A sign-out clears the visible reader directly rather than through
+    /// `setReaderVisible`, and with visibility alone now holding the display,
+    /// any writer that did not recompute left the phone unable to sleep
+    /// behind the sign-in screen.
+    @Test("signing out with a book on screen lets the display go")
+    func signingOutReleases() async {
+        let app = AppModel(keychain: LocalTestTokens(), notificationCentre: NotificationCenter())
+        app.setReaderVisible(Self.bookUUID, true)
+        #expect(Self.held(app))
+
+        await app.signOut(keepDownloads: true)
+        #expect(app.visibleReaderUUID == nil)
+        #expect(Self.released(app))
+    }
+
+    /// Removing a book from the reader's own files closes its reader by
+    /// clearing the visible slot directly, and that has to give the display
+    /// back too.
+    @Test("removing a local book whose page is on screen lets the display go")
+    func removingAVisibleLocalBookReleases() async throws {
+        let local = try LocalFixtures()
+        defer { local.tearDown() }
+        await local.importAndWait(try local.pick("readalong"))
+        let book = try #require(local.library.books.first)
+        let app = AppModel()
+        _ = app.reader(for: book, persistence: local.library)
+        app.setReaderVisible(book.uuid, true)
+        #expect(Self.held(app))
+
+        app.releaseLocalBook(book.uuid)
+        #expect(app.visibleReaderUUID == nil)
+        #expect(Self.released(app))
+    }
+
+    /// A tested function nothing calls is not a fix. The sleep timer is built
+    /// inside `NowPlayingController.attach`, so this drives the real one to
+    /// expiry and asserts the app model heard it.
+    @Test("the real sleep timer running out reaches the app model")
+    func theSleepTimerReachesTheAppModel() throws {
+        let app = AppModel()
+        let controller = NowPlayingController()
+        app.nowPlayingController = controller
+        let engine = NowPlayingSessionEndTests.engine()
+        controller.attach(coordinator: engine, book: SharedFixtures.book("Dracula", uuid: Self.bookUUID))
+        defer { controller.attach(coordinator: nil, book: nil) }
+        app.setReaderVisible(Self.bookUUID, true)
+        #expect(Self.held(app))
+
+        engine.player.play()
+        try #require(controller.sleepTimer).start(.endOfChapter)
+        engine.onChapterChangeObserved?()
+
+        #expect(Self.released(app), "the timer stopped the book, so the phone may lock")
+        app.setReaderVisible(Self.bookUUID, false)
     }
 
     /// One flag for the process, written by a handler that runs once per
@@ -289,7 +410,9 @@ struct AppModelScreenAwakeTests {
         #expect(!app.keepsScreenAwake)
 
         app.setForeground(true)
-        #expect(!app.keepsScreenAwake, "coming back does not invent narration that was never playing")
+        #expect(app.keepsScreenAwake, "coming back to the same page holds again")
+        app.setReaderVisible(Self.bookUUID, false)
+        #expect(!app.keepsScreenAwake)
     }
 }
 

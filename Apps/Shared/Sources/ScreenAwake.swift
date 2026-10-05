@@ -6,31 +6,62 @@ import UIKit
 import SwiftUI
 #endif
 
-/// Whether the display may be held awake while a book reads itself aloud.
+/// Whether the display may be held awake while a book is open.
 ///
-/// `isIdleTimerDisabled` appeared **nowhere** in this app, so a reader
-/// following the highlight down a page watched the screen dim and lock at the
-/// device's Auto-Lock interval — thirty seconds at its shortest setting — with
-/// the narration carrying on underneath and the page they were reading gone.
-/// Nothing about a read-along touches the screen, so the idle timer never once
-/// got reset by the thing the reader was actually doing.
+/// `isIdleTimerDisabled` appeared **nowhere** in this app until 1.1.1, so a
+/// reader following the highlight down a page watched the screen dim and lock
+/// at the device's Auto-Lock interval — thirty seconds at its shortest setting.
+/// 1.1.1 held the display only while a read-along was *playing*, which left
+/// the same complaint standing for every other page: a book with no narration,
+/// or a read-along paused so the reader could take a page in at their own pace.
+/// A page turn is a touch and resets the idle timer, so it was the pages that
+/// took longest to read that went dark.
 ///
-/// Four conditions and no more, because the failure mode of getting this wrong
-/// is worse than the bug it fixes: an idle timer left disabled never lets the
-/// phone sleep again, and a flat battery is a larger complaint than a dimmed
-/// screen. Each of the four is therefore also a release path — pause, stop, the
-/// sleep timer expiring, the reader being dismissed, and the app being
-/// backgrounded all take one of them away.
+/// 1.4.1 adopts Storyteller's behaviour on the phone and the iPad, at the
+/// reader's request: the display stays awake for as long as a book is on
+/// screen, and the sleep timer running out is what lets it go. That is the
+/// answer to a book left open on the nightstand — a reader who set a timer has
+/// said in as many words that they want the device to stop.
+///
+/// The failure mode of getting this wrong is still worse than the bug it fixes:
+/// an idle timer left disabled never lets the phone sleep again, and a flat
+/// battery is a larger complaint than a dimmed screen. So every input is also
+/// a release path — the reader being dismissed, the app being backgrounded and
+/// the sleep timer expiring each take one away — and `AppModel` recomputes on
+/// every write to each of them.
 ///
 /// Pure, and in `Apps/Shared` for the reason `NarrationReach` and
-/// `TVReaderStyle` are: the assertion itself is owned by `AppModel` and is only
-/// reachable through a live narrating coordinator, which no test can build, and
-/// the screens that supply the inputs are SwiftUI views the test bundle cannot
-/// see at all. The truth table is the part of this that can be asserted.
+/// `TVReaderStyle` are: the screens that supply the inputs are SwiftUI views
+/// the test bundle cannot see at all. The truth table is the part of this that
+/// can be asserted.
 enum ScreenAwake {
+    /// Which rule a platform applies.
+    enum Policy: Equatable, Sendable {
+        /// A book on screen holds the display, narrated or not, playing or
+        /// paused. Storyteller's phone app, and this app's phone and iPad.
+        case whileReaderOpen
+        /// Only narration playing for its own page holds it — the 1.1.1 rule,
+        /// kept on the television. It is also Storyteller's own rule there,
+        /// and a television's screen saver is what keeps a paused page from
+        /// sitting on the panel all night.
+        case whileNarrating
+    }
+
+    /// The rule this build applies. The Mac compiles a rule too but never
+    /// applies one — `ScreenAwakeAssertion.apply` is a no-op there; see the
+    /// comment at the bottom of this file.
+    static var platformPolicy: Policy {
+        #if os(tvOS)
+        .whileNarrating
+        #else
+        .whileReaderOpen
+        #endif
+    }
+
     /// Whether the display should be kept awake right now.
     ///
     /// - Parameters:
+    ///   - policy: which rule applies; `platformPolicy` outside tests.
     ///   - isPlaying: whether audio is genuinely running. Read from
     ///     `AudioPlayer.isPlaying`, which every route into playback moves — the
     ///     reader's own button, a tapped sentence, the player sheet, a remote
@@ -39,20 +70,25 @@ enum ScreenAwake {
     ///     player sheet, the Lock Screen and CarPlay, and false again the
     ///     moment the reader is dismissed.
     ///   - followsText: whether what is audible is the narration belonging to
-    ///     *that* reader. This is the distinction the request drew with
-    ///     "actively reading with text": an audiobook has no text to follow, so
-    ///     listening with the screen off goes on working, which is the whole
-    ///     point of an audiobook. A read-along playing for one book while
-    ///     another book's reader is open is not something anybody is reading
-    ///     along with either.
+    ///     *that* reader. An audiobook has no text to follow, so listening with
+    ///     the screen off goes on working, which is the whole point of an
+    ///     audiobook. Only the television's rule asks.
     ///   - isForeground: whether the app is frontmost. The reader is a
     ///     full-screen cover on iOS and backgrounding does not dismiss it, so
-    ///     without this a phone put in a pocket mid-read-along would hold its
-    ///     own display awake for the rest of the book.
+    ///     without this a phone put in a pocket with a book open would hold its
+    ///     own display awake for as long as the book stayed open.
+    ///   - sleepTimerRanOut: whether the sleep timer has expired since the
+    ///     reader last opened a book, pressed play or picked the phone up.
     static func shouldKeepAwake(
+        policy: Policy,
         isPlaying: Bool, isReaderVisible: Bool, followsText: Bool, isForeground: Bool,
+        sleepTimerRanOut: Bool,
     ) -> Bool {
-        isPlaying && isReaderVisible && followsText && isForeground
+        guard isReaderVisible, isForeground, !sleepTimerRanOut else { return false }
+        switch policy {
+        case .whileReaderOpen: return true
+        case .whileNarrating: return isPlaying && followsText
+        }
     }
 }
 
