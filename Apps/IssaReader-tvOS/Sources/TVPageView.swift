@@ -40,7 +40,6 @@ struct TVPageView: View {
             turner: turner,
             pageSize: size,
             insets: EdgeInsets(),
-            accessibilityTurn: { forward in turn(forward: forward, announcing: true) },
         )
         .frame(width: size.width, height: size.height)
         .onChange(of: size.width, initial: true) { _, width in turner.width = width }
@@ -68,6 +67,8 @@ struct TVPageView: View {
                 }
             }
         }
+        // Outermost, around the focusable page, where it has always been.
+        .modifier(PageAccessibility(model: model) { forward in turn(forward: forward, announcing: true) })
     }
 
     /// Turns the page, taking the voice with it: on the television the page is

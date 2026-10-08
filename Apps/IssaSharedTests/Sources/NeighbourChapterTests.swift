@@ -37,6 +37,9 @@ struct NeighbourChapterTests {
         model.enqueuePosition = { _, _, _ in true }
         await model.open(pageSize: Self.pageSize)
         try #require(model.phase == .ready)
+        // As a reader whose pages slide, on screen.
+        model.keepsNeighbours = true
+        model.setReaderVisible(true)
         return (model, opening)
     }
 
@@ -99,11 +102,17 @@ struct NeighbourChapterTests {
         await standAtEdge(model, chapter: shape.start, forward: shape.forward)
         model.prefetchNeighbours()
         await model.neighbourSettled(forward: shape.forward)
+        let neighbour = try #require(model.neighbours[shape.forward], "the prefetch ran")
+        if case .pending = neighbour.state { Issue.record("the prefetch finished") }
         let prepared = model.neighbourPreview(forward: shape.forward)
         if shape.forward { await model.nextPage() } else { await model.previousPage() }
 
         #expect(arrival(model) == expected)
-        if case let .page(snapshot) = prepared, expected.chapter != shape.start {
+        if expected.chapter != shape.start {
+            guard case let .page(snapshot) = prepared else {
+                Issue.record("a turn that lands elsewhere has a page to slide in")
+                return
+            }
             #expect(model.layout === snapshot.layout, "the turn took the chapter already laid out")
         }
     }
@@ -195,6 +204,7 @@ struct NeighbourChapterTests {
         await standAtEdge(model, chapter: 0, forward: true)
         model.prefetchNeighbours()
         await model.neighbourSettled(forward: true)
+        try #require(!model.neighbours.isEmpty)
 
         await model.go(toChapter: 3)
 
@@ -213,10 +223,8 @@ struct NeighbourChapterTests {
         model.prefetchNeighbours()
         await model.neighbourSettled(forward: true)
 
-        guard case .pending = model.neighbourPreview(forward: true) else {
-            Issue.record("a chapter laid out in the old type was kept")
-            return
-        }
+        #expect(model.whilePreparingNeighbour == nil, "the change landed while it was being prepared")
+        #expect(model.neighbours.isEmpty, "and what it prepared was thrown away")
     }
 
     /// The chapter just left is the one a walk back would land on, so turning
@@ -248,6 +256,9 @@ struct NeighbourChapterTests {
         await model.go(toChapter: 1)
         try #require(model.annotatePage(tint: .tangerine) != nil)
         await standAtEdge(model, chapter: 0, forward: true)
+        // The jump back kept chapter 1 as the neighbour, marks and all; this is
+        // about the prefetch finding them.
+        model.dropNeighbours()
 
         model.prefetchNeighbours()
         await model.neighbourSettled(forward: true)
@@ -267,5 +278,63 @@ struct NeighbourChapterTests {
         #expect(model.neighbourPreview(forward: true) == .none)
         await standAtEdge(model, chapter: 0, forward: false)
         #expect(model.neighbourPreview(forward: false) == .none)
+    }
+
+    /// Re-flowed for a new page size, a chapter keeps the plates and margins
+    /// its parse set for the old one; turning back to it reads it again rather
+    /// than slide in a layout a fresh parse would not produce.
+    @Test("a chapter re-flowed for a new page size is not kept to turn back to")
+    func reflowedNotKept() async throws {
+        let (model, opening) = try await opened([Self.content(0), Self.content(1)])
+        defer { opening.tearDown() }
+        await standAtEdge(model, chapter: 0, forward: true)
+        await model.resize(to: CGSize(width: 300, height: 500))
+        model.pageIndex = model.pageCount - 1
+
+        await model.nextPage()
+
+        #expect(model.chapterIndex == 1)
+        #expect(model.neighbourPreview(forward: false) == .pending)
+    }
+
+    @Test("with None nothing beyond the chapter on screen is kept")
+    func noneKeepsNothing() async throws {
+        let (model, opening) = try await opened([Self.content(0), Self.content(1)])
+        defer { opening.tearDown() }
+        model.keepsNeighbours = false
+        await standAtEdge(model, chapter: 0, forward: true)
+
+        model.prefetchNeighbours()
+        await model.nextPage()
+
+        #expect(model.neighbours.isEmpty)
+    }
+
+    @Test("off screen, nothing is prepared")
+    func notWhileHidden() async throws {
+        let (model, opening) = try await opened([Self.content(0), Self.content(1)])
+        defer { opening.tearDown() }
+        await standAtEdge(model, chapter: 0, forward: true)
+        model.setReaderVisible(false)
+
+        model.prefetchNeighbours()
+
+        #expect(model.neighbours.isEmpty)
+    }
+
+    @Test("a neighbour is let go once the reader has moved away from its edge")
+    func farReleased() async throws {
+        let (model, opening) = try await opened([Self.content(0), Self.content(1)])
+        defer { opening.tearDown() }
+        await standAtEdge(model, chapter: 0, forward: true)
+        model.dropNeighbours()
+        model.prefetchNeighbours()
+        await model.neighbourSettled(forward: true)
+        try #require(model.neighbours[true] != nil)
+
+        model.pageIndex = 2
+        model.prefetchNeighbours()
+
+        #expect(model.neighbours[true] == nil)
     }
 }

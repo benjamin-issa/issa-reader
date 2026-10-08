@@ -9,8 +9,9 @@ import Foundation
 /// and its newer Swift reader with WebKit's smooth scroll over CSS scroll
 /// snapping — both a push, the old page and the new travelling together.
 /// Cover is Apple Books' "Slide": the page lifts away over the next one, which
-/// waits underneath. None is how every page turned before 1.5.0, and stays
-/// exactly that.
+/// waits underneath. None is how every page turned on iPhone, iPad and Mac
+/// before 1.5.0, and stays exactly that; on Apple TV it replaces the short
+/// slide-and-fade the television had.
 public enum PageTurnStyle: String, CaseIterable, Sendable, Identifiable {
     case slide
     case cover
@@ -69,9 +70,9 @@ public enum PageTurn {
     /// How far a finger travels before the page starts to follow it.
     ///
     /// `UIScrollView`'s pan recogniser waits for this much movement too, and
-    /// then — measured, see `PageTurnMeasurements` — moves the page by the
-    /// whole of the finger's travel *past* that point, never jumping to catch
-    /// up the distance it waited for.
+    /// then — measured on a paging scroll view, and pinned by
+    /// `PageTurnTests.tracking` — moves the page by the finger's travel *past*
+    /// that point, never jumping to catch up the distance it waited for.
     public static let trackingSlop: CGFloat = 10
 
     /// Whether a touch has become a drag that moves the page.
@@ -120,8 +121,8 @@ public enum PageTurn {
     /// Which way a released page goes, by `UIScrollView`'s paging rule.
     ///
     /// Measured on a paging scroll view driven by 96 synthesised drags (see
-    /// `flickVelocity` and `releaseFrequency`), and it is not the
-    /// projected-distance rule Apple
+    /// `flickVelocity`; `releaseFrequency` describes the 66 of them whose pages
+    /// moved), and it is not the projected-distance rule Apple
     /// recommends for free-standing gestures: thrown, the page goes to the next
     /// page in the direction it is moving — a ceiling or a floor of how far it
     /// has travelled — and put down, to the nearer page. Never more than one
@@ -232,7 +233,7 @@ public enum PageTurn {
     /// How progress runs against time.
     public enum Curve: Sendable, Equatable {
         /// Half a cosine: `(1 − cos πu) / 2`. What `UIScrollView` uses for an
-        /// animated `setContentOffset`, to within a third of a point.
+        /// animated `setContentOffset`, to 0.27 pt RMS; see `touchTiming`.
         case sineInOut
         /// A CSS-style cubic Bézier through (0,0) and (1,1).
         case cubic(CGFloat, CGFloat, CGFloat, CGFloat)

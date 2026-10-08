@@ -44,9 +44,11 @@ enum NeighbourPreview: Equatable {
 /// narration as it always has; the layer inside reads only the turner, so a
 /// finger moving the page re-evaluates offsets and nothing else.
 ///
-/// One accessibility element for the whole track, outside the motion, saying
-/// what the model says: the page being turned to is the page, the moment the
-/// turn is made, and the one sliding away is not there at all.
+/// The caller makes it one accessibility element with `PageAccessibility`,
+/// outside the motion, saying what the model says: the page being turned to is
+/// the page the moment the turn is made, and the one sliding away is not there
+/// at all. Outside rather than in here so the television can put it where it
+/// always was, around the focusable page.
 struct PageTrackView: View {
     let model: ReaderModel
     let turner: PageTurner
@@ -56,7 +58,6 @@ struct PageTrackView: View {
     /// so the whole width of the reader travels and no text is ever cut by a
     /// stationary edge.
     let insets: EdgeInsets
-    var accessibilityTurn: ((Bool) -> Void)?
 
     var body: some View {
         // Read in the body, not inside the renderer closure — observation tracks
@@ -68,7 +69,6 @@ struct PageTrackView: View {
             pageSize: pageSize,
             insets: insets,
         )
-        .modifier(PageAccessibility(model: model, onTurn: accessibilityTurn))
     }
 }
 

@@ -150,6 +150,15 @@ public struct ReaderView: View {
     /// Whether a finger is currently down, so `selecting` can be cleared at the
     /// start of a touch rather than the end of one.
     @State private var touching = false
+    /// Whether this touch moved the page. A quick, slightly sloppy tap can
+    /// travel the ten points that make it a drag and lift fast enough to be a
+    /// throw; it has turned the page already, and must not turn it again as a
+    /// tap.
+    @State private var touchMovedPage = false
+    /// True while a finger is on the page. SwiftUI resets it when the touch
+    /// ends — including when the system takes the touch away and calls no
+    /// `onEnded`, which is the case it is here for.
+    @GestureState private var fingerDown = false
     #if !os(tvOS)
     // First-run gesture guide. Persisted so it never returns once dismissed,
     // and split in two so the narrated tip can still appear the first time a
@@ -834,12 +843,12 @@ public struct ReaderView: View {
                 insets: EdgeInsets(
                     top: pageTopMargin, leading: model.style.pageMargin,
                     bottom: model.style.pageMargin, trailing: model.style.pageMargin),
-                accessibilityTurn: { forward in
-                    turner.requestTurn(forward: forward, carriesNarration: true) {
-                        PageAccessibility.announcePage(model)
-                    }
-                },
             )
+            .modifier(PageAccessibility(model: model) { forward in
+                turner.requestTurn(forward: forward, carriesNarration: true) {
+                    PageAccessibility.announcePage(model)
+                }
+            })
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { turner.width = $0 }
             .contentShape(Rectangle())
                 #if !os(tvOS)
@@ -852,11 +861,14 @@ public struct ReaderView: View {
                     ReadAloudDoubleTap(
                         enabled: model.hasNarration && model.style.tapToPlay,
                     ) { location in
+                        // The sentence under the finger, on a page at rest.
+                        turner.finish()
                         model.clearSelection()
                         Task { await model.playSentence(at: canvasPoint(location)) }
                     },
                 )
                 .onTapGesture { location in
+                    guard !touchMovedPage else { return }
                     // A tap with something selected dismisses it, the way it
                     // does everywhere else, and does nothing more.
                     if model.selection != nil {
@@ -885,6 +897,7 @@ public struct ReaderView: View {
                 // until the finger happened to slide.
                 .simultaneousGesture(
                     DragGesture(minimumDistance: 0)
+                        .updating($fingerDown) { _, down, _ in down = true }
                         .onChanged { value in
                             // Cleared at the START of a touch rather than on
                             // lift-off, because `onEnded` below has to be able
@@ -894,6 +907,7 @@ public struct ReaderView: View {
                             if !touching {
                                 touching = true
                                 selecting = false
+                                touchMovedPage = false
                             }
                             touchPoint = value.location
                             guard selecting else {
@@ -903,8 +917,9 @@ public struct ReaderView: View {
                                 // always has.
                                 if turner.dragChanged(
                                     startX: value.startLocation.x, translation: value.translation.width,
-                                ), model.selection != nil {
-                                    model.clearSelection()
+                                ) {
+                                    touchMovedPage = true
+                                    if model.selection != nil { model.clearSelection() }
                                 }
                                 return
                             }
@@ -914,7 +929,10 @@ public struct ReaderView: View {
                             touching = false
                             // A press-and-drag that was adjusting a selection is
                             // not a page turn.
-                            if selecting { return }
+                            if selecting {
+                                turner.dragCancelled()
+                                return
+                            }
                             // Slide and Cover: the page was following the
                             // finger, and where it lands is the turner's.
                             guard turner.style == .instant else {
@@ -951,8 +969,18 @@ public struct ReaderView: View {
                             // free to turn the page — otherwise a slow swipe
                             // over a plate is silently swallowed.
                             selecting = model.selection != nil
+                            // This touch is a selection now, not a drag.
+                            if selecting { turner.dragCancelled() }
                         },
                 )
+                // The touch was taken away — no `onEnded` will come — or it
+                // ended and `onEnded` has already let go, when this does
+                // nothing.
+                .onChange(of: fingerDown) { _, down in
+                    guard !down else { return }
+                    touching = false
+                    turner.dragCancelled()
+                }
                 .overlay(alignment: .bottom) {
                     if model.selection != nil { selectionMenu }
                 }
@@ -1528,10 +1556,9 @@ extension PageSurface: Equatable {
 /// them exist for a reader using VoiceOver.
 struct PageAccessibility: ViewModifier {
     let model: ReaderModel
-    /// How a turn is made, when something other than the model makes it — the
-    /// page turner, so a turn from the rotor slides like any other. Announced
-    /// once the model has turned either way.
-    var onTurn: ((Bool) -> Void)?
+    /// Makes a turn: the page turner, so a turn from the rotor is made, carried
+    /// and announced like any other. See `turn(forward:)`.
+    let onTurn: (Bool) -> Void
 
     func body(content: Content) -> some View {
         content
@@ -1590,28 +1617,22 @@ struct PageAccessibility: ViewModifier {
 
     /// Every page turn VoiceOver can make, spelled once.
     ///
-    /// `turnPage(forward:)`, not `nextPage()`/`previousPage()`. On the
-    /// television `TVReaderStyle` forces `followNarration` on, because there
-    /// the page *is* the scrubber — so a turn that moves the page without
+    /// Each caller turns with `carriesNarration: true`, not as a tap does. On
+    /// the television `TVReaderStyle` forces `followNarration` on, because
+    /// there the page *is* the scrubber — so a turn that moves the page without
     /// seeking the voice is snapped straight back at the next sentence
     /// boundary, and a reader using VoiceOver could not move forward at all.
     ///
     /// It changes the phone and the Mac in exactly one case, and deliberately: a
-    /// page turned from the rotor while narration is playing now takes the voice
-    /// with it. `turnPage`'s own doc justifies leaving the voice behind by the
-    /// phone having a scrubber and a sentence to tap, and a reader using
-    /// VoiceOver has neither — selection is a long press and a drag, which
-    /// VoiceOver consumes, and that is the very reason these actions exist. A
-    /// paused book still turns silently, here as everywhere.
+    /// page turned from the rotor while narration is playing takes the voice
+    /// with it. A tap leaves the voice behind because the phone has a scrubber
+    /// and a sentence to tap, and a reader using VoiceOver has neither —
+    /// selection is a long press and a drag, which VoiceOver consumes, and that
+    /// is the very reason these actions exist. A paused book still turns
+    /// silently, here as everywhere. See
+    /// `ReaderModel.narrationTargetOnVisiblePage()`.
     private func turn(forward: Bool) {
-        if let onTurn {
-            onTurn(forward)
-            return
-        }
-        Task {
-            await model.turnPage(forward: forward)
-            Self.announcePage(model)
-        }
+        onTurn(forward)
     }
 
     /// Says where the reader has landed.

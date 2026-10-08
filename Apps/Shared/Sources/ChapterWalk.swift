@@ -47,7 +47,7 @@ enum ChapterWalk {
     ///   - attempt: opens one chapter and says what it found. Not escaping, so
     ///     a caller can keep what it opened in a local.
     static func walk(
-        from start: Int, step: Int, spineCount: Int, limit: Int = limit,
+        from start: Int, step: Int, spineCount: Int,
         attempt: (Int) async -> Attempt,
     ) async -> Landing {
         var target = start

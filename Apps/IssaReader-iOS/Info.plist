@@ -31,6 +31,9 @@
 	</array>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<!-- Lets a ProMotion iPhone draw a sliding page at 120 Hz, as UIKit's own
+	     scrolling already does: without it an app's own animations are held to
+	     60 Hz. It applies to every animation in the app, not only page turns. -->
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>ITSAppUsesNonExemptEncryption</key>

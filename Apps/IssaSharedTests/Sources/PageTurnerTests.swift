@@ -15,16 +15,22 @@ struct PageTurnerTests {
         var now: TimeInterval = 1000
     }
 
+    final class Flag {
+        var raised = false
+    }
+
     static let width: CGFloat = 400
 
-    func opened() async throws -> (model: ReaderModel, opening: ReaderOpening) {
-        let chapters = (0 ..< 3).map(NeighbourChapterTests.content)
+    func opened(_ chapters: [TestEPUB.Chapter] = (0 ..< 3).map(NeighbourChapterTests.content))
+        async throws -> (model: ReaderModel, opening: ReaderOpening) {
         let opening = try ReaderOpening(epub: TestEPUB.data(chapters: chapters))
         let model = opening.model()
         model.enqueuePosition = { _, _, _ in true }
         await model.open(pageSize: NeighbourChapterTests.pageSize)
         try #require(model.phase == .ready)
         try #require(model.pageCount >= 5)
+        // On screen, as a reader the turner is drawing for always is.
+        model.setReaderVisible(true)
         return (model, opening)
     }
 
@@ -35,26 +41,21 @@ struct PageTurnerTests {
         return turner
     }
 
-    final class Flag {
-        var raised = false
-    }
-
-    /// Waits for a requested turn to have committed — for two seconds at most,
-    /// so a turn that is dropped fails the test rather than hanging it.
+    /// Asks for a turn and waits for it to have committed — for two seconds
+    /// at most, so a turn that is dropped fails the test rather than hanging it.
     func turn(_ turner: PageTurner, forward: Bool = true) async {
         let committed = Flag()
         turner.requestTurn(forward: forward) { committed.raised = true }
-        for _ in 0 ..< 400 where !committed.raised {
-            try? await Task.sleep(for: .milliseconds(5))
-        }
-        if !committed.raised { Issue.record("the turn never committed") }
+        await until { committed.raised }
     }
 
-    /// Lets the turner's own tasks run until a condition holds.
-    func until(_ condition: () -> Bool) async {
-        for _ in 0 ..< 200 where !condition() {
-            await Task.yield()
+    /// Lets the turner's own tasks run until a condition holds, for two seconds
+    /// at most.
+    func until(_ condition: () -> Bool, sourceLocation: SourceLocation = #_sourceLocation) async {
+        for _ in 0 ..< 400 where !condition() {
+            try? await Task.sleep(for: .milliseconds(5))
         }
+        if !condition() { Issue.record("timed out waiting", sourceLocation: sourceLocation) }
     }
 
     @Test("a tap turns the page at once, then slides the page it left away")
@@ -63,6 +64,7 @@ struct PageTurnerTests {
         defer { opening.tearDown() }
         let clock = Clock()
         let turner = turner(model, clock)
+        let duration = turner.timing.duration
 
         await turn(turner)
 
@@ -76,9 +78,9 @@ struct PageTurnerTests {
         }
         #expect(leaving.page.index == 0)
         #expect(turner.progress(at: clock.now) == 0)
-        #expect(abs(turner.progress(at: clock.now + 0.15) - 0.5) < 0.001)
+        #expect(abs(turner.progress(at: clock.now + duration / 2) - 0.5) < 0.001)
 
-        clock.now += 0.3
+        clock.now += duration
         turner.tick()
         #expect(turner.scene == nil, "at rest on the new page")
     }
@@ -91,7 +93,7 @@ struct PageTurnerTests {
         let turner = turner(model, clock)
 
         await turn(turner)
-        clock.now += 0.1
+        clock.now += turner.timing.duration / 3
         await turn(turner)
 
         #expect(model.pageIndex == 2)
@@ -104,9 +106,47 @@ struct PageTurnerTests {
         #expect(turner.progress(at: clock.now) == 0, "and the second started from the beginning")
     }
 
+    /// Asked for all at once, as a held key repeats or quick taps land, none
+    /// waiting for the one before.
+    @Test("turns asked for in a burst are all made, in order")
+    func burst() async throws {
+        let (model, opening) = try await opened()
+        defer { opening.tearDown() }
+        let turner = turner(model, Clock())
+        let committed = Flag()
+
+        turner.requestTurn(forward: true)
+        turner.requestTurn(forward: true)
+        turner.requestTurn(forward: true)
+        turner.requestTurn(forward: false) { committed.raised = true }
+        await until { committed.raised }
+
+        #expect(model.pageIndex == 2)
+    }
+
+    /// A finger going down on a page still sliding — the start of every tap —
+    /// is not a drag until it moves, and the slide carries on under it.
+    @Test("a finger resting on a sliding page does not stop it")
+    func touchDownDuringASlide() async throws {
+        let (model, opening) = try await opened()
+        defer { opening.tearDown() }
+        let clock = Clock()
+        let turner = turner(model, clock)
+        await turn(turner)
+        clock.now += turner.timing.duration / 2
+
+        turner.dragChanged(startX: 300, translation: 0)
+
+        #expect(abs(turner.progress(at: clock.now) - 0.5) < 0.001)
+        #expect(turner.scene?.liveIsArriving == true)
+    }
+
     /// Narration moving the page writes `pageIndex` itself, as does every
-    /// jump; none of them is a turn the reader made.
-    @Test("a page moved by anything else is shown where it is, at once", arguments: ["narration", "contents", "resize"])
+    /// jump; none of them is a turn the reader made. The contents entry for the
+    /// chapter already open reloads it onto the same numbers, which only the
+    /// layout's revision tells apart.
+    @Test("a page moved by anything else is shown where it is, at once",
+          arguments: ["narration", "contents", "same chapter", "resize"])
     func othersAreInstant(change: String) async throws {
         let (model, opening) = try await opened()
         defer { opening.tearDown() }
@@ -115,24 +155,26 @@ struct PageTurnerTests {
         await turn(turner)
         turner.modelKeyChanged(model.pageKey)
         #expect(turner.scene != nil, "its own turn is still sliding")
+        let before = model.pageKey
 
         switch change {
         case "narration": model.pageIndex = 3
         case "contents": await model.go(toChapter: 2)
+        case "same chapter": await model.go(toChapter: model.chapterIndex)
         default: await model.resize(to: CGSize(width: 300, height: 500))
         }
+        #expect(model.pageKey != before, "the change has to be one the view would report")
         turner.modelKeyChanged(model.pageKey)
 
         #expect(turner.scene == nil)
         #expect(turner.motion == nil)
     }
 
-    @Test("with None, a tap turns the page and nothing moves", arguments: [PageTurnStyle.instant])
-    func none(style: PageTurnStyle) async throws {
+    @Test("with None, a tap turns the page and nothing moves")
+    func none() async throws {
         let (model, opening) = try await opened()
         defer { opening.tearDown() }
-        let clock = Clock()
-        let turner = turner(model, clock, style: style)
+        let turner = turner(model, Clock(), style: .instant)
 
         await turn(turner)
 
@@ -141,6 +183,7 @@ struct PageTurnerTests {
         #expect(turner.motion == nil)
         #expect(!turner.dragChanged(startX: 300, translation: -120), "and a drag does not move the page")
         #expect(turner.scene == nil)
+        #expect(!model.keepsNeighbours, "and nothing beyond the chapter is kept")
     }
 
     @Test("a dragged page follows the finger, and a throw turns it")
@@ -165,7 +208,6 @@ struct PageTurnerTests {
         turner.dragEnded(velocity: -500)
         await until { model.pageIndex == 1 }
 
-        #expect(model.pageIndex == 1)
         #expect(turner.scene?.liveIsArriving == true)
         guard case let .spring(from, to, velocity, _)? = turner.motion else {
             Issue.record("a released page settles along the spring")
@@ -180,12 +222,10 @@ struct PageTurnerTests {
     func dragPutBack() async throws {
         let (model, opening) = try await opened()
         defer { opening.tearDown() }
-        let clock = Clock()
-        let turner = turner(model, clock)
+        let turner = turner(model, Clock())
 
         turner.dragChanged(startX: 300, translation: -110)
         turner.dragEnded(velocity: 0)
-        for _ in 0 ..< 20 { await Task.yield() }
 
         #expect(model.pageIndex == 0)
         guard case let .spring(_, to, _, _)? = turner.motion else {
@@ -193,6 +233,77 @@ struct PageTurnerTests {
             return
         }
         #expect(to == 0)
+    }
+
+    /// A tap or a key while a finger holds the page waits for it to lift, and
+    /// is then made — not lost.
+    @Test("a turn asked for while a finger holds the page is made once it lifts")
+    func deferredTurn() async throws {
+        let (model, opening) = try await opened()
+        defer { opening.tearDown() }
+        let turner = turner(model, Clock())
+        let committed = Flag()
+
+        turner.dragChanged(startX: 300, translation: -60)
+        turner.requestTurn(forward: true) { committed.raised = true }
+        for _ in 0 ..< 10 { await Task.yield() }
+        #expect(model.pageIndex == 0, "not while the finger is down")
+
+        turner.dragEnded(velocity: 0)
+        await until { committed.raised }
+
+        #expect(model.pageIndex == 1)
+    }
+
+    /// The touch was taken away — no `onEnded` — or became a selection. Either
+    /// way the page goes back and nothing is left holding later turns.
+    @Test("a drag the system takes away puts the page back and holds nothing up")
+    func cancelled() async throws {
+        let (model, opening) = try await opened()
+        defer { opening.tearDown() }
+        let turner = turner(model, Clock())
+
+        turner.dragChanged(startX: 300, translation: -110)
+        turner.dragCancelled()
+
+        guard case let .spring(_, to, _, _)? = turner.motion else {
+            Issue.record("the page should settle back")
+            return
+        }
+        #expect(to == 0)
+        await turn(turner)
+        #expect(model.pageIndex == 1, "a turn afterwards is made at once")
+    }
+
+    @Test("switching to None with a finger on the page does not hold turns up")
+    func styleChangeMidDrag() async throws {
+        let (model, opening) = try await opened()
+        defer { opening.tearDown() }
+        let turner = turner(model, Clock())
+
+        turner.dragChanged(startX: 300, translation: -110)
+        turner.style = .instant
+        await turn(turner)
+
+        #expect(model.pageIndex == 1)
+    }
+
+    /// Narration moved the page between the finger lifting and the turn being
+    /// committed: the turn was about a page that is no longer there.
+    @Test("a released drag whose page moved under it does not turn")
+    func staleCommit() async throws {
+        let (model, opening) = try await opened()
+        defer { opening.tearDown() }
+        let turner = turner(model, Clock())
+
+        turner.dragChanged(startX: 300, translation: -220)
+        turner.dragEnded(velocity: -500)
+        model.pageIndex = 3
+        turner.modelKeyChanged(model.pageKey)
+        for _ in 0 ..< 20 { await Task.yield() }
+
+        #expect(model.pageIndex == 3)
+        #expect(turner.scene == nil)
     }
 
     /// A slide caught by a finger halfway: the page the model turned to is now
@@ -204,7 +315,7 @@ struct PageTurnerTests {
         let clock = Clock()
         let turner = turner(model, clock)
         await turn(turner)
-        clock.now += 0.15
+        clock.now += turner.timing.duration / 2
 
         turner.dragChanged(startX: 300, translation: 10)
 
@@ -219,11 +330,11 @@ struct PageTurnerTests {
     func acrossTheBoundary() async throws {
         let (model, opening) = try await opened()
         defer { opening.tearDown() }
-        let clock = Clock()
-        let turner = turner(model, clock)
+        let turner = turner(model, Clock())
         model.pageIndex = model.pageCount - 1
 
         turner.dragChanged(startX: 300, translation: -60)
+        #expect(turner.scene?.other == .blank, "a blank page until the chapter is ready")
         await model.neighbourSettled(forward: true)
         turner.dragChanged(startX: 300, translation: -120)
         guard case let .page(next)? = turner.scene?.other else {
@@ -235,9 +346,33 @@ struct PageTurnerTests {
         turner.dragEnded(velocity: -800)
         await until { model.chapterIndex == 1 }
 
-        #expect(model.chapterIndex == 1)
         #expect(model.pageIndex == 0)
         #expect(model.layout === next.layout)
+    }
+
+    /// A swipe toward a chapter that will not open says so, as it did when
+    /// pages did not move: it is not the end of the book.
+    @Test("a swipe toward a chapter that will not open says which, and goes back")
+    func towardsAnUnreadableChapter() async throws {
+        let (model, opening) = try await opened([NeighbourChapterTests.content(0), NeighbourChapterTests.broken(1)])
+        defer { opening.tearDown() }
+        let turner = turner(model, Clock())
+        model.pageIndex = model.pageCount - 1
+        model.prefetchNeighbours()
+        await model.neighbourSettled(forward: true)
+
+        turner.dragChanged(startX: 300, translation: -230)
+        #expect(turner.scene?.other == .blank)
+        turner.dragEnded(velocity: -500)
+        await until { model.chapterNotice != nil }
+
+        #expect(model.chapterNotice?.message.contains("Chapter 1") == true)
+        #expect(model.chapterIndex == 0)
+        guard case let .spring(_, to, _, _)? = turner.motion else {
+            Issue.record("the page should settle back")
+            return
+        }
+        #expect(to == 0)
     }
 
     @Test("the first page of the book does not move back")

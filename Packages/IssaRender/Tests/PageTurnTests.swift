@@ -43,8 +43,9 @@ struct PageTurnTests {
     // MARK: - Following the finger
 
     /// A paging scroll view's page starts to follow after ten points of travel,
-    /// and then by exactly the travel past those ten: a 60.3-point drag moved
-    /// its page 50.3 points, a 120.6-point one 110.7, a 180.9-point one 171.0.
+    /// and then by the travel past those ten, to within a tenth of a point: a
+    /// 60.3-point drag moved its page 50.3 points, a 120.6-point one 110.7, a
+    /// 180.9-point one 171.0.
     @Test("the page follows one for one, from ten points in, with no jump")
     func tracking() {
         #expect(!PageTurn.beginsTracking(startX: 200, translation: -9.9))

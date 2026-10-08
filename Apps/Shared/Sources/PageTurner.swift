@@ -39,11 +39,21 @@ final class PageTurner {
     private var dragProgress: CGFloat = 0
 
     var style: PageTurnStyle = .slide {
-        didSet { if style != oldValue { finish() } }
+        didSet {
+            guard style != oldValue else { return }
+            // A finger on the page is let go of with the old style; None has no
+            // drag to finish, and would otherwise defer every turn to a lift
+            // that never comes.
+            drag = nil
+            dragProgress = 0
+            finish()
+            model.keepsNeighbours = style != .instant
+            runDeferred()
+        }
     }
 
     /// How long a tap's turn takes.
-    var timing: PageTurn.Timing = {
+    let timing: PageTurn.Timing = {
         #if os(macOS)
         PageTurn.macTiming
         #else
@@ -83,16 +93,22 @@ final class PageTurner {
     private var finishTask: Task<Void, Never>?
     private var idleTask: Task<Void, Never>?
     private var seeking = false
-    private var seekAgain = false
+    /// The sentence the next seek goes to; see `carryNarration`.
+    private var seekTarget: String?
 
     init(model: ReaderModel, now: @escaping () -> TimeInterval = { Date().timeIntervalSinceReferenceDate }) {
         self.model = model
         self.now = now
+        model.keepsNeighbours = style != .instant
     }
 
     /// How far through its turn the page is.
+    ///
+    /// A finger that is down but has not yet moved far enough to be a drag —
+    /// every tap is one — is not dragging anything, and a slide still running
+    /// carries on under it.
     func progress(at time: TimeInterval) -> CGFloat {
-        if drag != nil { return dragProgress }
+        if drag?.tracking == true { return dragProgress }
         return CGFloat(motion?.value(at: time) ?? 0)
     }
 
@@ -107,9 +123,9 @@ final class PageTurner {
     /// this deliberately does not.
     ///
     /// - Parameters:
-    ///   - carriesNarration: whether a playing voice moves with the page, as
-    ///     `ReaderModel.turnPage(forward:)` has it — the television and
-    ///     VoiceOver, where the page is the scrubber.
+    ///   - carriesNarration: whether a playing voice moves with the page — the
+    ///     television and VoiceOver, where the page is the scrubber. See
+    ///     `ReaderModel.narrationTargetOnVisiblePage()`.
     ///   - onCommitted: once the model has turned.
     func requestTurn(forward: Bool, carriesNarration: Bool = false, onCommitted: (() -> Void)? = nil) {
         if drag?.tracking == true {
@@ -134,7 +150,7 @@ final class PageTurner {
             return
         }
         // At a chapter's edge, the next chapter may be on its way already.
-        if model.neighbourPreview(forward: forward) == .pending {
+        if model.neighbourIsPending(forward: forward) {
             await model.neighbourSettled(forward: forward)
             finish()
         }
@@ -204,8 +220,12 @@ final class PageTurner {
     func dragEnded(velocity: CGFloat) {
         guard let ended = drag else { return }
         drag = nil
+        dragProgress = 0
         defer { runDeferred() }
-        guard ended.tracking, !ended.abandoned, width > 0 else { return }
+        guard ended.tracking, !ended.abandoned, width > 0 else {
+            scheduleIdle()
+            return
+        }
         let canBack = ended.previews[false] != NeighbourPreview.none
         let canForward = ended.previews[true] != NeighbourPreview.none
         guard let direction = PageTurn.settle(
@@ -224,11 +244,28 @@ final class PageTurner {
         start(.spring(from: Double(abs(ended.offset) / width), to: 1, velocity: speed, start: now()))
         dragCommit &+= 1
         let commit = dragCommit
-        let previous = chain
+        // Not behind whatever `chain` holds: a tap waiting for the next chapter
+        // must not keep a page the reader has already let go of from turning.
+        // Turns asked for after this one still wait for it.
         chain = Task { [weak self] in
-            await previous?.value
             await self?.commitDrag(forward: forward, commit)
         }
+    }
+
+    /// The touch ended without a drag the turner should finish: it became a
+    /// selection, or the system took it away. Where SwiftUI cancels a gesture
+    /// it calls no `onEnded`, and a drag left behind would hold every later
+    /// turn back until the next touch.
+    func dragCancelled() {
+        guard let cancelled = drag else { return }
+        drag = nil
+        dragProgress = 0
+        defer {
+            runDeferred()
+            scheduleIdle()
+        }
+        guard cancelled.tracking, !cancelled.abandoned else { return }
+        settleBack(from: cancelled.offset, velocity: 0)
     }
 
     private func commitDrag(forward: Bool, _ commit: Int) async {
@@ -280,8 +317,10 @@ final class PageTurner {
         self.motion = nil
         finishTask?.cancel()
         guard scene.liveIsArriving else {
-            // Still settling back from an earlier drag: the same page, further
-            // across.
+            // A page let go of a moment ago and not yet turned to, or one
+            // settling back: the same page, further across, and a turn waiting
+            // to be made for it is not wanted now that it has been caught.
+            dragCommit &+= 1
             return (scene.direction == .forward ? -1 : 1) * p * width
         }
         let remaining = (1 - p) * width
@@ -356,32 +395,36 @@ final class PageTurner {
     }
 
     /// Gets the neighbouring chapters ready once the page has been still for a
-    /// moment, so the work never lands on a frame of a turn.
+    /// moment, so the work stays off the frames of a turn — unless a finger
+    /// reaches a chapter's edge first, when it is started at once.
     private func scheduleIdle() {
         idleTask?.cancel()
         guard style != .instant else { return }
         idleTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(250))
-            guard !Task.isCancelled, let self, motion == nil, drag == nil else { return }
+            guard !Task.isCancelled, let self, motion == nil, drag?.tracking != true else { return }
             model.prefetchNeighbours()
         }
     }
 
-    /// Takes a playing voice to the page turned to. One seek at a time, and
-    /// only the last page asked for: a quick run of turns lands the voice on
-    /// the page they ended on, not on each in turn.
+    /// Takes a playing voice to the page just turned to. One seek at a time,
+    /// and only the last page asked for: a quick run of turns lands the voice
+    /// on the page they ended on, not on each in turn.
+    ///
+    /// The sentence is chosen now, at the commit, rather than when the seek
+    /// gets to run: narration reaching a sentence boundary in between would
+    /// move the page back to the voice, and the seek would follow it there.
     private func carryNarration() {
-        if seeking {
-            seekAgain = true
-            return
-        }
+        guard let target = model.narrationTargetOnVisiblePage() else { return }
+        seekTarget = target
+        guard !seeking else { return }
         seeking = true
         Task { [weak self] in
             guard let self else { return }
-            repeat {
-                seekAgain = false
-                await model.carryNarrationToVisiblePage()
-            } while seekAgain
+            while let next = seekTarget {
+                seekTarget = nil
+                await model.carryNarration(to: next)
+            }
             seeking = false
         }
     }
