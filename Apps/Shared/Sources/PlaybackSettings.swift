@@ -59,6 +59,18 @@ public final class PlaybackSettings {
         didSet { defaults.set(askEnabled, forKey: Self.askEnabledKey) }
     }
 
+    /// How a turned page moves: Slide, Cover, or None.
+    ///
+    /// Beside `progressScope` and out of `readerStyle` for the same reason —
+    /// a change to the style re-paginates the open book, and choosing how a
+    /// page moves should cost the reader nothing, least of all their place.
+    /// Device-local like the rest: the server's settings are for preferences
+    /// that should travel, and how pages move on a phone has no bearing on a
+    /// television.
+    public var pageTurn: PageTurnStyle {
+        didSet { defaults.set(pageTurn.rawValue, forKey: Self.pageTurnKey) }
+    }
+
     /// Per-book departures from `readerStyle`, keyed by book uuid.
     ///
     /// Device-local and deliberately not synced: a size that suits a phone is
@@ -118,6 +130,7 @@ public final class PlaybackSettings {
     private static let rateKey = "issa.playbackRate"
     private static let progressScopeKey = "issa.progressScope"
     private static let askEnabledKey = "issa.askAboutBook"
+    private static let pageTurnKey = "issa.pageTurn"
     private static let faceMigrationKey = "issa.migratedDefaultFaceToLiterata"
 
     /// The observer token, in a box `deinit` can reach.
@@ -192,6 +205,11 @@ public final class PlaybackSettings {
         // `bool(forKey:)` is false for an absent key, which is the default this
         // wants: a reader who has never seen the switch has not turned it on.
         askEnabled = store.bool(forKey: Self.askEnabledKey)
+        // Slide unless the reader chose otherwise — including a value this
+        // build cannot read, which a later build might one day write. Absent
+        // until the picker is first moved, as `progressScope` is.
+        pageTurn = store.string(forKey: Self.pageTurnKey)
+            .flatMap(PageTurnStyle.init(rawValue:)) ?? .slide
         moveOffTheOldDefaultFace()
         // Assignments in `init` do not fire `didSet`, so the levels this build
         // just converted are written back by hand — once, and only when they

@@ -104,6 +104,9 @@ public struct ReaderScreen: View {
 /// turning a page translates geometry rather than laying anything out again.
 public struct ReaderView: View {
     @State private var model: ReaderModel
+    /// Slides, covers or simply changes the page; see `PageTurner`.
+    @State private var turner: PageTurner
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var showsPlayer = false
     @State private var showsContents = false
     @State private var showsSearch = false
@@ -210,6 +213,7 @@ public struct ReaderView: View {
     /// audio off mid-sentence.
     public init(model: ReaderModel) {
         _model = State(initialValue: model)
+        _turner = State(initialValue: PageTurner(model: model))
     }
 
     public var body: some View {
@@ -597,8 +601,8 @@ public struct ReaderView: View {
         case .marks: showsAnnotations = true
         case .bookmark: model.toggleBookmark()
         case .typography: showsTypography = true
-        case .nextPage: Task { await model.nextPage() }
-        case .previousPage: Task { await model.previousPage() }
+        case .nextPage: turner.requestTurn(forward: true)
+        case .previousPage: turner.requestTurn(forward: false)
         // Its own window on the Mac, which several open books can share, rather
         // than a sheet belonging to whichever one happened to summon it.
         case .player:
@@ -814,17 +818,30 @@ public struct ReaderView: View {
                 Color.clear.frame(height: ReaderChrome.barHeight)
             }
 
-            PageCanvas(model: model, pageSize: size)
-                .padding(.horizontal, model.style.pageMargin)
-                .padding(.bottom, model.style.pageMargin)
-                // And the top margin, where there is no bar standing in for it
-                // — which is the Mac. It has to be drawn as well as reserved:
-                // `ReaderChrome.topReserve` takes it out of the page's height
-                // budget, and if nothing then puts it on screen the page simply
-                // sits that much higher, back under the toolbar with the space
-                // spent at the bottom instead.
-                .padding(.top, pageTopMargin)
-                .contentShape(Rectangle())
+            // Each page carries its margins with it, so a turning page takes
+            // the whole width of the reader across rather than being cut by a
+            // margin that stays put.
+            PageTrackView(
+                model: model,
+                turner: turner,
+                pageSize: size,
+                // And the top margin, where there is no bar standing in for
+                // it — which is the Mac. It has to be drawn as well as
+                // reserved: `ReaderChrome.topReserve` takes it out of the
+                // page's height budget, and if nothing then puts it on screen
+                // the page simply sits that much higher, back under the
+                // toolbar with the space spent at the bottom instead.
+                insets: EdgeInsets(
+                    top: pageTopMargin, leading: model.style.pageMargin,
+                    bottom: model.style.pageMargin, trailing: model.style.pageMargin),
+                accessibilityTurn: { forward in
+                    turner.requestTurn(forward: forward, carriesNarration: true) {
+                        PageAccessibility.announcePage(model)
+                    }
+                },
+            )
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { turner.width = $0 }
+            .contentShape(Rectangle())
                 #if !os(tvOS)
                 // Double tap first: SwiftUI gives the higher count priority,
                 // and this is the gesture that used to be a single tap — which
@@ -849,8 +866,8 @@ public struct ReaderView: View {
                     switch ReaderTapZone.of(
                         x: location.x, pageWidth: size.width, margin: model.style.pageMargin,
                     ) {
-                    case .back: Task { await model.previousPage() }
-                    case .forward: Task { await model.nextPage() }
+                    case .back: turner.requestTurn(forward: false)
+                    case .forward: turner.requestTurn(forward: true)
                     case .middle: model.toggleChrome()
                     }
                 }
@@ -879,7 +896,18 @@ public struct ReaderView: View {
                                 selecting = false
                             }
                             touchPoint = value.location
-                            guard selecting else { return }
+                            guard selecting else {
+                                // The page follows the finger, once it has
+                                // moved far enough to be a drag. Starting to
+                                // move it lets go of a selection, as a swipe
+                                // always has.
+                                if turner.dragChanged(
+                                    startX: value.startLocation.x, translation: value.translation.width,
+                                ), model.selection != nil {
+                                    model.clearSelection()
+                                }
+                                return
+                            }
                             model.extendSelection(to: canvasPoint(value.location))
                         }
                         .onEnded { value in
@@ -887,27 +915,35 @@ public struct ReaderView: View {
                             // A press-and-drag that was adjusting a selection is
                             // not a page turn.
                             if selecting { return }
+                            // Slide and Cover: the page was following the
+                            // finger, and where it lands is the turner's.
+                            guard turner.style == .instant else {
+                                turner.dragEnded(velocity: value.velocity.width)
+                                return
+                            }
                             // The leading edge belongs to the system's own
                             // dismiss gesture — the reader is presented as a
                             // full-screen cover — so a back-swipe starting
                             // there shuts the book. Unguarded it did that AND
                             // turned the page on the way out.
-                            guard value.startLocation.x > 20 else { return }
-                            guard abs(value.translation.width) >= 24 else { return }
+                            guard let direction = PageTurn.liftOffSwipe(
+                                startX: value.startLocation.x, translation: value.translation.width,
+                            ) else { return }
                             // Clear a selection and turn the page in one motion.
                             // Guarding on `selection == nil` meant that once
                             // anything was selected, swiping silently did
                             // nothing at all and nothing said why.
                             if model.selection != nil { model.clearSelection() }
-                            Task {
-                                if value.translation.width < 0 { await model.nextPage() }
-                                else { await model.previousPage() }
-                            }
+                            turner.requestTurn(forward: direction == .forward)
                         },
                 )
                 .simultaneousGesture(
                     LongPressGesture(minimumDuration: 0.35)
                         .onEnded { _ in
+                            // Selecting on a page still sliding would select
+                            // what is under the finger now, which is not where
+                            // the words will be.
+                            turner.finish()
                             model.beginSelection(at: canvasPoint(touchPoint))
                             // Claim the touch only if there was text under it.
                             // A long press on an illustration or a margin
@@ -941,6 +977,12 @@ public struct ReaderView: View {
         // to leave. A selection with glyphs on the page just arrived at is the
         // one the reader came to see.
         .onChange(of: model.pageIndex) { model.clearSelectionIfStale() }
+        // Anything but the turner's own turn moving the page — narration, a
+        // jump — shows it where it now is, at once.
+        .onChange(of: model.pageKey) { _, key in turner.modelKeyChanged(key) }
+        .onChange(of: PageTurn.effectiveStyle(settings.pageTurn, reduceMotion: reduceMotion), initial: true) {
+            _, style in turner.style = style
+        }
         // Also on chapter change: a jump that lands on the same page index (both
         // page 0, say) never fires the pageIndex handler, so a stale selection
         // from the old chapter would otherwise survive at coincidentally
@@ -965,8 +1007,8 @@ public struct ReaderView: View {
         .onChange(of: anySheetShowing) { _, showing in
             if !showing { pageHasKeyboardFocus = true }
         }
-        .onKeyPress(.rightArrow) { Task { await model.nextPage() }; return .handled }
-        .onKeyPress(.leftArrow) { Task { await model.previousPage() }; return .handled }
+        .onKeyPress(.rightArrow) { turner.requestTurn(forward: true); return .handled }
+        .onKeyPress(.leftArrow) { turner.requestTurn(forward: false); return .handled }
         .onKeyPress(.space) {
             guard model.hasNarration else { return .ignored }
             Task { await model.togglePlayback() }
@@ -1453,48 +1495,29 @@ struct PageSurface: View {
     }
 }
 
-/// Draws one page, plus the read-along highlight when audio is playing.
-///
-/// The reader's half of the split: it reads the model and `PageSurface` draws.
-struct PageCanvas: View {
-    let model: ReaderModel
-    let pageSize: CGSize
+extension PageSurface: Equatable {
+    init(_ snapshot: PageSnapshot, size: CGSize) {
+        self.init(
+            layout: snapshot.layout,
+            page: snapshot.page,
+            activeFragment: snapshot.activeFragment,
+            annotations: snapshot.annotations,
+            selection: snapshot.selection,
+            theme: snapshot.theme,
+            highlight: snapshot.highlight,
+            highlightStyle: snapshot.highlightStyle,
+            size: size,
+        )
+    }
 
-    var body: some View {
-        // Read in the body, not inside the renderer closure. Observation tracks
-        // what a view's body touches; the Canvas closure runs during the render
-        // pass and is not tracked, so reading the narrated fragment only in
-        // there left the highlight frozen on one sentence for the whole page —
-        // the audio moved and the drawing did not.
-        let activeFragment = model.activeFragmentID
-        let selection = model.selection
-        let page = model.currentPage
-        let annotations = page.map { model.highlightBlocks(on: $0) } ?? []
-        let theme = model.style.theme
-        let highlight = model.style.highlightColor
-        let layout = model.layout
-
-        Group {
-            if let layout, let page {
-                PageSurface(
-                    layout: layout,
-                    page: page,
-                    activeFragment: activeFragment,
-                    annotations: annotations,
-                    selection: selection,
-                    theme: theme,
-                    highlight: highlight,
-                    highlightStyle: HighlightBlock.Style(fontSize: model.style.fontSize),
-                    size: pageSize,
-                )
-            } else {
-                // The chapter is still being laid out. Holding the page's exact
-                // size means nothing above or below it moves when the glyphs
-                // arrive, which is the whole reason the reserve exists.
-                Color.clear.frame(width: pageSize.width, height: pageSize.height)
-            }
-        }
-        .modifier(PageAccessibility(model: model))
+    /// Equal when it would draw the same thing, the layout by identity, so a
+    /// page that has not changed is not redrawn for every frame of a turn that
+    /// only moves it.
+    nonisolated static func == (lhs: PageSurface, rhs: PageSurface) -> Bool {
+        lhs.layout === rhs.layout && lhs.page == rhs.page && lhs.activeFragment == rhs.activeFragment
+            && lhs.annotations == rhs.annotations && lhs.selection == rhs.selection
+            && lhs.theme == rhs.theme && lhs.highlight == rhs.highlight
+            && lhs.highlightStyle == rhs.highlightStyle && lhs.size == rhs.size
     }
 }
 
@@ -1505,6 +1528,10 @@ struct PageCanvas: View {
 /// them exist for a reader using VoiceOver.
 struct PageAccessibility: ViewModifier {
     let model: ReaderModel
+    /// How a turn is made, when something other than the model makes it — the
+    /// page turner, so a turn from the rotor slides like any other. Announced
+    /// once the model has turned either way.
+    var onTurn: ((Bool) -> Void)?
 
     func body(content: Content) -> some View {
         content
@@ -1577,6 +1604,10 @@ struct PageAccessibility: ViewModifier {
     /// VoiceOver consumes, and that is the very reason these actions exist. A
     /// paused book still turns silently, here as everywhere.
     private func turn(forward: Bool) {
+        if let onTurn {
+            onTurn(forward)
+            return
+        }
         Task {
             await model.turnPage(forward: forward)
             Self.announcePage(model)

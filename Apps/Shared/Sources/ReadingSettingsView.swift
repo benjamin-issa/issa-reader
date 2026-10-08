@@ -6,6 +6,7 @@ import SwiftUI
 /// Typography, theme and read-along highlight controls, as the design lays out.
 public struct ReadingSettingsView: View {
     @Environment(PlaybackSettings.self) private var settings
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var customFamilies: [String] = []
     @State private var importing = false
@@ -73,6 +74,20 @@ public struct ReadingSettingsView: View {
             }
             .listRowBackground(Palette.surface)
 
+            SettingsSection(note: pagesNote) {
+                Picker("Page turn", selection: pageTurn) {
+                    ForEach(PageTurnStyle.allCases) { style in
+                        Text(style.title).tag(style)
+                    }
+                }
+                // Shown as None and left alone underneath, so the reader's own
+                // choice is still there when Reduce Motion is turned off again.
+                .disabled(reduceMotion)
+            } header: {
+                Text("Pages")
+            }
+            .listRowBackground(Palette.surface)
+
             SettingsSection(note: "“Follow narration” keeps the spoken sentence on screen. Turning pages mid-sentence flips as soon as the text runs off, rather than waiting for the sentence to finish. Double-tapping a sentence starts the narration there.") {
                 Picker("Highlight", selection: $settings.readerStyle.highlightGranularity) {
                     ForEach(ReaderStyle.HighlightGranularity.allCases, id: \.self) { level in
@@ -128,6 +143,29 @@ public struct ReadingSettingsView: View {
             }
         }
         #endif
+    }
+
+    /// What the page-turn picker shows: the reader's choice, or None while
+    /// Reduce Motion is deciding for them.
+    private var pageTurn: Binding<PageTurnStyle> {
+        Binding(
+            get: { PageTurn.effectiveStyle(settings.pageTurn, reduceMotion: reduceMotion) },
+            set: { settings.pageTurn = $0 },
+        )
+    }
+
+    /// The Pages section's note, which says first why the picker cannot be
+    /// used when it cannot — a disabled control with no reason given reads as
+    /// broken.
+    private var pagesNote: String {
+        let styles = "Slide moves the next page in beside the current one. Cover slides the page away over the next. None changes the page instantly."
+        guard reduceMotion else { return styles }
+        #if os(macOS)
+        let path = "System Settings › Accessibility › Display"
+        #else
+        let path = "Settings › Accessibility › Motion"
+        #endif
+        return "Reduce Motion is on, so pages change instantly. To choose how they move, turn it off in \(path). " + styles
     }
 
     /// A quiet line naming what the control under it applies to.
