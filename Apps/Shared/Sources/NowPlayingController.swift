@@ -26,6 +26,12 @@ public final class NowPlayingController {
     /// the sheet is dismissed is a sleep timer that never once worked, since
     /// the whole point is to put the phone down.
     public private(set) var sleepTimer: SleepTimer?
+    /// Told when a sleep timer runs out, after the book has stopped.
+    ///
+    /// `AppModel` listens so an open book's screen may lock again: a reader
+    /// who set a timer has said they want the device to stop, and that is the
+    /// one exception to the display staying awake while a book is open.
+    public var onSleepTimerExpired: (@MainActor () -> Void)?
     /// Cover art for the Lock Screen, CarPlay and AirPlay receivers.
     private var artwork: MPMediaItemArtwork?
     private var session: Session?
@@ -191,7 +197,10 @@ public final class NowPlayingController {
         // is told it may resume. A pause alone kept the session active with
         // nothing playing.
         let timer = SleepTimer(
-            onExpire: { [weak coordinator] in coordinator?.player.endSession() },
+            onExpire: { [weak coordinator, weak self] in
+                coordinator?.player.endSession()
+                self?.onSleepTimerExpired?()
+            },
             fade: { [weak coordinator] level in coordinator?.player.volume = level },
         )
         // A duration timer counts time spent *listening*, not wall-clock time.

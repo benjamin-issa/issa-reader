@@ -62,6 +62,50 @@ public final class ReaderModel {
     public private(set) var layout: ChapterLayout?
     public private(set) var chapterIndex = 0
     public var pageIndex = 0
+    /// Bumped whenever the chapter on screen is replaced or re-paginated.
+    ///
+    /// A chapter and page number alone cannot say whether the page changed: a
+    /// jump to the contents entry the reader is already in reloads the chapter
+    /// onto the same numbers, and a rotation re-paginates the same layout in
+    /// place. The page turner needs to know that something other than its own
+    /// turn moved the page, so that it lets go rather than sliding the wrong
+    /// page out.
+    public private(set) var layoutRevision = 0
+
+    /// Exactly which page is on screen.
+    public struct PageKey: Hashable, Sendable {
+        public let chapter: Int
+        public let page: Int
+        public let revision: Int
+    }
+
+    public var pageKey: PageKey {
+        PageKey(chapter: chapterIndex, page: pageIndex, revision: layoutRevision)
+    }
+
+    /// The chapters either side of this one, laid out before anyone turns to
+    /// them — `true` is the one after, `false` the one before. See
+    /// `prefetchNeighbours()`.
+    ///
+    /// Not observed: nothing draws from it directly. The page turner asks for
+    /// a neighbour's page as a finger moves, so one that arrives while a drag
+    /// is showing a blank page in its place is drawn at the finger's next
+    /// movement.
+    @ObservationIgnored private(set) var neighbours: [Bool: Neighbour] = [:]
+    /// Whether the chapters either side are wanted at all: only while pages
+    /// slide or cover, which is when there is a page to drag in. With None
+    /// nothing beyond the chapter on screen is kept, as before 1.5.0. Set by
+    /// the page turner.
+    @ObservationIgnored var keepsNeighbours = false {
+        didSet { if !keepsNeighbours { dropNeighbours() } }
+    }
+    @ObservationIgnored private var neighbourTasks: [Bool: Task<Void, Never>] = [:]
+    /// The key the chapter on screen was laid out under, so that it can become
+    /// the neighbour on the other side of a turn only if it still matches.
+    @ObservationIgnored private var layoutKey: NeighbourKey?
+    /// Called between a neighbour's parse and its layout. A test seam, nil on
+    /// every path a reader can reach, and spent when it fires.
+    @ObservationIgnored var whilePreparingNeighbour: (@MainActor () async -> Void)?
     /// The narrated sentence to light on the page: the one the voice is on,
     /// when it is in the chapter on screen, and nil otherwise.
     ///
@@ -70,7 +114,13 @@ public final class ReaderModel {
     /// in chapter one lit the same-numbered sentence of chapter two whenever
     /// the reader had paged on ahead of it.
     public var activeFragmentID: String? {
-        guard let narratedFragment, narratedDocument == currentSpineHref else { return nil }
+        activeFragment(inDocument: currentSpineHref)
+    }
+
+    /// The narrated sentence to light in one document — this chapter's, or a
+    /// neighbour's sliding in.
+    func activeFragment(inDocument href: String?) -> String? {
+        guard let narratedFragment, narratedDocument == href else { return nil }
         return narratedFragment
     }
     /// The sentence the voice is on, by id, and the document that id is in.
@@ -163,6 +213,13 @@ public final class ReaderModel {
     public var style: ReaderStyle {
         didSet {
             guard style != oldValue else { return }
+
+            // A neighbour laid out in the old type, or the old ink, is of no
+            // use — everything but the highlighter is in its text.
+            var laidOut = style, wasLaidOut = oldValue
+            laidOut.highlighters = [:]
+            wasLaidOut.highlighters = [:]
+            if laidOut != wasLaidOut { dropNeighbours() }
 
             // Synchronously, inside the mutation: the canvas re-renders because
             // `style` changed, and it has to find the repainted text when it
@@ -504,6 +561,7 @@ public final class ReaderModel {
     public func open(pageSize: CGSize) async {
         self.pageSize = pageSize
         openGeneration &+= 1
+        dropNeighbours()
         let generation = openGeneration
         // Which edition, for a server book; a local book has the one file.
         let opening: Opening
@@ -1687,27 +1745,28 @@ public final class ReaderModel {
         return layout.page(containingFragment: entry.fragmentID)?.index == page.index
     }
 
-    /// Turns the page, and takes the voice with it.
+    /// The sentence a playing voice moves to after a turn: the first that
+    /// begins on the page now on screen, or nil when nothing is playing or the
+    /// page has no narration.
     ///
-    /// The television's page turn, not the phone's. A phone can afford to let
-    /// narration carry on where it was and snap the page back at the next
-    /// sentence, because a reader who wanted the audio moved has a scrubber and
-    /// a sentence to tap. A remote has neither, so here the page *is* the
-    /// scrubber: turning it while the voice is talking seeks narration to the
-    /// first sentence beginning on the new page.
+    /// The television's page turn, and VoiceOver's, take the voice with them;
+    /// the phone's tap does not. A phone can afford to let narration carry on
+    /// where it was and snap the page back at the next sentence, because a
+    /// reader who wanted the audio moved has a scrubber and a sentence to tap.
+    /// A remote has neither, so there the page *is* the scrubber — and a
+    /// reader using VoiceOver has neither either, since selection is a long
+    /// press and a drag, which VoiceOver consumes.
     ///
-    /// A paused book turns silently — pressing right on a paused book is
-    /// reading ahead, not asking to be read to. At the end of the book nothing
-    /// happens at all, which `nextPage()` already decides; this notices that
-    /// the position did not move and leaves the voice alone.
-    public func turnPage(forward: Bool) async {
-        let wasPlaying = isPlaying
-        let before = (chapterIndex, pageIndex)
-        if forward { await nextPage() } else { await previousPage() }
-        guard (chapterIndex, pageIndex) != before else { return }
-        guard wasPlaying, let readalong, let page = currentPage,
-              let fragment = firstNarratedFragment(beginningOn: page)
-        else { return }
+    /// A paused book turns silently: pressing right on a paused book is
+    /// reading ahead, not asking to be read to.
+    func narrationTargetOnVisiblePage() -> String? {
+        guard isPlaying, let page = currentPage else { return nil }
+        return firstNarratedFragment(beginningOn: page)
+    }
+
+    /// Moves the voice to a sentence chosen by `narrationTargetOnVisiblePage()`.
+    func carryNarration(to fragment: String) async {
+        guard let readalong else { return }
         await seekNarration(readalong, toFragment: fragment)
     }
 
@@ -1783,6 +1842,7 @@ public final class ReaderModel {
     /// `syncToNarration`.
     public func setReaderVisible(_ visible: Bool) {
         isReaderVisible = visible
+        if !visible { dropNeighbours() }
         if !visible { entryWhenHidden = readalong?.activeEntry }
         readalong?.player.setHighFrequencyUpdates(visible)
         onVisibilityChanged?(visible)
@@ -1791,6 +1851,7 @@ public final class ReaderModel {
     public func resize(to size: CGSize) async {
         guard size != pageSize, size.width > 0, size.height > 0 else { return }
         pageSize = size
+        dropNeighbours()
         await relayoutCurrentChapter()
     }
 
@@ -1847,6 +1908,12 @@ public final class ReaderModel {
             ? layout.pages[pageIndex].characterRange.location
             : 0
         layout.layout(pageSize: pageSize)
+        layoutRevision &+= 1
+        // Re-flowed, not re-parsed: a plate's size and a percentage margin
+        // were fixed by the parse at the old page size, so this layout is not
+        // what a fresh one at the new size would be, and must not be kept as a
+        // neighbour once the reader turns away from it.
+        layoutKey = nil
         pageIndex = layout.pages.firstIndex { NSLocationInRange(anchor, $0.characterRange) } ?? 0
     }
 
@@ -1863,56 +1930,91 @@ public final class ReaderModel {
     @discardableResult
     private func loadChapter(_ index: Int, restoring locator: ReadiumLocator? = nil) async -> Bool {
         guard let package, package.spine.indices.contains(index) else { return false }
-        let item = package.spine[index]
-        do {
-            let data = try package.archive.read(item.href)
-            let images = ArchiveImageSource(archive: package.archive)
-            let sheets = styleSheets
-            let parsed = try HTMLContentParser(
-                style: style,
-                maxImageWidth: max(pageSize.width, 1),
-                maxImageHeight: max(pageSize.height, 1),
-                columnWidth: max(pageSize.width, 1),
-                loadImage: { images.image(for: $0) },
-                loadStyleSheet: { sheets[$0] },
-            ).parse(xhtml: data, baseHref: item.href)
-            let layout = ChapterLayout(text: parsed.text, fragmentRanges: parsed.fragmentRanges)
-            layout.layout(pageSize: pageSize)
+        let key = neighbourKey
+        guard let layout = prepareOrReport(index) else { return false }
+        commit(layout, chapter: index, key: key, restoring: locator)
+        return true
+    }
 
-            // Everything committed together, once nothing can still throw.
-            self.layout = layout
-            chapterIndex = index
-            // Here rather than at the top of this method: everything above can
-            // throw, and a chapter that failed to load must leave the one on
-            // screen — and its anchors — alone.
-            anchorAnnotations()
-            if let locator, let offset = LocatorAnchoring.characterOffset(
-                for: locator, in: parsed.text.string, fragmentRanges: parsed.fragmentRanges,
-            ), let page = layout.page(containingOffset: offset) {
-                pageIndex = page.index
-            } else {
-                pageIndex = 0
-            }
-            return true
+    /// Parses and lays out one chapter, assigning nothing.
+    ///
+    /// Split from the commit so that a turn across a chapter boundary can try
+    /// several chapters and commit only the one it lands on, and so that the
+    /// neighbouring chapter can be got ready before anyone turns to it.
+    private func prepareChapter(_ index: Int) throws -> ChapterLayout {
+        guard let package, package.spine.indices.contains(index) else { throw CocoaError(.fileNoSuchFile) }
+        let item = package.spine[index]
+        let data = try package.archive.read(item.href)
+        let images = ArchiveImageSource(archive: package.archive)
+        let sheets = styleSheets
+        let parsed = try HTMLContentParser(
+            style: style,
+            maxImageWidth: max(pageSize.width, 1),
+            maxImageHeight: max(pageSize.height, 1),
+            columnWidth: max(pageSize.width, 1),
+            loadImage: { images.image(for: $0) },
+            loadStyleSheet: { sheets[$0] },
+        ).parse(xhtml: data, baseHref: item.href)
+        let layout = ChapterLayout(text: parsed.text, fragmentRanges: parsed.fragmentRanges)
+        layout.layout(pageSize: pageSize)
+        return layout
+    }
+
+    /// `prepareChapter`, saying so when the chapter will not open.
+    private func prepareOrReport(_ index: Int) -> ChapterLayout? {
+        do {
+            return try prepareChapter(index)
         } catch {
-            IssaLog.failure("load chapter", error,
-                            ["book": book.title, "chapter": String(index)])
-            let reason = AppModel.message(for: error)
-            if phase == .ready {
-                // The book is open and its chapter is still on screen, intact —
-                // nothing above committed. Replacing the reader with "Couldn't
-                // open this book" for it made the rest of the book unreachable:
-                // Try Again reopened at the saved place in front of the bad
-                // chapter, and the next page turn failed the same way.
-                chapterNotice = ChapterNotice(
-                    message: Self.unreadable(title(inSpineItem: index, atOffset: 0)) + " " + reason)
-            } else {
-                // Still opening: there is no page to keep, and `open` decides
-                // what to do about it — it retries from the first readable
-                // chapter before it gives up.
-                phase = .failed("Couldn't open this chapter. " + reason)
-            }
-            return false
+            reportUnloadable(index, error)
+            return nil
+        }
+    }
+
+    /// Makes a laid-out chapter the one on screen. Everything committed
+    /// together, once nothing can still throw.
+    private func commit(
+        _ layout: ChapterLayout, chapter index: Int, key: NeighbourKey?,
+        restoring locator: ReadiumLocator? = nil,
+    ) {
+        let left = self.layout.map {
+            LeftChapter(layout: $0, chapter: chapterIndex, key: layoutKey, ranges: anchoredRanges)
+        }
+        self.layout = layout
+        chapterIndex = index
+        layoutRevision &+= 1
+        layoutKey = key
+        // Here rather than before the parse: the parse can throw, and a chapter
+        // that failed to load must leave the one on screen — and its anchors —
+        // alone.
+        anchorAnnotations()
+        if let locator, let offset = LocatorAnchoring.characterOffset(
+            for: locator, in: layout.attributedText.string, fragmentRanges: layout.fragmentRanges,
+        ), let page = layout.page(containingOffset: offset) {
+            pageIndex = page.index
+        } else {
+            pageIndex = 0
+        }
+        keepNeighbours(leaving: left)
+    }
+
+    /// Says that a chapter would not open.
+    private func reportUnloadable(_ index: Int, _ error: Error) {
+        IssaLog.failure("load chapter", error,
+                        ["book": book.title, "chapter": String(index)])
+        let reason = AppModel.message(for: error)
+        if phase == .ready {
+            // The book is open and its chapter is still on screen, intact —
+            // nothing above committed. Replacing the reader with "Couldn't
+            // open this book" for it made the rest of the book unreachable:
+            // Try Again reopened at the saved place in front of the bad
+            // chapter, and the next page turn failed the same way.
+            chapterNotice = ChapterNotice(
+                message: Self.unreadable(title(inSpineItem: index, atOffset: 0)) + " " + reason)
+        } else {
+            // Still opening: there is no page to keep, and `open` decides
+            // what to do about it — it retries from the first readable
+            // chapter before it gives up.
+            phase = .failed("Couldn't open this chapter. " + reason)
         }
     }
 
@@ -1949,13 +2051,6 @@ public final class ReaderModel {
         scheduleSave()
     }
 
-    /// How many empty spine items in a row to step over before giving up.
-    ///
-    /// Gutenberg EPUBs routinely put wrapper items between chapters, and more
-    /// than one can sit together. A bound rather than a loop, so a book that is
-    /// empty from here on cannot spin.
-    private static let emptyChapterSkipLimit = 8
-
     /// Moves to a chapter, stepping over ones with nothing on them.
     ///
     /// Both directions skip. Only forward did before, which meant paging back
@@ -1966,37 +2061,53 @@ public final class ReaderModel {
     /// It used to end the move, and the failure took the whole reader with it,
     /// so a book with one corrupt spine item could not be read past it by
     /// turning pages at all.
+    ///
+    /// The walk is `ChapterWalk`'s, and only the chapter it lands on is
+    /// committed. When the neighbouring chapter was got ready ahead of the turn
+    /// — so that it could slide in — that is where the turn lands, without
+    /// opening anything again: the prefetch walked the same rule from the same
+    /// chapter.
     private func move(toChapter index: Int, landingOnLastPage: Bool) async {
         guard let package else { return }
-        let step = landingOnLastPage ? -1 : 1
-        var target = index
-        // Whether anything loaded: the pages below are counted on `layout`,
-        // which still holds the chapter the reader started from when every
-        // attempt failed — landing on its first page would be a move nobody
-        // made.
-        var landed = false
-        var skipped: [Int] = []
-        for _ in 0 ..< Self.emptyChapterSkipLimit {
-            guard package.spine.indices.contains(target) else { break }
-            if await loadChapter(target) {
-                landed = true
-                if !isCurrentChapterEmpty { break }
-            } else {
-                skipped.append(target)
+        // A prepared neighbour is the next chapter or the one before, which is
+        // all `nextPage` and `previousPage` ever ask for.
+        assert(index == chapterIndex + (landingOnLastPage ? -1 : 1))
+        if let neighbour = usableNeighbour(forward: !landingOnLastPage) {
+            switch neighbour.state {
+            case let .ready(prepared, skipped):
+                commit(prepared.layout, chapter: prepared.index, key: neighbour.key)
+                land(onLastPage: landingOnLastPage, skipped: skipped)
+                return
+            case let .nowhere(skipped):
+                cannotLand(skipped: skipped)
+                return
+            case .pending:
+                // Not there yet. Walked here instead, and the prefetch still in
+                // flight goes stale the moment this commits.
+                break
             }
-            target += step
         }
-        guard landed else {
-            // Nowhere to land. Each failed load put up its own notice, so the
-            // one left on screen named the *last* chapter tried — up to seven
-            // past the one that stopped the turn. Said for that one.
-            if let first = skipped.first {
-                chapterNotice = ChapterNotice(
-                    message: Self.unreadable(title(inSpineItem: first, atOffset: 0)))
-            }
+        let key = neighbourKey
+        var landing: (index: Int, layout: ChapterLayout)?
+        let walk = await ChapterWalk.walk(
+            from: index, step: landingOnLastPage ? -1 : 1, spineCount: package.spine.count,
+        ) { target in
+            guard let layout = prepareOrReport(target) else { return .unreadable }
+            landing = (target, layout)
+            return ChapterWalk.isEmpty(layout.attributedText.string) ? .empty : .content
+        }
+        guard let landing, walk.chapter == landing.index else {
+            cannotLand(skipped: walk.skipped)
             return
         }
-        pageIndex = landingOnLastPage ? max((layout?.pages.count ?? 1) - 1, 0) : 0
+        commit(landing.layout, chapter: landing.index, key: key)
+        land(onLastPage: landingOnLastPage, skipped: walk.skipped)
+    }
+
+    /// The page a turn across a chapter boundary arrives on, and what it says
+    /// about any chapter it had to step over.
+    private func land(onLastPage: Bool, skipped: [Int]) {
+        pageIndex = onLastPage ? max((layout?.pages.count ?? 1) - 1, 0) : 0
         if let first = skipped.first {
             let title = title(inSpineItem: first, atOffset: 0)
             chapterNotice = ChapterNotice(message: title.map {
@@ -2005,13 +2116,325 @@ public final class ReaderModel {
         }
     }
 
-    /// A chapter is empty only if it has neither prose nor an illustration.
-    /// Now that plates render, a full-page image is content worth stopping on.
-    private var isCurrentChapterEmpty: Bool {
-        guard let layout else { return true }
-        let text = layout.attributedText.string
-        if text.contains("\u{FFFC}") { return false }
-        return text.trimmingCharacters(in: .whitespacesAndNewlines).count < 4
+    /// Nowhere to land. Each failed load put up its own notice, so the one
+    /// left on screen named the *last* chapter tried — up to seven past the one
+    /// that stopped the turn. Said for that one.
+    private func cannotLand(skipped: [Int]) {
+        if let first = skipped.first {
+            chapterNotice = ChapterNotice(
+                message: Self.unreadable(title(inSpineItem: first, atOffset: 0)))
+        }
+    }
+
+    // MARK: - The chapters either side
+
+    /// A chapter laid out ahead of a turn: where the turn would land.
+    struct PreparedChapter {
+        let index: Int
+        let layout: ChapterLayout
+    }
+
+    /// What the far side of a chapter boundary holds.
+    enum NeighbourState {
+        /// Being got ready.
+        case pending
+        /// Where a turn across the boundary lands, and the chapters it steps
+        /// over on the way because they would not open.
+        case ready(PreparedChapter, skipped: [Int])
+        /// Nowhere: every chapter the walk tried would not open.
+        case nowhere(skipped: [Int])
+    }
+
+    /// Everything a laid-out chapter depends on. A neighbour prepared under one
+    /// key is of no use under another.
+    struct NeighbourKey: Equatable {
+        let pageSize: CGSize
+        /// Without the highlighters, which colour the read-along block at draw
+        /// time and are never laid out.
+        let style: ReaderStyle
+        let open: Int
+    }
+
+    struct Neighbour {
+        /// The chapter it neighbours. Turned away from that, it is stale.
+        let origin: Int
+        let key: NeighbourKey
+        var state: NeighbourState
+        /// Its marks, resolved as `anchorAnnotations` resolves the chapter on
+        /// screen, so a highlight is there on the page sliding in.
+        var anchoredRanges: [String: NSRange] = [:]
+    }
+
+    /// The chapter a commit replaced, and what it was laid out under.
+    private struct LeftChapter {
+        let layout: ChapterLayout
+        let chapter: Int
+        let key: NeighbourKey?
+        let ranges: [String: NSRange]
+    }
+
+    var neighbourKey: NeighbourKey {
+        var style = style
+        style.highlighters = [:]
+        return NeighbourKey(pageSize: pageSize, style: style, open: openGeneration)
+    }
+
+    /// The neighbour on one side, when it still belongs to the chapter on
+    /// screen and to the way it is set.
+    private func usableNeighbour(forward: Bool) -> Neighbour? {
+        guard let neighbour = neighbours[forward], neighbour.origin == chapterIndex,
+              neighbour.key == neighbourKey
+        else { return nil }
+        return neighbour
+    }
+
+    /// Gets the chapter on the far side of a boundary ready, when the reader is
+    /// within a page of one.
+    ///
+    /// So that turning past the end of a chapter slides the next chapter's
+    /// first page in like any other page, rather than stopping to read and lay
+    /// it out — and so that a finger dragging across the boundary has a page to
+    /// drag in. It walks `ChapterWalk`'s rule exactly as `move` will, so it
+    /// lands where the turn would, and commits nothing: not the chapter, not
+    /// the page, not a notice, not a save. `move` takes what it prepared.
+    ///
+    /// Parsed away from the main actor, as search parses; laid out on it,
+    /// which TextKit requires — normally once the page turner has been idle a
+    /// moment, and at once when a finger reaches the edge before that.
+    ///
+    /// Only while the reader is on screen and pages slide or cover; and a
+    /// neighbour the reader has moved away from is let go, so at most the
+    /// chapter on screen and one other are held for long.
+    func prefetchNeighbours() {
+        guard keepsNeighbours, isReaderVisible, phase == .ready, let package, let layout,
+              pageSize.width > 0, pageSize.height > 0
+        else { return }
+        let key = neighbourKey
+        let origin = chapterIndex
+        for forward in [true, false] {
+            let nearEdge = forward ? pageIndex >= layout.pages.count - 2 : pageIndex <= 1
+            guard nearEdge else {
+                neighbourTasks[forward]?.cancel()
+                neighbourTasks[forward] = nil
+                neighbours[forward] = nil
+                continue
+            }
+            guard package.spine.indices.contains(origin + (forward ? 1 : -1)) else { continue }
+            if let existing = neighbours[forward], existing.origin == origin, existing.key == key { continue }
+            neighbourTasks[forward]?.cancel()
+            neighbours[forward] = Neighbour(origin: origin, key: key, state: .pending)
+            neighbourTasks[forward] = Task { [weak self] in
+                await self?.prepareNeighbour(forward: forward, origin: origin, key: key)
+            }
+        }
+    }
+
+    /// Waits for the neighbour on one side to finish being prepared, if it is
+    /// being prepared. A tap at a chapter's last page that arrives while the
+    /// next chapter is still being read waits for it rather than reading it a
+    /// second time.
+    func neighbourSettled(forward: Bool) async {
+        await neighbourTasks[forward]?.value
+    }
+
+    /// Forgets every neighbour, and stops any being prepared. A neighbour that
+    /// no longer matches is never used anyway — `usableNeighbour` checks — so
+    /// this is for the memory, and for the work.
+    func dropNeighbours() {
+        for task in neighbourTasks.values { task.cancel() }
+        neighbourTasks = [:]
+        if !neighbours.isEmpty { neighbours = [:] }
+    }
+
+    private func neighbourIsWanted(_ forward: Bool, origin: Int, key: NeighbourKey) -> Bool {
+        !Task.isCancelled && chapterIndex == origin && neighbourKey == key
+            && neighbours[forward]?.origin == origin && neighbours[forward]?.key == key
+    }
+
+    private func prepareNeighbour(forward: Bool, origin: Int, key: NeighbourKey) async {
+        guard let package else { return }
+        let archive = package.archive
+        let spine = package.spine
+        let sheets = styleSheets
+        let size = pageSize
+        let style = style
+        var landing: PreparedChapter?
+        let walk = await ChapterWalk.walk(
+            from: origin + (forward ? 1 : -1), step: forward ? 1 : -1, spineCount: spine.count,
+        ) { index in
+            let parsed = await Self.parseChapter(
+                spine[index], in: archive, style: style, pageSize: size, styleSheets: sheets)
+            if let seam = whilePreparingNeighbour {
+                whilePreparingNeighbour = nil
+                await seam()
+            }
+            guard neighbourIsWanted(forward, origin: origin, key: key) else { return .abandoned }
+            switch parsed {
+            case let .failure(error):
+                IssaLog.failure("prepare chapter", error,
+                                ["book": book.title, "chapter": String(index)])
+                return .unreadable
+            case let .success(result):
+                let layout = ChapterLayout(text: result.text, fragmentRanges: result.fragmentRanges)
+                layout.layout(pageSize: size)
+                landing = PreparedChapter(index: index, layout: layout)
+                return ChapterWalk.isEmpty(layout.attributedText.string) ? .empty : .content
+            }
+        }
+        guard !walk.abandoned, neighbourIsWanted(forward, origin: origin, key: key) else { return }
+        var neighbour = Neighbour(origin: origin, key: key, state: .nowhere(skipped: walk.skipped))
+        if let landing, walk.chapter == landing.index {
+            neighbour.state = .ready(landing, skipped: walk.skipped)
+            neighbour.anchoredRanges = anchoredRanges(in: landing.layout, href: spine[landing.index].href)
+        }
+        neighbours[forward] = neighbour
+        neighbourTasks[forward] = nil
+    }
+
+    /// One chapter's text, read and parsed off the main actor — the same parse
+    /// `prepareChapter` does, with the same limits on its plates.
+    private nonisolated static func parseChapter(
+        _ item: EPUBPackage.SpineItem,
+        in archive: EPUBArchive,
+        style: ReaderStyle,
+        pageSize: CGSize,
+        styleSheets: [String: EPUBStyleSheet],
+    ) async -> Result<HTMLContentParser.Result, Error> {
+        Result {
+            let data = try archive.read(item.href)
+            let images = ArchiveImageSource(archive: archive)
+            return try HTMLContentParser(
+                style: style,
+                maxImageWidth: max(pageSize.width, 1),
+                maxImageHeight: max(pageSize.height, 1),
+                columnWidth: max(pageSize.width, 1),
+                loadImage: { images.image(for: $0) },
+                loadStyleSheet: { styleSheets[$0] },
+            ).parse(xhtml: data, baseHref: item.href)
+        }
+    }
+
+    /// Keeps what is still worth keeping after a commit.
+    ///
+    /// A neighbour of the chapter left behind is of no use. But the chapter
+    /// left behind is itself the neighbour of the one arrived at, when the two
+    /// are next to each other and it has something on it — which is exactly
+    /// where a walk back from the new chapter would land — so turning straight
+    /// back slides it in at once rather than reading it again.
+    private func keepNeighbours(leaving left: LeftChapter?) {
+        guard keepsNeighbours, isReaderVisible else {
+            dropNeighbours()
+            return
+        }
+        var kept: [Bool: Neighbour] = [:]
+        if let left, let key = left.key, key == neighbourKey, abs(left.chapter - chapterIndex) == 1,
+           !ChapterWalk.isEmpty(left.layout.attributedText.string)
+        {
+            let forward = left.chapter > chapterIndex
+            kept[forward] = Neighbour(
+                origin: chapterIndex, key: key,
+                state: .ready(PreparedChapter(index: left.chapter, layout: left.layout), skipped: []),
+                anchoredRanges: left.ranges)
+        }
+        for (forward, task) in neighbourTasks where kept[forward] != nil || neighbours[forward]?.origin != chapterIndex {
+            task.cancel()
+            neighbourTasks[forward] = nil
+        }
+        for (forward, neighbour) in neighbours where neighbour.origin == chapterIndex && kept[forward] == nil {
+            kept[forward] = neighbour
+        }
+        neighbours = kept
+    }
+
+    /// Re-resolves the neighbours' marks after the book's marks changed.
+    private func reanchorNeighbours() {
+        guard let package else { return }
+        for (forward, neighbour) in neighbours {
+            guard case let .ready(prepared, _) = neighbour.state,
+                  package.spine.indices.contains(prepared.index) else { continue }
+            neighbours[forward]?.anchoredRanges = anchoredRanges(
+                in: prepared.layout, href: package.spine[prepared.index].href)
+        }
+    }
+
+    // MARK: - Pages, as the page turner draws them
+
+    /// The page on screen, as plain values.
+    func currentSnapshot() -> PageSnapshot? {
+        guard let layout, let page = currentPage else { return nil }
+        return snapshot(layout, page)
+    }
+
+    /// What a turn one page that way would show.
+    ///
+    /// Inside the chapter it is simply the next page of the same layout. Across
+    /// a boundary it is the prepared neighbour's first page — or its last,
+    /// turning back — or `.pending` while that is still being got ready, or
+    /// `.none` where no turn can go.
+    func neighbourPreview(forward: Bool) -> NeighbourPreview {
+        guard let layout, let package else { return .none }
+        let next = pageIndex + (forward ? 1 : -1)
+        if layout.pages.indices.contains(next) {
+            return .page(snapshot(layout, layout.pages[next]))
+        }
+        guard package.spine.indices.contains(chapterIndex + (forward ? 1 : -1)) else { return .none }
+        guard let neighbour = usableNeighbour(forward: forward) else { return .pending }
+        switch neighbour.state {
+        case .pending:
+            return .pending
+        case .nowhere:
+            // Not the end of the book: chapters that will not open. The page
+            // is let go of onto a blank one, and the turn then fails as it
+            // always did — with the notice that names the chapter — and the
+            // page settles back.
+            return .pending
+        case let .ready(prepared, _):
+            let pages = prepared.layout.pages
+            guard let page = forward ? pages.first : pages.last,
+                  package.spine.indices.contains(prepared.index)
+            else { return .pending }
+            let href = package.spine[prepared.index].href
+            return .page(snapshot(
+                prepared.layout, page, activeFragment: activeFragment(inDocument: href),
+                annotations: highlightBlocks(on: page, in: prepared.layout, href: href,
+                                             ranges: neighbour.anchoredRanges),
+                selection: nil))
+        }
+    }
+
+    /// Whether a turn that way would have to wait for a chapter still being
+    /// laid out — asked on every tap at a chapter's edge, so it builds no page.
+    func neighbourIsPending(forward: Bool) -> Bool {
+        guard let layout, let package else { return false }
+        guard !layout.pages.indices.contains(pageIndex + (forward ? 1 : -1)),
+              package.spine.indices.contains(chapterIndex + (forward ? 1 : -1))
+        else { return false }
+        guard let neighbour = usableNeighbour(forward: forward) else { return true }
+        if case .pending = neighbour.state { return true }
+        return false
+    }
+
+    /// A page of the chapter on screen, as `PageTrackView` draws it — the same
+    /// narrated sentence and marks the page has always been drawn with.
+    private func snapshot(_ layout: ChapterLayout, _ page: RenderedPage) -> PageSnapshot {
+        snapshot(layout, page, activeFragment: activeFragmentID, annotations: highlightBlocks(on: page),
+                 selection: selection)
+    }
+
+    private func snapshot(
+        _ layout: ChapterLayout, _ page: RenderedPage, activeFragment: String?,
+        annotations: [PageSurface.AnnotationBlock], selection: NSRange?,
+    ) -> PageSnapshot {
+        PageSnapshot(
+            layout: layout,
+            page: page,
+            activeFragment: activeFragment,
+            annotations: annotations,
+            selection: selection,
+            theme: style.theme,
+            highlight: style.highlightColor,
+            highlightStyle: HighlightBlock.Style(fontSize: style.fontSize),
+        )
     }
 
     public func go(toChapter index: Int, fragment: String? = nil) async {
@@ -2200,7 +2623,10 @@ public final class ReaderModel {
     private var selectionChapter: Int?
     /// Annotations for this book, drawn under the text and listed on demand.
     public private(set) var annotations: [Annotation] = [] {
-        didSet { anchorAnnotations() }
+        didSet {
+            anchorAnnotations()
+            reanchorNeighbours()
+        }
     }
 
     /// Where each of this chapter's annotations actually is, resolved once.
@@ -2215,7 +2641,7 @@ public final class ReaderModel {
     /// bookmark showed on the page after its own.
     ///
     /// `@ObservationIgnored` because `highlightBlocks(on:)` is read from inside
-    /// a view's `body` — `PageCanvas` reads it directly — and a plain stored
+    /// a view's `body` — `PageTrackView` reads it directly — and a plain stored
     /// property on an `@Observable` class publishes its mutations, which from
     /// inside view evaluation is how a redraw loop starts. Nothing observes
     /// this; it is derived from two things that are observed.
@@ -2359,11 +2785,15 @@ public final class ReaderModel {
     /// showed on the page after its own, and the button on its own page added
     /// a second one.
     private func anchorAnnotations() {
-        guard let layout, let package, package.spine.indices.contains(chapterIndex) else {
+        guard let layout, let href = currentSpineHref else {
             anchoredRanges = [:]
             return
         }
-        let href = package.spine[chapterIndex].href
+        anchoredRanges = anchoredRanges(in: layout, href: href)
+    }
+
+    /// Where each of one chapter's marks is in that chapter's text.
+    private func anchoredRanges(in layout: ChapterLayout, href: String) -> [String: NSRange] {
         let text = layout.attributedText.string
         var resolved: [String: NSRange] = [:]
         for annotation in annotations where annotation.locator.matchesHref(href) {
@@ -2373,7 +2803,7 @@ public final class ReaderModel {
                 resolved[annotation.id] = range
             }
         }
-        anchoredRanges = resolved
+        return resolved
     }
 
     /// Opens the page an annotation is on.
@@ -2492,8 +2922,13 @@ public final class ReaderModel {
     /// one composited the tint over itself wherever two lines met — a darker
     /// band at every seam of every wrapped highlight.
     func highlightBlocks(on page: RenderedPage) -> [PageSurface.AnnotationBlock] {
-        guard let layout, let package, package.spine.indices.contains(chapterIndex) else { return [] }
-        let href = package.spine[chapterIndex].href
+        guard let layout, let href = currentSpineHref else { return [] }
+        return highlightBlocks(on: page, in: layout, href: href, ranges: anchoredRanges)
+    }
+
+    private func highlightBlocks(
+        on page: RenderedPage, in layout: ChapterLayout, href: String, ranges anchoredRanges: [String: NSRange],
+    ) -> [PageSurface.AnnotationBlock] {
         var result: [PageSurface.AnnotationBlock] = []
         for annotation in annotations where annotation.kind != .bookmark {
             guard annotation.locator.matchesHref(href) else { continue }

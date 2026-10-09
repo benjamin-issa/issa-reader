@@ -4,90 +4,49 @@ import SwiftUI
 
 /// One page of the book on a television, and the remote that turns it.
 ///
-/// The page is drawn by `PageSurface` — the same view the phone and the Mac
-/// use, so the read-along block, the stored highlights and the glyphs are
-/// identical here — and everything this view adds is about the remote: which
-/// direction turns a page, where focus goes, and how one page becomes the next.
+/// The page is drawn by `PageTrackView` — the same view the phone and the Mac
+/// use, so the read-along block, the stored highlights, the glyphs and the way
+/// a page slides are identical here — and everything this view adds is about
+/// the remote: which direction turns a page and where focus goes.
 struct TVPageView: View {
     let model: ReaderModel
     let size: CGSize
     @FocusState.Binding var focus: TVFocus?
 
-    /// Which way the last turn went, so the outgoing page leaves the way a
-    /// paper page would.
-    @State private var forward = true
-    /// One turn at a time.
-    ///
-    /// A held-down remote repeats, and `turnPage` is asynchronous — it may load
-    /// a chapter and seek audio. Without this, three presses in a second start
-    /// three overlapping turns, each one having read `pageIndex` before the
-    /// others committed, and the book arrives somewhere none of them meant.
-    @State private var turning = false
+    @Environment(PlaybackSettings.self) private var settings
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    /// Which page is on screen, as far as the animation is concerned.
+    /// Slides, covers or simply changes the page, as the reader chose.
     ///
-    /// Chapter *and* page: page 0 of chapter 2 is not page 0 of chapter 1, and
-    /// keying on the page number alone would cross a chapter boundary with no
-    /// transition at all — the one moment a reader most needs to see that
-    /// something moved.
-    private struct PageKey: Hashable {
-        let chapter: Int
-        let page: Int
+    /// It used to be a 48-point slide and fade keyed on the page itself, so
+    /// every change of page animated — narration moving on included. Now only
+    /// a press of the remote does, and the narration's own turns are instant,
+    /// as they are on the phone and in Storyteller's readers. And a held-down
+    /// remote, which repeats, turns as many pages as it repeats: a press
+    /// mid-slide finishes the slide and makes its own turn, where it used to be
+    /// dropped.
+    @State private var turner: PageTurner
+
+    init(model: ReaderModel, size: CGSize, focus: FocusState<TVFocus?>.Binding) {
+        self.model = model
+        self.size = size
+        _focus = focus
+        _turner = State(initialValue: PageTurner(model: model))
     }
 
-    /// How far a page slides as it comes and goes. Enough to read as a turn,
-    /// short enough that the text is never legible in the wrong place.
-    private static let slide: CGFloat = 48
-    private static let turnDuration = 0.3
-
     var body: some View {
-        // Every model read happens here, on the main actor, and the values are
-        // handed to `PageSurface` as plain data. That is what lets the outgoing
-        // page keep drawing the *old* sentence while the model has already
-        // moved on to the next — and it is the rule the tvOS `ViewThatFits`
-        // crash was about: a view SwiftUI may size or draw off the main actor
-        // must not read a `@MainActor` model from inside a closure.
-        let layout = model.layout
-        let page = model.currentPage
-        let key = PageKey(chapter: model.chapterIndex, page: model.pageIndex)
-        let activeFragment = model.activeFragmentID
-        let annotations = page.map { model.highlightBlocks(on: $0) } ?? []
-        let selection = model.selection
-        let theme = model.style.theme
-        // The reader's own highlighter for this page colour, so the television
-        // paints the block the same colour the phone and the Mac do.
-        let highlight = model.style.highlightColor
-        let highlightStyle = HighlightBlock.Style(fontSize: model.style.fontSize)
-
-        ZStack {
-            if let layout, let page {
-                PageSurface(
-                    layout: layout,
-                    page: page,
-                    activeFragment: activeFragment,
-                    annotations: annotations,
-                    selection: selection,
-                    theme: theme,
-                    highlight: highlight,
-                    highlightStyle: highlightStyle,
-                    size: size,
-                )
-                .id(key)
-                .transition(
-                    .asymmetric(
-                        insertion: .opacity.combined(with: .offset(x: forward ? Self.slide : -Self.slide)),
-                        removal: .opacity.combined(with: .offset(x: forward ? -Self.slide : Self.slide)),
-                    ),
-                )
-            } else {
-                // The chapter is still laying out. An empty band the exact size
-                // of the page means the header, the timeline and the footer do
-                // not shuffle when the glyphs arrive.
-                Color.clear
-            }
-        }
+        PageTrackView(
+            model: model,
+            turner: turner,
+            pageSize: size,
+            insets: EdgeInsets(),
+        )
         .frame(width: size.width, height: size.height)
-        .animation(.easeInOut(duration: Self.turnDuration), value: key)
+        .onChange(of: size.width, initial: true) { _, width in turner.width = width }
+        .onChange(of: model.pageKey) { _, key in turner.modelKeyChanged(key) }
+        .onChange(of: PageTurn.effectiveStyle(settings.pageTurn, reduceMotion: reduceMotion), initial: true) {
+            _, style in turner.style = style
+        }
         .focusable()
         .focused($focus, equals: .page)
         .onMoveCommand { direction in
@@ -108,17 +67,16 @@ struct TVPageView: View {
                 }
             }
         }
-        .modifier(PageAccessibility(model: model))
+        // Outermost, around the focusable page, where it has always been.
+        .modifier(PageAccessibility(model: model) { forward in turn(forward: forward, announcing: true) })
     }
 
-    /// Turns the page, once.
-    private func turn(forward direction: Bool) {
-        guard !turning else { return }
-        turning = true
-        forward = direction
-        Task {
-            await model.turnPage(forward: direction)
-            turning = false
+    /// Turns the page, taking the voice with it: on the television the page is
+    /// the scrubber, so a turn that left the voice behind would be snapped
+    /// straight back at the next sentence.
+    private func turn(forward: Bool, announcing: Bool = false) {
+        turner.requestTurn(forward: forward, carriesNarration: true) {
+            if announcing { PageAccessibility.announcePage(model) }
         }
     }
 }
