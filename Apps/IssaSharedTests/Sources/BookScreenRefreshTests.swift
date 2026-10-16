@@ -72,4 +72,43 @@ struct BookScreenRefreshTests {
             $0.method == "POST" && $0.path == Endpoint.positions(Self.uuid)
         })
     }
+
+    /// The book screen refreshes on every appearance, and nearly every one
+    /// learns nothing. It used to rebuild the facets, rails and groupings of
+    /// the whole catalogue regardless.
+    @Test("a refresh that changes nothing does not rebuild the catalogue")
+    func anUnchangedBookDoesNotRebuild() async throws {
+        let server = ScriptedServer.make("book-screen-quiet")
+        defer { ScriptedServer.forget(server) }
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "book-screen-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try LibraryStore(serverKey: server.absoluteString, directory: directory)
+
+        let app = AppModel(keychain: LifecycleTokens(), notificationCentre: NotificationCenter())
+        app.useStore(store)
+        app.session = ScriptedServer.session(on: server, storing: "token-A")
+        let book = SharedFixtures.book(
+            "Dracula", uuid: Self.uuid, progress: 0.5, positionTimestamp: 1_000)
+        app.books = [book]
+        app.rebuildDerived()
+        ScriptedServer.answer(Endpoint.book(Self.uuid), on: server, json: ScriptedServer.book(
+            Self.uuid, title: "Dracula", progress: 0.5, timestamp: 1_000))
+
+        // The first answer may well change the row: the fixture is not the
+        // server's own spelling. What it has settled on, the second must keep.
+        await app.refresh(book: book)
+        let rebuilds = app.derivedRebuilds
+        await app.refresh(book: book)
+        await app.refresh(book: book)
+
+        #expect(app.derivedRebuilds == rebuilds, "an answer that agrees with the row is not news")
+
+        // And one that disagrees still is.
+        ScriptedServer.answer(Endpoint.book(Self.uuid), on: server, json: ScriptedServer.book(
+            Self.uuid, title: "Dracula", progress: 0.8, timestamp: 2_000))
+        await app.refresh(book: book)
+        #expect(app.derivedRebuilds > rebuilds)
+        #expect(app.bookByUUID[Self.uuid]?.progress.map { abs($0 - 0.8) < 0.0001 } == true)
+    }
 }

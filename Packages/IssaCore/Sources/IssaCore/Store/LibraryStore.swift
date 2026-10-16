@@ -347,12 +347,19 @@ public actor LibraryStore {
                     """, arguments: [pattern])
                 if !rows.isEmpty { return rows.compactMap { try? $0.decoded() } }
             }
-            let like = "%\(trimmed)%"
+            // What was typed is text, not a pattern: `%`, `_` and the escape
+            // character itself are escaped, so a search for `100%` or `_` finds
+            // those characters rather than matching everything.
+            let escaped = trimmed
+                .replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "%", with: "\\%")
+                .replacingOccurrences(of: "_", with: "\\_")
+            let like = "%\(escaped)%"
             // The same field set the FTS index carries, so the two paths cannot
             // disagree about what is searchable. (They still differ in *how*:
             // FTS matches token prefixes, LIKE matches any substring.)
             let columns = ["title", "byline", "subtitle", "narrators", "series", "tags"]
-            let clause = columns.map { "\($0) LIKE ?" }.joined(separator: " OR ")
+            let clause = columns.map { "\($0) LIKE ? ESCAPE '\\'" }.joined(separator: " OR ")
             return try BookRow
                 .filter(sql: clause, arguments: StatementArguments(columns.map { _ in like }))
                 .order(Column("title").asc)

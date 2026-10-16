@@ -493,6 +493,42 @@ struct CancelBeforeStartTests {
         await manager.shutDown()
     }
 
+    /// `stop()` is what a sign-out calls. It empties `cancelledBeforeStart`
+    /// and bumps the fence, so a `start(_:)` that resumes afterwards used to
+    /// find no marker, stamp its task with the *new* generation, and run a
+    /// transfer for an account that had gone.
+    @Test("a stop that lands during the token fetch is not undone by the start that resumes")
+    func stopDuringTokenFetchStopsTheTask() async {
+        let tokens = GatedTokens()
+        let manager = DownloadManager(
+            baseURL: unreachableServer,
+            tokens: tokens,
+            identifier: "test.\(UUID().uuidString)",
+            fenceStore: nil,
+            destinationFor: { _ in URL(fileURLWithPath: "/dev/null") },
+        )
+        let job = DownloadManager.Job(bookUUID: "b", format: .ebook)
+
+        let starting = Task { await manager.start(job) }
+        await tokens.waitUntilEntered()
+        #expect(manager.state(for: job) == .queued)
+
+        manager.stop()
+
+        await tokens.release()
+        await starting.value
+
+        #expect(!manager.hasTask(for: job), "the departed account's download must not start")
+        #expect(manager.state(for: job) == nil, "and must not leave a row for the next account")
+
+        // The manager is still usable afterwards: a later start is a new
+        // call, and takes the new fence.
+        manager.reconfigure(baseURL: unreachableServer, tokens: StubTokens())
+        await manager.start(job)
+        #expect(manager.hasTask(for: job))
+        await manager.shutDown()
+    }
+
     /// A session invalidated during the same window is worse than a cancel:
     /// `downloadTask(with:)` on an invalid session does not fail, it raises an
     /// `NSGenericException`, and nothing in Swift can catch that. Sign-out

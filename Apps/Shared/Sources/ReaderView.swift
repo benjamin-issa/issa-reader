@@ -1009,7 +1009,7 @@ public struct ReaderView: View {
         // jump — shows it where it now is, at once.
         .onChange(of: model.pageKey) { _, key in turner.modelKeyChanged(key) }
         .onChange(of: PageTurn.effectiveStyle(settings.pageTurn, reduceMotion: reduceMotion), initial: true) {
-            _, style in turner.style = style
+            _, style in turner.adopt(style: style)
         }
         // Also on chapter change: a jump that lands on the same page index (both
         // page 0, say) never fires the pageIndex handler, so a stale selection

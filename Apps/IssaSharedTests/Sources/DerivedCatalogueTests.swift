@@ -24,6 +24,21 @@ struct DerivedCatalogueTests {
         return app
     }
 
+    /// `refreshDownloadedSet` runs whenever the app comes forward, a car
+    /// connects or a download ends, and nearly always finds what it found
+    /// before. Each used to regroup and re-sort the whole catalogue anyway.
+    @Test("a download set that did not change does not rebuild the catalogue")
+    func anUnchangedDownloadSetDoesNotRebuild() {
+        let app = Self.model([SharedFixtures.book("Dracula", uuid: "d")])
+        app.refreshDownloadedSet()
+        let rebuilds = app.derivedRebuilds
+
+        app.refreshDownloadedSet()
+        app.refreshDownloadedSet()
+
+        #expect(app.derivedRebuilds == rebuilds, "the same answer from the disk is not news")
+    }
+
     @Test("the index holds every book the catalogue does")
     func indexesTheCatalogue() {
         let app = Self.model([

@@ -998,7 +998,7 @@ public final class ReaderModel {
         timeline: SMILTimeline,
     ) -> Landing {
         guard let stored else { return Landing(index: nil, restoring: nil, how: .none) }
-        if let index = package.spine.firstIndex(where: { stored.matchesHref($0.href) }) {
+        if let index = stored.bestMatch(in: package.spine.map(\.href)) {
             return Landing(index: index, restoring: stored, how: .storedHref)
         }
         // An audiobook wrote this position, so its `totalProgression` is a
@@ -2817,8 +2817,7 @@ public final class ReaderModel {
         // the reader landed on an arbitrary page of an unrelated chapter, and
         // the two lines below then marked it `.chosen` and saved it: the one
         // origin PositionGuard may not refuse, over their real place.
-        guard let index = package.spine.firstIndex(
-            where: { annotation.locator.matchesHref($0.href) })
+        guard let index = annotation.locator.bestMatch(in: package.spine.map(\.href))
         else {
             IssaLog.warning("annotation names no chapter in this book", [
                 "book": book.uuid, "href": annotation.locator.href,

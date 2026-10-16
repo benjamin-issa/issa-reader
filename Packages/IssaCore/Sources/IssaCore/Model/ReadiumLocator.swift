@@ -145,15 +145,48 @@ public extension ReadiumLocator {
     }
 
     static func normalizeHref(_ href: String) -> String {
+        // Compare on the last two components: enough to tell `text/ch01.xhtml`
+        // from `images/ch01.xhtml`, tolerant of differing package roots.
+        pathComponents(href).suffix(2).joined(separator: "/")
+    }
+
+    /// The path of `href` as lowercase components, without the addressing
+    /// within the resource, `.` segments or empty ones.
+    private static func pathComponents(_ href: String) -> [String] {
         // Query and fragment are addressing within the resource, not the
         // resource itself.
         var value = href
         if let hash = value.firstIndex(of: "#") { value = String(value[value.startIndex ..< hash]) }
         if let query = value.firstIndex(of: "?") { value = String(value[value.startIndex ..< query]) }
         value = value.removingPercentEncoding ?? value
-        // Compare on the last two components: enough to tell `text/ch01.xhtml`
-        // from `images/ch01.xhtml`, tolerant of differing package roots.
-        let parts = value.split(separator: "/").filter { $0 != "." && !$0.isEmpty }
-        return parts.suffix(2).joined(separator: "/").lowercased()
+        return value.split(separator: "/").filter { $0 != "." && !$0.isEmpty }.map { $0.lowercased() }
+    }
+
+    /// Which of `hrefs` this locator names, best first.
+    ///
+    /// `matchesHref` compares the last two components, which cannot tell
+    /// `vol1/text/ch01.xhtml` from `vol2/text/ch01.xhtml` in an omnibus: both
+    /// are `text/ch01.xhtml`. Taking the first match put a position in volume 2
+    /// into volume 1, and the next page turn saved that over the real one. So
+    /// every href that matches is ranked by how many trailing components it
+    /// shares with the locator's — the whole path, where the locator has it —
+    /// and equal ranks keep the book's order, which is what the first-match
+    /// lookups did before.
+    func rankedMatches(in hrefs: [String]) -> [Int] {
+        let wanted = Self.pathComponents(href)
+        func shared(_ candidate: String) -> Int {
+            zip(wanted.reversed(), Self.pathComponents(candidate).reversed())
+                .prefix { $0 == $1 }.count
+        }
+        return hrefs.indices
+            .filter { matchesHref(hrefs[$0]) }
+            .map { (index: $0, rank: shared(hrefs[$0])) }
+            .sorted { $0.rank != $1.rank ? $0.rank > $1.rank : $0.index < $1.index }
+            .map(\.index)
+    }
+
+    /// The index in `hrefs` this locator names; see `rankedMatches(in:)`.
+    func bestMatch(in hrefs: [String]) -> Int? {
+        rankedMatches(in: hrefs).first
     }
 }

@@ -357,6 +357,12 @@ public final class DownloadManager: NSObject {
         states[job] = .queued
         cancelledBeforeStart.remove(job)
 
+        // The fence as this call began, taken before the await below: a
+        // `stop()` or `cancel(_:)` that lands while the token is fetched moves
+        // it, and stamping afterwards would hand the transfer the *new*
+        // numbers and admit it as live for an account that has gone.
+        let stamp = currentStamp(for: job)
+
         var request = URLRequest(url: baseURL.appending(path: Endpoint.files(job.bookUUID)))
         request.url?.append(queryItems: [URLQueryItem(name: "format", value: job.format.rawValue)])
         if let token = await tokens.currentToken() {
@@ -369,6 +375,10 @@ public final class DownloadManager: NSObject {
         // Honour it here, before a task is created and resumed for a transfer
         // the caller already asked to stop.
         if cancelledBeforeStart.remove(job) != nil { return }
+
+        // A `stop()` clears `cancelledBeforeStart` along with everything else,
+        // so it leaves no marker to find above. The fence is what it moved.
+        guard currentStamp(for: job) == stamp else { return }
 
         // The session may have gone while the token was fetched — a sign-out,
         // or the daemon. Creating a task on an invalid session is not an
@@ -384,7 +394,6 @@ public final class DownloadManager: NSObject {
         } else {
             session.downloadTask(with: request)
         }
-        let stamp = currentStamp(for: job)
         task.taskDescription = Self.encode(job, generation: stamp.generation, epoch: stamp.epoch)
         tasks[job] = task
         task.resume()

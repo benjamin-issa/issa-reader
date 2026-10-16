@@ -114,6 +114,11 @@ struct DownloadRemovalTests {
         let book = SharedFixtures.book(
             "Dracula", uuid: uuid, status: "Reading", progress: 0.42, positionTimestamp: 99)
         app.books = [book]
+        // The derived indexes are the model's to rebuild when it changes
+        // `books`; this test sets them directly. A removal used to rebuild them
+        // by accident, on the download set it assigned whether or not it had
+        // changed.
+        app.rebuildDerived()
         app.ratings[uuid] = 4
 
         // A real annotation in a real store, because "device-local and this is

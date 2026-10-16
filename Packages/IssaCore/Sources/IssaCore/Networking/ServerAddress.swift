@@ -96,6 +96,11 @@ public enum ServerAddress {
     /// bare host `normalize(typed)` *is* the fallback URL, so nothing
     /// downstream re-derives a different one. The downgrade is logged, so an
     /// unencrypted connection at least shows up in a diagnostics export.
+    ///
+    /// Raw text is not raw all the way: `normalize` drops userinfo, a query and
+    /// a fragment, and so does this. A reader who typed `ben:hunter2@host` must
+    /// not have the password land in `issa.lastServer` and on the sign-in
+    /// screen because the host happened to need the fallback.
     public static func addressToStore(for input: String, connectedTo url: URL) -> String {
         let typed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard isCleartextFallback(url, forTyped: typed) else { return url.absoluteString }
@@ -103,6 +108,20 @@ public enum ServerAddress {
             "connected over cleartext HTTP after HTTPS failed",
             ["server": url.absoluteString],
         )
-        return typed
+        return withoutUserinfo(typed)
+    }
+
+    /// `typed` as it was, less what `normalize` strips from an address: the
+    /// scheme-less text, so the next connect still leads with HTTPS.
+    private static func withoutUserinfo(_ typed: String) -> String {
+        guard typed.contains(where: { "@?#".contains($0) }) else { return typed }
+        let scheme = "http://"
+        guard var components = URLComponents(string: scheme + typed) else { return "" }
+        components.user = nil
+        components.password = nil
+        components.query = nil
+        components.fragment = nil
+        guard let text = components.string, text.hasPrefix(scheme) else { return "" }
+        return String(text.dropFirst(scheme.count))
     }
 }

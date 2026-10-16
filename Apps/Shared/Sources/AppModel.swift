@@ -57,7 +57,17 @@ public final class AppModel {
     ///
     /// Only when the pending removal is the book's *last* edition: it is keyed
     /// by book, and a book that has lost one of two has not left the device.
-    public private(set) var downloadedUUIDs: Set<String> = [] { didSet { rebuildDerived() } }
+    ///
+    /// Assigned the disk's answer every time the app comes forward, a car
+    /// connects or a download ends, and nearly always to the set it already
+    /// was; only a change is worth the rebuild, which regroups and re-sorts the
+    /// whole catalogue on the main actor.
+    public private(set) var downloadedUUIDs: Set<String> = [] {
+        didSet {
+            guard downloadedUUIDs != oldValue else { return }
+            rebuildDerived()
+        }
+    }
     /// What the last directory read actually found, before the undo window is
     /// applied. The disk's own answer, kept so the window can be taken back
     /// without another read.
@@ -1553,8 +1563,13 @@ public final class AppModel {
     /// the whole point of re-resolving is that a position change must show.
     public private(set) var bookByUUID: [String: Book] = [:]
 
+    /// How many times everything derived from the catalogue was rebuilt, for
+    /// the tests that pin when it is not.
+    @ObservationIgnored private(set) var derivedRebuilds = 0
+
     /// Recomputes everything derived from the catalogue.
     func rebuildDerived() {
+        derivedRebuilds += 1
         facets = LibraryFacets(books: books, downloadedUUIDs: downloadedUUIDs)
         rails = LibraryRails(books: books)
         let derivation = LibraryDerivation(books: books)
@@ -5010,7 +5025,8 @@ public final class AppModel {
         // catalogue wrote this book's server data into whichever book had taken
         // its place, and then persisted that.
         guard let index = books.firstIndex(where: { $0.uuid == book.uuid }) else { return }
-        books[index] = books[index].reconciled(
+        let reconciledFrom = books[index]
+        books[index] = reconciledFrom.reconciled(
             with: fresh, keepingStatus: keepsLocal(.status, book.uuid, given: fence))
         // And the guards re-seeded from the answer, as the library refresh
         // re-seeds them. A newer, lower position from another device is taken
@@ -5021,6 +5037,10 @@ public final class AppModel {
         // runs on every appearance, so it is the one that sees the restart
         // first; the library refresh may not run for days.
         reseedGuards(against: [books[index]])
-        rebuildDerived()
+        // Most appearances learn nothing: the server agrees with the row. What
+        // is derived from an unchanged book is unchanged, so only a changed
+        // one pays for the whole rebuild (a status, a tag, a rating or a
+        // position can each move a shelf, a rail or a grouping).
+        if books[index] != reconciledFrom { rebuildDerived() }
     }
 }

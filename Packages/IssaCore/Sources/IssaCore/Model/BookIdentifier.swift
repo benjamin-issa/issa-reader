@@ -28,8 +28,12 @@ public extension String {
         guard groups.count == 5 else { return false }
         let widths = [8, 4, 4, 4, 12]
         for (group, width) in zip(groups, widths) {
-            guard group.count == width else { return false }
-            guard group.allSatisfy({ $0.isHexDigit && ($0.isNumber || $0.isLowercase || $0.isUppercase) })
+            // ASCII only, by byte: `Character.isHexDigit` also admits the
+            // fullwidth forms, and a "digit" of any script would pass
+            // `isNumber`. Each of those names a file with non-ASCII characters
+            // in it, and a second spelling of the identifier.
+            guard group.utf8.count == width, group.unicodeScalars.count == width else { return false }
+            guard group.utf8.allSatisfy({ ($0 >= 0x30 && $0 <= 0x39) || ($0 >= 0x41 && $0 <= 0x46) || ($0 >= 0x61 && $0 <= 0x66) })
             else { return false }
         }
         return true

@@ -112,6 +112,24 @@ struct ServerAddressTests {
         #expect(warned, "the downgrade to \(host) left no warning in the log")
     }
 
+    @Test("a cleartext fallback does not remember a typed password")
+    func cleartextFallbackDropsUserinfo() throws {
+        let host = "library-\(UUID().uuidString.lowercased()).example.com"
+        let http = try #require(URL(string: "http://\(host):8001"))
+        for typed in ["ben:hunter2@\(host)", "ben@\(host)?token=abc", "ben:hunter2@\(host)#top", "ben:hunter2@\(host)/shelf"] {
+            let stored = ServerAddress.addressToStore(for: typed, connectedTo: http)
+            #expect(!stored.contains("ben"), "\(typed) stored as \(stored)")
+            #expect(!stored.contains("hunter2") && !stored.contains("token") && !stored.contains("top"))
+            #expect(stored.hasPrefix(host))
+            // Still a bare address, so the next connect leads with HTTPS…
+            #expect(ServerAddress.candidates(for: stored).first?.scheme == "https")
+        }
+        // …and what is stored derives the URL that answered, path and all.
+        let stored = ServerAddress.addressToStore(for: "ben:hunter2@\(host)/shelf", connectedTo: http)
+        #expect(stored == "\(host)/shelf")
+        #expect(ServerAddress.normalize(stored)?.absoluteString == "http://\(host):8001/shelf")
+    }
+
     @Test("an explicit http:// is not treated as a downgrade")
     func explicitHTTPIsNotADowngrade() throws {
         let url = try #require(URL(string: "http://192.168.1.10:8001"))

@@ -342,7 +342,7 @@ struct ProgressRingWidget: View {
                 .rotationEffect(.degrees(-90))
             // Rounded, matching the reader's own readout. Truncating showed
             // "99%" beside a ring that had visibly closed.
-            Text("\(Int((value * 100).rounded()))%")
+            Text("\(ReadingProgress.percent(value))%")
                 .font(Typography.caption.weight(.semibold))
                 // inkSecondary, not tangerinePressed: tangerine on this surface
                 // is about 3.8:1, under the 4.5:1 floor for text this size.
@@ -351,7 +351,7 @@ struct ProgressRingWidget: View {
                 .lineLimit(1)
         }
         .frame(width: 40, height: 40)
-        .accessibilityLabel("\(Int((value * 100).rounded())) percent through")
+        .accessibilityLabel("\(ReadingProgress.percent(value)) percent through")
     }
 }
 

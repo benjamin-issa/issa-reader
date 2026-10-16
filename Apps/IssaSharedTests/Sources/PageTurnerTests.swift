@@ -37,7 +37,7 @@ struct PageTurnerTests {
     func turner(_ model: ReaderModel, _ clock: Clock, style: PageTurnStyle = .slide) -> PageTurner {
         let turner = PageTurner(model: model, now: { clock.now })
         turner.width = Self.width
-        turner.style = style
+        turner.adopt(style: style)
         return turner
     }
 
@@ -184,6 +184,39 @@ struct PageTurnerTests {
         #expect(!turner.dragChanged(startX: 300, translation: -120), "and a drag does not move the page")
         #expect(turner.scene == nil)
         #expect(!model.keepsNeighbours, "and nothing beyond the chapter is kept")
+    }
+
+    @Test("a turner built after the page's style was chosen does not undo it")
+    func laterTurnerLeavesNoneAlone() async throws {
+        let (model, opening) = try await opened()
+        defer { opening.tearDown() }
+        let kept = turner(model, Clock(), style: .instant)
+        try #require(!model.keepsNeighbours)
+
+        // What a view does on every re-init: build a turner it then discards.
+        _ = PageTurner(model: model)
+
+        #expect(!model.keepsNeighbours, "None keeps nothing beyond the chapter, whoever is built after")
+        _ = kept
+    }
+
+    @Test("a clock stepped back during a turn does not strand the page mid-turn")
+    func clockStepsBack() async throws {
+        let (model, opening) = try await opened()
+        defer { opening.tearDown() }
+        let clock = Clock()
+        let turner = turner(model, clock)
+
+        await turn(turner)
+        try #require(turner.motion != nil)
+
+        clock.now -= 600
+        try await Task.sleep(for: .seconds(turner.timing.duration + 0.15))
+        #expect(turner.motion != nil, "by the stepped clock the turn has not finished")
+
+        clock.now += 2000
+        await until { turner.motion == nil }
+        #expect(turner.scene == nil)
     }
 
     @Test("a dragged page follows the finger, and a throw turns it")

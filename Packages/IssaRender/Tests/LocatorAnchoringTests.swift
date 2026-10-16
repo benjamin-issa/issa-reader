@@ -178,6 +178,26 @@ struct LocatorAnchoringTests {
         // directories collapse into one.
         #expect(!locator.matchesHref("images/chapter 01.xhtml"))
     }
+
+    /// An omnibus with the same chapter names in two volumes: the last two
+    /// components cannot tell them apart, so the one the locator's own path
+    /// names has to win, not the first.
+    @Test("Hrefs that differ only above the last two components resolve to their own volume")
+    func ambiguousHrefsResolveToTheirOwnVolume() {
+        let spine = ["vol1/text/ch01.xhtml", "vol1/text/ch02.xhtml",
+                     "vol2/text/ch01.xhtml", "vol2/text/ch02.xhtml"]
+        let second = ReadiumLocator(href: "/OEBPS/vol2/text/ch01.xhtml", type: "application/xhtml+xml")
+        #expect(second.bestMatch(in: spine) == 2)
+        let first = ReadiumLocator(href: "/OEBPS/vol1/text/ch01.xhtml", type: "application/xhtml+xml")
+        #expect(first.bestMatch(in: spine) == 0)
+        // Nothing to tell them apart by: the book's order, as before.
+        let bare = ReadiumLocator(href: "text/ch02.xhtml", type: "application/xhtml+xml")
+        #expect(bare.bestMatch(in: spine) == 1)
+        #expect(bare.rankedMatches(in: spine) == [1, 3])
+        // And none is still none.
+        #expect(ReadiumLocator(href: "text/ch09.xhtml", type: "application/xhtml+xml")
+            .bestMatch(in: spine) == nil)
+    }
 }
 
 /// Remembered words, found again in a chapter that has been rendered since.
@@ -212,6 +232,35 @@ struct NearestOccurrenceTests {
     static func stored(_ text: String) -> String {
         text.replacingOccurrences(of: "\n", with: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// A 64-unit highlight or a 32-unit context that ends or begins inside an
+    /// emoji stored a lone surrogate, which became U+FFFD — and a quote with
+    /// that in it is in no chapter, so the position fell back to a raw offset.
+    @Test("a quote is never cut inside a surrogate pair")
+    func quoteKeepsSurrogatePairsWhole() throws {
+        // The highlight's 64th unit is the first half of the emoji.
+        let ending = String(repeating: "a", count: 63) + "\u{1F600}" + " and the rest of the line"
+        let head = try #require(LocatorAnchoring.quote(from: ending, at: 0))
+        let headWords = try #require(head.highlight)
+        #expect(!headWords.contains("\u{FFFD}"))
+        #expect(headWords.hasPrefix(String(repeating: "a", count: 63) + "\u{1F600}"))
+
+        // The context starts on the emoji's second half.
+        let beginning = String(repeating: "a", count: 10) + "\u{1F600}" + String(repeating: "b", count: 40) + " tail"
+        let tail = try #require(LocatorAnchoring.quote(from: beginning, at: 43))
+        let before = try #require(tail.before)
+        let tailWords = try #require(tail.highlight)
+        #expect(!before.contains("\u{FFFD}"))
+        #expect(before == String(repeating: "b", count: 31))
+
+        // And what was stored finds the place it came from.
+        let found = try #require(LocatorAnchoring.nearestOccurrence(
+            of: headWords, in: ending, near: 0, before: head.before))
+        #expect(found.location == 0)
+        let later = try #require(LocatorAnchoring.nearestOccurrence(
+            of: tailWords, in: beginning, near: 43, before: tail.before))
+        #expect(later.location == 43)
     }
 
     /// The case that never matched: a selection across a paragraph break, as

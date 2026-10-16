@@ -45,7 +45,7 @@ struct TVPageView: View {
         .onChange(of: size.width, initial: true) { _, width in turner.width = width }
         .onChange(of: model.pageKey) { _, key in turner.modelKeyChanged(key) }
         .onChange(of: PageTurn.effectiveStyle(settings.pageTurn, reduceMotion: reduceMotion), initial: true) {
-            _, style in turner.style = style
+            _, style in turner.adopt(style: style)
         }
         .focusable()
         .focused($focus, equals: .page)
