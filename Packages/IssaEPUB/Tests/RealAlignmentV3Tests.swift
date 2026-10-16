@@ -13,7 +13,8 @@ import Testing
 ///
 /// | Server | Store (`Tools/docker/data/real-alignment/<tag>/`) | Staged as |
 /// | --- | --- | --- |
-/// | `web-v3.0.0-beta.46` | `pw3.epub`, `pw3-loop.epub` | `/tmp/pw3.epub`, `/tmp/pw3-loop.epub` |
+/// | `web-v3.0.0-beta.49` | `pw3.epub`, `pw3-loop.epub` | `/tmp/pw3.epub`, `/tmp/pw3-loop.epub` |
+/// | `web-v3.0.0-beta.46` | `pw3.epub`, `pw3-loop.epub` | `/tmp/pw3-beta46.epub`, `/tmp/pw3-loop-beta46.epub` |
 /// | `web-v3.0.0-beta.40` | `pw3.epub`, `pw3-loop.epub` | `/tmp/pw3-beta40.epub`, `/tmp/pw3-loop-beta40.epub` |
 ///
 /// Every test runs once per server whose pair is staged, so a newer beta is
@@ -53,9 +54,12 @@ struct RealAlignmentV3Tests {
         var testDescription: String { tag }
     }
 
-    /// Newest first: the pinned beta, then the one before it.
+    /// Newest first: the pinned beta, then the ones before it.
     static let pairs = [
-        Pair(tag: "web-v3.0.0-beta.46", interludePath: "/tmp/pw3.epub", loopPath: "/tmp/pw3-loop.epub"),
+        Pair(tag: "web-v3.0.0-beta.49", interludePath: "/tmp/pw3.epub", loopPath: "/tmp/pw3-loop.epub"),
+        Pair(
+            tag: "web-v3.0.0-beta.46",
+            interludePath: "/tmp/pw3-beta46.epub", loopPath: "/tmp/pw3-loop-beta46.epub"),
         Pair(
             tag: "web-v3.0.0-beta.40",
             interludePath: "/tmp/pw3-beta40.epub", loopPath: "/tmp/pw3-loop-beta40.epub"),
@@ -188,9 +192,9 @@ struct RealAlignmentV3Tests {
     }
 
     /// The books are told apart only by where they are staged, and the
-    /// beta.46 slot reuses the `/tmp` paths 1.3.0 used for beta.40's. A
-    /// machine still holding those ran the newer pin's cases on the older
-    /// server's output and passed them. Each book names the server that
+    /// newest slot reuses the `/tmp` paths the previous pin used. A machine
+    /// still holding those ran the newer pin's cases on the older server's
+    /// output and passed them (it happened once, when beta.46 took beta.40's). Each book names the server that
     /// aligned it, so each pair's staged files must name that pair's tag.
     @Test("the staged books were aligned by the server their slot names",
           .enabled(if: RealAlignmentV3Tests.anyAvailable), arguments: RealAlignmentV3Tests.pairs)
@@ -200,8 +204,8 @@ struct RealAlignmentV3Tests {
         #expect(wrong.isEmpty, "\(pair.tag)'s slot holds another server's books: \(wrong)")
     }
 
-    /// The guard itself, on the mix-up it exists for: beta.40's books in the
-    /// beta.46 slot.
+    /// The guard itself, on the mix-up it exists for: the previous pin's books
+    /// (beta.46's) in the newest slot.
     @Test("a slot holding an older server's books is caught",
           .enabled(if: RealAlignmentV3Tests.pairs[1].paths.allSatisfy {
               FileManager.default.fileExists(atPath: $0)

@@ -80,7 +80,7 @@ finish() {
     echo "when         $(date -u +%Y-%m-%dT%H:%M:%SZ)"
     # Which aligned books the real-alignment suites read: told apart only by
     # where they are staged, so the record says which bytes they were.
-    for book in /tmp/pw2.epub /tmp/pw3.epub /tmp/pw3-loop.epub /tmp/pw3-beta40.epub /tmp/pw3-loop-beta40.epub; do
+    for book in /tmp/pw2.epub /tmp/pw3.epub /tmp/pw3-loop.epub /tmp/pw3-beta46.epub /tmp/pw3-loop-beta46.epub /tmp/pw3-beta40.epub /tmp/pw3-loop-beta40.epub; do
       if [ -f "$book" ]; then
         echo "staged       $book sha256 $(shasum -a 256 "$book" | cut -c1-16)"
       else
