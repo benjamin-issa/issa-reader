@@ -23,12 +23,46 @@ android {
 }
 
 // The bundled faces and their licences, shared with the Swift package
-// (Packages/IssaUI/Sources/IssaUI/Resources/Fonts) rather than copied.
+// (Packages/IssaUI/Sources/IssaUI/Resources/Fonts) rather than copied into the
+// repository twice. The faces become font resources (`R.font.literata_regular`)
+// so Compose, the page renderer and the widget can all reach them without a
+// Context; the licences become assets for the licences screen.
+abstract class SharedFontsTask : DefaultTask() {
+    @get:InputDirectory
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val fonts: DirectoryProperty
+
+    @get:OutputDirectory
+    abstract val resDir: DirectoryProperty
+
+    @get:OutputDirectory
+    abstract val assetsDir: DirectoryProperty
+
+    @TaskAction
+    fun copy() {
+        val res = resDir.get().asFile.resolve("font").apply { deleteRecursively(); mkdirs() }
+        val assets = assetsDir.get().asFile.resolve("Fonts").apply { deleteRecursively(); mkdirs() }
+        fonts.get().asFile.listFiles().orEmpty().sortedBy { it.name }.forEach { file ->
+            when (file.extension.lowercase()) {
+                // A resource name is lowercase letters, digits and underscores:
+                // `SourceSerif4-Regular.ttf` becomes `R.font.sourceserif4_regular`.
+                "ttf", "otf" -> file.copyTo(
+                    res.resolve(file.nameWithoutExtension.lowercase().replace(Regex("[^a-z0-9]"), "_") + "." + file.extension.lowercase()),
+                )
+                "txt" -> file.copyTo(assets.resolve(file.name))
+            }
+        }
+    }
+}
+
+val sharedFonts = tasks.register<SharedFontsTask>("sharedFonts") {
+    fonts.set(rootDir.parentFile.resolve("Packages/IssaUI/Sources/IssaUI/Resources/Fonts"))
+}
+
 androidComponents {
     onVariants { variant ->
-        variant.sources.assets?.addStaticSourceDirectory(
-            rootDir.parentFile.resolve("Packages/IssaUI/Sources/IssaUI/Resources").path,
-        )
+        variant.sources.res?.addGeneratedSourceDirectory(sharedFonts, SharedFontsTask::resDir)
+        variant.sources.assets?.addGeneratedSourceDirectory(sharedFonts, SharedFontsTask::assetsDir)
     }
 }
 
@@ -38,8 +72,9 @@ kotlin {
 
 dependencies {
     api(project(":core"))
+    api(project(":render"))
     api(libs.core.ktx)
-    implementation(platform(libs.compose.bom))
+    api(platform(libs.compose.bom))
     api(libs.compose.ui)
     api(libs.compose.foundation)
     api(libs.compose.material3)

@@ -29,7 +29,7 @@ dependencies {
     api(project(":ask"))
     implementation(libs.mlkit.genai.prompt)
     implementation(libs.kotlinx.coroutines.android)
-    implementation(platform(libs.compose.bom))
+    api(platform(libs.compose.bom))
     api(libs.compose.ui)
     api(libs.compose.foundation)
     api(libs.compose.material3)

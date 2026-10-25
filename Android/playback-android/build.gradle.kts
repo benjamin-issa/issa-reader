@@ -32,7 +32,7 @@ dependencies {
     api(libs.media3.session)
     api(libs.media3.datasource.okhttp)
     implementation(libs.car.app)
-    implementation(platform(libs.compose.bom))
+    api(platform(libs.compose.bom))
     api(libs.compose.ui)
     api(libs.compose.foundation)
     api(libs.compose.material3)
