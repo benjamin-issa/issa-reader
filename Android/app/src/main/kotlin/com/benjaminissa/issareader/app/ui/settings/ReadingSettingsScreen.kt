@@ -7,6 +7,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 import com.benjaminissa.issareader.app.model.PlaybackSettings
+import com.benjaminissa.issareader.app.ui.reader.HighlightSample
 import com.benjaminissa.issareader.render.PageTurn
 import com.benjaminissa.issareader.render.PageTurnStyle
 import com.benjaminissa.issareader.render.ReaderStyle
