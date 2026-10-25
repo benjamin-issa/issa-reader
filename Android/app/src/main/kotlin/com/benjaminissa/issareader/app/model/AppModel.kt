@@ -25,6 +25,7 @@ import com.benjaminissa.issareader.core.model.ReadiumLocator
 import com.benjaminissa.issareader.core.model.Status
 import com.benjaminissa.issareader.core.model.User
 import com.benjaminissa.issareader.core.model.asProgression
+import com.benjaminissa.issareader.core.networking.ApiClient
 import com.benjaminissa.issareader.core.networking.AudiobookService
 import com.benjaminissa.issareader.core.networking.MonitoredReachability
 import com.benjaminissa.issareader.core.networking.Reachability
@@ -74,7 +75,6 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.KSerializer
-import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
 import java.net.URI
@@ -2948,7 +2948,11 @@ class AppModel(
         }
 
         private suspend fun probe(url: URI, timeoutSeconds: Long): Boolean = withContext(Dispatchers.IO) {
-            val client = OkHttpClient.Builder()
+            // The shared client's threads and connections with the probe's own
+            // timeouts: a client of its own per probe started a dispatcher and
+            // a pool for one request, and the connection that answered was
+            // thrown away just before the sign-in that follows would reuse it.
+            val client = ApiClient.sharedHttpClient.newBuilder()
                 .callTimeout(timeoutSeconds, TimeUnit.SECONDS)
                 .connectTimeout(timeoutSeconds, TimeUnit.SECONDS)
                 .build()
@@ -2960,9 +2964,6 @@ class AppModel(
                 }
             } catch (_: Exception) {
                 false
-            } finally {
-                client.dispatcher.executorService.shutdown()
-                client.connectionPool.evictAll()
             }
         }
 
