@@ -18,6 +18,7 @@ import okhttp3.OkHttpClient
 import okio.Buffer
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -78,7 +79,31 @@ class WorkManagerTransferBackendTest {
         assertEquals("PK\u0003\u0004 the book", events.finished.single().second)
         assertEquals(200, transfer.response?.statusCode)
         assertEquals(listOf<TransferError?>(null), events.completed.map { it.second })
-        assertEquals("Bearer t", server.takeRequest().headers["Authorization"])
+        // The manager's token as the transfer ran, not the one it was made with.
+        assertEquals("Bearer current", server.takeRequest().headers["Authorization"])
+        assertEquals(listOf(URI(server.url("/book.epub").toString())), events.credentialsAskedFor)
+    }
+
+    /**
+     * WorkManager keeps each request in its own database, which is neither
+     * encrypted nor excluded from a device-to-device transfer: a token stored
+     * there outlived a sign-out, and a sign-in that replaced it.
+     */
+    @Test
+    fun `no credential is kept in WorkManager's database`() {
+        val stored = backend.inputData(
+            TransferRequest(
+                URI(server.url("/book.epub").toString()),
+                mapOf("Authorization" to "Bearer t", "cookie" to "session=s", "Accept" to "application/epub+zip"),
+                allowsMeteredNetwork = true,
+            ),
+            "uuid|ebook|1|1",
+            null,
+        )
+        val headers = stored.getString(WorkManagerTransferBackend.KEY_HEADERS)!!
+        assertFalse(headers, "Bearer" in headers)
+        assertFalse(headers, "session=s" in headers)
+        assertTrue(headers, "application/epub+zip" in headers)
     }
 
     /**
@@ -157,7 +182,13 @@ class WorkManagerTransferBackendTest {
     private class RecordingEvents : TransferEvents {
         val finished = mutableListOf<Pair<Transfer, String>>()
         val completed = mutableListOf<Pair<Transfer, TransferError?>>()
+        val credentialsAskedFor = mutableListOf<URI>()
         var invalidated = false
+
+        override suspend fun credentials(url: URI): Map<String, String> {
+            credentialsAskedFor += url
+            return mapOf("Authorization" to "Bearer current")
+        }
 
         override fun onProgress(transfer: Transfer, bytesWritten: Long, totalBytesWritten: Long, totalBytesExpected: Long) = Unit
 

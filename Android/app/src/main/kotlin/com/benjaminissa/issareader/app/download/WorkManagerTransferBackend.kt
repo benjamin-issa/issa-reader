@@ -52,7 +52,12 @@ import java.util.concurrent.ConcurrentHashMap
  * It keeps URLSession's contract with [com.benjaminissa.issareader.core.download.DownloadManager]:
  * the body arrives whatever the status, and the manager judges it; a pause
  * hands back resume data; a cancellation is always reported, including of a
- * transfer that never got to run. When Android stops a worker for its own
+ * transfer that never got to run.
+ *
+ * Nothing it stores holds a credential. WorkManager keeps each request in its
+ * own database, outside the Keystore, so the request is kept without its
+ * `Authorization` and `Cookie` headers and the manager is asked for the
+ * current ones as the transfer runs ([TransferEvents.credentials]). When Android stops a worker for its own
  * reasons — the Wi-Fi went, a quota ran out — nothing is reported: the work
  * runs again when it may, and picks the partial file up where it stopped, as a
  * background session would.
@@ -99,7 +104,7 @@ class WorkManagerTransferBackend(
     internal fun inputData(request: TransferRequest, description: String, resume: ResumeState?): Data =
         Data.Builder()
             .putString(KEY_URL, request.url.toString())
-            .putString(KEY_HEADERS, IssaJson.encodeToString(request.headers))
+            .putString(KEY_HEADERS, IssaJson.encodeToString(withoutCredentials(request.headers)))
             .putBoolean(KEY_METERED, request.allowsMeteredNetwork)
             .putString(KEY_DESCRIPTION, description)
             .putString(KEY_RESUME, resume?.let { IssaJson.encodeToString(it) })
@@ -275,7 +280,10 @@ class WorkManagerTransferBackend(
     private suspend fun download(worker: TransferWorker, transfer: WorkTransfer, request: TransferRequest, partial: File) {
         var offset = if (partial.exists()) partial.length() else 0L
         val builder = Request.Builder().url(request.url.toString())
-        request.headers.forEach { (name, value) -> builder.header(name, value) }
+        // The credentials current now, never the ones the request was made
+        // with: a sign-in since then replaced them.
+        val headers = withoutCredentials(request.headers) + events.credentials(request.url)
+        headers.forEach { (name, value) -> builder.header(name, value) }
         if (offset > 0) {
             builder.header("Range", "bytes=$offset-")
             transfer.validator?.let { builder.header("If-Range", it) }
@@ -343,6 +351,10 @@ class WorkManagerTransferBackend(
          */
         internal fun uniqueName(description: String): String =
             "download:" + description.split('|').take(2).joinToString("|")
+
+        /** A request's headers less the ones that carry a credential. */
+        internal fun withoutCredentials(headers: Map<String, String>): Map<String, String> =
+            headers.filterKeys { !it.equals("Authorization", ignoreCase = true) && !it.equals("Cookie", ignoreCase = true) }
     }
 }
 

@@ -480,6 +480,27 @@ class DownloadManager(
         hop { backendDidBecomeInvalid(error) }
     }
 
+    /**
+     * The bearer for the server this manager is pointed at, as it is now: the
+     * same header [start] builds, read again when a transfer runs. Nothing for
+     * another origin, so a token never leaves for a host it was not issued by.
+     */
+    override suspend fun credentials(url: URI): Map<String, String> {
+        val base = baseUrl
+        val sameOrigin = url.scheme.equals(base.scheme, ignoreCase = true) &&
+            url.host.equals(base.host, ignoreCase = true) &&
+            effectivePort(url) == effectivePort(base)
+        if (!sameOrigin) return emptyMap()
+        val token = tokens.currentToken() ?: return emptyMap()
+        return mapOf("Authorization" to "Bearer $token")
+    }
+
+    private fun effectivePort(url: URI): Int = when {
+        url.port != -1 -> url.port
+        url.scheme.equals("https", ignoreCase = true) -> 443
+        else -> 80
+    }
+
     override fun onProgress(transfer: Transfer, bytesWritten: Long, totalBytesWritten: Long, totalBytesExpected: Long) {
         val job = liveJob(transfer) ?: return
         val fraction = if (totalBytesExpected > 0) totalBytesWritten.toDouble() / totalBytesExpected.toDouble() else 0.0

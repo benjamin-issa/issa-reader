@@ -121,4 +121,14 @@ interface TransferEvents {
 
     /** The backend ended — asked to by [TransferBackend.invalidateAndCancel], or not. */
     fun onInvalidated(error: Throwable?)
+
+    /**
+     * The credentials to send with a transfer as it runs: the token current
+     * then, not the one it was started with. A backend that keeps its requests
+     * on disk between runs keeps them without credentials and asks here, so a
+     * token is never stored outside the Keystore and a download queued before
+     * a sign-in does not run with the token that sign-in replaced. Same origin
+     * only; none by default.
+     */
+    suspend fun credentials(url: URI): Map<String, String> = emptyMap()
 }
