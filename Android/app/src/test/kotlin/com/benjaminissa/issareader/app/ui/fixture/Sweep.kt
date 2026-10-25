@@ -41,6 +41,10 @@ object Sweep {
     val PRO = Device("iphone-17-pro", 402, 874)
     val PRO_MAX = Device("iphone-17-pro-max", 440, 956)
 
+    /** And the two widths most Android phones are: a compact one, and the Pixel's. */
+    val COMPACT = Device("android-compact", 360, 800)
+    val PIXEL = Device("android-pixel", 412, 915)
+
     /**
      * The process's storage root, the one the model suites share: the download
      * service settles on its Books directory once per process, and the app's

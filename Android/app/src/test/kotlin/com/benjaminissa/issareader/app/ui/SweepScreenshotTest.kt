@@ -11,7 +11,9 @@ import com.benjaminissa.issareader.app.model.AppModel
 import com.benjaminissa.issareader.app.ui.fixture.AppDriver
 import com.benjaminissa.issareader.app.ui.fixture.FixtureServer
 import com.benjaminissa.issareader.app.ui.fixture.Sweep
+import com.benjaminissa.issareader.ui.Metrics
 import com.github.takahirom.roborazzi.captureRoboImage
+import java.io.File
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -41,6 +43,21 @@ abstract class SweepScreenshotTest(private val device: Sweep.Device) {
     private fun capture(screen: String) {
         driver.settle()
         compose.onRoot().captureRoboImage("build/sweep/${device.width}/$screen.png")
+        recordReference()
+    }
+
+    /**
+     * What `Tools/scripts/make-contact-sheet.py` draws its guides from, as the
+     * iPhone's `LayoutSweepTests.recordReference` writes it: the window's
+     * width and the screen margin, as this run measured them rather than as
+     * anything here assumes.
+     */
+    private fun recordReference() {
+        val width = compose.onRoot().fetchSemanticsNode().size.width / compose.density.density
+        val margin = Metrics.screenMargin.value
+        File("build/sweep/${device.width}").apply { mkdirs() }
+            .resolve("reference.txt")
+            .writeText("width=${"%.1f".format(java.util.Locale.ROOT, width)}\nmargin=${"%.1f".format(java.util.Locale.ROOT, margin)}\n")
     }
 
     @Test
@@ -135,3 +152,9 @@ class Sweep402ScreenshotTest : SweepScreenshotTest(Sweep.PRO)
 
 @Config(qualifiers = "w440dp-h956dp-xxhdpi")
 class Sweep440ScreenshotTest : SweepScreenshotTest(Sweep.PRO_MAX)
+
+@Config(qualifiers = "w360dp-h800dp-xxhdpi")
+class Sweep360ScreenshotTest : SweepScreenshotTest(Sweep.COMPACT)
+
+@Config(qualifiers = "w412dp-h915dp-xxhdpi")
+class Sweep412ScreenshotTest : SweepScreenshotTest(Sweep.PIXEL)
