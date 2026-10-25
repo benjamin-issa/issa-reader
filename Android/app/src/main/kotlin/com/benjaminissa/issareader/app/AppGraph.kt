@@ -8,6 +8,9 @@ import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import com.benjaminissa.issareader.app.download.WorkManagerTransferBackend
+import com.benjaminissa.issareader.app.local.LocalBooksWiring
+import com.benjaminissa.issareader.app.local.LocalDevice
+import com.benjaminissa.issareader.app.local.LocalLibrary
 import com.benjaminissa.issareader.app.model.AppModel
 import com.benjaminissa.issareader.app.model.BrowserSignInModel
 import com.benjaminissa.issareader.app.model.CoverCache
@@ -109,7 +112,17 @@ class AppGraph(
     /** The launcher's recently opened books. */
     val shortcuts = ShortcutPublisher(LauncherShortcutBackend(context), defaults)
 
-    // LOCAL-LIBRARY-PLACEHOLDER
+    /**
+     * The books added from the reader's own files. `Local/` is under
+     * `StorageRoot`, outside the backup rules; the device store goes in
+     * `Store/` beside every server's.
+     */
+    val local: LocalLibrary = LocalLibrary(
+        scope = mainScope,
+        mediaSupport = mediaSupport,
+        contentResolver = context.contentResolver,
+        measurer = AndroidDurationMeasurer(),
+    )
 
     /** Exit bookkeeping: the background flush, so two overlapping ones do not run twice. */
     val termination = TerminationSequence()
@@ -159,7 +172,9 @@ class AppGraph(
         // Playback starts and stops from places with no screen to thread this
         // through: a car list item, the reader closing.
         app.nowPlayingController = nowPlaying
-        // LOCAL-WIRING-PLACEHOLDER
+        // What the copy deck calls this device: "On this phone", "On this tablet".
+        LocalDevice.noun = if (context.resources.configuration.smallestScreenWidthDp >= 600) "tablet" else "phone"
+        LocalBooksWiring.connect(app, local, settings, ask = null)
         observeLibraryForShortcuts()
         observeProcessLifecycle()
         app.startRestore()
