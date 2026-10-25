@@ -224,6 +224,10 @@ class ExoMediaBackend(
         cancelPendingSeeks()
         val made = Item(location, listener)
         item = made
+        // The phone stays awake while it plays, screen off in a pocket: a
+        // stream holds the Wi-Fi as well, a file on the device only the CPU.
+        // The engine takes and releases the locks with its own playing state.
+        exoPlayer.setWakeMode(if (location is AudioLocation.LocalFile) C.WAKE_MODE_LOCAL else C.WAKE_MODE_NETWORK)
         exoPlayer.setMediaSource(mediaSource(location))
         exoPlayer.prepare()
         return made
