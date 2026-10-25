@@ -91,7 +91,9 @@ internal fun LocalSettingsContent(
 ) {
     var stack by rememberSaveable { mutableStateOf(listOf(SettingsRoutes.ROOT)) }
     val push: (String) -> Unit = { stack = stack + it }
-    val pop: () -> Unit = { stack = stack.dropLast(1) }
+    // Never past the sheet's own list: a screen sliding away keeps its Back
+    // live until the next frame, and a second tap there came here too.
+    val pop: () -> Unit = { if (stack.size > 1) stack = stack.dropLast(1) }
     BackHandler(enabled = stack.size > 1, onBack = pop)
     AnimatedContent(
         targetState = stack,
