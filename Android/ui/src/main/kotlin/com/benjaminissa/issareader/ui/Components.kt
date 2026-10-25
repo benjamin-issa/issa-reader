@@ -157,6 +157,11 @@ fun BetaPill(modifier: Modifier = Modifier) {
  * The screen's one primary action: full width, the accent fill darkening
  * while it is held, white label, a spinner in place of the label's icon while
  * it works.
+ *
+ * Full tangerine whether or not it can be pressed, as the iPhone's is: its
+ * `PressedFillButtonStyle` reads the press and never `isEnabled`, so a button
+ * disabled for an empty field looks the same and does nothing. TalkBack still
+ * hears it as disabled.
  */
 @Composable
 fun PrimaryButton(
@@ -181,7 +186,7 @@ fun PrimaryButton(
         modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(Metrics.radiusMedium))
-            .background(if (enabled) fill else fill.copy(alpha = 0.5f))
+            .background(fill)
             .clickable(interactionSource = interaction, indication = null, enabled = enabled && !working, role = Role.Button, onClick = onClick)
             .padding(vertical = 14.dp),
         horizontalArrangement = Arrangement.spacedBy(Metrics.spacing8, Alignment.CenterHorizontally),

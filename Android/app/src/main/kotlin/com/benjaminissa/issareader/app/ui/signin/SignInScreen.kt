@@ -1,7 +1,10 @@
 package com.benjaminissa.issareader.app.ui.signin
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -16,11 +19,10 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -35,6 +37,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -314,14 +317,23 @@ private fun ServerForm(
  */
 @Composable
 private fun ServerField(value: String, onValueChange: (String) -> Unit, onGo: () -> Unit) {
-    OutlinedTextField(
+    // The iPhone's plain field, 44 tall, rather than Material's 56: the
+    // surface in a medium-rounded box with a hairline, 12 in from its edges,
+    // and the example address as its prompt. The hairline turns the accent
+    // while the field has focus, where Material's outlined field would.
+    val interaction = remember { MutableInteractionSource() }
+    val focused by interaction.collectIsFocusedAsState()
+    val shape = RoundedCornerShape(Metrics.radiusMedium)
+    BasicTextField(
         value = value,
         onValueChange = onValueChange,
+        // Named "Server", as the Swift field's label is: the prompt is an
+        // example, not a name, and a screen reader is told both.
         modifier = Modifier.fillMaxWidth().testTag("field.serverAddress").semantics { contentDescription = "Server" },
-        textStyle = Typography.body,
-        placeholder = { Text("https://yourlibrary.com", style = Typography.body, color = Palette.inkTertiary) },
+        textStyle = Typography.body.copy(color = Palette.ink),
         singleLine = true,
-        shape = RoundedCornerShape(Metrics.radiusMedium),
+        cursorBrush = SolidColor(Palette.tangerine),
+        interactionSource = interaction,
         keyboardOptions = KeyboardOptions(
             capitalization = KeyboardCapitalization.None,
             autoCorrectEnabled = false,
@@ -329,15 +341,20 @@ private fun ServerField(value: String, onValueChange: (String) -> Unit, onGo: ()
             imeAction = ImeAction.Go,
         ),
         keyboardActions = KeyboardActions(onGo = { onGo() }),
-        colors = OutlinedTextFieldDefaults.colors(
-            focusedTextColor = Palette.ink,
-            unfocusedTextColor = Palette.ink,
-            focusedContainerColor = Palette.surface,
-            unfocusedContainerColor = Palette.surface,
-            focusedBorderColor = Palette.tangerine,
-            unfocusedBorderColor = Palette.border,
-            cursorColor = Palette.tangerine,
-        ),
+        decorationBox = { field ->
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 44.dp)
+                    .background(Palette.surface, shape)
+                    .border(1.dp, if (focused) Palette.tangerine else Palette.border, shape)
+                    .padding(horizontal = Metrics.spacing12),
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                if (value.isEmpty()) Text("https://yourlibrary.com", style = Typography.body, color = Palette.inkTertiary, maxLines = 1)
+                field()
+            }
+        },
     )
 }
 
