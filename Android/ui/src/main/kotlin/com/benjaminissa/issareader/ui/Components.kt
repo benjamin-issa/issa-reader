@@ -14,19 +14,22 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.LargeTopAppBar
+import androidx.compose.material3.LocalTextStyle
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.TopAppBarScrollBehavior
 import androidx.compose.runtime.Composable
@@ -34,6 +37,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.Layout
@@ -41,6 +45,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.benjaminissa.issareader.core.model.asProgression
@@ -205,6 +210,15 @@ fun BackButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
  * one as the content scrolls, on paper, with an optional back button and
  * trailing actions. Material's large top app bar, in the system face at the
  * iPhone's sizes.
+ *
+ * Spaced as the iPhone's: Material's 112-high expanded bar left the content
+ * 5 lower than the iPhone's, and the gap under the title 8 wider. So the
+ * expanded bar is 5 shorter, and the large title — placed from the top of its
+ * row, so it does not move with the bar's height — is set 3 lower, where the
+ * iPhone's sits: its baseline 24 above what follows.
+ *
+ * @param navigationIcon what stands where the back button would, for a root
+ *   screen that has a button there of its own.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -213,15 +227,23 @@ fun LargeTitleBar(
     scrollBehavior: TopAppBarScrollBehavior,
     modifier: Modifier = Modifier,
     onBack: (() -> Unit)? = null,
+    navigationIcon: @Composable () -> Unit = { if (onBack != null) BackButton(onBack, Modifier.padding(start = Metrics.spacing8)) },
     actions: @Composable RowScope.() -> Unit = {},
 ) {
+    val expandedStyle = MaterialTheme.typography.headlineMedium
     LargeTopAppBar(
-        title = { Text(title, maxLines = 1) },
+        title = {
+            // One lambda draws both titles: the expanded one, in
+            // headlineMedium, and the collapsed one in the inline bar, which
+            // stays where Material centres it.
+            val expanded = LocalTextStyle.current.fontSize == expandedStyle.fontSize
+            Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = if (expanded) Modifier.offset(y = LargeTitleDrop) else Modifier)
+        },
         modifier = modifier,
-        navigationIcon = { if (onBack != null) BackButton(onBack, Modifier.padding(start = Metrics.spacing8)) },
+        navigationIcon = navigationIcon,
         actions = actions,
         collapsedHeight = 56.dp,
-        expandedHeight = 112.dp,
+        expandedHeight = LargeTitleExpandedHeight,
         scrollBehavior = scrollBehavior,
         colors = TopAppBarDefaults.topAppBarColors(
             containerColor = Palette.paper,
@@ -233,7 +255,20 @@ fun LargeTitleBar(
     )
 }
 
-/** An inline title bar, for pushed screens whose title is not a large one. */
+/** The expanded large-title bar: Material's 112, less the 5 the content sat too low under it. */
+private val LargeTitleExpandedHeight: Dp = 107.dp
+
+/** How far below Material's place the large title is set: the 3 lower the iPhone's sits. */
+private val LargeTitleDrop: Dp = 3.dp
+
+/**
+ * An inline title bar, for pushed screens whose title is not a large one:
+ * the title centred between the back button and the actions, as the iPhone's
+ * navigation bar sets it — Material's centre-aligned top app bar.
+ *
+ * @param titleAlpha how much of the title shows: a page whose header says the
+ *   same name beneath the bar fades it in once that has scrolled under.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun InlineTitleBar(
@@ -242,9 +277,18 @@ fun InlineTitleBar(
     onBack: (() -> Unit)? = null,
     actions: @Composable RowScope.() -> Unit = {},
     scrollBehavior: TopAppBarScrollBehavior? = null,
+    titleAlpha: Float = 1f,
 ) {
-    TopAppBar(
-        title = { Text(title, style = SystemText.navigationTitle, maxLines = 1) },
+    CenterAlignedTopAppBar(
+        title = {
+            Text(
+                title,
+                style = SystemText.navigationTitle,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.alpha(titleAlpha),
+            )
+        },
         modifier = modifier,
         navigationIcon = { if (onBack != null) BackButton(onBack, Modifier.padding(start = Metrics.spacing8)) },
         actions = actions,

@@ -18,8 +18,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -29,7 +27,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.semantics.Role
@@ -48,13 +45,12 @@ import com.benjaminissa.issareader.core.download.BookMenu
 import com.benjaminissa.issareader.core.model.Book
 import com.benjaminissa.issareader.core.sync.LibraryArrangement
 import com.benjaminissa.issareader.core.sync.StagedBooks
-import com.benjaminissa.issareader.ui.BackButton
+import com.benjaminissa.issareader.ui.InlineTitleBar
 import com.benjaminissa.issareader.ui.Metrics
 import com.benjaminissa.issareader.ui.Overline
 import com.benjaminissa.issareader.ui.Palette
 import com.benjaminissa.issareader.ui.PalettePlaceholder
 import com.benjaminissa.issareader.ui.Symbols
-import com.benjaminissa.issareader.ui.SystemText
 import com.benjaminissa.issareader.ui.Typography
 
 /** Every book carrying one tag, reached from a tag chip on a book's page. Swift's `TagView`. */
@@ -135,15 +131,7 @@ fun BookListPage(subject: BookListSubject, books: List<Book>) {
         PushedScreen(
             subject.name,
             Modifier.testTag("screen.${subject.kind}"),
-            topBar = {
-                TopAppBar(
-                    title = {
-                        Text(subject.name, style = SystemText.navigationTitle, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.alpha(titleAlpha))
-                    },
-                    navigationIcon = { BackButton({ navigator.back() }, Modifier.padding(start = Metrics.spacing8)) },
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = Palette.paper, scrolledContainerColor = Palette.paper, titleContentColor = Palette.ink),
-                )
-            },
+            topBar = { InlineTitleBar(subject.name, onBack = { navigator.back() }, titleAlpha = titleAlpha) },
         ) { padding ->
             Refreshable(onRefresh = { app.refreshLibrary() }, modifier = Modifier.padding(padding).fillMaxSize()) {
                 if (staged.isEmpty) {

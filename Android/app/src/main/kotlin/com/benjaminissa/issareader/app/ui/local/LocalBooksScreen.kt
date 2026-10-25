@@ -35,7 +35,6 @@ import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButtonDefaults
-import androidx.compose.material3.LargeTopAppBar
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
@@ -92,6 +91,7 @@ import com.benjaminissa.issareader.core.sync.LibraryService
 import com.benjaminissa.issareader.playback.PlaybackAction
 import com.benjaminissa.issareader.playback.PlaybackProgress
 import com.benjaminissa.issareader.ui.BackButton
+import com.benjaminissa.issareader.ui.LargeTitleBar
 import com.benjaminissa.issareader.ui.Metrics
 import com.benjaminissa.issareader.ui.MiniPlayerBar
 import com.benjaminissa.issareader.ui.Overline
@@ -411,8 +411,9 @@ internal object LocalBooksLayout {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun LocalBooksTitleBar(behavior: TopAppBarScrollBehavior, onBack: (() -> Unit)?, onSettings: (() -> Unit)?, onAdd: () -> Unit) {
-    LargeTopAppBar(
-        title = { Text(LocalBooksCopy.listTitle, maxLines = 1) },
+    LargeTitleBar(
+        LocalBooksCopy.listTitle,
+        behavior,
         navigationIcon = {
             when {
                 onBack != null -> BackButton(onBack, Modifier.padding(start = Metrics.spacing8))
@@ -423,16 +424,6 @@ private fun LocalBooksTitleBar(behavior: TopAppBarScrollBehavior, onBack: (() ->
             // "Add a book from Files" on the iPhone.
             RoundToolbarButton(Symbols.plus, "Add a book from your files", onAdd, Modifier.padding(end = Metrics.spacing8).testTag("button.addLocalBook"))
         },
-        collapsedHeight = 56.dp,
-        expandedHeight = 112.dp,
-        scrollBehavior = behavior,
-        colors = TopAppBarDefaults.topAppBarColors(
-            containerColor = Palette.paper,
-            scrolledContainerColor = Palette.paper,
-            titleContentColor = Palette.ink,
-            navigationIconContentColor = Palette.ink,
-            actionIconContentColor = Palette.ink,
-        ),
     )
 }
 
