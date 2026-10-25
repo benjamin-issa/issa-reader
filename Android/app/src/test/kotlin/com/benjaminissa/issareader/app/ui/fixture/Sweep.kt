@@ -1,6 +1,7 @@
 package com.benjaminissa.issareader.app.ui.fixture
 
 import com.benjaminissa.issareader.app.model.AppModel
+import com.benjaminissa.issareader.app.processStorageRoot
 import com.benjaminissa.issareader.app.model.BrowserSignInModel
 import com.benjaminissa.issareader.app.model.CoverCache
 import com.benjaminissa.issareader.app.model.DeviceSignInModel
@@ -41,25 +42,21 @@ object Sweep {
     val PRO_MAX = Device("iphone-17-pro-max", 440, 956)
 
     /**
-     * One storage root for the process. The download service settles on its
-     * Books directory once per process, and Robolectric runs a class's tests
-     * in one, so a root per test left the second test reading the first's.
-     */
-    private val storage: File by lazy { kotlin.io.path.createTempDirectory("issa-sweep").toFile() }
-
-    /**
-     * The sweep's root, made the storage root again for each test: the app's
-     * other suites share the process and configure roots of their own, and a
-     * sweep reading theirs drew their downloads, or none.
+     * The process's storage root, the one the model suites share: the download
+     * service settles on its Books directory once per process, and the app's
+     * suites run in one, so every one of them has to use the same root. Made
+     * the root again for each test, with the fixture's downloads planted
+     * afresh, because a model test empties it after itself.
      */
     private fun useStorage() {
+        val storage = processStorageRoot
         StorageRoot.configure(root = File(storage, "files"), caches = File(storage, "caches"), isPurgeable = false)
         FixtureLibrary.plantDownloads()
     }
 
     /**
      * @param root this test's own files: its cover cache. The books on the
-     *   device are the process's (see [storage]).
+     *   device are the process's (see [useStorage]).
      */
     fun environment(root: File, signedIn: Boolean): AppEnvironment {
         useStorage()

@@ -153,9 +153,17 @@ class FreshStorage : ExternalResource() {
     }
 
     private companion object {
-        val processRoot: File by lazy { Files.createTempDirectory("issa-app-tests").toFile().apply { deleteOnExit() } }
+        val processRoot: File get() = processStorageRoot
     }
 }
+
+/**
+ * The test process's one storage root, which [FreshStorage] empties around
+ * each model test and the layout sweep's app ([com.benjaminissa.issareader.app.ui.fixture.Sweep])
+ * reads too: the downloads directory is settled on once per process, so every
+ * suite in it has to agree on where it is.
+ */
+internal val processStorageRoot: File by lazy { Files.createTempDirectory("issa-app-tests").toFile().apply { deleteOnExit() } }
 
 /** One font registry for the whole test process, as the app has one. */
 val testFonts: ReaderFonts by lazy { ReaderFonts(RuntimeEnvironment.getApplication()) }

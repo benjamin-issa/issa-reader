@@ -80,7 +80,8 @@ kotlin {
 
 // The unit tests run on this machine's JVM, where the Android build of
 // bundled SQLite has no native library to load: its JVM build, which carries
-// the host's, stands in — the Ask suites build real indexes, as `:ask`'s do.
+// the host's, stands in, so the device store, every server's store and the
+// Ask indexes open real databases, as `:core`'s and `:ask`'s suites do.
 configurations.configureEach {
     if (name.endsWith("UnitTestRuntimeClasspath")) exclude(group = "androidx.sqlite", module = "sqlite-bundled-android")
 }
@@ -142,34 +143,4 @@ dependencies {
     androidTestImplementation(libs.uiautomator)
     androidTestImplementation(platform(libs.compose.bom))
     androidTestImplementation(libs.compose.ui.test.junit4)
-}
-
-// The device store and every server's store are SQLite through androidx.sqlite's
-// bundled driver. Under Robolectric the classpath carries the driver's Android
-// build, whose native library is built for phones, so `System.loadLibrary`
-// finds nothing and every store fails to open. The JVM build of the same
-// version carries the library for the machine running the suites, under the
-// same name and with the same JNI entry points; it is unpacked here and put on
-// the test JVM's library path ahead of AGP's own entries.
-val hostSqlite: Configuration by configurations.creating
-dependencies { hostSqlite("androidx.sqlite:sqlite-bundled-jvm:${libs.versions.sqlite.get()}@jar") }
-val hostSqliteNatives = layout.buildDirectory.dir("host-sqlite")
-val unpackHostSqlite by tasks.registering(Sync::class) {
-    from({ hostSqlite.map { zipTree(it) } }) { include("natives/**") }
-    into(hostSqliteNatives)
-}
-tasks.withType<Test>().configureEach {
-    dependsOn(unpackHostSqlite)
-    val os = System.getProperty("os.name").lowercase()
-    val arm = System.getProperty("os.arch").lowercase().let { it == "aarch64" || it == "arm64" }
-    val platform = when {
-        os.contains("mac") -> if (arm) "osx_arm64" else "osx_x64"
-        os.contains("windows") -> if (arm) "windows_arm64" else "windows_x64"
-        else -> if (arm) "linux_arm64" else "linux_x64"
-    }
-    val natives = hostSqliteNatives.map { it.dir("natives/$platform").asFile.path }
-    doFirst {
-        val existing = systemProperties["java.library.path"]?.toString() ?: System.getProperty("java.library.path")
-        systemProperty("java.library.path", listOfNotNull(natives.get(), existing).joinToString(File.pathSeparator))
-    }
 }
