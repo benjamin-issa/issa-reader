@@ -263,3 +263,14 @@ class DeviceSignInModel(
         const val MAX_RENEWALS = 8
     }
 }
+
+/** What the sign-in form decides from what is typed in it. */
+object SignInForm {
+    /**
+     * Whether the "Not encrypted" line shows under the server field: worked
+     * out from the field, not the stored server, so it describes the address
+     * being typed. A bare address is what normalising makes of it — plain
+     * HTTP on Storyteller's port.
+     */
+    fun isCleartext(typed: String): Boolean = AppModel.normalizeServerUrl(typed)?.scheme?.lowercase() == "http"
+}

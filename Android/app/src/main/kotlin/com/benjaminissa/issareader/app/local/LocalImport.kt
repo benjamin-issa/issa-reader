@@ -1,8 +1,11 @@
 package com.benjaminissa.issareader.app.local
 
 import android.net.Uri
+import com.benjaminissa.issareader.core.model.Book
 import com.benjaminissa.issareader.core.model.ByteCountText
 import com.benjaminissa.issareader.core.model.LocalNotice
+import com.benjaminissa.issareader.core.model.ReadingProgress
+import com.benjaminissa.issareader.ui.HtmlText
 import com.benjaminissa.issareader.core.model.wholeSeconds
 import java.util.UUID
 import kotlin.math.roundToLong
@@ -222,5 +225,96 @@ object LocalBooksCopy {
         val minutes = (total.toDouble() / 60).roundToLong()
         val length = if (minutes >= 60) "${minutes / 60} h ${minutes % 60} min" else "${maxOf(minutes, 1)} min"
         return "Narrated · $length"
+    }
+}
+
+/**
+ * Which row a keyboard's shortcuts act on — a tablet's or a Chromebook's
+ * Delete and Ctrl+I. The Swift client's `LocalBooksKeyboard`.
+ */
+object LocalBooksKeyboard {
+    /**
+     * Delete: the row the keyboard is on, and nothing when it is on none.
+     * Falling back to the first book removed the one opened last — the list's
+     * first row — when the rows had been reached by touch (R-30).
+     */
+    fun removalTarget(focused: String?): String? = focused
+
+    /** Ctrl+I: the row the keyboard is on, else the first book. Showing a book's info destroys nothing, so it may guess. */
+    fun infoTarget(focused: String?, books: List<Book>): String? = focused ?: books.firstOrNull()?.uuid
+}
+
+/** What a row's notice strip is about, and so what its one action does. */
+sealed interface LocalRowNotice {
+    /** Told once after import: OK clears it for good. */
+    data class Imported(val notice: LocalNotice) : LocalRowNotice
+
+    /** The file did not come back from a backup: Add Again… opens the picker. */
+    data object Missing : LocalRowNotice
+}
+
+/**
+ * One book as its row card says it: what TalkBack reads and what the trailing
+ * column shows. The Swift client's `LocalBookFacts`.
+ */
+data class LocalBookFacts(
+    val book: Book,
+    val size: Long?,
+    val isMissing: Boolean,
+    val isPlaying: Boolean,
+) {
+    val author: String get() = book.byline
+
+    val narration: String?
+        get() {
+            val seconds = book.narrationDuration
+            if (!book.hasReadalong || seconds == null || isMissing) return null
+            return LocalBooksCopy.narrated(seconds)
+        }
+
+    val progress: Double? get() = book.progress?.takeIf { it > 0 }
+    val percent: String? get() = progress?.let { ReadingProgress.percentText(it) }
+    val sizeText: String? get() = size?.let { ByteCountText.text(it) }
+    val trailing: String? get() = if (isMissing) LocalBooksCopy.notOnDevice else sizeText
+
+    val notices: List<LocalRowNotice>
+        get() = if (isMissing) listOf(LocalRowNotice.Missing) else (book.localCopy?.notices ?: emptyList()).map { LocalRowNotice.Imported(it) }
+
+    /** The whole row, as one sentence: title, author, narration and length, percent, size, and "playing" while it narrates. */
+    val spoken: String
+        get() {
+            val parts = mutableListOf(book.title)
+            if (author.isNotEmpty()) parts.add(author)
+            narration?.let { parts.add(it.replace(" · ", ", ")) }
+            percent?.let { parts.add("$it read") }
+            trailing?.let { parts.add(it) }
+            if (isPlaying) parts.add("playing")
+            return parts.joinToString(", ")
+        }
+
+    companion object {
+        fun noticeText(notice: LocalRowNotice): String = when (notice) {
+            is LocalRowNotice.Imported -> LocalBooksCopy.notice(notice.notice)
+            LocalRowNotice.Missing -> LocalBooksCopy.restoredNotice
+        }
+
+        fun noticeAction(notice: LocalRowNotice): String = when (notice) {
+            is LocalRowNotice.Imported -> "OK"
+            LocalRowNotice.Missing -> "Add Again…"
+        }
+    }
+}
+
+/** What Book info shows of a book from the reader's own files. */
+object LocalBookInfo {
+    /**
+     * The description as text. Calibre and most tools write it as escaped
+     * HTML, which the XML parser hands back as literal tags and entities, so
+     * it showed `<div><p>…` on screen (R-19).
+     */
+    fun aboutText(description: String?): String? {
+        if (description.isNullOrEmpty()) return null
+        val text = HtmlText.plain(description).trim()
+        return text.ifEmpty { null }
     }
 }
