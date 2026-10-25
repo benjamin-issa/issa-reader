@@ -43,14 +43,15 @@ class SqliteDatabase(path: String, busyTimeoutMillis: Int? = null) : AutoCloseab
         check(!closed) { "the database is closed" }
         val access = Access(connection)
         access.execute(begin)
-        val result = try {
-            block(access)
+        // The COMMIT inside the try, as GRDB has it: a COMMIT refused with
+        // SQLITE_BUSY leaves the transaction open, and a connection left
+        // inside one refuses every BEGIN after it.
+        try {
+            block(access).also { access.execute("COMMIT") }
         } catch (e: Throwable) {
             runCatching { access.execute("ROLLBACK") }
             throw e
         }
-        access.execute("COMMIT")
-        result
     }
 
     override fun close() {
