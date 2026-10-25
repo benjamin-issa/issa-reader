@@ -6,15 +6,13 @@ import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.snapshotFlow
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import com.benjaminissa.issareader.app.ui.shell.AppEnvironment
+import com.benjaminissa.issareader.app.ui.shell.IssaRoot
+import com.benjaminissa.issareader.ui.IssaTheme
 import kotlinx.coroutines.launch
 import java.net.URI
 
@@ -24,7 +22,8 @@ import java.net.URI
  * announcer — and the links it is opened with: `issareader://book/<uuid>`
  * (the widget, a shortcut) and `issareader://continue`.
  *
- * The screens are the UI port's; until they land this draws the app's ground.
+ * Its content is `IssaRoot` in the app's theme, edge to edge: the phase's
+ * screen, the tabs, and the reader over them.
  */
 class MainActivity : ComponentActivity() {
     private val graph: AppGraph get() = (application as IssaApplication).graph
@@ -51,8 +50,11 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) { graph.app.watchForExpiry() }
         }
+        val environment = AppEnvironment.from(graph)
         setContent {
-            Box(Modifier.fillMaxSize().background(Color(0xFFEFE8DC)))
+            IssaTheme {
+                IssaRoot(environment)
+            }
         }
     }
 
