@@ -778,7 +778,7 @@ private fun MenuAction(title: String, symbol: Int, close: () -> Unit, destructiv
     val color = if (destructive) Palette.alert else Palette.ink
     DropdownMenuItem(
         text = { Text(title, style = SystemText.body, color = color) },
-        leadingIcon = { Icon(painterResource(symbol), contentDescription = null, tint = color, modifier = Modifier.size(22.dp)) },
+        trailingIcon = { Icon(painterResource(symbol), contentDescription = null, tint = color, modifier = Modifier.size(22.dp)) },
         onClick = {
             close()
             action()

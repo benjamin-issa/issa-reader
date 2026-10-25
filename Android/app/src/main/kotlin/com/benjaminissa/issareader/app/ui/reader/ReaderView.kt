@@ -639,7 +639,7 @@ private fun SelectionMenu(model: ReaderModel, modifier: Modifier = Modifier) {
                 for (tint in Annotation.Tint.entries) {
                     DropdownMenuItem(
                         text = { Text(tint.title, style = SystemText.body, color = Palette.ink) },
-                        leadingIcon = { Icon(painterResource(Symbols.circleFill), contentDescription = null, tint = ReaderPalette.color(tint), modifier = Modifier.size(18.dp)) },
+                        trailingIcon = { Icon(painterResource(Symbols.circleFill), contentDescription = null, tint = ReaderPalette.color(tint), modifier = Modifier.size(18.dp)) },
                         onClick = {
                             tints = false
                             model.annotate(Annotation.Kind.HIGHLIGHT, tint)
@@ -735,7 +735,7 @@ private fun TopBar(
                 )) {
                     DropdownMenuItem(
                         text = { Text(title, style = SystemText.body, color = Palette.ink) },
-                        leadingIcon = { Icon(painterResource(icon), contentDescription = null, tint = Palette.ink) },
+                        trailingIcon = { Icon(painterResource(icon), contentDescription = null, tint = Palette.ink) },
                         onClick = {
                             menu = false
                             onSheet(kind)
