@@ -81,3 +81,7 @@ rather than silently dropped.
 
 | Suite or test | Reason |
 | --- | --- |
+| IssaCore `IssaLogTests.describesTransportError`, the `code` expectation | A JVM exception has no `NSError` domain and numeric code. `IssaLog.describe` records the exception's class as `domain`; the test checks that, and that the message survives. |
+| IssaCore `StorageRootTests.rootIsUnchangedOffTV` | Application Support and tvOS's Caches root do not exist on Android. Ported as: the root is the directory the app passes to `StorageRoot.configure`, it is not purgeable, and `Books/` sits under it. |
+| IssaCore `DownloadFilenameTests.unreadableDirectoryThrows`, under a privileged user | Permissions do not bind root, which this suite runs as in the container. Where `chmod 000` still leaves the directory readable, the test checks the same refusal for a path that exists and cannot be listed (a file where the directory should be); otherwise it checks the unreadable directory itself. |
+| IssaCore download suites: the real background `URLSession` | The transfers run through a `TransferBackend` the app provides. The suites drive a fake backend whose callbacks land a turn later, as a session's delegate queue does, so what is ported is every rule the manager keeps (fence, pause, cancel, validation, adoption); the session's own behaviour (an invalid session raising `NSGenericException`, a contested identifier) is not reproducible and belongs to the app's backend. |

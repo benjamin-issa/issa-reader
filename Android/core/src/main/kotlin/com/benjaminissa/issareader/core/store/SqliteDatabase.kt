@@ -61,7 +61,7 @@ internal class SqliteDatabase(path: String, busyTimeoutMillis: Int? = null) : Au
     /** What a transaction can do: run statements, and read their rows. */
     class Access internal constructor(private val connection: SQLiteConnection) {
         fun execute(sql: String, vararg arguments: Any?) {
-            prepare(sql, arguments).use { statement -> while (statement.step()) Unit }
+            prepare(sql, arguments).use { statement -> while (statement.step()) { } }
         }
 
         fun <T> query(sql: String, vararg arguments: Any?, row: (Row) -> T): List<T> =

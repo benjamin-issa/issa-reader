@@ -212,7 +212,7 @@ class BookContentService(private val client: ApiClient, cacheDirectory: File? = 
         fun preferredReadingFormat(book: Book): Format? {
             val readaloudUsable = book.readaloud?.filepath != null && book.readaloud.missing != true
             val ebookUsable = book.ebook != null && book.ebook.missing != true
-            if (readaloudUsable && book.readaloud?.isAligned == true) return Format.READALOUD
+            if (readaloudUsable && book.readaloud.isAligned) return Format.READALOUD
             if (ebookUsable) return Format.EBOOK
             if (readaloudUsable) return Format.READALOUD
             return null
