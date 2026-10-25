@@ -6,8 +6,11 @@ import android.content.ContextWrapper
 import android.provider.Settings
 import android.view.View
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -51,6 +54,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.dropShadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -96,7 +100,12 @@ import com.benjaminissa.issareader.app.model.NowPlayingController
 import com.benjaminissa.issareader.app.model.PlaybackSettings
 import com.benjaminissa.issareader.app.reader.PageSize
 import com.benjaminissa.issareader.app.reader.ReaderModel
+import com.benjaminissa.issareader.app.ui.ask.AskPillState
 import com.benjaminissa.issareader.app.ui.ask.AskSheet
+import com.benjaminissa.issareader.app.ui.ask.AskSparkle
+import com.benjaminissa.issareader.app.ui.ask.AskStatusBadge
+import com.benjaminissa.issareader.app.ui.ask.pillState
+import com.benjaminissa.issareader.app.ui.ask.showsBadge
 import com.benjaminissa.issareader.core.KeyValueStore
 import com.benjaminissa.issareader.core.model.Annotation
 import com.benjaminissa.issareader.core.model.ByteCountText
@@ -305,15 +314,43 @@ fun ReaderView(
             }
         }
 
+        // The sparkle's state for this book: working, an answer waiting, or nothing.
+        val ask = environment.ask
+        val askState = if (showsAsk && ask != null) ask.pillState(uuid) else AskPillState.IDLE
+
         TopBar(
             model, edges.top,
             showsAsk = showsAsk,
+            askState = askState,
             onClose = onClose,
             onSheet = { sheet = it },
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .then(if (coachShowing) Modifier.clearAndSetSemantics {} else Modifier),
         )
+
+        // The sparkle that stays while the chrome is away. Reading with the
+        // bars hidden is the ordinary case, and it is exactly when a reader
+        // who closed the sheet is waiting: without this the only sign the app
+        // is working goes with the top bar. Inside the notch, like the bar it
+        // stands in for.
+        AnimatedVisibility(
+            visible = !model.chromeVisible && ask != null && ask.showsBadge(uuid),
+            enter = fadeIn(tween(200)),
+            exit = fadeOut(tween(200)),
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(top = edges.top + Metrics.spacing8, end = Metrics.spacing16),
+        ) {
+            AskStatusBadge(
+                theme,
+                askState,
+                Modifier
+                    .clip(CircleShape)
+                    .clickable(role = Role.Button) { sheet = ReaderSheetKind.ASK }
+                    .testTag("reader.askBadge"),
+            )
+        }
 
         if (coachShowing) {
             ReaderCoachOverlay(
@@ -691,6 +728,7 @@ private fun TopBar(
     model: ReaderModel,
     top: Dp,
     showsAsk: Boolean,
+    askState: AskPillState,
     onClose: () -> Unit,
     onSheet: (ReaderSheetKind) -> Unit,
     modifier: Modifier = Modifier,
@@ -716,7 +754,16 @@ private fun TopBar(
         BarGlyph(Symbols.chevronLeft, "Back to the book", theme, enabled = visible, iconSize = 32.dp, onClick = onClose)
         Spacer(Modifier.weight(1f))
         if (showsAsk) {
-            BarGlyph(Symbols.sparkles, "Ask about this book", theme, enabled = visible, modifier = Modifier.testTag("reader.ask")) {
+            // The sparkle says its state with the glyph: a pulse while an
+            // answer is being worked out, the accent's dot when one waits.
+            BarGlyph(
+                Symbols.sparkles, askState.label, theme, enabled = visible, modifier = Modifier.testTag("reader.ask"),
+                glyph = {
+                    Box(Modifier.clearAndSetSemantics {}) {
+                        AskSparkle(askState, tint = theme.text.color, dot = theme.accent.color)
+                    }
+                },
+            ) {
                 onSheet(ReaderSheetKind.ASK)
             }
         }
@@ -756,6 +803,7 @@ private fun BarGlyph(
     enabled: Boolean,
     iconSize: Dp = 24.dp,
     modifier: Modifier = Modifier,
+    glyph: (@Composable () -> Unit)? = null,
     onClick: () -> Unit,
 ) {
     Box(
@@ -771,7 +819,11 @@ private fun BarGlyph(
             .semantics { contentDescription = label },
         contentAlignment = Alignment.Center,
     ) {
-        Icon(painterResource(icon), contentDescription = null, tint = theme.text.color, modifier = Modifier.size(iconSize))
+        if (glyph != null) {
+            glyph()
+        } else {
+            Icon(painterResource(icon), contentDescription = null, tint = theme.text.color, modifier = Modifier.size(iconSize))
+        }
     }
 }
 
