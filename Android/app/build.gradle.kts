@@ -117,6 +117,7 @@ dependencies {
     testImplementation(libs.robolectric)
     testImplementation(libs.mockwebserver)
     testImplementation(libs.turbine)
+    testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.work.testing)
     testImplementation(libs.media3.test.utils)
     testImplementation(libs.media3.test.utils.robolectric)
