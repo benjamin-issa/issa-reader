@@ -4,6 +4,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.staticCompositionLocalOf
 import com.benjaminissa.issareader.app.AppGraph
+import com.benjaminissa.issareader.app.local.LocalBooksRoute
+import com.benjaminissa.issareader.app.local.LocalLibrary
 import com.benjaminissa.issareader.app.model.AppModel
 import com.benjaminissa.issareader.app.model.BrowserSignInModel
 import com.benjaminissa.issareader.app.model.CoverCache
@@ -35,6 +37,8 @@ import java.net.URI
  *   reader can open.
  * @param localBook a book from the reader's own files, by uuid, and where its
  *   reader's writes go.
+ * @param localRoute where this window is in the local books' flow: the book
+ *   whose reader is over it, and whether the list stands in for sign-in.
  */
 class AppEnvironment(
     val app: AppModel,
@@ -47,6 +51,8 @@ class AppEnvironment(
     val covers: () -> CoverCache = { CoverCache.shared },
     val readerEnvironment: () -> ReaderEnvironment? = { null },
     val localBook: (String) -> LocalReaderBook? = { null },
+    val local: LocalLibrary? = null,
+    val localRoute: LocalBooksRoute? = null,
 ) {
     companion object {
         /** The app's own, from its graph. */
@@ -70,6 +76,8 @@ class AppEnvironment(
                 )
             },
             localBook = { uuid -> graph.local.book(uuid)?.let { LocalReaderBook(it, graph.local) } },
+            local = graph.local,
+            localRoute = graph.localBooksRoute,
         )
     }
 }

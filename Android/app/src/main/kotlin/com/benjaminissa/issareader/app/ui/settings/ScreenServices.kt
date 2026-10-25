@@ -8,6 +8,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.platform.LocalContext
 import com.benjaminissa.issareader.app.AppGraph
+import com.benjaminissa.issareader.app.ask.AskCoordinator
 import com.benjaminissa.issareader.app.IssaApplication
 import com.benjaminissa.issareader.app.local.LocalBooksRoute
 import com.benjaminissa.issareader.app.local.LocalDevice
@@ -40,6 +41,8 @@ class ScreenServices(
     val coverCache: CoverCache = CoverCache.shared,
     /** "1.5.1 (52)", as Settings › About states the build. */
     val versionText: String = "?",
+    /** Ask's coordinator, whose switch Settings carries. Null where Ask is not built. */
+    val ask: AskCoordinator? = null,
 ) {
     companion object {
         fun from(graph: AppGraph): ScreenServices = ScreenServices(
@@ -49,6 +52,7 @@ class ScreenServices(
             local = graph.local,
             localRoute = graph.localBooksRoute,
             versionText = versionText(graph.context),
+            ask = graph.ask,
         )
 
         /** The marketing version and the build number, as Swift's `"\(short) (\(build))"`. */

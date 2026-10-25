@@ -100,7 +100,7 @@ class LocalImportTest : AppSuite() {
         assertTrue("the copy is the file", files.epub.readBytes().contentEquals(fileOf(url).readBytes()))
         assertTrue("the original is never touched", fileOf(url).exists())
         assertTrue("nothing left in flight", local.incoming().isEmpty())
-        // Out of backups, the whole tree: the original is still in Files.
+        // Out of backups, the whole tree: the original is still in the reader's files.
         // Android has no per-file flag; the rules name what is backed up.
         assertTrue("Local/ is backed up: ${backedUpPaths()}", backedUpPaths().none { it.startsWith("file:Local") })
 
@@ -419,7 +419,7 @@ class LocalImportTest : AppSuite() {
         assertTrue(local.library.books.isEmpty())
         assertEquals("whatever was reading it is let go at once", listOf(book.uuid), released)
         assertEquals(
-            "Removed Alice's Adventures in Wonderland. Original kept in Files.",
+            "Removed Alice's Adventures in Wonderland. Original kept in your files.",
             local.library.pendingRemoval?.message,
         )
         assertTrue("still the device's until it goes", book.uuid in local.library.uuids)

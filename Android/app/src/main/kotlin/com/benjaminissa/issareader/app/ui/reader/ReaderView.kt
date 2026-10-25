@@ -183,6 +183,10 @@ fun ReaderView(
     val reduceMotion = rememberReduceMotion()
     val theme = model.style.theme
     val uuid = model.book.uuid
+    // A tapped answer opens its book's reader with the answer's sheet up.
+    environment.ask?.let { ask ->
+        LaunchedEffect(ask.reopenRequest, uuid) { if (ask.takeReopenRequest(uuid)) sheet = ReaderSheetKind.ASK }
+    }
 
     // Puts the settings, this book's own departures from them, and the face
     // found inside the book together into the style the page is set in.

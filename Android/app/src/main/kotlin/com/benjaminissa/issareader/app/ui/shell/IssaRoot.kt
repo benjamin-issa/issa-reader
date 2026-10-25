@@ -24,12 +24,15 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
+import com.benjaminissa.issareader.app.ask.LocalBookRequests
 import com.benjaminissa.issareader.app.model.AppModel
 import com.benjaminissa.issareader.app.model.RootScreen
 import com.benjaminissa.issareader.app.ui.library.showLibrary
 import com.benjaminissa.issareader.app.ui.local.LocalBooksScreen
+import com.benjaminissa.issareader.app.ui.player.PlayerSheet
 import com.benjaminissa.issareader.app.ui.reader.ReaderScreen
 import com.benjaminissa.issareader.app.ui.signin.SignInScreen
+import com.benjaminissa.issareader.core.model.isLocal
 import com.benjaminissa.issareader.core.sync.LibraryArrangement
 import com.benjaminissa.issareader.ui.Palette
 
@@ -49,6 +52,33 @@ fun IssaRoot(environment: AppEnvironment) {
         val rootNav = rememberNavController()
         val state = remember { RootState() }
         val actions = remember(rootNav, state, app) { RootActions(rootNav, state, app) }
+        // Nothing to expand into once the book has stopped.
+        LaunchedEffect(app.playback == null) { if (app.playback == null) state.showsPlayer = false }
+
+        // The books from the reader's files: the route says which one's reader
+        // is over this window, and the root presents it — and takes it down
+        // when the route lets it go (the book removed, a server book pushed).
+        val localRoute = environment.localRoute
+        val local = environment.local
+        if (localRoute != null && local != null) {
+            LaunchedEffect(localRoute, local) { localRoute.observe(app, local, this) }
+            LaunchedEffect(rootNav, localRoute) {
+                snapshotFlow { localRoute.openBook }.collect { uuid ->
+                    val reader = rootNav.currentBackStackEntry?.takeIf { it.destination.hasRoute<ReaderRoute>() }?.toRoute<ReaderRoute>()
+                    when {
+                        uuid != null && reader?.bookUuid != uuid -> actions.openReader(uuid, local = true)
+                        uuid == null && reader?.local == true -> rootNav.popBackStack(RootRoute, inclusive = false)
+                    }
+                }
+            }
+            // A tapped answer for one of those books: not in the catalogue, so
+            // it comes to the local route rather than the app's pending book.
+            LaunchedEffect(localRoute) {
+                snapshotFlow { LocalBookRequests.shared.pending }.collect {
+                    LocalBookRequests.shared.take()?.let(localRoute::open)
+                }
+            }
+        }
 
         // A link to another book arriving while a reader is up takes the
         // reader down, so the tabs underneath can open the link's book; a
@@ -82,8 +112,27 @@ fun IssaRoot(environment: AppEnvironment) {
                         popExitTransition = { slideOutVertically(tween(320)) { it } },
                     ) { entry ->
                         val route = entry.toRoute<ReaderRoute>()
-                        ReaderScreen(bookUuid = route.bookUuid, local = route.local, onClose = { rootNav.popBackStack() })
+                        ReaderScreen(
+                            bookUuid = route.bookUuid,
+                            local = route.local,
+                            onClose = {
+                                if (route.local) localRoute?.openBook = null
+                                rootNav.popBackStack()
+                            },
+                            onOpenPlayer = actions::showPlayer,
+                        )
                     }
+                }
+                // The full player, over the tabs or the reader alike: the
+                // reader's waveform raises it as the mini bar does.
+                if (state.showsPlayer) {
+                    PlayerSheet(
+                        onDismiss = { state.showsPlayer = false },
+                        onReadAlong = {
+                            state.showsPlayer = false
+                            app.playbackBook?.let { actions.openReader(it.uuid, local = it.isLocal) }
+                        },
+                    )
                 }
             }
         }
@@ -96,21 +145,27 @@ private fun PhaseSwitch(state: RootState) {
     val environment = LocalAppEnvironment.current
     val app = environment.app
     // This window's place in the books-from-your-files flow: the list is the
-    // root while signed out once the reader has chosen it. The local-books
-    // port owns the rest of `LocalBooksRoute`.
-    var showsListSignedOut by rememberSaveable { mutableStateOf(false) }
+    // root while signed out once the reader has chosen it — remembered by the
+    // route, so a reader with no server lands on their books every launch.
+    // A window without the route (a test's) keeps it for itself.
+    val route = environment.localRoute
+    var ownShowsList by rememberSaveable { mutableStateOf(false) }
+    val showsListSignedOut = route?.showsListSignedOut ?: ownShowsList
+    fun showList(value: Boolean) {
+        if (route != null) route.showsListSignedOut = value else ownShowsList = value
+    }
     LaunchedEffect(app.phase) {
-        if (app.phase == AppModel.Phase.READY) showsListSignedOut = false
+        if (route == null && app.phase == AppModel.Phase.READY) ownShowsList = false
     }
     when (RootScreen.forPhase(app.phase, showsListSignedOut)) {
         // Deliberately no content, painted in the app's own ground: the
         // launch, this and the library are one continuous colour.
         RootScreen.LAUNCHING -> Box(Modifier.fillMaxSize().background(Palette.paper))
         RootScreen.SIGN_IN -> SignInScreen(
-            onReadFromFiles = if (environment.localBooksAvailable) ({ showsListSignedOut = true }) else null,
-            onStartingSignIn = { showsListSignedOut = false },
+            onReadFromFiles = if (environment.localBooksAvailable) ({ showList(true) }) else null,
+            onStartingSignIn = { showList(false) },
         )
-        RootScreen.LOCAL_BOOKS -> LocalBooksScreen(standalone = true, onConnectServer = { showsListSignedOut = false })
+        RootScreen.LOCAL_BOOKS -> LocalBooksScreen(standalone = true, onConnectServer = { showList(false) })
         RootScreen.LIBRARY -> LibraryShell(state)
     }
 }

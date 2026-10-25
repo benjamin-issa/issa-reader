@@ -45,12 +45,10 @@ import com.benjaminissa.issareader.app.ui.downloads.DownloadRemovalToast
 import com.benjaminissa.issareader.app.ui.library.LibraryScreen
 import com.benjaminissa.issareader.app.ui.library.SeriesListScreen
 import com.benjaminissa.issareader.app.ui.local.LocalBooksScreen
-import com.benjaminissa.issareader.app.ui.player.PlayerSheet
 import com.benjaminissa.issareader.app.ui.reading.ReadingScreen
 import com.benjaminissa.issareader.app.ui.settings.DownloadsScreen
 import com.benjaminissa.issareader.app.ui.settings.SettingsScreen
 import com.benjaminissa.issareader.core.model.Book
-import com.benjaminissa.issareader.core.model.isLocal
 import com.benjaminissa.issareader.core.sync.LibraryService
 import com.benjaminissa.issareader.playback.Observed
 import com.benjaminissa.issareader.playback.PlaybackAction
@@ -149,8 +147,6 @@ fun LibraryShell(state: RootState) {
     LaunchedEffect(libraryNavigator.showRequests) { if (libraryNavigator.showRequests > 0) showLibraryRoot() }
     LaunchedEffect(state.libraryRootRequests) { if (state.libraryRootRequests > 0) libraryNavigator.showLibrary() }
     LaunchedEffect(selected) { switching.active = false }
-    // Nothing to expand into once the book has stopped.
-    LaunchedEffect(app.playback == null) { if (app.playback == null) state.showsPlayer = false }
 
     val snackbar = remember { SnackbarHostState() }
     DownloadRemovalToast(snackbar)
@@ -200,21 +196,10 @@ fun LibraryShell(state: RootState) {
                 composable<SeriesListRoute> { SeriesListScreen() }
                 composable<TagRoute> { TagScreen(it.toRoute<TagRoute>().name) }
                 composable<AuthorRoute> { AuthorScreen(it.toRoute<AuthorRoute>().name) }
-                composable<DownloadsRoute> { DownloadsScreen(onBack = { nav.popBackStack() }) }
+                composable<DownloadsRoute> { DownloadsScreen(app, onBack = { nav.popBackStack() }) }
                 composable<LocalBooksRoute> { LocalBooksScreen(standalone = false, onConnectServer = {}) }
             }
         }
-    }
-
-    if (state.showsPlayer) {
-        val shell = LocalShellActions.current
-        PlayerSheet(
-            onDismiss = { state.showsPlayer = false },
-            onReadAlong = {
-                state.showsPlayer = false
-                app.playbackBook?.let { shell.openReader(it.uuid, local = it.isLocal) }
-            },
-        )
     }
 }
 

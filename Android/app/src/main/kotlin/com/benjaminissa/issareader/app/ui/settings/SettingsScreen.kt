@@ -24,12 +24,14 @@ import androidx.compose.ui.unit.dp
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import com.benjaminissa.issareader.app.ask.AskCoordinator
 import com.benjaminissa.issareader.app.local.LocalBooksCopy
 import com.benjaminissa.issareader.app.local.LocalDevice
 import com.benjaminissa.issareader.app.local.LocalLibrary
 import com.benjaminissa.issareader.app.model.AppModel
 import com.benjaminissa.issareader.app.model.NowPlayingController
 import com.benjaminissa.issareader.app.model.PlaybackSettings
+import com.benjaminissa.issareader.app.ui.ask.askSettingsSection
 import com.benjaminissa.issareader.core.Session
 import com.benjaminissa.issareader.core.model.ServerCapabilities
 import com.benjaminissa.issareader.playback.ProgressScope
@@ -129,6 +131,7 @@ internal fun SettingsRoot(services: ScreenServices, onNavigate: (String) -> Unit
         settings = services.settings,
         nowPlaying = services.nowPlaying,
         local = services.local,
+        ask = services.ask,
         account = rememberSettingsAccount(services.app.session),
         onNavigate = onNavigate,
         onOpenLocalBooks = onOpenLocalBooks,
@@ -150,6 +153,7 @@ internal fun SettingsRootList(
     onNavigate: (String) -> Unit,
     onOpenLocalBooks: () -> Unit,
     initiallyAdvanced: Boolean = false,
+    ask: AskCoordinator? = null,
 ) {
     var advanced by rememberSaveable { mutableStateOf(initiallyAdvanced) }
     var confirmingSignOut by rememberSaveable { mutableStateOf(false) }
@@ -183,7 +187,7 @@ internal fun SettingsRootList(
         // Between reading and the machinery, because that is what it is: a
         // reading feature, off by default, that most readers will decide about
         // once and never revisit.
-        // Ask section: wired at merge (askSettingsSection)
+        if (ask != null) askSettingsSection(ask)
 
         // Server internals and log export serve self-hosters and support, not
         // the general reader, so they collapse one tap down rather than
