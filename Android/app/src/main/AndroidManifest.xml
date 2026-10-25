@@ -75,6 +75,19 @@
             android:foregroundServiceType="dataSync"
             tools:node="merge" />
 
+        <!--
+            ML Kit's own start-up, removed. com.google.mlkit:common declares
+            this provider so ML Kit initialises at every process start, before
+            any of the app's code, and ML Kit reports diagnostics to Google
+            from its first call. With Ask off nothing may go to Google, so the
+            app starts ML Kit itself (MlKitStartup.ensureStarted) only when
+            Ask is turned on, just before its first call.
+        -->
+        <provider
+            android:name="com.google.mlkit.common.internal.MlKitInitProvider"
+            android:authorities="${applicationId}.mlkitinitprovider"
+            tools:node="remove" />
+
         <!-- Android Auto: this is a media app. -->
         <meta-data
             android:name="com.google.android.gms.car.application"
