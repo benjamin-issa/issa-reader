@@ -67,10 +67,12 @@ open class StubServer(private val answering: StubServer.(SentRequest) -> Answer)
                     body = request.body?.utf8() ?: "",
                 )
                 var latch: CountDownLatch? = null
-                val answer: Answer
+                synchronized(lock) { log.add(sent) }
+                // Outside the lock: a rule may hold its own request (a
+                // subclass with holds of its own), and every other request
+                // must still get through while it does.
+                val answer = answering(sent)
                 synchronized(lock) {
-                    log.add(sent)
-                    answer = answering(sent)
                     if (!closed && sent.path in holding) {
                         latch = CountDownLatch(1).also { held.getOrPut(sent.path) { ArrayDeque() }.addLast(it) }
                         heldCounts[sent.path] = (heldCounts[sent.path] ?: 0) + 1

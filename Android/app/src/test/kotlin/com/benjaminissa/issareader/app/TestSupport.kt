@@ -127,11 +127,10 @@ abstract class AppSuite {
  * per server.
  */
 class FreshStorage : ExternalResource() {
-    lateinit var root: File
-        private set
+    val root: File get() = processRoot
 
     override fun before() {
-        root = Files.createTempDirectory("issa-app-tests").toFile()
+        empty()
         StorageRoot.configure(File(root, "files"), File(root, "caches"), isPurgeable = false)
         // The widget's file too: a test's publish never lands where another
         // test, or the next run, reads it.
@@ -140,7 +139,21 @@ class FreshStorage : ExternalResource() {
 
     override fun after() {
         CurrentBookSnapshotStore.configure(null)
-        root.deleteRecursively()
+        empty()
+    }
+
+    /**
+     * One root for the process, emptied around every test rather than replaced:
+     * `BookContentService` resolves its directory once, lazily, as the app
+     * does after configuring the root at launch, so a root moved per test
+     * would leave it reading the first test's.
+     */
+    private fun empty() {
+        root.listFiles()?.forEach { it.deleteRecursively() }
+    }
+
+    private companion object {
+        val processRoot: File by lazy { Files.createTempDirectory("issa-app-tests").toFile().apply { deleteOnExit() } }
     }
 }
 
