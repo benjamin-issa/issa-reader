@@ -53,6 +53,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -155,6 +162,9 @@ internal fun LocalBooksContent(
     var info by rememberSaveable { mutableStateOf(initialInfo) }
     var highlighted by remember { mutableStateOf<String?>(null) }
     var openRow by remember { mutableStateOf<String?>(null) }
+    // The row a hardware keyboard is on: arrows and Tab move it, Enter opens
+    // it, Ctrl+Delete removes it and Ctrl+I shows its Book info.
+    var focusedRow by remember { mutableStateOf<String?>(null) }
     val listState = rememberLazyListState()
 
     // The picker. EPUBs, and anything a provider only knows as bytes: a cloud
@@ -237,7 +247,26 @@ internal fun LocalBooksContent(
             .fillMaxSize()
             .semantics { testTagsAsResourceId = true }
             .testTag("screen.localBooks")
-            .nestedScroll(behavior.nestedScrollConnection),
+            .nestedScroll(behavior.nestedScrollConnection)
+            .onPreviewKeyEvent { event ->
+                if (event.type != KeyEventType.KeyDown || !event.isCtrlPressed) return@onPreviewKeyEvent false
+                when (event.key) {
+                    // Ctrl+O, as File › Add Book… is ⌘O on the Mac.
+                    Key.O -> {
+                        choose()
+                        true
+                    }
+                    Key.Backspace, Key.Delete -> {
+                        LocalBooksKeyboard.removalTarget(focusedRow)?.let { remove(listOf(it)) }
+                        true
+                    }
+                    Key.I -> {
+                        LocalBooksKeyboard.infoTarget(focusedRow, library.books)?.let { info = it }
+                        true
+                    }
+                    else -> false
+                }
+            },
         containerColor = Palette.paper,
         topBar = {
             LocalBooksTitleBar(
@@ -279,6 +308,9 @@ internal fun LocalBooksContent(
                         highlighted = highlighted,
                         openRow = openRow,
                         onOpenRowChange = { openRow = it },
+                        onFocusChange = { uuid, focused ->
+                            if (focused) focusedRow = uuid else if (focusedRow == uuid) focusedRow = null
+                        },
                         onTap = ::tap,
                         onOpen = ::open,
                         onInfo = { info = it.uuid },
@@ -538,6 +570,7 @@ private fun LazyListScope.booksGroup(
     highlighted: String?,
     openRow: String?,
     onOpenRowChange: (String?) -> Unit,
+    onFocusChange: (String, Boolean) -> Unit,
     onTap: (Book) -> Unit,
     onOpen: (Book) -> Unit,
     onInfo: (Book) -> Unit,
@@ -578,7 +611,9 @@ private fun LazyListScope.booksGroup(
                             }
                         },
                         coverCache = services.coverCache,
-                        modifier = Modifier.combinedClickable(onClick = { onTap(book) }, onLongClick = { menu = true }),
+                        modifier = Modifier
+                            .onFocusChanged { onFocusChange(book.uuid, it.isFocused) }
+                            .combinedClickable(onClick = { onTap(book) }, onLongClick = { menu = true }),
                         rowModifier = Modifier.localRowActions(
                                 spoken = facts.spoken,
                                 onOpen = { onTap(book) },

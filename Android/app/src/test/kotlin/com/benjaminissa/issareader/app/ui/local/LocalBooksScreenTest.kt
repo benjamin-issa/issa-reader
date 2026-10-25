@@ -1,6 +1,16 @@
 package com.benjaminissa.issareader.app.ui.local
 
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.hasAnyDescendant
+import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.pressKey
+import androidx.compose.ui.test.requestFocus
+import androidx.compose.ui.test.withKeyDown
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
@@ -70,6 +80,20 @@ class LocalBooksScreenTest {
         compose.waitForIdle()
         assertEquals(null, fixture.local.pendingRemoval)
         assertEquals(SettingsFixture.localBooks.map { it.uuid }.toSet(), fixture.local.books.map { it.uuid }.toSet())
+    }
+
+    /** Ctrl+Delete removes the row the keyboard is on, and nothing when it is on none. */
+    @OptIn(ExperimentalTestApi::class)
+    @Test
+    fun `the keyboard removes only the row it is on`() {
+        show()
+        val second = SettingsFixture.localBooks[1]
+        compose.onRoot().performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(Key.Delete) } }
+        assertEquals(null, fixture.local.pendingRemoval)
+        compose.onAllNodes(hasClickAction() and hasAnyDescendant(hasTestTag("localBook.row")), useUnmergedTree = true)[1].requestFocus()
+        compose.onRoot().performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(Key.Delete) } }
+        compose.waitForIdle()
+        assertEquals(listOf(second.uuid), fixture.local.pendingRemoval?.books?.map { it.uuid })
     }
 
     @Test
