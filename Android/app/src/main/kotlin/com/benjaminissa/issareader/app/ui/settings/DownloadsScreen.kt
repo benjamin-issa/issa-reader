@@ -152,7 +152,7 @@ internal fun DownloadsScreen(app: AppModel, onBack: (() -> Unit)?, scanned: Down
         AlertDialog(
             onDismissRequest = { confirmingSweep = false },
             containerColor = Palette.surface,
-            title = { Text("Remove ${ByteCountText.text(inventory.orphanBytes)} of downloads?", style = SystemText.title3.copy(fontWeight = FontWeight.SemiBold), color = Palette.ink) },
+            title = { Text("Remove ${ByteCountText.text(inventory.orphanBytes)} of downloads?", style = SystemText.title3, color = Palette.ink) },
             text = {
                 Text(
                     "These files belong to books that are no longer in your library. Nothing you can still see in the app is affected.",

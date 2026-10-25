@@ -7,7 +7,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.sizeIn
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyListScope
@@ -247,11 +250,17 @@ internal fun ChoiceDialog(
     cancelTitle: String = "Cancel",
 ) {
     BasicAlertDialog(onDismissRequest = onDismiss) {
-        Surface(shape = RoundedCornerShape(28.dp), color = Palette.surface, tonalElevation = 0.dp) {
-            Column(Modifier.padding(top = Metrics.spacing24, bottom = Metrics.spacing12)) {
+        // Material's alert frame: as wide as its content, between 280 and 560.
+        Surface(
+            modifier = Modifier.sizeIn(minWidth = 280.dp, maxWidth = 560.dp),
+            shape = RoundedCornerShape(28.dp),
+            color = Palette.surface,
+            tonalElevation = 0.dp,
+        ) {
+            Column(Modifier.width(IntrinsicSize.Max).padding(top = Metrics.spacing24, bottom = Metrics.spacing12)) {
                 Text(
                     title,
-                    style = SystemText.title3.copy(fontWeight = FontWeight.SemiBold),
+                    style = SystemText.title3,
                     color = Palette.ink,
                     modifier = Modifier.padding(horizontal = Metrics.spacing24),
                 )

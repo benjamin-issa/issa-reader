@@ -101,7 +101,7 @@ internal fun DiagnosticsScreen(onBack: (() -> Unit)?, preview: Pair<String, Int>
         AlertDialog(
             onDismissRequest = { confirmingClear = false },
             containerColor = Palette.surface,
-            title = { Text("Clear the log?", style = SystemText.title3.copy(fontWeight = FontWeight.SemiBold), color = Palette.ink) },
+            title = { Text("Clear the log?", style = SystemText.title3, color = Palette.ink) },
             confirmButton = {
                 TextButton(onClick = {
                     confirmingClear = false
