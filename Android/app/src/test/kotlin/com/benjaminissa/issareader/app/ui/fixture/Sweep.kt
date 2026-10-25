@@ -1,7 +1,9 @@
 package com.benjaminissa.issareader.app.ui.fixture
 
+import androidx.test.core.app.ApplicationProvider
+import com.benjaminissa.issareader.app.ask.AskCoordinator
+import com.benjaminissa.issareader.app.ask.CountingPlatform
 import com.benjaminissa.issareader.app.model.AppModel
-import com.benjaminissa.issareader.app.processStorageRoot
 import com.benjaminissa.issareader.app.model.BrowserSignInModel
 import com.benjaminissa.issareader.app.model.CoverCache
 import com.benjaminissa.issareader.app.model.CustomFonts
@@ -9,22 +11,23 @@ import com.benjaminissa.issareader.app.model.DeviceSignInModel
 import com.benjaminissa.issareader.app.model.FontImport
 import com.benjaminissa.issareader.app.model.NowPlayingController
 import com.benjaminissa.issareader.app.model.PlaybackSettings
+import com.benjaminissa.issareader.app.processStorageRoot
 import com.benjaminissa.issareader.app.reader.ReaderServices
 import com.benjaminissa.issareader.app.ui.reader.QuietBackend
 import com.benjaminissa.issareader.app.ui.reader.ReaderEnvironment
 import com.benjaminissa.issareader.app.ui.shell.AppEnvironment
+import com.benjaminissa.issareader.ask.AskIndexStore
 import com.benjaminissa.issareader.core.InMemoryKeyValueStore
 import com.benjaminissa.issareader.core.Session
 import com.benjaminissa.issareader.core.StorageRoot
 import com.benjaminissa.issareader.core.auth.HttpDeviceGrantTransport
 import com.benjaminissa.issareader.core.networking.MonitoredReachability
 import com.benjaminissa.issareader.render.android.ReaderFonts
-import androidx.test.core.app.ApplicationProvider
+import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.awaitCancellation
-import java.io.File
 
 /**
  * The layout sweep's app: an [AppEnvironment] in front of [FixtureServer], on
@@ -56,6 +59,10 @@ object Sweep {
      */
     private fun useStorage() {
         val storage = processStorageRoot
+        // Emptied first, as the model suites empty it around themselves: the
+        // library store lives here too, and a position an earlier test saved
+        // (a book opened in the reader) changed which book Continue showed.
+        storage.listFiles()?.forEach { it.deleteRecursively() }
         StorageRoot.configure(root = File(storage, "files"), caches = File(storage, "caches"), isPurgeable = false)
         FixtureLibrary.plantDownloads()
     }
@@ -97,6 +104,9 @@ object Sweep {
             readerEnvironment = { ReaderEnvironment(settings, fonts, defaults, scope, app, nowPlaying, fontImport = fontImport) },
             fontImport = fontImport,
             versionText = "1.5.1 (52)",
+            // Settings carries Ask's section, as the iPhone's sweep shows it:
+            // off, so nothing is asked of the stand-in for Gemini Nano.
+            ask = AskCoordinator(settings, CountingPlatform(), defaults, scope, AskIndexStore(File(root, "Ask"))),
         )
     }
 }

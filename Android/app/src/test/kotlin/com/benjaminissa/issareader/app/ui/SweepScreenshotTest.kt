@@ -2,6 +2,7 @@ package com.benjaminissa.issareader.app.ui
 
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasSetTextAction
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onRoot
@@ -117,6 +118,14 @@ abstract class SweepScreenshotTest(private val device: Sweep.Device) {
         compose.onNode(hasText("Gothic Horror") and hasClickAction()).performClick()
         driver.waitForNode(hasText("2 BOOKS"))
         capture("series")
+    }
+
+    @Test
+    fun settings() {
+        driver.launch(signedIn = true)
+        driver.tab("Settings")
+        driver.waitForNode(hasTestTag("screen.settings"))
+        capture("settings")
     }
 
     @Test
