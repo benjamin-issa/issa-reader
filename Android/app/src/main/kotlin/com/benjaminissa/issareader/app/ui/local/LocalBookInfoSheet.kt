@@ -51,6 +51,7 @@ import com.benjaminissa.issareader.app.ui.player.BookCoverImage
 import com.benjaminissa.issareader.core.model.Book
 import com.benjaminissa.issareader.core.model.ByteCountText
 import com.benjaminissa.issareader.core.model.LocalCopy
+import com.benjaminissa.issareader.ui.WrappingText
 import com.benjaminissa.issareader.ui.Metrics
 import com.benjaminissa.issareader.ui.Overline
 import com.benjaminissa.issareader.ui.Palette
@@ -142,7 +143,7 @@ internal fun LocalBookInfoContent(
                 LocalBookInfo.aboutText(book.description)?.let { about ->
                     Column(verticalArrangement = Arrangement.spacedBy(Metrics.spacing8)) {
                         Overline("About this book")
-                        Text(about, style = Typography.serif(17f), color = Palette.inkSecondary)
+                        WrappingText(about, style = Typography.serif(17f), color = Palette.inkSecondary)
                     }
                 }
             }
@@ -167,7 +168,7 @@ private fun Hero(book: Book, isMissing: Boolean, coverCache: CoverCache) {
     Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(Metrics.spacing16)) {
         BookCoverImage(book, session = null, cache = coverCache, modifier = Modifier.width(96.dp).alpha(if (isMissing) 0.5f else 1f))
         Column(verticalArrangement = Arrangement.spacedBy(Metrics.spacing4)) {
-            Text(book.title, style = Typography.title, color = if (isMissing) Palette.inkSecondary else Palette.ink)
+            WrappingText(book.title, style = Typography.title, color = if (isMissing) Palette.inkSecondary else Palette.ink)
             if (book.byline.isNotEmpty()) Text(book.byline, style = Typography.body, color = Palette.inkSecondary)
             val seconds = book.narrationDuration
             if (isMissing) {

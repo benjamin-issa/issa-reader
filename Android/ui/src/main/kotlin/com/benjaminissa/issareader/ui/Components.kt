@@ -130,7 +130,7 @@ fun PalettePlaceholder(
     ) {
         Icon(painterResource(symbol), contentDescription = null, tint = Palette.inkQuaternary, modifier = Modifier.size(40.dp))
         Text(title, style = Typography.headline, color = Palette.ink, textAlign = TextAlign.Center)
-        Text(message, style = Typography.footnote, color = Palette.inkTertiary, textAlign = TextAlign.Center)
+        WrappingText(message, style = Typography.footnote, color = Palette.inkTertiary, textAlign = TextAlign.Center)
         if (actionTitle != null && action != null) {
             TextButton(onClick = action) {
                 Text(actionTitle, style = Typography.callout.copy(fontWeight = FontWeight.SemiBold), color = Palette.tangerinePressed)

@@ -52,6 +52,7 @@ import com.benjaminissa.issareader.app.model.BrowserSignInModel
 import com.benjaminissa.issareader.app.model.DeviceSignInModel
 import com.benjaminissa.issareader.app.model.SignInForm
 import com.benjaminissa.issareader.app.ui.shell.LocalAppEnvironment
+import com.benjaminissa.issareader.ui.WrappingText
 import com.benjaminissa.issareader.ui.Metrics
 import com.benjaminissa.issareader.ui.Overline
 import com.benjaminissa.issareader.ui.Palette
@@ -232,8 +233,8 @@ private fun SignInFrame(content: @Composable () -> Unit) {
 private fun ExpiredNotice(server: String, onSignInAgain: () -> Unit, onReadFromFiles: (() -> Unit)?) {
     Column(verticalArrangement = Arrangement.spacedBy(Metrics.spacing24)) {
         Overline("Signed out", color = Palette.tangerine)
-        Text("Your session has ended.", style = Typography.displayLarge, color = Palette.ink)
-        Text(
+        WrappingText("Your session has ended.", style = Typography.displayLarge, color = Palette.ink)
+        WrappingText(
             "Sessions last about a month. Your library and downloads are still here — sign in again to carry on.",
             style = Typography.body,
             color = Palette.inkSecondary,
@@ -261,12 +262,12 @@ private fun ServerForm(
         Column(verticalArrangement = Arrangement.spacedBy(Metrics.spacing8)) {
             Overline("Issa Reader", color = Palette.tangerine)
             Text("Welcome back.", style = Typography.displayLarge, color = Palette.ink)
-            Text("Connect to your server and pick up exactly where the narrator left off.", style = Typography.body, color = Palette.inkSecondary)
+            WrappingText("Connect to your server and pick up exactly where the narrator left off.", style = Typography.body, color = Palette.inkSecondary)
         }
         Column(verticalArrangement = Arrangement.spacedBy(Metrics.spacing8)) {
             Overline("Server")
             ServerField(address, onAddressChange, onGo = { if (address.isNotEmpty() && !connecting) onContinue() })
-            Text(
+            WrappingText(
                 "Your library's web address. On your own network it might look like 192.168.1.10:8001.",
                 style = Typography.footnote,
                 color = Palette.inkTertiary,
@@ -279,8 +280,8 @@ private fun ServerForm(
         }
         // The server's answer, then this attempt's: two slots, because they
         // say different things.
-        if (loadError != null) Text(loadError, style = Typography.footnote, color = Palette.alert)
-        if (signInNote != null) Text(signInNote, style = Typography.footnote, color = Palette.inkSecondary)
+        if (loadError != null) WrappingText(loadError, style = Typography.footnote, color = Palette.alert)
+        if (signInNote != null) WrappingText(signInNote, style = Typography.footnote, color = Palette.inkSecondary)
 
         Column(verticalArrangement = Arrangement.spacedBy(Metrics.spacing8 + 2.dp)) {
             PrimaryButton(
@@ -290,7 +291,7 @@ private fun ServerForm(
                 working = connecting,
                 trailingIcon = Symbols.arrowUpRight,
             )
-            Text(
+            WrappingText(
                 "Your library's own sign-in page opens, then you land back here.",
                 style = Typography.footnote,
                 color = Palette.inkTertiary,

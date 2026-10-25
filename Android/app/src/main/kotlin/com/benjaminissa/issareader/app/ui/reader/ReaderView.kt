@@ -107,6 +107,7 @@ import com.benjaminissa.issareader.render.ReaderChrome
 import com.benjaminissa.issareader.render.ReaderTapZone
 import com.benjaminissa.issareader.render.ReaderTheme
 import com.benjaminissa.issareader.render.android.ReaderFonts
+import com.benjaminissa.issareader.ui.WrappingText
 import com.benjaminissa.issareader.ui.Metrics
 import com.benjaminissa.issareader.ui.Palette
 import com.benjaminissa.issareader.ui.SkipGlyph
@@ -954,7 +955,7 @@ private fun DownloadingView(model: ReaderModel, theme: ReaderTheme, received: Lo
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(Metrics.spacing16),
     ) {
-        Text(model.book.title, style = Typography.title, color = theme.text.color, textAlign = TextAlign.Center)
+        WrappingText(model.book.title, style = Typography.title, color = theme.text.color, textAlign = TextAlign.Center)
         val numbers = Typography.caption.copy(fontFeatureSettings = "tnum")
         if (total > 0) {
             LinearProgressIndicator(

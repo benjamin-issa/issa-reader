@@ -83,6 +83,7 @@ import com.benjaminissa.issareader.core.model.ReadingProgress
 import com.benjaminissa.issareader.core.model.SeriesText
 import com.benjaminissa.issareader.core.networking.isWebLink
 import com.benjaminissa.issareader.ui.HtmlText
+import com.benjaminissa.issareader.ui.LastWords
 import com.benjaminissa.issareader.ui.LocalPlayerBand
 import com.benjaminissa.issareader.ui.Metrics
 import com.benjaminissa.issareader.ui.Overline
@@ -91,6 +92,7 @@ import com.benjaminissa.issareader.ui.ProgressBar
 import com.benjaminissa.issareader.ui.Symbols
 import com.benjaminissa.issareader.ui.SystemText
 import com.benjaminissa.issareader.ui.Typography
+import com.benjaminissa.issareader.ui.WrappingText
 import com.benjaminissa.issareader.ui.colorFromHexString
 import kotlinx.coroutines.launch
 import java.net.URI
@@ -176,7 +178,7 @@ private fun BookDetailContent(book: Book) {
         // showed up on screen verbatim.
         SelectionContainer(margin) {
             Text(
-                HtmlText.annotated(HtmlText.cached(description), linkColor = Palette.tangerine),
+                LastWords.together(HtmlText.annotated(HtmlText.cached(description), linkColor = Palette.tangerine)),
                 style = Typography.body,
                 color = Palette.inkSecondary,
             )
@@ -204,13 +206,13 @@ private fun Hero(book: Book) {
             // The title and its subtitle as one block, set tighter than the
             // column, so the subtitle reads as part of the title.
             Column(verticalArrangement = Arrangement.spacedBy(Metrics.spacing4)) {
-                Text(book.title, style = Typography.title, color = Palette.ink)
-                book.displaySubtitle?.let { Text(it, style = Typography.bookTitle, color = Palette.inkSecondary) }
+                WrappingText(book.title, style = Typography.title, color = Palette.ink)
+                book.displaySubtitle?.let { WrappingText(it, style = Typography.bookTitle, color = Palette.inkSecondary) }
             }
             SeriesLines(book)
-            Text(book.byline, style = Typography.callout, color = Palette.inkSecondary)
+            WrappingText(book.byline, style = Typography.callout, color = Palette.inkSecondary)
             if (book.narrators.isNotEmpty()) {
-                Text("Narrated by " + book.narrators.joinToString(", ") { it.name }, style = Typography.footnote, color = Palette.inkTertiary)
+                WrappingText("Narrated by " + book.narrators.joinToString(", ") { it.name }, style = Typography.footnote, color = Palette.inkTertiary)
             }
             // Wrapping, not a fixed row: "Read-along · 5h 4m" beside a status
             // pill overflows a phone column.
