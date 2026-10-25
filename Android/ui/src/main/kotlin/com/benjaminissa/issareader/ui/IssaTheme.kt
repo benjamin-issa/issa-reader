@@ -84,7 +84,9 @@ private val materialTypography = MaterialTypography(
     displayMedium = SystemText.largeTitle,
     displaySmall = SystemText.title1,
     headlineLarge = SystemText.title1,
-    headlineMedium = SystemText.title2,
+    // Material's large top app bar sets its expanded title in headlineMedium:
+    // the iPhone's large title.
+    headlineMedium = SystemText.largeTitle,
     headlineSmall = SystemText.title3,
     titleLarge = SystemText.navigationTitle,
     titleMedium = SystemText.headline,
