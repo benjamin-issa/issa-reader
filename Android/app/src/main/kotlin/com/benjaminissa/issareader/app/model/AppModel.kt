@@ -322,7 +322,9 @@ class AppModel(
 
             // The local store first, and what is already known on screen: a
             // reader opening the app on a train should see their shelf.
+            val replacedStore = store
             store = runCatching { LibraryStore(url.toString()) }.getOrNull()
+            closeStore(replacedStore)
             runCatching { store?.ratings() }.getOrNull()?.takeIf { it.isNotEmpty() }?.let { ratings = it }
             defaults.getString(accountKey(url))?.let { account -> runCatching { store?.setAccount(account) } }
             // A session again means the widget may be written again.
@@ -490,6 +492,7 @@ class AppModel(
         leaveAccount(AccountExit.SIGN_OUT, nowPlaying)
 
         // What only a sign-out lets go of.
+        closeStore(store)
         store = null
         session = null
         if (!keepDownloads) {
@@ -610,6 +613,20 @@ class AppModel(
     private fun localBookFolders(): Set<String> {
         val entries = File(storageRoot, "Local").listFiles() ?: return emptySet()
         return entries.map { it.name }.filterNot { it.startsWith(".") }.toSet()
+    }
+
+    /**
+     * Closes a store the app has let go of, rather than leaving its connection
+     * to the collector: an open one keeps contending for the file's locks.
+     *
+     * Off the main thread, because closing waits for a transaction still in
+     * flight on it. Every caller reaches the store through `runCatching`, so a
+     * departed account's refresh or save that finds it closed gives up, as it
+     * should.
+     */
+    private fun closeStore(store: LibraryStore?) {
+        store ?: return
+        scope.launch(Dispatchers.IO) { runCatching { store.close() } }
     }
 
     /** Retires a queue, and closes its connection once whatever holds its drain lock has let go. */

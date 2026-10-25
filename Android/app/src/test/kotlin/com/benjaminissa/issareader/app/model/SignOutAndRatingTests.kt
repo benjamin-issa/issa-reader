@@ -4,6 +4,8 @@ import com.benjaminissa.issareader.app.AppSuite
 import com.benjaminissa.issareader.app.ScriptedServer
 import com.benjaminissa.issareader.app.SharedFixtures
 import com.benjaminissa.issareader.app.TestTokens
+import com.benjaminissa.issareader.app.Answer
+import com.benjaminissa.issareader.app.StubServer
 import com.benjaminissa.issareader.app.close
 import com.benjaminissa.issareader.app.mainTest
 import com.benjaminissa.issareader.app.temporaryDirectory
@@ -92,6 +94,56 @@ class SignOutStateTest : AppSuite() {
             token.close()
             scope.close()
         }
+    }
+
+    /**
+     * The store a sign-out lets go of is closed, not left to the collector:
+     * an open connection on the file kept contending for its locks with the
+     * next account's.
+     */
+    @Test
+    fun theStoreASignOutLetsGoOfIsClosed() = mainTest {
+        val scope = testScope()
+        val app = testApp(scope)
+        val directory = temporaryDirectory("sign-out-store")
+        val store = LibraryStore("https://departed.storyteller.test", directory)
+        app.useStore(store)
+
+        app.signOut(keepDownloads = true)
+
+        assertTrue(
+            "the departed account's store is still open",
+            waitUntil { runCatching { store.allBooks() }.isFailure },
+        )
+        scope.close()
+        directory.deleteRecursively()
+    }
+
+    /**
+     * And so is the one a connect to another server replaces. The new store
+     * is another connection, to another file, and stays open.
+     */
+    @Test
+    fun theStoreAServerSwitchReplacesIsClosed() = mainTest {
+        val scope = testScope()
+        val app = testApp(scope)
+        val directory = temporaryDirectory("switch-store")
+        val departed = LibraryStore("https://departed.storyteller.test", directory)
+        app.useStore(departed)
+        val server = StubServer { Answer(401) }
+
+        app.connect(server.url.toString())
+
+        val arrived = checkNotNull(app.store)
+        assertTrue("connect has to have opened the second server's store", arrived !== departed)
+        assertTrue(
+            "the first server's store is still open",
+            waitUntil { runCatching { departed.allBooks() }.isFailure },
+        )
+        assertTrue("the second server's store was closed with it", runCatching { arrived.allBooks() }.isSuccess)
+        server.close()
+        scope.close()
+        directory.deleteRecursively()
     }
 }
 
