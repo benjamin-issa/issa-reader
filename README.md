@@ -1,9 +1,12 @@
 # Issa Reader
 
 A native Apple client suite for **[Storyteller](https://storyteller-platform.dev/)** —
-ebooks, audiobooks, and synchronised read-along on iPhone, iPad, Apple TV and the Mac.
+ebooks, audiobooks, and synchronised read-along on iPhone, iPad, Apple TV and the Mac —
+and its Android counterpart, for phones and Android Auto.
 
-Written in Swift 6 for iOS 26, macOS 26 and tvOS 26, built with Xcode 27.
+Written in Swift 6 for iOS 26, macOS 26 and tvOS 26, built with Xcode 27. The
+Android app is written in Kotlin with Jetpack Compose for Android 12 and later;
+see [Android](#android).
 
 ![Read-along on iPhone](docs/screenshots/ios-09-readalong-highlight.png)
 
@@ -51,6 +54,7 @@ accommodate it.
 | Ask about a book | A question about the story so far, answered on the device by Apple Intelligence from the part you have actually read — never from further on. Off by default; iPhone, iPad and Mac with Apple Intelligence, not Apple TV |
 | Widget | Current book, chapter and progress from a shared App Group snapshot |
 | Books from your files | With or without a server, a DRM-free EPUB chosen from Files or iCloud Drive is copied into the app and read on that device alone, with read-along narration when it has media overlays. Kept apart from the server's library and never sent anywhere; iPhone, iPad and Mac, not Apple TV |
+| Android | The iPhone app on Android phones: the same sign-in, library, reader, read-along, player, remappable controls, books from your files, widget and Ask (by Gemini Nano, where the phone has it), with Android Auto in CarPlay's place |
 
 ## Layout
 
@@ -68,6 +72,7 @@ Apps/
   IssaReader-tvOS     Apple TV
   IssaWidgets         WidgetKit extension
   Shared              views and app model used by more than one platform
+Android/              the Android app and its modules (see "Android" below)
 Tools/
   docker    local Storyteller + Keycloak stack and its provisioning scripts
   scripts   fixture generation, and the app-icon generators (see Tools/design/app-icon/ICON.md)
@@ -213,6 +218,55 @@ a real one rather than a remembered token. The verdicts, screenshots and the app
 `.build/live-check/<label>/`. `--platform tvos` runs the television's share on
 the Apple TV simulator, by remote: the pairing, the library, the session and
 the server version.
+
+## Android
+
+`Android/` is the same app for Android phones, with Android Auto, written in
+Kotlin and Jetpack Compose. It is a port, not a second design: every module
+mirrors a Swift package and passes that package's own test suites, read from
+the same fixtures. It looks like the iPhone app, with the same screens, type,
+colours and covers, while the system's own controls are Material 3 in the
+app's palette and the system text is Roboto.
+
+| Swift | Android | |
+| --- | --- | --- |
+| IssaCore | `:core` | models, networking, auth, sync, downloads |
+| IssaEPUB | `:epub` | EPUB container and package parsing, SMIL |
+| IssaRender | `:render`, `:render-android` | the chapter parser (same text, same offsets), then pagination with `StaticLayout` |
+| IssaPlayback | `:playback`, `:playback-android` | the coordinators and control remapping, then Media3 ExoPlayer |
+| IssaUI | `:ui` | palette, type ramp, the bundled fonts (read from IssaUI's resources), Material Symbols |
+| IssaAsk | `:ask`, `:ask-android` | the same engine, answered by Gemini Nano through ML Kit |
+| Apps/Shared, Apps/IssaReader-iOS | `:app` | the app model, the screens, the media service and Android Auto, the widget and shortcuts |
+
+The platform's own features stand in for the Apple ones:
+
+| Apple | Android |
+| --- | --- |
+| Sign-in browser | Chrome Auth Tab, or a pairing code where Auth Tab is unsupported |
+| CarPlay | Android Auto: the same three tabs, the chapter queue, the rate button, plus voice search |
+| Siri's "Continue reading" | a "Continue reading" launcher shortcut |
+| Spotlight | recent books as launcher shortcuts |
+| WidgetKit | a home-screen widget (Glance) |
+| Apple Intelligence | Gemini Nano, on the phones that have it |
+| Handoff | none |
+
+Building it needs JDK 21 and the Android SDK (platform 37, build tools 36);
+Android Studio brings both. The Gradle wrapper fetches everything else.
+
+```bash
+cd Android
+echo "sdk.dir=$HOME/Library/Android/sdk" > local.properties   # wherever the SDK is
+./gradlew test                  # every module's suites; no device or server needed
+./gradlew :app:installDebug     # onto the attached phone or emulator
+```
+
+The suites take the repository's root from the build, so they read
+`Packages/*/Tests/Fixtures` in place. `scripts/android-release-tests.sh` runs
+them under the release switch, and CLAUDE.md has the rest of the Android
+release rule. Point an emulator at the local server below by the Mac's LAN
+address, as a phone is: the emulator reaches it too, and the server's sign-in
+has to see one host throughout (see below). `10.0.2.2`, the emulator's name for
+the Mac, would be a second one.
 
 ## Notes on the server
 

@@ -58,6 +58,8 @@ mkdir -p "$OUT"
 rm -f "$OUT"/*.log "$OUT/summary.txt"
 RESULTS=()
 FAILED=0
+# shasum on the Mac, sha256sum elsewhere.
+sha256() { if command -v shasum >/dev/null; then shasum -a 256 "$1"; else sha256sum "$1"; fi; }
 pass() { RESULTS+=("PASS $1"); }
 fail() { RESULTS+=("FAIL $1"); FAILED=1; }
 note() { RESULTS+=("NOT RUN $1"); }
@@ -74,7 +76,7 @@ finish() {
     echo "when         $(date -u +%Y-%m-%dT%H:%M:%SZ)"
     for book in /tmp/pw2.epub /tmp/pw3.epub /tmp/pw3-loop.epub /tmp/pw3-beta46.epub /tmp/pw3-loop-beta46.epub /tmp/pw3-beta40.epub /tmp/pw3-loop-beta40.epub; do
       if [ -f "$book" ]; then
-        echo "staged       $book sha256 $(shasum -a 256 "$book" | cut -c1-16)"
+        echo "staged       $book sha256 $(sha256 "$book" | cut -c1-16)"
       else
         echo "staged       $book absent"
       fi
@@ -145,9 +147,13 @@ if [ "$status" = 0 ]; then pass "screenshots: match their baselines"; else fail 
 
 if [ -n "$ASK_DEVICE" ]; then
   echo "▸ real-model Ask suites on $ASK_DEVICE"
+  # The two opt-in recorders are left out by name, as the Swift run leaves out
+  # AskScorecardTests and RethinkExperiments: unasked, they would skip.
+  rm -rf ask-android/build/outputs/androidTest-results/connected
   set +e
   ANDROID_SERIAL="$ASK_DEVICE" ./gradlew :ask-android:connectedDebugAndroidTest \
       -Pandroid.testInstrumentationRunnerArguments.ISSA_RELEASE_RUN=1 \
+      -Pandroid.testInstrumentationRunnerArguments.notClass=com.benjaminissa.issareader.ask.android.AskScorecardTest,com.benjaminissa.issareader.ask.android.RethinkExperiments \
       --console=plain > "$OUT/ask-device.log" 2>&1
   status=$?
   set -e

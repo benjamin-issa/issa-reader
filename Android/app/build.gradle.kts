@@ -1,4 +1,27 @@
+import java.util.Properties
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
+/**
+ * The marketing version is the Apple apps' (`project.yml`), so one release
+ * carries one number on every platform. Play's build number is its own
+ * counter, in `version.properties`, which `scripts/android-release.sh` raises.
+ */
+val marketingVersion: String = rootProject.file("../project.yml").readLines()
+    .firstNotNullOfOrNull { Regex("""^\s*MARKETING_VERSION:\s*"?([^"\s]+)"?""").find(it)?.groupValues?.get(1) }
+    ?: error("MARKETING_VERSION is missing from project.yml")
+val buildNumber: Int = Properties()
+    .apply { rootProject.file("version.properties").inputStream().use(::load) }
+    .getProperty("versionCode").toInt()
+
+/**
+ * The upload key's properties file — `storeFile`, `storePassword`, `keyAlias`,
+ * `keyPassword` — kept outside the repository: `ISSA_ANDROID_UPLOAD_KEY`, or
+ * `~/.android-upload-key.properties`. Without one a release build is unsigned.
+ */
+val uploadKey: Properties? = (System.getenv("ISSA_ANDROID_UPLOAD_KEY")
+    ?: "${System.getProperty("user.home")}/.android-upload-key.properties")
+    .let(::File).takeIf { it.isFile }
+    ?.let { file -> Properties().apply { file.inputStream().use(::load) } }
 
 plugins {
     alias(libs.plugins.android.application)
@@ -15,15 +38,25 @@ android {
         applicationId = "com.benjaminissa.issareader"
         minSdk = 31
         targetSdk = 36
-        // The same marketing version as the Apple apps; the build number is
-        // Android's own counter (docs/RELEASE.md).
-        versionName = "1.5.1"
-        versionCode = 1
+        versionName = marketingVersion
+        versionCode = buildNumber
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    signingConfigs {
+        if (uploadKey != null) {
+            create("upload") {
+                storeFile = file(uploadKey.getProperty("storeFile"))
+                storePassword = uploadKey.getProperty("storePassword")
+                keyAlias = uploadKey.getProperty("keyAlias")
+                keyPassword = uploadKey.getProperty("keyPassword")
+            }
+        }
     }
 
     buildTypes {
         release {
+            signingConfig = signingConfigs.findByName("upload")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")

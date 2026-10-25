@@ -96,6 +96,82 @@ bring them up is in the README, under "A local server to talk to".
 If either server cannot be brought up, the release waits. It does not ship on
 the strength of one generation.
 
+## Android releases
+
+The Android app (`Android/`, phone and Android Auto) follows the same rule,
+against the same servers. Every Android release, whether an upload to a Play
+testing track or a production rollout, is tested against **both** release
+pins, and against the legacy rows as "Older servers" below requires. "All
+tests" on Android means all of these:
+
+1. **Every module's suites**, through `scripts/android-release-tests.sh`. It
+   runs each module's JVM and Robolectric tests through Gradle, one module at
+   a time, under `ISSA_RELEASE_RUN=1`: `:core`, `:epub`, `:render`, `:playback`,
+   `:ask`, `:ui`, `:render-android`, `:playback-android`, `:ask-android` and
+   `:app`. It then verifies the screenshot baselines (`verifyRoborazziDebug`).
+   It fails the run on any skipped test, any failure, or a module that ran no
+   tests. `.build/android-release-tests/summary.txt` is the record.
+   - **Fixtures.** The suites read the Swift suites' fixtures where they lie, in
+     `Packages/*/Tests/Fixtures`, so every server generation's captured
+     responses and both read-along books are decoded on Android too.
+   - **Parser parity.** The run includes the chapter parser's parity check
+     against the goldens in `Packages/IssaRender/Tests/Fixtures/parity/`.
+     Those are written on the Mac by
+     `ISSA_WRITE_PARITY_GOLDENS=1 swift test --filter ParityGoldenTests`, and
+     written again and committed whenever the Swift parser's output changes.
+     Absent goldens fail a release run on either platform: a position saved on
+     one platform must land on the same sentence on the other.
+   - **Real-model Ask suites.** `SystemAnswerModelTest` and
+     `RegressionQuestionsTest` need Gemini Nano, which no emulator has. With
+     `--ask-device <serial>` naming a phone that has it, they run there and
+     must pass. Without such a phone to hand, the summary records them as NOT
+     RUN, and only then may a release go ahead without them. The two opt-in
+     recorders, `AskScorecardTest` and `RethinkExperiments`, are left out by
+     name.
+2. **The real-alignment suites, with their files present.** `:epub`'s
+   `RealAlignmentTest` and `RealAlignmentV3Test` read the same seven
+   `/tmp/pw*.epub` files as item 2 above, copied from the same place. Under
+   the release switch they fail rather than skip when the files are absent.
+3. **Live checks, against each server, on a phone or emulator running Android
+   12 or later.** `scripts/android-live-check.sh <server> <label>` installs the
+   app fresh (`--serial` names the device; the only one attached by default).
+   It then:
+   - pairs the app by device code, approved through `approve-device.mjs`;
+   - drives the app through `Android/app/src/androidTest`'s live test: the
+     library and its covers load and the session survives them, Settings ›
+     Advanced shows the right server version, a book's status shows the
+     server's label, and reading a page saves a position;
+   - asks the server whether the position arrived and, on 3.x, whether the
+     book was filed;
+   - with `--audio`, checks that the read-along's position gets past its first
+     file. It plays through the speaker, so ask first.
+
+   `--fresh` clears the app's data so the pairing is a real one.
+   `.build/android-live-check/<label>/summary.txt` is the record. Give an
+   emulator the machine's LAN address, as a phone, not `10.0.2.2`: the
+   server's sign-in has to see one host throughout.
+4. **Android Auto, on the Desktop Head Unit, against each release pin.**
+   `scripts/android-auto-check.sh <label>` walks the checklist:
+   - the Recent, Library and Downloaded tabs;
+   - playing from Recent;
+   - the chapter queue;
+   - the rate button;
+   - voice search;
+   - the steering-wheel bindings;
+   - the error shown when signed out;
+   - the hand-off to the reader when the car disconnects.
+
+   `.build/android-auto-check/<label>.txt` is the record.
+5. **The layout sweep.** `scripts/android-layout-sweep.sh` records every screen
+   at 360, 375, 402, 412 and 440 dp. Its contact sheets in
+   `docs/screenshots/android-sweep/_sheets` are compared by eye with the
+   iPhone's in `docs/screenshots/sweep/_sheets`. As on the iPhone, they are the
+   only coverage for a control whose inner padding drifted.
+
+The Android code is held to "Older servers" below exactly as the Swift is.
+Both platforms read the same fixtures, so a response captured for one is
+decoded by the other.
+
 ## Older servers
 
 The pins are what the client is tested against, not a new minimum. Every
@@ -118,12 +194,16 @@ release still works with `web-v2.14.21` and the 3.x betas up to `beta.40`
   required, since App Review's server runs it; against beta.40 and beta.46 it
   is recommended. Those
   runs also exercise the older device-approval page in `approve-device.mjs`,
-  which the pins' runs no longer reach.
+  which the pins' runs no longer reach. An Android release does the same with
+  `scripts/android-live-check.sh --fresh`: against 2.14.21 it is required,
+  since Google Play's reviewers use the same server; against beta.40 and
+  beta.46 it is recommended.
 
 ## The App Review server stays on Storyteller 2
 
 The server Apple's reviewers sign into runs **Storyteller 2 (`web-v2.14.21`)
-only**. Do not upgrade it to 3.x, including after a release has been verified
+only**. Google Play's reviewers sign into the same server, under the same
+rule. Do not upgrade it to 3.x, including after a release has been verified
 against 3.x. Testing on both generations is for us; review is done on the stable
 line. Its address, credentials and tooling are kept outside this repository and
 stay there.

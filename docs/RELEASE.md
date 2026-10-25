@@ -226,3 +226,111 @@ coverage for that class**, so do not drop them for being slow.
 `LayoutInvariantsTests` is the test for the tests: it feeds the invariants
 hand-built trees shaped like each of the four bugs and asserts that each one
 fails. If those ever start passing, the sweep has stopped working.
+
+## Android
+
+```
+scripts/android-release.sh                # raise the build number, build the bundle
+scripts/android-release.sh --build 18     # build this number, no raise
+```
+
+That raises `versionCode` in `Android/version.properties` by one, builds
+`:app:bundleRelease` (R8-minified, signed with the upload key), checks that the
+bundle is signed and that no dex file holds the UI-test fixture, and leaves
+`IssaReader-<version>-<build>.aab`, its R8 mapping and a note of what was built
+in `.build/android-release/`. The version name is not Android's own: the build
+reads `MARKETING_VERSION` from `project.yml`, so one release carries one number
+on every platform. The build number is Android's own counter, because Play
+counts per app and refuses any number it has seen. Commit
+`version.properties` with the release.
+
+Uploading is done in the Play Console, not by the script. A new app's first
+bundle can only be uploaded there. The console is also where the track
+(internal, closed, open or production), the release notes and the staged
+rollout are chosen.
+
+### The upload key
+
+Play App Signing holds the key that signs what users install. The repository
+holds neither that key nor the upload key that signs what is sent to Play. The
+upload key's properties file lives outside it, at
+`~/.android-upload-key.properties` or wherever `ISSA_ANDROID_UPLOAD_KEY` points:
+
+```
+storeFile=/Users/you/keys/issa-upload.jks
+storePassword=…
+keyAlias=upload
+keyPassword=…
+```
+
+`Android/app/build.gradle.kts` reads it. Without it a release build is
+unsigned and `android-release.sh` refuses to go on. To make the key:
+
+```bash
+keytool -genkeypair -v -keystore ~/keys/issa-upload.jks -alias upload \
+  -keyalg RSA -keysize 4096 -validity 10000
+```
+
+Back it up. If it is lost, Play can reset the upload key from the console, but
+that takes a request and a wait.
+
+### The Play Console, once
+
+- **App access.** Reviewers need to sign in. Give them the App Review server
+  (CLAUDE.md: Storyteller 2, `web-v2.14.21`, address and credentials kept
+  outside this repository) and the steps: the server address, then "Continue
+  in browser" and the account.
+- **Data safety.** This follows PRIVACY.md. The answers below are a
+  recommendation, and the form's answers are the developer's to give:
+  - **Data the app sends to the reader's own server.** This goes to a server
+    the reader chose and runs, not to the developer or anyone acting for them,
+    so it is not declared as collected. Self-hosted media clients commonly
+    answer the same way.
+  - **ML Kit's diagnostics.** Declare these as collected, because they leave
+    the phone for Google:
+    - data types: "Device or other IDs", plus "App info and performance" ›
+      "Diagnostics" and "Other app performance data";
+    - purpose: "Analytics";
+    - shared: no (Google's ML Kit disclosure says it passes them to no third
+      party);
+    - processed ephemerally: no;
+    - collection: optional, because it starts only when the reader turns Ask
+      on;
+    - encrypted in transit: yes.
+  - **Deletion.** The developer holds no data, so there is nothing to request
+    deleted. Point to PRIVACY.md.
+  - **Privacy policy URL.** PRIVACY.md as published.
+- **Foreground services.** The app declares two foreground-service types, and
+  Play asks for each to be justified with a short video:
+  - `mediaPlayback`: audiobook and read-along narration that keeps playing with
+    the screen off;
+  - `dataSync`: book and audio downloads the reader started, which run to the
+    end with the app closed.
+- **Android Auto.** The app is a media app (`automotive_app_desc.xml`). Opt in
+  under Advanced settings › Release types. Review checks Google's
+  car-media-app quality rules: browsing within its limits, voice search, and
+  errors shown on the car's screen. `scripts/android-auto-check.sh` walks the
+  same ground on the Desktop Head Unit first.
+- **Content rating and target audience.** A reading app that shows whatever the
+  reader's own server holds: no user-generated content, no ads, not directed
+  at children.
+
+### Before a release: the tests
+
+The whole rule is in CLAUDE.md, "Android releases". Its first two items are
+one command:
+
+```bash
+scripts/android-release-tests.sh                        # every module's suites
+scripts/android-release-tests.sh --ask-device SERIAL    # and the real-model Ask suites on that phone
+```
+
+`.build/android-release-tests/summary.txt` is the record. The parity goldens
+it checks are written on the Mac:
+
+```bash
+ISSA_WRITE_PARITY_GOLDENS=1 swift test --filter ParityGoldenTests
+```
+
+Write them again, and commit them, whenever the Swift chapter parser's output
+changes.
