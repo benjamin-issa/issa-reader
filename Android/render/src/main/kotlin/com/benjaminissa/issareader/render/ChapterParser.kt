@@ -4,7 +4,6 @@ import com.benjaminissa.issareader.epub.EpubPackage
 import com.benjaminissa.issareader.epub.EpubStyleSheet
 import com.benjaminissa.issareader.epub.EpubXml
 import com.benjaminissa.issareader.epub.EpubXmlNode
-import java.text.BreakIterator
 
 /**
  * Turns an EPUB chapter's XHTML into styled text, keeping every element id so
@@ -613,34 +612,6 @@ class ChapterParser(
             return if (cut == 0) text else text.substring(cut)
         }
 
-        /** Calls [visit] with each extended grapheme cluster's bounds, in order. */
-        private inline fun forEachCluster(text: String, visit: (start: Int, end: Int) -> Unit) {
-            if (text.isEmpty()) return
-            val clusters = BreakIterator.getCharacterInstance()
-            clusters.setText(text)
-            var start = clusters.first()
-            var end = clusters.next()
-            while (end != BreakIterator.DONE) {
-                visit(start, end)
-                start = end
-                end = clusters.next()
-            }
-        }
-
-        /** As [forEachCluster], stopping at the first cluster [visit] answers false for. */
-        private inline fun forEachClusterWhile(text: String, visit: (start: Int, end: Int) -> Boolean) {
-            if (text.isEmpty()) return
-            val clusters = BreakIterator.getCharacterInstance()
-            clusters.setText(text)
-            var start = clusters.first()
-            var end = clusters.next()
-            while (end != BreakIterator.DONE) {
-                if (!visit(start, end)) return
-                start = end
-                end = clusters.next()
-            }
-        }
-
         /** The four UTF-16 units the final trim removes: newline, space, tab and carriage return. */
         private fun isTrimmable(unit: Char): Boolean = unit == '\n' || unit == ' ' || unit == '\t' || unit == '\r'
 
@@ -737,15 +708,3 @@ class ChapterParser(
         val plate: ChapterPlate? = null,
     )
 }
-
-/** Unicode's White_Space property: what Swift's `Character.isWhitespace` asks of a cluster's first scalar. */
-internal fun isSwiftWhitespace(codePoint: Int): Boolean = when (codePoint) {
-    in 0x0009..0x000D, 0x0020, 0x0085, 0x00A0, 0x1680, in 0x2000..0x200A, 0x2028, 0x2029, 0x202F, 0x205F, 0x3000 -> true
-    else -> false
-}
-
-/**
- * `trimmingCharacters(in: .whitespacesAndNewlines)`: the same 25 code points,
- * trimmed one UTF-16 unit at a time as Foundation trims them.
- */
-internal fun String.trimmingWhitespaceAndNewlines(): String = trim { isSwiftWhitespace(it.code) }
