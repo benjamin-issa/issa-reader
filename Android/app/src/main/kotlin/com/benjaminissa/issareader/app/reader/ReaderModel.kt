@@ -241,6 +241,10 @@ class ReaderModel(
     /** Called at the start of narration's preparation. A test seam, spent when it fires. */
     internal var whilePreparingNarration: (suspend () -> Unit)? = null
 
+    /** The extraction narration's preparation runs, off the main thread. A test seam, for one it can hold. */
+    internal var extractNarration: (EpubPackage, SmilTimeline, String, File?, () -> Boolean) -> Map<String, File> =
+        AudioExtraction::extractAudio
+
     /** What this book offers by way of its own face, once opened. */
     var publisherFont: EpubFontResolver.Resolution? by mutableStateOf(null)
         internal set
@@ -775,7 +779,7 @@ class ReaderModel(
         val extraction: Deferred<Map<String, File>?> = services.scope.async(services.io) {
             val context = currentCoroutineContext()
             try {
-                AudioExtraction.extractAudio(epubPackage, timeline, bookId, directory) { !context.isActive }
+                extractNarration(epubPackage, timeline, bookId, directory) { !context.isActive }
             } catch (_: Exception) {
                 null
             }
@@ -784,6 +788,11 @@ class ReaderModel(
         val files = try {
             extraction.await()
         } catch (_: CancellationException) {
+            // This open's own cancellation goes on up, and leaves the slot
+            // held: the extraction runs on regardless, and the slot is how a
+            // removal revokes it before deleting what it writes. Only the
+            // extraction's own cancellation, a revoke, reads as no narration.
+            currentCoroutineContext().ensureActive()
             null
         }
         narrationExtraction.release(extraction)

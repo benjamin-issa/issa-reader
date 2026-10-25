@@ -20,8 +20,10 @@ import com.benjaminissa.issareader.core.model.StoredPosition
 import com.benjaminissa.issareader.core.sync.PositionOrigin
 import com.benjaminissa.issareader.playback.AudioExtraction
 import com.benjaminissa.issareader.playback.ChunkDurations
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotSame
@@ -29,6 +31,8 @@ import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlin.math.abs
 
 /**
@@ -316,6 +320,44 @@ class ReaderNarrationFixesTest : AppSuite() {
 
             assertSame("the superseded open installed a second coordinator", second, model.readalong)
             assertEquals(ReaderModel.Phase.Ready, model.phase)
+        } finally {
+            opening.tearDown()
+        }
+    }
+
+    /**
+     * An open cancelled while its narration is extracted leaves the
+     * extraction where a removal can still revoke it. The open's await gave
+     * the cancellation up as "no narration" and let go of the slot while the
+     * extraction ran on, so the removal that followed, revoking it first as
+     * it must, reached nothing, and the extraction wrote on into the folder
+     * being deleted.
+     */
+    @Test
+    fun aCancelledOpenLeavesItsExtractionRevocable() = run { scope ->
+        val opening = ReaderOpening(fallbackBook())
+        try {
+            val model = opening.model(scope)
+            model.enqueuePosition = { _, _, _ -> true }
+            val extracting = CountDownLatch(1)
+            val carryOn = CountDownLatch(1)
+            val revoked = CompletableDeferred<Boolean>()
+            model.extractNarration = { _, _, _, _, isCancelled ->
+                extracting.countDown()
+                carryOn.await(10, TimeUnit.SECONDS)
+                revoked.complete(isCancelled())
+                emptyMap()
+            }
+
+            val open = scope.async { model.open(pageSize) }
+            assertTrue("the open never reached its extraction", waitUntil { extracting.count == 0L })
+            // The reader closes mid-open, and the book is removed: the
+            // removal revokes the extraction before it deletes anything.
+            open.cancelAndJoin()
+            model.cancelNarrationExtraction()
+            carryOn.countDown()
+
+            assertTrue("the removal could not reach the extraction, which wrote on", revoked.await())
         } finally {
             opening.tearDown()
         }
