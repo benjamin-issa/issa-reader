@@ -275,7 +275,8 @@ fun SeriesTile(
 
 /**
  * The Reading tab's lead card: the book you were last in. The card resumes
- * reading; the chevron at its edge opens the book's page instead.
+ * reading; the chevron at its edge opens the book's page instead. A long
+ * press on the card is the book's menu, as Swift's `.bookMenu` gives it.
  */
 @Composable
 fun ContinueCard(
@@ -286,6 +287,7 @@ fun ContinueCard(
     onResume: (() -> Unit)?,
     onDetails: (() -> Unit)?,
     modifier: Modifier = Modifier,
+    onLongClick: (() -> Unit)? = null,
 ) {
     val shape = RoundedCornerShape(Metrics.radiusLarge)
     Row(
@@ -298,7 +300,7 @@ fun ContinueCard(
         Row(
             Modifier
                 .weight(1f)
-                .then(if (onResume != null) Modifier.clickable(role = Role.Button, onClickLabel = "Resume $title", onClick = onResume) else Modifier)
+                .then(if (onResume != null) Modifier.combinedClickableCompat(onResume, onLongClick, onClickLabel = "Resume $title") else Modifier)
                 .padding(Metrics.spacing16),
             horizontalArrangement = Arrangement.spacedBy(Metrics.spacing16),
         ) {
@@ -353,7 +355,7 @@ fun ResumeRow(cover: @Composable () -> Unit, title: String, progress: Double?, o
 }
 
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
-private fun Modifier.combinedClickableCompat(onClick: () -> Unit, onLongClick: (() -> Unit)?): Modifier =
-    this.then(Modifier.combinedClickable(role = Role.Button, onClick = onClick, onLongClick = onLongClick))
+private fun Modifier.combinedClickableCompat(onClick: () -> Unit, onLongClick: (() -> Unit)?, onClickLabel: String? = null): Modifier =
+    this.then(Modifier.combinedClickable(role = Role.Button, onClickLabel = onClickLabel, onClick = onClick, onLongClick = onLongClick))
 
 private fun Modifier.fillMaxHeightCompat(): Modifier = this.then(Modifier.fillMaxHeight())
