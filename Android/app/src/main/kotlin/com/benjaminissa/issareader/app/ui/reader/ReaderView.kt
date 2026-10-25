@@ -87,13 +87,13 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.LifecycleResumeEffect
+import com.benjaminissa.issareader.app.ask.AskCoordinator
 import com.benjaminissa.issareader.app.model.AppModel
 import com.benjaminissa.issareader.app.model.Clipboard
 import com.benjaminissa.issareader.app.model.NowPlayingController
 import com.benjaminissa.issareader.app.model.PlaybackSettings
 import com.benjaminissa.issareader.app.reader.PageSize
 import com.benjaminissa.issareader.app.reader.ReaderModel
-import com.benjaminissa.issareader.app.ui.ask.AskAvailability
 import com.benjaminissa.issareader.app.ui.ask.AskSheet
 import com.benjaminissa.issareader.core.KeyValueStore
 import com.benjaminissa.issareader.core.model.Annotation
@@ -136,6 +136,7 @@ class ReaderEnvironment(
     val appScope: CoroutineScope,
     val app: AppModel? = null,
     val nowPlaying: NowPlayingController? = null,
+    val ask: AskCoordinator? = null,
 )
 
 /** The sheets the reader presents, one at a time. */
@@ -222,7 +223,7 @@ fun ReaderView(
     val coachShowing = model.phase == ReaderModel.Phase.Ready && (showsZones || showsTip)
 
     // The setting *and* the device: the sparkle shows only where Ask can run.
-    val showsAsk = settings.askEnabled && remember { AskAvailability.offersAsk(context) }
+    val showsAsk = environment.ask?.isOffered == true
 
     BoxWithConstraints(
         Modifier

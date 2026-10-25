@@ -66,6 +66,7 @@ class AppEnvironment(
                     appScope = graph.mainScope,
                     app = graph.app,
                     nowPlaying = graph.nowPlaying,
+                    ask = graph.ask,
                 )
             },
             localBook = { uuid -> graph.local.book(uuid)?.let { LocalReaderBook(it, graph.local) } },

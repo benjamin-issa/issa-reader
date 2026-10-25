@@ -11,6 +11,12 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <!-- …and the engine holds the CPU (and, streaming, the Wi-Fi) awake while it plays. -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!--
+        "Your answer is ready", when an Ask answer finishes with the app in the
+        background. Asked for once, in context, the first time a question is
+        asked (Android 13 and later).
+    -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:name=".app.IssaApplication"
@@ -78,6 +84,19 @@
             android:name="androidx.work.impl.foreground.SystemForegroundService"
             android:foregroundServiceType="dataSync"
             tools:node="merge" />
+
+        <!--
+            ML Kit's own start-up, removed. com.google.mlkit:common declares
+            this provider so ML Kit initialises at every process start, before
+            any of the app's code, and ML Kit reports diagnostics to Google
+            from its first call. With Ask off nothing may go to Google, so the
+            app starts ML Kit itself (MlKitStartup.ensureStarted) only when
+            Ask is turned on, just before its first call.
+        -->
+        <provider
+            android:name="com.google.mlkit.common.internal.MlKitInitProvider"
+            android:authorities="${applicationId}.mlkitinitprovider"
+            tools:node="remove" />
 
         <!-- Android Auto: this is a media app. -->
         <meta-data

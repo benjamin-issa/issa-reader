@@ -7,7 +7,12 @@ import androidx.compose.runtime.snapshots.Snapshot
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
+import com.benjaminissa.issareader.app.ask.AskCoordinator
+import com.benjaminissa.issareader.app.ask.AskNotificationRouter
+import com.benjaminissa.issareader.app.ask.AskNotifier
+import com.benjaminissa.issareader.app.ask.GeminiNanoPlatform
 import com.benjaminissa.issareader.app.download.WorkManagerTransferBackend
+import com.benjaminissa.issareader.ask.AskIndexStore
 import com.benjaminissa.issareader.app.local.LocalBooksWiring
 import com.benjaminissa.issareader.app.local.LocalDevice
 import com.benjaminissa.issareader.app.local.LocalLibrary
@@ -165,6 +170,31 @@ class AppGraph(
      */
     val media: AppMedia by lazy { AppMedia(this) }
 
+    /** "Your answer is ready", when the app is not in front. */
+    val askNotifier = AskNotifier(context)
+
+    /**
+     * Every question in flight, above the reader: `AppModel.readerDidClose`
+     * evicts a reader's model the moment its screen goes away, and an answer
+     * has to outlive that.
+     *
+     * Built at launch and costing nothing: [GeminiNanoPlatform] keeps a
+     * context and nothing else, and the coordinator calls it — and so ML Kit
+     * — only once the reader has turned Ask on. The index directory is
+     * `Ask/` under `StorageRoot`, configured above, outside the backup rules.
+     */
+    val ask: AskCoordinator = AskCoordinator(
+        settings = settings,
+        platform = GeminiNanoPlatform(context),
+        defaults = defaults,
+        scope = mainScope,
+        store = AskIndexStore(),
+        notifier = askNotifier,
+    )
+
+    /** What a tapped Ask notification opens: the book, and its answer's sheet. */
+    val askNotifications = AskNotificationRouter(ask, app, local)
+
     private var started = false
 
     /** Starts the app. Idempotent. */
@@ -193,7 +223,13 @@ class AppGraph(
         app.nowPlayingController = nowPlaying
         // What the copy deck calls this device: "On this phone", "On this tablet".
         LocalDevice.noun = if (context.resources.configuration.smallestScreenWidthDp >= 600) "tablet" else "phone"
-        LocalBooksWiring.connect(app, local, settings, ask = null)
+        // Deleting a download has to take that book's question index with it.
+        app.ask = ask
+        // Set at launch rather than when the first question is asked: a
+        // notification tapped from a cold launch arrives before any sheet has
+        // ever been opened.
+        app.answerLinks = askNotifications::open
+        LocalBooksWiring.connect(app, local, settings, ask = ask)
         // The car, its covers and the media session: before the restore, so a
         // car already connected is the surface from the first book on.
         media.start()
@@ -275,10 +311,14 @@ class AppGraph(
                     app.setForeground(true)
                     // A transfer can complete while backgrounded.
                     app.refreshDownloadedSet()
+                    // Held questions are asked now that Gemini Nano will
+                    // answer; availability is read again only while Ask is on.
+                    ask.appDidBecomeActive()
                 }
 
                 override fun onStop(owner: LifecycleOwner) {
                     app.setForeground(false)
+                    ask.appDidEnterBackground()
                     flushOnBackground()
                 }
             },
