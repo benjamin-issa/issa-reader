@@ -66,8 +66,10 @@ fun RailHeader(title: String, modifier: Modifier = Modifier, trailing: String? =
             Text(
                 "See all",
                 style = Typography.caption.copy(fontWeight = FontWeight.SemiBold),
-                color = Palette.tangerine,
-                modifier = Modifier.padding(start = Metrics.spacing8).clickable(role = Role.Button, onClick = onSeeAll),
+                color = Palette.tangerinePressed,
+                modifier = Modifier
+                    .clickable(role = Role.Button, onClickLabel = "See all $title", onClick = onSeeAll)
+                    .padding(start = Metrics.spacing8, top = 14.dp, bottom = 14.dp),
             )
         }
     }
@@ -87,7 +89,8 @@ fun ProgressBar(value: Double, modifier: Modifier = Modifier, thickness: Dp = 3.
             Box(Modifier.clip(CircleShape).background(Palette.tangerine))
         },
     ) { measurables, constraints ->
-        val width = constraints.maxWidth
+        // Unbounded when asked for its intrinsic size: a bar has no width of its own.
+        val width = if (constraints.hasBoundedWidth) constraints.maxWidth else constraints.minWidth
         val height = thickness.roundToPx()
         val fill = maxOf(2.dp.roundToPx(), (width * (value.asProgression ?: 0.0)).toInt()).coerceAtMost(width)
         val trackPlaceable = measurables[0].measure(androidx.compose.ui.unit.Constraints.fixed(width, height))

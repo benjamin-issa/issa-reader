@@ -8,7 +8,8 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Text
+import androidx.compose.foundation.text.BasicText
+import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -19,6 +20,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import java.text.BreakIterator
 import java.util.Locale
 
@@ -53,12 +55,13 @@ fun CoverArt(
         } else {
             val tint = CoverPlaceholder.tints()[CoverPlaceholder.tintIndex(uuid)]
             Box(Modifier.fillMaxSize().background(tint.copy(alpha = 0.28f)), contentAlignment = Alignment.Center) {
-                Text(
+                // 34 points, shrinking to fit a small cover rather than being
+                // cut off, as the iPhone's `minimumScaleFactor` does.
+                BasicText(
                     CoverPlaceholder.initial(initialSource),
-                    style = Typography.serif(34f, FontWeight.Medium),
-                    color = Palette.ink.copy(alpha = 0.55f),
+                    style = Typography.serif(34f, FontWeight.Medium).copy(color = Palette.ink.copy(alpha = 0.55f), textAlign = TextAlign.Center),
                     maxLines = 1,
-                    textAlign = TextAlign.Center,
+                    autoSize = TextAutoSize.StepBased(minFontSize = 7.sp, maxFontSize = 34.sp, stepSize = 1.sp),
                     modifier = Modifier.padding(2.dp),
                 )
             }
