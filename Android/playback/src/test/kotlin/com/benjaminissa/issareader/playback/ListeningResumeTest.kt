@@ -1,5 +1,6 @@
 package com.benjaminissa.issareader.playback
 
+import com.benjaminissa.issareader.core.model.StoredPosition
 import com.benjaminissa.issareader.core.model.AudioAnchor
 import com.benjaminissa.issareader.core.model.AudiobookManifest
 import com.benjaminissa.issareader.core.model.ReadiumLocator

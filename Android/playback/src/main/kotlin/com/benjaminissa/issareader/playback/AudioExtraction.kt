@@ -1,5 +1,6 @@
 package com.benjaminissa.issareader.playback
 
+import com.benjaminissa.issareader.core.model.safePathComponent
 import com.benjaminissa.issareader.core.StorageRoot
 import com.benjaminissa.issareader.core.model.Fnv1a
 import com.benjaminissa.issareader.epub.EpubArchive
