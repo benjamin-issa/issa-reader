@@ -56,6 +56,19 @@
                 android:resource="@xml/file_paths" />
         </provider>
 
+        <!-- The "Currently Reading" home-screen widget. -->
+        <receiver
+            android:name=".app.widget.CurrentBookWidgetReceiver"
+            android:exported="true"
+            android:label="@string/widget_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/current_book_widget_info" />
+        </receiver>
+
         <!-- WorkManager's foreground service, declared as data sync for the downloads. -->
         <service
             android:name="androidx.work.impl.foreground.SystemForegroundService"
