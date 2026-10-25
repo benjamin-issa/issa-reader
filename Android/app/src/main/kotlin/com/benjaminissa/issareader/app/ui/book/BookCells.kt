@@ -4,12 +4,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import com.benjaminissa.issareader.app.model.BookRouter
 import com.benjaminissa.issareader.app.ui.shell.BookDetailRoute
 import com.benjaminissa.issareader.app.ui.shell.LocalTabNavigator
 import com.benjaminissa.issareader.app.ui.shell.appModel
@@ -68,7 +68,7 @@ fun BookGridItem(
     caption: String? = null,
 ) {
     val open = rememberOpenBook()
-    BookMenuBox(book, modifier) { openMenu ->
+    BookMenuBox(book, modifier.testTag("cell.book.${book.uuid}")) { openMenu ->
         BookCell(
             cover = { BookCover(book) },
             title = book.title,
@@ -101,7 +101,7 @@ fun BookRail(
     onSeeAll: (() -> Unit)? = null,
 ) {
     val open = rememberOpenBook()
-    CoverRail(title, books, key = { it.uuid }, modifier = modifier, onSeeAll = onSeeAll) { book ->
+    CoverRail(title, books, key = { it.uuid }, modifier = modifier.testTag(railTag(title)), onSeeAll = onSeeAll) { book ->
         BookMenuBox(book) { openMenu ->
             RailBook(
                 cover = { BookCover(book, Modifier.width(coverWidth)) },
@@ -115,12 +115,8 @@ fun BookRail(
     }
 }
 
-/** Pushes a page through the screen's router: a series or tag line on a book's page. */
-@Composable
-fun rememberPush(): (BookRouter.Route) -> Unit {
-    val navigator = LocalTabNavigator.current
-    return { route -> navigator.push(route) }
-}
+/** A rail's test tag, as Swift's identifier spells it: "rail.up-next-·-to-read". */
+fun railTag(title: String): String = "rail." + title.lowercase().replace(" ", "-")
 
 /**
  * The grid's columns: as many as fit at [minimum] with [spacing] between,

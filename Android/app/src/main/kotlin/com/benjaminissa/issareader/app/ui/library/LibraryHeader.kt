@@ -23,6 +23,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -62,7 +63,7 @@ fun LibraryHeader(search: String, onSearchChange: (String) -> Unit, displayedCou
             .padding(top = Metrics.spacing8, bottom = Metrics.spacing12),
         verticalArrangement = Arrangement.spacedBy(Metrics.spacing12),
     ) {
-        LibrarySearchField(search, onSearchChange, Modifier.padding(horizontal = Metrics.screenMargin))
+        LibrarySearchField(search, onSearchChange, Modifier.padding(horizontal = Metrics.screenMargin).testTag("field.librarySearch"))
         ShelfChips(app)
         // A count and a sort describe a grid. Browse has rails, and search
         // results are already an answer — but the number of them is worth a
@@ -85,6 +86,7 @@ private fun ShelfChips(app: AppModel) {
     Row(
         Modifier
             .fillMaxWidth()
+            .testTag("chips.shelf")
             .horizontalScroll(rememberScrollState())
             .padding(horizontal = Metrics.screenMargin),
         horizontalArrangement = Arrangement.spacedBy(Metrics.spacing8),

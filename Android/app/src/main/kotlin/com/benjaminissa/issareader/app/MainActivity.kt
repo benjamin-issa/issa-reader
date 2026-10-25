@@ -6,7 +6,11 @@ import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
@@ -53,7 +57,11 @@ class MainActivity : ComponentActivity() {
         val environment = AppEnvironment.from(graph)
         setContent {
             IssaTheme {
-                IssaRoot(environment)
+                // Test tags as resource ids, so UI Automator — the live check
+                // driving the real app — finds what Swift's identifiers name.
+                Box(Modifier.semantics { testTagsAsResourceId = true }) {
+                    IssaRoot(environment)
+                }
             }
         }
     }

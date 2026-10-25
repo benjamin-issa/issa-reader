@@ -15,8 +15,10 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
+import com.benjaminissa.issareader.app.model.AppModel
 import com.benjaminissa.issareader.app.ui.book.BookCover
 import com.benjaminissa.issareader.app.ui.book.BookRail
 import com.benjaminissa.issareader.app.ui.book.CoverGrid
@@ -38,45 +40,46 @@ import com.benjaminissa.issareader.ui.Symbols
  * arrivals, your series, what has audio, and the tags you use most, each with
  * a "See all" into the flat grid on the matching shelf. Every list is
  * `LibraryRails`, derived in the model; a rail with nothing on it is left out
- * rather than shown empty. Swift's `BrowseView`.
+ * rather than shown empty. Swift's `BrowseView`, whose rails are its lazy
+ * stack's own items, as they are the list's here.
  */
-fun LazyListScope.browseRails() {
-    item(key = "browse") { BrowseRails() }
-}
-
-@Composable
-private fun BrowseRails() {
-    val app = appModel
+fun LazyListScope.browseRails(app: AppModel) {
     val rails = app.rails
     val hasRails = rails.recentlyAdded.isNotEmpty() || rails.series.isNotEmpty() || rails.withAudio.isNotEmpty() || rails.tagRails.isNotEmpty()
     if (!hasRails) {
         if (app.books.isNotEmpty()) {
-            // A library of undated, untagged, unseriesed, text-only books has
-            // nothing to browse by. Say so, and offer the grid — never a
-            // blank page under a chip reading "Browse".
-            PalettePlaceholder(
-                symbol = Symbols.squareGrid2x2,
-                title = "Nothing to browse by yet",
-                message = "Series, tags and audio will appear here as your library grows.",
-                actionTitle = "Show all books",
-                action = { app.showAllBooks(shelf = LibraryArrangement.Shelf.ALL) },
-            )
+            item(key = "browse.nothing") {
+                // A library of undated, untagged, unseriesed, text-only books
+                // has nothing to browse by. Say so, and offer the grid — never
+                // a blank page under a chip reading "Browse".
+                PalettePlaceholder(
+                    symbol = Symbols.squareGrid2x2,
+                    title = "Nothing to browse by yet",
+                    message = "Series, tags and audio will appear here as your library grows.",
+                    actionTitle = "Show all books",
+                    action = { app.showAllBooks(shelf = LibraryArrangement.Shelf.ALL) },
+                )
+            }
         }
         return
     }
-    Column(verticalArrangement = Arrangement.spacedBy(Metrics.spacing32)) {
-        if (rails.recentlyAdded.isNotEmpty()) {
+    if (rails.recentlyAdded.isNotEmpty()) {
+        item(key = "browse.recent") {
             BookRail("Recently added", rails.recentlyAdded, coverWidth = 74.dp) {
                 app.showAllBooks(shelf = LibraryArrangement.Shelf.ALL, sort = LibraryArrangement.Sort.ADDED)
             }
         }
-        if (rails.series.isNotEmpty()) SeriesRail(rails.series)
-        if (rails.withAudio.isNotEmpty()) {
+    }
+    if (rails.series.isNotEmpty()) item(key = "browse.series") { SeriesRail(rails.series) }
+    if (rails.withAudio.isNotEmpty()) {
+        item(key = "browse.audio") {
             BookRail("With audio", rails.withAudio, coverWidth = 74.dp) {
                 app.showAllBooks(shelf = LibraryArrangement.Shelf.WITH_NARRATION)
             }
         }
-        for (rail in rails.tagRails) {
+    }
+    for (rail in rails.tagRails) {
+        item(key = "browse.tag.${rail.tag}") {
             BookRail(rail.tag, rail.books, coverWidth = 74.dp) {
                 app.showAllBooks(shelf = LibraryArrangement.Shelf.ALL, tags = setOf(rail.tag))
             }
@@ -88,7 +91,7 @@ private fun BrowseRails() {
 @Composable
 fun SeriesRail(series: List<SeriesGroup>, modifier: Modifier = Modifier) {
     val navigator = LocalTabNavigator.current
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(Metrics.spacing4)) {
+    Column(modifier.testTag("rail.series"), verticalArrangement = Arrangement.spacedBy(Metrics.spacing8)) {
         RailHeader("Series", onSeeAll = { navigator.push(SeriesListRoute) })
         LazyRow(
             // The rotated back cover pokes above the tile's frame.

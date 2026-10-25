@@ -23,9 +23,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.benjaminissa.issareader.ui.InlineTitleBar
 import com.benjaminissa.issareader.ui.LargeTitleBar
+import com.benjaminissa.issareader.ui.Metrics
 import com.benjaminissa.issareader.ui.Palette
 import kotlinx.coroutines.launch
 
@@ -108,6 +111,19 @@ fun Refreshable(onRefresh: suspend () -> Unit, modifier: Modifier = Modifier, co
         },
         content = content,
     )
+}
+
+/**
+ * Lets a rail reach the screen's edges from inside a list padded by
+ * [margin], as Swift's negative padding does: the rail keeps the margin as
+ * its own content inset, so a shelf that continues off screen does not look
+ * cut off.
+ */
+fun Modifier.bleed(margin: Dp = Metrics.screenMargin): Modifier = layout { measurable, constraints ->
+    val inset = margin.roundToPx()
+    val width = constraints.maxWidth + inset * 2
+    val placeable = measurable.measure(constraints.copy(minWidth = width, maxWidth = width))
+    layout(constraints.maxWidth, placeable.height) { placeable.place(-inset, 0) }
 }
 
 /** The system spinner in the accent, centred: Swift's bare `ProgressView()` over a loading screen. */

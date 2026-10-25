@@ -11,6 +11,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import com.benjaminissa.issareader.app.ui.shell.PushedScreen
 import com.benjaminissa.issareader.app.ui.shell.appModel
 import com.benjaminissa.issareader.core.download.BookMenu
@@ -33,7 +34,7 @@ fun SeriesScreen(name: String) {
     val app = appModel
     val series = app.rails.series.firstOrNull { it.name == name }
     BookRoutes(place = BookMenu.Place.Series(name)) {
-        PushedScreen(name) { padding ->
+        PushedScreen(name, Modifier.testTag("screen.series")) { padding ->
             if (series == null) {
                 Box(Modifier.padding(padding).fillMaxSize(), contentAlignment = Alignment.Center) {
                     PalettePlaceholder(

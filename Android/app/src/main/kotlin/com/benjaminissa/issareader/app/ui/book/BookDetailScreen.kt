@@ -49,11 +49,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -120,14 +122,15 @@ fun BookDetailScreen(uuid: String) {
     }
 
     BookRoutes(place = BookMenu.Place.BookPage(uuid)) {
-        PushedScreen(book?.title ?: "") { padding ->
+        PushedScreen(book?.title ?: "", Modifier.testTag("screen.bookDetail")) { padding ->
             if (book == null) return@PushedScreen
             Column(
                 Modifier
                     .padding(padding)
                     .fillMaxSize()
                     .verticalScroll(rememberScrollState())
-                    .padding(vertical = Metrics.screenMargin),
+                    .padding(vertical = Metrics.screenMargin)
+                    .testTag("content.bookDetail"),
                 verticalArrangement = Arrangement.spacedBy(Metrics.spacing32),
             ) {
                 BookDetailContent(book)
@@ -192,7 +195,9 @@ private fun BookDetailContent(book: Book) {
 private fun Hero(book: Book) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Metrics.spacing16)) {
         BookCover(book, Modifier.width(130.dp))
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Metrics.spacing8)) {
+        // The end padding is the gap Swift's stack keeps before its trailing
+        // spacer, which is what the column's width comes to there.
+        Column(Modifier.weight(1f).padding(end = Metrics.spacing16), verticalArrangement = Arrangement.spacedBy(Metrics.spacing8)) {
             // The title and its subtitle as one block, set tighter than the
             // column, so the subtitle reads as part of the title.
             Column(verticalArrangement = Arrangement.spacedBy(Metrics.spacing4)) {
@@ -230,13 +235,17 @@ private fun SeriesLines(book: Book) {
     val app = LocalAppEnvironment.current.app
     val navigator = LocalTabNavigator.current
     val groups = app.rails.series
+    // On the first link only, so a query for it finds one element.
+    val firstLinked = BookDetail.firstLinkedSeriesId(book.series, groups)
     for (membership in book.series) {
         val group = groups.firstOrNull { it.name == membership.name }
         val text = SeriesText.label(membership, group)
         Row(
-            Modifier.then(
-                if (group != null) Modifier.clickable(role = Role.Button) { navigator.push(BookRouter.Route.Series(membership.name)) } else Modifier,
-            ),
+            Modifier
+                .then(if (membership.id == firstLinked) Modifier.testTag("bookDetail.series") else Modifier)
+                .then(
+                    if (group != null) Modifier.clickable(role = Role.Button) { navigator.push(BookRouter.Route.Series(membership.name)) } else Modifier,
+                ),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(Metrics.spacing4),
         ) {
@@ -265,7 +274,12 @@ private fun StatusControl(book: Book) {
             Modifier
                 .background(Palette.surfaceRaised, CircleShape)
                 .clickable(enabled = enabled, role = Role.Button) { open = true }
-                .semantics { contentDescription = if (book.status == null) "Set reading status" else "Change reading status, ${book.status?.displayName}" }
+                // The pill's own text is a bare shelf name; a screen reader
+                // needs the verb. The current shelf is the value.
+                .semantics {
+                    contentDescription = if (book.status == null) "Set reading status" else "Change reading status"
+                    stateDescription = book.status?.displayName ?: "None"
+                }
                 .padding(horizontal = Metrics.spacing8, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(Metrics.spacing4),
@@ -430,7 +444,7 @@ private fun ActionRow(book: Book) {
     Column(verticalArrangement = Arrangement.spacedBy(Metrics.spacing8)) {
         FlowRow(horizontalArrangement = Arrangement.spacedBy(Metrics.spacing12), verticalArrangement = Arrangement.spacedBy(Metrics.spacing12)) {
             if (primary != null && app.session != null) {
-                PrimaryCapsule(primary) { shell.openReader(book.uuid) }
+                PrimaryCapsule(primary, Modifier.testTag("action.read")) { shell.openReader(book.uuid) }
             }
             val formats = book.servableFormats
             if (BookFormat.AUDIOBOOK in formats || BookFormat.READALOUD in formats) {
@@ -465,9 +479,9 @@ private fun ActionRow(book: Book) {
 
 /** The primary control's face: the tangerine capsule, with a ring while a download fills. */
 @Composable
-private fun PrimaryCapsule(action: BookPrimaryAction, onClick: () -> Unit) {
+private fun PrimaryCapsule(action: BookPrimaryAction, modifier: Modifier = Modifier, onClick: () -> Unit) {
     Row(
-        Modifier
+        modifier
             .background(Palette.tangerine, CircleShape)
             .clickable(role = Role.Button, onClick = onClick)
             .semantics { contentDescription = action.accessibilityLabel }
@@ -533,9 +547,13 @@ private fun Tags(book: Book, modifier: Modifier) {
     Column(modifier) {
         Overline("Tags")
         FlowRow(horizontalArrangement = Arrangement.spacedBy(Metrics.spacing8)) {
+            // The identifier goes on the first linked chip, as on the series line.
+            val firstLinked = BookDetail.firstLinkedTagId(book.distinctTags, app.booksByTag)
             for (tag in book.distinctTags) {
                 if (BookDetail.isLinked(tag.name, app.booksByTag)) {
-                    TagChip(tag.name, isLinked = true) { navigator.push(BookRouter.Route.Tag(tag.name)) }
+                    TagChip(tag.name, isLinked = true, modifier = if (tag.id == firstLinked) Modifier.testTag("bookDetail.tag") else Modifier) {
+                        navigator.push(BookRouter.Route.Tag(tag.name))
+                    }
                 } else {
                     TagChip(tag.name, isLinked = false)
                 }

@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.runtime.Composable
@@ -21,6 +20,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import com.benjaminissa.issareader.app.model.AppModel
 import com.benjaminissa.issareader.app.ui.book.BookGridItem
 import com.benjaminissa.issareader.app.ui.book.BookRoutes
@@ -77,8 +77,8 @@ fun LibraryScreen() {
     val books = if (search.isEmpty()) app.arrangedBooks else results
 
     BookRoutes(place = BookMenu.Place.Shelf) {
-        LargeTitleScreen("Library") { padding ->
-            Column(Modifier.padding(padding).fillMaxSize()) {
+        LargeTitleScreen("Library", Modifier.testTag("screen.library")) { padding ->
+            Column(Modifier.padding(padding).fillMaxSize().testTag("content.library")) {
                 LibraryHeader(search = search, onSearchChange = { search = it }, displayedCount = books.size, isSearching = search.isNotEmpty())
                 Refreshable(onRefresh = { app.refreshLibrary() }, modifier = Modifier.weight(1f)) {
                     if (app.libraryMode == AppModel.LibraryMode.BROWSE && search.isEmpty()) {
@@ -128,12 +128,13 @@ internal fun CenteredPlaceholder(content: @Composable () -> Unit) {
 /** Browse's rails, in a scroll of their own, edge to edge. */
 @Composable
 private fun BrowseList() {
+    val app = appModel
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(vertical = Metrics.screenMargin),
         verticalArrangement = Arrangement.spacedBy(Metrics.spacing32),
     ) {
-        browseRails()
+        browseRails(app)
     }
 }
 
@@ -153,14 +154,12 @@ private fun Shelf(books: List<Book>, search: String) {
     }
     LazyVerticalGrid(
         columns = CoverGrid.cells,
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier.fillMaxSize().testTag("grid.library"),
         contentPadding = PaddingValues(Metrics.screenMargin),
         horizontalArrangement = Arrangement.spacedBy(CoverGrid.columnSpacing, Alignment.Start),
         verticalArrangement = Arrangement.spacedBy(CoverGrid.rowSpacing),
     ) {
         items(books, key = { it.uuid }) { book -> BookGridItem(book) }
-        // Keeps the grid a grid when it has nothing in it but a spacer.
-        if (books.isEmpty()) item(span = { GridItemSpan(maxLineSpan) }) { Unit }
     }
 }
 

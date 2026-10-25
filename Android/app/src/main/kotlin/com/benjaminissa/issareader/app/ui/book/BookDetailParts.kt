@@ -117,11 +117,11 @@ fun FitsOrStacks(modifier: Modifier = Modifier, row: @Composable () -> Unit, sta
  * every chip sits in a 44-point frame, the whole of it the target.
  */
 @Composable
-fun TagChip(name: String, isLinked: Boolean, onClick: (() -> Unit)? = null) {
+fun TagChip(name: String, isLinked: Boolean, modifier: Modifier = Modifier, onClick: (() -> Unit)? = null) {
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     Box(
-        Modifier
+        modifier
             .heightIn(min = 44.dp)
             .then(
                 if (onClick != null) {

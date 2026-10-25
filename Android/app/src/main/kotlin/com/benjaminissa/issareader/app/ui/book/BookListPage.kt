@@ -28,6 +28,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInParent
@@ -133,6 +134,7 @@ fun BookListPage(subject: BookListSubject, books: List<Book>) {
     BookRoutes(place = subject.place) {
         PushedScreen(
             subject.name,
+            Modifier.testTag("screen.${subject.kind}"),
             topBar = {
                 TopAppBar(
                     title = {
@@ -152,6 +154,7 @@ fun BookListPage(subject: BookListSubject, books: List<Book>) {
                     Modifier
                         .fillMaxSize()
                         .verticalScroll(scroll)
+                        .testTag("content.${subject.kind}")
                         .padding(start = Metrics.screenMargin, end = Metrics.screenMargin, bottom = Metrics.screenMargin),
                 ) {
                     Header(subject, staged, showInLibrary, onNameBottom = { nameBottom = it })

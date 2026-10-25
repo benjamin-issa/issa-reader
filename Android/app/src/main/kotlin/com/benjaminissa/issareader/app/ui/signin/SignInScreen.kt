@@ -33,6 +33,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -203,6 +204,7 @@ private fun SignInFrame(content: @Composable () -> Unit) {
         Modifier
             .fillMaxSize()
             .background(Palette.paper)
+            .testTag("screen.signIn")
             .safeDrawingPadding()
             .imePadding(),
     ) {
@@ -218,7 +220,8 @@ private fun SignInFrame(content: @Composable () -> Unit) {
                     .heightIn(min = viewport)
                     .widthIn(max = 460.dp)
                     .fillMaxWidth()
-                    .padding(Metrics.spacing32),
+                    .padding(Metrics.spacing32)
+                    .testTag("content.signIn"),
                 contentAlignment = Alignment.CenterStart,
             ) {
                 content()
@@ -239,8 +242,10 @@ private fun ExpiredNotice(server: String, onSignInAgain: () -> Unit, onReadFromF
             color = Palette.inkSecondary,
         )
         Text(server, style = Typography.body.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace), color = Palette.inkTertiary)
-        PrimaryButton("Sign in again", onSignInAgain)
-        if (onReadFromFiles != null) QuietLink("Read a book from your files", enabled = true, onClick = onReadFromFiles)
+        PrimaryButton("Sign in again", onSignInAgain, Modifier.testTag("button.signInAgain"))
+        if (onReadFromFiles != null) {
+            QuietLink("Read a book from your files", enabled = true, onClick = onReadFromFiles, modifier = Modifier.testTag("link.readFromFiles"))
+        }
     }
 }
 
@@ -301,7 +306,9 @@ private fun ServerForm(
         // other, neither competing with the button.
         Column {
             QuietLink("Use a device code", enabled = address.isNotEmpty() && !connecting, onClick = onDeviceCode)
-            if (onReadFromFiles != null) QuietLink("Read a book from your files", enabled = true, onClick = onReadFromFiles)
+            if (onReadFromFiles != null) {
+                QuietLink("Read a book from your files", enabled = true, onClick = onReadFromFiles, modifier = Modifier.testTag("link.readFromFiles"))
+            }
         }
     }
 }
@@ -316,7 +323,7 @@ private fun ServerField(value: String, onValueChange: (String) -> Unit, onGo: ()
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
-        modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Server" },
+        modifier = Modifier.fillMaxWidth().testTag("field.serverAddress").semantics { contentDescription = "Server" },
         textStyle = Typography.body,
         placeholder = { Text("https://yourlibrary.com", style = Typography.body, color = Palette.inkTertiary) },
         singleLine = true,
@@ -345,10 +352,10 @@ private fun ServerField(value: String, onValueChange: (String) -> Unit, onGo: ()
  * underlined line under the separator.
  */
 @Composable
-internal fun QuietLink(title: String, enabled: Boolean, onClick: () -> Unit) {
+internal fun QuietLink(title: String, enabled: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val underline = Palette.borderStrong
     Box(
-        Modifier
+        modifier
             .fillMaxWidth()
             .heightIn(min = 44.dp)
             .clickable(enabled = enabled, role = Role.Button, onClick = onClick),

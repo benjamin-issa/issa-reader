@@ -6,19 +6,13 @@ import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Snackbar
-import androidx.compose.material3.SnackbarDuration
-import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.SnackbarResult
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -46,6 +40,8 @@ import com.benjaminissa.issareader.app.ui.book.BookCover
 import com.benjaminissa.issareader.app.ui.book.BookDetailScreen
 import com.benjaminissa.issareader.app.ui.book.SeriesScreen
 import com.benjaminissa.issareader.app.ui.book.TagScreen
+import com.benjaminissa.issareader.app.ui.downloads.DownloadRemovalSnackbarHost
+import com.benjaminissa.issareader.app.ui.downloads.DownloadRemovalToast
 import com.benjaminissa.issareader.app.ui.library.LibraryScreen
 import com.benjaminissa.issareader.app.ui.library.SeriesListScreen
 import com.benjaminissa.issareader.app.ui.local.LocalBooksScreen
@@ -157,13 +153,7 @@ fun LibraryShell(state: RootState) {
     LaunchedEffect(app.playback == null) { if (app.playback == null) state.showsPlayer = false }
 
     val snackbar = remember { SnackbarHostState() }
-    val pendingRemoval = app.pendingRemoval
-    LaunchedEffect(pendingRemoval?.id) {
-        val removal = pendingRemoval ?: return@LaunchedEffect
-        // Until the model's window closes, or the reader takes it back.
-        val result = snackbar.showSnackbar("Removed ${removal.title}", actionLabel = "Undo", duration = SnackbarDuration.Indefinite)
-        if (result == SnackbarResult.ActionPerformed) app.undoPendingRemoval()
-    }
+    DownloadRemovalToast(snackbar)
 
     CompositionLocalProvider(
         LocalTabNavigator provides remember(nav) { TabNavigator(nav) },
@@ -172,18 +162,7 @@ fun LibraryShell(state: RootState) {
         Scaffold(
             containerColor = Palette.paper,
             contentWindowInsets = WindowInsets(0),
-            snackbarHost = {
-                SnackbarHost(snackbar) { data ->
-                    Snackbar(
-                        data,
-                        modifier = Modifier.padding(horizontal = 16.dp).border(1.dp, Palette.border, CircleShape),
-                        shape = CircleShape,
-                        containerColor = Palette.surfaceRaised,
-                        contentColor = Palette.ink,
-                        actionColor = Palette.tangerinePressed,
-                    )
-                }
-            },
+            snackbarHost = { DownloadRemovalSnackbarHost(snackbar) },
             bottomBar = {
                 Column {
                     val book = app.playbackBook
