@@ -165,23 +165,58 @@ class CommandRouter(commandMap: CommandMap = CommandMap()) {
 
     fun togglePlayPause() = dispatch(PlaybackAction.PLAY_PAUSE)
 
-    /** The system's skip-forward command: the tap control. */
-    fun skipForward() = fire(PlaybackControl.TAP_FORWARD)
+    /**
+     * The system's skip-forward command: the tap control.
+     *
+     * @param from the surface the command came from, where the session can
+     *   tell — Android names the controller that sent each command, which iOS
+     *   never did: Android Auto is the car, the media notification and the
+     *   app's own controller are the phone. Null for a command whose sender
+     *   says nothing about where it was pressed — a hardware media key, a
+     *   Bluetooth remote — which is inferred as [surface] infers it.
+     */
+    fun skipForward(from: ControlSurface? = null) = fire(PlaybackControl.TAP_FORWARD, from)
 
-    fun skipBackward() = fire(PlaybackControl.TAP_BACKWARD)
+    fun skipBackward(from: ControlSurface? = null) = fire(PlaybackControl.TAP_BACKWARD, from)
 
     /**
      * Next track — a head unit's, a steering wheel's `»`, headphones' double
      * press. Only answered while this surface binds the wheel; otherwise the
      * command is not offered at all.
+     *
+     * @param from as for [skipForward]. A surface that binds the wheel is
+     *   answered by its own binding even while the transport on offer was
+     *   drawn for another — the car's wheel is the car's before the phone has
+     *   heard it connect. One that binds nothing to the wheel resolves against
+     *   the surface the track buttons were drawn for, because a button on
+     *   screen that does nothing when pressed is worse than one that does what
+     *   it does everywhere else.
      */
-    fun nextTrack() {
-        if (transport?.usesTrackCommands == true) fire(PlaybackControl.WHEEL_NEXT)
+    fun nextTrack(from: ControlSurface? = null) {
+        if (offersTrackCommands(from)) fire(PlaybackControl.WHEEL_NEXT, trackSurface(from))
     }
 
-    fun previousTrack() {
-        if (transport?.usesTrackCommands == true) fire(PlaybackControl.WHEEL_PREVIOUS)
+    fun previousTrack(from: ControlSurface? = null) {
+        if (offersTrackCommands(from)) fire(PlaybackControl.WHEEL_PREVIOUS, trackSurface(from))
     }
+
+    /**
+     * Whether next/previous track mean anything for a command from [from]:
+     * offered by the transport, or bound on that surface's own wheel.
+     *
+     * What a hardware key decoder asks before it turns a headset's double
+     * press into a track command or, as iOS does when the track pair is not
+     * registered, into a skip.
+     */
+    fun offersTrackCommands(from: ControlSurface? = null): Boolean {
+        if (transport == null) return false
+        if (transport?.usesTrackCommands == true) return true
+        return from != null && commandMap.usesTrackCommands(from)
+    }
+
+    /** The surface a track command resolves against: its own, when it binds the wheel. */
+    private fun trackSurface(from: ControlSurface?): ControlSurface? =
+        from?.takeIf { commandMap.usesTrackCommands(it) }
 
     /**
      * A scrubber drag: seconds on whatever span the now-playing entry
@@ -204,9 +239,9 @@ class CommandRouter(commandMap: CommandMap = CommandMap()) {
         onAction?.invoke(action)
     }
 
-    private fun fire(control: PlaybackControl) {
+    private fun fire(control: PlaybackControl, from: ControlSurface? = null) {
         if (transport == null) return
-        val surface = surface(control, activeSurface, headphonesRouted)
+        val surface = from ?: surface(control, activeSurface, headphonesRouted)
         val action = commandMap.action(control, surface)
         if (action == PlaybackAction.NONE) return
         onAction?.invoke(action)
