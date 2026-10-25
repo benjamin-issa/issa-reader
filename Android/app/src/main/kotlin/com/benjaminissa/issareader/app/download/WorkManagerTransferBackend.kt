@@ -86,6 +86,9 @@ class WorkManagerTransferBackend(
             )
             .setInputData(inputData(request, description, resume))
             .addTag(TAG)
+            // The description again, where a later process can read it back
+            // without running the work: WorkInfo carries tags, not input data.
+            .addTag(DESCRIPTION_TAG + description)
             .build()
         val transfer = WorkTransfer(work.id, description, request)
         transfers[work.id] = transfer
@@ -106,9 +109,11 @@ class WorkManagerTransferBackend(
         val infos = workManager.getWorkInfosByTagFlow(TAG).first()
         return infos.filter { !it.state.isFinished }.map { info ->
             transfers.getOrPut(info.id) {
-                // Started in an earlier launch: the manager re-stamps it with
-                // its own description when it adopts it.
-                WorkTransfer(info.id, description = null, request = null)
+                // Started in an earlier launch. Its description is what the
+                // manager adopts it by; without it, the transfer's events were
+                // dropped and its finished file deleted unseen.
+                val description = info.tags.firstOrNull { it.startsWith(DESCRIPTION_TAG) }?.removePrefix(DESCRIPTION_TAG)
+                WorkTransfer(info.id, description = description, request = null)
             }
         }
     }
@@ -221,7 +226,10 @@ class WorkManagerTransferBackend(
 
     internal fun transfer(id: UUID, input: Data): WorkTransfer = transfers.getOrPut(id) {
         WorkTransfer(id, input.getString(KEY_DESCRIPTION), requestFrom(input))
-    }.also { if (it.request == null) it.request = requestFrom(input) }
+    }.also {
+        if (it.request == null) it.request = requestFrom(input)
+        if (it.description == null) it.description = input.getString(KEY_DESCRIPTION)
+    }
 
     /** Runs one transfer, on the worker's thread. Returns false when Android stopped it and it should run again. */
     internal suspend fun run(worker: TransferWorker, transfer: WorkTransfer, input: Data): Boolean {
@@ -320,6 +328,7 @@ class WorkManagerTransferBackend(
         internal const val KEY_METERED = "metered"
         internal const val KEY_DESCRIPTION = "description"
         internal const val KEY_RESUME = "resume"
+        internal const val DESCRIPTION_TAG = "description:"
         internal const val CHANNEL = "downloads"
         internal const val NOTIFICATION_ID = 0x15A0
 

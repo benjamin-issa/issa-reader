@@ -81,6 +81,24 @@ class WorkManagerTransferBackendTest {
         assertEquals("Bearer t", server.takeRequest().headers["Authorization"])
     }
 
+    /**
+     * A transfer a new process adopts carries its description, which is what
+     * the manager knows it by. Without it the manager dropped every event of
+     * the download it had been waiting for, and deleted the finished file.
+     */
+    @Test
+    fun `a transfer adopted after a restart keeps its description`() = runBlocking {
+        val transfer = backend.start(request(), "uuid|ebook|1|4", null)
+        // The next process: a backend that has never seen the transfer, over
+        // the same WorkManager.
+        val adopting = WorkManagerTransferBackend(
+            context, OkHttpClient(), RecordingEvents(), WorkManager.getInstance(context),
+            File(context.cacheDir, "partial-${System.nanoTime()}"),
+        )
+        val adopted = adopting.runningTransfers().single { (it as WorkManagerTransferBackend.WorkTransfer).id == (transfer as WorkManagerTransferBackend.WorkTransfer).id }
+        assertEquals("uuid|ebook|1|4", adopted.description)
+    }
+
     @Test
     fun `an error status still delivers its body, for the manager to judge`() {
         server.enqueue(MockResponse.Builder().code(404).body("{\"message\":\"gone\"}").build())
