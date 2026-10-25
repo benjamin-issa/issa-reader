@@ -7,6 +7,10 @@
     <!-- Downloads run as foreground data-sync work, so a long one outlasts the screen. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- A book playing with the screen off: the media service runs in the foreground as media playback… -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <!-- …and the engine holds the CPU (and, streaming, the Wi-Fi) awake while it plays. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <application
         android:name=".app.IssaApplication"
@@ -79,5 +83,38 @@
         <meta-data
             android:name="com.google.android.gms.car.application"
             android:resource="@xml/automotive_app_desc" />
+
+        <!--
+            The media session: the lock screen and notification, headset
+            buttons, and Android Auto's browse tree, Now Playing and wheel.
+            Exported, as a media browser service must be for the car to bind
+            it; the browse tree answers only the car, the system and the
+            trusted (IssaPlaybackService.mayBrowse).
+        -->
+        <service
+            android:name=".app.media.IssaPlaybackService"
+            android:exported="true"
+            android:foregroundServiceType="mediaPlayback">
+            <intent-filter>
+                <action android:name="androidx.media3.session.MediaLibraryService" />
+                <action android:name="android.media.browse.MediaBrowserService" />
+            </intent-filter>
+        </service>
+
+        <!-- Media buttons with nothing running: a headset's play resumes the last book. -->
+        <receiver
+            android:name="androidx.media3.session.MediaButtonReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MEDIA_BUTTON" />
+            </intent-filter>
+        </receiver>
+
+        <!-- The car's covers, granted per address to whoever draws the car. -->
+        <provider
+            android:name=".app.media.CoverProvider"
+            android:authorities="${applicationId}.covers"
+            android:exported="false"
+            android:grantUriPermissions="true" />
     </application>
 </manifest>

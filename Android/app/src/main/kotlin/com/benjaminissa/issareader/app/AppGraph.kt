@@ -8,6 +8,8 @@ import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import com.benjaminissa.issareader.app.download.WorkManagerTransferBackend
+import com.benjaminissa.issareader.app.media.AppMedia
+import com.benjaminissa.issareader.app.media.CarRate
 import com.benjaminissa.issareader.app.model.AppModel
 import com.benjaminissa.issareader.app.model.BrowserSignInModel
 import com.benjaminissa.issareader.app.model.CoverCache
@@ -136,6 +138,14 @@ class AppGraph(
         makeBackend = { events -> WorkManagerTransferBackend(context, ApiClient.sharedHttpClient, events) },
     )
 
+    /**
+     * The media session's and Android Auto's half of the app: the host the
+     * service reaches the app through, the car's comings and goings, the
+     * car's covers, and the binding that keeps the service up while a book
+     * plays.
+     */
+    val media: AppMedia by lazy { AppMedia(this) }
+
     private var started = false
 
     /** Starts the app. Idempotent. */
@@ -159,6 +169,9 @@ class AppGraph(
         // Playback starts and stops from places with no screen to thread this
         // through: a car list item, the reader closing.
         app.nowPlayingController = nowPlaying
+        // The car, its covers and the media session: before the restore, so a
+        // car already connected is the surface from the first book on.
+        media.start()
         // LOCAL-WIRING-PLACEHOLDER
         observeLibraryForShortcuts()
         observeProcessLifecycle()
@@ -188,14 +201,7 @@ class AppGraph(
     }
 
     /** Through the rates a driver actually wants, wrapping around: there is no menu in a car. */
-    fun cycleRateFromCar() {
-        val rates = listOf(1.0, 1.25, 1.5, 1.75, 2.0)
-        val current = settings.playbackRate
-        val next = rates.firstOrNull { it > current + 0.01 } ?: rates[0]
-        settings.playbackRate = next
-        nowPlaying.coordinator?.player?.rate = next.toFloat()
-        nowPlaying.publish()
-    }
+    fun cycleRateFromCar() = CarRate.cycle(settings, nowPlaying)
 
     /**
      * A small square cover for a car's list row, by the book where the
