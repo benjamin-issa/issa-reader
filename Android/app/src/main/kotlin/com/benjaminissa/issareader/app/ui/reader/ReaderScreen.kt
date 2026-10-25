@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import com.benjaminissa.issareader.ui.Palette
 
 /**
@@ -16,5 +17,7 @@ import com.benjaminissa.issareader.ui.Palette
 @Composable
 fun ReaderScreen(bookUuid: String, local: Boolean, onClose: () -> Unit) {
     BackHandler(onBack = onClose)
-    Box(Modifier.fillMaxSize().background(Palette.paper))
+    // The tag the reader's own screen carries in Swift, so the shell's tests
+    // and the live check find it before the reader port lands.
+    Box(Modifier.fillMaxSize().background(Palette.paper).testTag("screen.reader"))
 }
