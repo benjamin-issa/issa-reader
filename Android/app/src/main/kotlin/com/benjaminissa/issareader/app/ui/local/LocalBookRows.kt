@@ -174,6 +174,7 @@ internal fun LocalBookRow(
     onNoticeAction: (LocalRowNotice) -> Unit,
     coverCache: CoverCache,
     modifier: Modifier = Modifier,
+    rowModifier: Modifier = Modifier,
 ) {
     val facts = LocalBookFacts(book, size, isMissing, isPlaying)
     val stacked = isAccessibilityTextSize()
@@ -188,7 +189,9 @@ internal fun LocalBookRow(
             .padding(Metrics.spacing12),
         verticalArrangement = Arrangement.spacedBy(Metrics.spacing12),
     ) {
-        Box(Modifier.testTag("localBook.row")) {
+        // The row is one element — what a screen reader reads and the live
+        // check finds — and each notice strip's action another.
+        Box(Modifier.testTag("localBook.row").then(rowModifier)) {
             if (stacked) StackedRow(book, facts, isMissing, isPlaying, coverCache) else InlineRow(book, facts, isMissing, isPlaying, coverCache)
         }
         for (notice in facts.notices) {

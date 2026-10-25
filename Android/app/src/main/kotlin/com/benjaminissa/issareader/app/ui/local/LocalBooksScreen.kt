@@ -578,9 +578,8 @@ private fun LazyListScope.booksGroup(
                             }
                         },
                         coverCache = services.coverCache,
-                        modifier = Modifier
-                            .combinedClickable(onClick = { onTap(book) }, onLongClick = { menu = true })
-                            .localRowActions(
+                        modifier = Modifier.combinedClickable(onClick = { onTap(book) }, onLongClick = { menu = true }),
+                        rowModifier = Modifier.localRowActions(
                                 spoken = facts.spoken,
                                 onOpen = { onTap(book) },
                                 onInfo = { onInfo(book) },
