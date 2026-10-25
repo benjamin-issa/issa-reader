@@ -94,6 +94,9 @@ class ShortcutPublisher(
      */
     private var generation = 0
 
+    /** The [generation] the last [clear] took: what tells an account leaving from a newer pass. */
+    private var clearedAt = -1
+
     /**
      * Publishes the recently opened books, unless what is published already
      * answers for them.
@@ -111,7 +114,13 @@ class ShortcutPublisher(
             val shortcuts = chosen.map(::shortcut)
             if (pass != generation) return
             backend.replace(shortcuts)
-            if (pass != generation) return
+            if (pass != generation) {
+                // Overtaken while the launcher was applying it. By the account
+                // leaving, the clear's removal may have landed first, and what
+                // this pass put there is the departed account's: it goes too.
+                if (clearedAt == generation) runCatching { backend.removeAll() }
+                return
+            }
             defaults.putString(VERSION_KEY, stamp)
         } catch (e: CancellationException) {
             throw e
@@ -129,6 +138,7 @@ class ShortcutPublisher(
      */
     override suspend fun clear() {
         generation += 1
+        clearedAt = generation
         defaults.remove(VERSION_KEY)
         val backend = backend
         val finished = BoundedWait.run(clearWait) { runCatching { backend.removeAll() } }

@@ -77,6 +77,22 @@ an ordinary run and fails under `ISSA_RELEASE_RUN=1`.
 A Swift test that cannot apply on Android is listed below with the reason,
 rather than silently dropped.
 
+### The app's suites
+
+`Apps/IssaSharedTests` is ported into `:app`'s unit tests, under Robolectric
+at SDK 36 with native graphics (chapters are laid out by `StaticLayout`). The
+Swift suites are `@MainActor`; here one thread of the suites' own,
+`issa-test-main`, plays the main thread (`TestMain`): `mainTest { }` runs the
+body on it and every model is built on a `testScope()` that posts to it, so
+the test and the code under test interleave only where something suspends, as
+they do in Swift. `ScriptedServer` and `LifecycleServer` are `mockwebserver3`
+dispatchers (`Servers.kt`); `SilentAudio`'s engine is `ScriptedBackend`, which
+opens any file that exists as thirty minutes of silence and never ticks on its
+own. Each test gets an emptied storage root (`FreshStorage`), and the local
+library's store runs on the host's SQLite through the bundled driver's JVM
+natives (`hostSqlite` in `app/build.gradle.kts`). "iPhone" in the copy deck is
+"phone"; CarPlay is Android Auto; Spotlight is the launcher's dynamic shortcuts.
+
 ### Not ported
 
 | Suite or test | Reason |
@@ -94,3 +110,19 @@ rather than silently dropped.
 | IssaPlayback `GainTapPerTapStateTests` `unprepareDoesNotClearTheOtherTap` | Stages two `MTAudioProcessingTap`s whose prepare/unprepare callbacks interleave across a chapter change. Android has one `GainKneeAudioProcessor` per sink, configured anew for each format; `GainKneeAudioProcessorTest.theLevelSurvivesAReconfiguration` checks the level survives that. |
 | IssaPlayback `GainTapPerTapStateTests` `scratchIsPerTap`, `scratchIsPerTrackOfOneMix` | Working room per tap and per track of one `AVAudioMix`. The Android stage is one processor on one audio thread, holding its own scratch; there is no second tap or track to share it with. |
 | IssaPlayback `GainTapPerTapStateTests` `retainBalance` | Checks the `Unmanaged` retain/release balance of the tap's client info. Kotlin has no manual retain counts. |
+| IssaShared `BrowserOutcomeTests` (all four) | They decide `ASWebAuthenticationSession`'s outcomes — a callback racing a cancel, `canceledLogin`, a foreign `NSError`. Android's browser sign-in is Chrome's Auth Tab, whose result codes `AuthTabBrowser` maps; `AuthTabBrowserTest` (`app.platform`) checks that mapping, and `BrowserSignInBeginTest.noAuthTabOffersTheDeviceCode` the fallback when there is no Auth Tab. |
+| IssaShared `BookRoutingTests`: R-20 `searchGoesToItsOwnWindow`, R-58 `publishedYearReadsUTC`, R-61 `stagingIsKept`, `titleCrossing` | Helpers on views — `LibraryView` hosted in two windows, `BookDetailView.publishedYear`, the tag page's `StagingCache`, `BookListPage.hasScrolledPast` — which belong to the screens' port, not the model layer. The model half of the suite (`LibraryModeSwitch`, `showLibrary(fromReading)`, the resume refusal) is ported. |
+| IssaShared `ScreenAwakeTests`: the three scene-table tests | They walk `UIScene` activation states across windows. Android has one activity and reads the process lifecycle (`ProcessLifecycleOwner`) into `AppModel.setForeground`; the rules the table fed — a visible reader, a playing narration, foreground only — are `AppModelScreenAwakeTest`. |
+| IssaShared `RootWindowTests.localTapOpensOneWindow` (R-29) | An Ask answer's tap routed through `LocalBookRequests` to one of several windows: the Ask port's, and Android has one window. |
+| IssaShared `LocalBooksWiringTests`: `tapOpensTheLocalReader`, `tapWaitsForTheLibrary`, `tapOnScreenBringsItForward` | `AskNotificationDelegate`'s routing of an answer notification's tap: the Ask port's. `servicesWireTheLibrary` is ported against `LocalBooksWiring.connect` with no question index (`ask = null`). |
+| IssaShared `LocalBooksRootTests.undoManagerTakesItBack`, `LocalBooksHardeningTests.undoIsWithdrawn` (R-27) | Edit › Undo through the window's `UndoManager`. Android has no shared undo stack; the toast's Undo is the only undo, and `staleUndo`, `removeAndUndo` and `commitPendingRemoval` hold its rules. |
+| IssaShared `LocalBooksHardeningTests.storedAbsurdLengthDraws`, the hosting half | It draws `LocalBookRow` and `LocalBookInfoView` in a `UIHostingController`, which are composables in the screens' port. The copy and `LocalBookFacts` it reads are ported and asserted. |
+| IssaShared `LocalBooksHardeningTests`: `allowsClone` | Android copies every picked file through a stream, chunk by chunk; there is no clone to turn off, so `chunkedCopyReachesTheEnd` and `copyReportsArePercents` run against the one path there is. |
+| IssaShared `LocalImportTests.readalongIsAligned`: `isExcludedFromBackup` | Android has no per-file flag. The test reads `data_extraction_rules.xml` instead and checks `Local/` is not among what it includes — naming what is included excludes everything else. |
+| IssaShared `DownloadRemovalTests.reconcileRemovesExtractedFontsOnly` | Android extracts no `Fonts/<uuid>/`: `ReaderFonts.registerPublisherFace` registers a book's own face from its archive, in memory, so a reconcile has no font folder to sweep. Elsewhere in the suite the extracted-face canary is a recording `BookIndexes` (the per-book derived files a removal releases). |
+| IssaShared `LocalAccountIsolationTests`: the question index's files and `Fonts/<uuid>/` | The index files are the Ask port's: the sign-out's kept set, which is what the index store is told to keep, stands in. There is no extracted-fonts folder (above). |
+| IssaShared `ReadingBoundaryTests.indexStringMatchesTheLaidOutChapter` | It compares the reader's laid-out chapter with `AskIndexStore`'s string; the index store is the Ask port's. The reader's half, `readingBoundary()`, is ported. |
+| IssaShared `CarPlaySurfaceTests` (both) | `CarPlayBridge` is a process singleton that announced the surface as an event, so a late listener could miss it. On Android the car's media service calls `AppGraph.setCarConnected`, which writes `AppModel.setControlSurface` — state, read rather than heard — and the bridge itself is the Android Auto port's. `ListeningHandoffReaderTest.theCarKeepsPlaybackWhileConnected` covers what the surface decides. |
+| IssaShared `SpotlightIndexerTests.renewsBeforeExpiry` | Spotlight items expire a month after indexing; launcher shortcuts do not expire, so there is nothing to renew. The rest of the suite is `ShortcutPublisherTest` (an older schema's shortcuts replaced, a changed library at once, a departure overtaking a pass), with `localBooksAreNeverPublished` and `aShortcutOpensTheBook` added. |
+| IssaShared `ListeningHandoffReaderTests.anUnresolvedStartWhoseTrackWillNotOpenSpeaksUp`: the decoder's refusal | AVFoundation refused the non-audio chunks itself. The scripted engine opens any file that exists, so this test gives it the decoder's rule — a file whose bytes are the test's sentence will not open — and the start must still report `WOULD_NOT_PLAY`. |
+| IssaShared suites using an Opus file as "narration this device can't play" | Android decodes Opus. `TestMedia` (`LocalFixtures.kt`) stands for a device without that decoder, which is what those tests are about; what a real device decodes is `AndroidMediaSupport`'s, tested in `:playback-android`. |
