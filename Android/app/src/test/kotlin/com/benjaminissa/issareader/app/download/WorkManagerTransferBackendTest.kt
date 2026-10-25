@@ -30,8 +30,8 @@ import java.net.URI
 
 /**
  * The WorkManager transport keeps a background URLSession's contract with the
- * download manager: the body arrives whatever the status, a pause hands back
- * what resuming needs, and every cancellation is reported.
+ * download manager: a fresh download's body arrives whatever the status, a
+ * pause hands back what resuming needs, and every cancellation is reported.
  */
 @RunWith(RobolectricTestRunner::class)
 class WorkManagerTransferBackendTest {
@@ -122,6 +122,41 @@ class WorkManagerTransferBackendTest {
         )
         val adopted = adopting.runningTransfers().single { (it as WorkManagerTransferBackend.WorkTransfer).id == (transfer as WorkManagerTransferBackend.WorkTransfer).id }
         assertEquals("uuid|ebook|1|4", adopted.description)
+    }
+
+    @Test
+    fun `a resume that meets an error keeps every byte it had, and what resuming needs`() {
+        val partial = File(context.cacheDir, "kept-${System.nanoTime()}.part").apply { writeText("first half ") }
+        val resume = WorkManagerTransferBackend.ResumeState(partial.path, partial.length(), "\"etag-1\"")
+        server.enqueue(MockResponse.Builder().code(503).body("<html>try again later</html>").build())
+        val data = kotlinx.serialization.json.Json.encodeToString(WorkManagerTransferBackend.ResumeState.serializer(), resume).encodeToByteArray()
+        val transfer = backend.start(request(), "uuid|ebook|1|5", data)
+        runWorker(transfer, "uuid|ebook|1|5", resume)
+
+        assertTrue("an error page is never handed over as the book", events.finished.isEmpty())
+        val error = events.completed.single().second!!
+        assertEquals(TransferError.Kind.OTHER, error.kind)
+        assertEquals("The server returned 503.", error.message)
+        val kept = kotlinx.serialization.json.Json.decodeFromString(
+            WorkManagerTransferBackend.ResumeState.serializer(), error.resumeData!!.decodeToString(),
+        )
+        assertEquals("first half ", File(kept.path).readText())
+        assertEquals(11L, kept.length)
+        assertEquals("\"etag-1\"", kept.validator)
+    }
+
+    @Test
+    fun `a resume refused as out of range starts again from nothing`() {
+        val partial = File(context.cacheDir, "whole-${System.nanoTime()}.part").apply { writeText("all of it") }
+        val resume = WorkManagerTransferBackend.ResumeState(partial.path, partial.length(), "\"etag-1\"")
+        server.enqueue(MockResponse.Builder().code(416).build())
+        val data = kotlinx.serialization.json.Json.encodeToString(WorkManagerTransferBackend.ResumeState.serializer(), resume).encodeToByteArray()
+        val transfer = backend.start(request(), "uuid|ebook|1|6", data)
+        runWorker(transfer, "uuid|ebook|1|6", resume)
+
+        val error = events.completed.single().second!!
+        assertEquals("The server returned 416.", error.message)
+        assertNull("a range the file no longer has would meet the 416 again", error.resumeData)
     }
 
     @Test

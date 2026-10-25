@@ -50,9 +50,12 @@ import java.util.concurrent.ConcurrentHashMap
  * changed, and it starts again.
  *
  * It keeps URLSession's contract with [com.benjaminissa.issareader.core.download.DownloadManager]:
- * the body arrives whatever the status, and the manager judges it; a pause
- * hands back resume data; a cancellation is always reported, including of a
- * transfer that never got to run.
+ * a fresh download's body arrives whatever the status, and the manager judges
+ * it; a pause hands back resume data; a cancellation is always reported,
+ * including of a transfer that never got to run. It goes one better than
+ * URLSession in one place: a resumed download that meets an error status
+ * keeps the bytes it had and reports the failure with what resuming needs,
+ * rather than trading a gigabyte for an error page.
  *
  * Nothing it stores holds a credential. WorkManager keeps each request in its
  * own database, outside the Keystore, so the request is kept without its
@@ -291,6 +294,16 @@ class WorkManagerTransferBackend(
         val call = client.newCall(builder.build())
         call.execute().use { response ->
             transfer.response = TransferResponse(response.code, response.body.contentType()?.let { "${it.type}/${it.subtype}" })
+            // A resume that met an error — a proxy restarting, a server down —
+            // keeps the partial file and its validator, and fails with what
+            // resuming needs: written through, the error page replaced every
+            // byte. A 416 is the one exception: the range no longer fits the
+            // file, so the partial is no use, and keeping it would only meet
+            // the 416 again on every retry.
+            if (offset > 0 && response.code != 200 && response.code != 206) {
+                if (response.code == 416) partial.delete()
+                throw ResumeRefused(response.code)
+            }
             transfer.validator = response.header("ETag") ?: response.header("Last-Modified")
             val append = offset > 0 && response.code == 206
             if (!append) offset = 0
@@ -322,6 +335,9 @@ class WorkManagerTransferBackend(
         }
         events.onProgress(transfer, 0, transfer.bytesReceived, transfer.bytesExpected)
     }
+
+    /** An error status met by a resumed download, which keeps its partial file. */
+    internal class ResumeRefused(status: Int) : java.io.IOException("The server returned $status.")
 
     private fun requestFrom(input: Data): TransferRequest? {
         val url = input.getString(KEY_URL) ?: return null
