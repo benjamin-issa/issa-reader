@@ -44,15 +44,6 @@ class BookDetailLabelTest {
     }
 
     @Test
-    fun `a tag links only when another book shares it`() {
-        val book = book(series = emptyList())
-        val other = book.copy(uuid = "other")
-        assertEquals(true, BookDetail.isLinked("Classics", mapOf("Classics" to listOf(book, other))))
-        assertEquals(false, BookDetail.isLinked("Classics", mapOf("Classics" to listOf(book))))
-        assertEquals(false, BookDetail.isLinked("Fiction", mapOf("Classics" to listOf(book, other))))
-    }
-
-    @Test
     fun `the status glyph follows the built-in name, never the label`() {
         assertEquals(com.benjaminissa.issareader.ui.Symbols.book, BookDetail.symbol("Reading"))
         assertEquals(com.benjaminissa.issareader.ui.Symbols.checkmarkCircle, BookDetail.symbol("Read"))

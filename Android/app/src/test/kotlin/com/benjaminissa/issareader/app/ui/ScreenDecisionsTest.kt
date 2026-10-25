@@ -4,7 +4,6 @@ import com.benjaminissa.issareader.app.ui.book.CoverGrid
 import com.benjaminissa.issareader.app.ui.book.hasScrolledPast
 import com.benjaminissa.issareader.app.ui.book.railTag
 import com.benjaminissa.issareader.app.ui.book.stars
-import com.benjaminissa.issareader.app.ui.downloads.DownloadsRowCommands
 import com.benjaminissa.issareader.app.ui.downloads.downloadsSummary
 import com.benjaminissa.issareader.app.ui.downloads.metaLine
 import com.benjaminissa.issareader.app.ui.downloads.statusText
@@ -13,13 +12,11 @@ import com.benjaminissa.issareader.app.ui.library.countText
 import com.benjaminissa.issareader.app.ui.library.tagFilterLabel
 import com.benjaminissa.issareader.app.ui.reading.resumeLabel
 import com.benjaminissa.issareader.app.ui.signin.countdown
-import com.benjaminissa.issareader.app.ui.signin.isCleartext
 import com.benjaminissa.issareader.core.download.BookContentService
 import com.benjaminissa.issareader.core.download.DownloadManager
 import com.benjaminissa.issareader.core.download.DownloadsInventory
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.Instant
@@ -55,14 +52,6 @@ class ScreenDecisionsTest {
     }
 
     @Test
-    fun `an address that would go in the clear says so`() {
-        assertTrue(isCleartext("http://192.168.1.10:8001"))
-        assertTrue("a bare address is what normalising makes of it", isCleartext("192.168.1.10:8001"))
-        assertFalse(isCleartext("https://library.example.com"))
-        assertFalse(isCleartext(""))
-    }
-
-    @Test
     fun `the device code counts down as a timer reads`() {
         val now = Instant.parse("2026-10-25T12:00:00Z")
         assertEquals("15:00", countdown(now, now.plusSeconds(900)))
@@ -91,16 +80,6 @@ class ScreenDecisionsTest {
         assertEquals("Audiobook · 2 MB", statusText(job, DownloadManager.State.Downloading(0.0, 2_000_000, 0)))
         assertEquals("Audiobook · Done", statusText(job, DownloadManager.State.Finished))
         assertEquals("No room.", statusText(job, DownloadManager.State.Failed("No room.")))
-    }
-
-    @Test
-    fun `a row command is about one listed row or none`() {
-        val book = FixtureLibrary.books.first()
-        val item = DownloadsInventory.DownloadedItem(book, BookContentService.Format.EBOOK, 1)
-        assertEquals(item, DownloadsRowCommands.target(setOf(item.id), listOf(item)))
-        assertNull(DownloadsRowCommands.target(emptySet(), listOf(item)))
-        assertNull(DownloadsRowCommands.target(setOf(item.id, "other"), listOf(item)))
-        assertNull(DownloadsRowCommands.target(setOf("gone"), listOf(item)))
     }
 
     @Test

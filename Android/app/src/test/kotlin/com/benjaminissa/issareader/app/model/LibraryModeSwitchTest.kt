@@ -1,6 +1,5 @@
-package com.benjaminissa.issareader.app.ui.library
+package com.benjaminissa.issareader.app.model
 
-import com.benjaminissa.issareader.app.model.AppModel
 import com.benjaminissa.issareader.core.sync.LibraryArrangement
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse

@@ -62,6 +62,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import com.benjaminissa.issareader.app.model.AppModel
+import com.benjaminissa.issareader.app.model.BookActions
+import com.benjaminissa.issareader.app.model.BookLinks
 import com.benjaminissa.issareader.app.model.BookRouter
 import com.benjaminissa.issareader.app.ui.shell.LocalAppEnvironment
 import com.benjaminissa.issareader.app.ui.shell.LocalShellActions
@@ -548,9 +550,9 @@ private fun Tags(book: Book, modifier: Modifier) {
         Overline("Tags")
         FlowRow(horizontalArrangement = Arrangement.spacedBy(Metrics.spacing8)) {
             // The identifier goes on the first linked chip, as on the series line.
-            val firstLinked = BookDetail.firstLinkedTagId(book.distinctTags, app.booksByTag)
+            val firstLinked = BookLinks.firstLinkedTagId(book.distinctTags, app.booksByTag)
             for (tag in book.distinctTags) {
-                if (BookDetail.isLinked(tag.name, app.booksByTag)) {
+                if (BookLinks.isLinked(tag.name, app.booksByTag)) {
                     TagChip(tag.name, isLinked = true, modifier = if (tag.id == firstLinked) Modifier.testTag("bookDetail.tag") else Modifier) {
                         navigator.push(BookRouter.Route.Tag(tag.name))
                     }
@@ -718,7 +720,7 @@ private fun EditionRow(
         // Why "Save for offline" did nothing: the Wi-Fi-only rule refuses
         // before any transfer exists.
         if (!missing) {
-            app.downloadRefusals[job]?.let { refusal ->
+            BookActions.refusal(book, format, app.downloadRefusals)?.let { refusal ->
                 Text(refusal, style = Typography.caption, color = Palette.alert)
             }
         }

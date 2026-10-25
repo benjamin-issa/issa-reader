@@ -216,7 +216,7 @@ private fun MenuRow(title: String, symbol: Int, destructive: Boolean = false, on
 
 @Composable
 private fun EditionRow(action: BookMenu.EditionAction, namingEdition: Boolean, onClick: () -> Unit) {
-    MenuRow(action.title(namingEdition), BookActions.symbol(action), destructive = action.isDestructive, onClick = onClick)
+    MenuRow(action.title(namingEdition), action.symbol, destructive = action.isDestructive, onClick = onClick)
 }
 
 /** A row that opens a submenu: its icon, its title, and the chevron that says there is more. */

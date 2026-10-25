@@ -43,6 +43,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.benjaminissa.issareader.app.local.LocalBookInfo
 import com.benjaminissa.issareader.app.local.LocalBooksCopy
 import com.benjaminissa.issareader.app.local.LocalDevice
 import com.benjaminissa.issareader.app.model.CoverCache
@@ -50,8 +51,6 @@ import com.benjaminissa.issareader.app.ui.player.BookCoverImage
 import com.benjaminissa.issareader.core.model.Book
 import com.benjaminissa.issareader.core.model.ByteCountText
 import com.benjaminissa.issareader.core.model.LocalCopy
-import com.benjaminissa.issareader.core.model.ReadingProgress
-import com.benjaminissa.issareader.ui.HtmlText
 import com.benjaminissa.issareader.ui.Metrics
 import com.benjaminissa.issareader.ui.Overline
 import com.benjaminissa.issareader.ui.Palette
@@ -59,9 +58,6 @@ import com.benjaminissa.issareader.ui.PrimaryButton
 import com.benjaminissa.issareader.ui.Symbols
 import com.benjaminissa.issareader.ui.SystemText
 import com.benjaminissa.issareader.ui.Typography
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
-import java.time.format.FormatStyle
 
 /**
  * Book info for a book from the reader's files, as a Material bottom sheet:
@@ -247,54 +243,4 @@ private fun Details(book: Book, copy: LocalCopy?, isMissing: Boolean) {
             color = Palette.inkTertiary,
         )
     }
-}
-
-/** The sheet's words, without the sheet. */
-internal object LocalBookInfo {
-    /** "Added from": where the original is, as a value — "Files" on the iPhone. */
-    const val ADDED_FROM = "Your files"
-
-    /**
-     * "About this book": the package's description as text. Most tools write
-     * it as escaped HTML, which arrives as literal tags and entities; shown
-     * as-is it put `<div><p>…` on screen.
-     */
-    fun aboutText(description: String?): String? {
-        if (description.isNullOrEmpty()) return null
-        val text = HtmlText.plain(description).trim()
-        return text.ifEmpty { null }
-    }
-
-    /** "Read", or "Continue · 42%" for a book already started. */
-    fun primaryTitle(book: Book): String {
-        val progress = book.progress
-        if (progress == null || progress <= 0) return "Read"
-        return "Continue · ${ReadingProgress.percentText(progress)}"
-    }
-
-    /** "Narrated by Lucy Simmons · 7 h 4 min", or "Narrated · 7 h 4 min". */
-    fun narratedLine(book: Book, seconds: Double): String {
-        val length = LocalBooksCopy.narrated(seconds)
-        val narrators = book.narrators.map { it.name }
-        if (narrators.isEmpty()) return length
-        return length.replace("Narrated", "Narrated by ${narrators.joinToString(", ")}")
-    }
-
-    fun missingReason(book: Book, copy: LocalCopy?): String {
-        val file = copy?.fileName ?: "the file"
-        val place = book.progress?.let { " from ${ReadingProgress.percentText(it)}" } ?: ""
-        return "Your place and highlights came back from the backup, but the EPUB didn’t. Choose $file again to keep reading$place."
-    }
-
-    /** "EPUB 3 · Narration", "EPUB 3 · Fixed layout", "EPUB 2". */
-    fun format(book: Book): String {
-        val copy = book.localCopy
-        val version = copy?.epubVersion?.firstOrNull()?.let { "EPUB $it" } ?: "EPUB"
-        if (book.hasReadalong) return "$version · Narration"
-        if (copy?.isFixedLayout == true) return "$version · Fixed layout"
-        return version
-    }
-
-    fun date(instant: java.time.Instant): String =
-        DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM).withZone(ZoneId.systemDefault()).format(instant)
 }

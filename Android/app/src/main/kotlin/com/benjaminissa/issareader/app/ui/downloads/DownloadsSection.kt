@@ -284,20 +284,6 @@ fun statusText(job: DownloadManager.Job, state: DownloadManager.State): String {
     }
 }
 
-/**
- * The item a context click, a double click or Delete is about, on a list
- * whose rows can be selected: the one row named, if it is still listed.
- * Several, or none, is no one row. Swift's `DownloadsRowCommands`, for the
- * Mac's list; kept so a selectable list here asks the same question.
- */
-object DownloadsRowCommands {
-    fun target(ids: Set<String>, items: List<DownloadsInventory.DownloadedItem>): DownloadsInventory.DownloadedItem? {
-        if (ids.size != 1) return null
-        val id = ids.first()
-        return items.firstOrNull { it.id == id }
-    }
-}
-
 /** The same shape as a rail's heading: the overline, the total, and on the Reading tab "Manage". */
 @Composable
 private fun Header(items: List<DownloadsInventory.DownloadedItem>, placement: DownloadsPlacement, modifier: Modifier = Modifier) {

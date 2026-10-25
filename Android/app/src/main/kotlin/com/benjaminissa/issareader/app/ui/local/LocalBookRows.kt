@@ -65,9 +65,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import com.benjaminissa.issareader.app.local.LocalBookFacts
 import com.benjaminissa.issareader.app.local.LocalBooksCopy
 import com.benjaminissa.issareader.app.local.LocalImport
 import com.benjaminissa.issareader.app.local.LocalImportError
+import com.benjaminissa.issareader.app.local.LocalRowNotice
 import com.benjaminissa.issareader.app.ui.player.BookCoverImage
 import com.benjaminissa.issareader.app.model.CoverCache
 import com.benjaminissa.issareader.core.model.Book
@@ -87,72 +89,6 @@ import kotlin.math.roundToInt
  * a file on its way in, a file that could not be added, the undo toast, and
  * the swipe that removes.
  */
-
-/** Which book a hardware keyboard's shortcut acts on. */
-internal object LocalBooksKeyboard {
-    /**
-     * Delete: the row the keyboard is on, and nothing when it is on none.
-     * Falling back to the first book removed the one opened last — the list's
-     * first row — when the rows had been reached by touch.
-     */
-    fun removalTarget(focused: String?): String? = focused
-
-    /** Book info: the row the keyboard is on, else the first book. Showing a book's info destroys nothing, so it may guess. */
-    fun infoTarget(focused: String?, books: List<Book>): String? = focused ?: books.firstOrNull()?.uuid
-}
-
-/** What a row's notice strip is about, and so what its one action does. */
-internal sealed interface LocalRowNotice {
-    /** Told once after import: OK clears it for good. */
-    data class Imported(val notice: LocalNotice) : LocalRowNotice
-
-    /** The file did not come back from a backup: Add Again… opens the picker. */
-    data object Missing : LocalRowNotice
-}
-
-/** One book as its row card says it: what a screen reader reads and what the trailing column shows. */
-internal class LocalBookFacts(val book: Book, val size: Long?, val isMissing: Boolean, val isPlaying: Boolean) {
-    val author: String get() = book.byline
-
-    val narration: String?
-        get() {
-            val seconds = book.narrationDuration
-            if (!book.hasReadalong || seconds == null || isMissing) return null
-            return LocalBooksCopy.narrated(seconds)
-        }
-
-    val progress: Double? get() = book.progress?.takeIf { it > 0 }
-    val percent: String? get() = progress?.let(ReadingProgress::percentText)
-    val sizeText: String? get() = size?.let(ByteCountText::text)
-    val trailing: String? get() = if (isMissing) LocalBooksCopy.notOnDevice else sizeText
-
-    val notices: List<LocalRowNotice>
-        get() = if (isMissing) listOf(LocalRowNotice.Missing) else (book.localCopy?.notices ?: emptyList()).map { LocalRowNotice.Imported(it) }
-
-    /** The whole row, as one sentence: title, author, narration and length, percent, size, and "playing" while it narrates. */
-    val spoken: String
-        get() {
-            val parts = mutableListOf(book.title)
-            if (author.isNotEmpty()) parts += author
-            narration?.let { parts += it.replace(" · ", ", ") }
-            percent?.let { parts += "$it read" }
-            trailing?.let { parts += it }
-            if (isPlaying) parts += "playing"
-            return parts.joinToString(", ")
-        }
-
-    companion object {
-        fun noticeText(notice: LocalRowNotice): String = when (notice) {
-            is LocalRowNotice.Imported -> LocalBooksCopy.notice(notice.notice)
-            LocalRowNotice.Missing -> LocalBooksCopy.restoredNotice
-        }
-
-        fun noticeAction(notice: LocalRowNotice): String = when (notice) {
-            is LocalRowNotice.Imported -> "OK"
-            LocalRowNotice.Missing -> "Add Again…"
-        }
-    }
-}
 
 /** Whether the system's text is at one of its largest sizes, where a row stacks rather than lines up. */
 @Composable

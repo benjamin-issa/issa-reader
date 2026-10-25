@@ -47,6 +47,7 @@ import androidx.compose.ui.unit.dp
 import com.benjaminissa.issareader.app.model.AppModel
 import com.benjaminissa.issareader.app.model.BrowserSignInModel
 import com.benjaminissa.issareader.app.model.DeviceSignInModel
+import com.benjaminissa.issareader.app.model.SignInForm
 import com.benjaminissa.issareader.app.ui.shell.LocalAppEnvironment
 import com.benjaminissa.issareader.ui.Metrics
 import com.benjaminissa.issareader.ui.Overline
@@ -187,13 +188,6 @@ private sealed interface SignInRoute {
 private enum class SignInDestination { BROWSER, DEVICE_CODE }
 
 /**
- * Whether the address in the field would be spoken to in the clear. A bare
- * address counts: what a LAN server answers on is plain HTTP, and the field's
- * own hint suggests exactly that form.
- */
-fun isCleartext(typed: String): Boolean = AppModel.normalizeServerUrl(typed)?.scheme?.lowercase() == "http"
-
-/**
  * The paper, and the content at most 460 wide, 32 in from the edges, centred
  * in the height when it fits and scrolling when it does not — the device
  * code's screen is taller than a small phone.
@@ -276,7 +270,7 @@ private fun ServerForm(
             )
             // From the field, not from the session: the fact is about the
             // address being typed.
-            if (isCleartext(address)) {
+            if (SignInForm.isCleartext(address)) {
                 Text("Not encrypted — this server is on http://.", style = Typography.footnote, color = Palette.alert)
             }
         }
