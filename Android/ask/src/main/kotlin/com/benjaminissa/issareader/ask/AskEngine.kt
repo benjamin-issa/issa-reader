@@ -491,8 +491,12 @@ class AskEngine(
          * **Not a name finder.** The only safe use of one here would be as a
          * positive exemption — "this is a place" — which opens a hole precisely
          * where place names are the spoiler: "Mordor lies to the east."
+         *
+         * Public, unlike the rest of the engine's arithmetic, because the
+         * real-model suites in `:ask-android` run on a device in another module
+         * and check the model's answers with exactly this test.
          */
-        internal fun unvettedNames(answer: String): List<String> {
+        fun unvettedNames(answer: String): List<String> {
             val candidates = HashSet<String>()
             // The first word of the answer opens a sentence like any other.
             var opensSentence = true

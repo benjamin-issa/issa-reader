@@ -81,3 +81,6 @@ rather than silently dropped.
 
 | Suite or test | Reason |
 | --- | --- |
+| IssaAsk `SearchBookToolTests` (all 14) | The `searchBook` tool is not ported: ML Kit's Prompt API has no tool calling, so `AskEngine.usesSearchTool` is false and `forQuestion` registers no tool. The engine's handling of excerpts a tool showed is still covered by `AskEngineTest` with a stand-in tool. |
+| IssaAsk `FailureTableTests`: `currentTable`, `legacyTable`, `toolCallUnwraps` | They assert FoundationModels' two error families and `ToolCallError`. `:ask-android`'s `FailureTableTest` asserts the ML Kit `GenAiException` table in their place, and unwrapping a cause chain stands in for the tool-call unwrap. |
+| IssaAsk `RethinkExperiments`: variants T, TR, H, P1, S, SR and Z; the probe's capability lines; per-session token usage; the prewarm "same session" mode | They need tool calling, guided generation (`@Generable`), reasoning levels, `LanguageModelSession.usage` or a session to prewarm, none of which the Prompt API offers as used here. The other variants, the probe and the cold/shipped prewarm comparison are ported as an opt-in device suite. |
