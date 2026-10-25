@@ -34,6 +34,8 @@ object Symbols {
     @DrawableRes val bookmarkSquare: Int = R.drawable.ms_bookmarks
     /** `books.vertical` */
     @DrawableRes val booksVertical: Int = R.drawable.ms_library_books
+    /** `books.vertical.fill` */
+    @DrawableRes val booksVerticalFill: Int = R.drawable.ms_library_books_fill
     /** `chart.bar.fill` */
     @DrawableRes val chartBarFill: Int = R.drawable.ms_equalizer_fill
     /** `checkmark` */
@@ -70,6 +72,8 @@ object Symbols {
     @DrawableRes val exclamationmarkTriangle: Int = R.drawable.ms_warning
     /** `gearshape` */
     @DrawableRes val gearshape: Int = R.drawable.ms_settings
+    /** `gearshape.fill` */
+    @DrawableRes val gearshapeFill: Int = R.drawable.ms_settings_fill
     /** `gobackward` */
     @DrawableRes val gobackward: Int = R.drawable.ms_replay
     /** `hand.point.up.left` */

@@ -71,4 +71,28 @@ class ComponentsScreenshotTest {
             }
         }
     }
+
+    @Test
+    fun shellBars() {
+        captureRoboImage("build/specimen/shell.png") {
+            IssaTheme(darkTheme = false) {
+                Column(Modifier.size(402.dp, 220.dp).background(Palette.paper)) {
+                    androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
+                    MiniPlayerBar(
+                        cover = { CoverArt(null, "peter", "J. M. Barrie", aspect = 1f) },
+                        title = "Peter and Wendy",
+                        chapter = "Chapter I · Peter Breaks Through",
+                        isPlaying = true,
+                        progress = 0.2,
+                        onPlayPause = {}, onSkipBack = {}, onSkipForward = {}, onExpand = {},
+                    )
+                    IssaNavigationBar(
+                        listOf(TabItem("Library", Symbols.booksVerticalFill), TabItem("Reading", Symbols.bookmarkFill), TabItem("Settings", Symbols.gearshapeFill)),
+                        selected = 1,
+                        onSelect = {},
+                    )
+                }
+            }
+        }
+    }
 }
