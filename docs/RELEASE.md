@@ -280,7 +280,7 @@ that takes a request and a wait.
   (CLAUDE.md: Storyteller 2, `web-v2.14.21`, address and credentials kept
   outside this repository) and the steps: the server address, then "Continue
   in browser" and the account.
-- **Data safety.** This follows PRIVACY.md. The answers below are a
+- **Data safety.** This follows PRIVACY-ANDROID.md. The answers below are a
   recommendation, and the form's answers are the developer's to give:
   - **Data the app sends to the reader's own server.** This goes to a server
     the reader chose and runs, not to the developer or anyone acting for them,
@@ -298,8 +298,8 @@ that takes a request and a wait.
       on;
     - encrypted in transit: yes.
   - **Deletion.** The developer holds no data, so there is nothing to request
-    deleted. Point to PRIVACY.md.
-  - **Privacy policy URL.** PRIVACY.md as published.
+    deleted. Point to PRIVACY-ANDROID.md.
+  - **Privacy policy URL.** PRIVACY-ANDROID.md as published (the Apple apps keep PRIVACY.md).
 - **Foreground services.** The app declares two foreground-service types, and
   Play asks for each to be justified with a short video:
   - `mediaPlayback`: audiobook and read-along narration that keeps playing with

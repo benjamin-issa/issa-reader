@@ -77,7 +77,7 @@ interface AskNotifying {
  * even the book: the public version is the title alone.
  *
  * The question used to be the body, on the argument that it is theirs
- * already. PRIVACY.md promises "your questions and the answers are never
+ * already. PRIVACY-ANDROID.md promises "your questions and the answers are never
  * written down: they exist while the sheet is open and are gone when you close
  * it" — and a delivered notification outlives the sheet. So the question is
  * out, and [removeDelivered] takes back what has been delivered when the

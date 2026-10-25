@@ -384,7 +384,7 @@ class AskEngine(
         // answer. Without this the sheet drew the sources under nothing at
         // all, which is how 1.2.0 (41) shipped on the iPhone.
         //
-        // The shape is logged and never the text: PRIVACY.md promises a
+        // The shape is logged and never the text: PRIVACY-ANDROID.md promises a
         // question and its answer are never written down.
         if (answer.text.isEmpty()) {
             IssaLog.error(

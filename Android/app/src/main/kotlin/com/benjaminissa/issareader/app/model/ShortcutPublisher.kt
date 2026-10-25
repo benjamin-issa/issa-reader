@@ -73,7 +73,7 @@ class LauncherShortcutBackend(private val context: Context) : ShortcutBackend {
  * Long-pressing the app's icon offers them beside "Continue reading", each
  * opening `issareader://book/<uuid>` — the widget's link, so a shortcut opens
  * the book rather than the app. Server books only, never a book from the
- * reader's own files: PRIVACY.md promises those are sent nowhere outside the
+ * reader's own files: PRIVACY-ANDROID.md promises those are sent nowhere outside the
  * app, and the launcher is outside it.
  *
  * Replaced when what they would show changes, not on every launch. Cleared

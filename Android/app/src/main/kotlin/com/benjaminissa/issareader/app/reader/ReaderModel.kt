@@ -302,7 +302,7 @@ class ReaderModel(
 
     /**
      * Whether this book may appear outside the app: the widget's snapshot. A
-     * book from the reader's files never does — PRIVACY.md promises they are
+     * book from the reader's files never does — PRIVACY-ANDROID.md promises they are
      * never sent anywhere.
      */
     val publishesToSystem: Boolean get() = !isLocal

@@ -26,7 +26,7 @@ import kotlin.math.abs
  * not in this object. The one exception is a record of the last cover
  * *attempt*, which leaves nothing on disk when it fails.
  *
- * Never a book from the reader's own files: PRIVACY.md promises those are
+ * Never a book from the reader's own files: PRIVACY-ANDROID.md promises those are
  * sent nowhere, and the widget is outside the app.
  *
  * Main-thread only, as the Swift class is `@MainActor`.

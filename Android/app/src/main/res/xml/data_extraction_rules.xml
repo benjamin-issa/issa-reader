@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    What Android backs up, matching PRIVACY.md: preferences, and the library
+    What Android backs up, matching PRIVACY-ANDROID.md: preferences, and the library
     database (local positions, highlights and bookmarks). Not downloads,
     extracted narration, books added from the reader's own files, fonts, the
     diagnostics log, Ask indexes or the sign-in token: they can be fetched

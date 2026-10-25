@@ -20,7 +20,7 @@ import org.robolectric.Shadows.shadowOf
  * `AskNotifierTests`, with what the Android notification itself carries.
  *
  * The body used to be the reader's own question. A delivered notification
- * outlives the sheet, and PRIVACY.md promises that questions "exist while the
+ * outlives the sheet, and PRIVACY-ANDROID.md promises that questions "exist while the
  * sheet is open and are gone when you close it". The suite exists so the
  * question cannot quietly come back: nothing else checks what goes into it.
  */
