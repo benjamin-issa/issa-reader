@@ -108,12 +108,18 @@ dependencies {
     implementation(libs.glance.material3)
     implementation(libs.datastore.preferences)
     implementation(libs.kotlinx.coroutines.android)
+    // The media session and Android Auto (app/media): the session's library
+    // service, and the car library's connection state.
+    implementation(libs.media3.session)
+    implementation(libs.car.app)
 
     testImplementation(project(":testing"))
     testImplementation(libs.robolectric)
     testImplementation(libs.mockwebserver)
     testImplementation(libs.turbine)
     testImplementation(libs.work.testing)
+    testImplementation(libs.media3.test.utils)
+    testImplementation(libs.media3.test.utils.robolectric)
     testImplementation(platform(libs.compose.bom))
     testImplementation(libs.compose.ui.test.junit4)
     testImplementation(libs.roborazzi)

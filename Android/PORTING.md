@@ -31,6 +31,24 @@ follow Kotlin's casing: `HTMLEntities` → `HtmlEntities`, `FNV1a` → `Fnv1a`,
 members to a type become members or top-level extension functions in the file
 of the type they extend.
 
+## CarPlay and Now Playing
+
+CarPlay becomes Android Auto, and the system half of Now Playing a Media3
+media session; one `MediaLibraryService` is both.
+
+| Swift | Kotlin |
+| --- | --- |
+| `CarPlaySceneDelegate` (tabs, rows, Up Next, the rate button, the alert) | `app.media.IssaPlaybackService`, `app.media.AutoBrowseTree` |
+| `CarPlayBridge`, `AppServices.connectCarPlay()` | `app.media.MediaHost`, `app.media.AppMedia` |
+| `CarPlayChapters` | `app.media.AutoChapters` |
+| `RemoteCommandCenter`'s `MPRemoteCommandCenter` and `MPNowPlayingInfoCenter` | `playback.android.IssaSessionPlayer`, `SessionTransport`; the decisions stay in `playback.CommandRouter` |
+| AirPods' decoded presses | `playback.android.HeadsetButtons` |
+| The CarPlay scene connecting | `playback.android.CarPresence` |
+
+Android Auto adds voice search (`app.media.VoiceSearch`), which CarPlay
+never had, and names the controller behind each command, which iOS never
+did (`playback.android.ControllerSurfaces`).
+
 ## Types
 
 | Swift | Kotlin |
@@ -90,6 +108,7 @@ rather than silently dropped.
 | `RenderTests.swift` › `PageBoundaryTests.spannedParagraphLayout()` at 320 × 400 | At 400 Android sets every sentence of the fixture on exactly two lines and every page holds twelve, so no sentence straddles a page and the fixture tests nothing; `:render-android` lays it out 370 tall, where every other break falls mid-sentence. |
 | `ArchiveImageSourceTests.swift` › R-59 on AppKit (a plate's size in points at its DPI) | The Mac's `NSImage` behaviour. Android follows the iPhone and iPad (`UIImage`): a plate is laid out at its pixel size whatever resolution it is tagged with, and the ported test asserts that. |
 | `WhitespaceStabilityTests.swift` (IssaAsk) | Both cases are about the passage chunker and the ranker, not the parser's string, so they belong to the Ask port. The parser half of `IndexOffsetTests.swift` is `:render`'s `IndexOffsetTest`. |
+| `CarPlayRootTemplateTests` (IssaReader-iOS) `nowPlayingIsExcluded`, `unknownTypesAreRefused` | CarPlay's templates have no Android counterpart. Ported as `AutoBrowseTreeTest` against what Android Auto asks of its root — browsable folders only: a playable item stands for `CPNowPlayingTemplate`, a row neither browsable nor playable for `CPAlertTemplate`. |
 | IssaPlayback `HandlerBoxTests` (both tests) | `HandlerBox` exists because `MPRemoteCommandCenter` is process-wide and `removeTarget(nil)` stripped every instance's handlers. Android has no shared command centre: each `MediaSession` owns its callback, and `CommandRouter` keeps no targets to remove. |
 | IssaPlayback `GainTapPerTapStateTests` `unprepareDoesNotClearTheOtherTap` | Stages two `MTAudioProcessingTap`s whose prepare/unprepare callbacks interleave across a chapter change. Android has one `GainKneeAudioProcessor` per sink, configured anew for each format; `GainKneeAudioProcessorTest.theLevelSurvivesAReconfiguration` checks the level survives that. |
 | IssaPlayback `GainTapPerTapStateTests` `scratchIsPerTap`, `scratchIsPerTrackOfOneMix` | Working room per tap and per track of one `AVAudioMix`. The Android stage is one processor on one audio thread, holding its own scratch; there is no second tap or track to share it with. |

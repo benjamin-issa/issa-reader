@@ -4,5 +4,7 @@
     <string name="shortcut_continue_short">Continue reading</string>
     <string name="shortcut_continue_long">Continue reading</string>
     <string name="widget_name">Currently Reading</string>
+    <!-- The channel the media notification posts to, as Settings lists it. -->
+    <string name="playback_channel_name">Listening</string>
     <string name="widget_description">The book you\'re reading or listening to, and how far through you are.</string>
 </resources>

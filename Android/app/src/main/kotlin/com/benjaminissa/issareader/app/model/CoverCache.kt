@@ -159,6 +159,36 @@ class CoverCache(
     }
 
     /**
+     * A server book's cover as a file, fetched if it is not on disk yet and
+     * never decoded: what the Android Auto cover provider serves the car.
+     * Filed under [imageKey], so this and [image] share one copy of the art.
+     *
+     * @return the file, or null when the server had no image to give.
+     */
+    suspend fun file(
+        book: Book,
+        session: Session,
+        shape: LibraryService.CoverShape = LibraryService.CoverShape.SQUARE,
+        maxPixel: Int = 600,
+    ): File? {
+        val file = fileFor(imageKey(book, shape, maxPixel))
+        if (withContext(io) { file.isFile }) return file
+        val data = try {
+            LibraryService(session.client).coverData(book, shape, pixelWidth = maxPixel)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            return null
+        }
+        if (!isImage(data)) return null
+        writeFile(file, data)
+        return file.takeIf { withContext(io) { it.isFile } }
+    }
+
+    /** Where the JPEG filed under [key] lives, whether or not it is there yet. */
+    fun fileFor(key: String): File = File(directory, "$key.jpg")
+
+    /**
      * The cover of a book from the reader's own files: the `cover.jpg` cut
      * from it at import, decoded to the size drawn. From memory or the disk
      * only — never a request — and null for a book that had no cover, which
