@@ -21,6 +21,16 @@ android {
     testOptions { unitTests.isIncludeAndroidResources = true }
 }
 
+// The device suites read IssaAsk's own fixtures — the two books and the
+// question files — packed into the test APK, as the JVM suites read them in
+// place.
+androidComponents {
+    onVariants { variant ->
+        val fixtures = rootDir.parentFile.resolve("Packages/IssaAsk/Tests/Fixtures").path
+        variant.deviceTests.values.forEach { test -> test.sources.assets?.addStaticSourceDirectory(fixtures) }
+    }
+}
+
 kotlin {
     compilerOptions { jvmTarget.set(JvmTarget.JVM_17) }
 }

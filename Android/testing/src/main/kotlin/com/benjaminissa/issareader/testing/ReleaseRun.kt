@@ -37,9 +37,19 @@ object ReleaseRun {
     }
 
     /** For a suite that needs something other than files, such as a model. */
-    fun require(available: Boolean, what: String) {
+    fun require(available: Boolean, what: String) = require(available, what, releaseRun = isOn)
+
+    /**
+     * The same, with the switch read by the caller: an instrumented test on a
+     * device has no `ISSA_RELEASE_RUN` in its environment and reads it from the
+     * instrumentation arguments instead.
+     */
+    fun require(available: Boolean, what: String, releaseRun: Boolean) {
         if (available) return
-        if (isOn) fail("$what is not available. A release run (ISSA_RELEASE_RUN=1) must see this suite run, not skip.")
+        if (releaseRun) fail("$what is not available. A release run (ISSA_RELEASE_RUN=1) must see this suite run, not skip.")
         Assume.assumeTrue("$what is not available", false)
     }
+
+    /** Whether a suite needing a model runs: when the model is there, and always on a release run, where its absence is [require]'s to report. */
+    fun shouldRun(releaseRun: Boolean, modelAvailable: Boolean): Boolean = releaseRun || modelAvailable
 }
