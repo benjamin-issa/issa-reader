@@ -94,6 +94,12 @@ class AppGraph(
     /** The faces a page is set in. */
     val fonts = ReaderFonts(context)
 
+    /** The faces the reader imported, registered into [fonts]. */
+    val customFonts = com.benjaminissa.issareader.app.model.CustomFonts(fonts)
+
+    /** "Add a font…", for Settings and a book's own sheet alike. */
+    val fontImport = com.benjaminissa.issareader.app.model.FontImport(customFonts, context.contentResolver)
+
     /** What each reader needs that is not about its book. */
     val readerServices = ReaderServices(
         scope = mainScope,
@@ -157,6 +163,9 @@ class AppGraph(
         started = true
         sendSnapshotApplyNotifications()
         BookContentService.migrateFromCachesIfNeeded()
+        // Before the first page is set, or a book in an imported face opens in
+        // the fallback and the setting looks forgotten.
+        customFonts.registerAll()
         IssaLog.info(
             "app launched",
             mapOf(
