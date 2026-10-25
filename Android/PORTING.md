@@ -81,3 +81,7 @@ rather than silently dropped.
 
 | Suite or test | Reason |
 | --- | --- |
+| IssaPlayback `HandlerBoxTests` (both tests) | `HandlerBox` exists because `MPRemoteCommandCenter` is process-wide and `removeTarget(nil)` stripped every instance's handlers. Android has no shared command centre: each `MediaSession` owns its callback, and `CommandRouter` keeps no targets to remove. |
+| IssaPlayback `GainTapPerTapStateTests` `unprepareDoesNotClearTheOtherTap` | Stages two `MTAudioProcessingTap`s whose prepare/unprepare callbacks interleave across a chapter change. Android has one `GainKneeAudioProcessor` per sink, configured anew for each format; `GainKneeAudioProcessorTest.theLevelSurvivesAReconfiguration` checks the level survives that. |
+| IssaPlayback `GainTapPerTapStateTests` `scratchIsPerTap`, `scratchIsPerTrackOfOneMix` | Working room per tap and per track of one `AVAudioMix`. The Android stage is one processor on one audio thread, holding its own scratch; there is no second tap or track to share it with. |
+| IssaPlayback `GainTapPerTapStateTests` `retainBalance` | Checks the `Unmanaged` retain/release balance of the tap's client info. Kotlin has no manual retain counts. |
