@@ -86,6 +86,8 @@ object Symbols {
     @DrawableRes val highlighter: Int = R.drawable.ms_ink_highlighter
     /** `info.circle` */
     @DrawableRes val infoCircle: Int = R.drawable.ms_info
+    /** `ipad` */
+    @DrawableRes val ipad: Int = R.drawable.ms_tablet
     /** `iphone` */
     @DrawableRes val iphone: Int = R.drawable.ms_mobile
     /** `list.bullet` */

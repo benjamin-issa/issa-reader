@@ -175,8 +175,12 @@ object LocalDevice {
 
 /** The copy deck's words for the list's notices and toasts, in one place. */
 object LocalBooksCopy {
-    /** Where the original stays: the Files app. */
-    const val ORIGINALS_PLACE = "Files"
+    /**
+     * Where the original stays. "Files" on the iPhone, the app of that name;
+     * Android has no one app the reader's files live in, so the copy deck
+     * names them by what they are.
+     */
+    const val ORIGINALS_PLACE = "your files"
 
     /** The list's title: "On this phone". */
     val listTitle: String get() = "On this ${LocalDevice.noun}"
@@ -196,7 +200,7 @@ object LocalBooksCopy {
 
     fun alreadyHere(title: String): String = "$title is already on this ${LocalDevice.noun}."
 
-    /** The undo toast: "Removed Dracula. Original kept in Files." */
+    /** The undo toast: "Removed Dracula. Original kept in your files." */
     fun removed(titles: List<String>): String =
         if (titles.size == 1) {
             "Removed ${titles[0]}. Original kept in $ORIGINALS_PLACE."
