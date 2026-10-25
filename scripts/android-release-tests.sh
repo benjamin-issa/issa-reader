@@ -9,7 +9,10 @@
 # Every module's JVM and Robolectric suites run through Gradle, one module at
 # a time, reading the same captured responses and books as the Swift suites
 # (every Storyteller generation's, from Packages/*/Tests/Fixtures). The
-# screenshot baselines are verified after them.
+# screenshot tests run among them and must draw; whether what they draw looks
+# right is the layout sweep's to show (scripts/android-layout-sweep.sh), by
+# eye, as on the iPhone — pixel baselines drawn on one machine do not match
+# another's font rendering.
 #
 # It sets ISSA_RELEASE_RUN=1, the release switch: a suite whose input is
 # absent — the real-alignment EPUBs in /tmp, the parity goldens the Mac writes
@@ -137,13 +140,6 @@ for entry in "${MODULES[@]}"; do
   set -e
   judge ":$module" "$module/build/test-results/$task" "$OUT/$module.log" "$status"
 done
-
-echo "▸ screenshot baselines"
-set +e
-./gradlew verifyRoborazziDebug --console=plain > "$OUT/screenshots.log" 2>&1
-status=$?
-set -e
-if [ "$status" = 0 ]; then pass "screenshots: match their baselines"; else fail "screenshots: differ from their baselines (see $OUT/screenshots.log)"; fi
 
 if [ -n "$ASK_DEVICE" ]; then
   echo "▸ real-model Ask suites on $ASK_DEVICE"

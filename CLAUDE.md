@@ -108,9 +108,9 @@ tests" on Android means all of these:
    runs each module's JVM and Robolectric tests through Gradle, one module at
    a time, under `ISSA_RELEASE_RUN=1`: `:core`, `:epub`, `:render`, `:playback`,
    `:ask`, `:ui`, `:render-android`, `:playback-android`, `:ask-android` and
-   `:app`. It then verifies the screenshot baselines (`verifyRoborazziDebug`).
-   It fails the run on any skipped test, any failure, or a module that ran no
-   tests. `.build/android-release-tests/summary.txt` is the record.
+   `:app`, the screenshot tests among them. It fails the run on any skipped
+   test, any failure, or a module that ran no tests.
+   `.build/android-release-tests/summary.txt` is the record.
    - **Fixtures.** The suites read the Swift suites' fixtures where they lie, in
      `Packages/*/Tests/Fixtures`, so every server generation's captured
      responses and both read-along books are decoded on Android too.
