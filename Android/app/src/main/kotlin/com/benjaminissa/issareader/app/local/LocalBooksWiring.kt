@@ -7,6 +7,7 @@ import com.benjaminissa.issareader.app.model.AppModel
 import com.benjaminissa.issareader.app.model.BookIndexes
 import com.benjaminissa.issareader.app.model.PlaybackSettings
 import com.benjaminissa.issareader.core.KeyValueStore
+import com.benjaminissa.issareader.core.model.Book
 import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -72,6 +73,29 @@ class LocalBooksRoute(private val defaults: KeyValueStore) {
 
     fun open(uuid: String) {
         openBook = uuid
+    }
+
+    /**
+     * Takes the app's pending book — a deep link, a launcher shortcut, the
+     * widget — for this window's library to push, by the root's rules. A link
+     * to the book whose reader is already up is dropped rather than consumed:
+     * consuming arms the one-shot reader request, and one armed for a book
+     * already on screen re-presented the reader the next time its page
+     * appeared. And a book from the reader's files open over this window
+     * closes, so the server book is not pushed underneath it where nothing
+     * can be seen.
+     *
+     * @return the book and where it goes, or null when there is nothing to push.
+     */
+    fun takePendingBook(app: AppModel): Pair<Book, AppModel.PendingBook.Destination>? {
+        val pending = app.pendingBook ?: return null
+        if (app.visibleReaderUuid == pending.uuid) {
+            app.discardPendingBook()
+            return null
+        }
+        val taken = app.consumePendingBook() ?: return null
+        if (openBook != null) openBook = null
+        return taken
     }
 
     /**

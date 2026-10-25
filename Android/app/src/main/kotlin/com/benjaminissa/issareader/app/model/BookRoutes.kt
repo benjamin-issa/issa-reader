@@ -4,7 +4,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.benjaminissa.issareader.core.download.BookContentService
+import com.benjaminissa.issareader.core.download.BookMenu
+import com.benjaminissa.issareader.core.download.DownloadManager
 import com.benjaminissa.issareader.core.model.Book
+import com.benjaminissa.issareader.core.model.Tag
+import com.benjaminissa.issareader.core.sync.LibraryArrangement
+import com.benjaminissa.issareader.core.sync.LibraryRails
 import java.util.UUID
 
 /**
@@ -71,5 +77,109 @@ class LibraryNavigator {
     fun showLibrary(search: String? = null) {
         pendingSearch = search
         showRequests += 1
+    }
+}
+
+/**
+ * The library's Browse / All Books switch, as decisions from plain values,
+ * so a screen and a test ask the same thing. (Swift's `LibraryModeSwitch`.)
+ */
+object LibraryModeSwitch {
+    /** What the switch looks at: the library's mode and shelf, and whether a search is showing results. */
+    data class State(val mode: AppModel.LibraryMode, val shelf: LibraryArrangement.Shelf, val isSearching: Boolean)
+
+    /** Whether the content shows Browse's rails rather than the grid: rails only on All books, with nothing searched. */
+    fun showsRails(state: State): Boolean =
+        state.mode == AppModel.LibraryMode.BROWSE && state.shelf == LibraryArrangement.Shelf.ALL && !state.isSearching
+
+    /** What the segment reads: "All Books" whenever rails are not what is on screen. */
+    fun shown(state: State): AppModel.LibraryMode = if (showsRails(state)) AppModel.LibraryMode.BROWSE else AppModel.LibraryMode.ALL
+
+    /**
+     * What picking a segment leaves the library as. Browse is the rails, from
+     * wherever the library is; All Books writes the mode and nothing else.
+     */
+    fun picking(mode: AppModel.LibraryMode, state: State): State = when (mode) {
+        AppModel.LibraryMode.BROWSE -> State(AppModel.LibraryMode.BROWSE, LibraryArrangement.Shelf.ALL, false)
+        AppModel.LibraryMode.ALL -> State(AppModel.LibraryMode.ALL, state.shelf, state.isSearching)
+    }
+
+    /** Where a segment picked on a page pushed over the library lands: its All books, nothing searched. */
+    fun fromPage(picked: AppModel.LibraryMode): State = State(picked, LibraryArrangement.Shelf.ALL, false)
+
+    /**
+     * Where the Reading screen's links into the library land. A "See all"
+     * names a shelf and means that shelf's flat grid; "Go to Library" names
+     * none and means the landing: Browse's rails on All books.
+     */
+    fun fromReading(shelf: LibraryArrangement.Shelf?): State =
+        if (shelf != null) {
+            State(AppModel.LibraryMode.ALL, shelf, false)
+        } else {
+            State(AppModel.LibraryMode.BROWSE, LibraryArrangement.Shelf.ALL, false)
+        }
+}
+
+/**
+ * Puts the library where [LibraryModeSwitch.fromReading] says a link from the
+ * Reading screen lands. The caller shows the library from its root, so no
+ * search or pushed page is left over it.
+ */
+fun AppModel.showLibrary(fromReading: LibraryArrangement.Shelf?) {
+    val landing = LibraryModeSwitch.fromReading(fromReading)
+    if (landing.mode == AppModel.LibraryMode.ALL) {
+        showAllBooks(landing.shelf)
+    } else {
+        arrangement = arrangement.copy(shelf = landing.shelf)
+        libraryMode = landing.mode
+    }
+}
+
+/** What a book page's tag chips link to, decided from the catalogue. */
+object BookLinks {
+    /** Whether a chip links: only for a tag on two books or more, counted once each. */
+    fun isLinked(name: String, booksByTag: Map<String, List<Book>>): Boolean =
+        (booksByTag[name]?.size ?: 0) >= LibraryRails.minimumBooksPerTag
+
+    /** The first linked chip, which carries the identifier a test or a screen reader finds. */
+    fun firstLinkedTagId(tags: List<Tag>, booksByTag: Map<String, List<Book>>): String? =
+        tags.firstOrNull { isLinked(it.name, booksByTag) }?.id
+}
+
+/** What a book's menu does that is not navigation. */
+object BookActions {
+    /**
+     * Why this edition is not downloading, when the Wi-Fi rule held it back:
+     * what the book screen shows against the edition that was asked for, and
+     * only that edition.
+     */
+    fun refusal(book: Book, format: BookContentService.Format, refusals: Map<DownloadManager.Job, String>): String? =
+        refusals[DownloadManager.Job(book.uuid, format)]
+
+    /**
+     * Saves, retries or resumes an edition, and says what the reader has to be
+     * told: the Wi-Fi rule's reason when it held the download back. Resume
+     * included — it used to throw the outcome away, so a "Resume download"
+     * refused on cellular looked ignored.
+     *
+     * @return the alert to show, or null when the download started.
+     */
+    suspend fun startDownload(
+        kind: BookMenu.EditionAction.Kind,
+        book: Book,
+        format: BookContentService.Format,
+        app: AppModel,
+    ): BookAlert? {
+        val job = DownloadManager.Job(book.uuid, format)
+        val started = when (kind) {
+            BookMenu.EditionAction.Kind.RESUME -> {
+                app.resumeDownload(job)
+                app.downloadRefusals[job] == null
+            }
+            BookMenu.EditionAction.Kind.SAVE, BookMenu.EditionAction.Kind.RETRY -> app.download(book, format)
+            BookMenu.EditionAction.Kind.PAUSE, BookMenu.EditionAction.Kind.REMOVE -> return null
+        }
+        if (started) return null
+        return BookAlert(title = "Not downloaded yet", message = app.downloadRefusals[job] ?: "The download could not start.")
     }
 }

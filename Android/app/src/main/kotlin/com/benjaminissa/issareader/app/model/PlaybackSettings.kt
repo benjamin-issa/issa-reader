@@ -304,3 +304,30 @@ class PlaybackSettings(
         internal fun legalTrim(stored: Int): Int? = VolumeTrim.clamped(stored).takeIf { it != 0 }
     }
 }
+
+/**
+ * Telling a reader their book cannot be made louder: the half of the volume
+ * slider that cannot be delivered, said rather than silently lost. Three states,
+ * not two — null is "nothing loaded yet", and captioning that would put the
+ * warning under every book for the moment before its tracks resolve.
+ */
+object VolumeTrimReach {
+    /** Whether the louder half of the slider can actually be heard: only a player that has answered no says no. */
+    fun canBeLouder(carriesGain: Boolean?): Boolean = carriesGain != false
+
+    /** The line under the slider, or null when there is nothing to explain. */
+    fun caption(carriesGain: Boolean?): String? {
+        if (canBeLouder(carriesGain)) return null
+        return "This book can only be made quieter. It is being streamed, and only a downloaded file can be played louder than it was recorded."
+    }
+
+    /**
+     * What TalkBack reads as the slider's value: the caption folded in, and
+     * only where the level asks for more than can be delivered.
+     */
+    fun spoken(decibels: Int, carriesGain: Boolean?): String {
+        val level = VolumeTrim.spoken(decibels)
+        if (canBeLouder(carriesGain) || VolumeTrim.clamped(decibels) <= 0) return level
+        return "$level, but this book can only be made quieter"
+    }
+}
