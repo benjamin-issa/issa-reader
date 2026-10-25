@@ -27,8 +27,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.benjaminissa.issareader.app.ui.settings.ScreenServices
-import com.benjaminissa.issareader.app.ui.settings.screenServices
+import com.benjaminissa.issareader.app.ui.shell.AppEnvironment
+import com.benjaminissa.issareader.app.ui.shell.LocalAppEnvironment
 import com.benjaminissa.issareader.core.Session
 import com.benjaminissa.issareader.core.model.Book
 import com.benjaminissa.issareader.core.model.BookFormat
@@ -51,8 +51,8 @@ import com.benjaminissa.issareader.ui.SystemText
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PlayerSheet(onDismiss: () -> Unit, onReadAlong: () -> Unit) {
-    val services = screenServices()
-    val app = services.app
+    val environment = LocalAppEnvironment.current
+    val app = environment.app
     val book = app.playbackBook
     LaunchedEffect(book == null) { if (book == null) onDismiss() }
     if (book == null) return
@@ -67,7 +67,7 @@ fun PlayerSheet(onDismiss: () -> Unit, onReadAlong: () -> Unit) {
             session = app.session,
             coordinator = app.playback,
             chapterTitle = app.playbackChapterTitle,
-            services = services,
+            environment = environment,
             onDone = onDismiss,
             onReadAlong = onReadAlong,
             modifier = Modifier.fillMaxHeight(),
@@ -83,7 +83,7 @@ internal fun NowPlayingSheetContent(
     session: Session?,
     coordinator: PlaybackDriving?,
     chapterTitle: String?,
-    services: ScreenServices,
+    environment: AppEnvironment,
     onDone: () -> Unit,
     onReadAlong: () -> Unit,
     modifier: Modifier = Modifier,
@@ -122,9 +122,9 @@ internal fun NowPlayingSheetContent(
                 session = session,
                 coordinator = coordinator,
                 chapterTitle = chapterTitle,
-                settings = services.settings,
-                nowPlaying = services.nowPlaying,
-                coverCache = services.coverCache,
+                settings = environment.settings,
+                nowPlaying = environment.nowPlaying,
+                coverCache = environment.covers(),
             )
         }
     }

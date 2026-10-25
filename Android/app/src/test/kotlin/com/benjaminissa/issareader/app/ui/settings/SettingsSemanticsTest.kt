@@ -13,6 +13,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
 import com.benjaminissa.issareader.app.ui.SettingsFixture
+import com.benjaminissa.issareader.app.ui.shell.LocalAppEnvironment
 import com.benjaminissa.issareader.playback.CommandMap
 import com.benjaminissa.issareader.playback.ControlSurface
 import com.benjaminissa.issareader.playback.PlaybackAction
@@ -74,7 +75,7 @@ class SettingsSemanticsTest {
     fun `the tab pushes Controls inside itself`() {
         compose.setContent {
             IssaTheme(darkTheme = false) {
-                CompositionLocalProvider(LocalScreenServices provides fixture.services) {
+                CompositionLocalProvider(LocalAppEnvironment provides fixture.environment) {
                     SettingsScreen(onOpenLocalBooks = {})
                 }
             }

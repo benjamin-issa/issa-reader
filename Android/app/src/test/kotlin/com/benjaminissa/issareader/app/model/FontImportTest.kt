@@ -5,6 +5,7 @@ import com.benjaminissa.issareader.app.AppSuite
 import com.benjaminissa.issareader.app.temporaryDirectory
 import com.benjaminissa.issareader.app.testFonts
 import com.benjaminissa.issareader.render.ReaderStyle
+import com.benjaminissa.issareader.testing.Fixtures
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -45,20 +46,39 @@ internal object PickedFonts {
      */
     fun ownFace(name: String): File {
         val file = bundledCopy(name)
-        val from = "Literata".toByteArray(Charsets.UTF_16BE)
-        val to = "Testface".toByteArray(Charsets.UTF_16BE)
-        val bytes = file.readBytes()
+        file.writeBytes(renamed(file.readBytes(), "Literata", "Testface"))
+        return file
+    }
+
+    /** One of the app's bundled files, by name, from the Swift package's fonts. */
+    fun bundled(name: String): ByteArray = Fixtures.bytes("Packages/IssaUI/Sources/IssaUI/Resources/Fonts/$name")
+
+    /**
+     * A face the app does not ship, made from one it does by renaming its
+     * family in place — the same length in both encodings the name table
+     * uses, so no offset moves.
+     */
+    fun renamed(bytes: ByteArray, from: String, to: String): ByteArray {
+        require(from.length == to.length)
+        var out = bytes
+        for (charset in listOf(Charsets.UTF_16BE, Charsets.ISO_8859_1)) {
+            out = replaceAll(out, from.toByteArray(charset), to.toByteArray(charset))
+        }
+        return out
+    }
+
+    private fun replaceAll(bytes: ByteArray, from: ByteArray, to: ByteArray): ByteArray {
+        val out = bytes.copyOf()
         var index = 0
-        while (index <= bytes.size - from.size) {
-            if ((from.indices).all { bytes[index + it] == from[it] }) {
-                to.copyInto(bytes, index)
+        while (index <= out.size - from.size) {
+            if ((from.indices).all { out[index + it] == from[it] }) {
+                to.copyInto(out, index)
                 index += from.size
             } else {
                 index += 1
             }
         }
-        file.writeBytes(bytes)
-        return file
+        return out
     }
 
     fun uri(file: File): Uri = Uri.fromFile(file)
@@ -163,11 +183,35 @@ class FontImportTest : AppSuite() {
         assertNull(fontImport.notice.message)
         assertTrue(File(directory, file.name).exists())
         assertEquals(listOf("Testface"), fontImport.customFonts.families())
+        assertTrue(testFonts.hasFamily("Testface"))
         assertNotNull("a page can be set in it", testFonts.upright("Testface", 18.0))
         assertEquals(ReaderStyle.Typeface.Custom("Testface"), FontImport.typeface("Testface"))
         assertEquals("Testface", fontImport.adopt(PickedFonts.uri(file)))
         assertEquals("the same bytes again are the same copy", 1, directory.listFiles()?.size)
         assertEquals("and the next launch registers it again", listOf("Testface"), CustomFonts(testFonts).registerAll())
+    }
+
+    /**
+     * A second file of the same name and different bytes is not silently the
+     * first: it gets a name of its own. And a family's bold imported after its
+     * regular is one family with a bold, as CoreText's registration makes it,
+     * not a family whose regular was replaced by its bold.
+     */
+    @Test
+    fun aFamilysBoldJoinsItsRegular() {
+        val directory = checkNotNull(fontImport.customFonts.importedDirectory)
+        val regular = PickedFonts.renamed(PickedFonts.bundled("Lexend-Regular.ttf"), "Lexend", "Texend")
+        val bold = PickedFonts.renamed(PickedFonts.bundled("Lexend-Bold.ttf"), "Lexend", "Texend")
+
+        assertEquals("Texend", fontImport.adopt("Mine.ttf", regular))
+        assertEquals("Texend", fontImport.adopt("Mine.ttf", bold))
+
+        assertTrue(File(directory, "Mine.ttf").exists())
+        assertTrue("a different file under a name already taken", File(directory, "Mine-2.ttf").exists())
+        assertEquals("one family, two members", listOf("Texend"), fontImport.customFonts.families())
+        val upright = checkNotNull(testFonts.upright("Texend", 18.0))
+        assertFalse("the regular is still the upright", upright.isBold)
+        assertTrue("and the family has its bold", testFonts.withBold(upright, 18.0).isBold)
     }
 }
 
@@ -200,5 +244,14 @@ class BookFontImportTest : AppSuite() {
         } finally {
             file.parentFile?.deleteRecursively()
         }
+    }
+
+    /** The same, from the name and bytes the picker's read leaves: the import after that read. */
+    @Test
+    fun importedTypefaceFromBytes() {
+        val name = "Picked-${UUID.randomUUID()}.ttf"
+        assertEquals(ReaderStyle.Typeface.Bundled("Literata"), fontImport.importedTypeface(name, PickedFonts.bundled("Literata-Regular.ttf")))
+        assertNull(fontImport.importedTypeface("Damaged-${UUID.randomUUID()}.ttf", "this is not a font".toByteArray()))
+        assertNotNull(fontImport.notice.message)
     }
 }

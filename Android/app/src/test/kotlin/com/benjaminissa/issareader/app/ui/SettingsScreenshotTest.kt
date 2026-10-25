@@ -15,7 +15,7 @@ import com.benjaminissa.issareader.app.ui.settings.DiagnosticsScreen
 import com.benjaminissa.issareader.app.ui.settings.DownloadsScreen
 import com.benjaminissa.issareader.app.ui.settings.FontLicencesScreen
 import com.benjaminissa.issareader.app.ui.settings.LicenceTextScreen
-import com.benjaminissa.issareader.app.ui.settings.LocalScreenServices
+import com.benjaminissa.issareader.app.ui.shell.LocalAppEnvironment
 import com.benjaminissa.issareader.app.ui.settings.ReadingSettingsScreen
 import com.benjaminissa.issareader.app.ui.settings.SettingsRootList
 import com.benjaminissa.issareader.core.download.BookContentService
@@ -53,7 +53,7 @@ class SettingsScreenshotTest {
         fixture.withLibrary().withLocalBooks()
         captureRoboImage("build/settings-shots/$name.png") {
             IssaTheme(darkTheme = dark) {
-                CompositionLocalProvider(LocalScreenServices provides fixture.services) {
+                CompositionLocalProvider(LocalAppEnvironment provides fixture.environment) {
                     Box(Modifier.fillMaxSize().background(Palette.paper)) { content() }
                 }
             }
@@ -141,7 +141,7 @@ class SettingsScreenshotTest {
     fun localEmpty() {
         captureRoboImage("build/settings-shots/local-empty-402.png") {
             IssaTheme(darkTheme = false) {
-                CompositionLocalProvider(LocalScreenServices provides fixture.services) {
+                CompositionLocalProvider(LocalAppEnvironment provides fixture.environment) {
                     Box(Modifier.fillMaxSize().background(Palette.paper)) { localEmptyContent() }
                 }
             }
@@ -150,17 +150,17 @@ class SettingsScreenshotTest {
 
     @Composable
     private fun localEmptyContent() {
-        LocalBooksContent(fixture.services, fixture.local, standalone = false, onConnectServer = {}, onBack = {}, sizes = emptyMap(), freeSpace = 23_400_000_000)
+        LocalBooksContent(fixture.environment, fixture.local, standalone = false, onConnectServer = {}, onBack = {}, sizes = emptyMap(), freeSpace = 23_400_000_000)
     }
 
     @Test
     fun localTwoBooks() = shot("local-books-402") {
-        LocalBooksContent(fixture.services, fixture.local, standalone = false, onConnectServer = {}, onBack = {}, sizes = SettingsFixture.localSizes, freeSpace = 23_400_000_000)
+        LocalBooksContent(fixture.environment, fixture.local, standalone = false, onConnectServer = {}, onBack = {}, sizes = SettingsFixture.localSizes, freeSpace = 23_400_000_000)
     }
 
     @Test
     fun localStandalone() = shot("local-standalone-402") {
-        LocalBooksContent(fixture.services, fixture.local, standalone = true, onConnectServer = {}, onBack = null, sizes = SettingsFixture.localSizes, freeSpace = 23_400_000_000)
+        LocalBooksContent(fixture.environment, fixture.local, standalone = true, onConnectServer = {}, onBack = null, sizes = SettingsFixture.localSizes, freeSpace = 23_400_000_000)
     }
 
     @Test
@@ -176,7 +176,7 @@ class SettingsScreenshotTest {
 
     @Test
     fun localSettings() = shot("local-settings-402") {
-        LocalSettingsContent(fixture.services, fixture.local, onDone = {}, onConnectServer = {}, spaceUsed = 152_610_000)
+        LocalSettingsContent(fixture.environment, fixture.local, onDone = {}, onConnectServer = {}, spaceUsed = 152_610_000)
     }
 
     // The player
@@ -188,7 +188,7 @@ class SettingsScreenshotTest {
             session = null,
             coordinator = FixturePlayback(playing),
             chapterTitle = null,
-            services = fixture.services,
+            environment = fixture.environment,
             onDone = {},
             onReadAlong = {},
             modifier = Modifier.fillMaxSize(),

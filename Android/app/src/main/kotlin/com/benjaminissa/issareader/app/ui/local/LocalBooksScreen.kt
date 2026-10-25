@@ -82,9 +82,9 @@ import com.benjaminissa.issareader.app.local.LocalRowNotice
 import com.benjaminissa.issareader.app.ui.player.BookCoverImage
 import com.benjaminissa.issareader.app.ui.player.PlayerSheet
 import com.benjaminissa.issareader.app.ui.settings.ReadingSettings
-import com.benjaminissa.issareader.app.ui.settings.ScreenServices
+import com.benjaminissa.issareader.app.ui.shell.AppEnvironment
+import com.benjaminissa.issareader.app.ui.shell.LocalAppEnvironment
 import com.benjaminissa.issareader.app.ui.settings.observe
-import com.benjaminissa.issareader.app.ui.settings.screenServices
 import com.benjaminissa.issareader.core.download.DiskSpace
 import com.benjaminissa.issareader.core.model.Book
 import com.benjaminissa.issareader.core.model.ByteCountText
@@ -120,16 +120,16 @@ import kotlinx.coroutines.withContext
  */
 @Composable
 fun LocalBooksScreen(standalone: Boolean, onConnectServer: () -> Unit) {
-    val services = screenServices()
-    val library = services.local ?: return
+    val environment = LocalAppEnvironment.current
+    val library = environment.local ?: return
     val dispatcher = LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
     LocalBooksContent(
-        services = services,
+        environment = environment,
         library = library,
         standalone = standalone,
         onConnectServer = {
             // Books here stay on the device either way.
-            services.localRoute?.showsListSignedOut = false
+            environment.localRoute?.showsListSignedOut = false
             onConnectServer()
         },
         onBack = if (standalone) null else ({ dispatcher?.onBackPressed() }),
@@ -144,7 +144,7 @@ fun LocalBooksScreen(standalone: Boolean, onConnectServer: () -> Unit) {
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalComposeUiApi::class, ExperimentalFoundationApi::class)
 @Composable
 internal fun LocalBooksContent(
-    services: ScreenServices,
+    environment: AppEnvironment,
     library: LocalLibrary,
     standalone: Boolean,
     onConnectServer: () -> Unit,
@@ -153,7 +153,7 @@ internal fun LocalBooksContent(
     freeSpace: Long? = null,
     initialInfo: String? = null,
 ) {
-    val app = services.app
+    val app = environment.app
     val context = LocalContext.current
     val reduceMotion = remember(context) { ReadingSettings.animationsRemoved(context) }
 
@@ -192,7 +192,7 @@ internal fun LocalBooksContent(
     }
     fun open(book: Book) {
         if (book.uuid in library.missingFiles) return addAgain(book)
-        services.localRoute?.open(book.uuid)
+        environment.localRoute?.open(book.uuid)
     }
     fun remove(uuids: List<String>) {
         if (uuids.isEmpty()) return
@@ -283,7 +283,7 @@ internal fun LocalBooksContent(
             // The tab bar carries its own mini player when the list is pushed;
             // standing alone, the list carries one while narration outlives
             // the reader.
-            if (standalone && playing != null) StandaloneMiniPlayer(services, onExpand = { showsPlayer = true })
+            if (standalone && playing != null) StandaloneMiniPlayer(environment, onExpand = { showsPlayer = true })
         },
     ) { padding ->
         Box(Modifier.fillMaxSize()) {
@@ -306,7 +306,7 @@ internal fun LocalBooksContent(
                     importGroups(library, reduceMotion, onChooseAgain = ::choose)
                     booksGroup(
                         library = library,
-                        services = services,
+                        environment = environment,
                         sizes = measuredSizes,
                         highlighted = highlighted,
                         openRow = openRow,
@@ -355,12 +355,12 @@ internal fun LocalBooksContent(
     }
 
     if (showsSettings) {
-        LocalSettingsSheet(services, library, onDismiss = { showsSettings = false }, onConnectServer = onConnectServer)
+        LocalSettingsSheet(environment, library, onDismiss = { showsSettings = false }, onConnectServer = onConnectServer)
     }
     if (showsPlayer) {
         PlayerSheet(onDismiss = { showsPlayer = false }, onReadAlong = {
             showsPlayer = false
-            app.playbackBook?.let { services.localRoute?.open(it.uuid) }
+            app.playbackBook?.let { environment.localRoute?.open(it.uuid) }
         })
     }
     info?.let { uuid ->
@@ -371,7 +371,7 @@ internal fun LocalBooksContent(
             LocalBookInfoSheet(
                 book = book,
                 isMissing = uuid in library.missingFiles,
-                coverCache = services.coverCache,
+                coverCache = environment.covers(),
                 onDismiss = { info = null },
                 onOpen = {
                     info = null
@@ -568,7 +568,7 @@ private fun LazyListScope.importGroups(library: LocalLibrary, reduceMotion: Bool
 @OptIn(ExperimentalFoundationApi::class)
 private fun LazyListScope.booksGroup(
     library: LocalLibrary,
-    services: ScreenServices,
+    environment: AppEnvironment,
     sizes: Map<String, Long>,
     highlighted: String?,
     openRow: String?,
@@ -587,7 +587,7 @@ private fun LazyListScope.booksGroup(
     }
     for (book in library.books) {
         item(key = book.uuid) {
-            val app = services.app
+            val app = environment.app
             val isMissing = book.uuid in library.missingFiles
             val isPlaying = app.playbackBook?.uuid == book.uuid && app.playback?.player?.isPlaying == true
             val facts = LocalBookFacts(book, sizes[book.uuid], isMissing, isPlaying)
@@ -613,7 +613,7 @@ private fun LazyListScope.booksGroup(
                                 LocalRowNotice.Missing -> onAddAgain(book)
                             }
                         },
-                        coverCache = services.coverCache,
+                        coverCache = environment.covers(),
                         modifier = Modifier
                             .onFocusChanged { onFocusChange(book.uuid, it.isFocused) }
                             .combinedClickable(onClick = { onTap(book) }, onLongClick = { menu = true }),
@@ -681,14 +681,14 @@ private fun WayBack(onConnectServer: () -> Unit) {
 
 /** The standalone list's own mini player, in a card above the foot of the screen. */
 @Composable
-private fun StandaloneMiniPlayer(services: ScreenServices, onExpand: () -> Unit) {
-    val app = services.app
+private fun StandaloneMiniPlayer(environment: AppEnvironment, onExpand: () -> Unit) {
+    val app = environment.app
     val book = app.playbackBook ?: return
     val coordinator = app.playback
     val scope = rememberCoroutineScope()
     coordinator?.player.observe()
     val progress = coordinator?.let {
-        PlaybackProgress(services.settings.progressScope, it.bookProgress, it.totalDuration, it.chapterSpan).fraction
+        PlaybackProgress(environment.settings.progressScope, it.bookProgress, it.totalDuration, it.chapterSpan).fraction
     } ?: 0.0
     Box(Modifier.fillMaxWidth().padding(horizontal = Metrics.screenMargin, vertical = Metrics.spacing8), contentAlignment = Alignment.Center) {
         Box(
@@ -699,14 +699,14 @@ private fun StandaloneMiniPlayer(services: ScreenServices, onExpand: () -> Unit)
                 .clip(RoundedCornerShape(Metrics.radiusLarge)),
         ) {
             MiniPlayerBar(
-                cover = { BookCoverImage(book, session = app.session, aspect = 1f, shape = LibraryService.CoverShape.SQUARE, cache = services.coverCache) },
+                cover = { BookCoverImage(book, session = app.session, aspect = 1f, shape = LibraryService.CoverShape.SQUARE, cache = environment.covers()) },
                 title = book.title,
                 chapter = app.playbackChapterTitle,
                 isPlaying = coordinator?.player?.isPlaying == true,
                 progress = progress,
-                onPlayPause = { scope.launch { coordinator?.perform(PlaybackAction.PLAY_PAUSE, services.settings.commandMap); services.nowPlaying.publish() } },
-                onSkipBack = { scope.launch { coordinator?.perform(PlaybackAction.SKIP_BACKWARD, services.settings.commandMap) } },
-                onSkipForward = { scope.launch { coordinator?.perform(PlaybackAction.SKIP_FORWARD, services.settings.commandMap) } },
+                onPlayPause = { scope.launch { coordinator?.perform(PlaybackAction.PLAY_PAUSE, environment.settings.commandMap); environment.nowPlaying.publish() } },
+                onSkipBack = { scope.launch { coordinator?.perform(PlaybackAction.SKIP_BACKWARD, environment.settings.commandMap) } },
+                onSkipForward = { scope.launch { coordinator?.perform(PlaybackAction.SKIP_FORWARD, environment.settings.commandMap) } },
                 onExpand = onExpand,
             )
         }

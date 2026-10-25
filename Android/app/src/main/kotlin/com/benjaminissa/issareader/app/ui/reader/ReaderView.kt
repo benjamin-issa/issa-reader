@@ -90,6 +90,8 @@ import androidx.lifecycle.compose.LifecycleResumeEffect
 import com.benjaminissa.issareader.app.ask.AskCoordinator
 import com.benjaminissa.issareader.app.model.AppModel
 import com.benjaminissa.issareader.app.model.Clipboard
+import com.benjaminissa.issareader.app.model.CustomFonts
+import com.benjaminissa.issareader.app.model.FontImport
 import com.benjaminissa.issareader.app.model.NowPlayingController
 import com.benjaminissa.issareader.app.model.PlaybackSettings
 import com.benjaminissa.issareader.app.reader.PageSize
@@ -128,6 +130,9 @@ import kotlin.math.floor
  *   playing this book, and the release once the screen has gone. Absent in a
  *   screen built for a test.
  * @param defaults where the first-run guide remembers it has been seen.
+ * @param fontImport "Add a font…" in the Aa sheet, and the faces it has
+ *   imported: the app's one, which Settings shares. A screen built for a test
+ *   gets its own, over [fonts].
  */
 class ReaderEnvironment(
     val settings: PlaybackSettings,
@@ -137,6 +142,7 @@ class ReaderEnvironment(
     val app: AppModel? = null,
     val nowPlaying: NowPlayingController? = null,
     val ask: AskCoordinator? = null,
+    val fontImport: FontImport = FontImport(CustomFonts(fonts), contentResolver = null),
 )
 
 /** The sheets the reader presents, one at a time. */
@@ -350,14 +356,21 @@ fun ReaderView(
             BookTypographyView(
                 book = model.book,
                 settings = settings,
-                fonts = environment.fonts,
+                fontImport = environment.fontImport,
                 publisherFamily = model.style.publisherFamily,
                 publisherNote = model.publisherFontDescription,
                 onChange = ::applyStyle,
                 onDone = dismiss,
             )
         }
-        ReaderSheetKind.ASK -> AskSheet(uuid) { sheet = null }
+        ReaderSheetKind.ASK -> {
+            val ask = environment.ask
+            if (ask != null) {
+                AskSheet(model = model, coordinator = ask) { sheet = null }
+            } else {
+                LaunchedEffect(Unit) { sheet = null }
+            }
+        }
         null -> Unit
     }
 }

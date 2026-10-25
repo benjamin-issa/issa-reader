@@ -1,14 +1,19 @@
 package com.benjaminissa.issareader.app.ui
 
+import androidx.test.core.app.ApplicationProvider
 import com.benjaminissa.issareader.app.local.LocalBooksRoute
 import com.benjaminissa.issareader.app.local.LocalLibrary
 import com.benjaminissa.issareader.app.model.AppModel
+import com.benjaminissa.issareader.app.model.BrowserSignInModel
 import com.benjaminissa.issareader.app.model.CoverCache
+import com.benjaminissa.issareader.app.model.CustomFonts
+import com.benjaminissa.issareader.app.model.DeviceSignInModel
+import com.benjaminissa.issareader.app.model.FontImport
 import com.benjaminissa.issareader.app.model.NowPlayingController
 import com.benjaminissa.issareader.app.model.PlaybackSettings
 import com.benjaminissa.issareader.app.model.SignOutCentre
-import com.benjaminissa.issareader.app.ui.settings.ScreenServices
 import com.benjaminissa.issareader.app.ui.settings.SettingsAccount
+import com.benjaminissa.issareader.app.ui.shell.AppEnvironment
 import com.benjaminissa.issareader.core.InMemoryKeyValueStore
 import com.benjaminissa.issareader.core.auth.TokenPersisting
 import com.benjaminissa.issareader.core.model.Book
@@ -34,9 +39,11 @@ import com.benjaminissa.issareader.playback.MediaSupport
 import com.benjaminissa.issareader.playback.MediaTime
 import com.benjaminissa.issareader.playback.PlaybackAction
 import com.benjaminissa.issareader.playback.PlaybackDriving
+import com.benjaminissa.issareader.render.android.ReaderFonts
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import java.io.File
 import java.nio.file.Files
@@ -72,13 +79,18 @@ internal class SettingsFixture {
         contentResolver = null,
     )
     val coverCache = CoverCache(directory = File(root, "Covers"))
-    val services = ScreenServices(
+    val environment = AppEnvironment(
         app = app,
-        settings = settings,
         nowPlaying = nowPlaying,
+        settings = settings,
+        browserSignIn = { url -> BrowserSignInModel(url, scope) { awaitCancellation() } },
+        deviceSignIn = { url -> DeviceSignInModel(url, scope) },
+        isBrowserSupported = { true },
+        localBooksAvailable = true,
+        covers = { coverCache },
         local = local,
         localRoute = LocalBooksRoute(defaults),
-        coverCache = coverCache,
+        fontImport = FontImport(CustomFonts(ReaderFonts(ApplicationProvider.getApplicationContext())), contentResolver = null),
         versionText = "1.5.1 (52)",
     )
 

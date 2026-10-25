@@ -47,6 +47,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.benjaminissa.issareader.playback.Observed
 import com.benjaminissa.issareader.ui.InlineTitleBar
@@ -199,7 +200,7 @@ internal fun <T> SectionedPickerRow(
     Box(modifier) {
         PaperRowFrame(onClick = { open = true }) {
             Text(title, style = SystemText.body, color = Palette.ink, modifier = Modifier.weight(1f))
-            Text(label(selection), style = SystemText.body, color = Palette.tangerine, maxLines = 1)
+            Text(label(selection), style = SystemText.body, color = Palette.tangerine, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Icon(painterResource(Symbols.chevronUpChevronDown), contentDescription = null, tint = Palette.tangerine, modifier = Modifier.size(16.dp))
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }, containerColor = Palette.surface) {

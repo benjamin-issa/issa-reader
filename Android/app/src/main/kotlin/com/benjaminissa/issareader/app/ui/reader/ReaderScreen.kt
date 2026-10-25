@@ -64,8 +64,8 @@ fun ReaderScreen(bookUuid: String, local: Boolean, onClose: () -> Unit, onOpenPl
 
     LaunchedEffect(bookUuid, local) {
         if (model != null) return@LaunchedEffect
-        // Every face the reader imported, before the first page is set in one.
-        CustomFonts.ensureLoaded(environment.fonts)
+        // Every face the reader imported is registered at launch
+        // (`AppGraph.start`), before the first page is set in one.
         model = if (local) {
             shell.localBook(bookUuid)?.let { app.reader(it.book, it.persistence) }
         } else {
