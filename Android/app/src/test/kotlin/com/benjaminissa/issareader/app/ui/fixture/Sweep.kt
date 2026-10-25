@@ -45,11 +45,16 @@ object Sweep {
      * Books directory once per process, and Robolectric runs a class's tests
      * in one, so a root per test left the second test reading the first's.
      */
-    private val storage: File by lazy {
-        val directory = kotlin.io.path.createTempDirectory("issa-sweep").toFile()
-        StorageRoot.configure(root = File(directory, "files"), caches = File(directory, "caches"), isPurgeable = false)
+    private val storage: File by lazy { kotlin.io.path.createTempDirectory("issa-sweep").toFile() }
+
+    /**
+     * The sweep's root, made the storage root again for each test: the app's
+     * other suites share the process and configure roots of their own, and a
+     * sweep reading theirs drew their downloads, or none.
+     */
+    private fun useStorage() {
+        StorageRoot.configure(root = File(storage, "files"), caches = File(storage, "caches"), isPurgeable = false)
         FixtureLibrary.plantDownloads()
-        directory
     }
 
     /**
@@ -57,8 +62,7 @@ object Sweep {
      *   device are the process's (see [storage]).
      */
     fun environment(root: File, signedIn: Boolean): AppEnvironment {
-        storage
-        StorageRoot.configure(root = File(storage, "files"), caches = File(storage, "caches"), isPurgeable = false)
+        useStorage()
         val defaults = InMemoryKeyValueStore()
         if (signedIn) defaults.putString("issa.lastServer", FixtureServer.SERVER)
         val tokens = InMemoryTokens(signedIn)
