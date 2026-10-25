@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    What Android backs up, matching PRIVACY.md: preferences, and the library
+    database (local positions, highlights and bookmarks). Not downloads,
+    extracted narration, books added from the reader's own files, fonts, the
+    diagnostics log, Ask indexes or the sign-in token: they can be fetched
+    again, are the reader's own files, or must not leave the device. Naming
+    what is included excludes everything else.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <include domain="sharedpref" path="." />
+        <include domain="file" path="datastore/" />
+        <include domain="file" path="Store/" />
+    </cloud-backup>
+    <device-transfer>
+        <include domain="sharedpref" path="." />
+        <include domain="file" path="datastore/" />
+        <include domain="file" path="Store/" />
+    </device-transfer>
+</data-extraction-rules>

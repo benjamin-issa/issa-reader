@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    A Storyteller server is self-hosted, and often on a home network at a plain
+    http:// address, so cleartext is allowed, as the iPhone app allows it
+    (NSAllowsArbitraryLoads). HTTPS is used wherever the server offers it, and
+    the sign-in screen warns when an address is not encrypted.
+
+    User-installed certificate authorities are trusted as well as the system's,
+    for servers behind a private CA.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

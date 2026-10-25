@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Issa Reader</string>
+    <string name="shortcut_continue_short">Continue reading</string>
+    <string name="shortcut_continue_long">Continue reading</string>
 </resources>

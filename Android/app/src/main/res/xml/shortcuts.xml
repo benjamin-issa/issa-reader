@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    "Continue reading", on a long press of the app icon: Android's stand-in for
+    the iPhone's Siri shortcut. It opens the book the widget shows.
+-->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="continue-reading"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_continue"
+        android:shortcutShortLabel="@string/shortcut_continue_short"
+        android:shortcutLongLabel="@string/shortcut_continue_long">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:data="issareader://continue"
+            android:targetPackage="com.benjaminissa.issareader"
+            android:targetClass="com.benjaminissa.issareader.app.MainActivity" />
+    </shortcut>
+</shortcuts>
