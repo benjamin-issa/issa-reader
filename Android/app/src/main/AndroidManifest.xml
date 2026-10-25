@@ -7,6 +7,12 @@
     <!-- Downloads run as foreground data-sync work, so a long one outlasts the screen. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!--
+        "Your answer is ready", when an Ask answer finishes with the app in the
+        background. Asked for once, in context, the first time a question is
+        asked (Android 13 and later).
+    -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:name=".app.IssaApplication"

@@ -45,7 +45,15 @@ kotlin {
     compilerOptions { jvmTarget.set(JvmTarget.JVM_17) }
 }
 
+// The unit tests run on this machine's JVM, where the Android build of
+// bundled SQLite has no native library to load: its JVM build, which carries
+// the host's, stands in — the Ask suites build real indexes, as `:ask`'s do.
+configurations.configureEach {
+    if (name.endsWith("UnitTestRuntimeClasspath")) exclude(group = "androidx.sqlite", module = "sqlite-bundled-android")
+}
+
 dependencies {
+    testRuntimeOnly("androidx.sqlite:sqlite-bundled-jvm:${libs.versions.sqlite.get()}")
     implementation(project(":core"))
     implementation(project(":epub"))
     implementation(project(":render"))

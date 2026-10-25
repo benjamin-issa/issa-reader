@@ -1308,8 +1308,19 @@ class AppModel(
     }
 
     /**
-     * Accepts `issareader://book/{uuid}` and `issareader://continue` — the
-     * latter is Android's "Continue reading": the book the widget shows.
+     * What a tapped "Your answer is ready" opens: the Ask machinery's router,
+     * handed over at launch, which asks for the book's reader and its sheet.
+     * Swift's `AskNotificationDelegate`, reached through a link here because
+     * an Android notification opens the activity rather than calling a
+     * delegate.
+     */
+    var answerLinks: ((String) -> Unit)? = null
+
+    /**
+     * Accepts `issareader://book/{uuid}`, `issareader://ask/{uuid}` (an Ask
+     * notification: the book, with its answer's sheet) and
+     * `issareader://continue` — the latter is Android's "Continue reading":
+     * the book the widget shows.
      */
     fun open(url: URI): Boolean {
         if (url.scheme != "issareader") return false
@@ -1318,6 +1329,12 @@ class AppModel(
             "book" -> {
                 val uuid = components.firstOrNull() ?: return false
                 requestBook(uuid, PendingBook.Destination.READ)
+                true
+            }
+            "ask" -> {
+                val uuid = components.firstOrNull() ?: return false
+                // With nothing to route it, the book at least opens.
+                answerLinks?.invoke(uuid) ?: requestBook(uuid, PendingBook.Destination.READ)
                 true
             }
             "continue" -> {
@@ -1652,6 +1669,12 @@ class AppModel(
 
     /** The model backing whichever book is currently narrating: what Android Auto's chapter list reads. */
     val reader: ReaderModel? get() = narratingBookUuid?.let { readers[it] }
+
+    /**
+     * The model of a book whose reader is open — or still narrating — by its
+     * uuid, for a screen that holds only the uuid: the Ask sheet.
+     */
+    fun openReader(bookUuid: String): ReaderModel? = readers[bookUuid]
 
     /** The Now Playing surface, handed over at launch. Its sleep timer running out lets an open book's screen lock. */
     var nowPlayingController: NowPlayingController? = null
