@@ -1,5 +1,9 @@
 package com.benjaminissa.issareader.ask
 
+import com.benjaminissa.issareader.core.store.SqliteDatabase
+import java.io.File
+import java.util.Collections
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -21,16 +25,13 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
-import java.io.File
-import java.util.Collections
-import kotlin.coroutines.cancellation.CancellationException
 
 class AskIndexStoreTest {
     // Names, folded
 
     /** A scratch index with nothing in it but the name rows a test writes. */
-    private fun nameTable(rows: List<NameRow>): IndexDatabase {
-        val database = IndexDatabase.inMemory()
+    private fun nameTable(rows: List<NameRow>): SqliteDatabase {
+        val database = SqliteDatabase.inMemory()
         AskIndexStore.migrator.migrate(database)
         database.write { db ->
             for ((name, spine, offset, mentions) in rows) {

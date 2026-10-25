@@ -18,11 +18,14 @@ import kotlin.concurrent.withLock
  * an upgrade. Two of these on one file — the store's and the mutation queue's
  * — share nothing in process, exactly as two `DatabaseQueue`s do not.
  *
+ * Public for `:ask`, whose per-book indexes are the same kind of file — one
+ * helper, so a fix to it reaches every database the app opens.
+ *
  * @param busyTimeoutMillis how long a statement waits for another connection's
  *   lock before failing with `SQLITE_BUSY`; null keeps SQLite's default,
  *   which is not to wait at all.
  */
-internal class SqliteDatabase(path: String, busyTimeoutMillis: Int? = null) : AutoCloseable {
+class SqliteDatabase(path: String, busyTimeoutMillis: Int? = null) : AutoCloseable {
     private val connection: SQLiteConnection =
         driver.open(path, SQLITE_OPEN_READWRITE or SQLITE_OPEN_CREATE)
     private val lock = ReentrantLock()
@@ -121,6 +124,8 @@ internal class SqliteDatabase(path: String, busyTimeoutMillis: Int? = null) : Au
         fun double(name: String): Double = double(index(name))
         fun doubleOrNull(name: String): Double? = if (isNull(name)) null else double(name)
 
+        fun int(name: String): Int = long(name).toInt()
+
         fun string(index: Int): String = statement.getText(index)
         fun string(name: String): String = string(index(name))
         fun stringOrNull(name: String): String? = if (isNull(name)) null else string(name)
@@ -131,7 +136,13 @@ internal class SqliteDatabase(path: String, busyTimeoutMillis: Int? = null) : Au
     }
 
     companion object {
+        /** GRDB's `busyMode = .timeout(5)`, which the Swift client's queues use. */
+        const val DEFAULT_BUSY_TIMEOUT = 5_000
+
         private val driver = BundledSQLiteDriver()
+
+        /** A database that lives only as long as its connection. */
+        fun inMemory(): SqliteDatabase = SqliteDatabase(":memory:")
     }
 }
 
@@ -141,7 +152,7 @@ internal class SqliteDatabase(path: String, busyTimeoutMillis: Int? = null) : Au
  * table, `grdb_migrations`, with the same identifiers, so a store's history
  * reads the same on both clients.
  */
-internal class Migrator {
+class Migrator {
     private val migrations = mutableListOf<Pair<String, (SqliteDatabase.Access) -> Unit>>()
 
     fun registerMigration(identifier: String, migrate: (SqliteDatabase.Access) -> Unit) {

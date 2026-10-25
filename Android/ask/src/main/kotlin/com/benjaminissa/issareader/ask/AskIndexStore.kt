@@ -3,11 +3,17 @@ package com.benjaminissa.issareader.ask
 import com.benjaminissa.issareader.core.StorageRoot
 import com.benjaminissa.issareader.core.diagnostics.IssaLog
 import com.benjaminissa.issareader.core.model.safePathComponent
+import com.benjaminissa.issareader.core.store.Migrator
+import com.benjaminissa.issareader.core.store.SqliteDatabase
 import com.benjaminissa.issareader.epub.EpubArchive
 import com.benjaminissa.issareader.epub.EpubPackage
 import com.benjaminissa.issareader.render.ArchiveImageSource
 import com.benjaminissa.issareader.render.ChapterParser
 import com.benjaminissa.issareader.render.ReaderStyle
+import java.io.File
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
+import java.nio.file.attribute.BasicFileAttributes
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -17,10 +23,6 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import java.io.File
-import java.nio.file.Files
-import java.nio.file.StandardCopyOption
-import java.nio.file.attribute.BasicFileAttributes
 
 /**
  * One book's searchable text, on disk, bounded by where the reader has got to.
@@ -70,7 +72,7 @@ class AskIndexStore(
      * is the difference between one stale read and every read for that book
      * failing with a disk I/O error until the next [prepare].
      */
-    private class OpenIndex(val database: IndexDatabase, val identity: FileIdentity)
+    private class OpenIndex(val database: SqliteDatabase, val identity: FileIdentity)
 
     /**
      * Which file, as the file system means it — not which path: the platform's
@@ -468,7 +470,7 @@ class AskIndexStore(
      * paths would not catch it — the path is identical either side of the
      * rename — so the identity is the file's own key.
      */
-    private fun database(bookUuid: String): IndexDatabase? {
+    private fun database(bookUuid: String): SqliteDatabase? {
         val url = indexUrl(bookUuid)
         val identity = FileIdentity.of(url)
         if (identity == null) {
@@ -573,7 +575,7 @@ class AskIndexStore(
         /** [url] and every file SQLite may be keeping beside it. */
         internal fun withCompanions(url: File): List<File> = listOf(url) + companionSuffixes.map { File(url.path + it) }
 
-        internal fun openDatabase(url: File): IndexDatabase = IndexDatabase(url.path)
+        internal fun openDatabase(url: File): SqliteDatabase = SqliteDatabase(url.path, busyTimeoutMillis = SqliteDatabase.DEFAULT_BUSY_TIMEOUT)
 
         /**
          * How much of the book, by uncompressed bytes, the index left out as
@@ -669,7 +671,7 @@ class AskIndexStore(
         }
 
         /** Writes one chapter's rows. */
-        internal fun insert(chapter: ParsedChapter, db: IndexDatabase.Access) {
+        internal fun insert(chapter: ParsedChapter, db: SqliteDatabase.Access) {
             db.execute(
                 "INSERT OR REPLACE INTO chapter(spineIndex, href, length) VALUES (?, ?, ?)",
                 chapter.spineIndex, chapter.href, chapter.length,
@@ -696,13 +698,13 @@ class AskIndexStore(
         }
 
         /** Stamps the fingerprint. */
-        internal fun stamp(key: IndexKey, database: IndexDatabase) {
+        internal fun stamp(key: IndexKey, database: SqliteDatabase) {
             database.write { db ->
                 db.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('indexKey', ?)", key.storedValue)
             }
         }
 
-        internal fun storedKey(database: IndexDatabase): IndexKey? = database.read { db ->
+        internal fun storedKey(database: SqliteDatabase): IndexKey? = database.read { db ->
             db.queryOne("SELECT value FROM meta WHERE key = 'indexKey'") { it.string(0) }
         }?.let(IndexKey::fromStoredValue)
 
@@ -710,7 +712,7 @@ class AskIndexStore(
             terms: QueryTerms,
             before: ReadingBoundary,
             limit: Int,
-            database: IndexDatabase,
+            database: SqliteDatabase,
         ): List<RetrievedPassage> {
             // `FtsQuery.any`, not GRDB's `FTS5Pattern(matchingAnyTokenIn:)`,
             // which runs the ASCII tokeniser over what it is handed:
@@ -727,7 +729,7 @@ class AskIndexStore(
             before: ReadingBoundary,
             order: PassageOrder,
             limit: Int,
-            database: IndexDatabase,
+            database: SqliteDatabase,
         ): List<RetrievedPassage> = database.read { db -> bounded(pattern, before, Scan.of(order), limit, db) }
 
         /**
@@ -781,7 +783,7 @@ class AskIndexStore(
             before: ReadingBoundary,
             order: Scan,
             limit: Int,
-            db: IndexDatabase.Access,
+            db: SqliteDatabase.Access,
         ): List<RetrievedPassage> {
             require(pattern != null || order != Scan.RELEVANCE) { "bm25 needs a pattern" }
             val matching = if (pattern == null) {
@@ -855,14 +857,14 @@ class AskIndexStore(
             )
         }
 
-        internal fun recapPassages(before: ReadingBoundary, limit: Int, database: IndexDatabase): List<RetrievedPassage> =
+        internal fun recapPassages(before: ReadingBoundary, limit: Int, database: SqliteDatabase): List<RetrievedPassage> =
             database.read { db ->
                 // Back into reading order: a recap read backwards is a worse recap.
                 bounded(null, before, Scan.NEWEST_FIRST, limit, db)
                     .sortedWith(compareBy({ it.passage.spineIndex }, { it.passage.ordinal }))
             }
 
-        internal fun unmetWords(words: List<String>, before: ReadingBoundary, database: IndexDatabase): List<String> =
+        internal fun unmetWords(words: List<String>, before: ReadingBoundary, database: SqliteDatabase): List<String> =
             database.read { db ->
                 words.filter { word ->
                     // `FtsQuery.all`, not an ASCII-tokenised pattern, which
@@ -921,7 +923,7 @@ class AskIndexStore(
             return tokens
         }
 
-        internal fun topNames(before: ReadingBoundary, limit: Int, database: IndexDatabase): List<String> {
+        internal fun topNames(before: ReadingBoundary, limit: Int, database: SqliteDatabase): List<String> {
             // Grouped by the folded key in SQL, then folded to one spelling
             // here. The SQL alone cannot do the second half: choosing between
             // "RYN" and "Ryn" is a judgement about which the book prints more
@@ -943,8 +945,8 @@ class AskIndexStore(
 
         // Schema
 
-        internal val migrator: IndexMigrator
-            get() = IndexMigrator().apply {
+        internal val migrator: Migrator
+            get() = Migrator().apply {
                 registerMigration("v1") { db ->
                     db.execute("CREATE TABLE \"meta\" (\"key\" TEXT PRIMARY KEY, \"value\" TEXT NOT NULL)")
                     // `length` is the UTF-16 length of the rendered chapter, so a
