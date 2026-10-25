@@ -64,6 +64,7 @@ import com.benjaminissa.issareader.playback.ProgressScope
 import com.benjaminissa.issareader.playback.SleepTimer
 import com.benjaminissa.issareader.playback.displayChapterTitle
 import com.benjaminissa.issareader.app.model.CoverCache
+import com.benjaminissa.issareader.ui.WrappingText
 import com.benjaminissa.issareader.ui.Metrics
 import com.benjaminissa.issareader.ui.Palette
 import com.benjaminissa.issareader.ui.SkipGlyph
@@ -153,7 +154,7 @@ internal fun PlayerView(
         }
 
         Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(Metrics.spacing4)) {
-            Text(book.title, style = Typography.title, color = Palette.ink, textAlign = TextAlign.Center)
+            WrappingText(book.title, style = Typography.title, color = Palette.ink, textAlign = TextAlign.Center)
             Text(PlayerText.byline(book), style = Typography.footnote, color = Palette.inkTertiary, textAlign = TextAlign.Center)
             if (nowPlayingChapter != null) {
                 Text(nowPlayingChapter, style = Typography.caption, color = Palette.inkQuaternary, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 2.dp))

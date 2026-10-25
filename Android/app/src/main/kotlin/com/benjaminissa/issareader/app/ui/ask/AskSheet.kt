@@ -69,7 +69,6 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import com.benjaminissa.issareader.app.IssaApplication
 import com.benjaminissa.issareader.app.ask.AskCoordinator
 import com.benjaminissa.issareader.app.ask.AskDevice
 import com.benjaminissa.issareader.app.ask.AskJob
@@ -87,26 +86,10 @@ import com.benjaminissa.issareader.ui.Typography
 import kotlinx.coroutines.launch
 
 /**
- * The Ask sheet for one book, as the reader presents it: the entry point the
- * reader's sparkle opens.
+ * One question, one answer, nothing kept: the sheet the reader's sparkle
+ * opens, for the book on screen, with the app's [AskCoordinator] from the
+ * reader's environment. [onDismiss] is called once, however the sheet goes.
  *
- * Finds the book's reader model and the app's [AskCoordinator] itself, so the
- * reader needs to hold nothing but the uuid; closes straight away if the book
- * has no reader open. [onDismiss] is called once, however the sheet goes.
- */
-@Composable
-fun AskSheet(bookUuid: String, onDismiss: () -> Unit) {
-    val graph = (LocalContext.current.applicationContext as? IssaApplication)?.graph
-    val model = graph?.app?.openReader(bookUuid)
-    if (graph == null || model == null) {
-        LaunchedEffect(bookUuid) { onDismiss() }
-        return
-    }
-    AskSheet(model = model, coordinator = graph.ask, onDismiss = onDismiss)
-}
-
-/**
- * One question, one answer, nothing kept.
  *
  * Four states in one sheet rather than four screens, because they are one
  * thought: the reader asks, waits, reads, and either asks again or closes. A

@@ -26,10 +26,16 @@ import java.nio.ByteOrder
  * registered again at every launch ([registerAll]).
  *
  * Registration is keyed by file, as the Swift registry is by URL, so two
- * imports of different files are two registrations; and a copy of a family
- * the app ships is answered with the app's own and never registered, because
- * registering it beside the bundled files would make which copy a page gets
- * depend on the order things happened in.
+ * imports of different files are two registrations. The renderer registers a
+ * family from its files, so this keeps which file is which member of which
+ * family: importing a family's bold after its regular gives the family a bold
+ * rather than replacing it, as CoreText's registration does on the iPhone.
+ * And a copy of a family the app ships is answered with the app's own and
+ * never registered, because registering it beside the bundled files would
+ * make which copy a page gets depend on the order things happened in.
+ *
+ * One for the app ([com.benjaminissa.issareader.app.AppGraph.customFonts]),
+ * over the one [ReaderFonts] every page is set from.
  *
  * @param directory where imported faces live: `Fonts/` under [StorageRoot],
  *   which the backup rules leave out — the file came from somewhere else and
@@ -39,8 +45,10 @@ class CustomFonts(
     private val fonts: ReaderFonts,
     private val directory: () -> File = { StorageRoot.directory("Fonts") },
 ) {
-    /** File path to the family name it registered under. */
-    private val registered = HashMap<String, String>()
+    private data class Member(val family: String, val bold: Boolean, val italic: Boolean)
+
+    /** File path to the family and member it registered as, in the order they arrived. */
+    private val registered = LinkedHashMap<String, Member>()
 
     /** Imported faces live here; the reader chose them. Created on first ask, or null when it cannot be. */
     val importedDirectory: File?
@@ -55,7 +63,7 @@ class CustomFonts(
      */
     @Synchronized
     fun register(file: File): String? {
-        registered[file.path]?.let { return it }
+        registered[file.path]?.let { return it.family }
         if (!isReadable(file.name)) return null
         val bytes = try {
             file.readBytes()
@@ -64,20 +72,47 @@ class CustomFonts(
         }
         // Read before registering: a file that cannot be named is never
         // registered at all.
-        val family = familyName(bytes) ?: return null
+        val description = describe(bytes) ?: return null
         // A copy of a family the app ships is answered with the bundled
         // family, and neither registered nor recorded — so [families] never
         // offers it under "Your fonts".
-        bundledFamily(family)?.let { return it }
+        bundledFamily(description.family)?.let { return it }
         if (!isUsable(bytes)) return null
-        fonts.register(family, bytes)
-        registered[file.path] = family
-        return family
+        registered[file.path] = Member(description.family, description.bold, description.italic)
+        install(description.family)
+        return description.family
+    }
+
+    /**
+     * Hands a family's every member to the renderer, which registers a family
+     * whole: the upright regular — or, failing one, the first file of the
+     * family — with whichever bold, italic and bold italic have arrived.
+     */
+    private fun install(family: String) {
+        val members = registered.entries
+            .filter { it.value.family == family }
+            .map { File(it.key) to it.value }
+            .filter { it.first.exists() }
+        fun member(bold: Boolean, italic: Boolean): File? =
+            members.firstOrNull { it.second.bold == bold && it.second.italic == italic }?.first
+        val regular = member(bold = false, italic = false) ?: members.firstOrNull()?.first ?: return
+        try {
+            fonts.register(
+                family,
+                regular,
+                bold = member(bold = true, italic = false),
+                italic = member(bold = false, italic = true),
+                boldItalic = member(bold = true, italic = true),
+            )
+        } catch (_: Exception) {
+            // A member that read once and will not now: the family keeps what
+            // it was last registered with.
+        }
     }
 
     /** Every imported face currently registered, for the picker to list. */
     @Synchronized
-    fun families(): List<String> = registered.values.toSortedSet().toList()
+    fun families(): List<String> = registered.values.map { it.family }.toSortedSet().toList()
 
     /**
      * Registers everything in the fonts folder. Called at launch: a face
@@ -87,6 +122,9 @@ class CustomFonts(
      */
     fun registerAll(): List<String> =
         importedDirectory?.listFiles()?.filter { it.isFile }?.sortedBy { it.name }?.mapNotNull { register(it) }.orEmpty()
+
+    /** What a font file says about itself: its family, and which member of it the file is. */
+    data class Description(val family: String, val bold: Boolean, val italic: Boolean)
 
     companion object {
         /**
@@ -110,8 +148,11 @@ class CustomFonts(
          * declares. The typographic family (name 16) where the file has one,
          * which is what CoreText answers with, then the family (name 1).
          */
-        fun familyName(data: ByteArray): String? = try {
-            SfntNames(data).family()
+        fun familyName(data: ByteArray): String? = describe(data)?.family
+
+        /** The family a file declares and which member of it the file is, or null for a file that is not a font. */
+        fun describe(data: ByteArray): Description? = try {
+            SfntTables(data).describe()
         } catch (_: IndexOutOfBoundsException) {
             null
         } catch (_: IllegalArgumentException) {
@@ -131,30 +172,50 @@ class CustomFonts(
 }
 
 /**
- * The `name` table of an OpenType or TrueType file, or the first face of a
- * collection: just enough to say what family a file declares.
+ * The tables of an OpenType or TrueType file, or of the first face of a
+ * collection, as the loader takes it: just enough to say what family a file
+ * declares and which member of that family it is.
  */
-private class SfntNames(private val data: ByteArray) {
+private class SfntTables(private val data: ByteArray) {
     private val buffer: ByteBuffer = ByteBuffer.wrap(data).order(ByteOrder.BIG_ENDIAN)
 
     private fun u16(at: Int): Int = buffer.getShort(at).toInt() and 0xFFFF
     private fun u32(at: Int): Long = buffer.getInt(at).toLong() and 0xFFFFFFFFL
 
-    fun family(): String? {
+    /**
+     * The family, and whether this file is its bold or its italic: from
+     * `OS/2`'s selection flags and weight where the file has that table, from
+     * `head`'s style bits where it does not.
+     */
+    fun describe(): CustomFonts.Description? {
         var face = 0
         if (u32(0) == TTCF) face = u32(12).toInt()
         val version = u32(face)
         if (version != TRUE_TYPE && version != OPEN_TYPE && version != APPLE_TRUE) return null
-        val tables = u16(face + 4)
-        var nameTable = -1
-        for (index in 0 until tables) {
+        val tables = HashMap<Long, Pair<Int, Int>>()
+        for (index in 0 until u16(face + 4)) {
             val record = face + 12 + 16 * index
-            if (u32(record) == NAME) {
-                nameTable = u32(record + 8).toInt()
-                break
-            }
+            tables[u32(record)] = u32(record + 8).toInt() to u32(record + 12).toInt()
         }
-        if (nameTable < 0) return null
+        val family = family(tables[NAME]?.first ?: return null) ?: return null
+        var bold = false
+        var italic = false
+        val os2 = tables[OS2]
+        val head = tables[HEAD]
+        if (os2 != null && os2.second >= 64) {
+            val selection = u16(os2.first + 62)
+            italic = selection and 0x1 != 0
+            bold = selection and 0x20 != 0 || u16(os2.first + 4) >= 600
+        } else if (head != null) {
+            val style = u16(head.first + 44)
+            bold = style and 0x1 != 0
+            italic = style and 0x2 != 0
+        }
+        return CustomFonts.Description(family, bold, italic)
+    }
+
+    /** The typographic family (name 16), else the family (name 1): Windows English first, then any Windows or Unicode entry, then a Macintosh Roman one. */
+    private fun family(nameTable: Int): String? {
         val count = u16(nameTable + 2)
         val strings = nameTable + u16(nameTable + 4)
         class Found(val name: String, val rank: Int)
@@ -193,6 +254,8 @@ private class SfntNames(private val data: ByteArray) {
         const val OPEN_TYPE = 0x4F54544FL
         const val APPLE_TRUE = 0x74727565L
         const val NAME = 0x6E616D65L
+        const val OS2 = 0x4F532F32L
+        const val HEAD = 0x68656164L
     }
 }
 
@@ -204,7 +267,9 @@ private class SfntNames(private val data: ByteArray) {
  *
  * One for the app ([com.benjaminissa.issareader.app.AppGraph.fontImport]),
  * because the two screens that import — Settings and a book's own sheet —
- * share the controls that say what the last import could not do.
+ * share the controls that say what the last import could not do. The screens
+ * reach it through their environment: Settings through `AppEnvironment`, the
+ * reader through `ReaderEnvironment`.
  */
 class FontImport(
     val customFonts: CustomFonts,
@@ -232,10 +297,24 @@ class FontImport(
      */
     fun adopt(picked: Uri): String? {
         notice.clear()
-        val name = safeName(displayName(picked))
+        val name = displayName(picked)
+        val bytes = read(picked) ?: return refuse(safeName(name), "That file couldn't be opened.", "copy failed")
+        return adopt(name, bytes)
+    }
+
+    /**
+     * The import itself, once the picked file has been read: its name, as the
+     * provider gave it, and its bytes.
+     *
+     * A failure is said, in [notice], and logged: the picker closing with
+     * nothing changed looked exactly like an import that worked and had not
+     * refreshed.
+     */
+    fun adopt(fileName: String, bytes: ByteArray): String? {
+        notice.clear()
+        val name = safeName(fileName)
         val directory = customFonts.importedDirectory
             ?: return refuse(name, "That font couldn't be saved on this device.", "no font directory")
-        val bytes = read(picked) ?: return refuse(name, "That file couldn't be opened.", "copy failed")
         val destination = destination(name, bytes, directory)
         val existedBefore = destination.exists()
         if (!existedBefore) {
@@ -265,8 +344,16 @@ class FontImport(
      * The typeface a book's own sheet sets for a picked file: the app's own
      * row when the file was a copy of a family it ships, or null when it was
      * refused. `BookTypographyView.importedTypeface`.
+     *
+     * Resolved the way the reading settings resolve it: a file of a family the
+     * app ships was once set here as a custom face — the book set in the app's
+     * own face under no row of the picker, listed as a face of the reader's
+     * that is not theirs.
      */
     fun importedTypeface(picked: Uri): ReaderStyle.Typeface? = adopt(picked)?.let(::typeface)
+
+    /** [importedTypeface], once the picked file has been read. */
+    fun importedTypeface(fileName: String, bytes: ByteArray): ReaderStyle.Typeface? = adopt(fileName, bytes)?.let(::typeface)
 
     private fun refuse(name: String, sentence: String, reason: String): String? {
         IssaLog.warning(

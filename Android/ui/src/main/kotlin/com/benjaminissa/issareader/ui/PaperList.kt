@@ -155,7 +155,7 @@ fun SectionHeaderText(text: String, modifier: Modifier = Modifier) {
 /** The sentence under a settings section, which says what its rows do. */
 @Composable
 fun SettingsFooter(text: String, modifier: Modifier = Modifier) {
-    Text(text, modifier = modifier.fillMaxWidth(), style = Typography.footnote, color = Palette.inkSecondary)
+    WrappingText(text, modifier = modifier.fillMaxWidth(), style = Typography.footnote, color = Palette.inkSecondary)
 }
 
 /** The frame every row shares: its height, padding and, when tappable, its touch target. */

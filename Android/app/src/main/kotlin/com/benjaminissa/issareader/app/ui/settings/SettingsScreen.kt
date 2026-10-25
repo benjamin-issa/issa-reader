@@ -32,6 +32,8 @@ import com.benjaminissa.issareader.app.model.AppModel
 import com.benjaminissa.issareader.app.model.NowPlayingController
 import com.benjaminissa.issareader.app.model.PlaybackSettings
 import com.benjaminissa.issareader.app.ui.ask.askSettingsSection
+import com.benjaminissa.issareader.app.ui.shell.AppEnvironment
+import com.benjaminissa.issareader.app.ui.shell.LocalAppEnvironment
 import com.benjaminissa.issareader.core.Session
 import com.benjaminissa.issareader.core.model.ServerCapabilities
 import com.benjaminissa.issareader.playback.ProgressScope
@@ -75,7 +77,7 @@ internal object SettingsRoutes {
 /** The Settings tab: the list, and every screen it pushes. */
 @Composable
 fun SettingsScreen(onOpenLocalBooks: () -> Unit) {
-    val services = screenServices()
+    val environment = LocalAppEnvironment.current
     val navigation = rememberNavController()
     val back: () -> Unit = { navigation.popBackStack() }
     NavHost(
@@ -89,13 +91,13 @@ fun SettingsScreen(onOpenLocalBooks: () -> Unit) {
         popExitTransition = { slideOutHorizontally { it } },
     ) {
         composable(SettingsRoutes.ROOT) {
-            SettingsRoot(services, onNavigate = { navigation.navigate(it) }, onOpenLocalBooks = onOpenLocalBooks)
+            SettingsRoot(environment, onNavigate = { navigation.navigate(it) }, onOpenLocalBooks = onOpenLocalBooks)
         }
-        composable(SettingsRoutes.CONTROLS) { ControlsSettingsScreen(services.settings, onBack = back) }
+        composable(SettingsRoutes.CONTROLS) { ControlsSettingsScreen(environment.settings, onBack = back) }
         composable(SettingsRoutes.READING) {
-            ReadingSettingsScreen(services.settings, onBack = back, onOpenLicences = { navigation.navigate(SettingsRoutes.FONTS) })
+            ReadingSettingsScreen(environment.settings, onBack = back, onOpenLicences = { navigation.navigate(SettingsRoutes.FONTS) })
         }
-        composable(SettingsRoutes.DOWNLOADS) { DownloadsScreen(services.app, onBack = back) }
+        composable(SettingsRoutes.DOWNLOADS) { DownloadsScreen(environment.app, onBack = back) }
         composable(SettingsRoutes.DIAGNOSTICS) { DiagnosticsScreen(onBack = back) }
         composable(SettingsRoutes.FONTS) {
             FontLicencesScreen(onBack = back, onOpen = { navigation.navigate(SettingsRoutes.licence(it)) })
@@ -125,14 +127,14 @@ internal fun rememberSettingsAccount(session: Session?): SettingsAccount? {
 
 /** The Settings list itself, reading the app's session. */
 @Composable
-internal fun SettingsRoot(services: ScreenServices, onNavigate: (String) -> Unit, onOpenLocalBooks: () -> Unit) {
+internal fun SettingsRoot(environment: AppEnvironment, onNavigate: (String) -> Unit, onOpenLocalBooks: () -> Unit) {
     SettingsRootList(
-        app = services.app,
-        settings = services.settings,
-        nowPlaying = services.nowPlaying,
-        local = services.local,
-        ask = services.ask,
-        account = rememberSettingsAccount(services.app.session),
+        app = environment.app,
+        settings = environment.settings,
+        nowPlaying = environment.nowPlaying,
+        local = environment.local,
+        ask = environment.ask,
+        account = rememberSettingsAccount(environment.app.session),
         onNavigate = onNavigate,
         onOpenLocalBooks = onOpenLocalBooks,
     )
@@ -370,3 +372,6 @@ private fun CapabilityRow(name: String, available: Boolean) {
         )
     }
 }
+
+/** The device's own glyph, for the Settings row: Swift's `LocalDevice.symbol`. */
+val LocalDevice.symbol: Int get() = if (noun == "tablet") Symbols.ipad else Symbols.iphone

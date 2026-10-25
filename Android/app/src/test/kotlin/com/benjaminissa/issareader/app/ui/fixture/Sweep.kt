@@ -4,7 +4,9 @@ import com.benjaminissa.issareader.app.model.AppModel
 import com.benjaminissa.issareader.app.processStorageRoot
 import com.benjaminissa.issareader.app.model.BrowserSignInModel
 import com.benjaminissa.issareader.app.model.CoverCache
+import com.benjaminissa.issareader.app.model.CustomFonts
 import com.benjaminissa.issareader.app.model.DeviceSignInModel
+import com.benjaminissa.issareader.app.model.FontImport
 import com.benjaminissa.issareader.app.model.NowPlayingController
 import com.benjaminissa.issareader.app.model.PlaybackSettings
 import com.benjaminissa.issareader.app.reader.ReaderServices
@@ -82,6 +84,8 @@ object Sweep {
         // The reader's services, as the graph hands the app its own: a book
         // opened here lays out in the real reader and plays into nothing.
         app.readerServices = ReaderServices(scope = scope, fonts = fonts, makeMediaBackend = { QuietBackend() })
+        // "Add a font…", over this test's own faces and fonts folder.
+        val fontImport = FontImport(CustomFonts(fonts, directory = { File(root, "Fonts") }), contentResolver = null)
         return AppEnvironment(
             app = app,
             nowPlaying = nowPlaying,
@@ -90,7 +94,9 @@ object Sweep {
             deviceSignIn = { url -> DeviceSignInModel(url, scope) { HttpDeviceGrantTransport(url, FixtureServer.client) } },
             isBrowserSupported = { true },
             covers = { covers },
-            readerEnvironment = { ReaderEnvironment(settings, fonts, defaults, scope, app, nowPlaying) },
+            readerEnvironment = { ReaderEnvironment(settings, fonts, defaults, scope, app, nowPlaying, fontImport = fontImport) },
+            fontImport = fontImport,
+            versionText = "1.5.1 (52)",
         )
     }
 }

@@ -39,6 +39,7 @@ import com.benjaminissa.issareader.core.model.Book
 import com.benjaminissa.issareader.core.model.ReadingProgress
 import com.benjaminissa.issareader.core.sync.LibraryArrangement
 import com.benjaminissa.issareader.ui.ContinueCard
+import com.benjaminissa.issareader.ui.LocalPlayerBand
 import com.benjaminissa.issareader.ui.Metrics
 import com.benjaminissa.issareader.ui.Overline
 import com.benjaminissa.issareader.ui.PalettePlaceholder
@@ -69,7 +70,13 @@ fun ReadingScreen() {
                 // Downloaded section's rows can sit closer together.
                 LazyColumn(
                     modifier = Modifier.fillMaxSize().testTag("content.reading"),
-                    contentPadding = PaddingValues(Metrics.screenMargin),
+                    contentPadding = PaddingValues(
+                        start = Metrics.screenMargin,
+                        top = Metrics.screenMargin,
+                        end = Metrics.screenMargin,
+                        // The last item clears the mini player's band, which the list runs beneath.
+                        bottom = Metrics.screenMargin + LocalPlayerBand.current,
+                    ),
                 ) {
                     // A first item that is always there: the list keeps its place by
                     // the first visible item, and the blocks above the downloads
@@ -115,7 +122,7 @@ private fun ReadingStates(app: AppModel, isEmpty: Boolean, goToLibrary: () -> Un
     if (app.books.isEmpty() && app.isLoadingLibrary) {
         LoadingOverlay()
     } else if (isEmpty) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Box(Modifier.fillMaxSize().padding(bottom = LocalPlayerBand.current), contentAlignment = Alignment.Center) {
             PalettePlaceholder(
                 symbol = Symbols.bookmark,
                 title = "Nothing in progress",

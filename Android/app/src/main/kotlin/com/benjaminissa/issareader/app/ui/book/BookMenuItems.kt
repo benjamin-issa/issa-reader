@@ -1,6 +1,8 @@
 package com.benjaminissa.issareader.app.ui.book
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.DropdownMenu
@@ -13,6 +15,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
@@ -204,33 +207,46 @@ private fun MenuIcon(symbol: Int, tint: Color) {
     Icon(painterResource(symbol), contentDescription = null, tint = tint, modifier = Modifier.size(22.dp))
 }
 
+/** One item: its title, and its symbol after it, at the trailing edge, where the iPhone's menu sets it. */
 @Composable
 private fun MenuRow(title: String, symbol: Int, destructive: Boolean = false, onClick: () -> Unit) {
     val color = if (destructive) Palette.alert else Palette.ink
     DropdownMenuItem(
         text = { MenuText(title, color) },
-        leadingIcon = { MenuIcon(symbol, color) },
+        trailingIcon = { MenuIcon(symbol, color) },
         onClick = onClick,
     )
 }
 
 @Composable
 private fun EditionRow(action: BookMenu.EditionAction, namingEdition: Boolean, onClick: () -> Unit) {
-    MenuRow(action.title(namingEdition), BookActions.symbol(action), destructive = action.isDestructive, onClick = onClick)
+    MenuRow(action.title(namingEdition), action.symbol, destructive = action.isDestructive, onClick = onClick)
 }
 
-/** A row that opens a submenu: its icon, its title, and the chevron that says there is more. */
+/**
+ * A row that opens a submenu: its title, then at the trailing edge its icon
+ * and the chevron that says there is more — Material's one trailing slot
+ * holding both.
+ */
 @Composable
 private fun SubmenuRow(title: String, symbol: Int, onClick: () -> Unit) {
     DropdownMenuItem(
         text = { MenuText(title, Palette.ink) },
-        leadingIcon = { MenuIcon(symbol, Palette.ink) },
-        trailingIcon = { MenuIcon(Symbols.chevronRight, Palette.inkTertiary) },
+        trailingIcon = {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Metrics.spacing4)) {
+                MenuIcon(symbol, Palette.ink)
+                Icon(painterResource(Symbols.chevronRight), contentDescription = null, tint = Palette.inkTertiary, modifier = Modifier.size(14.dp))
+            }
+        },
         onClick = onClick,
     )
 }
 
-/** A submenu's head, which leads back to the menu. */
+/**
+ * A submenu's head, which leads back to the menu. Its chevron stays at the
+ * leading edge: it is the way back, not the item's symbol, and points where
+ * it goes.
+ */
 @Composable
 private fun BackRow(title: String, onClick: () -> Unit) {
     DropdownMenuItem(

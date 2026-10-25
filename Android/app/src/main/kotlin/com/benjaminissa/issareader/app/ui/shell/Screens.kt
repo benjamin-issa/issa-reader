@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.benjaminissa.issareader.ui.InlineTitleBar
 import com.benjaminissa.issareader.ui.LargeTitleBar
+import com.benjaminissa.issareader.ui.LocalPlayerBand
 import com.benjaminissa.issareader.ui.Metrics
 import com.benjaminissa.issareader.ui.Palette
 import kotlinx.coroutines.launch
@@ -37,7 +38,9 @@ import kotlinx.coroutines.launch
  * one as the content scrolls, over the paper.
  *
  * The window's top inset is the title bar's; the bottom is the shell's, which
- * has already set the content above the player band and the tabs.
+ * has set the content above the tabs. The mini player's band is not taken
+ * out of it: the content runs beneath the band, and a scrolling screen pads
+ * its end by [LocalPlayerBand] so its last item can clear it.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -126,10 +129,10 @@ fun Modifier.bleed(margin: Dp = Metrics.screenMargin): Modifier = layout { measu
     layout(constraints.maxWidth, placeable.height) { placeable.place(-inset, 0) }
 }
 
-/** The system spinner in the accent, centred: Swift's bare `ProgressView()` over a loading screen. */
+/** The system spinner in the accent, centred above the mini player's band: Swift's bare `ProgressView()` over a loading screen. */
 @Composable
 fun LoadingOverlay(modifier: Modifier = Modifier) {
-    Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+    Box(modifier.fillMaxSize().padding(bottom = LocalPlayerBand.current), contentAlignment = Alignment.Center) {
         CircularProgressIndicator(color = Palette.inkTertiary, strokeWidth = 2.5.dp, modifier = Modifier.size(28.dp).padding(2.dp))
     }
 }

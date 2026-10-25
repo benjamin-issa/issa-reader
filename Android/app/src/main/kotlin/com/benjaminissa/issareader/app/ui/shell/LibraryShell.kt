@@ -6,7 +6,8 @@ import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.padding
@@ -21,6 +22,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
@@ -29,11 +31,13 @@ import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavDestination
 import androidx.navigation.NavDestination.Companion.hasRoute
 import androidx.navigation.NavGraph.Companion.findStartDestination
+import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.navigation
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
+import com.benjaminissa.issareader.app.model.AppModel
 import com.benjaminissa.issareader.app.model.LibraryNavigator
 import com.benjaminissa.issareader.app.ui.book.AuthorScreen
 import com.benjaminissa.issareader.app.ui.book.BookCover
@@ -57,7 +61,8 @@ import com.benjaminissa.issareader.playback.PlaybackProgress
 import com.benjaminissa.issareader.ui.IssaNavigationBar
 import com.benjaminissa.issareader.ui.MiniPlayerBar
 import com.benjaminissa.issareader.ui.Palette
-import com.benjaminissa.issareader.ui.ReservedPlayerBand
+import com.benjaminissa.issareader.ui.LocalPlayerBand
+import com.benjaminissa.issareader.ui.PlayerBandHeight
 import com.benjaminissa.issareader.ui.Symbols
 import com.benjaminissa.issareader.ui.TabItem
 import kotlinx.coroutines.launch
@@ -158,48 +163,61 @@ fun LibraryShell(state: RootState) {
         Scaffold(
             containerColor = Palette.paper,
             contentWindowInsets = WindowInsets(0),
-            snackbarHost = { DownloadRemovalSnackbarHost(snackbar) },
-            bottomBar = {
-                Column {
-                    val book = app.playbackBook
-                    val coordinator = app.playback
-                    if (book != null && coordinator != null) {
-                        key(coordinator) { MiniPlayer(book, coordinator) { state.showsPlayer = true } }
-                    } else {
-                        ReservedPlayerBand()
-                    }
-                    IssaNavigationBar(TABS, selected.ordinal, onSelect = { select(Tab.entries[it]) })
-                }
-            },
+            // Above the band, where the iPhone's toast sits: the bottom of the
+            // safe area the band is part of.
+            snackbarHost = { DownloadRemovalSnackbarHost(snackbar, Modifier.padding(bottom = PlayerBandHeight)) },
+            bottomBar = { IssaNavigationBar(TABS, selected.ordinal, onSelect = { select(Tab.entries[it]) }) },
         ) { padding ->
-            NavHost(
-                navController = nav,
-                startDestination = ReadingTab,
-                modifier = Modifier.padding(padding).consumeWindowInsets(padding),
-                enterTransition = { if (switching.active) EnterTransition.None else push() },
-                exitTransition = { if (switching.active) ExitTransition.None else pushAway() },
-                popEnterTransition = { if (switching.active) EnterTransition.None else popBack() },
-                popExitTransition = { if (switching.active) ExitTransition.None else popAway() },
-            ) {
-                navigation<LibraryTab>(startDestination = LibraryHome) {
-                    composable<LibraryHome> { LibraryScreen() }
+            Box(Modifier.padding(padding).consumeWindowInsets(padding).fillMaxSize()) {
+                // Every tab's content runs down to the tabs, under the band,
+                // and pads its scroll's end by the band's height so the last
+                // item clears it.
+                CompositionLocalProvider(LocalPlayerBand provides PlayerBandHeight) {
+                    Tabs(nav, switching, app)
                 }
-                navigation<ReadingTab>(startDestination = ReadingHomeRoute) {
-                    composable<ReadingHomeRoute> { ReadingScreen() }
+                // Over the content, in the band it leaves clear: starting a
+                // book moves nothing.
+                val book = app.playbackBook
+                val coordinator = app.playback
+                if (book != null && coordinator != null) {
+                    key(coordinator) {
+                        MiniPlayer(book, coordinator, Modifier.align(Alignment.BottomCenter)) { state.showsPlayer = true }
+                    }
                 }
-                navigation<SettingsTab>(startDestination = SettingsHome) {
-                    composable<SettingsHome> { SettingsScreen(onOpenLocalBooks = { nav.navigate(LocalBooksRoute) }) }
-                }
-                // The pages any tab can push, on whichever tab pushed them.
-                composable<BookDetailRoute> { BookDetailScreen(it.toRoute<BookDetailRoute>().uuid) }
-                composable<SeriesRoute> { SeriesScreen(it.toRoute<SeriesRoute>().name) }
-                composable<SeriesListRoute> { SeriesListScreen() }
-                composable<TagRoute> { TagScreen(it.toRoute<TagRoute>().name) }
-                composable<AuthorRoute> { AuthorScreen(it.toRoute<AuthorRoute>().name) }
-                composable<DownloadsRoute> { DownloadsScreen(app, onBack = { nav.popBackStack() }) }
-                composable<LocalBooksRoute> { LocalBooksScreen(standalone = false, onConnectServer = {}) }
             }
         }
+    }
+}
+
+/** The tabs' stacks: each tab's home and the pages any of them can push. */
+@Composable
+private fun Tabs(nav: NavHostController, switching: TabSwitch, app: AppModel) {
+    NavHost(
+        navController = nav,
+        startDestination = ReadingTab,
+        modifier = Modifier.fillMaxSize(),
+        enterTransition = { if (switching.active) EnterTransition.None else push() },
+        exitTransition = { if (switching.active) ExitTransition.None else pushAway() },
+        popEnterTransition = { if (switching.active) EnterTransition.None else popBack() },
+        popExitTransition = { if (switching.active) ExitTransition.None else popAway() },
+    ) {
+        navigation<LibraryTab>(startDestination = LibraryHome) {
+            composable<LibraryHome> { LibraryScreen() }
+        }
+        navigation<ReadingTab>(startDestination = ReadingHomeRoute) {
+            composable<ReadingHomeRoute> { ReadingScreen() }
+        }
+        navigation<SettingsTab>(startDestination = SettingsHome) {
+            composable<SettingsHome> { SettingsScreen(onOpenLocalBooks = { nav.navigate(LocalBooksRoute) }) }
+        }
+        // The pages any tab can push, on whichever tab pushed them.
+        composable<BookDetailRoute> { BookDetailScreen(it.toRoute<BookDetailRoute>().uuid) }
+        composable<SeriesRoute> { SeriesScreen(it.toRoute<SeriesRoute>().name) }
+        composable<SeriesListRoute> { SeriesListScreen() }
+        composable<TagRoute> { TagScreen(it.toRoute<TagRoute>().name) }
+        composable<AuthorRoute> { AuthorScreen(it.toRoute<AuthorRoute>().name) }
+        composable<DownloadsRoute> { DownloadsScreen(app, onBack = { nav.popBackStack() }) }
+        composable<LocalBooksRoute> { LocalBooksScreen(standalone = false, onConnectServer = {}) }
     }
 }
 
@@ -257,7 +275,7 @@ private fun AnimatedContentTransitionScope<NavBackStackEntry>.popAway(): ExitTra
  * into the player; skip uses the reader's command map, as the remote does.
  */
 @Composable
-private fun MiniPlayer(book: Book, coordinator: PlaybackDriving, onExpand: () -> Unit) {
+private fun MiniPlayer(book: Book, coordinator: PlaybackDriving, modifier: Modifier = Modifier, onExpand: () -> Unit) {
     val environment = LocalAppEnvironment.current
     val scope = rememberCoroutineScope()
     // Redrawn as the engine moves: its observed state bumps a revision.
@@ -293,5 +311,6 @@ private fun MiniPlayer(book: Book, coordinator: PlaybackDriving, onExpand: () ->
             }
         },
         onExpand = onExpand,
+        modifier = modifier,
     )
 }

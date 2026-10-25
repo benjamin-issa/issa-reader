@@ -1,7 +1,6 @@
 package com.benjaminissa.issareader.app.ui.local
 
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -12,17 +11,12 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.gestures.Orientation
-import androidx.compose.foundation.gestures.draggable
-import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -41,7 +35,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -63,11 +56,12 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import com.benjaminissa.issareader.app.local.LocalBookFacts
 import com.benjaminissa.issareader.app.local.LocalBooksCopy
 import com.benjaminissa.issareader.app.local.LocalImport
 import com.benjaminissa.issareader.app.local.LocalImportError
+import com.benjaminissa.issareader.app.local.LocalRowNotice
 import com.benjaminissa.issareader.app.ui.player.BookCoverImage
 import com.benjaminissa.issareader.app.model.CoverCache
 import com.benjaminissa.issareader.core.model.Book
@@ -79,80 +73,12 @@ import com.benjaminissa.issareader.ui.Palette
 import com.benjaminissa.issareader.ui.ProgressBar
 import com.benjaminissa.issareader.ui.Symbols
 import com.benjaminissa.issareader.ui.Typography
-import kotlinx.coroutines.launch
-import kotlin.math.roundToInt
 
 /*
  * The rows of the local books list (`LocalBooksScreen.swift`): a book's card,
  * a file on its way in, a file that could not be added, the undo toast, and
  * the swipe that removes.
  */
-
-/** Which book a hardware keyboard's shortcut acts on. */
-internal object LocalBooksKeyboard {
-    /**
-     * Delete: the row the keyboard is on, and nothing when it is on none.
-     * Falling back to the first book removed the one opened last — the list's
-     * first row — when the rows had been reached by touch.
-     */
-    fun removalTarget(focused: String?): String? = focused
-
-    /** Book info: the row the keyboard is on, else the first book. Showing a book's info destroys nothing, so it may guess. */
-    fun infoTarget(focused: String?, books: List<Book>): String? = focused ?: books.firstOrNull()?.uuid
-}
-
-/** What a row's notice strip is about, and so what its one action does. */
-internal sealed interface LocalRowNotice {
-    /** Told once after import: OK clears it for good. */
-    data class Imported(val notice: LocalNotice) : LocalRowNotice
-
-    /** The file did not come back from a backup: Add Again… opens the picker. */
-    data object Missing : LocalRowNotice
-}
-
-/** One book as its row card says it: what a screen reader reads and what the trailing column shows. */
-internal class LocalBookFacts(val book: Book, val size: Long?, val isMissing: Boolean, val isPlaying: Boolean) {
-    val author: String get() = book.byline
-
-    val narration: String?
-        get() {
-            val seconds = book.narrationDuration
-            if (!book.hasReadalong || seconds == null || isMissing) return null
-            return LocalBooksCopy.narrated(seconds)
-        }
-
-    val progress: Double? get() = book.progress?.takeIf { it > 0 }
-    val percent: String? get() = progress?.let(ReadingProgress::percentText)
-    val sizeText: String? get() = size?.let(ByteCountText::text)
-    val trailing: String? get() = if (isMissing) LocalBooksCopy.notOnDevice else sizeText
-
-    val notices: List<LocalRowNotice>
-        get() = if (isMissing) listOf(LocalRowNotice.Missing) else (book.localCopy?.notices ?: emptyList()).map { LocalRowNotice.Imported(it) }
-
-    /** The whole row, as one sentence: title, author, narration and length, percent, size, and "playing" while it narrates. */
-    val spoken: String
-        get() {
-            val parts = mutableListOf(book.title)
-            if (author.isNotEmpty()) parts += author
-            narration?.let { parts += it.replace(" · ", ", ") }
-            percent?.let { parts += "$it read" }
-            trailing?.let { parts += it }
-            if (isPlaying) parts += "playing"
-            return parts.joinToString(", ")
-        }
-
-    companion object {
-        fun noticeText(notice: LocalRowNotice): String = when (notice) {
-            is LocalRowNotice.Imported -> LocalBooksCopy.notice(notice.notice)
-            LocalRowNotice.Missing -> LocalBooksCopy.restoredNotice
-        }
-
-        fun noticeAction(notice: LocalRowNotice): String = when (notice) {
-            is LocalRowNotice.Imported -> "OK"
-            LocalRowNotice.Missing -> "Add Again…"
-        }
-    }
-}
 
 /** Whether the system's text is at one of its largest sizes, where a row stacks rather than lines up. */
 @Composable
@@ -304,82 +230,6 @@ private fun NoticeStrip(notice: LocalRowNotice, stacked: Boolean, onAction: () -
             text(Modifier.weight(1f))
             action()
         }
-    }
-}
-
-/**
- * Swipe left to remove, for a row that is not in a list with swipe actions of
- * its own: the row slides left over the alert-coloured Remove, snaps open at
- * 88 points, and a swipe past 200 removes outright. Only horizontal drags are
- * claimed, so the list still scrolls.
- */
-@Composable
-internal fun LocalSwipeToRemove(
-    id: String,
-    openRow: String?,
-    onOpenRowChange: (String?) -> Unit,
-    label: String,
-    onRemove: () -> Unit,
-    modifier: Modifier = Modifier,
-    content: @Composable () -> Unit,
-) {
-    val density = LocalDensity.current
-    val reveal = with(density) { 88.dp.toPx() }
-    val commit = with(density) { 200.dp.toPx() }
-    val isOpen = openRow == id
-    val offset = remember { Animatable(0f) }
-    val scope = rememberCoroutineScope()
-    androidx.compose.runtime.LaunchedEffect(isOpen) { offset.animateTo(if (isOpen) -reveal else 0f) }
-    Box(modifier.clip(RoundedCornerShape(Metrics.radiusMedium)).height(IntrinsicSize.Min)) {
-        // Grows with the swipe, so dragging past the commit distance looks
-        // like what it does. Only there while the row is moved: at rest its
-        // colour would show through the card's rounded corners.
-        val width = with(density) { maxOf(reveal, -offset.value).toDp() }
-        if (offset.value < 0f) Box(
-            Modifier
-                .align(Alignment.CenterEnd)
-                .fillMaxHeight()
-                .width(width)
-                .background(Palette.alert)
-                .clickable {
-                    onOpenRowChange(null)
-                    onRemove()
-                }
-                .clearAndSetSemantics {},
-            contentAlignment = Alignment.Center,
-        ) {
-            // Paper on alert, not white: the alert colour is the *light* half
-            // of its pair in the dark theme.
-            Text(label, style = Typography.callout.copy(fontWeight = FontWeight.SemiBold), color = Palette.paper)
-        }
-        Box(
-            Modifier
-                .offset { IntOffset(offset.value.roundToInt(), 0) }
-                .draggable(
-                    orientation = Orientation.Horizontal,
-                    state = rememberDraggableState { delta ->
-                        scope.launch { offset.snapTo((offset.value + delta).coerceAtMost(0f)) }
-                    },
-                    onDragStopped = {
-                        val travelled = -offset.value
-                        when {
-                            travelled > commit -> {
-                                onOpenRowChange(null)
-                                offset.snapTo(0f)
-                                onRemove()
-                            }
-                            travelled > reveal / 2 -> {
-                                onOpenRowChange(id)
-                                offset.animateTo(-reveal)
-                            }
-                            else -> {
-                                if (isOpen) onOpenRowChange(null)
-                                offset.animateTo(0f)
-                            }
-                        }
-                    },
-                ),
-        ) { content() }
     }
 }
 

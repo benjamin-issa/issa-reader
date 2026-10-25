@@ -34,6 +34,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import com.benjaminissa.issareader.app.model.AppModel
+import com.benjaminissa.issareader.app.model.DownloadsScreen as DownloadDecisions
 import com.benjaminissa.issareader.app.ui.downloads.DownloadsPlacement
 import com.benjaminissa.issareader.app.ui.downloads.downloadsSection
 import com.benjaminissa.issareader.app.ui.downloads.rememberDownloadsSectionState
@@ -89,7 +90,7 @@ internal fun DownloadsScreen(app: AppModel, onBack: (() -> Unit)?, scanned: Down
         LaunchedEffect(refreshKey) {
             inventory = DownloadsInventory.scan(
                 books = app.books,
-                downloaded = DownloadsStorage.onDisk(app.downloadedUuids, app.pendingRemoval),
+                downloaded = DownloadDecisions.onDisk(app.downloadedUuids, app.pendingRemoval),
                 scope = DownloadsInventory.Scope.EVERYTHING,
             )
         }
@@ -286,14 +287,4 @@ internal object DownloadsStorage {
         Segment("Question indexes", inventory.askIndexBytes) { Palette.moss.copy(alpha = 0.55f) },
         if (accountsForLibrary) Segment("No longer in your library", inventory.unaccountedBytes) { Palette.alert } else null,
     ).filter { it.bytes > 0 }
-
-    /**
-     * The books whose files are on disk, which during a removal's undo window
-     * is one more than `downloadedUuids` says: the app's set already leaves
-     * out the book being removed, but its file is still there, and the scan
-     * would count it as no longer in the library — an alert-red band for the
-     * book just swiped away, under a toast offering to undo it.
-     */
-    fun onDisk(downloaded: Set<String>, pending: AppModel.PendingRemoval?): Set<String> =
-        if (pending == null) downloaded else downloaded + pending.bookUuid
 }

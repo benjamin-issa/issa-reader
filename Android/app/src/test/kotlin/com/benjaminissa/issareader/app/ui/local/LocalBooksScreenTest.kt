@@ -48,7 +48,7 @@ class LocalBooksScreenTest {
         compose.setContent {
             IssaTheme(darkTheme = false) {
                 LocalBooksContent(
-                    fixture.services, fixture.local, standalone = standalone, onConnectServer = {}, onBack = if (standalone) null else ({}),
+                    fixture.environment, fixture.local, standalone = standalone, onConnectServer = {}, onBack = if (standalone) null else ({}),
                     sizes = SettingsFixture.localSizes, freeSpace = 1_000_000_000,
                 )
             }

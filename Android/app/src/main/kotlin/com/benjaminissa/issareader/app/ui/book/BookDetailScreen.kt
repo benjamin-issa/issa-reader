@@ -62,6 +62,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import com.benjaminissa.issareader.app.model.AppModel
+import com.benjaminissa.issareader.app.model.BookActions
+import com.benjaminissa.issareader.app.model.BookLinks
 import com.benjaminissa.issareader.app.model.BookRouter
 import com.benjaminissa.issareader.app.ui.shell.LocalAppEnvironment
 import com.benjaminissa.issareader.app.ui.shell.LocalShellActions
@@ -81,6 +83,8 @@ import com.benjaminissa.issareader.core.model.ReadingProgress
 import com.benjaminissa.issareader.core.model.SeriesText
 import com.benjaminissa.issareader.core.networking.isWebLink
 import com.benjaminissa.issareader.ui.HtmlText
+import com.benjaminissa.issareader.ui.LastWords
+import com.benjaminissa.issareader.ui.LocalPlayerBand
 import com.benjaminissa.issareader.ui.Metrics
 import com.benjaminissa.issareader.ui.Overline
 import com.benjaminissa.issareader.ui.Palette
@@ -88,6 +92,7 @@ import com.benjaminissa.issareader.ui.ProgressBar
 import com.benjaminissa.issareader.ui.Symbols
 import com.benjaminissa.issareader.ui.SystemText
 import com.benjaminissa.issareader.ui.Typography
+import com.benjaminissa.issareader.ui.WrappingText
 import com.benjaminissa.issareader.ui.colorFromHexString
 import kotlinx.coroutines.launch
 import java.net.URI
@@ -129,7 +134,7 @@ fun BookDetailScreen(uuid: String) {
                     .padding(padding)
                     .fillMaxSize()
                     .verticalScroll(rememberScrollState())
-                    .padding(vertical = Metrics.screenMargin)
+                    .padding(top = Metrics.screenMargin, bottom = Metrics.screenMargin + LocalPlayerBand.current)
                     .testTag("content.bookDetail"),
                 verticalArrangement = Arrangement.spacedBy(Metrics.spacing32),
             ) {
@@ -173,7 +178,7 @@ private fun BookDetailContent(book: Book) {
         // showed up on screen verbatim.
         SelectionContainer(margin) {
             Text(
-                HtmlText.annotated(HtmlText.cached(description), linkColor = Palette.tangerine),
+                LastWords.together(HtmlText.annotated(HtmlText.cached(description), linkColor = Palette.tangerine)),
                 style = Typography.body,
                 color = Palette.inkSecondary,
             )
@@ -201,13 +206,13 @@ private fun Hero(book: Book) {
             // The title and its subtitle as one block, set tighter than the
             // column, so the subtitle reads as part of the title.
             Column(verticalArrangement = Arrangement.spacedBy(Metrics.spacing4)) {
-                Text(book.title, style = Typography.title, color = Palette.ink)
-                book.displaySubtitle?.let { Text(it, style = Typography.bookTitle, color = Palette.inkSecondary) }
+                WrappingText(book.title, style = Typography.title, color = Palette.ink)
+                book.displaySubtitle?.let { WrappingText(it, style = Typography.bookTitle, color = Palette.inkSecondary) }
             }
             SeriesLines(book)
-            Text(book.byline, style = Typography.callout, color = Palette.inkSecondary)
+            WrappingText(book.byline, style = Typography.callout, color = Palette.inkSecondary)
             if (book.narrators.isNotEmpty()) {
-                Text("Narrated by " + book.narrators.joinToString(", ") { it.name }, style = Typography.footnote, color = Palette.inkTertiary)
+                WrappingText("Narrated by " + book.narrators.joinToString(", ") { it.name }, style = Typography.footnote, color = Palette.inkTertiary)
             }
             // Wrapping, not a fixed row: "Read-along · 5h 4m" beside a status
             // pill overflows a phone column.
@@ -548,9 +553,9 @@ private fun Tags(book: Book, modifier: Modifier) {
         Overline("Tags")
         FlowRow(horizontalArrangement = Arrangement.spacedBy(Metrics.spacing8)) {
             // The identifier goes on the first linked chip, as on the series line.
-            val firstLinked = BookDetail.firstLinkedTagId(book.distinctTags, app.booksByTag)
+            val firstLinked = BookLinks.firstLinkedTagId(book.distinctTags, app.booksByTag)
             for (tag in book.distinctTags) {
-                if (BookDetail.isLinked(tag.name, app.booksByTag)) {
+                if (BookLinks.isLinked(tag.name, app.booksByTag)) {
                     TagChip(tag.name, isLinked = true, modifier = if (tag.id == firstLinked) Modifier.testTag("bookDetail.tag") else Modifier) {
                         navigator.push(BookRouter.Route.Tag(tag.name))
                     }
@@ -718,7 +723,7 @@ private fun EditionRow(
         // Why "Save for offline" did nothing: the Wi-Fi-only rule refuses
         // before any transfer exists.
         if (!missing) {
-            app.downloadRefusals[job]?.let { refusal ->
+            BookActions.refusal(book, format, app.downloadRefusals)?.let { refusal ->
                 Text(refusal, style = Typography.caption, color = Palette.alert)
             }
         }
@@ -775,7 +780,7 @@ private fun MenuAction(title: String, symbol: Int, close: () -> Unit, destructiv
     val color = if (destructive) Palette.alert else Palette.ink
     DropdownMenuItem(
         text = { Text(title, style = SystemText.body, color = color) },
-        leadingIcon = { Icon(painterResource(symbol), contentDescription = null, tint = color, modifier = Modifier.size(22.dp)) },
+        trailingIcon = { Icon(painterResource(symbol), contentDescription = null, tint = color, modifier = Modifier.size(22.dp)) },
         onClick = {
             close()
             action()

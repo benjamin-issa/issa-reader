@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -25,10 +24,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
-import androidx.compose.material3.SwipeToDismissBox
-import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -41,10 +37,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -58,6 +57,7 @@ import com.benjaminissa.issareader.core.model.Annotation
 import com.benjaminissa.issareader.render.BookSearch
 import com.benjaminissa.issareader.ui.Metrics
 import com.benjaminissa.issareader.ui.Palette
+import com.benjaminissa.issareader.ui.SwipeToRemove
 import com.benjaminissa.issareader.ui.Symbols
 import com.benjaminissa.issareader.ui.SystemText
 import com.benjaminissa.issareader.ui.Typography
@@ -195,11 +195,14 @@ private fun SearchField(text: String, onChange: (String) -> Unit, modifier: Modi
 
 /**
  * Everything the reader has marked in this book: the Marks sheet. A row
- * swiped away is deleted, as the iPhone's swipe action deletes it.
+ * swiped left shows Delete, and one swiped all the way is deleted, as the
+ * iPhone's swipe action does.
  */
 @Composable
 fun AnnotationsView(model: ReaderModel, onOpen: (Annotation) -> Unit, onDismiss: () -> Unit) {
     val annotations = model.annotations
+    // The row whose Delete is showing: one at a time.
+    var openRow by remember { mutableStateOf<String?>(null) }
     Column(Modifier.fillMaxWidth()) {
         SheetLargeTitle("Marks")
         LazyColumn(contentPadding = PaddingValues(start = Metrics.screenMargin, end = Metrics.screenMargin, bottom = Metrics.spacing32)) {
@@ -216,6 +219,8 @@ fun AnnotationsView(model: ReaderModel, onOpen: (Annotation) -> Unit, onDismiss:
             itemsIndexed(annotations, key = { _, annotation -> annotation.id }) { index, annotation ->
                 MarkRow(
                     annotation, index, annotations.size,
+                    openRow = openRow,
+                    onOpenRowChange = { openRow = it },
                     onOpen = {
                         onOpen(annotation)
                         onDismiss()
@@ -227,23 +232,34 @@ fun AnnotationsView(model: ReaderModel, onOpen: (Annotation) -> Unit, onDismiss:
     }
 }
 
+/**
+ * One mark: the shared swipe — Delete revealed, or the mark deleted by a
+ * swipe all the way — in the grouped list's card, whose corners clip it.
+ * A screen reader has Delete among the row's actions, as VoiceOver has the
+ * swipe action.
+ */
 @Composable
-private fun MarkRow(annotation: Annotation, index: Int, count: Int, onOpen: () -> Unit, onDelete: () -> Unit) {
-    val state = rememberSwipeToDismissBoxState()
-    LaunchedEffect(state.currentValue) {
-        if (state.currentValue == SwipeToDismissBoxValue.EndToStart) onDelete()
-    }
-    SwipeToDismissBox(
-        state = state,
-        enableDismissFromStartToEnd = false,
-        modifier = Modifier.groupedRow(index, count),
-        backgroundContent = {
-            Box(Modifier.fillMaxSize().background(Palette.alert).padding(horizontal = 20.dp), contentAlignment = Alignment.CenterEnd) {
-                Text("Delete", style = SystemText.body, color = androidx.compose.ui.graphics.Color.White)
-            }
-        },
+private fun MarkRow(
+    annotation: Annotation,
+    index: Int,
+    count: Int,
+    openRow: String?,
+    onOpenRowChange: (String?) -> Unit,
+    onOpen: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    SwipeToRemove(
+        id = annotation.id,
+        openRow = openRow,
+        onOpenRowChange = onOpenRowChange,
+        onRemove = onDelete,
+        modifier = Modifier
+            .groupedRow(index, count)
+            .semantics { customActions = listOf(CustomAccessibilityAction("Delete") { onDelete(); true }) },
+        onTap = onOpen,
+        shape = RectangleShape,
     ) {
-        Column(Modifier.background(Palette.surface).clickable(role = Role.Button, onClick = onOpen)) {
+        Column(Modifier.background(Palette.surface)) {
             Row(
                 Modifier.fillMaxWidth().height(IntrinsicSize.Min).padding(horizontal = 16.dp, vertical = 11.dp),
                 horizontalArrangement = Arrangement.spacedBy(Metrics.spacing12),

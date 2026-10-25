@@ -4,9 +4,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import com.benjaminissa.issareader.core.download.BookContentService
-import com.benjaminissa.issareader.core.download.BookMenu
-import com.benjaminissa.issareader.core.download.DownloadManager
 import com.benjaminissa.issareader.core.model.Book
 import com.benjaminissa.issareader.core.model.Tag
 import com.benjaminissa.issareader.core.sync.LibraryArrangement
@@ -146,40 +143,3 @@ object BookLinks {
         tags.firstOrNull { isLinked(it.name, booksByTag) }?.id
 }
 
-/** What a book's menu does that is not navigation. */
-object BookActions {
-    /**
-     * Why this edition is not downloading, when the Wi-Fi rule held it back:
-     * what the book screen shows against the edition that was asked for, and
-     * only that edition.
-     */
-    fun refusal(book: Book, format: BookContentService.Format, refusals: Map<DownloadManager.Job, String>): String? =
-        refusals[DownloadManager.Job(book.uuid, format)]
-
-    /**
-     * Saves, retries or resumes an edition, and says what the reader has to be
-     * told: the Wi-Fi rule's reason when it held the download back. Resume
-     * included — it used to throw the outcome away, so a "Resume download"
-     * refused on cellular looked ignored.
-     *
-     * @return the alert to show, or null when the download started.
-     */
-    suspend fun startDownload(
-        kind: BookMenu.EditionAction.Kind,
-        book: Book,
-        format: BookContentService.Format,
-        app: AppModel,
-    ): BookAlert? {
-        val job = DownloadManager.Job(book.uuid, format)
-        val started = when (kind) {
-            BookMenu.EditionAction.Kind.RESUME -> {
-                app.resumeDownload(job)
-                app.downloadRefusals[job] == null
-            }
-            BookMenu.EditionAction.Kind.SAVE, BookMenu.EditionAction.Kind.RETRY -> app.download(book, format)
-            BookMenu.EditionAction.Kind.PAUSE, BookMenu.EditionAction.Kind.REMOVE -> return null
-        }
-        if (started) return null
-        return BookAlert(title = "Not downloaded yet", message = app.downloadRefusals[job] ?: "The download could not start.")
-    }
-}

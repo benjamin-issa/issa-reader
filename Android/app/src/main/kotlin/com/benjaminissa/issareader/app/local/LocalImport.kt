@@ -3,10 +3,15 @@ package com.benjaminissa.issareader.app.local
 import android.net.Uri
 import com.benjaminissa.issareader.core.model.Book
 import com.benjaminissa.issareader.core.model.ByteCountText
+import com.benjaminissa.issareader.core.model.LocalCopy
 import com.benjaminissa.issareader.core.model.LocalNotice
 import com.benjaminissa.issareader.core.model.ReadingProgress
 import com.benjaminissa.issareader.ui.HtmlText
 import com.benjaminissa.issareader.core.model.wholeSeconds
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.format.FormatStyle
 import java.util.UUID
 import kotlin.math.roundToLong
 
@@ -309,8 +314,11 @@ data class LocalBookFacts(
     }
 }
 
-/** What Book info shows of a book from the reader's own files. */
+/** What Book info shows of a book from the reader's own files: the sheet's words, without the sheet. */
 object LocalBookInfo {
+    /** "Added from": where the original is, as a value — "Files" on the iPhone. */
+    const val ADDED_FROM = "Your files"
+
     /**
      * The description as text. Calibre and most tools write it as escaped
      * HTML, which the XML parser hands back as literal tags and entities, so
@@ -321,4 +329,39 @@ object LocalBookInfo {
         val text = HtmlText.plain(description).trim()
         return text.ifEmpty { null }
     }
+
+    /** "Read", or "Continue · 42%" for a book already started. */
+    fun primaryTitle(book: Book): String {
+        val progress = book.progress
+        if (progress == null || progress <= 0) return "Read"
+        return "Continue · ${ReadingProgress.percentText(progress)}"
+    }
+
+    /** "Narrated by Lucy Simmons · 7 h 4 min", or "Narrated · 7 h 4 min". */
+    fun narratedLine(book: Book, seconds: Double): String {
+        val length = LocalBooksCopy.narrated(seconds)
+        val narrators = book.narrators.map { it.name }
+        if (narrators.isEmpty()) return length
+        return length.replace("Narrated", "Narrated by ${narrators.joinToString(", ")}")
+    }
+
+    /** Why a book whose file did not come back from a backup cannot open, and how to bring it back. */
+    fun missingReason(book: Book, copy: LocalCopy?): String {
+        val file = copy?.fileName ?: "the file"
+        val place = book.progress?.let { " from ${ReadingProgress.percentText(it)}" } ?: ""
+        return "Your place and highlights came back from the backup, but the EPUB didn’t. Choose $file again to keep reading$place."
+    }
+
+    /** "EPUB 3 · Narration", "EPUB 3 · Fixed layout", "EPUB 2". */
+    fun format(book: Book): String {
+        val copy = book.localCopy
+        val version = copy?.epubVersion?.firstOrNull()?.let { "EPUB $it" } ?: "EPUB"
+        if (book.hasReadalong) return "$version · Narration"
+        if (copy?.isFixedLayout == true) return "$version · Fixed layout"
+        return version
+    }
+
+    /** When it was added, as the device's locale writes a date. */
+    fun date(instant: Instant): String =
+        DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM).withZone(ZoneId.systemDefault()).format(instant)
 }

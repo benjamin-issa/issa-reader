@@ -1,7 +1,10 @@
 package com.benjaminissa.issareader.app.ui.signin
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -16,11 +19,10 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -35,6 +37,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -47,7 +50,9 @@ import androidx.compose.ui.unit.dp
 import com.benjaminissa.issareader.app.model.AppModel
 import com.benjaminissa.issareader.app.model.BrowserSignInModel
 import com.benjaminissa.issareader.app.model.DeviceSignInModel
+import com.benjaminissa.issareader.app.model.SignInForm
 import com.benjaminissa.issareader.app.ui.shell.LocalAppEnvironment
+import com.benjaminissa.issareader.ui.WrappingText
 import com.benjaminissa.issareader.ui.Metrics
 import com.benjaminissa.issareader.ui.Overline
 import com.benjaminissa.issareader.ui.Palette
@@ -187,13 +192,6 @@ private sealed interface SignInRoute {
 private enum class SignInDestination { BROWSER, DEVICE_CODE }
 
 /**
- * Whether the address in the field would be spoken to in the clear. A bare
- * address counts: what a LAN server answers on is plain HTTP, and the field's
- * own hint suggests exactly that form.
- */
-fun isCleartext(typed: String): Boolean = AppModel.normalizeServerUrl(typed)?.scheme?.lowercase() == "http"
-
-/**
  * The paper, and the content at most 460 wide, 32 in from the edges, centred
  * in the height when it fits and scrolling when it does not — the device
  * code's screen is taller than a small phone.
@@ -235,8 +233,8 @@ private fun SignInFrame(content: @Composable () -> Unit) {
 private fun ExpiredNotice(server: String, onSignInAgain: () -> Unit, onReadFromFiles: (() -> Unit)?) {
     Column(verticalArrangement = Arrangement.spacedBy(Metrics.spacing24)) {
         Overline("Signed out", color = Palette.tangerine)
-        Text("Your session has ended.", style = Typography.displayLarge, color = Palette.ink)
-        Text(
+        WrappingText("Your session has ended.", style = Typography.displayLarge, color = Palette.ink)
+        WrappingText(
             "Sessions last about a month. Your library and downloads are still here — sign in again to carry on.",
             style = Typography.body,
             color = Palette.inkSecondary,
@@ -264,26 +262,26 @@ private fun ServerForm(
         Column(verticalArrangement = Arrangement.spacedBy(Metrics.spacing8)) {
             Overline("Issa Reader", color = Palette.tangerine)
             Text("Welcome back.", style = Typography.displayLarge, color = Palette.ink)
-            Text("Connect to your server and pick up exactly where the narrator left off.", style = Typography.body, color = Palette.inkSecondary)
+            WrappingText("Connect to your server and pick up exactly where the narrator left off.", style = Typography.body, color = Palette.inkSecondary)
         }
         Column(verticalArrangement = Arrangement.spacedBy(Metrics.spacing8)) {
             Overline("Server")
             ServerField(address, onAddressChange, onGo = { if (address.isNotEmpty() && !connecting) onContinue() })
-            Text(
+            WrappingText(
                 "Your library's web address. On your own network it might look like 192.168.1.10:8001.",
                 style = Typography.footnote,
                 color = Palette.inkTertiary,
             )
             // From the field, not from the session: the fact is about the
             // address being typed.
-            if (isCleartext(address)) {
+            if (SignInForm.isCleartext(address)) {
                 Text("Not encrypted — this server is on http://.", style = Typography.footnote, color = Palette.alert)
             }
         }
         // The server's answer, then this attempt's: two slots, because they
         // say different things.
-        if (loadError != null) Text(loadError, style = Typography.footnote, color = Palette.alert)
-        if (signInNote != null) Text(signInNote, style = Typography.footnote, color = Palette.inkSecondary)
+        if (loadError != null) WrappingText(loadError, style = Typography.footnote, color = Palette.alert)
+        if (signInNote != null) WrappingText(signInNote, style = Typography.footnote, color = Palette.inkSecondary)
 
         Column(verticalArrangement = Arrangement.spacedBy(Metrics.spacing8 + 2.dp)) {
             PrimaryButton(
@@ -293,7 +291,7 @@ private fun ServerForm(
                 working = connecting,
                 trailingIcon = Symbols.arrowUpRight,
             )
-            Text(
+            WrappingText(
                 "Your library's own sign-in page opens, then you land back here.",
                 style = Typography.footnote,
                 color = Palette.inkTertiary,
@@ -320,14 +318,23 @@ private fun ServerForm(
  */
 @Composable
 private fun ServerField(value: String, onValueChange: (String) -> Unit, onGo: () -> Unit) {
-    OutlinedTextField(
+    // The iPhone's plain field, 44 tall, rather than Material's 56: the
+    // surface in a medium-rounded box with a hairline, 12 in from its edges,
+    // and the example address as its prompt. The hairline turns the accent
+    // while the field has focus, where Material's outlined field would.
+    val interaction = remember { MutableInteractionSource() }
+    val focused by interaction.collectIsFocusedAsState()
+    val shape = RoundedCornerShape(Metrics.radiusMedium)
+    BasicTextField(
         value = value,
         onValueChange = onValueChange,
+        // Named "Server", as the Swift field's label is: the prompt is an
+        // example, not a name, and a screen reader is told both.
         modifier = Modifier.fillMaxWidth().testTag("field.serverAddress").semantics { contentDescription = "Server" },
-        textStyle = Typography.body,
-        placeholder = { Text("https://yourlibrary.com", style = Typography.body, color = Palette.inkTertiary) },
+        textStyle = Typography.body.copy(color = Palette.ink),
         singleLine = true,
-        shape = RoundedCornerShape(Metrics.radiusMedium),
+        cursorBrush = SolidColor(Palette.tangerine),
+        interactionSource = interaction,
         keyboardOptions = KeyboardOptions(
             capitalization = KeyboardCapitalization.None,
             autoCorrectEnabled = false,
@@ -335,15 +342,20 @@ private fun ServerField(value: String, onValueChange: (String) -> Unit, onGo: ()
             imeAction = ImeAction.Go,
         ),
         keyboardActions = KeyboardActions(onGo = { onGo() }),
-        colors = OutlinedTextFieldDefaults.colors(
-            focusedTextColor = Palette.ink,
-            unfocusedTextColor = Palette.ink,
-            focusedContainerColor = Palette.surface,
-            unfocusedContainerColor = Palette.surface,
-            focusedBorderColor = Palette.tangerine,
-            unfocusedBorderColor = Palette.border,
-            cursorColor = Palette.tangerine,
-        ),
+        decorationBox = { field ->
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 44.dp)
+                    .background(Palette.surface, shape)
+                    .border(1.dp, if (focused) Palette.tangerine else Palette.border, shape)
+                    .padding(horizontal = Metrics.spacing12),
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                if (value.isEmpty()) Text("https://yourlibrary.com", style = Typography.body, color = Palette.inkTertiary, maxLines = 1)
+                field()
+            }
+        },
     )
 }
 

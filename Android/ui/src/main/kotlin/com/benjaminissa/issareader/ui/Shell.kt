@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -19,6 +18,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
@@ -110,13 +110,17 @@ fun MiniPlayerBar(
     Column(
         modifier
             .fillMaxWidth()
+            .height(PlayerBandHeight)
             .background(Palette.surface)
             .clickable(onClick = onExpand)
             .semantics { contentDescription = "Now playing: $title" },
     ) {
         ProgressBar(progress, Modifier.fillMaxWidth(), thickness = 2.dp, track = Palette.border)
+        // The band's height, whatever the controls' touch targets would make
+        // it: the bar floats over the content in the band the content already
+        // leaves clear, so it may not be taller than that band.
         Row(
-            Modifier.padding(horizontal = Metrics.spacing12, vertical = Metrics.spacing8),
+            Modifier.weight(1f).padding(horizontal = Metrics.spacing12),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(Metrics.spacing12),
         ) {
@@ -140,10 +144,19 @@ fun MiniPlayerBar(
 }
 
 /**
- * The band the shell keeps for the mini player while nothing plays, so the
- * content does not jump when playback starts (the iPhone's reserved 56 points).
+ * The mini player's band above the tabs: the iPhone's accessory, 56 points,
+ * which the [MiniPlayerBar] fills exactly.
  */
-@Composable
-fun ReservedPlayerBand(modifier: Modifier = Modifier) {
-    Spacer(modifier.fillMaxWidth().height(56.dp))
-}
+val PlayerBandHeight: Dp = 56.dp
+
+/**
+ * How much a tab's scrolling content adds to the end of its padding so that
+ * its last item can clear the mini player's band. The band takes no layout
+ * space of its own: content scrolls beneath it, and the mini player, when
+ * something plays, floats over the content in the same place rather than
+ * pushing it up — so starting a book moves nothing, as on the iPhone, where
+ * the band is held in the safe area whether or not the bar is showing.
+ *
+ * The shell provides [PlayerBandHeight] to its tabs; zero everywhere else.
+ */
+val LocalPlayerBand = staticCompositionLocalOf { 0.dp }

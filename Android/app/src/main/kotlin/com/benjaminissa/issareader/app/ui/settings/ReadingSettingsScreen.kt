@@ -2,11 +2,20 @@ package com.benjaminissa.issareader.app.ui.settings
 
 import android.content.Context
 import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
+import com.benjaminissa.issareader.app.model.FontImport
 import com.benjaminissa.issareader.app.model.PlaybackSettings
+import com.benjaminissa.issareader.app.ui.reader.HighlightSample
+import com.benjaminissa.issareader.app.ui.reader.typographyControls
+import com.benjaminissa.issareader.app.ui.shell.LocalAppEnvironment
 import com.benjaminissa.issareader.render.PageTurn
 import com.benjaminissa.issareader.render.PageTurnStyle
 import com.benjaminissa.issareader.render.ReaderStyle
@@ -29,6 +38,8 @@ import com.benjaminissa.issareader.ui.paperSection
  *
  * @param reduceMotion whether the system has removed animations; read from
  *   the device when not given.
+ * @param fontImport "Add a font…" and the faces it imported: the app's one,
+ *   which a book's own sheet shares. Null where importing is not offered.
  */
 @Composable
 internal fun ReadingSettingsScreen(
@@ -37,11 +48,24 @@ internal fun ReadingSettingsScreen(
     onOpenLicences: () -> Unit,
     reduceMotion: Boolean? = null,
     largeTitle: Boolean = true,
+    fontImport: FontImport? = LocalAppEnvironment.current.fontImport,
 ) {
     val context = LocalContext.current
     val motionRemoved = reduceMotion ?: remember(context) { ReadingSettings.animationsRemoved(context) }
     val style = settings.readerStyle
     val theme = style.theme
+    var customFamilies by remember(fontImport) { mutableStateOf(fontImport?.customFonts?.families().orEmpty()) }
+    // A refusal says itself, under "Add a font…". An import is selected
+    // straight away: importing a font and then having to find it in a list is
+    // a step with no purpose — as the app's own face when the file was a copy
+    // of one.
+    val importer = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        val fonts = fontImport ?: return@rememberLauncherForActivityResult
+        uri ?: return@rememberLauncherForActivityResult
+        val family = fonts.adopt(uri) ?: return@rememberLauncherForActivityResult
+        customFamilies = fonts.customFonts.families()
+        settings.readerStyle = settings.readerStyle.copy(typeface = FontImport.typeface(family))
+    }
 
     SettingsPage(title = "Reading", onBack = onBack, largeTitle = largeTitle) {
         paperSection(
@@ -88,8 +112,15 @@ internal fun ReadingSettingsScreen(
             footer = "These are your defaults. Any book can depart from them — open it and tap Aa.",
         ) {
             // The publisher's font is a per-book choice — there is no book
-            // here — so the picker offers the app's faces.
-            readingDefaultsControls(style, onStyleChange = { settings.readerStyle = it })
+            // here — so the picker offers the app's faces and any the reader
+            // imported.
+            typographyControls(
+                style = style,
+                onStyle = { settings.readerStyle = it },
+                customFamilies = customFamilies,
+                importNotice = fontImport?.notice,
+                onImport = if (fontImport != null) ({ importer.launch(FontImport.contentTypes) }) else null,
+            )
         }
 
         paperSection(key = "pages", header = "Pages", footer = ReadingSettings.pagesNote(motionRemoved)) {

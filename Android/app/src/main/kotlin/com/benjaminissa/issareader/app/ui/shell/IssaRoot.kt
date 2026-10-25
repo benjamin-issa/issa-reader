@@ -27,7 +27,7 @@ import androidx.navigation.toRoute
 import com.benjaminissa.issareader.app.ask.LocalBookRequests
 import com.benjaminissa.issareader.app.model.AppModel
 import com.benjaminissa.issareader.app.model.RootScreen
-import com.benjaminissa.issareader.app.ui.library.showLibrary
+import com.benjaminissa.issareader.app.model.showLibrary
 import com.benjaminissa.issareader.app.ui.local.LocalBooksScreen
 import com.benjaminissa.issareader.app.ui.player.PlayerSheet
 import com.benjaminissa.issareader.app.ui.reader.ReaderScreen

@@ -27,11 +27,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
-import com.benjaminissa.issareader.core.model.Book
 import com.benjaminissa.issareader.core.model.SeriesMembership
 import com.benjaminissa.issareader.core.model.Status
-import com.benjaminissa.issareader.core.model.Tag
-import com.benjaminissa.issareader.core.sync.LibraryRails
 import com.benjaminissa.issareader.core.sync.SeriesGroup
 import com.benjaminissa.issareader.core.sync.StarRating
 import com.benjaminissa.issareader.ui.Metrics
@@ -64,14 +61,6 @@ object BookDetail {
      */
     fun firstLinkedSeriesId(memberships: List<SeriesMembership>, groups: List<SeriesGroup>): String? =
         memberships.firstOrNull { membership -> groups.any { it.name == membership.name } }?.id
-
-    /** Whether a tag is shared widely enough to have a page: the floor the Browse screen's tag rails use. */
-    fun isLinked(name: String, booksByTag: Map<String, List<Book>>): Boolean =
-        (booksByTag[name]?.size ?: 0) >= LibraryRails.minimumBooksPerTag
-
-    /** The first linked tag, which carries the identifier. */
-    fun firstLinkedTagId(tags: List<Tag>, booksByTag: Map<String, List<Book>>): String? =
-        tags.firstOrNull { isLinked(it.name, booksByTag) }?.id
 
     /**
      * The status pill's glyph, from the status's `name`, never its label:

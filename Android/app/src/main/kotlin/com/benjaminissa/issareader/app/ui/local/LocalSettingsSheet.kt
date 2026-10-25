@@ -33,7 +33,7 @@ import com.benjaminissa.issareader.app.ui.settings.ControlsSettingsScreen
 import com.benjaminissa.issareader.app.ui.settings.FontLicencesScreen
 import com.benjaminissa.issareader.app.ui.settings.LicenceTextScreen
 import com.benjaminissa.issareader.app.ui.settings.ReadingSettingsScreen
-import com.benjaminissa.issareader.app.ui.settings.ScreenServices
+import com.benjaminissa.issareader.app.ui.shell.AppEnvironment
 import com.benjaminissa.issareader.app.ui.settings.SettingsPage
 import com.benjaminissa.issareader.app.ui.settings.SettingsRoutes
 import com.benjaminissa.issareader.app.ui.settings.playbackRows
@@ -59,7 +59,7 @@ import kotlinx.coroutines.withContext
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun LocalSettingsSheet(services: ScreenServices, library: LocalLibrary, onDismiss: () -> Unit, onConnectServer: () -> Unit) {
+internal fun LocalSettingsSheet(environment: AppEnvironment, library: LocalLibrary, onDismiss: () -> Unit, onConnectServer: () -> Unit) {
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
@@ -67,7 +67,7 @@ internal fun LocalSettingsSheet(services: ScreenServices, library: LocalLibrary,
         dragHandle = { BottomSheetDefaults.DragHandle(color = Palette.borderStrong) },
     ) {
         LocalSettingsContent(
-            services = services,
+            environment = environment,
             library = library,
             onDone = onDismiss,
             onConnectServer = {
@@ -82,7 +82,7 @@ internal fun LocalSettingsSheet(services: ScreenServices, library: LocalLibrary,
 /** The sheet's screens: its own list, and what that list pushes. */
 @Composable
 internal fun LocalSettingsContent(
-    services: ScreenServices,
+    environment: AppEnvironment,
     library: LocalLibrary,
     onDone: () -> Unit,
     onConnectServer: () -> Unit,
@@ -107,19 +107,19 @@ internal fun LocalSettingsContent(
     ) { screens ->
         val top = screens.last()
         when {
-            top == SettingsRoutes.CONTROLS -> ControlsSettingsScreen(services.settings, onBack = pop, largeTitle = false)
+            top == SettingsRoutes.CONTROLS -> ControlsSettingsScreen(environment.settings, onBack = pop, largeTitle = false)
             top == SettingsRoutes.READING ->
-                ReadingSettingsScreen(services.settings, onBack = pop, onOpenLicences = { push(SettingsRoutes.FONTS) }, largeTitle = false)
+                ReadingSettingsScreen(environment.settings, onBack = pop, onOpenLicences = { push(SettingsRoutes.FONTS) }, largeTitle = false)
             top == SettingsRoutes.FONTS -> FontLicencesScreen(onBack = pop, onOpen = { push(SettingsRoutes.licence(it)) })
             top.startsWith(SettingsRoutes.FONTS + "/") -> LicenceTextScreen(top.removePrefix(SettingsRoutes.FONTS + "/"), onBack = pop)
-            else -> LocalSettingsRoot(services, library, onDone, onConnectServer, push, spaceUsed)
+            else -> LocalSettingsRoot(environment, library, onDone, onConnectServer, push, spaceUsed)
         }
     }
 }
 
 @Composable
 private fun LocalSettingsRoot(
-    services: ScreenServices,
+    environment: AppEnvironment,
     library: LocalLibrary,
     onDone: () -> Unit,
     onConnectServer: () -> Unit,
@@ -149,7 +149,7 @@ private fun LocalSettingsRoot(
             row { LabeledRow("Space used", spaceUsed?.let(ByteCountText::text) ?: "—") }
         }
         paperSection(key = "playback", header = "Playback & reading") {
-            playbackRows(services.settings, onNavigate, includeDownloads = false)
+            playbackRows(environment.settings, onNavigate, includeDownloads = false)
         }
         paperSection(
             key = "server",
@@ -165,7 +165,7 @@ private fun LocalSettingsRoot(
             }
         }
         paperSection(key = "about", header = "About") {
-            row { LabeledRow("Version", services.versionText) }
+            row { LabeledRow("Version", environment.versionText) }
         }
     }
 }

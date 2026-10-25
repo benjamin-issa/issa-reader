@@ -29,6 +29,7 @@ import com.benjaminissa.issareader.app.ui.shell.SeriesRoute
 import com.benjaminissa.issareader.app.ui.shell.appModel
 import com.benjaminissa.issareader.core.sync.LibraryArrangement
 import com.benjaminissa.issareader.core.sync.SeriesGroup
+import com.benjaminissa.issareader.ui.LocalPlayerBand
 import com.benjaminissa.issareader.ui.Metrics
 import com.benjaminissa.issareader.ui.PalettePlaceholder
 import com.benjaminissa.issareader.ui.RailHeader
@@ -127,7 +128,7 @@ fun SeriesListScreen() {
         LazyVerticalGrid(
             columns = SeriesTileCells,
             modifier = Modifier.padding(padding).fillMaxSize(),
-            contentPadding = PaddingValues(Metrics.spacing16),
+            contentPadding = PaddingValues(start = Metrics.spacing16, top = Metrics.spacing16, end = Metrics.spacing16, bottom = Metrics.spacing16 + LocalPlayerBand.current),
             horizontalArrangement = Arrangement.spacedBy(Metrics.spacing16),
             verticalArrangement = Arrangement.spacedBy(Metrics.spacing24),
         ) {

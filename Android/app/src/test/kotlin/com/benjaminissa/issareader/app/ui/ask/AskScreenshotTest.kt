@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -29,10 +30,12 @@ import com.benjaminissa.issareader.ask.AskSource
 import com.benjaminissa.issareader.ask.AskSuggestions
 import com.benjaminissa.issareader.ask.Passage
 import com.benjaminissa.issareader.ask.ReadingBoundary
+import com.benjaminissa.issareader.render.ReaderTheme
 import com.benjaminissa.issareader.ui.IssaTheme
 import com.benjaminissa.issareader.ui.Metrics
 import com.benjaminissa.issareader.ui.Palette
 import com.benjaminissa.issareader.ui.Typography
+import com.benjaminissa.issareader.ui.color
 import com.github.takahirom.roborazzi.captureRoboImage
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -192,6 +195,31 @@ class AskScreenshotTest {
     @Test
     fun downloading() = shot("sheet-8-downloading") {
         Sheet(job = null, height = medium, notice = AskCopy.stillDownloading("phone"))
+    }
+
+    // The reader's cues
+
+    /**
+     * The bar's sparkle in each state — idle, working, an answer waiting with
+     * the accent's dot — and the badge that stands in for it over the page
+     * while the chrome is hidden, working and ready, on paper and on night.
+     */
+    @Test
+    fun readerCues() = shot("reader-cues") {
+        Column(Modifier.size(402.dp, 160.dp)) {
+            for (theme in listOf(ReaderTheme.PAPER, ReaderTheme.NIGHT)) {
+                Row(
+                    Modifier.fillMaxWidth().weight(1f).background(theme.background.color).padding(horizontal = Metrics.spacing24),
+                    horizontalArrangement = Arrangement.spacedBy(Metrics.spacing24),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    for (state in AskPillState.entries) AskSparkle(state, tint = theme.text.color, dot = theme.accent.color)
+                    Box(Modifier.weight(1f))
+                    AskStatusBadge(theme, AskPillState.WORKING)
+                    AskStatusBadge(theme, AskPillState.READY)
+                }
+            }
+        }
     }
 
     // The settings section

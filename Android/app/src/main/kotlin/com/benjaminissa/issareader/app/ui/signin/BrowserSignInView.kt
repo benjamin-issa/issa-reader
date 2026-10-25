@@ -19,6 +19,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.benjaminissa.issareader.app.model.BrowserSignInModel
 import com.benjaminissa.issareader.app.platform.AuthTabBrowser
+import com.benjaminissa.issareader.ui.WrappingText
 import com.benjaminissa.issareader.ui.Metrics
 import com.benjaminissa.issareader.ui.Overline
 import com.benjaminissa.issareader.ui.Palette
@@ -62,7 +63,7 @@ fun BrowserSignInView(
     Column(verticalArrangement = Arrangement.spacedBy(Metrics.spacing24)) {
         Column(verticalArrangement = Arrangement.spacedBy(Metrics.spacing8)) {
             Overline("Sign in", color = Palette.tangerine)
-            Text(if (failed) "That didn't work." else "In your browser.", style = Typography.display, color = Palette.ink)
+            WrappingText(if (failed) "That didn't work." else "In your browser.", style = Typography.display, color = Palette.ink)
             Text(serverAddress, style = Typography.footnote.copy(fontFamily = FontFamily.Monospace), color = Palette.inkTertiary)
         }
         when (stage) {

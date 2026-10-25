@@ -11,11 +11,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
+import com.benjaminissa.issareader.app.model.FontImport
 import com.benjaminissa.issareader.app.model.PlaybackSettings
 import com.benjaminissa.issareader.core.model.Book
 import com.benjaminissa.issareader.render.ReaderStyle
-import com.benjaminissa.issareader.render.android.ReaderFonts
 import com.benjaminissa.issareader.ui.ButtonRow
 import com.benjaminissa.issareader.ui.Metrics
 import com.benjaminissa.issareader.ui.PaperList
@@ -36,6 +35,7 @@ import com.benjaminissa.issareader.ui.paperSection
  * opening the sheet once re-derived the override and, when the global
  * settings had caught up with a book's own choice, deleted it outright.
  *
+ * @param fontImport "Add a font…": the app's one, which Settings shares.
  * @param publisherFamily the face this book embeds, when it has a usable one.
  * @param onChange applies the resolved style to the open reader.
  */
@@ -43,15 +43,14 @@ import com.benjaminissa.issareader.ui.paperSection
 fun BookTypographyView(
     book: Book,
     settings: PlaybackSettings,
-    fonts: ReaderFonts,
+    fontImport: FontImport,
     publisherFamily: String?,
     publisherNote: String,
     onChange: () -> Unit,
     onDone: () -> Unit,
 ) {
-    val context = LocalContext.current
     var style by remember(book.uuid) { mutableStateOf(settings.style(book.uuid)) }
-    var customFamilies by remember { mutableStateOf(CustomFonts.families()) }
+    var customFamilies by remember(fontImport) { mutableStateOf(fontImport.customFonts.families()) }
 
     fun edit(edited: ReaderStyle) {
         style = edited
@@ -60,10 +59,12 @@ fun BookTypographyView(
         onChange()
     }
 
+    // A refusal says itself, under "Add a font…". A file of a family the app
+    // ships selects the app's own row (`FontImport.importedTypeface`).
     val importer = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri ?: return@rememberLauncherForActivityResult
-        val typeface = FontImport.adopt(context, uri, fonts)?.let(FontImport::typeface) ?: return@rememberLauncherForActivityResult
-        customFamilies = CustomFonts.families()
+        val typeface = fontImport.importedTypeface(uri) ?: return@rememberLauncherForActivityResult
+        customFamilies = fontImport.customFonts.families()
         edit(style.copy(typeface = typeface))
     }
 
@@ -99,7 +100,8 @@ fun BookTypographyView(
                     publisherFamily = publisherFamily,
                     publisherNote = publisherNote,
                     customFamilies = customFamilies,
-                    onImport = { importer.launch(FontImport.mimeTypes) },
+                    importNotice = fontImport.notice,
+                    onImport = { importer.launch(FontImport.contentTypes) },
                 )
             }
             if (override != null && !override.isEmpty) {
@@ -115,19 +117,4 @@ fun BookTypographyView(
             }
         }
     }
-}
-
-/** The pure half of the sheet's import, for the suites. */
-object BookTypography {
-    /**
-     * The face to select for a picked file, or null when the import was
-     * refused — which [FontImport.notice] says under "Add a font…".
-     *
-     * Resolved the way the reading settings resolve it: a file of a family the
-     * app ships is answered with that family, and was once set here as a
-     * custom face — the book set in the app's own face under no row of the
-     * picker, listed as a face of the reader's that is not theirs.
-     */
-    fun importedTypeface(fileName: String, bytes: ByteArray, fonts: ReaderFonts): ReaderStyle.Typeface? =
-        FontImport.adopt(fileName, bytes, fonts)?.let(FontImport::typeface)
 }
