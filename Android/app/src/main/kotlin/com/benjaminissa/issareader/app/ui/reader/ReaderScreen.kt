@@ -23,10 +23,10 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextAlign
-import com.benjaminissa.issareader.app.IssaApplication
 import com.benjaminissa.issareader.app.reader.ReaderModel
 import com.benjaminissa.issareader.app.reader.ReaderPersistence
 import com.benjaminissa.issareader.core.model.Book
+import com.benjaminissa.issareader.app.ui.shell.LocalAppEnvironment
 import com.benjaminissa.issareader.ui.Metrics
 import com.benjaminissa.issareader.ui.Typography
 import com.benjaminissa.issareader.ui.color
@@ -34,13 +34,6 @@ import kotlinx.coroutines.flow.first
 
 /** A book from the reader's own files, and where its writes go. */
 data class LocalReaderBook(val book: Book, val persistence: ReaderPersistence)
-
-/**
- * How the reader finds a book from the reader's own files by its uuid.
- * Provided by whatever owns the local library; absent until it does, when a
- * local book cannot be opened.
- */
-val LocalReaderBooks = compositionLocalOf<((String) -> LocalReaderBook?)?> { null }
 
 /**
  * Opens a book, resolving its model at the moment the screen is really shown.
@@ -61,19 +54,20 @@ val LocalReaderBooks = compositionLocalOf<((String) -> LocalReaderBook?)?> { nul
  */
 @Composable
 fun ReaderScreen(bookUuid: String, local: Boolean, onClose: () -> Unit, onOpenPlayer: () -> Unit = {}) {
-    val context = LocalContext.current
-    val graph = remember(context) { (context.applicationContext as? IssaApplication)?.graph } ?: return
-    val app = graph.app
-    val lookupLocal = LocalReaderBooks.current
+    // Everything from the shell's environment, not the graph: a test's fixture
+    // library opens its books in the same reader the app's does.
+    val shell = LocalAppEnvironment.current
+    val environment = remember(shell) { shell.readerEnvironment() } ?: return
+    val app = shell.app
     var model by remember { mutableStateOf<ReaderModel?>(null) }
     var missing by remember { mutableStateOf(false) }
 
     LaunchedEffect(bookUuid, local) {
         if (model != null) return@LaunchedEffect
         // Every face the reader imported, before the first page is set in one.
-        CustomFonts.ensureLoaded(graph.fonts)
+        CustomFonts.ensureLoaded(environment.fonts)
         model = if (local) {
-            lookupLocal?.invoke(bookUuid)?.let { app.reader(it.book, it.persistence) }
+            shell.localBook(bookUuid)?.let { app.reader(it.book, it.persistence) }
         } else {
             val book = app.bookByUuid[bookUuid] ?: app.books.firstOrNull { it.uuid == bookUuid }
             val session = app.session
@@ -92,19 +86,9 @@ fun ReaderScreen(bookUuid: String, local: Boolean, onClose: () -> Unit, onOpenPl
         }
     }
 
-    val environment = remember(graph) {
-        ReaderEnvironment(
-            settings = graph.settings,
-            fonts = graph.fonts,
-            defaults = graph.defaults,
-            appScope = graph.mainScope,
-            app = app,
-            nowPlaying = graph.nowPlaying,
-        )
-    }
     // The page's own ground for the moment before the model lands, so a
     // reader that is opening is never briefly the wrong colour.
-    val theme = graph.settings.readerStyle.theme
+    val theme = environment.settings.readerStyle.theme
     Box(
         Modifier
             .fillMaxSize()

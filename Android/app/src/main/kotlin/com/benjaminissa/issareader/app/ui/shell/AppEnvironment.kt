@@ -11,6 +11,8 @@ import com.benjaminissa.issareader.app.model.DeviceSignInModel
 import com.benjaminissa.issareader.app.model.LibraryNavigator
 import com.benjaminissa.issareader.app.model.NowPlayingController
 import com.benjaminissa.issareader.app.model.PlaybackSettings
+import com.benjaminissa.issareader.app.ui.reader.LocalReaderBook
+import com.benjaminissa.issareader.app.ui.reader.ReaderEnvironment
 import com.benjaminissa.issareader.core.sync.LibraryArrangement
 import java.net.URI
 
@@ -28,6 +30,11 @@ import java.net.URI
  *   so and offers the device code.
  * @param localBooksAvailable whether the books-from-your-files flow is wired.
  *   Swift draws its link only when a `LocalLibrary` is in the environment.
+ * @param readerEnvironment what the reader is drawn with: the faces, the
+ *   preferences, the scope its writes outlive the screen in. Null where no
+ *   reader can open.
+ * @param localBook a book from the reader's own files, by uuid, and where its
+ *   reader's writes go.
  */
 class AppEnvironment(
     val app: AppModel,
@@ -38,6 +45,8 @@ class AppEnvironment(
     val isBrowserSupported: () -> Boolean,
     val localBooksAvailable: Boolean = false,
     val covers: () -> CoverCache = { CoverCache.shared },
+    val readerEnvironment: () -> ReaderEnvironment? = { null },
+    val localBook: (String) -> LocalReaderBook? = { null },
 ) {
     companion object {
         /** The app's own, from its graph. */
@@ -48,6 +57,18 @@ class AppEnvironment(
             browserSignIn = graph::browserSignIn,
             deviceSignIn = graph::deviceSignIn,
             isBrowserSupported = { graph.authTab.isSupported },
+            localBooksAvailable = true,
+            readerEnvironment = {
+                ReaderEnvironment(
+                    settings = graph.settings,
+                    fonts = graph.fonts,
+                    defaults = graph.defaults,
+                    appScope = graph.mainScope,
+                    app = graph.app,
+                    nowPlaying = graph.nowPlaying,
+                )
+            },
+            localBook = { uuid -> graph.local.book(uuid)?.let { LocalReaderBook(it, graph.local) } },
         )
     }
 }

@@ -12,7 +12,6 @@ import com.benjaminissa.issareader.app.ui.fixture.AppDriver
 import com.benjaminissa.issareader.app.ui.fixture.FixtureServer
 import com.benjaminissa.issareader.app.ui.fixture.Sweep
 import com.github.takahirom.roborazzi.captureRoboImage
-import org.junit.Assume.assumeTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -105,7 +104,6 @@ abstract class SweepScreenshotTest(private val device: Sweep.Device) {
 
     @Test
     fun libraryDark() {
-        assumeTrue(device == Sweep.PRO)
         driver.launch(signedIn = true, dark = true)
         driver.tab("Library")
         capture("library-dark")
@@ -113,7 +111,6 @@ abstract class SweepScreenshotTest(private val device: Sweep.Device) {
 
     @Test
     fun bookDetailDark() {
-        assumeTrue(device == Sweep.PRO)
         bookDetail(dark = true)
         capture("bookDetail-dark")
     }

@@ -6,12 +6,17 @@ import com.benjaminissa.issareader.app.model.CoverCache
 import com.benjaminissa.issareader.app.model.DeviceSignInModel
 import com.benjaminissa.issareader.app.model.NowPlayingController
 import com.benjaminissa.issareader.app.model.PlaybackSettings
+import com.benjaminissa.issareader.app.reader.ReaderServices
+import com.benjaminissa.issareader.app.ui.reader.QuietBackend
+import com.benjaminissa.issareader.app.ui.reader.ReaderEnvironment
 import com.benjaminissa.issareader.app.ui.shell.AppEnvironment
 import com.benjaminissa.issareader.core.InMemoryKeyValueStore
 import com.benjaminissa.issareader.core.Session
 import com.benjaminissa.issareader.core.StorageRoot
 import com.benjaminissa.issareader.core.auth.HttpDeviceGrantTransport
 import com.benjaminissa.issareader.core.networking.MonitoredReachability
+import com.benjaminissa.issareader.render.android.ReaderFonts
+import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -66,14 +71,21 @@ object Sweep {
             makeSession = { Session(it, tokens, http = FixtureServer.client) },
         )
         val covers = CoverCache(File(root, "caches/Covers"))
+        val nowPlaying = NowPlayingController(scope)
+        val settings = PlaybackSettings(defaults)
+        val fonts = ReaderFonts(ApplicationProvider.getApplicationContext())
+        // The reader's services, as the graph hands the app its own: a book
+        // opened here lays out in the real reader and plays into nothing.
+        app.readerServices = ReaderServices(scope = scope, fonts = fonts, makeMediaBackend = { QuietBackend() })
         return AppEnvironment(
             app = app,
-            nowPlaying = NowPlayingController(scope),
-            settings = PlaybackSettings(defaults),
+            nowPlaying = nowPlaying,
+            settings = settings,
             browserSignIn = { url -> BrowserSignInModel(url, scope, isSupported = { true }) { awaitCancellation() } },
             deviceSignIn = { url -> DeviceSignInModel(url, scope) { HttpDeviceGrantTransport(url, FixtureServer.client) } },
             isBrowserSupported = { true },
             covers = { covers },
+            readerEnvironment = { ReaderEnvironment(settings, fonts, defaults, scope, app, nowPlaying) },
         )
     }
 }
