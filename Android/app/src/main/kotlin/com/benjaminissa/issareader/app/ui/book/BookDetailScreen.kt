@@ -83,6 +83,7 @@ import com.benjaminissa.issareader.core.model.ReadingProgress
 import com.benjaminissa.issareader.core.model.SeriesText
 import com.benjaminissa.issareader.core.networking.isWebLink
 import com.benjaminissa.issareader.ui.HtmlText
+import com.benjaminissa.issareader.ui.LocalPlayerBand
 import com.benjaminissa.issareader.ui.Metrics
 import com.benjaminissa.issareader.ui.Overline
 import com.benjaminissa.issareader.ui.Palette
@@ -131,7 +132,7 @@ fun BookDetailScreen(uuid: String) {
                     .padding(padding)
                     .fillMaxSize()
                     .verticalScroll(rememberScrollState())
-                    .padding(vertical = Metrics.screenMargin)
+                    .padding(top = Metrics.screenMargin, bottom = Metrics.screenMargin + LocalPlayerBand.current)
                     .testTag("content.bookDetail"),
                 verticalArrangement = Arrangement.spacedBy(Metrics.spacing32),
             ) {

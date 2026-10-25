@@ -33,6 +33,7 @@ import com.benjaminissa.issareader.app.ui.shell.appModel
 import com.benjaminissa.issareader.core.download.BookMenu
 import com.benjaminissa.issareader.core.model.Book
 import com.benjaminissa.issareader.core.sync.LibraryArrangement
+import com.benjaminissa.issareader.ui.LocalPlayerBand
 import com.benjaminissa.issareader.ui.Metrics
 import com.benjaminissa.issareader.ui.PalettePlaceholder
 import com.benjaminissa.issareader.ui.Symbols
@@ -122,7 +123,7 @@ private fun LibraryStates(app: AppModel) {
 
 @Composable
 internal fun CenteredPlaceholder(content: @Composable () -> Unit) {
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { content() }
+    Box(Modifier.fillMaxSize().padding(bottom = LocalPlayerBand.current), contentAlignment = Alignment.Center) { content() }
 }
 
 /** Browse's rails, in a scroll of their own, edge to edge. */
@@ -131,7 +132,7 @@ private fun BrowseList() {
     val app = appModel
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(vertical = Metrics.screenMargin),
+        contentPadding = PaddingValues(top = Metrics.screenMargin, bottom = Metrics.screenMargin + LocalPlayerBand.current),
         verticalArrangement = Arrangement.spacedBy(Metrics.spacing32),
     ) {
         browseRails(app)
@@ -155,7 +156,12 @@ private fun Shelf(books: List<Book>, search: String) {
     LazyVerticalGrid(
         columns = CoverGrid.cells,
         modifier = Modifier.fillMaxSize().testTag("grid.library"),
-        contentPadding = PaddingValues(Metrics.screenMargin),
+        contentPadding = PaddingValues(
+            start = Metrics.screenMargin,
+            top = Metrics.screenMargin,
+            end = Metrics.screenMargin,
+            bottom = Metrics.screenMargin + LocalPlayerBand.current,
+        ),
         horizontalArrangement = Arrangement.spacedBy(CoverGrid.columnSpacing, Alignment.Start),
         verticalArrangement = Arrangement.spacedBy(CoverGrid.rowSpacing),
     ) {

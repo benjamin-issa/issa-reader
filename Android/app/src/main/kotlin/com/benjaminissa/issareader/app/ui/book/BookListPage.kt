@@ -46,6 +46,7 @@ import com.benjaminissa.issareader.core.model.Book
 import com.benjaminissa.issareader.core.sync.LibraryArrangement
 import com.benjaminissa.issareader.core.sync.StagedBooks
 import com.benjaminissa.issareader.ui.InlineTitleBar
+import com.benjaminissa.issareader.ui.LocalPlayerBand
 import com.benjaminissa.issareader.ui.Metrics
 import com.benjaminissa.issareader.ui.Overline
 import com.benjaminissa.issareader.ui.Palette
@@ -135,7 +136,7 @@ fun BookListPage(subject: BookListSubject, books: List<Book>) {
         ) { padding ->
             Refreshable(onRefresh = { app.refreshLibrary() }, modifier = Modifier.padding(padding).fillMaxSize()) {
                 if (staged.isEmpty) {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { EmptyState(subject) }
+                    Box(Modifier.fillMaxSize().padding(bottom = LocalPlayerBand.current), contentAlignment = Alignment.Center) { EmptyState(subject) }
                     return@Refreshable
                 }
                 Column(
@@ -143,7 +144,7 @@ fun BookListPage(subject: BookListSubject, books: List<Book>) {
                         .fillMaxSize()
                         .verticalScroll(scroll)
                         .testTag("content.${subject.kind}")
-                        .padding(start = Metrics.screenMargin, end = Metrics.screenMargin, bottom = Metrics.screenMargin),
+                        .padding(start = Metrics.screenMargin, end = Metrics.screenMargin, bottom = Metrics.screenMargin + LocalPlayerBand.current),
                 ) {
                     Header(subject, staged, showInLibrary, onNameBottom = { nameBottom = it })
                     Column(Modifier.padding(top = Metrics.spacing8), verticalArrangement = Arrangement.spacedBy(Metrics.spacing32)) {

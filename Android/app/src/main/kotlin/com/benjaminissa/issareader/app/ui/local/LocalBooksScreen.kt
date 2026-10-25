@@ -92,6 +92,7 @@ import com.benjaminissa.issareader.playback.PlaybackAction
 import com.benjaminissa.issareader.playback.PlaybackProgress
 import com.benjaminissa.issareader.ui.BackButton
 import com.benjaminissa.issareader.ui.LargeTitleBar
+import com.benjaminissa.issareader.ui.LocalPlayerBand
 import com.benjaminissa.issareader.ui.Metrics
 import com.benjaminissa.issareader.ui.MiniPlayerBar
 import com.benjaminissa.issareader.ui.Overline
@@ -294,7 +295,7 @@ internal fun LocalBooksContent(
                     start = Metrics.screenMargin,
                     end = Metrics.screenMargin,
                     top = padding.calculateTopPadding() + Metrics.spacing16,
-                    bottom = padding.calculateBottomPadding() + Metrics.spacing16 + 72.dp,
+                    bottom = padding.calculateBottomPadding() + Metrics.spacing16 + 72.dp + LocalPlayerBand.current,
                 ),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {

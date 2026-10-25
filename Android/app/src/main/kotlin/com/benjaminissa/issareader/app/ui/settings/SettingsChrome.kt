@@ -52,6 +52,7 @@ import androidx.compose.ui.unit.dp
 import com.benjaminissa.issareader.playback.Observed
 import com.benjaminissa.issareader.ui.InlineTitleBar
 import com.benjaminissa.issareader.ui.LargeTitleBar
+import com.benjaminissa.issareader.ui.LocalPlayerBand
 import com.benjaminissa.issareader.ui.Metrics
 import com.benjaminissa.issareader.ui.Overline
 import com.benjaminissa.issareader.ui.Palette
@@ -112,7 +113,11 @@ internal fun SettingsPage(
         Box(Modifier.fillMaxSize()) {
             PaperList(
                 modifier = Modifier.fillMaxSize().then(if (listTag != null) Modifier.testTag(listTag) else Modifier),
-                contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = padding.calculateBottomPadding() + Metrics.spacing32),
+                contentPadding = PaddingValues(
+                    top = padding.calculateTopPadding(),
+                    // Past the mini player's band too, inside the tabs: the list runs beneath it.
+                    bottom = padding.calculateBottomPadding() + Metrics.spacing32 + LocalPlayerBand.current,
+                ),
                 content = content,
             )
             overlay()

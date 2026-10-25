@@ -16,6 +16,7 @@ import com.benjaminissa.issareader.app.ui.shell.PushedScreen
 import com.benjaminissa.issareader.app.ui.shell.appModel
 import com.benjaminissa.issareader.core.download.BookMenu
 import com.benjaminissa.issareader.core.model.SeriesText
+import com.benjaminissa.issareader.ui.LocalPlayerBand
 import com.benjaminissa.issareader.ui.Metrics
 import com.benjaminissa.issareader.ui.Overline
 import com.benjaminissa.issareader.ui.PalettePlaceholder
@@ -36,7 +37,7 @@ fun SeriesScreen(name: String) {
     BookRoutes(place = BookMenu.Place.Series(name)) {
         PushedScreen(name, Modifier.testTag("screen.series")) { padding ->
             if (series == null) {
-                Box(Modifier.padding(padding).fillMaxSize(), contentAlignment = Alignment.Center) {
+                Box(Modifier.padding(padding).fillMaxSize().padding(bottom = LocalPlayerBand.current), contentAlignment = Alignment.Center) {
                     PalettePlaceholder(
                         symbol = Symbols.booksVertical,
                         title = "Series unavailable",
@@ -50,7 +51,7 @@ fun SeriesScreen(name: String) {
                     .padding(padding)
                     .fillMaxSize()
                     .verticalScroll(rememberScrollState())
-                    .padding(Metrics.spacing16),
+                    .padding(start = Metrics.spacing16, top = Metrics.spacing16, end = Metrics.spacing16, bottom = Metrics.spacing16 + LocalPlayerBand.current),
                 verticalArrangement = Arrangement.spacedBy(Metrics.spacing12),
             ) {
                 Overline("${series.books.size} books")
