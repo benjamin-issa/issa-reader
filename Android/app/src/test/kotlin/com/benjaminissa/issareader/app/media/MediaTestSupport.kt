@@ -4,6 +4,7 @@ import com.benjaminissa.issareader.app.model.NowPlayingSink
 import com.benjaminissa.issareader.core.IssaJson
 import com.benjaminissa.issareader.core.model.Book
 import com.benjaminissa.issareader.core.sync.CarCatalogue
+import com.benjaminissa.issareader.playback.CommandMap
 import com.benjaminissa.issareader.playback.CommandRouter
 import com.benjaminissa.issareader.playback.android.CarPresence
 import com.benjaminissa.issareader.playback.android.SessionTransport
@@ -75,8 +76,9 @@ class FakeHost(
     var books: List<Book> = emptyList(),
     var downloaded: Set<String> = emptySet(),
     var localUuids: Set<String> = emptySet(),
+    map: CommandMap = CommandMap(),
 ) : MediaHost {
-    override val router: CommandRouter = CommandRouter().apply { activate() }
+    override val router: CommandRouter = CommandRouter(map).apply { activate() }
     var sink: NowPlayingSink? = null
     override var access: MediaHost.Access = MediaHost.Access.READY
     override var playbackRate: Double = 1.0
