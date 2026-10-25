@@ -291,5 +291,9 @@
   "gearshape.fill": [
     "settings",
     true
+  ],
+  "ipad": [
+    "tablet",
+    false
   ]
 }

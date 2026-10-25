@@ -13,6 +13,7 @@ import com.benjaminissa.issareader.app.ask.AskNotifier
 import com.benjaminissa.issareader.app.ask.GeminiNanoPlatform
 import com.benjaminissa.issareader.app.download.WorkManagerTransferBackend
 import com.benjaminissa.issareader.ask.AskIndexStore
+import com.benjaminissa.issareader.app.local.LocalBooksRoute
 import com.benjaminissa.issareader.app.local.LocalBooksWiring
 import com.benjaminissa.issareader.app.local.LocalDevice
 import com.benjaminissa.issareader.app.local.LocalLibrary
@@ -136,6 +137,14 @@ class AppGraph(
         contentResolver = context.contentResolver,
         measurer = AndroidDurationMeasurer(),
     )
+
+    /**
+     * Where the one window is in the local books' flow: the book whose reader
+     * is presented over it, and whether the list stands in for sign-in. Swift
+     * keeps one per window in `RootView`; Android has one window, so the
+     * graph holds it for the root and the screens alike.
+     */
+    val localBooksRoute: LocalBooksRoute = LocalBooksRoute(defaults)
 
     /** Exit bookkeeping: the background flush, so two overlapping ones do not run twice. */
     val termination = TerminationSequence()
