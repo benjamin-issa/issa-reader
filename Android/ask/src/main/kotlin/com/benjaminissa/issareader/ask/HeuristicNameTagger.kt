@@ -309,13 +309,16 @@ object HeuristicNameTagger : NameTagger {
         val lowerCase = HashMap<String, Int>()
         val afterLocative = HashMap<String, Int>()
 
+        /** Every capitalised sighting, wherever it stands. */
+        val capitalised = HashMap<String, Int>()
+
         fun isName(key: String): Boolean {
-            val capitalised = bare[key] ?: 0
-            if (capitalised == 0) return false
-            if ((lowerCase[key] ?: 0) >= capitalised) return false
+            val sightings = bare[key] ?: 0
+            if (sightings == 0) return false
+            if ((lowerCase[key] ?: 0) >= sightings) return false
             // A place, by where it stands: most of its capitalised sightings
             // follow a locative preposition.
-            return (afterLocative[key] ?: 0) * 2 <= capitalised
+            return (afterLocative[key] ?: 0) * 2 <= sightings
         }
     }
 
@@ -325,6 +328,7 @@ object HeuristicNameTagger : NameTagger {
             if (token.lineIndex in headings || token.key.isEmpty()) continue
             val first = token.name.firstCodePoint ?: continue
             if (Character.isLowerCase(first)) votes.lowerCase.merge(token.key, 1, Int::plus)
+            if (token.isCapitalised && !token.isShouted) votes.capitalised.merge(token.key, 1, Int::plus)
         }
         for (run in runs) {
             val before = run.before
@@ -364,8 +368,18 @@ object HeuristicNameTagger : NameTagger {
 
     private fun emit(words: MutableList<Token>, votes: Votes, found: MutableList<TaggedName>) {
         // A sentence-opening word the text never uses as a name is capitalised
-        // for grammar: "Poor Alice" is Alice.
-        while (words.isNotEmpty() && words.first().isInitial && !votes.isName(words.first().key)) words.removeAt(0)
+        // for grammar: "Poor Alice" is Alice. Unless a name follows it and the
+        // text, having capitalised it more than once, never prints it in lower
+        // case: "“Cheshire Puss,” she began" is one name, the way "Mary Ann"
+        // is. A contraction is grammar whatever the count ("Didn't Alice").
+        while (words.isNotEmpty() && words.first().isInitial && !votes.isName(words.first().key)) {
+            val opener = words.first()
+            val joined = words.size > 1 && votes.isName(words[1].key) &&
+                (votes.lowerCase[opener.key] ?: 0) == 0 && (votes.capitalised[opener.key] ?: 0) >= 2 &&
+                opener.core.none { it == '\'' || it == '’' }
+            if (joined) break
+            words.removeAt(0)
+        }
         if (words.isEmpty() || words.size > MAXIMUM_NAME_WORDS) return
         if (words.none { votes.isName(it.key) }) return
         found.add(TaggedName(words.joinToString(" ") { it.name }, words.first().coreStart))
