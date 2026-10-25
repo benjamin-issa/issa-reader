@@ -97,6 +97,7 @@ import com.benjaminissa.issareader.ui.Metrics
 import com.benjaminissa.issareader.ui.MiniPlayerBar
 import com.benjaminissa.issareader.ui.Overline
 import com.benjaminissa.issareader.ui.Palette
+import com.benjaminissa.issareader.ui.SwipeToRemove
 import com.benjaminissa.issareader.ui.Symbols
 import com.benjaminissa.issareader.ui.SystemText
 import com.benjaminissa.issareader.ui.Typography
@@ -586,7 +587,7 @@ private fun LazyListScope.booksGroup(
             var menu by remember { mutableStateOf(false) }
             val removeTitle = "Remove from this ${LocalDevice.noun}"
             Box(Modifier.widthIn(max = 640.dp).padding(bottom = Metrics.spacing8)) {
-                LocalSwipeToRemove(
+                SwipeToRemove(
                     id = book.uuid,
                     openRow = openRow,
                     onOpenRowChange = onOpenRowChange,

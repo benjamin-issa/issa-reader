@@ -1,7 +1,6 @@
 package com.benjaminissa.issareader.app.ui.local
 
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -12,17 +11,12 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.gestures.Orientation
-import androidx.compose.foundation.gestures.draggable
-import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -41,7 +35,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -63,7 +56,6 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.benjaminissa.issareader.app.local.LocalBookFacts
 import com.benjaminissa.issareader.app.local.LocalBooksCopy
@@ -81,8 +73,6 @@ import com.benjaminissa.issareader.ui.Palette
 import com.benjaminissa.issareader.ui.ProgressBar
 import com.benjaminissa.issareader.ui.Symbols
 import com.benjaminissa.issareader.ui.Typography
-import kotlinx.coroutines.launch
-import kotlin.math.roundToInt
 
 /*
  * The rows of the local books list (`LocalBooksScreen.swift`): a book's card,
@@ -240,82 +230,6 @@ private fun NoticeStrip(notice: LocalRowNotice, stacked: Boolean, onAction: () -
             text(Modifier.weight(1f))
             action()
         }
-    }
-}
-
-/**
- * Swipe left to remove, for a row that is not in a list with swipe actions of
- * its own: the row slides left over the alert-coloured Remove, snaps open at
- * 88 points, and a swipe past 200 removes outright. Only horizontal drags are
- * claimed, so the list still scrolls.
- */
-@Composable
-internal fun LocalSwipeToRemove(
-    id: String,
-    openRow: String?,
-    onOpenRowChange: (String?) -> Unit,
-    label: String,
-    onRemove: () -> Unit,
-    modifier: Modifier = Modifier,
-    content: @Composable () -> Unit,
-) {
-    val density = LocalDensity.current
-    val reveal = with(density) { 88.dp.toPx() }
-    val commit = with(density) { 200.dp.toPx() }
-    val isOpen = openRow == id
-    val offset = remember { Animatable(0f) }
-    val scope = rememberCoroutineScope()
-    androidx.compose.runtime.LaunchedEffect(isOpen) { offset.animateTo(if (isOpen) -reveal else 0f) }
-    Box(modifier.clip(RoundedCornerShape(Metrics.radiusMedium)).height(IntrinsicSize.Min)) {
-        // Grows with the swipe, so dragging past the commit distance looks
-        // like what it does. Only there while the row is moved: at rest its
-        // colour would show through the card's rounded corners.
-        val width = with(density) { maxOf(reveal, -offset.value).toDp() }
-        if (offset.value < 0f) Box(
-            Modifier
-                .align(Alignment.CenterEnd)
-                .fillMaxHeight()
-                .width(width)
-                .background(Palette.alert)
-                .clickable {
-                    onOpenRowChange(null)
-                    onRemove()
-                }
-                .clearAndSetSemantics {},
-            contentAlignment = Alignment.Center,
-        ) {
-            // Paper on alert, not white: the alert colour is the *light* half
-            // of its pair in the dark theme.
-            Text(label, style = Typography.callout.copy(fontWeight = FontWeight.SemiBold), color = Palette.paper)
-        }
-        Box(
-            Modifier
-                .offset { IntOffset(offset.value.roundToInt(), 0) }
-                .draggable(
-                    orientation = Orientation.Horizontal,
-                    state = rememberDraggableState { delta ->
-                        scope.launch { offset.snapTo((offset.value + delta).coerceAtMost(0f)) }
-                    },
-                    onDragStopped = {
-                        val travelled = -offset.value
-                        when {
-                            travelled > commit -> {
-                                onOpenRowChange(null)
-                                offset.snapTo(0f)
-                                onRemove()
-                            }
-                            travelled > reveal / 2 -> {
-                                onOpenRowChange(id)
-                                offset.animateTo(-reveal)
-                            }
-                            else -> {
-                                if (isOpen) onOpenRowChange(null)
-                                offset.animateTo(0f)
-                            }
-                        }
-                    },
-                ),
-        ) { content() }
     }
 }
 

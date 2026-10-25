@@ -1,17 +1,13 @@
 package com.benjaminissa.issareader.app.ui.downloads
 
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -28,10 +24,7 @@ import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
-import androidx.compose.material3.SwipeToDismissBox
-import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
@@ -49,7 +42,6 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.Role
@@ -75,10 +67,10 @@ import com.benjaminissa.issareader.core.model.ByteCountText
 import com.benjaminissa.issareader.ui.Metrics
 import com.benjaminissa.issareader.ui.Overline
 import com.benjaminissa.issareader.ui.Palette
+import com.benjaminissa.issareader.ui.SwipeToRemove
 import com.benjaminissa.issareader.ui.Symbols
 import com.benjaminissa.issareader.ui.Typography
 import kotlinx.coroutines.launch
-import kotlin.math.min
 
 /*
  * What is on this device, and the one way to take it off again: Swift's
@@ -319,7 +311,8 @@ private fun RemovableRow(state: DownloadsSectionState, item: DownloadsInventory.
     BookMenuBox(item.book, modifier, focusEdition = item.format, onRemoveFocused = remove) { openMenu ->
         SwipeToRemove(
             id = item.id,
-            state = state,
+            openRow = state.openRow,
+            onOpenRowChange = { state.openRow = it },
             onRemove = remove,
             onTap = open,
             onLongPress = openMenu,
@@ -337,86 +330,6 @@ private fun RemovableRow(state: DownloadsSectionState, item: DownloadsInventory.
         ) {
             DownloadRow(item.book, metaLine(item), ByteCountText.text(item.bytes))
         }
-    }
-}
-
-/**
- * Swipe-left-to-remove for a row: Material's swipe-to-dismiss, the row
- * sliding over [label] in paper on the alert colour, removing once it is
- * swiped past the commit distance or flung. Shared with the list of books
- * from the reader's files, whose word is Remove — its original stays in
- * Files — rather than Delete.
- *
- * Only once the drag is more horizontal than vertical does it take over,
- * which is Material's own rule, so the list it lives in still scrolls.
- *
- * @param state whose [DownloadsSectionState.openRow] says which row a swipe
- *   has hold of; a swipe beginning on another row lets this one go.
- */
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-fun SwipeToRemove(
-    id: String,
-    state: DownloadsSectionState,
-    onRemove: () -> Unit,
-    onTap: () -> Unit,
-    modifier: Modifier = Modifier,
-    label: String = "Delete",
-    onLongPress: (() -> Unit)? = null,
-    content: @Composable () -> Unit,
-) {
-    val density = LocalDensity.current
-    // Swift's commit distance: past 200 points, or half a narrow row.
-    val swipe = rememberSwipeToDismissBoxState(positionalThreshold = { total -> min(with(density) { COMMIT_DISTANCE.toPx() }, total / 2) })
-    val scope = rememberCoroutineScope()
-    LaunchedEffect(swipe.dismissDirection) {
-        if (swipe.dismissDirection == SwipeToDismissBoxValue.EndToStart) state.openRow = id
-    }
-    LaunchedEffect(state.openRow) {
-        if (state.openRow != id && swipe.currentValue != SwipeToDismissBoxValue.Settled) swipe.reset()
-    }
-    SwipeToDismissBox(
-        state = swipe,
-        modifier = modifier.clip(RoundedCornerShape(Metrics.radiusMedium)),
-        enableDismissFromStartToEnd = false,
-        onDismiss = { value ->
-            if (value == SwipeToDismissBoxValue.EndToStart) {
-                onRemove()
-                // The row leaves the list; should it come back (an undo),
-                // it comes back settled.
-                scope.launch { swipe.snapTo(SwipeToDismissBoxValue.Settled) }
-            }
-        },
-        backgroundContent = { RemoveBackground(label) },
-    ) {
-        Box(
-            Modifier.combinedClickable(
-                role = Role.Button,
-                onClick = {
-                    // A tap while another row is mid-swipe puts that one away
-                    // rather than opening a book.
-                    if (state.openRow != null && state.openRow != id) state.openRow = null else onTap()
-                },
-                onLongClick = onLongPress,
-            ),
-        ) { content() }
-    }
-}
-
-private val COMMIT_DISTANCE = 200.dp
-
-/**
- * What the swipe uncovers: the word in paper on the alert colour — paper,
- * not white, because the alert colour is the light half of its pair in the
- * dark theme.
- */
-@Composable
-private fun RowScope.RemoveBackground(label: String) {
-    Box(
-        Modifier.fillMaxSize().background(Palette.alert).padding(horizontal = Metrics.spacing24),
-        contentAlignment = Alignment.CenterEnd,
-    ) {
-        Text(label, style = Typography.callout.copy(fontWeight = FontWeight.SemiBold), color = Palette.paper)
     }
 }
 
