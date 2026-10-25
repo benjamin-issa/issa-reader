@@ -259,14 +259,6 @@ class AppModel(
     var pendingWrites: Int by mutableIntStateOf(0)
         private set
 
-    init {
-        reachability.onBecameOnline = { scope.launch { cameBackOnline() } }
-        // A property initialiser does not rebuild, so without this the first
-        // frame renders empty facets and an unarranged shelf.
-        rebuildDerived()
-        watchMetering()
-    }
-
     /**
      * The launch restore, started rather than awaited, and not bound to any
      * screen's lifetime: the restore moves `phase`, and a phase change that
@@ -2875,6 +2867,19 @@ class AppModel(
         reseedGuards(listOf(updated))
         // Most appearances learn nothing: only a changed book pays for the rebuild.
         if (updated != reconciledFrom) rebuildDerived()
+    }
+
+    // Last in the class, after every property it touches: Kotlin runs
+    // initialisers in the order they are written, and while this block sat
+    // near the top, `rebuildDerived` wrote derived state (`booksByAuthor`, the
+    // facets) whose delegates had not been created yet — so constructing an
+    // `AppModel` threw, and the app with it.
+    init {
+        reachability.onBecameOnline = { scope.launch { cameBackOnline() } }
+        // A property initialiser does not rebuild, so without this the first
+        // frame renders empty facets and an unarranged shelf.
+        rebuildDerived()
+        watchMetering()
     }
 
     companion object {
