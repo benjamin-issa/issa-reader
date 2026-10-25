@@ -31,6 +31,16 @@ subprojects {
         providers.environmentVariable("ISSA_RELEASE_RUN").orNull?.let { environment("ISSA_RELEASE_RUN", it) }
         inputs.property("issaReleaseRun", providers.environmentVariable("ISSA_RELEASE_RUN").orElse("0"))
         maxHeapSize = "2g"
+        // Opt-in recorders, not release checks: they report themselves skipped
+        // unless asked for, so a release run leaves them out by name, as
+        // scripts/release-tests.sh does for the Swift ones.
+        if (providers.environmentVariable("ISSA_RELEASE_RUN").orNull == "1") {
+            filter {
+                excludeTestsMatching("*AskScorecard*")
+                excludeTestsMatching("*RethinkExperiments*")
+                isFailOnNoMatchingTests = false
+            }
+        }
         dependsOn(rootProject.tasks.named("syncRobolectricRuntime"))
         systemProperty("robolectric.offline", "true")
         systemProperty("robolectric.dependency.dir", rootProject.layout.buildDirectory.dir("robolectric-runtime").get().asFile.path)

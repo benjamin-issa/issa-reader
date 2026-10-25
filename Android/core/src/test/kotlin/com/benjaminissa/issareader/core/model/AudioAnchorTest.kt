@@ -1,6 +1,9 @@
 package com.benjaminissa.issareader.core.model
 
 import com.benjaminissa.issareader.core.instantOfEpochSeconds
+import com.benjaminissa.issareader.core.store.LibraryStore
+import com.benjaminissa.issareader.core.withTemporaryDirectory
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -9,7 +12,7 @@ import org.junit.Test
 
 /**
  * The bridge between the two clocks one book is played on. Ported from
- * `AudioAnchorTests.swift`; the persistence test is in `store.AudioAnchorStoreTest`.
+ * `AudioAnchorTests.swift`.
  *
  * The app has two playback engines for a read-along: the read-along
  * coordinator, driven by the EPUB's media overlay, and the audiobook
@@ -203,5 +206,39 @@ class AudioAnchorTest {
         assertTrue(fromTheAudiobook.isAudioScaled)
         // Servers are not reliably lower-case about media types.
         assertTrue(ReadiumLocator(href = "x.m4a", type = "AUDIO/MP4").isAudioScaled)
+    }
+
+    // Persistence
+
+    /** An anchor survives a restart, and the newer of two wins. */
+    @Test
+    fun anchorRoundTrips() = runBlocking {
+        withTemporaryDirectory("anchors") { directory ->
+            LibraryStore(serverKey = "http://example.test", directory = directory).use { store ->
+                assertNull(store.audioAnchor(bookUuid = "b1"))
+
+                val first = AudioAnchor(audioHref = "chapter01.mp3", offset = 30.0, writtenAt = 100.0)
+                store.setAudioAnchor(first, bookUuid = "b1")
+                assertEquals(first, store.audioAnchor(bookUuid = "b1"))
+
+                // The reader and the audiobook both write these, and the phone
+                // may have been running while the car was not: last *in time*,
+                // not last to arrive.
+                val stale = AudioAnchor(audioHref = "chapter01.mp3", offset = 5.0, writtenAt = 50.0)
+                store.setAudioAnchor(stale, bookUuid = "b1")
+                assertEquals("a stale anchor is refused", first, store.audioAnchor(bookUuid = "b1"))
+
+                val fresh = AudioAnchor(audioHref = "chapter04.mp3", offset = 600.0, writtenAt = 200.0)
+                store.setAudioAnchor(fresh, bookUuid = "b1")
+                assertEquals(fresh, store.audioAnchor(bookUuid = "b1"))
+
+                // And it is per book.
+                assertNull(store.audioAnchor(bookUuid = "b2"))
+
+                LibraryStore(serverKey = "http://example.test", directory = directory).use { reopened ->
+                    assertEquals(fresh, reopened.audioAnchor(bookUuid = "b1"))
+                }
+            }
+        }
     }
 }

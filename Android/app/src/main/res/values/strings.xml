@@ -3,4 +3,6 @@
     <string name="app_name">Issa Reader</string>
     <string name="shortcut_continue_short">Continue reading</string>
     <string name="shortcut_continue_long">Continue reading</string>
+    <string name="widget_name">Currently Reading</string>
+    <string name="widget_description">The book you\'re reading or listening to, and how far through you are.</string>
 </resources>
