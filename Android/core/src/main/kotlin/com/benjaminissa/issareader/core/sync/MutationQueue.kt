@@ -79,7 +79,15 @@ class MutationQueue(store: LibraryStore, private val io: CoroutineDispatcher = D
      */
     private val db = SqliteDatabase(store.url.path, busyTimeoutMillis = 5000)
 
-    /** Everything below is touched only while holding this. */
+    /**
+     * The drain's bookkeeping below — whether a drain holds it, who waits,
+     * whether the queue is retired — is touched only while holding this.
+     *
+     * Never the database. Those calls run on the main thread, and a database
+     * call can sit in SQLite's five-second busy wait behind the other
+     * connection: held across it, this lock froze the main thread for as long.
+     * The connection serialises its own calls ([SqliteDatabase]).
+     */
     private val lock = Any()
 
     /**
@@ -106,7 +114,11 @@ class MutationQueue(store: LibraryStore, private val io: CoroutineDispatcher = D
      */
     private var isDraining = false
 
-    /** Set by [retire], and never cleared. */
+    /**
+     * Set by [retire], and never cleared. Volatile because [enqueue] reads it
+     * inside its write transaction, without [lock].
+     */
+    @Volatile
     private var retired = false
 
     /** Callers waiting for the lock, handed it in order by [endDraining]. */
@@ -224,6 +236,14 @@ class MutationQueue(store: LibraryStore, private val io: CoroutineDispatcher = D
      * promised, and it does not need to be: either way nothing lands after the
      * DELETE, and a refused write was the departed account's.
      *
+     * The "one lock" is the database's own write lock. [enqueue] reads the flag
+     * inside its write transaction, and the caller's DELETE, on any connection
+     * to the file, is a write that has to wait for that transaction to end: a
+     * write whose transaction began before the flag was set inserts first and
+     * is deleted with the rest, and one that begins after reads the flag and is
+     * refused. So retiring never waits for a write, even one stuck in SQLite's
+     * busy wait.
+     *
      * Only a flag. It never waits for the drain lock, so it is safe while a
      * pause holds it, and it deletes nothing: the rows are the caller's to
      * clear.
@@ -255,52 +275,54 @@ class MutationQueue(store: LibraryStore, private val io: CoroutineDispatcher = D
      */
     suspend fun enqueue(kind: Kind, bookUuid: String, payload: ByteArray, supersedes: Double? = null): Boolean =
         withContext(io) {
-            synchronized(lock) {
+            if (retired) throw Retired()
+            db.write { db ->
+                // Again inside the transaction, which is what retirement's
+                // promise rests on (see [retire]); the check above only
+                // spares a retired queue the wait for the write lock.
                 if (retired) throw Retired()
-                db.write { db ->
-                    val existing = db.queryOne(
-                        "SELECT ordering, attempts, createdAt, payload FROM mutation WHERE bookUUID = ? AND kind = ?",
-                        bookUuid, kind.rawValue,
-                    ) { row ->
-                        Existing(
-                            ordering = row.doubleOrNull("ordering"),
-                            attempts = row.long("attempts").toInt(),
-                            createdAt = row.double("createdAt"),
-                            payload = row.blob("payload"),
-                        )
-                    }
-                    val held = heldOrdering(existing)
-                    if (supersedes != null && held != null && supersedes < held) {
-                        // The queued write is newer than this one. Keeping it is
-                        // the whole point: it may be the only remaining copy of
-                        // where the reader actually is.
-                        return@write false
-                    }
-                    // The replacement inherits the failures and the age of what
-                    // it replaces. With a fresh count on every collapse, a
-                    // position the server kept refusing was re-queued every page
-                    // turn as a brand-new item and could never reach the abandon
-                    // limit.
-                    //
-                    // Its place in the drain is its own, though. `updatedAt` is
-                    // now, and the drain sends in that order — the order the
-                    // reader made the writes in. Going by `createdAt`, which the
-                    // collapse keeps, a status chosen between two offline page
-                    // turns was sent after the second: the server's own rule ran
-                    // on the position before the reader's choice arrived, and the
-                    // book ended on a different status than it would have with a
-                    // connection.
-                    val now = Instant.now().toEpochSecondsDouble()
-                    val attempts = existing?.attempts ?: 0
-                    val createdAt = existing?.createdAt ?: now
-                    db.execute("DELETE FROM mutation WHERE bookUUID = ? AND kind = ?", bookUuid, kind.rawValue)
-                    db.execute(
-                        "INSERT INTO mutation (bookUUID, kind, payload, createdAt, updatedAt, attempts, ordering) " +
-                            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                        bookUuid, kind.rawValue, payload, createdAt, now, attempts, supersedes,
+                val existing = db.queryOne(
+                    "SELECT ordering, attempts, createdAt, payload FROM mutation WHERE bookUUID = ? AND kind = ?",
+                    bookUuid, kind.rawValue,
+                ) { row ->
+                    Existing(
+                        ordering = row.doubleOrNull("ordering"),
+                        attempts = row.long("attempts").toInt(),
+                        createdAt = row.double("createdAt"),
+                        payload = row.blob("payload"),
                     )
-                    true
                 }
+                val held = heldOrdering(existing)
+                if (supersedes != null && held != null && supersedes < held) {
+                    // The queued write is newer than this one. Keeping it is
+                    // the whole point: it may be the only remaining copy of
+                    // where the reader actually is.
+                    return@write false
+                }
+                // The replacement inherits the failures and the age of what
+                // it replaces. With a fresh count on every collapse, a
+                // position the server kept refusing was re-queued every page
+                // turn as a brand-new item and could never reach the abandon
+                // limit.
+                //
+                // Its place in the drain is its own, though. `updatedAt` is
+                // now, and the drain sends in that order — the order the
+                // reader made the writes in. Going by `createdAt`, which the
+                // collapse keeps, a status chosen between two offline page
+                // turns was sent after the second: the server's own rule ran
+                // on the position before the reader's choice arrived, and the
+                // book ended on a different status than it would have with a
+                // connection.
+                val now = Instant.now().toEpochSecondsDouble()
+                val attempts = existing?.attempts ?: 0
+                val createdAt = existing?.createdAt ?: now
+                db.execute("DELETE FROM mutation WHERE bookUUID = ? AND kind = ?", bookUuid, kind.rawValue)
+                db.execute(
+                    "INSERT INTO mutation (bookUUID, kind, payload, createdAt, updatedAt, attempts, ordering) " +
+                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    bookUuid, kind.rawValue, payload, createdAt, now, attempts, supersedes,
+                )
+                true
             }
         }
 
@@ -329,11 +351,9 @@ class MutationQueue(store: LibraryStore, private val io: CoroutineDispatcher = D
         }.getOrNull()
     }
 
-    private suspend fun <T> writing(block: (SqliteDatabase.Access) -> T): T =
-        withContext(io) { synchronized(lock) { db.write(block) } }
+    private suspend fun <T> writing(block: (SqliteDatabase.Access) -> T): T = withContext(io) { db.write(block) }
 
-    private suspend fun <T> reading(block: (SqliteDatabase.Access) -> T): T =
-        withContext(io) { synchronized(lock) { db.read(block) } }
+    private suspend fun <T> reading(block: (SqliteDatabase.Access) -> T): T = withContext(io) { db.read(block) }
 
     /**
      * Blanks the ordering column, to stand in for a row written before the v4

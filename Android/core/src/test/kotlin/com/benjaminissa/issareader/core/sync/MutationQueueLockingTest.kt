@@ -118,4 +118,98 @@ class MutationQueueLockingTest {
             directory.deleteRecursively()
         }
     }
+
+    /**
+     * Starts an enqueue that has to wait out [holdLock]'s write lock, and
+     * returns once it is genuinely waiting, with what it ends in.
+     */
+    private fun waitingEnqueue(queue: MutationQueue): Pair<Thread, () -> Result<Boolean>> {
+        var outcome: Result<Boolean>? = null
+        val writer = thread {
+            outcome = runCatching {
+                runBlocking { queue.enqueue(MutationQueue.Kind.STATUS, bookUuid = "x", payload = "{}".encodeToByteArray()) }
+            }
+        }
+        // Long enough to be inside SQLite's busy wait, well short of its five seconds.
+        Thread.sleep(300)
+        return writer to { outcome!! }
+    }
+
+    /**
+     * The drain's controls never wait behind a write that is waiting on
+     * SQLite. They run on the main thread — the drain's claim and hand-over,
+     * the yield check before each row, an account's retirement — and the
+     * queue used to hold one JVM lock across both its bookkeeping and every
+     * database call, so a write sitting in the five-second busy wait froze the
+     * main thread for as long: long enough for Android to call the app
+     * unresponsive.
+     */
+    @Test
+    fun theDrainControlsNeverWaitBehindAWaitingWrite() {
+        val directory = temporaryDirectory("issa-lock")
+        try {
+            LibraryStore(serverKey = "http://example.test", directory = directory).use { store ->
+                MutationQueue(store).use { queue ->
+                    val lockAcquired = CountDownLatch(1)
+                    val releaseLock = CountDownLatch(1)
+                    val holderFinished = CountDownLatch(1)
+                    holdLock(store.url.path, lockAcquired, releaseLock, holderFinished)
+                    assertTrue(lockAcquired.await(10, TimeUnit.SECONDS))
+                    val (writer, _) = waitingEnqueue(queue)
+
+                    val started = System.nanoTime()
+                    assertTrue(queue.beginDraining())
+                    queue.shouldYield
+                    queue.endDraining()
+                    val tookMillis = (System.nanoTime() - started) / 1_000_000
+                    assertTrue("the drain's controls took $tookMillis ms behind a waiting write", tookMillis < 100)
+
+                    releaseLock.countDown()
+                    writer.join(10_000)
+                    assertTrue(holderFinished.await(10, TimeUnit.SECONDS))
+                }
+            }
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    /**
+     * Retiring a queue does not wait for a write that is waiting on SQLite,
+     * and that write is then refused: retirement's promise — nothing lands
+     * after the caller's DELETE — now rests on the write checking the flag
+     * inside its own transaction, which the DELETE has to wait for.
+     */
+    @Test
+    fun retiringDoesNotWaitAndTheWaitingWriteIsRefused() = runBlocking {
+        val directory = temporaryDirectory("issa-lock")
+        try {
+            LibraryStore(serverKey = "http://example.test", directory = directory).use { store ->
+                MutationQueue(store).use { queue ->
+                    val lockAcquired = CountDownLatch(1)
+                    val releaseLock = CountDownLatch(1)
+                    val holderFinished = CountDownLatch(1)
+                    holdLock(store.url.path, lockAcquired, releaseLock, holderFinished)
+                    assertTrue(lockAcquired.await(10, TimeUnit.SECONDS))
+                    val (writer, outcome) = waitingEnqueue(queue)
+
+                    val started = System.nanoTime()
+                    queue.retire()
+                    val tookMillis = (System.nanoTime() - started) / 1_000_000
+                    assertTrue("retire() took $tookMillis ms behind a waiting write", tookMillis < 100)
+
+                    releaseLock.countDown()
+                    writer.join(10_000)
+                    assertTrue(holderFinished.await(10, TimeUnit.SECONDS))
+                    assertTrue(
+                        "a write still waiting when the queue retired must be refused",
+                        outcome().exceptionOrNull() is MutationQueue.Retired,
+                    )
+                    assertEquals(0, queue.count())
+                }
+            }
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
 }
