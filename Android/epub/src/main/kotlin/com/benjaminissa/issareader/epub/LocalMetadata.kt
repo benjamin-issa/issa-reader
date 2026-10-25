@@ -1,5 +1,9 @@
 package com.benjaminissa.issareader.epub
 
+import com.benjaminissa.issareader.core.model.LocalBookMetadata
+import com.benjaminissa.issareader.core.model.LocalContributor
+import com.benjaminissa.issareader.core.model.LocalSeries
+
 /**
  * The archive path of the book's cover image, or null when it names none.
  *

@@ -1,5 +1,7 @@
 package com.benjaminissa.issareader.epub
 
+import com.benjaminissa.issareader.core.model.LocalContributor
+import com.benjaminissa.issareader.core.model.LocalSeries
 import com.benjaminissa.issareader.epub.EpubInspection.Problem
 import com.benjaminissa.issareader.epub.EpubInspection.Protection
 import org.junit.Assert.assertEquals
