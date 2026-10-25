@@ -319,6 +319,7 @@ class WorkManagerTransferBackend(
         FileOutputStream(partial, append).use { out ->
             val buffer = ByteArray(64 * 1024)
             var lastReport = 0L
+            val throttle = ProgressThrottle()
             while (true) {
                 if (worker.isStopped) throw CancellationException("stopped")
                 val read = source.read(buffer)
@@ -329,8 +330,10 @@ class WorkManagerTransferBackend(
                 if (now - lastReport > 100_000_000L) {
                     lastReport = now
                     events.onProgress(transfer, read.toLong(), transfer.bytesReceived, transfer.bytesExpected)
-                    worker.reportProgress(transfer.fractionCompleted)
                 }
+                // WorkManager's copy is a database write and a notification
+                // re-post each time: far less often than the app's own.
+                if (throttle.shouldReport(transfer.fractionCompleted, now)) worker.reportProgress(transfer.fractionCompleted)
             }
         }
         events.onProgress(transfer, 0, transfer.bytesReceived, transfer.bytesExpected)
@@ -371,6 +374,28 @@ class WorkManagerTransferBackend(
         /** A request's headers less the ones that carry a credential. */
         internal fun withoutCredentials(headers: Map<String, String>): Map<String, String> =
             headers.filterKeys { !it.equals("Authorization", ignoreCase = true) && !it.equals("Cookie", ignoreCase = true) }
+    }
+}
+
+/**
+ * When a worker tells WorkManager how far it has got: when the whole percent
+ * has moved, and at most once a second. Each report is a write to
+ * WorkManager's database and a re-post of the notification, which at the
+ * app's own tenth-of-a-second rate ran to ten of each a second for a whole
+ * download, and into the notification rate limit.
+ */
+internal class ProgressThrottle(private val intervalNanos: Long = 1_000_000_000L) {
+    private var lastPercent = -1
+    private var lastAt: Long? = null
+
+    fun shouldReport(fraction: Double, now: Long): Boolean {
+        val percent = (fraction.coerceIn(0.0, 1.0) * 100).toInt()
+        if (percent == lastPercent) return false
+        val last = lastAt
+        if (last != null && now - last < intervalNanos) return false
+        lastPercent = percent
+        lastAt = now
+        return true
     }
 }
 

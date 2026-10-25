@@ -160,6 +160,27 @@ class WorkManagerTransferBackendTest {
     }
 
     @Test
+    fun `WorkManager hears of progress when the percent moves, at most once a second`() {
+        val throttle = ProgressThrottle()
+        val second = 1_000_000_000L
+        assertTrue(throttle.shouldReport(0.0, 0))
+        // Ten reports a second, as the app's own run: the same percent, or
+        // inside the second, are dropped.
+        assertFalse(throttle.shouldReport(0.001, second / 10))
+        assertFalse(throttle.shouldReport(0.05, second / 2))
+        assertTrue(throttle.shouldReport(0.05, second))
+        assertFalse(throttle.shouldReport(0.059, 3 * second))
+        assertTrue(throttle.shouldReport(0.06, 3 * second))
+
+        // A hundred-second download at the app's rate of ten a second: about
+        // one report a second (a percent that rounds down lands a tick late),
+        // where every tick was one.
+        val fresh = ProgressThrottle()
+        val reports = (0..1_000).count { tick -> fresh.shouldReport(tick / 1_000.0, tick * second / 10) }
+        assertTrue("$reports reports", reports in 90..101)
+    }
+
+    @Test
     fun `an error status still delivers its body, for the manager to judge`() {
         server.enqueue(MockResponse.Builder().code(404).body("{\"message\":\"gone\"}").build())
         val transfer = backend.start(request(), "uuid|ebook|1|1", null)
