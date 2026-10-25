@@ -70,8 +70,24 @@ class QrCode private constructor(
 
         private fun countBits(version: Int): Int = if (version <= 9) 8 else 16
 
-        private fun dataCodewords(version: Int, ecc: Ecc): Int =
-            rawDataModules(version) / 8 - ECC_CODEWORDS_PER_BLOCK[ecc.index][version] * ERROR_CORRECTION_BLOCKS[ecc.index][version]
+        internal fun dataCodewords(version: Int, ecc: Ecc): Int =
+            rawDataModules(version) / 8 - eccCodewordsPerBlock(version, ecc) * blocks(version, ecc)
+
+        /** Error-correction codewords in each block. */
+        internal fun eccCodewordsPerBlock(version: Int, ecc: Ecc): Int = ECC_CODEWORDS_PER_BLOCK[ecc.index][version]
+
+        /** How many blocks the codewords are split into. */
+        internal fun blocks(version: Int, ecc: Ecc): Int = ERROR_CORRECTION_BLOCKS[ecc.index][version]
+
+        /**
+         * Which modules of a version are function patterns rather than data,
+         * for a test reading a symbol back.
+         */
+        internal fun functionModules(version: Int): BooleanArray =
+            Builder(version, Ecc.MEDIUM).apply { drawFunctionPatterns() }.isFunction
+
+        /** Where a version's alignment patterns are centred, on each axis. */
+        internal fun alignmentPositions(version: Int): IntArray = Builder(version, Ecc.MEDIUM).alignmentPositions()
 
         /** Data and error-correction bits a version holds once its function patterns are drawn. */
         internal fun rawDataModules(version: Int): Int {
@@ -154,7 +170,7 @@ class QrCode private constructor(
             isFunction[y * size + x] = true
         }
 
-        private fun drawFunctionPatterns() {
+        fun drawFunctionPatterns() {
             for (i in 0 until size) {
                 setFunction(6, i, i % 2 == 0)
                 setFunction(i, 6, i % 2 == 0)
@@ -192,7 +208,7 @@ class QrCode private constructor(
             }
         }
 
-        private fun alignmentPositions(): IntArray {
+        fun alignmentPositions(): IntArray {
             if (version == 1) return IntArray(0)
             val count = version / 7 + 2
             val step = (version * 8 + count * 3 + 5) / (count * 4 - 4) * 2
