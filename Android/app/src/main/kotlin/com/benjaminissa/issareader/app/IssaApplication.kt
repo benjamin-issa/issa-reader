@@ -7,8 +7,12 @@ import android.content.ComponentCallbacks2
  * Builds the app's graph as the process starts, however it was started — the
  * launcher, a widget, a download worker resuming, or Android Auto binding the
  * media service with no activity at all.
+ *
+ * Open for one reason: the launch test's subclass starts a test WorkManager
+ * first, as Android's start-up provider starts the real one before this runs
+ * on a phone and Robolectric does not run providers.
  */
-class IssaApplication : Application() {
+open class IssaApplication : Application() {
     lateinit var graph: AppGraph
         private set
 
