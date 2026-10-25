@@ -171,12 +171,11 @@ fun BookCell(
                 ProgressBar(progress, Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(Metrics.spacing4))
             }
         }
-        Column {
-            // Two lines reserved, so a one-line title does not lift the
-            // byline out of step with its neighbours'.
-            Text(title, style = Typography.subhead, color = Palette.ink, maxLines = 2, minLines = 2, overflow = TextOverflow.Ellipsis)
-            Text(caption, style = Typography.caption, color = Palette.inkTertiary, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        }
+        // Two lines reserved, so a one-line title does not lift the byline
+        // out of step with its neighbours'. Siblings of the cover, as in
+        // Swift's cell, so the byline sits the cell's 8 below the title.
+        Text(title, style = Typography.subhead, color = Palette.ink, maxLines = 2, minLines = 2, overflow = TextOverflow.Ellipsis)
+        Text(caption, style = Typography.caption, color = Palette.inkTertiary, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -209,7 +208,8 @@ fun <T> CoverRail(
     onSeeAll: (() -> Unit)? = null,
     item: @Composable (T) -> Unit,
 ) {
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(Metrics.spacing4)) {
+    // Swift's `BookRail`: a 44-point heading, 8 above the covers.
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(Metrics.spacing8)) {
         RailHeader(title, onSeeAll = onSeeAll)
         LazyRow(
             contentPadding = PaddingValues(horizontal = Metrics.screenMargin),

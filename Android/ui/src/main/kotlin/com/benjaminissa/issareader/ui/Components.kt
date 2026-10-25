@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
@@ -57,7 +58,9 @@ fun Overline(text: String, modifier: Modifier = Modifier, color: Color = Palette
 @Composable
 fun RailHeader(title: String, modifier: Modifier = Modifier, trailing: String? = null, onSeeAll: (() -> Unit)? = null) {
     Row(
-        modifier.fillMaxWidth().padding(horizontal = Metrics.screenMargin),
+        // 44 tall whether or not there is a "See all": the link's tap floor,
+        // which sets the rail's rhythm on the iPhone.
+        modifier.fillMaxWidth().heightIn(min = 44.dp).padding(horizontal = Metrics.screenMargin),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Overline(title, Modifier.weight(1f))
