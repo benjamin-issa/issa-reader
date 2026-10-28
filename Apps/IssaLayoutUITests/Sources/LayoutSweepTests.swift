@@ -640,8 +640,13 @@ final class LayoutSweepTests: XCTestCase {
     /// The menu's Stop Narration item. Matched by the start of its label: the
     /// item carries a subtitle, which VoiceOver and the tree read as part of
     /// the same label ("Stop Narration, Clears the highlight — …").
+    /// Any element type, not just buttons. At an accessibility text size the
+    /// menu's rows stop being buttons to the accessibility tree — the sweep's
+    /// extra-large phone drew Stop Narration, subtitle and all, and a
+    /// `buttons` query could not find it.
     private func stopNarrationItem(_ app: XCUIApplication) -> XCUIElement {
-        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Stop Narration")).firstMatch
+        app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label BEGINSWITH %@", "Stop Narration")).firstMatch
     }
 
     /// Opens the ellipsis menu and says whether Stop Narration is in it, then
@@ -650,7 +655,7 @@ final class LayoutSweepTests: XCTestCase {
         let more = app.descendants(matching: .any)["reader.more"].firstMatch
         XCTAssertTrue(more.waitForExistence(timeout: 10), "no ellipsis menu")
         more.tap()
-        XCTAssertTrue(app.buttons["Contents"].firstMatch.waitForExistence(timeout: 5),
+        XCTAssertTrue(app.descendants(matching: .any)["Contents"].firstMatch.waitForExistence(timeout: 5),
                       "the ellipsis menu did not open")
         let offered = stopNarrationItem(app).exists
         if let screen { capture(app, screen) }
@@ -743,6 +748,14 @@ final class LayoutSweepTests: XCTestCase {
         // device scale.
         let scale = CGFloat(cgImage.width) / reference.window.width
 
+        // At an accessibility text size the system draws no icon in a menu
+        // row, in any app, so there is no swatch to find: the sweep's
+        // extra-large phone showed five bare names, and sampling there found
+        // only the label's ink. What a swatch-less menu can still get wrong is
+        // painting the accent where a colour should be, so that is all this
+        // asks there. The runner is a UIKit app on the same simulator, so its
+        // own trait collection carries the device's text size.
+        let iconless = UIScreen.main.traitCollection.preferredContentSizeCategory.isAccessibilityCategory
         var dominant: [String: [Int]] = [:]
         for tint in Self.highlightTints {
             guard let item = items[tint.name], item.exists else {
@@ -759,6 +772,12 @@ final class LayoutSweepTests: XCTestCase {
                              width: frame.width * scale, height: frame.height * scale),
                 near: Self.highlightTints.map(\.rgb), tolerance: 14)
             dominant[tint.name] = counts
+            if iconless {
+                let tangerine = counts[Self.highlightTints.firstIndex { $0.name == "Tangerine" }!]
+                XCTAssertLessThan(
+                    tangerine, 20, "\(tint.name)'s row is drawn in the accent with no icon to carry it: \(counts)")
+                continue
+            }
             let own = counts[Self.highlightTints.firstIndex { $0.name == tint.name }!]
             XCTAssertGreaterThan(
                 own, 60, "\(tint.name)'s swatch is not drawn in \(tint.name): \(counts) pixels near each tint")
@@ -770,6 +789,7 @@ final class LayoutSweepTests: XCTestCase {
             }
         }
         // Five different swatches: each row's strongest colour is its own.
+        guard !iconless else { return }
         let strongest = Self.highlightTints.compactMap { tint -> Int? in
             dominant[tint.name]?.enumerated().max { $0.element < $1.element }?.offset
         }
