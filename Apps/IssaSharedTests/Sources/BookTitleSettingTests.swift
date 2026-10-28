@@ -2,6 +2,7 @@ import CoreGraphics
 import Foundation
 import IssaRender
 import Testing
+import UIKit
 
 @testable import IssaReader_iOS
 
@@ -68,5 +69,24 @@ struct BookTitleSettingTests {
         #expect(!ReaderView.bandFitsBookTitle(ReaderView.bookTitleBandMinimum - 1))
         #expect(ReaderView.bandFitsBookTitle(ReaderView.bookTitleBandMinimum))
         #expect(ReaderView.bandFitsBookTitle(34), "a notched phone in portrait")
+    }
+}
+
+/// The Pages section offers "Show book title" only where the reader can draw it.
+@Suite("The book title switch")
+struct BookTitleSwitchTests {
+    @Test("an iPad has no switch, because its band cannot hold the title")
+    func iPadHasNoSwitch() {
+        #expect(!ReadingSettingsView.showsBookTitleToggle(idiom: .pad))
+        #expect(ReadingSettingsView.showsBookTitleToggle(idiom: .phone))
+    }
+
+    @Test("the note names the switch only where it is shown", arguments: [true, false])
+    func noteFollowsTheSwitch(reduceMotion: Bool) {
+        let with = ReadingSettingsView.pagesNote(reduceMotion: reduceMotion, mentionsBookTitle: true)
+        let without = ReadingSettingsView.pagesNote(reduceMotion: reduceMotion, mentionsBookTitle: false)
+        #expect(with.contains("Show book title"))
+        #expect(!without.contains("book title"))
+        #expect(without.contains("Slide moves"))
     }
 }
