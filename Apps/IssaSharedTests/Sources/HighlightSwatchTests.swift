@@ -49,6 +49,12 @@ struct HighlightSwatchTests {
         #expect(ReaderPalette.swatch(for: tint).renderingMode == .alwaysOriginal)
     }
 
+    /// The highlight menu asks on every rebuild; the same image comes back.
+    @Test("a swatch is drawn once and then reused", arguments: Annotation.Tint.allCases)
+    func isDrawnOnce(tint: Annotation.Tint) {
+        #expect(ReaderPalette.swatch(for: tint) === ReaderPalette.swatch(for: tint))
+    }
+
     @Test("a swatch's middle is the tint's colour", arguments: Annotation.Tint.allCases)
     func centreIsTheTint(tint: Annotation.Tint) throws {
         let drawn = try centre(of: ReaderPalette.swatch(for: tint))

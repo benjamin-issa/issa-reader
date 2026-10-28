@@ -62,8 +62,24 @@ extension ReaderPalette {
     /// in the row; the grey is half-way between the two grounds, which is the
     /// only ring that shows on both. The disc's centre is the pure colour, and
     /// is what the tests read.
+    ///
+    /// Each of the five is drawn once and kept. The menu that shows them
+    /// rebuilds its rows whenever the reader's state changes, and a fresh
+    /// bitmap per tint per rebuild is five renders for pictures that never
+    /// change: a tint's colour is fixed (see `ReaderPalette`), so nothing about
+    /// the image depends on when it is drawn. The cache is main-actor state
+    /// because images are not `Sendable` and the only callers are views.
     #if canImport(UIKit)
-    static func swatch(for tint: Annotation.Tint) -> UIImage {
+    @MainActor private static var swatches: [Annotation.Tint: UIImage] = [:]
+
+    @MainActor static func swatch(for tint: Annotation.Tint) -> UIImage {
+        if let drawn = swatches[tint] { return drawn }
+        let drawn = drawSwatch(for: tint)
+        swatches[tint] = drawn
+        return drawn
+    }
+
+    private static func drawSwatch(for tint: Annotation.Tint) -> UIImage {
         let bounds = CGRect(x: 0, y: 0, width: swatchSide, height: swatchSide)
         let image = UIGraphicsImageRenderer(size: bounds.size).image { context in
             let disc = bounds.insetBy(dx: 1, dy: 1)
@@ -77,11 +93,20 @@ extension ReaderPalette {
     }
 
     /// The swatch for a `Label`'s icon slot.
-    static func swatchIcon(for tint: Annotation.Tint) -> Image {
+    @MainActor static func swatchIcon(for tint: Annotation.Tint) -> Image {
         Image(uiImage: swatch(for: tint)).renderingMode(.original)
     }
     #elseif canImport(AppKit)
-    static func swatch(for tint: Annotation.Tint) -> NSImage {
+    @MainActor private static var swatches: [Annotation.Tint: NSImage] = [:]
+
+    @MainActor static func swatch(for tint: Annotation.Tint) -> NSImage {
+        if let drawn = swatches[tint] { return drawn }
+        let drawn = drawSwatch(for: tint)
+        swatches[tint] = drawn
+        return drawn
+    }
+
+    private static func drawSwatch(for tint: Annotation.Tint) -> NSImage {
         let image = NSImage(
             size: NSSize(width: swatchSide, height: swatchSide), flipped: false,
         ) { bounds in
@@ -100,7 +125,7 @@ extension ReaderPalette {
     }
 
     /// The swatch for a `Label`'s icon slot.
-    static func swatchIcon(for tint: Annotation.Tint) -> Image {
+    @MainActor static func swatchIcon(for tint: Annotation.Tint) -> Image {
         Image(nsImage: swatch(for: tint)).renderingMode(.original)
     }
     #endif
