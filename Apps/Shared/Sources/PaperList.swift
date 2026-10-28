@@ -1,6 +1,11 @@
 import IssaCore
 import IssaUI
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#elseif canImport(AppKit)
+import AppKit
+#endif
 
 public extension View {
     /// Puts a List on the app's paper ground.
@@ -38,3 +43,66 @@ public enum ReaderPalette {
         }
     }
 }
+
+#if !os(tvOS)
+extension ReaderPalette {
+    /// How big a swatch is drawn, in points: a menu's icon slot, with a point
+    /// of margin all round for the ring.
+    static let swatchSide: CGFloat = 20
+
+    /// The tint's own colour as an icon a menu will not recolour.
+    ///
+    /// A menu paints a template image — which is what an SF Symbol is, and so
+    /// what `Label(_, systemImage: "circle.fill")` gave it — in the app's
+    /// accent, so all five highlighter colours came out tangerine. A bitmap
+    /// marked "always original" is drawn as it is.
+    ///
+    /// A hairline ring in a translucent grey goes round the disc. Slate is the
+    /// near-black of the five, and on a dark menu a bare slate disc is a hole
+    /// in the row; the grey is half-way between the two grounds, which is the
+    /// only ring that shows on both. The disc's centre is the pure colour, and
+    /// is what the tests read.
+    #if canImport(UIKit)
+    static func swatch(for tint: Annotation.Tint) -> UIImage {
+        let bounds = CGRect(x: 0, y: 0, width: swatchSide, height: swatchSide)
+        let image = UIGraphicsImageRenderer(size: bounds.size).image { context in
+            let disc = bounds.insetBy(dx: 1, dy: 1)
+            UIColor(color(for: tint)).setFill()
+            context.cgContext.fillEllipse(in: disc)
+            UIColor(white: 0.5, alpha: 0.6).setStroke()
+            context.cgContext.setLineWidth(0.5)
+            context.cgContext.strokeEllipse(in: disc)
+        }
+        return image.withRenderingMode(.alwaysOriginal)
+    }
+
+    /// The swatch for a `Label`'s icon slot.
+    static func swatchIcon(for tint: Annotation.Tint) -> Image {
+        Image(uiImage: swatch(for: tint)).renderingMode(.original)
+    }
+    #elseif canImport(AppKit)
+    static func swatch(for tint: Annotation.Tint) -> NSImage {
+        let image = NSImage(
+            size: NSSize(width: swatchSide, height: swatchSide), flipped: false,
+        ) { bounds in
+            let disc = NSBezierPath(ovalIn: bounds.insetBy(dx: 1, dy: 1))
+            NSColor(color(for: tint)).setFill()
+            disc.fill()
+            NSColor(white: 0.5, alpha: 0.6).setStroke()
+            disc.lineWidth = 0.5
+            disc.stroke()
+            return true
+        }
+        // Set explicitly: a template image is drawn in the menu's text colour,
+        // which is the Mac's version of the accent-tinted circles.
+        image.isTemplate = false
+        return image
+    }
+
+    /// The swatch for a `Label`'s icon slot.
+    static func swatchIcon(for tint: Annotation.Tint) -> Image {
+        Image(nsImage: swatch(for: tint)).renderingMode(.original)
+    }
+    #endif
+}
+#endif

@@ -680,57 +680,6 @@ public struct ReaderView: View {
         #endif
     }
 
-    /// Bookmark, and the rest behind an ellipsis.
-    @ViewBuilder
-    private var readerActions: some View {
-        #if !os(tvOS)
-        let askJob = ask.job(for: model.book.uuid)
-        if showsAskPill {
-            // A bare glyph, so the bar's own font and ink reach it exactly as
-            // they reach the three beside it. A tinted capsule with a word in
-            // it read as a different class of control — an advertisement in a
-            // row of tools — which is not what asking a question is. The two
-            // states it still has to show are said with the glyph itself, the
-            // way the Mac toolbar has always said them.
-            Button { showsAsk = true } label: {
-                Image(systemName: "sparkles")
-                    .symbolEffect(
-                        .pulse.byLayer, options: .repeating,
-                        isActive: askJob?.state.isWorking ?? false,
-                    )
-                    .overlay(alignment: .topTrailing) {
-                        if askJob?.state.isAnswered == true {
-                            Circle()
-                                .fill(model.style.theme.accent)
-                                .frame(width: 6, height: 6)
-                                .offset(x: 3, y: -2)
-                        }
-                    }
-            }
-            .accessibilityIdentifier("reader.ask")
-            .accessibilityLabel(askLabel(for: askJob))
-        }
-        #endif
-
-        Button { showsTypography = true } label: {
-            Image(systemName: "textformat.size")
-        }
-        .accessibilityLabel("Text options for this book")
-
-        Button { model.toggleBookmark() } label: {
-            Image(systemName: model.isPageBookmarked ? "bookmark.fill" : "bookmark")
-        }
-        .accessibilityLabel(model.isPageBookmarked ? "Remove bookmark" : "Bookmark this page")
-
-        Menu {
-            Button("Find in book", systemImage: "magnifyingglass") { showsSearch = true }
-            Button("Marks", systemImage: "bookmark.square") { showsAnnotations = true }
-            Button("Contents", systemImage: "list.bullet") { showsContents = true }
-        } label: {
-            Image(systemName: "ellipsis.circle")
-        }
-    }
-
     #if os(iOS)
     /// The sparkle that stays while the chrome is away.
     @ViewBuilder
@@ -750,19 +699,132 @@ public struct ReaderView: View {
         }
     }
 
-    /// The reader's own top bar, floating over the page.
-    private var topBar: some View {
-        HStack(spacing: Metrics.spacing16) {
+    /// How much of the top bar's tools stand in the bar, and how much has been
+    /// folded into the ellipsis menu to make the row fit.
+    ///
+    /// Three rows, in the order `ViewThatFits` tries them: everything, then
+    /// without Find, then without Find and Marks. Both are still one tap away
+    /// in the menu when they go, so a narrow window loses a shortcut and not a
+    /// feature.
+    private enum TopBarFit {
+        case full
+        case findInMenu
+        case findAndMarksInMenu
+
+        var showsFind: Bool { self == .full }
+        var showsMarks: Bool { self != .findAndMarksInMenu }
+    }
+
+    /// The tools on the right of the top bar: Ask when it is on offer, Find,
+    /// text options, Marks, the bookmark, and an ellipsis menu holding Contents
+    /// and whatever `fit` has folded into it.
+    ///
+    /// Find and Marks are the Mac toolbar's own glyphs and words, so the same
+    /// two actions look the same on every platform that has room to show them.
+    @ViewBuilder
+    private func readerActions(_ fit: TopBarFit) -> some View {
+        let askJob = ask.job(for: model.book.uuid)
+        if showsAskPill {
+            // A bare glyph, so the bar's own font and ink reach it exactly as
+            // they reach the ones beside it. A tinted capsule with a word in
+            // it read as a different class of control — an advertisement in a
+            // row of tools — which is not what asking a question is. The two
+            // states it still has to show are said with the glyph itself, the
+            // way the Mac toolbar has always said them.
+            Button { showsAsk = true } label: {
+                Image(systemName: "sparkles")
+                    .symbolEffect(
+                        .pulse.byLayer, options: .repeating,
+                        isActive: askJob?.state.isWorking ?? false,
+                    )
+                    .overlay(alignment: .topTrailing) {
+                        if askJob?.state.isAnswered == true {
+                            Circle()
+                                .fill(model.style.theme.accent)
+                                .frame(width: 6, height: 6)
+                                .offset(x: 3, y: -2)
+                        }
+                    }
+                    .topBarTarget()
+            }
+            .accessibilityIdentifier("reader.ask")
+            .accessibilityLabel(askLabel(for: askJob))
+        }
+
+        if fit.showsFind {
+            Button { showsSearch = true } label: {
+                Image(systemName: "magnifyingglass").topBarTarget()
+            }
+            .accessibilityIdentifier("reader.find")
+            .accessibilityLabel("Find in book")
+        }
+
+        Button { showsTypography = true } label: {
+            Image(systemName: "textformat.size").topBarTarget()
+        }
+        .accessibilityLabel("Text options for this book")
+
+        if fit.showsMarks {
+            Button { showsAnnotations = true } label: {
+                Image(systemName: "bookmark.square").topBarTarget()
+            }
+            .accessibilityIdentifier("reader.marks")
+            .accessibilityLabel("Bookmarks and highlights")
+        }
+
+        Button { model.toggleBookmark() } label: {
+            Image(systemName: model.isPageBookmarked ? "bookmark.fill" : "bookmark")
+                .topBarTarget()
+        }
+        .accessibilityLabel(model.isPageBookmarked ? "Remove bookmark" : "Bookmark this page")
+
+        Menu {
+            if !fit.showsFind {
+                Button("Find in book", systemImage: "magnifyingglass") { showsSearch = true }
+            }
+            if !fit.showsMarks {
+                Button("Marks", systemImage: "bookmark.square") { showsAnnotations = true }
+            }
+            Button("Contents", systemImage: "list.bullet") { showsContents = true }
+        } label: {
+            Image(systemName: "ellipsis.circle").topBarTarget()
+        }
+        .accessibilityIdentifier("reader.more")
+    }
+
+    /// One candidate row of the top bar: the way back, then the tools.
+    ///
+    /// No spacing between its items. Every glyph already stands in its own
+    /// 44-point square (`topBarTarget`), which is as far apart as two targets
+    /// need to be, and the first row has to fit a 375-point phone with Ask
+    /// showing: seven squares and the bar's margins are 316 points of it.
+    private func topBarRow(_ fit: TopBarFit) -> some View {
+        HStack(spacing: 0) {
             Button { dismiss() } label: {
-                Image(systemName: "chevron.left")
+                Image(systemName: "chevron.left").topBarTarget()
             }
             .accessibilityLabel("Back to the book")
-            Spacer()
-            readerActions
+            Spacer(minLength: 0)
+            readerActions(fit)
+        }
+    }
+
+    /// The reader's own top bar, floating over the page.
+    ///
+    /// The fullest row that fits, by `ViewThatFits`: on any phone that is all
+    /// of them, and the folded rows are for a narrow iPad window.
+    private var topBar: some View {
+        ViewThatFits(in: .horizontal) {
+            topBarRow(.full)
+            topBarRow(.findInMenu)
+            topBarRow(.findAndMarksInMenu)
         }
         .font(.system(size: 17, weight: .semibold))
         .foregroundStyle(model.style.theme.text)
-        .padding(.horizontal, Metrics.spacing16)
+        // Small, because the glyphs no longer stand at the bar's edge: each is
+        // centred in a 44-point square, so the square already carries about
+        // the 16 points of margin the glyph used to be given by padding.
+        .padding(.horizontal, Metrics.spacing4)
         .frame(height: ReaderChrome.barHeight)
         .padding(.top, deviceInsets.top)
         .background {
@@ -1150,7 +1212,14 @@ public struct ReaderView: View {
                     Button {
                         model.annotate(kind: .highlight, tint: tint)
                     } label: {
-                        Label(tint.title, systemImage: "circle.fill")
+                        // The tint's own colour as a bitmap, not a symbol: a
+                        // menu paints a template symbol in the accent, which
+                        // made all five swatches tangerine.
+                        Label {
+                            Text(tint.title)
+                        } icon: {
+                            ReaderPalette.swatchIcon(for: tint)
+                        }
                     }
                 }
             } label: {
@@ -1426,8 +1495,71 @@ public struct ReaderView: View {
                     showsPlayer = true
                 },
         )
+        // After the gesture, so the title is not part of what it listens to.
+        .overlay(alignment: .bottom) { bookTitle }
         #endif
     }
+
+    #if os(iOS)
+    /// The least the band under the footer can measure and still carry a line
+    /// of caption clear of the home indicator.
+    ///
+    /// The indicator is five points tall and rests eight above the screen's
+    /// edge, so it takes the band's last thirteen; the caption's line is
+    /// fourteen, set four below the footer; and the rest is air. A notched
+    /// iPhone's band is 34 in portrait and passes. An iPad's is 20, and a
+    /// phone turned on its side 21: both would put the line on the indicator,
+    /// so they leave the title out rather than draw over it. A home-button
+    /// phone has no band at all.
+    static let bookTitleBandMinimum: CGFloat = 32
+
+    /// Whether a band of this height can hold the title.
+    static func bandFitsBookTitle(_ band: CGFloat) -> Bool {
+        band >= bookTitleBandMinimum
+    }
+
+    /// The book's title, in the band below the footer's controls.
+    ///
+    /// Drawn into the home indicator's band rather than added to the footer,
+    /// and the whole design is that distinction. The page is already padded by
+    /// `deviceInsets.bottom`, and `ReaderChrome.bottomReserve` already counts
+    /// it, so a line set there takes nothing from the page: the footer stays
+    /// 44 points, the controls stay where they were, and no setting or chrome
+    /// toggle can re-paginate the chapter. An overlay offset down by the band,
+    /// not a row in the footer, is what keeps that true.
+    ///
+    /// Centred, under controls that sit to the left. The footer's own ends are
+    /// the play button and the percentage, and a title set flush left under
+    /// the first would read as a label for the play button; centred it reads
+    /// as the foot of the page, which is what it is.
+    ///
+    /// Held at the default type size: the band is a fixed 34 points and the
+    /// indicator is in it, so a title that grew with Dynamic Type would grow
+    /// into the indicator. It is a caption for the reader's orientation, and
+    /// the book's title is also on the page they came from.
+    @ViewBuilder
+    private var bookTitle: some View {
+        if settings.showsBookTitle, model.chromeVisible,
+           Self.bandFitsBookTitle(deviceInsets.bottom) {
+            Text(model.book.title)
+                .font(Typography.caption)
+                .foregroundStyle(model.style.theme.text.opacity(0.55))
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .dynamicTypeSize(...DynamicTypeSize.large)
+                .padding(.horizontal, model.style.pageMargin)
+                .padding(.top, Metrics.spacing4)
+                // Exactly the band's height, text at its top, so that the
+                // offset below puts the band's top edge on the footer's
+                // bottom edge whatever the text measures.
+                .frame(maxWidth: .infinity, alignment: .top)
+                .frame(height: deviceInsets.bottom, alignment: .top)
+                .offset(y: deviceInsets.bottom)
+                .allowsHitTesting(false)
+                .accessibilityIdentifier("reader.bookTitle")
+        }
+    }
+    #endif
 
     private func narrationSkipButton(
         seconds: TimeInterval, symbol: String, action: PlaybackAction, label: String,
@@ -1450,6 +1582,21 @@ public struct ReaderView: View {
         .accessibilityLabel("\(label) \(Int(seconds)) seconds")
     }
 }
+
+#if os(iOS)
+private extension View {
+    /// The square a finger touches a top-bar glyph through.
+    ///
+    /// `ReaderChrome.barHeight` is "also the smallest square a finger can
+    /// reliably hit", and a bare 17-point glyph was well under it. The content
+    /// shape is what makes the whole square the button: without it only the
+    /// glyph's own pixels are hit, and the frame is just empty space.
+    func topBarTarget() -> some View {
+        frame(width: ReaderChrome.barHeight, height: ReaderChrome.barHeight)
+            .contentShape(Rectangle())
+    }
+}
+#endif
 
 /// Installs the read-aloud double tap only where it could actually fire.
 ///

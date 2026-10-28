@@ -83,6 +83,9 @@ public struct ReadingSettingsView: View {
                 // Shown as None and left alone underneath, so the reader's own
                 // choice is still there when Reduce Motion is turned off again.
                 .disabled(reduceMotion)
+                #if os(iOS)
+                Toggle("Show book title", isOn: $settings.showsBookTitle)
+                #endif
             } header: {
                 Text("Pages")
             }
@@ -159,13 +162,18 @@ public struct ReadingSettingsView: View {
     /// broken.
     private var pagesNote: String {
         let styles = "Slide moves the next page in beside the current one. Cover slides the page away over the next. None changes the page instantly."
-        guard reduceMotion else { return styles }
+        #if os(iOS)
+        let title = " Show book title prints the title in small type under the controls at the foot of the page, wherever there is room for it."
+        #else
+        let title = ""
+        #endif
+        guard reduceMotion else { return styles + title }
         #if os(macOS)
         let path = "System Settings › Accessibility › Display"
         #else
         let path = "Settings › Accessibility › Motion"
         #endif
-        return "Reduce Motion is on, so pages change instantly. To choose how they move, turn it off in \(path). " + styles
+        return "Reduce Motion is on, so pages change instantly. To choose how they move, turn it off in \(path). " + styles + title
     }
 
     /// A quiet line naming what the control under it applies to.

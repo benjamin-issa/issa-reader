@@ -75,6 +75,19 @@ public final class PlaybackSettings {
         didSet { defaults.set(pageTurn.rawValue, forKey: Self.pageTurnKey) }
     }
 
+    /// Whether the reader prints the book's title in small type under the
+    /// footer's controls, on the iPhone and iPad.
+    ///
+    /// Beside `pageTurn` and out of `readerStyle` for the same reason: the
+    /// title is drawn in the band the home indicator holds, which the page's
+    /// size already counts, so showing or hiding it cannot move a line — but a
+    /// change to the style re-lays out the open book regardless of what it
+    /// touches, and this should cost the reader nothing, least of all their
+    /// place. Device-local like the rest.
+    public var showsBookTitle: Bool {
+        didSet { defaults.set(showsBookTitle, forKey: Self.showsBookTitleKey) }
+    }
+
     /// Per-book departures from `readerStyle`, keyed by book uuid.
     ///
     /// Device-local and deliberately not synced: a size that suits a phone is
@@ -135,6 +148,7 @@ public final class PlaybackSettings {
     private static let progressScopeKey = "issa.progressScope"
     private static let askEnabledKey = "issa.askAboutBook"
     private static let pageTurnKey = "issa.pageTurn"
+    private static let showsBookTitleKey = "issa.showBookTitle"
     private static let faceMigrationKey = "issa.migratedDefaultFaceToLiterata"
 
     /// The observer token, in a box `deinit` can reach.
@@ -225,6 +239,9 @@ public final class PlaybackSettings {
         // until the picker is first moved, as `progressScope` is.
         pageTurn = store.string(forKey: Self.pageTurnKey)
             .flatMap(PageTurnStyle.init(rawValue:)) ?? .slide
+        // On unless the reader turned it off. `bool(forKey:)` would read an
+        // absent key as off, and the title is a default, not a choice.
+        showsBookTitle = store.object(forKey: Self.showsBookTitleKey) as? Bool ?? true
         moveOffTheOldDefaultFace()
         // Assignments in `init` do not fire `didSet`, so the levels this build
         // just converted are written back by hand — once, and only when they
