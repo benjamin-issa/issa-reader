@@ -1,0 +1,13 @@
+{
+  "id": "8d299949-e1ef-4b10-8869-0a03fbbb24ba",
+  "publicUrl": "http://storyteller.test:8001",
+  "capabilities": [
+    "book-upload",
+    "media-manage",
+    "metadata-edit",
+    "opds",
+    "progress-sync",
+    "readaloud-process"
+  ],
+  "publicKey": "MCowBQYDK2VwAyEACVsDk6VsYdQ3iZdS3BvtPZi18O3vhl56D+geXzaFX9w="
+}

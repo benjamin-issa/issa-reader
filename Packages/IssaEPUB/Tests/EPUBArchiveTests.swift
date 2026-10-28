@@ -857,6 +857,22 @@ struct InflateHonestyTests {
         #expect(String(decoding: round, as: UTF8.self) == payload)
     }
 
+    /// The other direction. The stored-entry paths refuse a payload of any
+    /// length but the declared one; a deflate stream that ended short of it
+    /// came back as a success, a truncated chapter or narration chunk passed
+    /// off as whole.
+    @Test("an entry that inflates short of its declared size is refused too")
+    func overstatedSizeIsRefused() throws {
+        let payload = String(repeating: "the quick brown fox ", count: 400)
+        let compressed = try #require(Self.deflate(Data(payload.utf8)))
+        #expect(throws: EPUBError.self) {
+            try Inflate.raw(compressed, expectedSize: payload.utf8.count + 100)
+        }
+        // An undeclared size is not a claim, and still decodes.
+        let round = try Inflate.raw(compressed, expectedSize: 0)
+        #expect(String(decoding: round, as: UTF8.self) == payload)
+    }
+
     /// The ratio ceiling bounds compression ratio, not memory. A 4 MB entry
     /// declaring 4 GB passed it and the next line asked for a 4 GB allocation.
     @Test("a declared size beyond the absolute cap is refused whatever the ratio")
@@ -1133,6 +1149,8 @@ struct StreamingExtractTests {
             .init(name: "OEBPS/Audio/stored.mp3", payload: original),
             .init(name: "unknown.bin", payload: deflated, method: 8, declaredUncompressedSize: 0),
             .init(name: "understated.bin", payload: deflated, method: 8, declaredUncompressedSize: 16),
+            .init(name: "overstated.bin", payload: deflated, method: 8,
+                  declaredUncompressedSize: UInt32(original.count) + 100),
             .init(name: "bomb.bin", payload: InflateBoundsTests.helloDeflated, method: 8,
                   declaredUncompressedSize: 0xFFFF_FFFE),
             .init(name: "empty.css", payload: Data([0x03, 0x00]), method: 8, declaredUncompressedSize: 0),
@@ -1188,7 +1206,7 @@ struct StreamingExtractTests {
     /// Every refusal leaves nothing behind: not the destination, and not the
     /// half-written `.partial` a caller might later mistake for it.
     @Test("a lying entry is refused and leaves no file", arguments: [
-        "understated.bin", "bomb.bin", "liar.bin",
+        "understated.bin", "overstated.bin", "bomb.bin", "liar.bin",
     ])
     func refusals(_ name: String) throws {
         let archive = try archive()

@@ -150,6 +150,26 @@ struct LibraryStoreTests {
         #expect(try await store.search("hoban").contains { $0.title.hasPrefix("Alice") })
     }
 
+    /// The LIKE fallback takes what was typed as text. `%` and `_` used to be
+    /// wildcards, so a search for either returned the whole library.
+    @Test("a search for % or _ finds those characters, not everything")
+    func likeWildcardsAreLiteral() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try LibraryStore(serverKey: "http://example.test", directory: directory)
+        var books = Array(try sampleBooks().prefix(4))
+        try #require(books.count == 4)
+        books[0].title = "100% Pure"
+        books[1].title = "a_b"
+        books[2].title = "back\\slash"
+        try await store.replaceCatalogue(books)
+
+        #expect(try await store.search("%").map(\.title) == ["100% Pure"])
+        #expect(try await store.search("_").map(\.title) == ["a_b"])
+        #expect(try await store.search("100%").map(\.title) == ["100% Pure"])
+        #expect(try await store.search("\\").map(\.title) == ["back\\slash"])
+    }
+
     @Test("a single character still searches rather than returning nothing")
     func shortQueryFallsBack() async throws {
         let directory = temporaryDirectory()

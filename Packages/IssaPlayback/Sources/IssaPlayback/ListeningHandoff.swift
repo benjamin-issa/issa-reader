@@ -227,10 +227,9 @@ public enum ListeningHandoff {
         guard let entry = timeline.entry(inFile: anchor.audioHref, at: anchor.offset)
             ?? timeline.firstEntry(inFile: anchor.audioHref)
         else { return nil }
-        guard let index = package.spine.firstIndex(where: {
-            ReadiumLocator(href: entry.textHref, type: "application/xhtml+xml")
-                .matchesHref($0.href)
-        }) else { return nil }
+        guard let index = ReadiumLocator(href: entry.textHref, type: "application/xhtml+xml")
+            .bestMatch(in: package.spine.map(\.href))
+        else { return nil }
         return (index, entry)
     }
 }

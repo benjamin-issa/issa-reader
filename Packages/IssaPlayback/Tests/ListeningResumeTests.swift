@@ -65,6 +65,23 @@ struct ListeningResumeTests {
         StoredPosition(locator: locator, timestamp: writtenAtEpochSeconds * 1000)
     }
 
+    /// Two volumes of one omnibus, each with a sentence called `s1`. A
+    /// locator in volume two must find volume two's, not the first document
+    /// whose last two path components happen to agree.
+    @Test("a shared sentence id resolves in the volume the locator names")
+    func aSharedSentenceIDResolvesInTheLocatorsOwnVolume() {
+        let timeline = SMILTimeline(entries: [
+            SMILEntry(fragmentID: "s1", textHref: "vol1/text/ch01.xhtml",
+                      audioHref: "Audio/a.mp3", start: 0, end: 5, cumulativeEnd: 5),
+            SMILEntry(fragmentID: "s1", textHref: "vol2/text/ch01.xhtml",
+                      audioHref: "Audio/b.mp3", start: 0, end: 5, cumulativeEnd: 10),
+        ])
+        let second = textLocator("/OEBPS/vol2/text/ch01.xhtml", 0.5, fragment: "s1")
+        #expect(ListeningResume.entry(for: "s1", at: second, in: timeline)?.audioHref == "Audio/b.mp3")
+        let first = textLocator("/OEBPS/vol1/text/ch01.xhtml", 0.5, fragment: "s1")
+        #expect(ListeningResume.entry(for: "s1", at: first, in: timeline)?.audioHref == "Audio/a.mp3")
+    }
+
     // MARK: - The anchor, which is the rung that should answer
 
     @Test("an anchor naming a track wins")

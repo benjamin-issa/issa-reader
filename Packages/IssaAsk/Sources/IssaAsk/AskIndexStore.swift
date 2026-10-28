@@ -86,6 +86,17 @@ public actor AskIndexStore {
         url.deletingPathExtension().appendingPathExtension("building.sqlite")
     }
 
+    /// SQLite's own names for what it keeps beside a database: `-wal` and
+    /// `-shm` in WAL mode, `-journal` in the default one. They are the file's
+    /// name with the suffix on the end — not a path extension, which would name
+    /// `x.sqlite.wal` and delete a file that is never there.
+    static let companionSuffixes = ["-wal", "-shm", "-journal"]
+
+    /// `url` and every file SQLite may be keeping beside it.
+    static func withCompanions(of url: URL) -> [URL] {
+        [url] + companionSuffixes.map { URL(fileURLWithPath: url.path + $0) }
+    }
+
     public nonisolated func indexURL(for bookUUID: String) -> URL {
         Self.indexURL(in: directory, bookUUID: bookUUID)
     }
@@ -241,9 +252,9 @@ public actor AskIndexStore {
             try queue.close()
             progress?(.preparingIndex(done: total, total: total))
         } catch {
-            try? FileManager.default.removeItem(at: building)
-            try? FileManager.default.removeItem(at: building.appendingPathExtension("wal"))
-            try? FileManager.default.removeItem(at: building.appendingPathExtension("shm"))
+            for file in Self.withCompanions(of: building) {
+                try? FileManager.default.removeItem(at: file)
+            }
             throw error
         }
 
@@ -841,9 +852,9 @@ public actor AskIndexStore {
         open[bookUUID] = nil
         let url = indexURL(for: bookUUID)
         for candidate in [url, Self.buildingURL(for: url)] {
-            try? FileManager.default.removeItem(at: candidate)
-            try? FileManager.default.removeItem(at: candidate.appendingPathExtension("wal"))
-            try? FileManager.default.removeItem(at: candidate.appendingPathExtension("shm"))
+            for file in Self.withCompanions(of: candidate) {
+                try? FileManager.default.removeItem(at: file)
+            }
         }
     }
 
@@ -867,9 +878,10 @@ public actor AskIndexStore {
             let url = indexURL(for: uuid)
             for candidate in [url, Self.buildingURL(for: url)] {
                 let name = candidate.lastPathComponent
-                // SQLite's own companions are `-wal`, `-shm` and `-journal`;
-                // `remove(bookUUID:)` names `.wal` and `.shm`, so both spellings.
-                for suffix in ["", "-wal", "-shm", "-journal", ".wal", ".shm"] {
+                // The companions' real names, and the `.wal` and `.shm`
+                // spellings earlier builds mistook for them, which a kept
+                // book's directory may still hold.
+                for suffix in [""] + Self.companionSuffixes + [".wal", ".shm"] {
                     keptNames.insert(name + suffix)
                 }
             }

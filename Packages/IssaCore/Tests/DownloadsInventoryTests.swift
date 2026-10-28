@@ -330,6 +330,9 @@ struct DownloadsInventoryTests {
         #expect(BookContentService.decodeFilename("-ebook.epub") == nil)
         #expect(BookContentService.decodeFilename("a-unknown.epub") == nil)
         #expect(BookContentService.decodeFilename("not-a-uuid-ebook.epub") == nil)
+        // A uuid spelled in fullwidth digits is not the file this app wrote.
+        let fullwidth = "\u{FF11}\u{FF11}\u{FF11}\u{FF11}\u{FF11}\u{FF11}\u{FF11}\u{FF11}-1111-4111-8111-111111111111"
+        #expect(BookContentService.decodeFilename("\(fullwidth)-ebook.epub") == nil)
     }
 
     /// The worst thing this decoder could do, named as its own test.

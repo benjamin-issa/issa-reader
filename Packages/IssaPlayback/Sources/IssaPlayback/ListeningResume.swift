@@ -230,8 +230,9 @@ public enum ListeningResume {
     static func entry(
         for fragment: String, at locator: ReadiumLocator, in timeline: SMILTimeline,
     ) -> SMILEntry? {
-        let documents = timeline.documentHrefs.filter { $0 == locator.href }
-            + timeline.documentHrefs.filter { $0 != locator.href && locator.matchesHref($0) }
+        let hrefs = timeline.documentHrefs
+        let documents = hrefs.filter { $0 == locator.href }
+            + locator.rankedMatches(in: hrefs).map { hrefs[$0] }.filter { $0 != locator.href }
         for document in documents {
             if let entry = timeline.exactEntry(forFragment: fragment, inDocument: document) {
                 return entry

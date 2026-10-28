@@ -160,7 +160,8 @@ The provisioning scripts take `STORYTELLER_URL` for either server.
 
 The older tags the client must still work with run beside them under
 `--profile legacy`: `web-v2.14.21` on port 8011, the version App Review's
-server runs, and `web-v3.0.0-beta.40` on 8013. Each needs its own copy of the
+server runs, `web-v3.0.0-beta.46` (the pin before beta.49) on 8023, and
+`web-v3.0.0-beta.40` on 8013. Each needs its own copy of the
 data its newer pin started from, taken **before** that pin moved, because a
 newer server migrates the database one way and an older one must never be
 handed data a newer one has migrated.
@@ -180,9 +181,12 @@ docker compose --profile v3 stop
 # Only while the pins are still the old ones; see above.
 [ -e data/storyteller-legacy ] || cp -Rp data/storyteller data/storyteller-legacy
 [ -e data/storyteller-v3-legacy ] || cp -Rp data/storyteller-v3 data/storyteller-v3-legacy
+# beta.46's copy was taken from data/storyteller-v3 before beta.49 first booted on it.
+[ -e data/storyteller-v3-beta46 ] || cp -Rp data/storyteller-v3 data/storyteller-v3-beta46
 docker compose --profile legacy up -d
 STORYTELLER_URL=http://$(ipconfig getifaddr en0):8011 PUBLIC_HOST=$(ipconfig getifaddr en0) node setup.mjs
 STORYTELLER_URL=http://$(ipconfig getifaddr en0):8013 PUBLIC_HOST=$(ipconfig getifaddr en0) node setup.mjs
+STORYTELLER_URL=http://$(ipconfig getifaddr en0):8023 PUBLIC_HOST=$(ipconfig getifaddr en0) node setup.mjs
 ```
 
 They are not restarted on their own; `docker compose --profile legacy stop`
@@ -215,7 +219,8 @@ the server version.
 This client is written against Storyteller `web-v2.14.21` and still works
 with it, which is what App Review's server runs. It is tested against
 `web-v2.14.23`, the latest stable tag, and the 3.0 beta line at
-`web-v3.0.0-beta.46`, and still checked against `web-v3.0.0-beta.40`. It tells
+`web-v3.0.0-beta.49`, and still checked against `web-v3.0.0-beta.46` and
+`web-v3.0.0-beta.40`. It tells
 the generations apart by feature, not by version string: `GET
 /api/v2/server/public` exists only on 3.x, while a self-built 3.x image
 reports its package version, which is still a 2.x number. Where they differ it

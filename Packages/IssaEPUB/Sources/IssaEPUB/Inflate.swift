@@ -90,6 +90,14 @@ enum Inflate {
                         "entry inflates past its declared size of \(expectedSize)")
                 }
             } else if written > 0 {
+                // A declared size is a claim about the payload, checked in
+                // both directions: the stored-entry paths already refuse a
+                // payload of any other length, and a stream that ends short
+                // is a truncated entry returned as if it were whole.
+                guard expectedSize == 0 || written == expectedSize else {
+                    throw EPUBError.malformedArchive(
+                        "entry inflates to \(written) bytes, short of its declared size of \(expectedSize)")
+                }
                 output.removeSubrange(written ..< output.count)
                 return output
             }
@@ -151,6 +159,10 @@ enum Inflate {
             if produced > 0 { try write(UnsafeRawBufferPointer(start: slice, count: produced)) }
             switch status {
             case COMPRESSION_STATUS_END:
+                guard expectedSize == 0 || written == expectedSize else {
+                    throw EPUBError.malformedArchive(
+                        "entry inflates to \(written) bytes, short of its declared size of \(expectedSize)")
+                }
                 return written
             case COMPRESSION_STATUS_OK where produced > 0:
                 continue

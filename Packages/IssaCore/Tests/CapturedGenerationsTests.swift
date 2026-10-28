@@ -20,6 +20,8 @@ enum CapturedServer: String, CaseIterable, CustomTestStringConvertible, Sendable
     case v3_beta40 = "web-v3.0.0-beta.40"
     /// `Fixtures/v3/beta46/` — the same library after the server moved on.
     case v3_beta46 = "web-v3.0.0-beta.46"
+    /// `Fixtures/v3/beta49/` — the library once more, on the current pin.
+    case v3_beta49 = "web-v3.0.0-beta.49"
 
     var testDescription: String { rawValue }
 
@@ -30,10 +32,11 @@ enum CapturedServer: String, CaseIterable, CustomTestStringConvertible, Sendable
         case .v2_14_23: "v2-14-23/\(name)"
         case .v3_beta40: "v3/\(name)"
         case .v3_beta46: "v3/beta46/\(name)"
+        case .v3_beta49: "v3/beta49/\(name)"
         }
     }
 
-    var isV3: Bool { self == .v3_beta40 || self == .v3_beta46 }
+    var isV3: Bool { self == .v3_beta40 || self == .v3_beta46 || self == .v3_beta49 }
 
     func books() throws -> [Book] {
         try JSONDecoder().decode([Book].self, from: BookDecodingTests.fixture(fixture("books")))
@@ -64,8 +67,8 @@ struct CapturedGenerationsTests {
     }
 
     /// Only 3.x lets a book have no status, or an admin relabel one.
-    @Test("3.x shapes decode on both betas: no status, a relabelled status, a custom one",
-          arguments: [CapturedServer.v3_beta40, .v3_beta46])
+    @Test("3.x shapes decode on every beta: no status, a relabelled status, a custom one",
+          arguments: [CapturedServer.v3_beta40, .v3_beta46, .v3_beta49])
     func v3Shapes(_ server: CapturedServer) throws {
         let books = try server.books()
         func book(_ title: String) throws -> Book {
@@ -107,6 +110,22 @@ struct CapturedGenerationsTests {
         }
     }
 
+    /// And again from beta.46 to beta.49, on the data beta.46 had migrated.
+    @Test("beta.49 shows every book it shares with beta.46 the same way")
+    func beta49MatchesBeta46() throws {
+        let older = try CapturedServer.v3_beta46.books()
+        let newer = Dictionary(uniqueKeysWithValues: try CapturedServer.v3_beta49.books().map { ($0.uuid, $0) })
+        #expect(older.count == 27)
+        for book in older {
+            let moved = try #require(newer[book.uuid], "\(book.title) is missing from the beta.49 capture")
+            #expect(moved.title == book.title)
+            #expect(moved.status?.displayName == book.status?.displayName, "\(book.title)'s status")
+            #expect(moved.ebook?.cover == book.ebook?.cover, "\(book.title)'s ebook cover")
+            #expect(moved.audiobook?.cover == book.audiobook?.cover, "\(book.title)'s audiobook cover")
+            #expect(moved.readaloud?.cover == book.readaloud?.cover, "\(book.title)'s read-along cover")
+        }
+    }
+
     /// 2.x has no relabelling and no empty status: every captured book has
     /// one of the three built-in names.
     @Test("2.x books always carry a built-in status", arguments: [CapturedServer.v2_14_21, .v2_14_23])
@@ -118,27 +137,34 @@ struct CapturedGenerationsTests {
         }
     }
 
-    @Test("beta.46's identity says 3.x, and its details report beta.46")
-    func beta46Identity() async throws {
-        let identity = try BookDecodingTests.fixture(CapturedServer.v3_beta46.fixture("server-public"))
+    /// What the stub below answers for, by the host the client is pointed at.
+    static let hosts: [CapturedServer: String] = [
+        .v3_beta46: "beta46.storyteller.test", .v3_beta49: "beta49.storyteller.test",
+    ]
+
+    @Test("a 3.x beta's identity says 3.x, and its details report that beta",
+          arguments: [CapturedServer.v3_beta46, .v3_beta49])
+    func betaIdentity(_ server: CapturedServer) async throws {
+        let identity = try BookDecodingTests.fixture(server.fixture("server-public"))
         #expect(Session.generation(fromPublicProbe: (200, identity)) == .v3)
 
         let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [Beta46Stub.self]
+        configuration.protocolClasses = [CapturedBetaStub.self]
         let client = APIClient(
-            baseURL: URL(string: "http://beta46.storyteller.test")!,
-            tokens: Beta46Tokens(),
+            baseURL: URL(string: "http://\(try #require(Self.hosts[server]))")!,
+            tokens: BetaTokens(),
             session: URLSession(configuration: configuration))
         let caps = await Session.probeCapabilities(using: client)
+        let version = String(server.rawValue.dropFirst("web-v".count))
         #expect(caps.generation == .v3)
-        #expect(caps.reportedVersion == "3.0.0-beta.46")
-        #expect(caps.displayVersion == "3.0.0-beta.46")
+        #expect(caps.reportedVersion == version)
+        #expect(caps.displayVersion == version)
     }
 }
 
-/// beta.46 as `Session.probeCapabilities` sees it: the captured identity and
-/// details, every other route a 404.
-private final class Beta46Stub: URLProtocol {
+/// A beta as `Session.probeCapabilities` sees it: the captured identity and
+/// details of whichever one the host names, every other route a 404.
+private final class CapturedBetaStub: URLProtocol {
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
@@ -152,7 +178,10 @@ private final class Beta46Stub: URLProtocol {
         case Endpoint.V3.serverDetails: "server-details"
         default: nil
         }
-        let body = name.flatMap { try? BookDecodingTests.fixture(CapturedServer.v3_beta46.fixture($0)) }
+        let server = CapturedGenerationsTests.hosts.first { $0.value == url.host }?.key
+        let body = name.flatMap { name in
+            server.flatMap { try? BookDecodingTests.fixture($0.fixture(name)) }
+        }
         let response = HTTPURLResponse(
             url: url, statusCode: body == nil ? 404 : 200, httpVersion: "HTTP/1.1",
             headerFields: ["Content-Type": "application/json"])!
@@ -164,7 +193,7 @@ private final class Beta46Stub: URLProtocol {
     override func stopLoading() {}
 }
 
-private actor Beta46Tokens: TokenProviding {
+private actor BetaTokens: TokenProviding {
     func currentToken() async -> String? { "probe-token" }
     func invalidate() async {}
 }

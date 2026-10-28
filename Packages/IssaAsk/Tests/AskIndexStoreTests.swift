@@ -435,10 +435,24 @@ struct AskIndexStoreTests {
         defer { AskFixture.remove(directory) }
 
         let url = store.indexURL(for: AskFixture.bookUUID)
+        // What a build killed mid-write, or an index in use, leaves beside the
+        // file — under SQLite's own names, for the index and for the one being
+        // built. The book's text is in them too.
+        let building = AskIndexStore.buildingURL(for: url)
+        for file in [url, building] {
+            for suffix in ["-wal", "-shm", "-journal"] {
+                try Data("page of the book".utf8).write(to: URL(fileURLWithPath: file.path + suffix))
+            }
+        }
+        try Data("half a build".utf8).write(to: building)
+
         await store.remove(bookUUID: AskFixture.bookUUID)
         // The index is the text of a book that is no longer on the device.
-        for suffix in ["", "-wal", "-shm"] {
-            #expect(!FileManager.default.fileExists(atPath: url.path + suffix))
+        for file in [url, building] {
+            for suffix in ["", "-wal", "-shm", "-journal"] {
+                #expect(!FileManager.default.fileExists(atPath: file.path + suffix),
+                        "\(file.lastPathComponent + suffix) outlived the book")
+            }
         }
         let gone = await store.isPrepared(source: source)
         #expect(!gone)

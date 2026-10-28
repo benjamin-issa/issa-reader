@@ -99,6 +99,16 @@ final class PageTurner {
     init(model: ReaderModel, now: @escaping () -> TimeInterval = { Date().timeIntervalSinceReferenceDate }) {
         self.model = model
         self.now = now
+    }
+
+    /// Takes the reader's chosen style and tells the model whether to keep the
+    /// neighbouring chapters for it.
+    ///
+    /// The one place that tells the model. `init` must not: a view builds a
+    /// turner on every re-init and keeps only the first, so a write there
+    /// would turn neighbours back on under a turner that is on None.
+    func adopt(style: PageTurnStyle) {
+        self.style = style
         model.keepsNeighbours = style != .instant
     }
 
@@ -347,10 +357,13 @@ final class PageTurner {
 
     private func start(_ motion: PageTurn.Motion) {
         self.motion = motion
+        schedule(after: motion.duration)
+    }
+
+    private func schedule(after delay: TimeInterval) {
         finishTask?.cancel()
-        let duration = motion.duration
         finishTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(duration))
+            try? await Task.sleep(for: .seconds(delay))
             guard !Task.isCancelled else { return }
             self?.tick()
         }
@@ -358,8 +371,19 @@ final class PageTurner {
 
     /// Ends the motion if its time is up. Called when it should be; tests call
     /// it with their own clock.
+    ///
+    /// The motion is timed on the wall clock and the wake-up on the continuous
+    /// one, so a clock stepped back mid-turn wakes this early. It asks again
+    /// for the time that is left, at most one turn's worth, rather than
+    /// leaving the page where it is until something else finishes it.
     func tick() {
-        guard let motion, motion.isFinished(at: now()) else { return }
+        guard let motion else { return }
+        let time = now()
+        guard motion.isFinished(at: time) else {
+            let left = motion.start + motion.duration - time
+            schedule(after: min(max(left, 0.01), motion.duration))
+            return
+        }
         finish()
     }
 

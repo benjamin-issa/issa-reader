@@ -13,8 +13,9 @@ The servers are the ones pinned in `Tools/docker/compose.yaml`:
 | Generation | Tag | Local address | Role |
 | --- | --- | --- | --- |
 | 2 | `web-v2.14.23` | `:8001` | release pin |
-| 3 | `web-v3.0.0-beta.46` | `:8003` (`--profile v3`) | release pin |
+| 3 | `web-v3.0.0-beta.49` | `:8003` (`--profile v3`) | release pin |
 | 2 | `web-v2.14.21` | `:8011` (`--profile legacy`) | compatibility smoke; required, because App Review runs it |
+| 3 | `web-v3.0.0-beta.46` | `:8023` (`--profile legacy`) | compatibility smoke; recommended (the pin before beta.49) |
 | 3 | `web-v3.0.0-beta.40` | `:8013` (`--profile legacy`) | compatibility smoke; recommended |
 
 The two release pins are what "both servers" means below. Moving either pin —
@@ -40,15 +41,17 @@ bring them up is in the README, under "A local server to talk to".
    suites carry captured responses and read-along books from every server
    generation above — in
    `Packages/IssaCore/Tests/Fixtures`, 2.14.21's at the top level, 2.14.23's
-   in `v2-14-23/`, beta.40's in `v3/` and beta.46's in `v3/beta46/`, and the
+   in `v2-14-23/`, beta.40's in `v3/`, beta.46's in `v3/beta46/` and
+   beta.49's in `v3/beta49/`, and the
    read-along books `readalong.epub` (2.x) and `readalong-v3.epub` (3.x) in
    the `Tests/Fixtures` of `IssaEPUB` and `IssaPlayback`.
 2. **The real-alignment suites, with their files present.**
    `RealAlignmentTests` reads a read-along the 2.x server aligned
    (`/tmp/pw2.epub`); `RealAlignmentV3Tests` reads the ones the 3.x servers
-   aligned: beta.46's (`/tmp/pw3.epub`, `/tmp/pw3-loop.epub`) and beta.40's
+   aligned: beta.49's (`/tmp/pw3.epub`, `/tmp/pw3-loop.epub`), beta.46's
+   (`/tmp/pw3-beta46.epub`, `/tmp/pw3-loop-beta46.epub`) and beta.40's
    (`/tmp/pw3-beta40.epub`, `/tmp/pw3-loop-beta40.epub`), since upgrading a
-   server does not re-align the books it already has. The five files are
+   server does not re-align the books it already has. The seven files are
    kept in `Tools/docker/data/real-alignment/<tag>/` (gitignored) and copied
    into `/tmp` before the run. Outside a release run the suites skip when the
    files are absent; `scripts/release-tests.sh` turns that into a failure,
@@ -96,7 +99,8 @@ the strength of one generation.
 ## Older servers
 
 The pins are what the client is tested against, not a new minimum. Every
-release still works with `web-v2.14.21` and the 3.x betas up to `beta.40`:
+release still works with `web-v2.14.21` and the 3.x betas up to `beta.40`
+(and beta.46, the pin before beta.49):
 
 - No code may need a route, field or behaviour that 2.14.21 or beta.40 lacks.
   Features are detected by what the server answers
@@ -104,13 +108,15 @@ release still works with `web-v2.14.21` and the 3.x betas up to `beta.40`:
   decoded field is optional; a new probe uses only routes 2.14.21 serves,
   such as `GET /api/v2/user`.
 - Captured responses are added beside the old ones, never in their place, so
-  every unit run keeps decoding 2.14.21's and beta.40's next to the pins'.
+  every unit run keeps decoding 2.14.21's, beta.40's and beta.46's next to the
+  pins'.
 - The real-alignment suites read books aligned by the older servers as well
   as the newer ones (item 2).
 - Each release runs `scripts/live-check.sh --fresh` on an iPhone against the
   legacy servers too (`docker compose --profile legacy up -d`, then
-  `setup.mjs` against `:8011` and `:8013`): against 2.14.21 it is required,
-  since App Review's server runs it; against beta.40 it is recommended. Those
+  `setup.mjs` against `:8011`, `:8013` and `:8023`): against 2.14.21 it is
+  required, since App Review's server runs it; against beta.40 and beta.46 it
+  is recommended. Those
   runs also exercise the older device-approval page in `approve-device.mjs`,
   which the pins' runs no longer reach.
 

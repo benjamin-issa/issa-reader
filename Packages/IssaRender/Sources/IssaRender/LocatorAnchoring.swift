@@ -303,9 +303,19 @@ public enum LocatorAnchoring {
     private static func follows(_ context: String, at location: Int, in text: NSString) -> Bool {
         // Twice the context and some: folding only ever shortens, so a window
         // this size always holds enough of the chapter to compare.
-        let span = min(location, context.utf16.count * 2 + 16)
-        let preceding = text.substring(with: NSRange(location: location - span, length: span))
+        let start = boundary(at: location - min(location, context.utf16.count * 2 + 16), in: text)
+        let preceding = text.substring(with: NSRange(location: start, length: location - start))
         return comparableContext(preceding).hasSuffix(context)
+    }
+
+    /// `index`, or the next place after it where a character begins, when it
+    /// falls inside one — the second half of an emoji's surrogate pair, say. A
+    /// substring cut there has a lone surrogate at one end, which becomes U+FFFD
+    /// and matches nothing.
+    private static func boundary(at index: Int, in text: NSString) -> Int {
+        guard index > 0, index < text.length else { return index }
+        let sequence = text.rangeOfComposedCharacterSequence(at: index)
+        return sequence.location < index ? NSMaxRange(sequence) : index
     }
 
     /// Text reduced to what two renderings of it agree on: every run of
@@ -347,13 +357,17 @@ public enum LocatorAnchoring {
     public static func quote(from text: String, at offset: Int, length: Int = 64) -> ReadiumLocator.Text? {
         let string = text as NSString
         guard offset >= 0, offset < string.length else { return nil }
+        // Cut at the edge of a character, not of a UTF-16 unit: a slice that
+        // ends or begins inside an emoji stores a replacement character that
+        // no render of the chapter contains, and the quote can never be found.
+        let end = boundary(at: min(offset + length, string.length), in: string)
         let highlight = string
-            .substring(with: NSRange(location: offset, length: min(length, string.length - offset)))
+            .substring(with: NSRange(location: offset, length: end - offset))
             .replacingOccurrences(of: "\n", with: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !highlight.isEmpty else { return nil }
 
-        let beforeStart = max(0, offset - 32)
+        let beforeStart = boundary(at: max(0, offset - 32), in: string)
         let before = beforeStart < offset
             ? string.substring(with: NSRange(location: beforeStart, length: offset - beforeStart))
                 .replacingOccurrences(of: "\n", with: " ")

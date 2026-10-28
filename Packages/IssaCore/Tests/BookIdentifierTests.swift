@@ -29,6 +29,10 @@ struct BookIdentifierTests {
         "1111111g-1111-4111-8111-111111111111",     // not hex
         "{11111111-1111-4111-8111-111111111111}",   // the braced form Foundation allows
         "11111111-1111-4111-8111-111111111111\u{0}",
+        "\u{FF11}\u{FF11}\u{FF11}\u{FF11}\u{FF11}\u{FF11}\u{FF11}\u{FF11}-1111-4111-8111-111111111111", // fullwidth digits
+        "11111111-1111-4111-8111-\u{FF41}\u{FF42}\u{FF43}\u{FF44}\u{FF45}\u{FF46}111111",              // fullwidth letters
+        "\u{0661}\u{0661}\u{0661}\u{0661}\u{0661}\u{0661}\u{0661}\u{0661}-1111-4111-8111-111111111111", // Arabic-Indic digits
+        "11111111-1111-4111-8111-11111111111\u{0301}",                                                      // a combining mark
     ])
     func refusesEverythingElse(_ uuid: String) {
         #expect(!uuid.isBareUUID, "\"\(uuid)\" must not be allowed to name a file")
