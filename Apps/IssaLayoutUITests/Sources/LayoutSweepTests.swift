@@ -657,9 +657,18 @@ final class LayoutSweepTests: XCTestCase {
         more.tap()
         XCTAssertTrue(app.descendants(matching: .any)["Contents"].firstMatch.waitForExistence(timeout: 5),
                       "the ellipsis menu did not open")
-        let offered = stopNarrationItem(app).exists
+        let stop = stopNarrationItem(app)
+        let offered = stop.exists
         if let screen { capture(app, screen) }
-        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3)).tap()
+        // Closed with a tap below the menu's lowest row, never at a fixed
+        // spot. At an accessibility text size the menu reaches halfway down
+        // the screen, and the tap at 30 % that used to close it landed on Stop
+        // Narration and chose it, so the next look found the marker gone.
+        let contents = app.descendants(matching: .any)["Contents"].firstMatch
+        let lowest = max(contents.frame.maxY, offered ? stop.frame.maxY : 0)
+        let window = app.windows.firstMatch.frame
+        let y = min(lowest + 60, window.maxY * 0.8) / window.height
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: y)).tap()
         return offered
     }
 
