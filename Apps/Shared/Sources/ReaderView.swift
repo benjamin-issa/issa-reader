@@ -606,7 +606,8 @@ public struct ReaderView: View {
 
     private func reportNarration() {
         KeyReaderNarration.shared.update(
-            token: narrationToken, isKey: isActiveScene, isNarrated: model.hasNarration)
+            token: narrationToken, isKey: isActiveScene, isNarrated: model.hasNarration,
+            hasMarker: model.hasNarrationMarker)
     }
 
     /// What each reading command does, in one place.
@@ -630,6 +631,11 @@ public struct ReaderView: View {
         case .ask:
             guard showsAskPill else { return }
             showsAsk = true
+        // Guarded as the menu item is enabled, so a stale post cannot clear a
+        // place that is not there.
+        case .stopNarration:
+            guard model.hasNarration, model.hasNarrationMarker else { return }
+            stopNarrationForThisBook()
         case .playPause:
             guard model.hasNarration else { return }
             Task { await model.togglePlayback() }
@@ -786,6 +792,22 @@ public struct ReaderView: View {
                 Button("Marks", systemImage: "bookmark.square") { showsAnnotations = true }
             }
             Button("Contents", systemImage: "list.bullet") { showsContents = true }
+            // Only while narration has left a sentence lit: it is the way back
+            // to "Play starts on this page" after listening on, and with
+            // nothing lit there is nothing to clear. Disabled, not hidden,
+            // during a hand-off — the item would vanish and return under the
+            // reader's thumb while the book changes engines.
+            if model.hasNarration, model.hasNarrationMarker {
+                // Title, subtitle and icon as three siblings, which is how a
+                // menu item is given a second line. Nested in a `Label`'s
+                // title slot the second `Text` was dropped.
+                Button { stopNarrationForThisBook() } label: {
+                    Text("Stop Narration")
+                    Text("Clears the highlight — Play starts on this page")
+                    Image(systemName: "stop.circle")
+                }
+                .disabled(app.isHandingOffToReader(model.book.uuid))
+            }
         } label: {
             Image(systemName: "ellipsis.circle").topBarTarget()
         }
@@ -1176,11 +1198,16 @@ public struct ReaderView: View {
         .onReceive(NotificationCenter.default.publisher(for: ReaderCommand.playPause.notification)) { _ in
             if isActiveScene { perform(.playPause) }
         }
+        .onReceive(NotificationCenter.default.publisher(for: ReaderCommand.stopNarration.notification)) { _ in
+            if isActiveScene { perform(.stopNarration) }
+        }
         // Says whether this is the narrated book in front, for Playback ›
         // Play — which otherwise had nothing to act on until narration had
         // been started from the page. Each window clears only itself.
         .onChange(of: isActiveScene, initial: true) { reportNarration() }
         .onChange(of: model.hasNarration) { reportNarration() }
+        // Stop Narration is enabled only while there is a mark to clear.
+        .onChange(of: model.hasNarrationMarker) { reportNarration() }
         .onDisappear { KeyReaderNarration.shared.left(narrationToken) }
         #endif
         // A re-resolve, not an assignment: `model.style = settings.readerStyle`

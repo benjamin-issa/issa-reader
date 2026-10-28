@@ -50,6 +50,34 @@ struct MacPanesAndPlaybackTests {
         #expect(!tracker.narratedReaderIsKey)
     }
 
+    @Test("Stop Narration is offered only over a key narrated reader with a mark on it")
+    func stopNarrationFollowsTheKeyReadersMarker() {
+        let tracker = KeyReaderNarration()
+        let first = UUID(), second = UUID()
+        #expect(!tracker.keyReaderHasMarker, "no reader at all")
+
+        tracker.update(token: first, isKey: true, isNarrated: true, hasMarker: false)
+        #expect(!tracker.keyReaderHasMarker, "narrated, but nothing lit")
+        tracker.update(token: first, isKey: true, isNarrated: true, hasMarker: true)
+        #expect(tracker.keyReaderHasMarker)
+
+        // A second window gains the key with nothing lit: it is the one the
+        // menu acts on, whatever the first still has.
+        tracker.update(token: second, isKey: true, isNarrated: true, hasMarker: false)
+        tracker.update(token: first, isKey: false, isNarrated: true, hasMarker: true)
+        #expect(!tracker.keyReaderHasMarker)
+
+        tracker.update(token: second, isKey: true, isNarrated: true, hasMarker: true)
+        #expect(tracker.keyReaderHasMarker)
+        // The mark is cleared (Stop Narration was chosen): the item goes grey.
+        tracker.update(token: second, isKey: true, isNarrated: true, hasMarker: false)
+        #expect(!tracker.keyReaderHasMarker)
+
+        tracker.update(token: second, isKey: true, isNarrated: true, hasMarker: true)
+        tracker.left(second)
+        #expect(!tracker.keyReaderHasMarker, "a closed window leaves no mark behind")
+    }
+
     @Test("the tag filter says one tag, singular")
     func tagFilterLabel() {
         #expect(LibraryHeader.tagFilterLabel(selectedCount: 0) == "Filter by tag")

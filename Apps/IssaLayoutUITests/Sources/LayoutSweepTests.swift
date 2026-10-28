@@ -536,14 +536,16 @@ final class LayoutSweepTests: XCTestCase {
         XCTAssertTrue(app.buttons[before].waitForExistence(timeout: 5))
     }
 
-    /// Whether this device has the band under the footer the title is drawn
-    /// into: the sweep's home-button phone has none, and a notched phone has
-    /// one. Nil for a run the script did not name, which then checks the title
-    /// only if it is there.
+    /// Whether this device has a band under the footer tall enough to hold the
+    /// title (`ReaderView.bookTitleBandMinimum`): a notched phone's 34 points
+    /// does; the sweep's home-button phone has none, and an iPad's 20 would
+    /// put the line on the home indicator, so neither shows it. Nil for a run
+    /// the script did not name, which then checks the title only if it is
+    /// there.
     private var deviceHasTitleBand: Bool? {
         switch deviceSlug {
         case "device": nil
-        case "iphone-se3": false
+        case "iphone-se3", "ipad-a16": false
         default: true
         }
     }
@@ -631,6 +633,66 @@ final class LayoutSweepTests: XCTestCase {
         // Out of the menu without choosing anything.
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3)).tap()
         XCTAssertTrue(app.buttons["Back to the book"].firstMatch.waitForExistence(timeout: 5))
+    }
+
+    // MARK: - Stop Narration
+
+    /// The menu's Stop Narration item. Matched by the start of its label: the
+    /// item carries a subtitle, which VoiceOver and the tree read as part of
+    /// the same label ("Stop Narration, Clears the highlight — …").
+    private func stopNarrationItem(_ app: XCUIApplication) -> XCUIElement {
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Stop Narration")).firstMatch
+    }
+
+    /// Opens the ellipsis menu and says whether Stop Narration is in it, then
+    /// closes the menu without choosing anything.
+    private func ellipsisMenuOffersStop(_ app: XCUIApplication, capturing screen: String? = nil) -> Bool {
+        let more = app.descendants(matching: .any)["reader.more"].firstMatch
+        XCTAssertTrue(more.waitForExistence(timeout: 10), "no ellipsis menu")
+        more.tap()
+        XCTAssertTrue(app.buttons["Contents"].firstMatch.waitForExistence(timeout: 5),
+                      "the ellipsis menu did not open")
+        let offered = stopNarrationItem(app).exists
+        if let screen { capture(app, screen) }
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3)).tap()
+        return offered
+    }
+
+    /// Stop Narration is in the menu only once narration has left a sentence
+    /// lit, and choosing it takes the highlight away again.
+    ///
+    /// Narration is started from the footer's own play button, which is how a
+    /// reader starts it; the fixture's audio is a placeholder, so nothing is
+    /// heard, but the sentence is lit all the same. Paused again before the
+    /// menu is opened, so the marker is the only thing the item depends on.
+    func testStopNarrationFollowsTheMarker() throws {
+        let app = launch(["-issa.library.mode", "all"])
+        guard try openReader(app) != nil else { return }
+
+        XCTAssertFalse(ellipsisMenuOffersStop(app),
+                       "Stop Narration is offered before narration has lit anything")
+
+        let play = app.buttons["Play narration"].firstMatch
+        guard play.waitForExistence(timeout: 10) else {
+            return XCTFail("the read-along book has no play button in its footer")
+        }
+        play.tap()
+        let pause = app.buttons["Pause narration"].firstMatch
+        guard pause.waitForExistence(timeout: 20) else {
+            return XCTFail("narration never started, so there is no marker to clear")
+        }
+        pause.tap()
+        XCTAssertTrue(app.buttons["Play narration"].firstMatch.waitForExistence(timeout: 10))
+
+        XCTAssertTrue(ellipsisMenuOffersStop(app, capturing: "readerMoreStop"),
+                      "Stop Narration is missing while a sentence is lit")
+
+        app.descendants(matching: .any)["reader.more"].firstMatch.tap()
+        let stop = stopNarrationItem(app)
+        XCTAssertTrue(stop.waitForExistence(timeout: 5))
+        stop.tap()
+        XCTAssertFalse(ellipsisMenuOffersStop(app),
+                       "choosing Stop Narration left the highlight, and the item, in place")
     }
 
     // MARK: - The highlight colours
