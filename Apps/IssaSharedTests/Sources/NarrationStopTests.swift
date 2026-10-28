@@ -75,6 +75,7 @@ struct NarrationStopTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         let readalong = try #require(model.readalong)
         let pending = try #require(model.pendingNarrationStart, "a read-along nobody has started")
+        #expect(pending.playable, "the guard accepts a start on the reader's own page")
         if chapter > 0 {
             #expect(pending.bookProgress > 0, "the sheet drew the start of the book")
         }
@@ -130,19 +131,30 @@ struct NarrationStopTests {
     }
 
     /// A reader on a page with no narration, the nearest of it a long way on.
-    /// Play refuses, so the sheet has no sentence to draw: it draws the reader.
-    @Test("with narration too far away it draws the reader's own place, without a chapter")
-    func pendingFallsBackWhenTheStartIsTooFar() async throws {
+    /// Play refuses, but the narration is there, and the sheet draws where —
+    /// on the audio's clock, which is the only one its bar has — with Play
+    /// marked as not going there.
+    @Test("with narration too far away it draws that narration, on the audio's clock, unplayable")
+    func pendingIsTheDistantNarrationWhenTheStartIsTooFar() async throws {
         let (model, directory) = try await Self.farFromTheNarration()
         defer { try? FileManager.default.removeItem(at: directory) }
         let readalong = try #require(model.readalong)
-        try #require(model.narrationStart() != nil, "a start has to exist for the guard to refuse it")
+        let start = try #require(model.narrationStart(), "a start has to exist for the guard to refuse it")
         try #require(model.narrationStartIfNear() == nil, "and the guard has to refuse it")
+        try #require(model.bookProgress > 0, "the reader's own place is a different number")
 
         let pending = try #require(model.pendingNarrationStart)
 
-        #expect(pending.bookProgress == model.bookProgress)
-        #expect(pending.chapterSpan == nil)
+        let readout = readalong.readout(at: start.entry)
+        #expect(pending.entry == start.entry)
+        #expect(pending.bookProgress == readout.bookProgress,
+                "the reader's spine progress was drawn on the audio's bar")
+        #expect(pending.bookProgress != model.bookProgress)
+        let span = try #require(readout.chapterSpan)
+        let drawn = try #require(pending.chapterSpan, "the narration's own chapter is known")
+        #expect(drawn.start == span.start)
+        #expect(drawn.duration == span.duration)
+        #expect(!pending.playable)
 
         // The same refusal Play makes, from the same function.
         await model.startNarration()
@@ -152,16 +164,46 @@ struct NarrationStopTests {
         #expect(model.pendingNarrationStart != nil)
     }
 
-    @Test("with no narration ahead of the reader it draws the reader's own place")
-    func pendingFallsBackWithNothingAhead() async throws {
+    @Test("with no narration ahead of the reader there is nothing to draw")
+    func pendingIsNilWithNothingAhead() async throws {
         let (model, directory) = try await Self.pastTheNarration()
         defer { try? FileManager.default.removeItem(at: directory) }
         try #require(model.narrationStart() == nil, "narration never starts behind the reader")
 
-        let pending = try #require(model.pendingNarrationStart)
+        #expect(model.pendingNarrationStart == nil)
+    }
 
-        #expect(pending.bookProgress == model.bookProgress)
-        #expect(pending.chapterSpan == nil)
+    /// Drawing the sheet is not pressing Play. The refusals `narrationStartIfNear`
+    /// logs are for a Play that did nothing, and the diagnostics a reader exports
+    /// must not carry ones that never happened. A title of its own, since the log
+    /// is shared by every test in the process.
+    @Test("asking where Play would begin logs nothing, and pressing it still does")
+    func pendingLogsNoRefusals() async throws {
+        let title = "Quiet-\(UUID().uuidString)"
+        let (far, farDirectory) = try await Self.farFromTheNarration(titled: title)
+        defer { try? FileManager.default.removeItem(at: farDirectory) }
+        let (past, pastDirectory) = try await Self.pastTheNarration(titled: title)
+        defer { try? FileManager.default.removeItem(at: pastDirectory) }
+        func refusals() -> [Substring] {
+            IssaLog.export().split(separator: "\n").filter {
+                $0.contains("book=\(title)") && $0.contains("narration ")
+                    && ($0.contains("too far away") || $0.contains("nowhere to start"))
+            }
+        }
+
+        _ = far.pendingNarrationStart
+        _ = past.pendingNarrationStart
+        // Past the memo, which would hide a log made on the second ask.
+        await far.go(toChapter: 0)
+        await far.go(toChapter: 1)
+        _ = far.pendingNarrationStart
+
+        #expect(refusals().isEmpty, "the sheet logged a refusal nobody asked for: \(refusals())")
+
+        // The positive control: the same state, through Play.
+        await far.startNarration()
+        await past.startNarration()
+        #expect(refusals().count == 2, "Play's refusals went unlogged: \(refusals())")
     }
 
     /// The reader is in chapter two, past a short plain opening, with the long
@@ -169,7 +211,9 @@ struct NarrationStopTests {
     /// by weight, so the narration is far beyond `narrationProximityLimit`.
     /// Chapter two and not one, so the reader's place is not the zero a
     /// fallback that forgot to look would also answer.
-    static func farFromTheNarration() async throws -> (model: ReaderModel, directory: URL) {
+    static func farFromTheNarration(
+        titled title: String = "Far",
+    ) async throws -> (model: ReaderModel, directory: URL) {
         let filler = String(repeating: "<p>Filler that carries no narration at all, only weight.</p>", count: 600)
         return try await book(
             [
@@ -181,7 +225,7 @@ struct NarrationStopTests {
                     body: "<p><span id=\"s0\">The only narrated sentence in the whole book.</span></p>",
                     narrated: ["s0"]),
             ],
-            readingChapter: 1)
+            readingChapter: 1, titled: title)
     }
 
     /// A long plain chapter and then a short narrated one, the reader in the
@@ -214,7 +258,9 @@ struct NarrationStopTests {
     }
 
     /// Narration in the first chapter only, and the reader in the second.
-    static func pastTheNarration() async throws -> (model: ReaderModel, directory: URL) {
+    static func pastTheNarration(
+        titled title: String = "Far",
+    ) async throws -> (model: ReaderModel, directory: URL) {
         try await book(
             [
                 TestEPUB.Chapter(
@@ -223,16 +269,16 @@ struct NarrationStopTests {
                     narrated: ["s0"]),
                 TestEPUB.Chapter(id: "two", title: "Two", body: "<p>A plain chapter after it.</p>"),
             ],
-            readingChapter: 1)
+            readingChapter: 1, titled: title)
     }
 
     /// A book built in the test, open at a chapter with its narration hooked
     /// up and the player's clock taken away, as `opened` does for the fixture.
     static func book(
-        _ chapters: [TestEPUB.Chapter], readingChapter: Int,
+        _ chapters: [TestEPUB.Chapter], readingChapter: Int, titled title: String = "Far",
     ) async throws -> (model: ReaderModel, directory: URL) {
         let model = ReaderModel(
-            book: SharedFixtures.book("Far", uuid: "narration-stop-far"),
+            book: SharedFixtures.book(title, uuid: "narration-stop-far"),
             session: Session(
                 serverURL: URL(string: "https://library.example")!,
                 keychain: StopTokens(),
@@ -252,6 +298,111 @@ struct NarrationStopTests {
         readalong.player.onTimeUpdate = nil
         readalong.player.onFinishedFile = nil
         return (model, directory)
+    }
+
+    // MARK: - Cueing from the sheet
+
+    /// The sheet's slider before narration has started. The coordinator moving
+    /// from no sentence announces no chapter change, so the voice went to
+    /// chapter two and the page stayed on chapter one.
+    @Test("cueing into another chapter turns the page to it, and plays nothing")
+    func cuingTurnsThePage() async throws {
+        let (model, directory) = try await Self.opened(atChapter: 0)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let readalong = try #require(model.readalong)
+        let timeline = try #require(model.timeline)
+        let target = try #require(timeline.exactEntry(forFragment: "ch02-s1", inDocument: Self.chapterTwo))
+        try #require(model.chapterIndex == 0)
+        try #require(model.pendingNarrationStart != nil)
+
+        await model.cueNarration(
+            toBookProgress: (target.cumulativeEnd - target.duration) / timeline.totalDuration)
+
+        #expect(readalong.activeEntry?.textHref == Self.chapterTwo, "the voice is in chapter two")
+        #expect(model.chapterIndex == 1, "and the page did not follow it")
+        #expect(!readalong.player.isPlaying)
+        #expect(model.pendingNarrationStart == nil, "the coordinator's numbers are the truth now")
+    }
+
+    /// A cue inside the chapter on screen has nothing to load, and leaves the
+    /// reader where they are unless the follow setting moves the page.
+    @Test("cueing within the chapter on screen keeps it")
+    func cuingWithinTheChapter() async throws {
+        let (model, directory) = try await Self.opened(atChapter: 0)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let readalong = try #require(model.readalong)
+        let timeline = try #require(model.timeline)
+        let target = try #require(timeline.exactEntry(forFragment: "ch01-s3", inDocument: Self.chapterOne))
+
+        await model.cueNarration(
+            toBookProgress: (target.cumulativeEnd - target.duration) / timeline.totalDuration)
+
+        #expect(readalong.activeEntry == target)
+        #expect(model.chapterIndex == 0)
+    }
+
+    /// Skip, from the sheet: the start's time on the book clock plus the
+    /// interval, through the same cue. Back across the chapter boundary the
+    /// page has to turn back with it.
+    @Test("a skip from where Play would begin lands that far on, or back, and the page follows")
+    func skippingFromThePendingStart() async throws {
+        let (model, directory) = try await Self.opened(atChapter: 1)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let readalong = try #require(model.readalong)
+        let timeline = try #require(model.timeline)
+        let total = timeline.totalDuration
+        let pending = try #require(model.pendingNarrationStart)
+        let began = pending.entry.cumulativeEnd - pending.entry.duration
+        try #require(began > 2, "chapter two has to begin far enough in for a skip back to leave it")
+
+        // Back a second: into the last sentences of chapter one.
+        await model.cueNarration(toBookProgress: pending.progress(skippingBy: -1, inBookOf: total))
+        #expect(abs(readalong.bookProgress * total - (began - 1)) < 1e-6)
+        #expect(readalong.activeEntry?.textHref == Self.chapterOne)
+        #expect(model.chapterIndex == 0, "the page stayed on the chapter the voice left")
+
+        // And from a fresh start, forward.
+        model.clearNarration()
+        await model.go(toChapter: 1)
+        let again = try #require(model.pendingNarrationStart)
+        let forward = again.progress(skippingBy: 1, inBookOf: total)
+        #expect(abs(forward * total - (began + 1)) < 1e-6)
+        await model.cueNarration(toBookProgress: forward)
+        #expect(abs(readalong.bookProgress * total - (began + 1)) < 1e-6)
+        #expect(model.chapterIndex == 1)
+    }
+
+    // MARK: - Stopping the audiobook engine
+
+    /// The reader's Stop on a book the audiobook engine holds. `stopListening`
+    /// cancels the writer without writing, so the listening since its last tick
+    /// went with it.
+    @Test("stopping the audiobook writes where it was first")
+    func stoppingTheAudiobookWritesItsPosition() async throws {
+        let fixture = try ListeningFlushTests.listening()
+        defer { fixture.tearDown() }
+        let progress = fixture.coordinator.bookProgress
+        try #require(progress > 0.1, "the clock has to have moved for there to be anything to lose")
+
+        await fixture.app.stopListeningWritingPosition(of: ListeningFlushTests.uuid, nowPlaying: nil)
+
+        let written = try await fixture.queuedPositions()
+        #expect(written.count == 1, "the listening since the writer's last tick was lost")
+        let total = try #require(written.first?.locator.totalProgression)
+        #expect(abs(total - progress) < 0.0001)
+        #expect(fixture.app.listeningBook == nil, "and the engine is stopped")
+        #expect(fixture.app.listening == nil)
+    }
+
+    @Test("a stop for another book leaves the engine and writes nothing")
+    func stoppingAnotherBookDoesNothing() async throws {
+        let fixture = try ListeningFlushTests.listening()
+        defer { fixture.tearDown() }
+
+        await fixture.app.stopListeningWritingPosition(of: "another-book", nowPlaying: nil)
+
+        #expect(fixture.app.listeningBook?.uuid == ListeningFlushTests.uuid)
+        #expect(try await fixture.queuedPositions().isEmpty)
     }
 
     // MARK: - Stopping

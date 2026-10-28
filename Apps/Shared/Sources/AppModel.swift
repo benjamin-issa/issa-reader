@@ -3758,6 +3758,34 @@ public final class AppModel {
         listeningFormat = nil
     }
 
+    /// The reader's own stop of the audiobook engine holding a book: the
+    /// position first, then `stopListening`.
+    ///
+    /// `stopListening` cancels the writer without writing, and has to: a
+    /// sign-out must not send a position with a token it has just revoked, a
+    /// hand-off to the read-along must not write the audio clock over a
+    /// position that is now on the reader's, and a removal is taking the files
+    /// the position was read from. A reader pressing Stop is none of those, and
+    /// the up to fifteen seconds since the writer's last tick were otherwise
+    /// lost from the server, and from the car's next resume.
+    ///
+    /// Paused first, so the sound ends when the reader asked and not when the
+    /// write has drained a slow network; the position is then the one they
+    /// stopped at. And for the book that was asked about: the write suspends,
+    /// and a hand-off or another book that took the slot meanwhile is not
+    /// this call's to stop.
+    ///
+    /// - Parameter bookUUID: the book the reader stopped.
+    public func stopListeningWritingPosition(
+        of bookUUID: String, nowPlaying: NowPlayingController?,
+    ) async {
+        guard listeningBook?.uuid == bookUUID else { return }
+        listening?.player.pause()
+        await writeListeningPositionNow()
+        guard listeningBook?.uuid == bookUUID else { return }
+        stopListening(nowPlaying: nowPlaying)
+    }
+
     /// Which downloaded edition a source reads, if any.
     ///
     /// `.files` is a manifest synthesised over a read-along's own narration

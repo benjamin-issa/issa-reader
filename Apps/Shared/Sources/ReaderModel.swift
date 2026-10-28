@@ -176,7 +176,7 @@ public final class ReaderModel {
     /// change under a coordinator, apart from the stop, which empties
     /// `quitAnchor` and so counts as a generation.
     @ObservationIgnored private var pendingNarrationMemo:
-        (page: PageKey, generation: Int, start: PendingNarrationStart)?
+        (page: PageKey, generation: Int, start: PendingNarrationStart?)?
 
     /// Which `open` is the current one. Bumped by every open, read after every
     /// suspension in it: an open that something newer has replaced — Try
@@ -1509,31 +1509,36 @@ public final class ReaderModel {
         return nil
     }
 
-    /// Where narration would begin, if it is near enough to the reader to be
-    /// allowed to: `narrationStart()` held to `narrationProximityLimit`.
+    /// What `narrationStart()` found and how far it is from the reader, before
+    /// anyone has decided whether that is near enough.
     ///
-    /// One function, because it is asked two ways. Pressing play asks it to
-    /// begin there, and the player sheet asks it before anything has played, to
-    /// draw the place Play would begin rather than the start of the book. They
-    /// must not disagree: a sheet showing a position Play then refuses, or
-    /// starts somewhere else, would be wrong in the one way it exists to avoid.
+    /// The decision and the logging used to be one function, which is how the
+    /// player sheet — asking where Play would begin, with nobody having pressed
+    /// it — came to write Play's refusals into the diagnostics log. This is the
+    /// decision alone: pure, and the same one for both askers.
+    struct NarrationStartCandidate {
+        let entry: SMILEntry
+        /// The rung of `narrationStart()` that found it.
+        let via: String
+        /// How far it is from the reader, in `bookProgress`'s coordinates; nil
+        /// when the sentence's chapter is not in the spine, so there is
+        /// nothing to measure against.
+        let distance: Double?
+        /// Where the entry sits in those coordinates, for the log.
+        let at: Double?
+
+        /// Whether Play may begin here. A sentence with no distance is
+        /// allowed, as it always was: there is nothing to refuse it by.
+        let isNear: Bool
+    }
+
+    /// Where narration would begin and how far that is from the reader,
+    /// whether or not it is near enough: `narrationStart()` measured against
+    /// `narrationProximityLimit`, and nothing logged.
     ///
-    /// Logs its refusals, as it always has, so a play that does nothing says
-    /// why.
-    ///
-    /// - Returns: the sentence, the rung of `narrationStart()` that found it,
-    ///   and how far it is from the reader (nil when the sentence's chapter is
-    ///   not in the spine, so there is nothing to measure against). Nil when
-    ///   there is no start, or the only one is too far away.
-    func narrationStartIfNear() -> (entry: SMILEntry, via: String, distance: Double?)? {
-        guard let timeline, let package else { return nil }
-        guard let (entry, via) = narrationStart() else {
-            IssaLog.warning("narration has nowhere to start", [
-                "book": book.title, "chapter": String(chapterIndex),
-                "page": String(pageIndex), "entries": String(timeline.entries.count),
-            ])
-            return nil
-        }
+    /// - Returns: nil when there is no start at all.
+    func narrationStartCandidate() -> NarrationStartCandidate? {
+        guard let timeline, let package, let (entry, via) = narrationStart() else { return nil }
         // The proximity check, which is the actual fix. Refusing is right:
         // the alternative on the way in was a position, which plays, and which
         // is written to the server within two seconds.
@@ -1545,35 +1550,76 @@ public final class ReaderModel {
         // most of a book away and the play button was permanently dead.
         let at = Self.spineProgress(of: entry, in: package, timeline: timeline)
         let distance = at.map { abs($0 - bookProgress) }
-        if let distance, distance > Self.narrationProximityLimit {
-            IssaLog.warning("narration would start too far away", [
-                "book": book.title, "via": via, "chapter": String(chapterIndex),
-                "distance": String(format: "%.4f", distance),
-                "reader": String(format: "%.4f", bookProgress),
-                "candidate": String(format: "%.4f", at ?? -1),
+        return NarrationStartCandidate(
+            entry: entry, via: via, distance: distance, at: at,
+            isNear: distance.map { $0 <= Self.narrationProximityLimit } ?? true,
+        )
+    }
+
+    /// Where narration would begin, if it is near enough to the reader to be
+    /// allowed to: `narrationStartCandidate()` held to `narrationProximityLimit`.
+    ///
+    /// One decision, because it is asked two ways. Pressing play asks it to
+    /// begin there, and the player sheet asks it before anything has played, to
+    /// draw the place Play would begin rather than the start of the book. They
+    /// must not disagree: a sheet showing a position Play then refuses, or
+    /// starts somewhere else, would be wrong in the one way it exists to avoid.
+    ///
+    /// Logs its refusals, as it always has, so a play that does nothing says
+    /// why. The sheet does not ask this: it asks `narrationStartCandidate()`,
+    /// which is the same decision without the log, because nobody pressed Play
+    /// and a refusal that never happened does not belong in the diagnostics a
+    /// reader exports.
+    ///
+    /// - Returns: the sentence, the rung of `narrationStart()` that found it,
+    ///   and how far it is from the reader (nil when the sentence's chapter is
+    ///   not in the spine, so there is nothing to measure against). Nil when
+    ///   there is no start, or the only one is too far away.
+    func narrationStartIfNear() -> (entry: SMILEntry, via: String, distance: Double?)? {
+        guard let timeline, package != nil else { return nil }
+        guard let candidate = narrationStartCandidate() else {
+            IssaLog.warning("narration has nowhere to start", [
+                "book": book.title, "chapter": String(chapterIndex),
+                "page": String(pageIndex), "entries": String(timeline.entries.count),
             ])
             return nil
         }
-        return (entry, via, distance)
+        guard candidate.isNear else {
+            IssaLog.warning("narration would start too far away", [
+                "book": book.title, "via": candidate.via, "chapter": String(chapterIndex),
+                "distance": String(format: "%.4f", candidate.distance ?? -1),
+                "reader": String(format: "%.4f", bookProgress),
+                "candidate": String(format: "%.4f", candidate.at ?? -1),
+            ])
+            return nil
+        }
+        return (candidate.entry, candidate.via, candidate.distance)
     }
 
     /// Where the player sheet should draw a read-along nobody has started, so
     /// that it shows the place Play would begin and not the start of the book.
     ///
     /// Nil once the narration has a sentence of its own — the coordinator's
-    /// numbers are the truth from then on — and for a book with no narration.
-    /// Until then it is the sentence `narrationStartIfNear()` picks, read
-    /// through `ReadalongCoordinator.readout(at:)` so that it is the position
-    /// and chapter span the coordinator publishes the moment Play puts the
-    /// voice there. When Play would begin nowhere — no narration on this page
-    /// or near it, or the nearest too far away to start from — the reader's own
-    /// place stands in, byte-weighted as `bookProgress` is and with no chapter
-    /// to scope to, as the television draws its progress before narration has
-    /// an anchor.
+    /// numbers are the truth from then on — for a book with no narration, and
+    /// when there is no narration at or ahead of the reader at all. Until then
+    /// it is the sentence `narrationStartCandidate()` picks, read through
+    /// `ReadalongCoordinator.readout(at:)` so that it is the position and
+    /// chapter span the coordinator publishes the moment Play puts the voice
+    /// there.
+    ///
+    /// When that sentence is too far away for Play to begin from, it is still
+    /// what is drawn — on the narrated audio's clock, which is the only clock
+    /// the sheet's bar has — but `playable` is false, so the sheet can say Play
+    /// will not go there. The reader's own `bookProgress` used to stand in, and
+    /// it is byte-weighted spine progress: drawn on the audio's bar it put the
+    /// thumb, both times and the percentage in the wrong place, for a Play that
+    /// then did nothing.
     ///
     /// Display only. Nothing is loaded, cued, highlighted or saved: cueing the
     /// player to read these numbers off it left a sentence behind, so a reader
-    /// who closed the sheet and read on found Play resuming pages back.
+    /// who closed the sheet and read on found Play resuming pages back. And
+    /// nothing is logged, for the reason `narrationStartCandidate()` is not
+    /// `narrationStartIfNear()`.
     ///
     /// Computed, so it cannot go stale behind a page turn or a stop, and
     /// memoised per page, because working out where narration starts walks the
@@ -1587,12 +1633,12 @@ public final class ReaderModel {
         if let memo = pendingNarrationMemo, memo.page == page, memo.generation == narrationGeneration {
             return memo.start
         }
-        let start: PendingNarrationStart
-        if let (entry, _, _) = narrationStartIfNear() {
-            let readout = readalong.readout(at: entry)
-            start = PendingNarrationStart(bookProgress: readout.bookProgress, chapterSpan: readout.chapterSpan)
-        } else {
-            start = PendingNarrationStart(bookProgress: bookProgress, chapterSpan: nil)
+        let start = narrationStartCandidate().map { candidate in
+            let readout = readalong.readout(at: candidate.entry)
+            return PendingNarrationStart(
+                bookProgress: readout.bookProgress, chapterSpan: readout.chapterSpan,
+                entry: candidate.entry, playable: candidate.isNear,
+            )
         }
         pendingNarrationMemo = (page, narrationGeneration, start)
         return start
@@ -1624,6 +1670,34 @@ public final class ReaderModel {
         // alone — it used to be the only compensation for a coordinator that
         // could not see a document change it had caused, and that was true for
         // the play path only, leaving every seek uncovered.
+        await followNarration(toDocument: entry.textHref, fragment: entry.fragmentID)
+    }
+
+    /// Puts the voice on the sentence at a chosen book position, without
+    /// playing, and turns the page to it.
+    ///
+    /// For the player sheet before narration has started, whose slider and skip
+    /// buttons name a place while the coordinator holds none. The coordinator
+    /// announces a chapter change only when it is moving *from* a sentence in
+    /// another document, and from nothing it announces none — so a cue into
+    /// another chapter moved the voice and left the page where it was, the gap
+    /// `startNarration` closes for Play by following explicitly. This does the
+    /// same, after a seek of the kind the scrubber makes: the reader naming a
+    /// place, which `onSeek` records.
+    ///
+    /// Within the chapter it is on, the page is turned by the fragment change
+    /// the seek announces, under the reader's follow setting. `followNarration`
+    /// is the chapter-crossing half, and — as for `startNarration` and the
+    /// coordinator's own chapter hook — it does not consult that setting: a
+    /// sheet that has moved the voice into another chapter has to show the
+    /// reader where it went.
+    ///
+    /// - Parameter progress: a fraction of the whole narrated book, as
+    ///   `ReadalongCoordinator.seek(toBookProgress:)` takes it.
+    public func cueNarration(toBookProgress progress: Double) async {
+        guard let readalong else { return }
+        await readalong.seek(toBookProgress: progress)
+        guard let entry = readalong.activeEntry else { return }
         await followNarration(toDocument: entry.textHref, fragment: entry.fragmentID)
     }
 

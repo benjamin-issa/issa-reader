@@ -1,4 +1,5 @@
 import IssaCore
+import IssaEPUB
 import IssaPlayback
 import IssaUI
 import SwiftUI
@@ -10,9 +11,31 @@ import SwiftUI
 /// a bar scoped to the chapter, the chapter's extent on the book clock — the
 /// pair `ReadalongCoordinator` publishes as `bookProgress` and `chapterSpan`
 /// once Play has put the voice there.
+///
+/// Always on the narrated audio's clock, the one the sheet's bar is drawn on —
+/// never the reader's byte-weighted place in the spine, which is a different
+/// scale and put the thumb somewhere else entirely.
 public struct PendingNarrationStart {
     public let bookProgress: Double
     public let chapterSpan: (start: TimeInterval, duration: TimeInterval)?
+    /// The sentence these numbers stand for.
+    public let entry: SMILEntry
+    /// Whether Play would begin there. False when the narration ahead is too
+    /// far from the reader's page for Play to start from: the numbers are
+    /// still where that narration is, so the bar is true, but Play and skip
+    /// would do nothing and the sheet disables them. A drag on the slider is
+    /// still the reader naming a place, and still works.
+    public let playable: Bool
+
+    /// The fraction of the book a skip of `delta` seconds lands on, measured
+    /// from where the sentence begins on the book clock.
+    ///
+    /// From the sentence's own time and not from `bookProgress`, so that the
+    /// answer is a time on the clock the coordinator seeks by, and clamped to
+    /// the book.
+    func progress(skippingBy delta: TimeInterval, inBookOf total: TimeInterval) -> Double {
+        min(max((entry.cumulativeEnd - entry.duration + delta) / total, 0), 1)
+    }
 }
 
 /// What the player sheet is given for a read-along that has not started.
@@ -33,13 +56,20 @@ public struct NarrationFromPage {
     let pending: @MainActor () -> PendingNarrationStart?
     /// What the footer's Play does for this book: begin from the page.
     let start: @MainActor () async -> Void
+    /// What the slider and the skip buttons do before the voice has a place:
+    /// put it at this fraction of the book, and turn the page to it. The
+    /// coordinator alone moves the voice and leaves the page where it was when
+    /// the place is in another chapter.
+    let cue: @MainActor (Double) async -> Void
 
     public init(
         pending: @escaping @MainActor () -> PendingNarrationStart?,
         start: @escaping @MainActor () async -> Void,
+        cue: @escaping @MainActor (Double) async -> Void,
     ) {
         self.pending = pending
         self.start = start
+        self.cue = cue
     }
 }
 
@@ -112,6 +142,24 @@ public struct PlayerView: View {
 
     private var progress: Double {
         scrubbing ? scrubValue : readout.fraction
+    }
+
+    /// Why Play and skip are dimmed, when they are because the narration is
+    /// out of reach of the page: said once, on each, for VoiceOver.
+    private var notPlayableHint: String? {
+        guard let pending, !pending.playable else { return nil }
+        return "The narration is too far from this page to start here. Drag the slider to choose a place."
+    }
+
+    /// Moves to a place in the book the reader chose: through the reader before
+    /// the voice has one, so that the page follows, and through the coordinator
+    /// after.
+    private func move(toBookProgress target: Double) async {
+        if pending != nil, let fromPage {
+            await fromPage.cue(target)
+        } else {
+            await coordinator?.seek(toBookProgress: target)
+        }
     }
 
     /// Shown under the title while a chapter is actually playing: an audiobook
@@ -200,7 +248,7 @@ public struct PlayerView: View {
                         // the bar drew it — which for a chapter-scoped bar is
                         // not the same as the raw fraction.
                         let target = readout.bookProgress(forFraction: scrubValue)
-                        Task { await coordinator?.seek(toBookProgress: target) }
+                        Task { await move(toBookProgress: target) }
                     }
                 },
             )
@@ -305,7 +353,8 @@ public struct PlayerView: View {
                     .foregroundStyle(.white)
             }
             .buttonStyle(.plain)
-            .disabled(coordinator == nil)
+            .disabled(coordinator == nil || pending?.playable == false)
+            .accessibilityHint(notPlayableHint ?? "")
 
             skipButton(
                 seconds: settings.commandMap.skipForwardInterval,
@@ -320,12 +369,12 @@ public struct PlayerView: View {
         Button {
             Task {
                 // Before the voice has a place, a skip is measured from where
-                // Play would begin. The coordinator refuses a skip it has no
-                // anchor for, so as it stands the button did nothing.
-                if let pending, let total = coordinator?.totalDuration, total > 0 {
+                // Play would begin, on the book clock, and goes through the
+                // reader so the page follows. The coordinator refuses a skip it
+                // has no anchor for, so as it stands the button did nothing.
+                if let pending, pending.playable, let total = coordinator?.totalDuration, total > 0 {
                     let delta = action == .skipForward ? seconds : -seconds
-                    await coordinator?.seek(
-                        toBookProgress: min(max(pending.bookProgress + delta / total, 0), 1))
+                    await move(toBookProgress: pending.progress(skippingBy: delta, inBookOf: total))
                 } else {
                     await coordinator?.perform(action, using: settings.commandMap)
                 }
@@ -341,7 +390,8 @@ public struct PlayerView: View {
             .foregroundStyle(Palette.ink)
         }
         .buttonStyle(.plain)
-        .disabled(coordinator == nil)
+        .disabled(coordinator == nil || pending?.playable == false)
+        .accessibilityHint(notPlayableHint ?? "")
     }
 
     private var rateControl: some View {
