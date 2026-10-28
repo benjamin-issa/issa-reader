@@ -48,7 +48,7 @@ accommodate it.
 | Controls | Every external control remappable per surface — phone, CarPlay, headphones — including a car's steering-wheel buttons |
 | Apple TV | Device-code sign-in, poster-shelf library, and a real page of the book with the spoken sentence highlighted, chapter marks on a timeline, and page turns from the remote |
 | Mac | Sidebar library, each book in its own window, menu-bar transport, `issareader://` links and Handoff |
-| Ask about a book | A question about the story so far, answered on the device by Apple Intelligence from the part you have actually read — never from further on. Off by default; iPhone, iPad and Mac with Apple Intelligence, not Apple TV |
+| Ask about a book | A question about the story so far, answered on the device by Apple Intelligence from the part you have actually read — never from further on. On by default where the device can run it, and off in Settings; iPhone, iPad and Mac with Apple Intelligence, not Apple TV |
 | Widget | Current book, chapter and progress from a shared App Group snapshot |
 | Books from your files | With or without a server, a DRM-free EPUB chosen from Files or iCloud Drive is copied into the app and read on that device alone, with read-along narration when it has media overlays. Kept apart from the server's library and never sent anywhere; iPhone, iPad and Mac, not Apple TV |
 
