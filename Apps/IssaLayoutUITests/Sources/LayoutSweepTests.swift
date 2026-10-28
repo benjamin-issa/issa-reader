@@ -677,16 +677,19 @@ final class LayoutSweepTests: XCTestCase {
             return XCTFail("the read-along book has no play button in its footer")
         }
         play.tap()
+        // The sweep's book has stub audio a fraction of a second long under
+        // clips that claim seconds, so narration can start, run off the end of
+        // the book and stop before a poll ever sees "Pause narration". It
+        // failed that way on every 375-point phone, from a reader resumed in
+        // the last chapter. What it leaves behind is the lit sentence, which
+        // is what this test is about, so the pause is taken if it is seen and
+        // not required.
         let pause = app.buttons["Pause narration"].firstMatch
-        // Generous: starting the engine on a busy machine has taken longer than
-        // twenty seconds, and then the test reports a missing marker that was
-        // only late.
-        guard pause.waitForExistence(timeout: 60) else {
+        if pause.waitForExistence(timeout: 5) { pause.tap() }
+        guard app.buttons["Play narration"].firstMatch.waitForExistence(timeout: 60) else {
             capture(app, "readerStopNotStarted")
-            return XCTFail("narration never started, so there is no marker to clear")
+            return XCTFail("narration never came to rest, so there is no marker to clear")
         }
-        pause.tap()
-        XCTAssertTrue(app.buttons["Play narration"].firstMatch.waitForExistence(timeout: 10))
 
         XCTAssertTrue(ellipsisMenuOffersStop(app, capturing: "readerMoreStop"),
                       "Stop Narration is missing while a sentence is lit")
