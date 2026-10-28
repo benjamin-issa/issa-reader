@@ -122,6 +122,12 @@ release still works with `web-v2.14.21` and the 3.x betas up to `beta.40`
   runs also exercise the older device-approval page in `approve-device.mjs`,
   which the pins' runs no longer reach.
 
+## Tests that act on one item of many
+
+- **A per-row action is tested on rows other than the first, and by identity.** Long-press menus, swipes and row buttons are tested on a middle row and the last one, and the test asserts which book the action reached. A first-row-only test passes the bug where every row acts on the first. That bug shipped on the iPhone's Downloads screen in 1.5.1, under two tests that both pressed Dracula, the first row.
+- **A bug fixed on one platform gets a test on every platform that shares the code.** The Mac's Downloads menu was fixed for that bug (F1) and tested on the Mac alone. The iPhone kept it.
+- **What no accessibility query can see needs a pixel check or a contact sheet.** Colour, in particular, cannot be asserted from the accessibility tree. The highlight menu's swatches all drew in the accent colour until 1.5.2, and no test could have noticed.
+
 ## The App Review server stays on Storyteller 2
 
 The server Apple's reviewers sign into runs **Storyteller 2 (`web-v2.14.21`)
