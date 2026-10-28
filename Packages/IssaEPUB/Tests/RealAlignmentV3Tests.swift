@@ -13,7 +13,8 @@ import Testing
 ///
 /// | Server | Store (`Tools/docker/data/real-alignment/<tag>/`) | Staged as |
 /// | --- | --- | --- |
-/// | `web-v3.0.0-beta.49` | `pw3.epub`, `pw3-loop.epub` | `/tmp/pw3.epub`, `/tmp/pw3-loop.epub` |
+/// | `web-v3.0.0-beta.56` | `pw3.epub`, `pw3-loop.epub` | `/tmp/pw3.epub`, `/tmp/pw3-loop.epub` |
+/// | `web-v3.0.0-beta.49` | `pw3.epub`, `pw3-loop.epub` | `/tmp/pw3-beta49.epub`, `/tmp/pw3-loop-beta49.epub` |
 /// | `web-v3.0.0-beta.46` | `pw3.epub`, `pw3-loop.epub` | `/tmp/pw3-beta46.epub`, `/tmp/pw3-loop-beta46.epub` |
 /// | `web-v3.0.0-beta.40` | `pw3.epub`, `pw3-loop.epub` | `/tmp/pw3-beta40.epub`, `/tmp/pw3-loop-beta40.epub` |
 ///
@@ -56,7 +57,10 @@ struct RealAlignmentV3Tests {
 
     /// Newest first: the pinned beta, then the ones before it.
     static let pairs = [
-        Pair(tag: "web-v3.0.0-beta.49", interludePath: "/tmp/pw3.epub", loopPath: "/tmp/pw3-loop.epub"),
+        Pair(tag: "web-v3.0.0-beta.56", interludePath: "/tmp/pw3.epub", loopPath: "/tmp/pw3-loop.epub"),
+        Pair(
+            tag: "web-v3.0.0-beta.49",
+            interludePath: "/tmp/pw3-beta49.epub", loopPath: "/tmp/pw3-loop-beta49.epub"),
         Pair(
             tag: "web-v3.0.0-beta.46",
             interludePath: "/tmp/pw3-beta46.epub", loopPath: "/tmp/pw3-loop-beta46.epub"),
