@@ -96,6 +96,11 @@ final class BookMenuFlowTests: XCTestCase {
 
     /// A downloaded row's menu is the book's menu with the row's own removal
     /// in it, and its View details reaches the book.
+    ///
+    /// A row in the middle of the list, not the first. The first is the one a
+    /// menu that always opens on the first row would still get right, which is
+    /// what the phone's Downloads screen did; `MenuTargetingFlowTests` presses
+    /// the first, a middle and the last, and checks the menu's whole contents.
     func testDownloadedRowOffersDetailsAndRemoval() {
         let app = launch()
         let manage = app.buttons["Manage downloads"].firstMatch
@@ -103,14 +108,14 @@ final class BookMenuFlowTests: XCTestCase {
         manage.tap()
 
         let row = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "label BEGINSWITH %@", "Dracula, "))
+            .matching(NSPredicate(format: "label BEGINSWITH %@", "Pride and Prejudice, "))
             .firstMatch
-        XCTAssertTrue(row.waitForExistence(timeout: 30), "no Dracula row")
+        XCTAssertTrue(row.waitForExistence(timeout: 30), "no Pride and Prejudice row")
         openMenu(on: row, in: app)
         XCTAssertTrue(app.buttons["Remove download"].firstMatch.waitForExistence(timeout: 10),
                       "the row's menu lost its removal")
         viewDetails(app)
-        assertBookPage(showing: "Dracula", in: app)
+        assertBookPage(showing: "Pride and Prejudice", in: app)
     }
 
     /// A removal from the library grid, which lists no downloads of its own:

@@ -322,6 +322,29 @@ final class LayoutSweepTests: XCTestCase {
         assertHorizontallyContained(try shelf.snapshot(), reference, screen: "settings")
         capture(shelf, "settings")
 
+        // Downloads & storage, pushed from it. Unlike Settings it is a
+        // `ScrollView` and not a `List` on the phone — a `List` made every
+        // card's long press open the first card's menu — so its margin is
+        // ours to assert, as the Reading tab's is, and it has a screenshot at
+        // every width: the storage card, the Wi-Fi rule, and the rows.
+        let downloadsLink = shelf.buttons["Downloads & storage"].firstMatch
+        for _ in 0..<4 where !(downloadsLink.exists && downloadsLink.isHittable) {
+            shelf.collectionViews.firstMatch.swipeUp(velocity: .slow)
+        }
+        XCTAssertTrue(downloadsLink.waitForExistence(timeout: 15), "no Downloads & storage row in Settings")
+        downloadsLink.tap()
+        try check(shelf, screen: "downloads", root: "screen.downloads", content: "content.downloads")
+        // The rows are the fixture's planted downloads: a screen that drew the
+        // storage card and no rows would still have a margin.
+        XCTAssertTrue(
+            shelf.descendants(matching: .any)
+                .matching(NSPredicate(format: "identifier BEGINSWITH %@", "downloads.row."))
+                .firstMatch.waitForExistence(timeout: 15),
+            "the Downloads screen listed none of the planted downloads")
+        shelf.navigationBars.buttons.firstMatch.tap()
+        XCTAssertTrue(shelf.descendants(matching: .any)["screen.settings"].waitForExistence(timeout: 15),
+                      "Back did not return to Settings")
+
         // Advanced, open, with the row to the books from Files, and the list
         // it pushes — the signed-in placement, inside the Settings tab.
         // Near the foot of the list, below the fold on a phone.
