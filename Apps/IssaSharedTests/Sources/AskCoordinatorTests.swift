@@ -493,17 +493,32 @@ struct AskCoordinatorTests {
 
     @Test("Settings' footer says both things while Apple Intelligence is off")
     func footerSaysBothThings() {
-        let footer = AskSettingsSection.footer(for: .appleIntelligenceOff)
+        let footer = AskSettingsSection.footer(for: .appleIntelligenceOff, askEnabled: true)
         #expect(footer.contains(AskDevice.settingsPath))
         #expect(footer.contains("hide the button"))
-        #expect(AskSettingsSection.footer(for: .modelDownloading).contains("hide the button"))
+        #expect(AskSettingsSection.footer(for: .modelDownloading, askEnabled: true)
+            .contains("hide the button"))
+    }
+
+    /// With the switch already off there is no button, so no advice to hide it;
+    /// what the footer says about Apple Intelligence is unchanged.
+    @Test("Settings' footer stops telling a reader to hide a button they have hidden")
+    func footerDropsTheAdviceOnceAskIsOff() {
+        let off = AskSettingsSection.footer(for: .appleIntelligenceOff, askEnabled: false)
+        #expect(off.contains(AskDevice.settingsPath))
+        #expect(!off.contains("hide the button"))
+        #expect(!off.contains("turn this off"))
+        let downloading = AskSettingsSection.footer(for: .modelDownloading, askEnabled: false)
+        #expect(downloading.contains("Asking will work once it finishes."))
+        #expect(!downloading.contains("hide the button"))
+        #expect(!downloading.hasSuffix(" "))
     }
 
     @Test("a device that can never answer is not told how to hide a button it never sees")
     func unsupportedDevicesAreNotToldToHideAnything() {
         for availability in [AskAvailability.unsupportedDevice, .unsupportedOnThisPlatform] {
             #expect(!AskSheet.unavailableSentence(for: availability).contains(AskDevice.switchTitle))
-            #expect(!AskSettingsSection.footer(for: availability).contains("hide"))
+            #expect(!AskSettingsSection.footer(for: availability, askEnabled: true).contains("hide"))
         }
     }
 }

@@ -23,7 +23,7 @@ struct AskSettingsSection: View {
     var body: some View {
         @Bindable var settings = settings
 
-        return SettingsSection(note: Self.footer(for: availability)) {
+        return SettingsSection(note: Self.footer(for: availability, askEnabled: settings.askEnabled)) {
             if Self.offersSwitch(for: availability) {
                 Toggle(AskDevice.switchTitle, isOn: $settings.askEnabled)
                     .accessibilityIdentifier("settings.ask.toggle")
@@ -56,14 +56,22 @@ struct AskSettingsSection: View {
         }
     }
 
-    static func footer(for availability: AskAvailability) -> String {
+    private static let hideSentence = " Or turn this off to hide the button in the reader."
+
+    /// The sentence under the switch.
+    ///
+    /// "Or turn this off to hide the button in the reader" is advice to a
+    /// reader whose switch is on. Once they have turned it off there is no
+    /// button to hide, and the footer would be telling them to do what they
+    /// just did, so it leaves that sentence out when `askEnabled` is false.
+    static func footer(for availability: AskAvailability, askEnabled: Bool) -> String {
         switch availability {
         case .available:
             "Apple Intelligence answers on this \(AskDevice.noun); nothing leaves it. Issa Reader tries to limit the answer to only the parts of the book you have read, but can't guarantee it, and the model can produce incorrect answers."
         case .appleIntelligenceOff:
-            "Apple Intelligence is turned off. \(AskDevice.turnOnSentence) Or turn this off to hide the button in the reader."
+            "Apple Intelligence is turned off. \(AskDevice.turnOnSentence)" + (askEnabled ? hideSentence : "")
         case .modelDownloading:
-            "Apple Intelligence is still downloading its model to this \(AskDevice.noun). Asking will work once it finishes. Or turn this off to hide the button in the reader."
+            "Apple Intelligence is still downloading its model to this \(AskDevice.noun). Asking will work once it finishes." + (askEnabled ? hideSentence : "")
         case .unsupportedDevice, .unsupportedOnThisPlatform:
             "This \(AskDevice.noun) doesn't support Apple Intelligence, so asking isn't available here."
         }
