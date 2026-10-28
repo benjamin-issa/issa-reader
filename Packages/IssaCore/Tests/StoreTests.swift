@@ -187,6 +187,42 @@ struct LibraryStoreTests {
         #expect(try await store.search("100").map(\.title).sorted() == ["100 Ways", "100% Pure"])
     }
 
+    /// Keeping a literal query off FTS cost the words around the punctuation:
+    /// one contiguous substring cannot match a reordered title, or a title
+    /// beside its author. Such a query runs through FTS and keeps the rows
+    /// that hold each marked term as typed.
+    @Test("a query with % or _ still matches words in any order and any field")
+    func literalTermsKeepFullTextSearch() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try LibraryStore(serverKey: "http://example.test", directory: directory)
+        let captured = try sampleBooks()
+        try #require(!captured.isEmpty)
+        var books = (0..<5).map { index in
+            var book = captured[index % captured.count]
+            book.uuid = UUID().uuidString.lowercased()
+            return book
+        }
+        books[0].title = "100% Pure"
+        books[0].authors = [Creator(uuid: "tolkien", name: "J. R. R. Tolkien")]
+        books[1].title = "100 Ways"
+        books[1].authors = [Creator(uuid: "tolkien", name: "J. R. R. Tolkien")]
+        books[2].title = "Café_Noir"
+        books[3].title = "Cafe Noir"
+        books[4].title = "Pure Gold"
+        try await store.replaceCatalogue(books)
+
+        // Reordered, and in the other direction.
+        #expect(try await store.search("Pure 100%").map(\.title) == ["100% Pure"])
+        #expect(try await store.search("100% pure").map(\.title) == ["100% Pure"])
+        // Across fields: the title carries the percent sign, the byline the name.
+        #expect(try await store.search("100% tolkien").map(\.title) == ["100% Pure"])
+        #expect(try await store.search("tolkien 100%").map(\.title) == ["100% Pure"])
+        // FTS's Unicode folding survives; LIKE would not fold the accent.
+        #expect(try await store.search("cafe_noir").map(\.title) == ["Café_Noir"])
+        #expect(try await store.search("CAFÉ_NOIR").map(\.title) == ["Café_Noir"])
+    }
+
     @Test("a single character still searches rather than returning nothing")
     func shortQueryFallsBack() async throws {
         let directory = temporaryDirectory()

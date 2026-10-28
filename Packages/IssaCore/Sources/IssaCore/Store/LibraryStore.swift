@@ -334,24 +334,40 @@ public actor LibraryStore {
     /// apostrophe or a single letter produces an FTS pattern that matches
     /// nothing, and returning nothing for "a" reads as a broken search box.
     ///
-    /// A query carrying `%`, `_` or `\` goes straight to the LIKE scan. The
-    /// tokenizer reads all three as separators, so FTS heard `100%` as `100`
-    /// and found "100 Ways" beside "100% Pure" — and, having found something,
-    /// returned before the literal match below could run.
+    /// A query carrying `%`, `_` or `\` still goes through FTS, then keeps only
+    /// the rows that hold each such term literally. The tokenizer reads all
+    /// three characters as separators, so FTS alone heard `100%` as `100` and
+    /// found "100 Ways" beside "100% Pure"; the filter is what puts the
+    /// punctuation back. Going straight to the LIKE scan instead cured that but
+    /// cost the rest of the search: LIKE is one contiguous substring per
+    /// column, so "Pure 100%" or "tolkien 100%" found nothing, and its case
+    /// folding is ASCII only. The filter compares in Swift, folding case and
+    /// diacritics the way FTS does, and across all the searchable fields, so a
+    /// term may sit in the title and its neighbour in the byline.
+    ///
+    /// Only if the filter leaves nothing does the LIKE scan below run.
     public func search(_ query: String) throws -> [Book] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return try allBooks() }
-        let wantsLiteral = trimmed.contains { $0 == "%" || $0 == "_" || $0 == "\\" }
+        // The terms FTS cannot be trusted with: the ones carrying a character
+        // its tokenizer discards.
+        let literalTerms = trimmed
+            .split(whereSeparator: \.isWhitespace)
+            .map(String.init)
+            .filter { term in term.contains { $0 == "%" || $0 == "_" || $0 == "\\" } }
 
         return try dbQueue.read { db in
-            if !wantsLiteral, let pattern = FTS5Pattern(matchingAllPrefixesIn: trimmed) {
+            if let pattern = FTS5Pattern(matchingAllPrefixesIn: trimmed) {
                 let rows = try BookRow.fetchAll(db, sql: """
                     SELECT book.* FROM book
                     JOIN bookSearch ON bookSearch.rowid = book.rowid
                     WHERE bookSearch MATCH ?
                     ORDER BY bm25(bookSearch), book.title
                     """, arguments: [pattern])
-                if !rows.isEmpty { return rows.compactMap { try? $0.decoded() } }
+                let kept = literalTerms.isEmpty
+                    ? rows
+                    : rows.filter { row in literalTerms.allSatisfy(row.containsLiterally) }
+                if !kept.isEmpty { return kept.compactMap { try? $0.decoded() } }
             }
             // What was typed is text, not a pattern: `%`, `_` and the escape
             // character itself are escaped, so a search for `100%` or `_` finds
@@ -536,6 +552,15 @@ struct BookRow: Codable, FetchableRecord, PersistableRecord {
 
     func decoded() throws -> Book {
         try JSONDecoder().decode(Book.self, from: json)
+    }
+
+    /// Whether `term` appears as written in any searchable field, ignoring
+    /// case and diacritics. The fields are the ones the FTS index and the LIKE
+    /// scan carry. This is the check FTS cannot make for `%`, `_` and `\`.
+    func containsLiterally(_ term: String) -> Bool {
+        [title, byline, subtitle, narrators, series, tags].contains {
+            $0.range(of: term, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+        }
     }
 }
 
