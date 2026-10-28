@@ -658,15 +658,10 @@ struct SwipeToRemove<Content: View>: View {
         self.content = content
     }
 
-    /// The revealed button's width, and the distance past which the swipe
-    /// means it without being tapped.
-    private static var revealWidth: CGFloat { 88 }
-    private static var commitDistance: CGFloat { 200 }
-
     @State private var drag: CGFloat = 0
 
     private var isOpen: Bool { openRow == id }
-    private var offset: CGFloat { min(0, (isOpen ? -Self.revealWidth : 0) + drag) }
+    private var offset: CGFloat { min(0, (isOpen ? -SwipeDecision.revealWidth : 0) + drag) }
 
     var body: some View {
         ZStack(alignment: .trailing) {
@@ -675,16 +670,21 @@ struct SwipeToRemove<Content: View>: View {
                 .offset(x: offset)
                 .gesture(
                     HorizontalPan(
-                        onChanged: { drag = $0 },
-                        onEnded: {
-                            let travelled = -offset
+                        onChanged: { translation in
+                            guard SwipeDecision.isHorizontal(translation) else { return }
+                            drag = translation.width
+                        },
+                        onEnded: { translation in
                             drag = 0
-                            if travelled > Self.commitDistance {
+                            switch SwipeDecision.outcome(translation: translation, isOpen: isOpen) {
+                            case .ignore:
+                                break
+                            case .commit:
                                 openRow = nil
                                 onRemove()
-                            } else if travelled > Self.revealWidth / 2 {
+                            case .reveal:
                                 withAnimation(.snappy) { openRow = id }
-                            } else {
+                            case .close:
                                 withAnimation(.snappy) { if isOpen { openRow = nil } }
                             }
                         },
@@ -720,12 +720,56 @@ struct SwipeToRemove<Content: View>: View {
                 // and a pale rose in dark — so white on it is unreadable in
                 // the dark theme, where it is the *light* half of the pair.
                 .foregroundStyle(Palette.paper)
-                .frame(width: max(Self.revealWidth, -offset))
+                .frame(width: max(SwipeDecision.revealWidth, -offset))
                 .frame(maxHeight: .infinity)
                 .background(Palette.alert)
         }
         .buttonStyle(.plain)
         .accessibilityHidden(true)
+    }
+}
+
+/// What a swipe on a `SwipeToRemove` row means, apart from the view.
+///
+/// The decision is a function of the pan's whole translation, not its
+/// horizontal part. `HorizontalPan` asks only whether a pan *begins* more
+/// horizontal than vertical, so a finger that starts sideways and then
+/// scrolls the screen down while drifting left would, judged on x alone, have
+/// travelled past the commit distance and removed a download the reader was
+/// scrolling past. The old `DragGesture` checked dominance at every change and
+/// at the end; the same check is made here, in one place both of them ask.
+enum SwipeDecision {
+    /// What the end of a swipe does to the row.
+    enum Outcome: Equatable {
+        /// Not a swipe: the pan turned vertical. The row is left as it was.
+        case ignore
+        /// Short of half the button: put the row away if it was open.
+        case close
+        /// Past half the button: leave it open on the Delete button.
+        case reveal
+        /// Past the commit distance: remove without waiting for a tap.
+        case commit
+    }
+
+    /// The revealed button's width, and the distance past which the swipe
+    /// means it without being tapped.
+    static var revealWidth: CGFloat { 88 }
+    static var commitDistance: CGFloat { 200 }
+
+    /// Whether the pan is more sideways than down. Equal is not: a diagonal
+    /// is a scroll that has not made up its mind, and the scroll view wins.
+    static func isHorizontal(_ translation: CGSize) -> Bool {
+        abs(translation.width) > abs(translation.height)
+    }
+
+    /// The outcome of a swipe that ended with this translation on a row that
+    /// was, or was not, already open on its Delete button.
+    static func outcome(translation: CGSize, isOpen: Bool) -> Outcome {
+        guard isHorizontal(translation) else { return .ignore }
+        let travelled = -min(0, (isOpen ? -revealWidth : 0) + translation.width)
+        if travelled > commitDistance { return .commit }
+        if travelled > revealWidth / 2 { return .reveal }
+        return .close
     }
 }
 
@@ -741,9 +785,12 @@ struct SwipeToRemove<Content: View>: View {
 /// pan when it does begin — a swipe that wanders a little downhill keeps
 /// swiping — as `simultaneousGesture` did.
 struct HorizontalPan: UIGestureRecognizerRepresentable {
-    /// The pan's horizontal travel so far, in points, left negative.
-    let onChanged: (CGFloat) -> Void
-    let onEnded: () -> Void
+    /// The pan's travel so far, in points, left negative. Both axes, so the
+    /// receiver can tell a swipe that wandered downhill from a scroll that
+    /// wandered sideways; the recognizer can only say how the pan began.
+    let onChanged: (CGSize) -> Void
+    /// The travel when the finger lifted.
+    let onEnded: (CGSize) -> Void
     /// The system took the touch away — a call, a drag begun elsewhere.
     let onCancelled: () -> Void
 
@@ -756,9 +803,11 @@ struct HorizontalPan: UIGestureRecognizerRepresentable {
     }
 
     func handleUIGestureRecognizerAction(_ pan: UIPanGestureRecognizer, context: Context) {
+        let point = pan.translation(in: pan.view)
+        let translation = CGSize(width: point.x, height: point.y)
         switch pan.state {
-        case .changed: onChanged(pan.translation(in: pan.view).x)
-        case .ended: onEnded()
+        case .changed: onChanged(translation)
+        case .ended: onEnded(translation)
         case .cancelled, .failed: onCancelled()
         default: break
         }
