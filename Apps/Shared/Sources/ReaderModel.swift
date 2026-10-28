@@ -155,6 +155,29 @@ public final class ReaderModel {
     /// by `narrationStart` only while that sentence is on the page on screen.
     @ObservationIgnored private var quitAnchor: AudioAnchor?
 
+    /// How many times narration has been put back to the just-opened state by
+    /// `clearNarration()`.
+    ///
+    /// Read by `startNarration` before it awaits and again when it comes back,
+    /// to tell a stop that overtook it from a file that would not play. The
+    /// coordinator already declines to finish a move a stop overtook, so the
+    /// start comes back refused either way, and only this says which: a stop
+    /// is the reader's own request and has nothing to report, where a refusal
+    /// is a notice. Counted rather than flagged, so a start made after the stop
+    /// is not taken for the one it overtook.
+    @ObservationIgnored private var narrationGeneration = 0
+
+    /// The answer `pendingNarrationStart` gave for one page, so that asking
+    /// again — and the player sheet asks on every redraw, a drag on its
+    /// scrubber included — is a comparison and not a walk of the chapter.
+    ///
+    /// Valid for the page it was worked out on and the generation it was worked
+    /// out under: the page is everything `narrationStart()` reads that can
+    /// change under a coordinator, apart from the stop, which empties
+    /// `quitAnchor` and so counts as a generation.
+    @ObservationIgnored private var pendingNarrationMemo:
+        (page: PageKey, generation: Int, start: PendingNarrationStart)?
+
     /// Which `open` is the current one. Bumped by every open, read after every
     /// suspension in it: an open that something newer has replaced — Try
     /// Again pressed while it was still preparing narration — stands down
@@ -171,6 +194,15 @@ public final class ReaderModel {
 
     public var hasNarration: Bool { readalong != nil }
     public var isPlaying: Bool { readalong?.player.isPlaying ?? false }
+
+    /// Whether narration has left a place on the book: a sentence the voice is
+    /// on, or one lit on the page — playing or paused.
+    ///
+    /// What there is to put back with `clearNarration()`, and so whether the
+    /// reader is offered it.
+    public var hasNarrationMarker: Bool {
+        readalong?.activeEntry != nil || activeFragmentID != nil
+    }
 
     /// How long a burst of style changes is allowed to run together.
     ///
@@ -1223,6 +1255,7 @@ public final class ReaderModel {
             previous.onSeek = nil
         }
         let coordinator = ReadalongCoordinator(timeline: timeline, audioFiles: audioFiles)
+        pendingNarrationMemo = nil
         // The saved rate is otherwise written to preferences and never applied,
         // so every book starts at 1x however the reader left it.
         coordinator.player.rate = Float(preferredRate)
@@ -1476,14 +1509,30 @@ public final class ReaderModel {
         return nil
     }
 
-    public func startNarration() async {
-        guard let readalong, let timeline, let package else { return }
+    /// Where narration would begin, if it is near enough to the reader to be
+    /// allowed to: `narrationStart()` held to `narrationProximityLimit`.
+    ///
+    /// One function, because it is asked two ways. Pressing play asks it to
+    /// begin there, and the player sheet asks it before anything has played, to
+    /// draw the place Play would begin rather than the start of the book. They
+    /// must not disagree: a sheet showing a position Play then refuses, or
+    /// starts somewhere else, would be wrong in the one way it exists to avoid.
+    ///
+    /// Logs its refusals, as it always has, so a play that does nothing says
+    /// why.
+    ///
+    /// - Returns: the sentence, the rung of `narrationStart()` that found it,
+    ///   and how far it is from the reader (nil when the sentence's chapter is
+    ///   not in the spine, so there is nothing to measure against). Nil when
+    ///   there is no start, or the only one is too far away.
+    func narrationStartIfNear() -> (entry: SMILEntry, via: String, distance: Double?)? {
+        guard let timeline, let package else { return nil }
         guard let (entry, via) = narrationStart() else {
             IssaLog.warning("narration has nowhere to start", [
                 "book": book.title, "chapter": String(chapterIndex),
                 "page": String(pageIndex), "entries": String(timeline.entries.count),
             ])
-            return
+            return nil
         }
         // The proximity check, which is the actual fix. Refusing is right:
         // the alternative on the way in was a position, which plays, and which
@@ -1503,8 +1552,56 @@ public final class ReaderModel {
                 "reader": String(format: "%.4f", bookProgress),
                 "candidate": String(format: "%.4f", at ?? -1),
             ])
-            return
+            return nil
         }
+        return (entry, via, distance)
+    }
+
+    /// Where the player sheet should draw a read-along nobody has started, so
+    /// that it shows the place Play would begin and not the start of the book.
+    ///
+    /// Nil once the narration has a sentence of its own — the coordinator's
+    /// numbers are the truth from then on — and for a book with no narration.
+    /// Until then it is the sentence `narrationStartIfNear()` picks, read
+    /// through `ReadalongCoordinator.readout(at:)` so that it is the position
+    /// and chapter span the coordinator publishes the moment Play puts the
+    /// voice there. When Play would begin nowhere — no narration on this page
+    /// or near it, or the nearest too far away to start from — the reader's own
+    /// place stands in, byte-weighted as `bookProgress` is and with no chapter
+    /// to scope to, as the television draws its progress before narration has
+    /// an anchor.
+    ///
+    /// Display only. Nothing is loaded, cued, highlighted or saved: cueing the
+    /// player to read these numbers off it left a sentence behind, so a reader
+    /// who closed the sheet and read on found Play resuming pages back.
+    ///
+    /// Computed, so it cannot go stale behind a page turn or a stop, and
+    /// memoised per page, because working out where narration starts walks the
+    /// chapter's fragments and the sheet reads this on every redraw. Reading it
+    /// registers the page, the layout and the coordinator's sentence with
+    /// whoever is observing, which is what lets the sheet follow a Play press
+    /// from this state to the coordinator's.
+    public var pendingNarrationStart: PendingNarrationStart? {
+        guard let readalong, readalong.activeEntry == nil else { return nil }
+        let page = pageKey
+        if let memo = pendingNarrationMemo, memo.page == page, memo.generation == narrationGeneration {
+            return memo.start
+        }
+        let start: PendingNarrationStart
+        if let (entry, _, _) = narrationStartIfNear() {
+            let readout = readalong.readout(at: entry)
+            start = PendingNarrationStart(bookProgress: readout.bookProgress, chapterSpan: readout.chapterSpan)
+        } else {
+            start = PendingNarrationStart(bookProgress: bookProgress, chapterSpan: nil)
+        }
+        pendingNarrationMemo = (page, narrationGeneration, start)
+        return start
+    }
+
+    public func startNarration() async {
+        guard let readalong else { return }
+        let generation = narrationGeneration
+        guard let (entry, via, distance) = narrationStartIfNear() else { return }
         IssaLog.info("narration start", [
             "book": book.title, "via": via, "chapter": String(chapterIndex),
             "page": String(pageIndex), "fragment": entry.fragmentID,
@@ -1514,7 +1611,11 @@ public final class ReaderModel {
         // place, and pressing play is not. Keeping this on the derived side of
         // the line is what leaves the position guard armed.
         guard await readalong.play(from: entry) else {
-            narrationWouldNotPlay(entry.audioHref)
+            // Not a file that would not play when a stop landed while it was
+            // opening: the coordinator declined to finish the move the stop
+            // overtook, and the reader has just asked for that. Nothing to say,
+            // and — by returning — nowhere to turn the page to.
+            if generation == narrationGeneration { narrationWouldNotPlay(entry.audioHref) }
             return
         }
         // Belt and braces, and idempotent: `followNarration` returns
@@ -1524,6 +1625,37 @@ public final class ReaderModel {
         // could not see a document change it had caused, and that was true for
         // the play path only, leaving every seek uncovered.
         await followNarration(toDocument: entry.textHref, fragment: entry.fragmentID)
+    }
+
+    /// Puts narration back to the state of a book just opened: no sentence lit,
+    /// none the voice is on, nothing playing.
+    ///
+    /// After listening, the last sentence stays lit and the coordinator stays on
+    /// it while the reader reads on, so Play resumes pages back there — and,
+    /// following the narration, turns the page back to it. This forgets that
+    /// place, so the next Play begins from the page, as it does on a book nobody
+    /// has played, and the sheet draws that.
+    ///
+    /// The reader's place is not part of what is forgotten, and nothing here
+    /// writes: not `positionOrigin`, not the saved position, not the stored audio
+    /// anchor. The position is the page the reader is on and is exactly what it
+    /// was; the anchor is where the voice last was and stays a record of it
+    /// until narration moves it. `restoredSentenceID` stays too — it is the
+    /// stored position's sentence and only a rung `narrationStart()` falls to
+    /// after the page has none.
+    ///
+    /// `quitAnchor` goes. It is where the voice was when the book was last put
+    /// down, and it outranks the page: left in place, the first Play after a
+    /// stop would start there again.
+    ///
+    /// Bumps the generation first, so a start still opening its audio is
+    /// already overtaken by the time the coordinator is emptied beneath it.
+    public func clearNarration() {
+        narrationGeneration += 1
+        readalong?.clearPosition()
+        narratedFragment = nil
+        narratedDocument = nil
+        quitAnchor = nil
     }
 
     /// Turns the book to the page a narrated fragment is on, loading its chapter.
@@ -1634,7 +1766,8 @@ public final class ReaderModel {
     ///
     /// - Returns: whether the narration reached the sentence. False when its
     ///   audio file is not on disk, in which case nothing moved and the caller
-    ///   still has a car engine that knows where it is.
+    ///   still has a car engine that knows where it is — or when the reader
+    ///   stopped narration while the file was opening, which put it back.
     @discardableResult
     public func resumeNarration(at entry: SMILEntry, playing: Bool) async -> Bool {
         guard let readalong else { return false }

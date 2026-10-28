@@ -395,6 +395,13 @@ public struct ReaderView: View {
             PlayerView(
                 book: model.book, session: model.readerSession,
                 coordinator: model.readalong, chapterTitle: model.chapterTitle,
+                // Before narration has started the coordinator holds nothing,
+                // so the sheet is told where Play would begin and given the
+                // footer's own Play to begin there.
+                fromPage: NarrationFromPage(
+                    pending: { model.pendingNarrationStart },
+                    start: { await togglePlaybackForThisBook() },
+                ),
             )
                 .presentationDetents([.large])
                 // The sheet's own backdrop, which is what shows behind the
@@ -1264,6 +1271,30 @@ public struct ReaderView: View {
             return
         }
         await model.togglePlayback()
+    }
+
+    /// Puts narration back to a book just opened, whichever engine is holding it.
+    ///
+    /// After listening, the last sentence stays lit and Play resumes there, pages
+    /// behind a reader who has read on. This stops the sound, lets go of the lock
+    /// screen, and forgets the place — `ReaderModel.clearNarration` — so the next
+    /// Play begins from the page. The reader's own place and the stored audio
+    /// anchor are not touched.
+    ///
+    /// Mirrors `togglePlaybackForThisBook`, including its refusal during a
+    /// hand-off: until the book has changed engines there is no telling which
+    /// one a stop should reach, and the next tap acts on the one that owns it.
+    private func stopNarrationForThisBook() {
+        guard !app.isHandingOffToReader(model.book.uuid) else { return }
+        if app.listeningBook?.uuid == model.book.uuid {
+            // The audiobook engine holds the book, so that is the thing playing.
+            app.stopListening(nowPlaying: nowPlaying)
+        } else if app.reader === model {
+            // Only if this book is the one narrating. `stopNarration` stops
+            // whichever is, and on the Mac another window's book may be.
+            app.stopNarration()
+        }
+        model.clearNarration()
     }
 
     /// The strip below the page.

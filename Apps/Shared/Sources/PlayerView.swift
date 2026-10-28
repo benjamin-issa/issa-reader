@@ -3,6 +3,46 @@ import IssaPlayback
 import IssaUI
 import SwiftUI
 
+/// Where a read-along that nobody has started would begin, in the numbers the
+/// player sheet draws.
+///
+/// What `ReaderModel.pendingNarrationStart` answers: the book position and, for
+/// a bar scoped to the chapter, the chapter's extent on the book clock — the
+/// pair `ReadalongCoordinator` publishes as `bookProgress` and `chapterSpan`
+/// once Play has put the voice there.
+public struct PendingNarrationStart {
+    public let bookProgress: Double
+    public let chapterSpan: (start: TimeInterval, duration: TimeInterval)?
+}
+
+/// What the player sheet is given for a read-along that has not started.
+///
+/// The coordinator exists from the moment a book opens and holds nothing: no
+/// sentence, no file, a book position of zero. Drawn as it stands the sheet
+/// shows the start of the book, and its Play button asks a player with no file
+/// to play. So the reader hands over the two things the sheet cannot find for
+/// itself: where Play would begin, and how to make Play begin there.
+///
+/// Closures, and the first one asked afresh each time, rather than a value taken
+/// when the sheet was built. The sheet has to leave this state the moment Play
+/// puts the voice somewhere, and reading the reader's own model from inside the
+/// sheet's body is what makes it do so.
+public struct NarrationFromPage {
+    /// Where Play would begin; nil once the narration has a place of its own,
+    /// and the sheet draws the coordinator's numbers instead.
+    let pending: @MainActor () -> PendingNarrationStart?
+    /// What the footer's Play does for this book: begin from the page.
+    let start: @MainActor () async -> Void
+
+    public init(
+        pending: @escaping @MainActor () -> PendingNarrationStart?,
+        start: @escaping @MainActor () async -> Void,
+    ) {
+        self.pending = pending
+        self.start = start
+    }
+}
+
 /// The player, as the design lays it out: square audiobook art, title and
 /// narrator, a scrubber, and transport whose skip buttons carry their own
 /// interval so the amount is never a mystery.
@@ -17,6 +57,10 @@ public struct PlayerView: View {
     /// left to itself this line is an archive path or nothing at all. The
     /// reader has the book's table of contents.
     let chapterTitle: String?
+    /// How to show, and start, a read-along that has not begun. Nil for every
+    /// host that has no page to start from — the mini player's sheet, the
+    /// library, the Mac's window — whose coordinator is playing or is not one.
+    let fromPage: NarrationFromPage?
 
     @Environment(NowPlayingController.self) private var nowPlaying
     @State private var scrubbing = false
@@ -24,21 +68,44 @@ public struct PlayerView: View {
 
     public init(
         book: Book, session: Session?, coordinator: (any PlaybackDriving)?,
-        chapterTitle: String? = nil,
+        chapterTitle: String? = nil, fromPage: NarrationFromPage? = nil,
     ) {
         self.book = book
         self.session = session
         self.coordinator = coordinator
         self.chapterTitle = chapterTitle
+        self.fromPage = fromPage
+    }
+
+    /// Where Play would begin, while the narration has no place of its own.
+    ///
+    /// Asked of the reader on every use, not kept: it is nil from the moment
+    /// Play puts the voice somewhere, and everything below then reads the
+    /// coordinator, with no state of this view to fall out of step.
+    private var pending: PendingNarrationStart? {
+        fromPage?.pending()
     }
 
     /// What the bar stands for, and what a drag on it means. One value, so the
     /// bar and its two times can never disagree.
+    ///
+    /// Before narration has started, the place Play would begin. The coordinator
+    /// answers a book position of zero then, and a bar that said so would show
+    /// the start of the book to someone reading the middle of it.
     private var readout: PlaybackProgress {
-        PlaybackProgress(
+        let totalDuration = coordinator?.totalDuration ?? book.narrationDuration ?? 0
+        if let pending {
+            return PlaybackProgress(
+                scope: settings.progressScope,
+                bookProgress: pending.bookProgress,
+                totalDuration: totalDuration,
+                chapterSpan: pending.chapterSpan,
+            )
+        }
+        return PlaybackProgress(
             scope: settings.progressScope,
             bookProgress: coordinator?.bookProgress ?? book.progress ?? 0,
-            totalDuration: coordinator?.totalDuration ?? book.narrationDuration ?? 0,
+            totalDuration: totalDuration,
             chapterSpan: coordinator?.chapterSpan,
         )
     }
@@ -217,7 +284,14 @@ public struct PlayerView: View {
             )
             Button {
                 Task {
-                    await coordinator?.perform(.playPause, using: settings.commandMap)
+                    // From the page when the voice has no place yet. The
+                    // coordinator's own play would press play on a player with
+                    // no file in it and call that playing.
+                    if let fromPage, fromPage.pending() != nil {
+                        await fromPage.start()
+                    } else {
+                        await coordinator?.perform(.playPause, using: settings.commandMap)
+                    }
                     // The lock screen otherwise keeps the old rate until the
                     // five-second poll, extrapolating a clock the audio has
                     // stopped following. The mini player already does this.
@@ -244,7 +318,18 @@ public struct PlayerView: View {
     /// answered without opening settings.
     private func skipButton(seconds: TimeInterval, symbol: String, action: PlaybackAction) -> some View {
         Button {
-            Task { await coordinator?.perform(action, using: settings.commandMap) }
+            Task {
+                // Before the voice has a place, a skip is measured from where
+                // Play would begin. The coordinator refuses a skip it has no
+                // anchor for, so as it stands the button did nothing.
+                if let pending, let total = coordinator?.totalDuration, total > 0 {
+                    let delta = action == .skipForward ? seconds : -seconds
+                    await coordinator?.seek(
+                        toBookProgress: min(max(pending.bookProgress + delta / total, 0), 1))
+                } else {
+                    await coordinator?.perform(action, using: settings.commandMap)
+                }
+            }
         } label: {
             ZStack {
                 Image(systemName: symbol)
