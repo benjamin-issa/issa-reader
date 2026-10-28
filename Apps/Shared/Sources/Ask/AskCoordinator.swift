@@ -321,9 +321,10 @@ final class AskCoordinator {
     /// Asks for notification permission the first time — and only the first
     /// time — a reader closes a sheet with a question still running.
     ///
-    /// Contextual on purpose: a permission sheet at launch, for a feature that
-    /// is off by default, is the prompt everybody denies. This one arrives at
-    /// the moment the reader has just expressed the wish to be told later.
+    /// Contextual on purpose: a permission sheet at launch, for a feature the
+    /// reader has not yet used, is the prompt everybody denies. This one
+    /// arrives at the moment the reader has just expressed the wish to be told
+    /// later.
     private func requestNotificationsOnce() {
         guard !defaults.bool(forKey: Self.askedForNotificationsKey) else { return }
         defaults.set(true, forKey: Self.askedForNotificationsKey)
@@ -496,6 +497,46 @@ enum AskDevice {
         #else
         "Settings › Apple Intelligence & Siri"
         #endif
+    }
+
+    /// Where Issa Reader's own switch for Ask is, which is not the same place on
+    /// the two platforms either: the phone's Settings is a tab of the app, the
+    /// Mac's is a window with Reading among its tabs (`MacSettingsView`).
+    ///
+    /// Named as the app's own, never as plain "Settings", because the sentence
+    /// that uses it also names `settingsPath` — the system's — and two
+    /// "Settings" in one breath is how somebody goes looking in the wrong one.
+    static var appSwitchPath: String {
+        #if os(macOS)
+        "Issa Reader › Settings › Reading"
+        #else
+        "Issa Reader’s Settings tab"
+        #endif
+    }
+
+    /// How to take the button away again, said wherever the button is
+    /// explained.
+    ///
+    /// Ask is on from the first launch for any reader whose device can answer,
+    /// so a reader who does not want it, and whose device is not ready, meets
+    /// a sparkle that does nothing yet. The switch is always theirs; this is
+    /// the sentence that says where it is. One copy, so the sheet behind the
+    /// sparkle and Settings cannot give two different routes to it.
+    static var hideButtonSentence: String {
+        "To hide this button, turn off “\(switchTitle)” in \(appSwitchPath)."
+    }
+
+    /// The switch's own label, which the sentence above quotes. One string, so
+    /// a rename in Settings cannot leave the sheet pointing at a switch that no
+    /// longer exists.
+    static let switchTitle = "Ask about your book"
+
+    /// How Apple Intelligence gets switched on, and what happens next.
+    ///
+    /// Turning it on is what starts the model's download, so "then come back"
+    /// was leaving out the part that takes a while.
+    static var turnOnSentence: String {
+        "Turn it on in \(settingsPath), and this \(noun) will download the model. Asking will work once it finishes."
     }
 }
 #endif

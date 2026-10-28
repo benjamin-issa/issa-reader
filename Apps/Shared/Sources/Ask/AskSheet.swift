@@ -370,18 +370,23 @@ struct AskSheet: View {
     /// One sentence, and never a toggle: a switch that can do nothing is worse
     /// than an explanation.
     private var unavailable: some View {
-        Text(unavailableSentence)
+        Text(Self.unavailableSentence(for: availability))
             .font(Typography.body)
             .foregroundStyle(Palette.inkSecondary)
             .fixedSize(horizontal: false, vertical: true)
     }
 
-    private var unavailableSentence: String {
+    /// What the sheet says when the device could answer but is not ready to.
+    ///
+    /// Both of those states end with the way to hide the button, because Ask is
+    /// on by default: a reader who opened this sheet by tapping a sparkle they
+    /// never asked for needs the way out as much as the way forward.
+    static func unavailableSentence(for availability: AskAvailability) -> String {
         switch availability {
         case .appleIntelligenceOff:
-            "Apple Intelligence is turned off. Turn it on in \(AskDevice.settingsPath), then come back."
+            "Apple Intelligence is turned off. \(AskDevice.turnOnSentence) \(AskDevice.hideButtonSentence)"
         case .modelDownloading:
-            "Apple Intelligence is still downloading its model to this \(AskDevice.noun). Asking will work once it finishes."
+            "Apple Intelligence is still downloading its model to this \(AskDevice.noun). Asking will work once it finishes. \(AskDevice.hideButtonSentence)"
         case .available:
             ""
         case .unsupportedDevice, .unsupportedOnThisPlatform:

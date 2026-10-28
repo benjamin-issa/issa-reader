@@ -417,22 +417,93 @@ struct AskCoordinatorTests {
 
     // MARK: - The setting
 
-    @Test("the Ask switch is off until it is turned on, and survives a relaunch")
+    @Test("the Ask switch is on until it is turned off, and every choice survives a relaunch")
     func askEnabledPersists() {
         let (defaults, name) = SharedFixtures.scratchDefaults()
         defer { UserDefaults.standard.removePersistentDomain(forName: name) }
 
         let settings = PlaybackSettings(suiteName: name)
-        #expect(!settings.askEnabled, "a feature nobody has asked for is off")
+        #expect(settings.askEnabled, "a reader who never saw the switch gets Ask")
         #expect(defaults.object(forKey: "issa.askAboutBook") == nil,
-                "and writes nothing until it is touched")
-
-        settings.askEnabled = true
-        #expect(defaults.bool(forKey: "issa.askAboutBook"))
-        // A fresh instance is what the next launch builds.
+                "and nothing is written until the switch is touched, so the default can still move")
+        // Reading it back is not choosing it.
         #expect(PlaybackSettings(suiteName: name).askEnabled)
+        #expect(defaults.object(forKey: "issa.askAboutBook") == nil)
 
         settings.askEnabled = false
+        #expect(defaults.object(forKey: "issa.askAboutBook") as? Bool == false)
+        // A fresh instance is what the next launch builds. An explicit off must
+        // not be read back as "never chose".
         #expect(!PlaybackSettings(suiteName: name).askEnabled)
+
+        settings.askEnabled = true
+        #expect(defaults.object(forKey: "issa.askAboutBook") as? Bool == true)
+        #expect(PlaybackSettings(suiteName: name).askEnabled)
+    }
+
+    @Test("a stored choice from before the default changed is kept, either way")
+    func storedChoiceSurvivesTheDefaultChange() {
+        // Written by builds that read it with `bool(forKey:)`: off was the
+        // default, so a stored true is someone who turned it on, and a stored
+        // false is someone who turned it on and off again.
+        for choice in [true, false] {
+            let (defaults, name) = SharedFixtures.scratchDefaults()
+            defer { UserDefaults.standard.removePersistentDomain(forName: name) }
+            defaults.set(choice, forKey: "issa.askAboutBook")
+            #expect(PlaybackSettings(suiteName: name).askEnabled == choice)
+        }
+    }
+
+    // MARK: - What a not-yet-ready device is told
+
+    @Test("Apple Intelligence off: the sheet says how to turn it on, what follows, and how to hide the button")
+    func sheetExplainsAppleIntelligenceOff() {
+        let sentence = AskSheet.unavailableSentence(for: .appleIntelligenceOff)
+        #expect(sentence.contains(AskDevice.settingsPath), "where to turn Apple Intelligence on")
+        #expect(sentence.contains("download the model"), "that turning it on is what fetches the model")
+        #expect(sentence.contains("Asking will work once it finishes"))
+        #expect(sentence.contains(AskDevice.switchTitle), "the switch, by its own label")
+        #expect(sentence.contains(AskDevice.appSwitchPath), "and where it is in this app")
+    }
+
+    @Test("a model still downloading: the sheet says so, and how to hide the button")
+    func sheetExplainsModelDownloading() {
+        let sentence = AskSheet.unavailableSentence(for: .modelDownloading)
+        #expect(sentence.contains("downloading its model"))
+        #expect(sentence.contains(AskDevice.switchTitle))
+        #expect(sentence.contains(AskDevice.appSwitchPath))
+    }
+
+    @Test("the in-app route is the app's own, never the system's")
+    func hideRouteIsNotTheSystemsSettings() {
+        #expect(AskDevice.appSwitchPath.contains("Issa Reader"))
+        #expect(AskDevice.appSwitchPath != AskDevice.settingsPath)
+        #expect(!AskDevice.hideButtonSentence.contains("Apple Intelligence"))
+    }
+
+    @Test("the switch is offered whenever the device could answer, and only then")
+    func switchIsOfferedWhereTheButtonIs() {
+        #expect(AskSettingsSection.offersSwitch(for: .available))
+        #expect(AskSettingsSection.offersSwitch(for: .modelDownloading))
+        // The reader's only way to hide a sparkle that cannot answer yet.
+        #expect(AskSettingsSection.offersSwitch(for: .appleIntelligenceOff))
+        #expect(!AskSettingsSection.offersSwitch(for: .unsupportedDevice))
+        #expect(!AskSettingsSection.offersSwitch(for: .unsupportedOnThisPlatform))
+    }
+
+    @Test("Settings' footer says both things while Apple Intelligence is off")
+    func footerSaysBothThings() {
+        let footer = AskSettingsSection.footer(for: .appleIntelligenceOff)
+        #expect(footer.contains(AskDevice.settingsPath))
+        #expect(footer.contains("hide the button"))
+        #expect(AskSettingsSection.footer(for: .modelDownloading).contains("hide the button"))
+    }
+
+    @Test("a device that can never answer is not told how to hide a button it never sees")
+    func unsupportedDevicesAreNotToldToHideAnything() {
+        for availability in [AskAvailability.unsupportedDevice, .unsupportedOnThisPlatform] {
+            #expect(!AskSheet.unavailableSentence(for: availability).contains(AskDevice.switchTitle))
+            #expect(!AskSettingsSection.footer(for: availability).contains("hide"))
+        }
     }
 }
