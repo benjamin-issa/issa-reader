@@ -678,7 +678,11 @@ final class LayoutSweepTests: XCTestCase {
         }
         play.tap()
         let pause = app.buttons["Pause narration"].firstMatch
-        guard pause.waitForExistence(timeout: 20) else {
+        // Generous: starting the engine on a busy machine has taken longer than
+        // twenty seconds, and then the test reports a missing marker that was
+        // only late.
+        guard pause.waitForExistence(timeout: 60) else {
+            capture(app, "readerStopNotStarted")
             return XCTFail("narration never started, so there is no marker to clear")
         }
         pause.tap()
