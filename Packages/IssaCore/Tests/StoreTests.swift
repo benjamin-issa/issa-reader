@@ -152,22 +152,39 @@ struct LibraryStoreTests {
 
     /// The LIKE fallback takes what was typed as text. `%` and `_` used to be
     /// wildcards, so a search for either returned the whole library.
+    ///
+    /// Each literal title has a rival spelled without the punctuation. FTS
+    /// reads `%`, `_` and `\` as separators, so before these queries skipped
+    /// it, `100%` found "100 Ways" too and never reached the literal match.
     @Test("a search for % or _ finds those characters, not everything")
     func likeWildcardsAreLiteral() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = try LibraryStore(serverKey: "http://example.test", directory: directory)
-        var books = Array(try sampleBooks().prefix(4))
-        try #require(books.count == 4)
+        // Six rows from however many the capture holds, each its own book.
+        let captured = try sampleBooks()
+        try #require(!captured.isEmpty)
+        var books = (0..<6).map { index in
+            var book = captured[index % captured.count]
+            book.uuid = UUID().uuidString.lowercased()
+            return book
+        }
         books[0].title = "100% Pure"
         books[1].title = "a_b"
         books[2].title = "back\\slash"
+        books[3].title = "100 Ways"
+        books[4].title = "a b"
+        books[5].title = "back slash"
         try await store.replaceCatalogue(books)
 
         #expect(try await store.search("%").map(\.title) == ["100% Pure"])
         #expect(try await store.search("_").map(\.title) == ["a_b"])
         #expect(try await store.search("100%").map(\.title) == ["100% Pure"])
+        #expect(try await store.search("a_b").map(\.title) == ["a_b"])
+        #expect(try await store.search("back\\slash").map(\.title) == ["back\\slash"])
         #expect(try await store.search("\\").map(\.title) == ["back\\slash"])
+        // The rivals are still found the ordinary way.
+        #expect(try await store.search("100").map(\.title).sorted() == ["100 Ways", "100% Pure"])
     }
 
     @Test("a single character still searches rather than returning nothing")

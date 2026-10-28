@@ -333,12 +333,18 @@ public actor LibraryStore {
     /// Falls back to a LIKE scan when the query has no usable tokens — a lone
     /// apostrophe or a single letter produces an FTS pattern that matches
     /// nothing, and returning nothing for "a" reads as a broken search box.
+    ///
+    /// A query carrying `%`, `_` or `\` goes straight to the LIKE scan. The
+    /// tokenizer reads all three as separators, so FTS heard `100%` as `100`
+    /// and found "100 Ways" beside "100% Pure" — and, having found something,
+    /// returned before the literal match below could run.
     public func search(_ query: String) throws -> [Book] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return try allBooks() }
+        let wantsLiteral = trimmed.contains { $0 == "%" || $0 == "_" || $0 == "\\" }
 
         return try dbQueue.read { db in
-            if let pattern = FTS5Pattern(matchingAllPrefixesIn: trimmed) {
+            if !wantsLiteral, let pattern = FTS5Pattern(matchingAllPrefixesIn: trimmed) {
                 let rows = try BookRow.fetchAll(db, sql: """
                     SELECT book.* FROM book
                     JOIN bookSearch ON bookSearch.rowid = book.rowid
