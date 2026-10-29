@@ -723,8 +723,10 @@ public struct ReaderView: View {
     }
 
     /// The tools on the right of the top bar: Ask when it is on offer, Find,
-    /// text options, Marks, the bookmark, and an ellipsis menu holding Contents
-    /// and whatever `fit` has folded into it.
+    /// text options, Marks, the bookmark, and an ellipsis menu holding
+    /// whatever `fit` has folded into it, Contents and, in a narrated book,
+    /// Stop Narration. Where that would be Contents alone, Contents is a
+    /// button of its own instead (`ReaderOverflow`).
     ///
     /// Find and Marks are the Mac toolbar's own glyphs and words, so the same
     /// two actions look the same on every platform that has room to show them.
@@ -785,27 +787,44 @@ public struct ReaderView: View {
         }
         .accessibilityLabel(model.isPageBookmarked ? "Remove bookmark" : "Bookmark this page")
 
-        Menu {
-            if !fit.showsFind {
-                Button("Find in book", systemImage: "magnifyingglass") { showsSearch = true }
+        switch ReaderOverflow(
+            foldsFind: !fit.showsFind, foldsMarks: !fit.showsMarks,
+            hasNarration: model.hasNarration,
+        ) {
+        case .contentsButton:
+            Button { showsContents = true } label: {
+                Image(systemName: "list.bullet").topBarTarget()
             }
-            if !fit.showsMarks {
-                Button("Marks", systemImage: "bookmark.square") { showsAnnotations = true }
+            .accessibilityIdentifier("reader.contents")
+            .accessibilityLabel("Contents")
+        case .menu(let rows):
+            Menu {
+                ForEach(rows, id: \.self) { row in
+                    switch row {
+                    case .find:
+                        Button("Find in book", systemImage: "magnifyingglass") { showsSearch = true }
+                    case .marks:
+                        Button("Marks", systemImage: "bookmark.square") { showsAnnotations = true }
+                    case .contents:
+                        Button("Contents", systemImage: "list.bullet") { showsContents = true }
+                    case .stopNarration:
+                        // A view of its own, so that what it reads is its own
+                        // to be redrawn for. Whether narration has left a
+                        // sentence lit changes with every sentence while it
+                        // plays, and read here it made this whole screen —
+                        // three top-bar rows, the footer, the overlays —
+                        // recompute every few seconds for a menu item that is
+                        // almost always closed.
+                        StopNarrationMenuItem(model: model) {
+                            Task { await stopNarrationForThisBook() }
+                        }
+                    }
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle").topBarTarget()
             }
-            Button("Contents", systemImage: "list.bullet") { showsContents = true }
-            // A view of its own, so that what it reads is its own to be
-            // redrawn for. Whether narration has left a sentence lit changes
-            // with every sentence while it plays, and read here it made this
-            // whole screen — three top-bar rows, the footer, the overlays —
-            // recompute every few seconds for a menu item that is almost
-            // always closed.
-            StopNarrationMenuItem(model: model) {
-                Task { await stopNarrationForThisBook() }
-            }
-        } label: {
-            Image(systemName: "ellipsis.circle").topBarTarget()
+            .accessibilityIdentifier("reader.more")
         }
-        .accessibilityIdentifier("reader.more")
     }
 
     /// One candidate row of the top bar: the way back, then the tools.
@@ -1609,13 +1628,45 @@ public struct ReaderView: View {
 }
 
 #if os(iOS)
+/// What the last square of the reader's top bar holds: the ellipsis menu, or
+/// Contents on its own.
+///
+/// Never a menu of one row. iOS opens a menu out of the button it came from,
+/// so a menu of one row sits on the bar itself, over Find, the text options,
+/// Marks and the bookmark, in a thinner glass that lets them show through. A
+/// menu of two rows or more reaches below the bar. A narrated book's menu
+/// always has two, Contents and Stop Narration; a book with nothing to narrate
+/// and nothing folded into the menu has only Contents, which then stands in
+/// the bar as a button of its own.
+enum ReaderOverflow: Equatable {
+    enum Row: Hashable {
+        case find, marks, contents, stopNarration
+    }
+
+    /// The ellipsis menu, with these rows in this order. Always two or more.
+    case menu([Row])
+    /// Contents alone, as a top-bar button.
+    case contentsButton
+
+    init(foldsFind: Bool, foldsMarks: Bool, hasNarration: Bool) {
+        var rows: [Row] = []
+        if foldsFind { rows.append(.find) }
+        if foldsMarks { rows.append(.marks) }
+        rows.append(.contents)
+        if hasNarration { rows.append(.stopNarration) }
+        self = rows.count < 2 ? .contentsButton : .menu(rows)
+    }
+}
+
 /// The ellipsis menu's Stop Narration item, which reads for itself whether
 /// there is a mark to clear.
 ///
-/// Only while narration has left a sentence lit: it is the way back to "Play
-/// starts on this page" after listening on, and with nothing lit there is
-/// nothing to clear. Disabled, not hidden, during a hand-off — the item would
-/// vanish and return under the reader's thumb while the book changes engines.
+/// Always in a narrated book's menu, and greyed out while nothing is lit, as
+/// the Mac's Playback item is. Hidden instead, it left Contents alone in the
+/// menu whenever no sentence was lit, and iOS opens a one-row menu on top of
+/// the button it came from: a see-through pill over the bar's other tools
+/// rather than a menu below them (`ReaderOverflow`). Also greyed during a
+/// hand-off, while the book changes engines.
 ///
 /// A struct, not a branch in `ReaderView.body`, because `hasNarrationMarker`
 /// reads the coordinator's active sentence, which moves every few seconds
@@ -1628,17 +1679,8 @@ private struct StopNarrationMenuItem: View {
     @Environment(AppModel.self) private var app
 
     var body: some View {
-        if model.hasNarration, model.hasNarrationMarker {
-            // Title, subtitle and icon as three siblings, which is how a menu
-            // item is given a second line. Nested in a `Label`'s title slot the
-            // second `Text` was dropped.
-            Button(action: stop) {
-                Text("Stop Narration")
-                Text("Clears the highlight — Play starts on this page")
-                Image(systemName: "stop.circle")
-            }
-            .disabled(app.isHandingOffToReader(model.book.uuid))
-        }
+        Button("Stop Narration", systemImage: "stop.circle", action: stop)
+            .disabled(!model.hasNarrationMarker || app.isHandingOffToReader(model.book.uuid))
     }
 }
 

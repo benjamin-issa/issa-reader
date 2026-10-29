@@ -619,72 +619,101 @@ final class LayoutSweepTests: XCTestCase {
         XCTAssertEqual(page.frame, before, "showing the chrome moved the page")
     }
 
-    /// Find and Marks are in the bar, so the menu holds Contents and neither
-    /// of them. Marks is told apart by its label: the bar's is "Bookmarks and
-    /// highlights", the menu's is "Marks".
+    /// Find and Marks are in the bar, so the menu holds Contents and Stop
+    /// Narration and neither of them. Marks is told apart by its label: the
+    /// bar's is "Bookmarks and highlights", the menu's is "Marks".
+    ///
+    /// And the open menu reaches below the bar. iOS opens a menu out of its
+    /// button, so a menu of one row sits on the bar itself, over the tools
+    /// beside the button, in a glass they show through. 1.5.2's first build did
+    /// that whenever no sentence was lit, and this sheet showed it with nothing
+    /// here measuring it.
     private func assertEllipsisMenuHoldsContents(_ app: XCUIApplication) {
         let more = app.descendants(matching: .any)["reader.more"].firstMatch
         guard more.exists else { return }
+        let barBottom = app.buttons["Back to the book"].firstMatch.frame.maxY
         more.tap()
-        let contents = app.buttons["Contents"].firstMatch
+        let contents = app.descendants(matching: .any)["Contents"].firstMatch
         XCTAssertTrue(contents.waitForExistence(timeout: 5), "the ellipsis menu has no Contents")
         XCTAssertFalse(app.buttons["Marks"].exists, "Marks is in the menu as well as the bar")
+        let stop = stopNarrationItem(app)
+        XCTAssertTrue(stop.exists, "a narrated book's menu has no Stop Narration")
+        if stop.exists, !usesAccessibilityTextSize {
+            XCTAssertFalse(stop.isEnabled, "Stop Narration is enabled with nothing lit")
+        }
+        let lowest = max(contents.frame.maxY, stop.exists ? stop.frame.maxY : 0)
+        XCTAssertGreaterThan(lowest, barBottom + 0.5,
+                             "the open menu ends at \(lowest), on the top bar (which ends at \(barBottom))")
         capture(app, "readerMore")
-        // Out of the menu without choosing anything.
-        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3)).tap()
+        closeMenu(app, below: lowest)
         XCTAssertTrue(app.buttons["Back to the book"].firstMatch.waitForExistence(timeout: 5))
+    }
+
+    /// Whether the run is at an accessibility text size, where a menu's rows
+    /// stop being buttons to the accessibility tree and so carry no enabled
+    /// state worth reading.
+    private var usesAccessibilityTextSize: Bool {
+        UIScreen.main.traitCollection.preferredContentSizeCategory.isAccessibilityCategory
+    }
+
+    /// Out of an open menu without choosing anything: a tap below its lowest
+    /// row, never at a fixed spot. At an accessibility text size the menu
+    /// reaches halfway down the screen, and the tap at 30 % that used to close
+    /// it landed on Stop Narration and chose it.
+    private func closeMenu(_ app: XCUIApplication, below lowest: CGFloat) {
+        let window = app.windows.firstMatch.frame
+        let y = min(lowest + 60, window.maxY * 0.8) / window.height
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: y)).tap()
     }
 
     // MARK: - Stop Narration
 
-    /// The menu's Stop Narration item. Matched by the start of its label: the
-    /// item carries a subtitle, which VoiceOver and the tree read as part of
-    /// the same label ("Stop Narration, Clears the highlight — …").
-    /// Any element type, not just buttons. At an accessibility text size the
-    /// menu's rows stop being buttons to the accessibility tree — the sweep's
-    /// extra-large phone drew Stop Narration, subtitle and all, and a
-    /// `buttons` query could not find it.
+    /// The menu's Stop Narration item. Any element type, not just buttons: at
+    /// an accessibility text size the menu's rows stop being buttons to the
+    /// accessibility tree, and a `buttons` query could not find it on the
+    /// sweep's extra-large phone.
     private func stopNarrationItem(_ app: XCUIApplication) -> XCUIElement {
-        app.descendants(matching: .any)
-            .matching(NSPredicate(format: "label BEGINSWITH %@", "Stop Narration")).firstMatch
+        app.descendants(matching: .any)["Stop Narration"].firstMatch
     }
 
-    /// Opens the ellipsis menu and says whether Stop Narration is in it, then
-    /// closes the menu without choosing anything.
-    private func ellipsisMenuOffersStop(_ app: XCUIApplication, capturing screen: String? = nil) -> Bool {
+    /// Opens the ellipsis menu and says whether its Stop Narration item is
+    /// enabled, then closes the menu without choosing anything. The item has
+    /// to be there either way: a narrated book always lists it.
+    private func ellipsisMenuStopIsEnabled(_ app: XCUIApplication, capturing screen: String? = nil) -> Bool {
         let more = app.descendants(matching: .any)["reader.more"].firstMatch
         XCTAssertTrue(more.waitForExistence(timeout: 10), "no ellipsis menu")
         more.tap()
-        XCTAssertTrue(app.descendants(matching: .any)["Contents"].firstMatch.waitForExistence(timeout: 5),
-                      "the ellipsis menu did not open")
-        let stop = stopNarrationItem(app)
-        let offered = stop.exists
-        if let screen { capture(app, screen) }
-        // Closed with a tap below the menu's lowest row, never at a fixed
-        // spot. At an accessibility text size the menu reaches halfway down
-        // the screen, and the tap at 30 % that used to close it landed on Stop
-        // Narration and chose it, so the next look found the marker gone.
         let contents = app.descendants(matching: .any)["Contents"].firstMatch
-        let lowest = max(contents.frame.maxY, offered ? stop.frame.maxY : 0)
-        let window = app.windows.firstMatch.frame
-        let y = min(lowest + 60, window.maxY * 0.8) / window.height
-        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: y)).tap()
-        return offered
+        XCTAssertTrue(contents.waitForExistence(timeout: 5), "the ellipsis menu did not open")
+        let stop = stopNarrationItem(app)
+        XCTAssertTrue(stop.exists, "a narrated book's menu has no Stop Narration")
+        let enabled = stop.exists && stop.isEnabled
+        if let screen { capture(app, screen) }
+        closeMenu(app, below: max(contents.frame.maxY, stop.exists ? stop.frame.maxY : 0))
+        return enabled
     }
 
-    /// Stop Narration is in the menu only once narration has left a sentence
-    /// lit, and choosing it takes the highlight away again.
+    /// Stop Narration is enabled only once narration has left a sentence lit,
+    /// and choosing it takes the highlight away again.
     ///
     /// Narration is started from the footer's own play button, which is how a
     /// reader starts it; the fixture's audio is a placeholder, so nothing is
     /// heard, but the sentence is lit all the same. Paused again before the
     /// menu is opened, so the marker is the only thing the item depends on.
+    ///
+    /// The enabled state is read only at standard text sizes: at an
+    /// accessibility size the menu's rows are not buttons to the tree, and
+    /// there the test still checks the item is listed and that choosing it
+    /// works.
     func testStopNarrationFollowsTheMarker() throws {
         let app = launch(["-issa.library.mode", "all"])
         guard try openReader(app) != nil else { return }
+        let readsEnabled = !usesAccessibilityTextSize
 
-        XCTAssertFalse(ellipsisMenuOffersStop(app),
-                       "Stop Narration is offered before narration has lit anything")
+        let enabledBefore = ellipsisMenuStopIsEnabled(app)
+        if readsEnabled {
+            XCTAssertFalse(enabledBefore, "Stop Narration is enabled before narration has lit anything")
+        }
 
         let play = app.buttons["Play narration"].firstMatch
         guard play.waitForExistence(timeout: 10) else {
@@ -705,15 +734,20 @@ final class LayoutSweepTests: XCTestCase {
             return XCTFail("narration never came to rest, so there is no marker to clear")
         }
 
-        XCTAssertTrue(ellipsisMenuOffersStop(app, capturing: "readerMoreStop"),
-                      "Stop Narration is missing while a sentence is lit")
+        let enabledWhileLit = ellipsisMenuStopIsEnabled(app, capturing: "readerMoreStop")
+        if readsEnabled {
+            XCTAssertTrue(enabledWhileLit, "Stop Narration is greyed out while a sentence is lit")
+        }
 
         app.descendants(matching: .any)["reader.more"].firstMatch.tap()
         let stop = stopNarrationItem(app)
         XCTAssertTrue(stop.waitForExistence(timeout: 5))
         stop.tap()
-        XCTAssertFalse(ellipsisMenuOffersStop(app),
-                       "choosing Stop Narration left the highlight, and the item, in place")
+        let enabledAfter = ellipsisMenuStopIsEnabled(app)
+        if readsEnabled {
+            XCTAssertFalse(enabledAfter,
+                           "choosing Stop Narration left the highlight in place, and the item enabled")
+        }
     }
 
     // MARK: - The highlight colours
@@ -764,7 +798,7 @@ final class LayoutSweepTests: XCTestCase {
         // painting the accent where a colour should be, so that is all this
         // asks there. The runner is a UIKit app on the same simulator, so its
         // own trait collection carries the device's text size.
-        let iconless = UIScreen.main.traitCollection.preferredContentSizeCategory.isAccessibilityCategory
+        let iconless = usesAccessibilityTextSize
         var dominant: [String: [Int]] = [:]
         for tint in Self.highlightTints {
             guard let item = items[tint.name], item.exists else {
