@@ -766,6 +766,11 @@ public struct ReaderView: View {
             VStack(spacing: 0) {
                 NarratedPassageView(model: model)
                     .frame(height: max(fold.minY, 0))
+                    // The passage stands over the page, so it takes the tap
+                    // that brings the tools back; without it a reader who hid
+                    // them had no way back to Back.
+                    .contentShape(Rectangle())
+                    .onTapGesture { model.toggleChrome() }
                 Color.clear.frame(height: fold.height)
                 readerPlayer(.landscape)
                     .padding(.trailing, readerLayout.railSide == .trailing ? readerLayout.railWidth : 0)
