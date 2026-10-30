@@ -11,6 +11,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.security.MessageDigest
+import java.text.Normalizer
+import java.util.Locale
 
 /**
  * The on-device copy of the library.
@@ -122,10 +124,26 @@ class LibraryStore(
      * Falls back to a LIKE scan when the query has no usable tokens — a lone
      * apostrophe or a single letter produces an FTS pattern that matches
      * nothing, and returning nothing for "a" reads as a broken search box.
+     *
+     * A query carrying `%`, `_` or `\` still goes through FTS, then keeps only
+     * the rows that hold each such term literally. The tokenizer reads all
+     * three characters as separators, so FTS alone heard `100%` as `100` and
+     * found "100 Ways" beside "100% Pure"; the filter is what puts the
+     * punctuation back. The LIKE scan is no substitute: it is one contiguous
+     * substring per column, so "Pure 100%" or "tolkien 100%" would find
+     * nothing, and its case folding is ASCII only. The filter folds case and
+     * diacritics the way FTS does, across all the searchable fields, so a term
+     * may sit in the title and its neighbour in the byline.
+     *
+     * Only if the filter leaves nothing does the LIKE scan below run.
      */
     suspend fun search(query: String): List<Book> {
         val trimmed = query.trim()
         if (trimmed.isEmpty()) return allBooks()
+        // The terms FTS cannot be trusted with: the ones carrying a character
+        // its tokenizer discards.
+        val literalTerms = trimmed.split(Regex("\\s+"))
+            .filter { term -> term.any { it == '%' || it == '_' || it == '\\' } }
 
         return reading { db ->
             val pattern = prefixPattern(trimmed)
@@ -135,15 +153,21 @@ class LibraryStore(
                 val rows = runCatching {
                     db.query(
                         """
-                        SELECT book.json FROM book
+                        SELECT book.json, book.title, book.byline, book.subtitle, book.narrators, book.series, book.tags
+                        FROM book
                         JOIN bookSearch ON bookSearch.rowid = book.rowid
                         WHERE bookSearch MATCH ?
                         ORDER BY bm25(bookSearch), book.title
                         """.trimIndent(),
                         pattern,
-                    ) { it.blob(0) }
+                    ) { row -> row.blob(0) to (1..6).map { row.string(it) } }
                 }.getOrDefault(emptyList())
-                if (rows.isNotEmpty()) return@reading rows.mapNotNull(::decodeBook)
+                val kept = if (literalTerms.isEmpty()) {
+                    rows
+                } else {
+                    rows.filter { (_, fields) -> literalTerms.all { term -> containsLiterally(fields, term) } }
+                }
+                if (kept.isNotEmpty()) return@reading kept.mapNotNull { decodeBook(it.first) }
             }
             // What was typed is text, not a pattern: `%`, `_` and the escape
             // character itself are escaped, so a search for `100%` or `_` finds
@@ -488,6 +512,22 @@ class LibraryStore(
          * each made a prefix query, all of them required. Null when there is
          * no token at all.
          */
+        /**
+         * Whether [term] appears as written in any of [fields], ignoring case
+         * and diacritics: the check FTS cannot make for `%`, `_` and `\`. The
+         * fields are the ones the FTS index and the LIKE scan carry.
+         */
+        internal fun containsLiterally(fields: List<String>, term: String): Boolean {
+            val wanted = folded(term)
+            return fields.any { folded(it).contains(wanted) }
+        }
+
+        /** Case and diacritics folded away, as FTS's `remove_diacritics` and Swift's insensitive search do. */
+        private fun folded(text: String): String =
+            Normalizer.normalize(text, Normalizer.Form.NFD).replace(combiningMarks, "").lowercase(Locale.ROOT)
+
+        private val combiningMarks = Regex("\\p{M}+")
+
         internal fun prefixPattern(text: String): String? {
             val tokens = mutableListOf<String>()
             val current = StringBuilder()

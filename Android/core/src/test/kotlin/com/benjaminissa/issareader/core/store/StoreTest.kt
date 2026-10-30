@@ -7,6 +7,7 @@ import com.benjaminissa.issareader.core.fixtureBooks
 import com.benjaminissa.issareader.core.model.Annotation
 import com.benjaminissa.issareader.core.model.AudioAnchor
 import com.benjaminissa.issareader.core.model.Book
+import com.benjaminissa.issareader.core.model.Creator
 import com.benjaminissa.issareader.core.model.ReadiumLocator
 import com.benjaminissa.issareader.core.stubHttp
 import com.benjaminissa.issareader.core.sync.MutationQueue
@@ -21,6 +22,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
 import java.net.URI
+import java.util.UUID
 
 private fun storeDirectory(prefix: String = "issa-store"): File = temporaryDirectory(prefix)
 
@@ -163,21 +165,72 @@ class LibraryStoreTest {
         }
     }
 
-    /** A search for % or _ finds those characters, not everything: the LIKE fallback takes what was typed as text. */
+    /** Six rows from however many the capture holds, each its own book. */
+    private fun distinctBooks(count: Int): MutableList<Book> {
+        val captured = sampleBooks()
+        assertTrue(captured.isNotEmpty())
+        return MutableList(count) { index -> captured[index % captured.size].copy(uuid = UUID.randomUUID().toString()) }
+    }
+
+    /**
+     * A search for % or _ finds those characters, not everything: the LIKE
+     * fallback takes what was typed as text.
+     *
+     * Each literal title has a rival spelled without the punctuation. FTS
+     * reads `%`, `_` and `\` as separators, so before the literal filter
+     * `100%` found "100 Ways" too and never reached the literal match.
+     */
     @Test
     fun likeWildcardsAreLiteral() = inDirectory { directory ->
         LibraryStore(serverKey = "http://example.test", directory = directory).use { store ->
-            val books = sampleBooks().take(4).toMutableList()
-            assertEquals(4, books.size)
+            val books = distinctBooks(6)
             books[0] = books[0].copy(title = "100% Pure")
             books[1] = books[1].copy(title = "a_b")
             books[2] = books[2].copy(title = "back\\slash")
+            books[3] = books[3].copy(title = "100 Ways")
+            books[4] = books[4].copy(title = "a b")
+            books[5] = books[5].copy(title = "back slash")
             store.replaceCatalogue(books)
 
             assertEquals(listOf("100% Pure"), store.search("%").map { it.title })
             assertEquals(listOf("a_b"), store.search("_").map { it.title })
             assertEquals(listOf("100% Pure"), store.search("100%").map { it.title })
+            assertEquals(listOf("a_b"), store.search("a_b").map { it.title })
+            assertEquals(listOf("back\\slash"), store.search("back\\slash").map { it.title })
             assertEquals(listOf("back\\slash"), store.search("\\").map { it.title })
+            // The rivals are still found the ordinary way.
+            assertEquals(listOf("100 Ways", "100% Pure"), store.search("100").map { it.title }.sorted())
+        }
+    }
+
+    /**
+     * A query with % or _ still matches words in any order and any field.
+     * Keeping such a query off FTS would cost the words around the
+     * punctuation: one contiguous substring cannot match a reordered title, or
+     * a title beside its author. It runs through FTS and keeps the rows that
+     * hold each marked term as typed.
+     */
+    @Test
+    fun literalTermsKeepFullTextSearch() = inDirectory { directory ->
+        LibraryStore(serverKey = "http://example.test", directory = directory).use { store ->
+            val tolkien = listOf(Creator(uuid = "tolkien", name = "J. R. R. Tolkien"))
+            val books = distinctBooks(5)
+            books[0] = books[0].copy(title = "100% Pure", authors = tolkien)
+            books[1] = books[1].copy(title = "100 Ways", authors = tolkien)
+            books[2] = books[2].copy(title = "Café_Noir")
+            books[3] = books[3].copy(title = "Cafe Noir")
+            books[4] = books[4].copy(title = "Pure Gold")
+            store.replaceCatalogue(books)
+
+            // Reordered, and in the other direction.
+            assertEquals(listOf("100% Pure"), store.search("Pure 100%").map { it.title })
+            assertEquals(listOf("100% Pure"), store.search("100% pure").map { it.title })
+            // Across fields: the title carries the percent sign, the byline the name.
+            assertEquals(listOf("100% Pure"), store.search("100% tolkien").map { it.title })
+            assertEquals(listOf("100% Pure"), store.search("tolkien 100%").map { it.title })
+            // FTS's Unicode folding survives; LIKE would not fold the accent.
+            assertEquals(listOf("Café_Noir"), store.search("cafe_noir").map { it.title })
+            assertEquals(listOf("Café_Noir"), store.search("CAFÉ_NOIR").map { it.title })
         }
     }
 
