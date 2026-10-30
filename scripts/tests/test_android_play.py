@@ -125,7 +125,7 @@ class AndroidPlayTests(unittest.TestCase):
     def test_an_upload_is_a_draft_release_of_the_assigned_code(self):
         notes = self.dir / "notes.txt"
         notes.write_text("First release.\n")
-        play.upload(self.bundle(), "alpha", notes)
+        play.upload(self.bundle(), ["alpha"], notes)
         puts = [entry for entry in Stub.seen if entry[0] == "PUT"]
         self.assertEqual(len(puts), 1)
         method, path, body = puts[0]
@@ -139,10 +139,19 @@ class AndroidPlayTests(unittest.TestCase):
         uploads = [(path, query) for method, path, query in Stub.queries if path.endswith("/bundles")]
         self.assertEqual(uploads, [(f"/upload/androidpublisher/v3/applications/{play.PACKAGE}/edits/edit-1/bundles", "uploadType=media")])
 
+    def test_one_upload_drafts_the_same_code_on_every_track_named(self):
+        play.upload(self.bundle(), ["internal", "alpha"], None)
+        uploads = [path for method, path, _ in Stub.seen if path.endswith("/bundles")]
+        self.assertEqual(len(uploads), 1, "the bundle was uploaded more than once")
+        puts = {path.rsplit("/", 1)[1]: body["releases"][0] for method, path, body in Stub.seen if method == "PUT"}
+        self.assertEqual(set(puts), {"internal", "alpha"})
+        for release in puts.values():
+            self.assertEqual(release, {"versionCodes": ["7"], "status": "draft"})
+
     def test_a_failed_command_deletes_its_edit_instead_of_committing(self):
         Stub.fail_track = True
         with self.assertRaises(play.PlayError):
-            play.upload(self.bundle(), "alpha", None)
+            play.upload(self.bundle(), ["alpha"], None)
         self.assertFalse(any(path.endswith(":commit") for _, path, _ in Stub.seen))
         self.assertEqual(Stub.seen[-1][0], "DELETE")
 
