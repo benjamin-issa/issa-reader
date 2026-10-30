@@ -251,13 +251,16 @@ to the app under the Console's Users and permissions:
 
 ```bash
 scripts/android-play.py upload .build/android-release/IssaReader-<version>-<build>.aab \
-  --track alpha --notes Android/play/listing/en-US/release-notes.txt
+  --track internal --track alpha --notes Android/play/listing/en-US/release-notes.txt
 scripts/android-play.py listing Android/play/listing   # text, icon, feature graphic, screenshots
 scripts/android-play.py status                          # each track and its releases
 ```
 
-`upload` creates a *draft* release: an app that has never been published takes
-nothing else. Sending it for review is done in the Console (Publishing
+`upload` sends the bundle once and creates a *draft* release of it on every
+track named: Play takes a version code only once, so a second upload of the
+same bundle for another track is refused, and an app that has never been
+published takes nothing but drafts. Internal testing is the quickest way onto
+your own phone; the closed track is the one Google reviews. Sending it for review is done in the Console (Publishing
 overview), once the app's declarations below are complete. The Console is also
 where the testers and the staged rollout are chosen. The tracks are `internal`,
 `alpha` (closed testing), `beta` (open testing) and `production`.
@@ -272,7 +275,19 @@ the Console's Dashboard.
 The store listing lives in `Android/play/listing/en-US/`: the title, the short
 and full descriptions, the release notes, `graphics/` (the icon and the feature
 graphic, drawn by `Android/play/make-graphics.py`) and `phoneScreenshots/`
-(1080×1920, taken on an emulator signed into the local v2 server).
+(1080×1920, taken on an emulator signed into a local v2 server).
+
+To take them: `adb shell wm size 1080x1920` and `wm density 420`, System UI's
+demo mode for a 9:41 clock and full bars (`-e fully true` on the wifi, or it
+shows no internet), and the media volume at zero so a read-along can play for
+its highlight in silence. The fixture's Gap Book has no cover, so file it as
+To read for the shots and put it back afterwards, with every other book the
+shots touched. Look at each one before it goes up, and convert them to RGB:
+Play refuses a PNG with an alpha channel. Reset `wm size` and `wm density`
+afterwards.
+
+The listing describes what this build does: nothing about Android Auto until
+it has passed `android-auto-check.sh` and Play has approved the opt-in below.
 
 ### The upload key
 

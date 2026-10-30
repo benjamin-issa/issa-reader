@@ -103,5 +103,5 @@ cp "$AAB" "$OUT/$name.aab"
 } > "$OUT/$name.txt"
 cat "$OUT/$name.txt"
 echo
-echo "Upload it with scripts/android-play.py upload $OUT/$name.aab --track alpha --notes Android/play/listing/en-US/release-notes.txt,"
+echo "Upload it with scripts/android-play.py upload $OUT/$name.aab --track internal --track alpha --notes Android/play/listing/en-US/release-notes.txt,"
 echo "and commit Android/version.properties at $next."
