@@ -137,7 +137,8 @@ class LocalImportTest : AppSuite() {
         val first = checkNotNull(local.library.books.firstOrNull())
 
         // A second copy under another name: matched by identifier and hash, not by name.
-        local.importAndWait(local.pick("alice", "alice (1).epub"))
+        val second = local.pick("alice", "alice (1).epub")
+        local.importAndWait(second)
 
         assertEquals(listOf(first.uuid), local.library.books.map { it.uuid })
         assertEquals(first.uuid, local.library.duplicate?.uuid)
@@ -145,7 +146,12 @@ class LocalImportTest : AppSuite() {
         val folders = local.root.list()?.filter { !it.startsWith(".") }.orEmpty()
         assertEquals("a second folder was made for a book already here", 1, folders.size)
         assertTrue("the duplicate's copy was left in flight", local.incoming().isEmpty())
-        assertTrue("a duplicate leaves no problem row", local.library.imports.isEmpty())
+        // The duplicate's own row is gone at once. The first import's "added"
+        // row stays for its hold (10 ms here), and a duplicate found faster
+        // than that met it still standing, so it is waited out rather than
+        // raced.
+        assertTrue("a duplicate leaves no row of its own", local.library.imports.none { it.source == second })
+        assertTrue("a duplicate leaves no problem row", waitUntil { local.library.imports.isEmpty() })
     }
 
     /** A book whose file went missing is put back by choosing it again, with the reader's place. */
