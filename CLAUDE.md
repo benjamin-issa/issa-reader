@@ -131,7 +131,7 @@ tests" on Android means all of these:
      recorders, `AskScorecardTest` and `RethinkExperiments`, are left out by
      name.
 2. **The real-alignment suites, with their files present.** `:epub`'s
-   `RealAlignmentTest` and `RealAlignmentV3Test` read the same seven
+   `RealAlignmentTest` and `RealAlignmentV3Test` read the same nine
    `/tmp/pw*.epub` files as item 2 above, copied from the same place. Under
    the release switch they fail rather than skip when the files are absent.
 3. **Live checks, against each server, on a phone or emulator running Android
@@ -198,8 +198,8 @@ release still works with `web-v2.14.21` and the 3.x betas up to `beta.40`
   runs also exercise the older device-approval page in `approve-device.mjs`,
   which the pins' runs no longer reach. An Android release does the same with
   `scripts/android-live-check.sh --fresh`: against 2.14.21 it is required,
-  since Google Play's reviewers use the same server; against beta.40 and
-  beta.46 it is recommended.
+  since Google Play's reviewers use the same server; against beta.40, beta.46
+  and beta.49 it is recommended.
 
 ## Tests that act on one item of many
 

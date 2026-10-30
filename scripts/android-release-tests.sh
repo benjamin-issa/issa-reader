@@ -77,7 +77,7 @@ finish() {
     echo "release run  ISSA_RELEASE_RUN=1 (Android)"
     echo "commit       $(git rev-parse --short HEAD 2>/dev/null || echo unknown)$([ -z "$(git status --porcelain 2>/dev/null)" ] || echo ' (dirty)')"
     echo "when         $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    for book in /tmp/pw2.epub /tmp/pw3.epub /tmp/pw3-loop.epub /tmp/pw3-beta46.epub /tmp/pw3-loop-beta46.epub /tmp/pw3-beta40.epub /tmp/pw3-loop-beta40.epub; do
+    for book in /tmp/pw2.epub /tmp/pw3.epub /tmp/pw3-loop.epub /tmp/pw3-beta49.epub /tmp/pw3-loop-beta49.epub /tmp/pw3-beta46.epub /tmp/pw3-loop-beta46.epub /tmp/pw3-beta40.epub /tmp/pw3-loop-beta40.epub; do
       if [ -f "$book" ]; then
         echo "staged       $book sha256 $(sha256 "$book" | cut -c1-16)"
       else

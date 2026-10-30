@@ -40,8 +40,14 @@ enum class CapturedServer(val rawValue: String) {
     /** `Fixtures/v3/beta46/` — the same library after the server moved on. */
     V3_BETA46("web-v3.0.0-beta.46"),
 
-    /** `Fixtures/v3/beta49/` — the library once more, on the current pin. */
+    /** `Fixtures/v3/beta49/` — the library once more, a pin later. */
     V3_BETA49("web-v3.0.0-beta.49"),
+
+    /**
+     * `Fixtures/v3/beta56/` — and on the current pin, which added
+     * `progress-sync/v3` to the capabilities and nothing the client reads.
+     */
+    V3_BETA56("web-v3.0.0-beta.56"),
     ;
 
     /** The capture's name under `Fixtures/`, without `.json`. */
@@ -51,9 +57,10 @@ enum class CapturedServer(val rawValue: String) {
         V3_BETA40 -> "v3/$name"
         V3_BETA46 -> "v3/beta46/$name"
         V3_BETA49 -> "v3/beta49/$name"
+        V3_BETA56 -> "v3/beta56/$name"
     }
 
-    val isV3: Boolean get() = this == V3_BETA40 || this == V3_BETA46 || this == V3_BETA49
+    val isV3: Boolean get() = this == V3_BETA40 || this == V3_BETA46 || this == V3_BETA49 || this == V3_BETA56
 
     fun books(): List<Book> = fixtureBooks(fixture("books"))
 
@@ -91,7 +98,7 @@ class CapturedGenerationsTest {
     /** 3.x shapes decode on every beta: no status, a relabelled status, a custom one. Only 3.x lets a book have no status, or an admin relabel one. */
     @Test
     fun v3Shapes() {
-        for (server in listOf(CapturedServer.V3_BETA40, CapturedServer.V3_BETA46, CapturedServer.V3_BETA49)) {
+        for (server in listOf(CapturedServer.V3_BETA40, CapturedServer.V3_BETA46, CapturedServer.V3_BETA49, CapturedServer.V3_BETA56)) {
             val books = server.books()
             fun book(title: String): Book = books.firstOrNull { it.title == title } ?: error("no $title in the $server capture")
             assertNull(book("Emma").status)
@@ -154,6 +161,24 @@ class CapturedGenerationsTest {
         }
     }
 
+    /** And from beta.49 to beta.56, whose migration only added tables. */
+    @Test
+    fun beta56MatchesBeta49() {
+        val older = CapturedServer.V3_BETA49.books()
+        val newer = CapturedServer.V3_BETA56.books().associateBy { it.uuid }
+        assertEquals(27, older.size)
+        for (book in older) {
+            val moved = newer[book.uuid]
+            assertNotNull("${book.title} is missing from the beta.56 capture", moved)
+            moved!!
+            assertEquals(book.title, moved.title)
+            assertEquals("${book.title}'s status", book.status?.displayName, moved.status?.displayName)
+            assertEquals("${book.title}'s ebook cover", book.ebook?.cover, moved.ebook?.cover)
+            assertEquals("${book.title}'s audiobook cover", book.audiobook?.cover, moved.audiobook?.cover)
+            assertEquals("${book.title}'s read-along cover", book.readaloud?.cover, moved.readaloud?.cover)
+        }
+    }
+
     /** 2.x books always carry a built-in status: 2.x has no relabelling and no empty status. */
     @Test
     fun v2Statuses() {
@@ -170,7 +195,7 @@ class CapturedGenerationsTest {
     /** A 3.x beta's identity says 3.x, and its details report that beta. */
     @Test
     fun betaIdentity() = runBlocking {
-        for (server in listOf(CapturedServer.V3_BETA46, CapturedServer.V3_BETA49)) {
+        for (server in listOf(CapturedServer.V3_BETA46, CapturedServer.V3_BETA49, CapturedServer.V3_BETA56)) {
             val identity = fixture(server.fixture("server-public")).encodeToByteArray()
             assertEquals(ServerGeneration.V3, Session.generation(ProbeResponse(200, identity)))
 
@@ -188,6 +213,7 @@ class CapturedGenerationsTest {
         val hosts = mapOf(
             CapturedServer.V3_BETA46 to "beta46.storyteller.test",
             CapturedServer.V3_BETA49 to "beta49.storyteller.test",
+            CapturedServer.V3_BETA56 to "beta56.storyteller.test",
         )
 
         /**

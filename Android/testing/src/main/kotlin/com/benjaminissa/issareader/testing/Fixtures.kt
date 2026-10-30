@@ -8,7 +8,7 @@ import java.io.File
  * Captured server responses for every Storyteller generation the client
  * supports live in `Packages/IssaCore/Tests/Fixtures` (2.14.21 at the top
  * level, 2.14.23 in `v2-14-23/`, beta.40 in `v3/`, beta.46 in `v3/beta46/`,
- * beta.49 in `v3/beta49/`), and the books in each package's own
+ * beta.49 in `v3/beta49/`, beta.56 in `v3/beta56/`), and the books in each package's own
  * `Tests/Fixtures`. The Android suites read the same files, so a capture added
  * for one client is checked by both. Paths are repository-relative because the
  * same file name (`alice.epub`) exists in more than one package.
