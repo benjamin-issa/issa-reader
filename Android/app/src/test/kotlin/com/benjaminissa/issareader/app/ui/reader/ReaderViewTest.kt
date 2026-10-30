@@ -7,7 +7,10 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.click
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performCustomAccessibilityActionWithLabel
 import androidx.compose.ui.test.performSemanticsAction
@@ -271,6 +274,54 @@ class ReaderViewTest {
         assertTrue(defaults.getBoolean(SEEN_COACH_KEY))
         tap(200f)
         assertTrue("dismissing marks the tip seen", defaults.getBoolean(SEEN_NARRATION_TIP_KEY))
+    }
+
+    // The top bar: Find and Marks sit in it, and the last square is either the
+    // ellipsis menu of a narrated book or Contents on its own.
+
+    @Test
+    fun `the bar shows Find and Marks, and the last square is Contents for a book with no narration`() {
+        show()
+        compose.onNodeWithTag("reader.find").assertExists()
+        compose.onNodeWithTag("reader.marks").assertExists()
+        compose.onNodeWithTag("reader.contents").assertExists()
+        compose.onNodeWithTag("reader.more").assertDoesNotExist()
+    }
+
+    @Test
+    fun `a narrated book's More menu lists Contents and Stop Narration, which waits for a lit sentence`() {
+        val model = show(Fixtures.playback("readalong.epub"), narrated = true)
+        compose.waitUntil(10_000) { model.readalong != null }
+        compose.waitForIdle()
+        compose.onNodeWithTag("reader.find").assertExists()
+        compose.onNodeWithTag("reader.marks").assertExists()
+        compose.onNodeWithTag("reader.contents").assertDoesNotExist()
+
+        compose.onNodeWithTag("reader.more").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("reader.menu.contents").assertExists().assertIsEnabled()
+        // Find and Marks are in the bar on a phone, so not in the menu as well.
+        compose.onNodeWithTag("reader.menu.find").assertDoesNotExist()
+        compose.onNodeWithTag("reader.menu.marks").assertDoesNotExist()
+        assertFalse("nothing is lit yet", model.hasNarrationMarker)
+        compose.onNodeWithTag("reader.menu.stop_narration").assertExists().assertIsNotEnabled()
+    }
+
+    @Test
+    fun `Stop Narration is offered once a sentence is lit, and puts the book back`() {
+        val model = show(Fixtures.playback("readalong.epub"), narrated = true)
+        compose.waitUntil(10_000) { model.readalong != null }
+        compose.onRoot().performTouchInput { doubleClick(page(150f, 150f)) }
+        compose.waitUntil(5_000) { model.hasNarrationMarker }
+
+        compose.onNodeWithTag("reader.more").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("reader.menu.stop_narration").assertIsEnabled().performClick()
+        compose.waitUntil(5_000) { !model.hasNarrationMarker }
+
+        assertNull("the highlight is gone", model.activeFragmentId)
+        assertNull(model.readalong?.activeEntry)
+        assertFalse(model.isPlaying)
     }
 
     private companion object {
