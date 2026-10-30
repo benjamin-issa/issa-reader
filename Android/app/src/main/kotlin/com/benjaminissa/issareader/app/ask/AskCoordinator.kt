@@ -182,8 +182,8 @@ class AskCoordinator(
             if (!settings.askEnabled) return turnedOff?.footer() ?: AskCopy.TURNED_OFF
             return when (availability) {
                 null, AskAvailability.AVAILABLE -> null
-                AskAvailability.MODEL_DOWNLOADING, AskAvailability.MODEL_DOWNLOADABLE -> AskCopy.stillDownloading()
-                AskAvailability.NEEDS_SYSTEM_UPDATE -> AskCopy.needsSystemUpdate()
+                AskAvailability.MODEL_DOWNLOADING, AskAvailability.MODEL_DOWNLOADABLE -> AskCopy.sheetStillDownloading()
+                AskAvailability.NEEDS_SYSTEM_UPDATE -> AskCopy.sheetNeedsSystemUpdate()
                 AskAvailability.UNSUPPORTED_DEVICE, AskAvailability.APPLE_INTELLIGENCE_OFF,
                 AskAvailability.UNSUPPORTED_ON_THIS_PLATFORM,
                 -> AskCopy.unsupported()

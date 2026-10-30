@@ -5,6 +5,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import com.benjaminissa.issareader.app.ask.AskCoordinator
+import com.benjaminissa.issareader.app.ask.AskCopy
 import com.benjaminissa.issareader.app.ask.AskSettingsState
 import com.benjaminissa.issareader.ui.BetaPill
 import com.benjaminissa.issareader.ui.PaperSection
@@ -45,7 +46,7 @@ fun AskSettingsSection(state: AskSettingsState, onToggle: (Boolean) -> Unit, mod
     ) {
         row {
             ToggleRow(
-                title = "Ask about your book",
+                title = AskCopy.SWITCH_TITLE,
                 checked = state.isOn,
                 onCheckedChange = onToggle,
                 modifier = Modifier.testTag("settings.ask.toggle"),

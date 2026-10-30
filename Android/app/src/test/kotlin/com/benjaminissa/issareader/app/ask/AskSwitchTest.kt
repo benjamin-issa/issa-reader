@@ -123,6 +123,42 @@ class AskSwitchTest {
         }
     }
 
+    /**
+     * The sheet a reader reaches by tapping a sparkle that cannot answer yet
+     * says how to make the button go away (d184805's `hideButtonSentence`).
+     */
+    @Test
+    fun `the sheet of a model still on its way says how to hide the button`() {
+        for (availability in listOf(AskAvailability.MODEL_DOWNLOADING, AskAvailability.MODEL_DOWNLOADABLE)) {
+            val platform = CountingPlatform(availability = availability, scriptedDownload = null)
+            AskHarness(askEnabled = false, platform = platform).use { harness ->
+                harness.run {
+                    coordinator.setEnabled(true)
+                    coordinator.checkAvailability()?.join()
+                    assertEquals(
+                        "$availability",
+                        "Gemini Nano is still downloading its model to this phone. Asking will work once it finishes. " +
+                            "To hide the button, turn off Ask about your book in Settings.",
+                        coordinator.sheetNotice,
+                    )
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `the copy that needs a system update, and the one that is off, are asked for the way out as they should be`() {
+        assertEquals(
+            "Gemini Nano needs a system update on this phone before it can answer. Check for updates in Settings, then come back. " +
+                "To hide the button, turn off Ask about your book in Settings.",
+            AskCopy.sheetNeedsSystemUpdate("phone"),
+        )
+        // With the switch already off the sentence would point at a thing already done.
+        assertFalse(AskCopy.TURNED_OFF.contains("hide the button"))
+        assertFalse(AskCopy.unsupported("phone").contains("hide the button"))
+        assertTrue(AskCopy.HIDE_BUTTON.contains(AskCopy.SWITCH_TITLE))
+    }
+
     @Test
     fun `a phone that needs a system update turns the switch back off, and says so`() {
         val platform = CountingPlatform(availability = AskAvailability.NEEDS_SYSTEM_UPDATE)

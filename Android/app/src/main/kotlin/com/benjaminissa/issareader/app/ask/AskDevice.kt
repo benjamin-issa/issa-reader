@@ -51,6 +51,27 @@ object AskCopy {
     fun needsSystemUpdate(noun: String = AskDevice.noun): String =
         "$ASSISTANT needs a system update on this $noun before it can answer. Check for updates in Settings, then come back."
 
+    /**
+     * The Settings switch's own label, which the sentence below names. One
+     * string, so a rename in Settings cannot leave the sheet pointing at a
+     * switch that no longer exists.
+     */
+    const val SWITCH_TITLE = "Ask about your book"
+
+    /**
+     * How to take the button away again, said wherever the sheet explains why
+     * it cannot answer yet. Swift's `AskDevice.hideButtonSentence`. Ask is off
+     * until the reader turns it on here, so only a reader who did sees it, and
+     * one whose phone is not ready yet needs the way out as much as the way on.
+     */
+    const val HIDE_BUTTON = "To hide the button, turn off $SWITCH_TITLE in Settings."
+
+    /** What the sheet says while the model is downloading or downloadable: [stillDownloading] and the way out. */
+    fun sheetStillDownloading(noun: String = AskDevice.noun): String = "${stillDownloading(noun)} $HIDE_BUTTON"
+
+    /** What the sheet says when the system needs an update: [needsSystemUpdate] and the way out. */
+    fun sheetNeedsSystemUpdate(noun: String = AskDevice.noun): String = "${needsSystemUpdate(noun)} $HIDE_BUTTON"
+
     /** This hardware will never run it. */
     fun unsupported(noun: String = AskDevice.noun): String =
         "This $noun can't run $ASSISTANT, so asking isn't available here."
