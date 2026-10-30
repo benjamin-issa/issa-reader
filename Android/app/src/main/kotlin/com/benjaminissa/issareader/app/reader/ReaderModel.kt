@@ -238,6 +238,29 @@ class ReaderModel(
     /** Which `open` is the current one, read after every suspension in it. */
     private var openGeneration = 0
 
+    /**
+     * How many times narration has been put back to the just-opened state by
+     * [clearNarration].
+     *
+     * Read by [startNarration] before it suspends and again when it comes
+     * back, to tell a stop that overtook it from a file that would not play.
+     * The coordinator already declines to finish a move a stop overtook, so
+     * the start comes back refused either way, and only this says which: a
+     * stop is the reader's own request and has nothing to report, where a
+     * refusal is a notice. Counted rather than flagged, so a start made after
+     * the stop is not taken for the one it overtook.
+     */
+    private var narrationGeneration = 0
+
+    /**
+     * The answer [pendingNarrationStart] gave for one page, so that asking
+     * again — and the player sheet asks on every redraw, a drag on its
+     * scrubber included — is a comparison and not a walk of the chapter.
+     * Valid for the page it was worked out on and the generation it was
+     * worked out under: a stop empties [quitAnchor], and so counts as one.
+     */
+    private var pendingNarrationMemo: Triple<PageKey, Int, PendingNarrationStart?>? = null
+
     /** Called at the start of narration's preparation. A test seam, spent when it fires. */
     internal var whilePreparingNarration: (suspend () -> Unit)? = null
 
@@ -251,6 +274,13 @@ class ReaderModel(
 
     val hasNarration: Boolean get() = readalong != null
     val isPlaying: Boolean get() = readalong?.player?.isPlaying ?: false
+
+    /**
+     * Whether narration has left a place on the book: a sentence the voice is
+     * on, or one lit on the page — playing or paused. What there is to put
+     * back with [clearNarration], and so whether the reader is offered it.
+     */
+    val hasNarrationMarker: Boolean get() = readalong?.activeEntry != null || activeFragmentId != null
 
     /** The one in-flight response to a style change. Superseded, not stacked. */
     private var styleTask: Job? = null
@@ -879,6 +909,7 @@ class ReaderModel(
             previous.player.release()
         }
         val coordinator = ReadalongCoordinator(timeline, audioFiles, AudioPlayer(services.makeMediaBackend()), services.scope)
+        pendingNarrationMemo = null
         // The saved rate, otherwise written to preferences and never applied.
         coordinator.player.rate = preferredRate.toFloat()
         // And this book's level, for the same reason.
@@ -1029,12 +1060,68 @@ class ReaderModel(
         return entry to if (entry.textHref == href) "chapter" else "ahead"
     }
 
-    suspend fun startNarration() {
-        val readalong = readalong ?: return
-        val timeline = timeline ?: return
-        val epubPackage = epubPackage ?: return
-        val start = narrationStart()
-        if (start == null) {
+    /**
+     * What [narrationStart] found and how far it is from the reader, before
+     * anyone has decided whether that is near enough.
+     *
+     * The decision and the logging used to be one function, which is how the
+     * player sheet — asking where Play would begin, with nobody having pressed
+     * it — would write Play's refusals into the diagnostics log. This is the
+     * decision alone: pure, and the same one for both askers.
+     *
+     * @property via the rung of [narrationStart] that found it.
+     * @property distance how far it is from the reader, in [bookProgress]'s
+     *   coordinates; null when the sentence's chapter is not in the spine, so
+     *   there is nothing to measure against.
+     * @property at where the entry sits in those coordinates, for the log.
+     * @property isNear whether Play may begin here. A sentence with no
+     *   distance is allowed, as it always was: there is nothing to refuse it by.
+     */
+    data class NarrationStartCandidate(
+        val entry: SmilEntry,
+        val via: String,
+        val distance: Double?,
+        val at: Double?,
+        val isNear: Boolean,
+    )
+
+    /**
+     * Where narration would begin and how far that is from the reader, whether
+     * or not it is near enough: [narrationStart] measured against
+     * [NARRATION_PROXIMITY_LIMIT], and nothing logged. Null when there is no
+     * start at all.
+     */
+    internal fun narrationStartCandidate(): NarrationStartCandidate? {
+        val timeline = timeline ?: return null
+        val epubPackage = epubPackage ?: return null
+        val (entry, via) = narrationStart() ?: return null
+        // The proximity check, measured in the same coordinates as
+        // `bookProgress`. Refusing is right: the alternative is a position,
+        // written to the server within two seconds.
+        val at = spineProgress(entry, epubPackage, timeline)
+        val distance = at?.let { abs(it - bookProgress) }
+        return NarrationStartCandidate(entry, via, distance, at, isNear = distance?.let { it <= NARRATION_PROXIMITY_LIMIT } ?: true)
+    }
+
+    /**
+     * Where narration would begin, if it is near enough to the reader to be
+     * allowed to: [narrationStartCandidate] held to [NARRATION_PROXIMITY_LIMIT].
+     *
+     * One decision, because it is asked two ways. Pressing play asks it to
+     * begin there, and the player sheet asks it before anything has played, to
+     * draw the place Play would begin rather than the start of the book. They
+     * must not disagree.
+     *
+     * Logs its refusals, so a play that does nothing says why. The sheet does
+     * not ask this: it asks [narrationStartCandidate], the same decision
+     * without the log, because nobody pressed Play and a refusal that never
+     * happened does not belong in the diagnostics a reader exports.
+     */
+    internal fun narrationStartIfNear(): NarrationStartCandidate? {
+        val timeline = timeline ?: return null
+        if (epubPackage == null) return null
+        val candidate = narrationStartCandidate()
+        if (candidate == null) {
             IssaLog.warning(
                 "narration has nowhere to start",
                 mapOf(
@@ -1042,24 +1129,63 @@ class ReaderModel(
                     "page" to pageIndex.toString(), "entries" to timeline.entries.size.toString(),
                 ),
             )
-            return
+            return null
         }
-        val (entry, via) = start
-        // The proximity check, measured in the same coordinates as
-        // `bookProgress`. Refusing is right: the alternative is a position,
-        // written to the server within two seconds.
-        val at = spineProgress(entry, epubPackage, timeline)
-        val distance = at?.let { abs(it - bookProgress) }
-        if (distance != null && distance > NARRATION_PROXIMITY_LIMIT) {
+        if (!candidate.isNear) {
             IssaLog.warning(
                 "narration would start too far away",
                 mapOf(
-                    "book" to book.title, "via" to via, "chapter" to chapterIndex.toString(),
-                    "distance" to format4(distance), "reader" to format4(bookProgress), "candidate" to format4(at),
+                    "book" to book.title, "via" to candidate.via, "chapter" to chapterIndex.toString(),
+                    "distance" to format4(candidate.distance ?: -1.0), "reader" to format4(bookProgress),
+                    "candidate" to format4(candidate.at ?: -1.0),
                 ),
             )
-            return
+            return null
         }
+        return candidate
+    }
+
+    /**
+     * Where the player sheet should draw a read-along nobody has started, so
+     * that it shows the place Play would begin and not the start of the book.
+     *
+     * Null once the narration has a sentence of its own — the coordinator's
+     * numbers are the truth from then on — for a book with no narration, and
+     * when there is no narration at or ahead of the reader at all. Until then
+     * it is the sentence [narrationStartCandidate] picks, read through
+     * [ReadalongCoordinator.readout], so that it is the position and chapter
+     * span the coordinator publishes the moment Play puts the voice there.
+     *
+     * When that sentence is too far away for Play to begin from, it is still
+     * what is drawn — on the narrated audio's clock, the only clock the sheet's
+     * bar has — but `playable` is false, so the sheet can say Play will not go
+     * there.
+     *
+     * Display only: nothing is loaded, cued, highlighted, saved or logged.
+     * Computed, so it cannot go stale behind a page turn or a stop, and
+     * memoised per page, because working out where narration starts walks the
+     * chapter's fragments and the sheet reads this on every redraw.
+     */
+    val pendingNarrationStart: PendingNarrationStart?
+        get() {
+            val readalong = readalong ?: return null
+            if (readalong.activeEntry != null) return null
+            val page = pageKey
+            pendingNarrationMemo?.let { (memoPage, generation, start) ->
+                if (memoPage == page && generation == narrationGeneration) return start
+            }
+            val start = narrationStartCandidate()?.let { candidate ->
+                val readout = readalong.readout(candidate.entry)
+                PendingNarrationStart(readout.bookProgress, readout.chapterSpan, candidate.entry, candidate.isNear)
+            }
+            pendingNarrationMemo = Triple(page, narrationGeneration, start)
+            return start
+        }
+
+    suspend fun startNarration() {
+        val readalong = readalong ?: return
+        val generation = narrationGeneration
+        val (entry, via, distance) = narrationStartIfNear() ?: return
         IssaLog.info(
             "narration start",
             mapOf(
@@ -1071,14 +1197,82 @@ class ReaderModel(
         // `play(from)`, not a seek: pressing play is not naming a place, which
         // keeps the position guard armed.
         if (!readalong.play(entry)) {
-            narrationWouldNotPlay(entry.audioHref)
+            // Not a file that would not play when a stop landed while it was
+            // opening: the coordinator declined to finish the move the stop
+            // overtook, and the reader has just asked for that. Nothing to say,
+            // and — by returning — nowhere to turn the page to.
+            if (generation == narrationGeneration) narrationWouldNotPlay(entry.audioHref)
             return
         }
         followNarration(entry.textHref, entry.fragmentId)
     }
 
-    /** Turns the book to the page a narrated fragment is on, loading its chapter. */
-    private suspend fun followNarration(href: String, fragment: String?) {
+    /**
+     * Puts the voice on the sentence at a chosen book position, without
+     * playing, and turns the page to it.
+     *
+     * For the player sheet before narration has started, whose slider and
+     * skip buttons name a place while the coordinator holds none. The
+     * coordinator announces a chapter change only when it is moving *from* a
+     * sentence in another document, and from nothing it announces none — so a
+     * cue into another chapter would move the voice and leave the page where
+     * it was. This follows explicitly, after a seek of the kind the scrubber
+     * makes: the reader naming a place, which `onSeek` records.
+     *
+     * The chapter it loads is the reader's choice, as the seek was. `onSeek`
+     * marks the position CHOSEN when the seek lands, and the follow must not
+     * relabel it DERIVED straight after, as for a chapter the voice crossed
+     * into: a move back past the position guard's tolerance was then refused
+     * on save, and the place the reader had scrubbed away from stayed stored.
+     *
+     * @param progress a fraction of the whole narrated book, as
+     *   [ReadalongCoordinator.seekToBookProgress] takes it.
+     */
+    suspend fun cueNarration(progress: Double) {
+        val readalong = readalong ?: return
+        readalong.seekToBookProgress(progress)
+        val entry = readalong.activeEntry ?: return
+        followNarration(entry.textHref, entry.fragmentId, origin = PositionOrigin.CHOSEN)
+    }
+
+    /**
+     * Puts narration back to the state of a book just opened: no sentence lit,
+     * none the voice is on, nothing playing.
+     *
+     * After listening, the last sentence stays lit and the coordinator stays on
+     * it while the reader reads on, so Play resumes pages back there — and,
+     * following the narration, turns the page back to it. This forgets that
+     * place, so the next Play begins from the page, as it does on a book
+     * nobody has played, and the sheet draws that.
+     *
+     * The reader's place is not part of what is forgotten, and nothing here
+     * writes: not [positionOrigin], not the saved position, not the stored
+     * audio anchor. [restoredSentenceId] stays too — it is the stored
+     * position's sentence and only a rung [narrationStart] falls to after the
+     * page has none.
+     *
+     * [quitAnchor] goes. It is where the voice was when the book was last put
+     * down, and it outranks the page: left in place, the first Play after a
+     * stop would start there again.
+     *
+     * Bumps the generation first, so a start still opening its audio is
+     * already overtaken by the time the coordinator is emptied beneath it.
+     */
+    fun clearNarration() {
+        narrationGeneration += 1
+        readalong?.clearPosition()
+        narratedFragment = null
+        narratedDocument = null
+        quitAnchor = null
+    }
+
+    /**
+     * Turns the book to the page a narrated fragment is on, loading its chapter.
+     *
+     * @param origin DERIVED for a chapter the voice crossed into; CHOSEN when
+     *   the reader named the place, as a cue does.
+     */
+    private suspend fun followNarration(href: String, fragment: String?, origin: PositionOrigin = PositionOrigin.DERIVED) {
         val epubPackage = epubPackage ?: return
         val index = epubPackage.spine.indexOfFirst { it.href == href }
         if (index < 0 || index == chapterIndex) return
@@ -1086,8 +1280,9 @@ class ReaderModel(
             ReadiumLocator(href = href, type = XHTML, locations = ReadiumLocator.Locations(fragments = listOf(it)))
         }
         if (!loadChapter(index, anchor)) return
-        // A chapter the voice crossed into, not one the reader picked.
-        positionOrigin = PositionOrigin.DERIVED
+        // By default a chapter the voice crossed into, not one the reader
+        // picked.
+        positionOrigin = origin
         IssaLog.info(
             "narration crossed chapter",
             mapOf("book" to book.title, "to" to index.toString(), "fragment" to (fragment ?: "none"), "page" to pageIndex.toString()),

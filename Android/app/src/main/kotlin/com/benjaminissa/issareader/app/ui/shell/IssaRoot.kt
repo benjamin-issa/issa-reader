@@ -27,6 +27,7 @@ import androidx.navigation.toRoute
 import com.benjaminissa.issareader.app.ask.LocalBookRequests
 import com.benjaminissa.issareader.app.model.AppModel
 import com.benjaminissa.issareader.app.model.RootScreen
+import com.benjaminissa.issareader.app.reader.ReaderModel
 import com.benjaminissa.issareader.app.model.showLibrary
 import com.benjaminissa.issareader.app.ui.local.LocalBooksScreen
 import com.benjaminissa.issareader.app.ui.player.PlayerSheet
@@ -52,8 +53,12 @@ fun IssaRoot(environment: AppEnvironment) {
         val rootNav = rememberNavController()
         val state = remember { RootState() }
         val actions = remember(rootNav, state, app) { RootActions(rootNav, state, app) }
-        // Nothing to expand into once the book has stopped.
-        LaunchedEffect(app.playback == null) { if (app.playback == null) state.showsPlayer = false }
+        // Nothing to expand into once the book has stopped — unless the sheet
+        // is the reader's own, for a read-along that has not started.
+        val fromReader = state.playerFromReader?.takeIf { it.hasNarration && !app.hasLeft(it) }
+        LaunchedEffect(app.playback == null && fromReader == null) {
+            if (app.playback == null && fromReader == null) state.showsPlayer = false
+        }
 
         // The books from the reader's files: the route says which one's reader
         // is over this window, and the root presents it — and takes it down
@@ -119,7 +124,7 @@ fun IssaRoot(environment: AppEnvironment) {
                                 if (route.local) localRoute?.openBook = null
                                 rootNav.popBackStack()
                             },
-                            onOpenPlayer = actions::showPlayer,
+                            onOpenPlayer = actions::showPlayerFromReader,
                         )
                     }
                 }
@@ -132,6 +137,7 @@ fun IssaRoot(environment: AppEnvironment) {
                             state.showsPlayer = false
                             app.playbackBook?.let { actions.openReader(it.uuid, local = it.isLocal) }
                         },
+                        fromReader = fromReader,
                     )
                 }
             }
@@ -175,6 +181,13 @@ class RootState {
     /** The full player, which the mini bar's tap and a "Now Playing" raise. */
     var showsPlayer: Boolean by mutableStateOf(false)
 
+    /**
+     * The reader whose waveform raised the player, or null when the mini bar
+     * or a book's page did. The reader's sheet is about the reader's book,
+     * started or not; the others are about whatever is playing.
+     */
+    var playerFromReader: ReaderModel? by mutableStateOf(null)
+
     /** A request to show the Library tab from its root, bumped by each. */
     var libraryRootRequests: Int by mutableStateOf(0)
 }
@@ -187,11 +200,24 @@ private class RootActions(
 ) : ShellActions {
     override fun openReader(bookUuid: String, local: Boolean) {
         state.showsPlayer = false
+        state.playerFromReader = null
         rootNav.navigate(ReaderRoute(bookUuid, local)) { launchSingleTop = true }
     }
 
     override fun showPlayer() {
+        state.playerFromReader = null
         if (app.playback != null) state.showsPlayer = true
+    }
+
+    /**
+     * The player for the book on screen, raised from its reader: its own
+     * read-along even before anything has played, so the sheet can show where
+     * Play would begin rather than the start of the book.
+     */
+    fun showPlayerFromReader() {
+        val reader = app.visibleReader?.takeIf { it.hasNarration }
+        state.playerFromReader = reader
+        if (reader != null || app.playback != null) state.showsPlayer = true
     }
 
     override fun showLibrary(fromReading: LibraryArrangement.Shelf?) {

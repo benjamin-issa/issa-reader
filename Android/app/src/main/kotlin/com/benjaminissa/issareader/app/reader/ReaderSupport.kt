@@ -6,6 +6,8 @@ import com.benjaminissa.issareader.core.model.LocalBookFiles
 import com.benjaminissa.issareader.core.model.ReadiumLocator
 import com.benjaminissa.issareader.core.model.StoredPosition
 import com.benjaminissa.issareader.core.sync.PositionOrigin
+import com.benjaminissa.issareader.epub.SmilEntry
+import com.benjaminissa.issareader.playback.ChapterSpan
 import com.benjaminissa.issareader.render.HighlightBlock
 import com.benjaminissa.issareader.render.PageRect
 import com.benjaminissa.issareader.render.ReaderTheme
@@ -306,3 +308,95 @@ data class ReadingSnapshot(
     val remaining: Double?,
     val isPlaying: Boolean,
 )
+
+/**
+ * Where narration would begin, and what the player sheet draws for it, before
+ * anything has played: [ReaderModel.pendingNarrationStart].
+ *
+ * @property entry the sentence these numbers stand for.
+ * @property playable whether Play would begin there. False when the narration
+ *   ahead is too far from the reader's page for Play to start from: the
+ *   numbers are still where that narration is, so the bar is true, but Play
+ *   and skip would do nothing and the sheet disables them. A drag on the
+ *   slider is still the reader naming a place, and still works.
+ */
+data class PendingNarrationStart(
+    val bookProgress: Double,
+    val chapterSpan: ChapterSpan?,
+    val entry: SmilEntry,
+    val playable: Boolean,
+) {
+    /**
+     * The fraction of the book a skip of [skippingBy] seconds lands on, measured
+     * from where the sentence begins on the book clock — a time on the clock
+     * the coordinator seeks by, not [bookProgress] — and clamped to the book.
+     */
+    fun progress(skippingBy: Double, inBookOf: Double): Double =
+        ((entry.cumulativeEnd - entry.duration + skippingBy) / inBookOf).coerceIn(0.0, 1.0)
+}
+
+/**
+ * What the reader's top bar holds on the right, and what folds into the
+ * ellipsis menu when the window is too narrow for all of it.
+ *
+ * The bar is back, then the Ask sparkle (when offered), Find, the text
+ * options, Marks, the bookmark and a last square. On any phone everything
+ * fits; a narrow window (split screen, a small tablet pane) folds Find into
+ * the menu first, then Marks.
+ */
+enum class TopBarFit(val showsFind: Boolean, val showsMarks: Boolean) {
+    FULL(showsFind = true, showsMarks = true),
+    FIND_IN_MENU(showsFind = false, showsMarks = true),
+    FIND_AND_MARKS_IN_MENU(showsFind = false, showsMarks = false),
+    ;
+
+    companion object {
+        /**
+         * The fullest row that fits [widthDp] with [glyphDp]-wide squares and
+         * [paddingDp] of margin: back, the optional sparkle, the text options,
+         * the bookmark and the last square always; Find and Marks while
+         * there is room for them.
+         */
+        fun fitting(widthDp: Float, showsAsk: Boolean, glyphDp: Float, paddingDp: Float): TopBarFit {
+            val always = 4 + (if (showsAsk) 1 else 0)
+            fun fits(squares: Int) = (squares * glyphDp) + paddingDp <= widthDp
+            return when {
+                fits(always + 2) -> FULL
+                fits(always + 1) -> FIND_IN_MENU
+                else -> FIND_AND_MARKS_IN_MENU
+            }
+        }
+    }
+}
+
+/**
+ * What the last square of the reader's top bar holds: the ellipsis menu, or
+ * Contents on its own.
+ *
+ * Never a menu of one row: a book with nothing to narrate and nothing folded
+ * into the menu has only Contents, which then stands in the bar as a button
+ * of its own. A narrated book's menu always has two rows, Contents and Stop
+ * Narration (greyed while nothing is lit), so the menu does not change shape
+ * between one sentence and the next. As the iPhone has it.
+ */
+sealed interface ReaderOverflow {
+    enum class Row { FIND, MARKS, CONTENTS, STOP_NARRATION }
+
+    /** The ellipsis menu, with these rows in this order. Always two or more. */
+    data class Menu(val rows: List<Row>) : ReaderOverflow
+
+    /** Contents alone, as a top-bar button. */
+    data object ContentsButton : ReaderOverflow
+
+    companion object {
+        fun of(foldsFind: Boolean, foldsMarks: Boolean, hasNarration: Boolean): ReaderOverflow {
+            val rows = buildList {
+                if (foldsFind) add(Row.FIND)
+                if (foldsMarks) add(Row.MARKS)
+                add(Row.CONTENTS)
+                if (hasNarration) add(Row.STOP_NARRATION)
+            }
+            return if (rows.size < 2) ContentsButton else Menu(rows)
+        }
+    }
+}

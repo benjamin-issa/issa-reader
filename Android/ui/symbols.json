@@ -295,5 +295,9 @@
   "ipad": [
     "tablet",
     false
+  ],
+  "stop.circle": [
+    "stop_circle",
+    false
   ]
 }

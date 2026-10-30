@@ -61,6 +61,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.shadow.Shadow
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
@@ -100,6 +101,8 @@ import com.benjaminissa.issareader.app.model.NowPlayingController
 import com.benjaminissa.issareader.app.model.PlaybackSettings
 import com.benjaminissa.issareader.app.reader.PageSize
 import com.benjaminissa.issareader.app.reader.ReaderModel
+import com.benjaminissa.issareader.app.reader.ReaderOverflow
+import com.benjaminissa.issareader.app.reader.TopBarFit
 import com.benjaminissa.issareader.app.ui.ask.AskPillState
 import com.benjaminissa.issareader.app.ui.ask.AskSheet
 import com.benjaminissa.issareader.app.ui.ask.AskSparkle
@@ -324,6 +327,10 @@ fun ReaderView(
             askState = askState,
             onClose = onClose,
             onSheet = { sheet = it },
+            stopNarrationEnabled = model.hasNarrationMarker && environment.app?.isHandingOffToReader(model.book.uuid) != true,
+            onStopNarration = {
+                scope.launch { environment.app?.stopNarrationForThisBook(model) ?: model.clearNarration() }
+            },
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .then(if (coachShowing) Modifier.clearAndSetSemantics {} else Modifier),
@@ -731,6 +738,8 @@ private fun TopBar(
     askState: AskPillState,
     onClose: () -> Unit,
     onSheet: (ReaderSheetKind) -> Unit,
+    stopNarrationEnabled: Boolean,
+    onStopNarration: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val theme = model.style.theme
@@ -738,6 +747,13 @@ private fun TopBar(
     val alpha by animateFloatAsState(if (visible) 1f else 0f, tween(200), label = "chrome")
     if (alpha == 0f && !visible) return
     var menu by remember { mutableStateOf(false) }
+    // The fullest row that fits: on any phone that is all of it, and the
+    // folded rows are for a narrow window.
+    val fit = TopBarFit.fitting(
+        LocalConfiguration.current.screenWidthDp.toFloat(), showsAsk,
+        glyphDp = BAR_GLYPH_WIDTH.value, paddingDp = 20f,
+    )
+    val overflow = ReaderOverflow.of(foldsFind = !fit.showsFind, foldsMarks = !fit.showsMarks, hasNarration = model.hasNarration)
     Row(
         modifier
             .fillMaxWidth()
@@ -767,33 +783,67 @@ private fun TopBar(
                 onSheet(ReaderSheetKind.ASK)
             }
         }
+        if (fit.showsFind) {
+            BarGlyph(
+                Symbols.magnifyingglass, "Find in book", theme, enabled = visible,
+                modifier = Modifier.testTag("reader.find"),
+            ) { onSheet(ReaderSheetKind.SEARCH) }
+        }
         BarGlyph(Symbols.textformatSize, "Text options for this book", theme, enabled = visible) { onSheet(ReaderSheetKind.TYPOGRAPHY) }
+        if (fit.showsMarks) {
+            BarGlyph(
+                Symbols.bookmarkSquare, "Bookmarks and highlights", theme, enabled = visible,
+                modifier = Modifier.testTag("reader.marks"),
+            ) { onSheet(ReaderSheetKind.MARKS) }
+        }
         BarGlyph(
             if (model.isPageBookmarked) Symbols.bookmarkFill else Symbols.bookmark,
             if (model.isPageBookmarked) "Remove bookmark" else "Bookmark this page",
             theme, enabled = visible,
         ) { model.toggleBookmark() }
-        Box {
-            BarGlyph(Symbols.ellipsisCircle, "More", theme, enabled = visible) { menu = true }
-            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }, containerColor = Palette.surface) {
-                for ((title, icon, kind) in listOf(
-                    Triple("Find in book", Symbols.magnifyingglass, ReaderSheetKind.SEARCH),
-                    Triple("Marks", Symbols.bookmarkSquare, ReaderSheetKind.MARKS),
-                    Triple("Contents", Symbols.listBullet, ReaderSheetKind.CONTENTS),
-                )) {
-                    DropdownMenuItem(
-                        text = { Text(title, style = SystemText.body, color = Palette.ink) },
-                        trailingIcon = { Icon(painterResource(icon), contentDescription = null, tint = Palette.ink) },
-                        onClick = {
-                            menu = false
-                            onSheet(kind)
-                        },
-                    )
+        when (overflow) {
+            ReaderOverflow.ContentsButton -> BarGlyph(
+                Symbols.listBullet, "Contents", theme, enabled = visible,
+                modifier = Modifier.testTag("reader.contents"),
+            ) { onSheet(ReaderSheetKind.CONTENTS) }
+            is ReaderOverflow.Menu -> Box {
+                BarGlyph(Symbols.ellipsisCircle, "More", theme, enabled = visible, modifier = Modifier.testTag("reader.more")) { menu = true }
+                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }, containerColor = Palette.surface) {
+                    for (row in overflow.rows) {
+                        val (title, icon) = when (row) {
+                            ReaderOverflow.Row.FIND -> "Find in book" to Symbols.magnifyingglass
+                            ReaderOverflow.Row.MARKS -> "Marks" to Symbols.bookmarkSquare
+                            ReaderOverflow.Row.CONTENTS -> "Contents" to Symbols.listBullet
+                            ReaderOverflow.Row.STOP_NARRATION -> "Stop Narration" to Symbols.stopCircle
+                        }
+                        // Stop Narration is always in a narrated book's menu,
+                        // greyed while nothing is lit and during a hand-off.
+                        val enabled = row != ReaderOverflow.Row.STOP_NARRATION || stopNarrationEnabled
+                        val tint = if (enabled) Palette.ink else Palette.inkTertiary
+                        DropdownMenuItem(
+                            text = { Text(title, style = SystemText.body, color = tint) },
+                            trailingIcon = { Icon(painterResource(icon), contentDescription = null, tint = tint) },
+                            enabled = enabled,
+                            modifier = Modifier.testTag("reader.menu.${row.name.lowercase()}"),
+                            onClick = {
+                                menu = false
+                                when (row) {
+                                    ReaderOverflow.Row.FIND -> onSheet(ReaderSheetKind.SEARCH)
+                                    ReaderOverflow.Row.MARKS -> onSheet(ReaderSheetKind.MARKS)
+                                    ReaderOverflow.Row.CONTENTS -> onSheet(ReaderSheetKind.CONTENTS)
+                                    ReaderOverflow.Row.STOP_NARRATION -> onStopNarration()
+                                }
+                            },
+                        )
+                    }
                 }
             }
         }
     }
 }
+
+/** How wide each of the top bar's squares is. */
+private val BAR_GLYPH_WIDTH = 38.dp
 
 @Composable
 private fun BarGlyph(
@@ -808,7 +858,7 @@ private fun BarGlyph(
 ) {
     Box(
         modifier
-            .size(width = 38.dp, height = ReaderChrome.BAR_HEIGHT.dp)
+            .size(width = BAR_GLYPH_WIDTH, height = ReaderChrome.BAR_HEIGHT.dp)
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = ripple(bounded = false, radius = 20.dp),
@@ -857,15 +907,7 @@ private fun Footer(
     val bookIsPlaying = if (ownsListening) listening.player.isPlaying else model.isPlaying
 
     suspend fun togglePlaybackForThisBook() {
-        // Not while a hand-off is taking the book from the audiobook to the
-        // page: that coordinator is about to be discarded.
-        if (app?.isHandingOffToReader(model.book.uuid) == true) return
-        val playing = app?.listening
-        if (playing != null && app.listeningBook?.uuid == model.book.uuid) {
-            if (playing.player.isPlaying) playing.player.pause() else playing.player.play()
-            return
-        }
-        model.togglePlayback()
+        if (app != null) app.togglePlaybackForThisBook(model) else model.togglePlayback()
     }
 
     Row(

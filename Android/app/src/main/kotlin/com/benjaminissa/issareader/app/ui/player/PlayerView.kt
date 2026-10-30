@@ -42,12 +42,14 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.benjaminissa.issareader.app.model.NowPlayingController
 import com.benjaminissa.issareader.app.model.PlaybackSettings
+import com.benjaminissa.issareader.app.reader.PendingNarrationStart
 import com.benjaminissa.issareader.app.ui.settings.observe
 import com.benjaminissa.issareader.core.Session
 import com.benjaminissa.issareader.core.model.Book
@@ -77,6 +79,36 @@ import java.text.DecimalFormatSymbols
 import java.util.Locale
 
 /**
+ * What the player sheet is given for a read-along that has not started.
+ *
+ * The coordinator exists from the moment a book opens and holds nothing: no
+ * sentence, no file, a book position of zero. Drawn as it stands the sheet
+ * shows the start of the book, and its Play button asks a player with no file
+ * to play. So the reader hands over the two things the sheet cannot find for
+ * itself: where Play would begin, and how to make Play begin there.
+ *
+ * Functions, asked afresh on each draw, rather than a value taken when the
+ * sheet was built: the sheet has to leave this state the moment Play puts the
+ * voice somewhere.
+ *
+ * @property pending where Play would begin; null once the narration has a
+ *   place of its own, and the sheet draws the coordinator's numbers instead.
+ * @property start what Play does for this book: the reader's own transport,
+ *   which begins from the page, carries on, or does nothing past the last
+ *   narrated chapter.
+ * @property cue what the slider and the skip buttons do before the voice has a
+ *   place: put it at this fraction of the book, and turn the page to it.
+ */
+class NarrationFromPage(
+    val pending: () -> PendingNarrationStart?,
+    val start: suspend () -> Unit,
+    val cue: suspend (Double) -> Unit,
+)
+
+/** Said once, on Play and on each skip, when the narration is out of reach of the page. */
+internal const val NOT_PLAYABLE_HINT = "The narration is too far from this page to start here. Drag the slider to choose a place."
+
+/**
  * The player, as the design lays it out: square audiobook art, title and
  * narrator, a scrubber, and transport whose skip buttons carry their own
  * interval so the amount is never a mystery. `PlayerView.swift`.
@@ -84,6 +116,9 @@ import java.util.Locale
  * @param chapterTitle the chapter's real name, where the caller has one: a
  *   read-along coordinator only knows which text document it is in, and the
  *   reader has the book's table of contents.
+ * @param fromPage how to show, and start, a read-along that has not begun.
+ *   Null for every host with no page to start from — the mini player, the
+ *   library — whose coordinator is playing or is not one.
  */
 @Composable
 internal fun PlayerView(
@@ -95,6 +130,7 @@ internal fun PlayerView(
     nowPlaying: NowPlayingController,
     modifier: Modifier = Modifier,
     coverCache: CoverCache = CoverCache.shared,
+    fromPage: NarrationFromPage? = null,
 ) {
     // Redraw as the coordinator, its player and the sleep timer move.
     (coordinator as? Observed).observe()
@@ -106,14 +142,33 @@ internal fun PlayerView(
     var scrubValue by remember { mutableDoubleStateOf(0.0) }
     val scope = rememberCoroutineScope()
 
+    // Where Play would begin, while the narration has no place of its own:
+    // asked of the reader on every draw, not kept, so it is null from the
+    // moment Play puts the voice somewhere.
+    val pending = fromPage?.pending?.invoke()
+
     // What the bar stands for, and what a drag on it means: one value, so the
-    // bar and its two times can never disagree.
-    val readout = PlaybackProgress(
-        scope = settings.progressScope,
-        bookProgress = coordinator?.bookProgress ?: book.progress ?: 0.0,
-        totalDuration = coordinator?.totalDuration ?: book.narrationDuration ?: 0.0,
-        chapterSpan = coordinator?.chapterSpan,
-    )
+    // bar and its two times can never disagree. Before narration has started,
+    // the place Play would begin: the coordinator answers zero then, and a bar
+    // that said so would show the start of the book to someone reading the
+    // middle of it.
+    val totalDuration = coordinator?.totalDuration ?: book.narrationDuration ?: 0.0
+    val readout = if (pending != null) {
+        PlaybackProgress(settings.progressScope, pending.bookProgress, totalDuration, pending.chapterSpan)
+    } else {
+        PlaybackProgress(
+            scope = settings.progressScope,
+            bookProgress = coordinator?.bookProgress ?: book.progress ?: 0.0,
+            totalDuration = totalDuration,
+            chapterSpan = coordinator?.chapterSpan,
+        )
+    }
+
+    // A place the reader chose: through the reader before the voice has one,
+    // so that the page follows, and through the coordinator after.
+    suspend fun move(target: Double) {
+        if (pending != null && fromPage != null) fromPage.cue(target) else coordinator?.seekToBookProgress(target)
+    }
     val progress = if (scrubbing) scrubValue else readout.fraction
     val total = readout.spanDuration
     // The book numbers follow a drag in progress, through the bar's own
@@ -175,7 +230,7 @@ internal fun PlayerView(
                     // raw fraction.
                     val target = readout.bookProgressForFraction(scrubValue)
                     scrubbing = false
-                    scope.launch { coordinator?.seekToBookProgress(target) }
+                    scope.launch { move(target) }
                 },
                 enabled = coordinator != null,
                 colors = PlayerControls.sliderColors(),
@@ -204,7 +259,7 @@ internal fun PlayerView(
             }
         }
 
-        Transport(coordinator, settings, nowPlaying)
+        Transport(coordinator, settings, nowPlaying, fromPage, pending, ::move)
 
         // Under the transport, above the rate: it belongs to this book the
         // way the rate belongs to the reader.
@@ -218,15 +273,42 @@ internal fun PlayerView(
     }
 }
 
-/** Skip back, play or pause in the 68-point accent circle, skip forward. */
+/**
+ * Skip back, play or pause in the 68-point accent circle, skip forward.
+ *
+ * Before the voice has a place ([pending]), a skip is measured from where Play
+ * would begin, on the book clock, and goes through the reader so the page
+ * follows: the coordinator refuses a skip it has no anchor for. When that
+ * place is out of reach of the page, Play and the skips are dimmed and say
+ * why.
+ */
 @Composable
-private fun Transport(coordinator: PlaybackDriving?, settings: PlaybackSettings, nowPlaying: NowPlayingController) {
+private fun Transport(
+    coordinator: PlaybackDriving?,
+    settings: PlaybackSettings,
+    nowPlaying: NowPlayingController,
+    fromPage: NarrationFromPage?,
+    pending: PendingNarrationStart?,
+    move: suspend (Double) -> Unit,
+) {
     val scope = rememberCoroutineScope()
-    val enabled = coordinator != null
+    val enabled = coordinator != null && pending?.playable != false
     val isPlaying = coordinator?.player?.isPlaying ?: false
+    val hint = if (pending != null && !pending.playable) NOT_PLAYABLE_HINT else null
+    fun skip(action: PlaybackAction, seconds: Double) {
+        scope.launch {
+            val total = coordinator?.totalDuration ?: 0.0
+            if (pending != null && pending.playable && total > 0) {
+                val delta = if (action == PlaybackAction.SKIP_FORWARD) seconds else -seconds
+                move(pending.progress(skippingBy = delta, inBookOf = total))
+            } else {
+                coordinator?.perform(action, settings.commandMap)
+            }
+        }
+    }
     Row(horizontalArrangement = Arrangement.spacedBy(Metrics.spacing32), verticalAlignment = Alignment.CenterVertically) {
-        SkipButton(forward = false, seconds = settings.commandMap.skipBackwardInterval, enabled = enabled) {
-            scope.launch { coordinator?.perform(PlaybackAction.SKIP_BACKWARD, settings.commandMap) }
+        SkipButton(forward = false, seconds = settings.commandMap.skipBackwardInterval, enabled = enabled, hint = hint) {
+            skip(PlaybackAction.SKIP_BACKWARD, settings.commandMap.skipBackwardInterval)
         }
         Box(
             Modifier
@@ -236,14 +318,23 @@ private fun Transport(coordinator: PlaybackDriving?, settings: PlaybackSettings,
                 .background(Palette.tangerine)
                 .clickable(enabled = enabled, role = Role.Button) {
                     scope.launch {
-                        coordinator?.perform(PlaybackAction.PLAY_PAUSE, settings.commandMap)
+                        // Through the reader whenever the sheet came from one.
+                        // Its transport starts from the page when the voice
+                        // has no place, carries on when it has, and does
+                        // nothing past the last narrated chapter, where the
+                        // coordinator's own play would press play on a player
+                        // with no file in it and call that playing.
+                        if (fromPage != null) fromPage.start() else coordinator?.perform(PlaybackAction.PLAY_PAUSE, settings.commandMap)
                         // The lock screen otherwise keeps the old rate until
                         // the five-second poll, extrapolating a clock the
                         // audio has stopped following.
                         nowPlaying.publish()
                     }
                 }
-                .semantics { contentDescription = if (isPlaying) "Pause" else "Play" }
+                .semantics {
+                    contentDescription = if (isPlaying) "Pause" else "Play"
+                    if (hint != null) stateDescription = hint
+                }
                 .testTag("player.playPause"),
             contentAlignment = Alignment.Center,
         ) {
@@ -254,21 +345,24 @@ private fun Transport(coordinator: PlaybackDriving?, settings: PlaybackSettings,
                 modifier = Modifier.size(36.dp),
             )
         }
-        SkipButton(forward = true, seconds = settings.commandMap.skipForwardInterval, enabled = enabled) {
-            scope.launch { coordinator?.perform(PlaybackAction.SKIP_FORWARD, settings.commandMap) }
+        SkipButton(forward = true, seconds = settings.commandMap.skipForwardInterval, enabled = enabled, hint = hint) {
+            skip(PlaybackAction.SKIP_FORWARD, settings.commandMap.skipForwardInterval)
         }
     }
 }
 
 /** The interval drawn inside the arrow, so "how far does this jump" is answered without opening Settings. */
 @Composable
-private fun SkipButton(forward: Boolean, seconds: Double, enabled: Boolean, onClick: () -> Unit) {
+private fun SkipButton(forward: Boolean, seconds: Double, enabled: Boolean, hint: String? = null, onClick: () -> Unit) {
     Box(
         Modifier
             .size(48.dp)
             .clip(CircleShape)
             .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
-            .semantics { contentDescription = if (forward) "Skip forward ${seconds.toInt()} seconds" else "Skip back ${seconds.toInt()} seconds" },
+            .semantics {
+                contentDescription = if (forward) "Skip forward ${seconds.toInt()} seconds" else "Skip back ${seconds.toInt()} seconds"
+                if (hint != null) stateDescription = hint
+            },
         contentAlignment = Alignment.Center,
     ) {
         SkipGlyph(

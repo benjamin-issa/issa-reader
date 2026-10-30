@@ -134,6 +134,8 @@ object Symbols {
     @DrawableRes val starFill: Int = R.drawable.ms_star_fill
     /** `star.slash` */
     @DrawableRes val starSlash: Int = R.drawable.ms_close
+    /** `stop.circle` */
+    @DrawableRes val stopCircle: Int = R.drawable.ms_stop_circle
     /** `tag` */
     @DrawableRes val tag: Int = R.drawable.ms_sell
     /** `tags` */

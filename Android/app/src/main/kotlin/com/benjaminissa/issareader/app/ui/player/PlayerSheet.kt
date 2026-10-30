@@ -29,6 +29,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.benjaminissa.issareader.app.ui.shell.AppEnvironment
 import com.benjaminissa.issareader.app.ui.shell.LocalAppEnvironment
+import com.benjaminissa.issareader.app.reader.ReaderModel
 import com.benjaminissa.issareader.core.Session
 import com.benjaminissa.issareader.core.model.Book
 import com.benjaminissa.issareader.core.model.BookFormat
@@ -47,15 +48,30 @@ import com.benjaminissa.issareader.ui.SystemText
  *
  * @param onReadAlong opens the reader on the book that is playing; offered
  *   only for a book with text, and one this device can open.
+ * @param fromReader the reader whose waveform raised the sheet. Its sheet is
+ *   about its own book, as the iPhone's reader sheet is: its read-along,
+ *   started or not, unless the audiobook engine has the book, which is then
+ *   what plays. Before anything has played it shows where Play would begin,
+ *   and Play, the skips and the slider go through the reader.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun PlayerSheet(onDismiss: () -> Unit, onReadAlong: () -> Unit) {
+fun PlayerSheet(onDismiss: () -> Unit, onReadAlong: () -> Unit, fromReader: ReaderModel? = null) {
     val environment = LocalAppEnvironment.current
     val app = environment.app
-    val book = app.playbackBook
+    // The audiobook engine holding the reader's book is the thing playing it.
+    val readerOwnsPlayback = fromReader != null && !(app.listening != null && app.listeningBook?.uuid == fromReader.book.uuid)
+    val book = if (fromReader != null) fromReader.book else app.playbackBook
     LaunchedEffect(book == null) { if (book == null) onDismiss() }
     if (book == null) return
+    val coordinator = if (readerOwnsPlayback) fromReader?.readalong else app.playback
+    val fromPage = fromReader?.let { reader ->
+        NarrationFromPage(
+            pending = { if (readerOwnsPlayback) reader.pendingNarrationStart else null },
+            start = { app.togglePlaybackForThisBook(reader) },
+            cue = { reader.cueNarration(it) },
+        )
+    }
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
@@ -65,12 +81,14 @@ fun PlayerSheet(onDismiss: () -> Unit, onReadAlong: () -> Unit) {
         NowPlayingSheetContent(
             book = book,
             session = app.session,
-            coordinator = app.playback,
-            chapterTitle = app.playbackChapterTitle,
+            coordinator = coordinator,
+            chapterTitle = if (readerOwnsPlayback) fromReader?.chapterTitle else app.playbackChapterTitle,
             environment = environment,
             onDone = onDismiss,
-            onReadAlong = onReadAlong,
+            // From the reader, the words are already under the sheet.
+            onReadAlong = if (fromReader != null) onDismiss else onReadAlong,
             modifier = Modifier.fillMaxHeight(),
+            fromPage = fromPage,
         )
     }
 }
@@ -87,6 +105,7 @@ internal fun NowPlayingSheetContent(
     onDone: () -> Unit,
     onReadAlong: () -> Unit,
     modifier: Modifier = Modifier,
+    fromPage: NarrationFromPage? = null,
 ) {
     Column(modifier.fillMaxWidth().semantics { testTagsAsResourceId = true }.testTag("screen.player")) {
         CenterAlignedTopAppBar(
@@ -125,6 +144,7 @@ internal fun NowPlayingSheetContent(
                 settings = environment.settings,
                 nowPlaying = environment.nowPlaying,
                 coverCache = environment.covers(),
+                fromPage = fromPage,
             )
         }
     }
