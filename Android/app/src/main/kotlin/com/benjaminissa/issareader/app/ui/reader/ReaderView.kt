@@ -726,7 +726,17 @@ private fun SelectionMenu(model: ReaderModel, modifier: Modifier = Modifier) {
                 for (tint in Annotation.Tint.entries) {
                     DropdownMenuItem(
                         text = { Text(tint.title, style = SystemText.body, color = Palette.ink) },
-                        trailingIcon = { Icon(painterResource(Symbols.circleFill), contentDescription = null, tint = ReaderPalette.color(tint), modifier = Modifier.size(18.dp)) },
+                        // A filled circle in the tint with a 0.5 dp ring at 50% grey (alpha 0.6),
+                        // as the iPhone draws it, so Slate does not vanish on a dark menu.
+                        trailingIcon = {
+                            Box(
+                                Modifier
+                                    .size(18.dp)
+                                    .background(ReaderPalette.color(tint), CircleShape)
+                                    .border(0.5.dp, Color(0.5f, 0.5f, 0.5f, 0.6f), CircleShape)
+                                    .testTag("reader.swatch.${tint.name}"),
+                            )
+                        },
                         onClick = {
                             tints = false
                             model.annotate(Annotation.Kind.HIGHLIGHT, tint)
