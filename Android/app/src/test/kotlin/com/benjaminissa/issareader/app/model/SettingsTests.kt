@@ -162,6 +162,43 @@ class PageTurnSettingTest : AppSuite() {
 }
 
 /**
+ * The "Show book title" choice: on unless the reader turned it off, kept
+ * across launches, and costing the open book nothing when it changes. Ported
+ * from `BookTitleSettingTests.swift`.
+ */
+class BookTitleSettingTest : AppSuite() {
+    /** A reader who never chose sees the title, and nothing is stored for them. */
+    @Test
+    fun onByDefault() {
+        val defaults = InMemoryKeyValueStore()
+        assertTrue(PlaybackSettings(defaults, SignOutCentre()).showsBookTitle)
+        assertNull(defaults.getBooleanOrNull("issa.showBookTitle"))
+    }
+
+    /** The choice is the choice a relaunch restores, off included. */
+    @Test
+    fun persists() {
+        for (shown in listOf(true, false)) {
+            val defaults = InMemoryKeyValueStore()
+            PlaybackSettings(defaults, SignOutCentre()).showsBookTitle = shown
+            assertEquals(shown, defaults.getBooleanOrNull("issa.showBookTitle"))
+            assertEquals(shown, PlaybackSettings(defaults, SignOutCentre()).showsBookTitle)
+        }
+    }
+
+    /** Changing it leaves the reading style alone: a change there re-paginates the open book. */
+    @Test
+    fun notAStyle() {
+        val defaults = InMemoryKeyValueStore()
+        val settings = PlaybackSettings(defaults, SignOutCentre())
+        val style = settings.readerStyle
+        settings.showsBookTitle = false
+        assertEquals(style, settings.readerStyle)
+        assertEquals(style, PlaybackSettings(defaults, SignOutCentre()).readerStyle)
+    }
+}
+
+/**
  * The rate the reader sees and the rate on disk are the same rate. Ported
  * from `PlaybackRatePersistenceTests.swift`.
  */

@@ -21,6 +21,9 @@ class SharedPreferencesKeyValueStore(private val preferences: SharedPreferences)
 
     override fun getBoolean(key: String): Boolean = preferences.getBoolean(key, false)
 
+    override fun getBooleanOrNull(key: String): Boolean? =
+        if (preferences.contains(key)) preferences.getBoolean(key, false) else null
+
     override fun putBoolean(key: String, value: Boolean) {
         preferences.edit().putBoolean(key, value).apply()
     }

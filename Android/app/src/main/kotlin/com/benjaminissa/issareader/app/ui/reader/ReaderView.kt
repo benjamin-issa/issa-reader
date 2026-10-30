@@ -26,7 +26,9 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.navigationBarsIgnoringVisibility
 import androidx.compose.foundation.layout.systemBarsIgnoringVisibility
+import androidx.compose.foundation.layout.tappableElementIgnoringVisibility
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -42,6 +44,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
@@ -85,6 +88,7 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
@@ -359,6 +363,8 @@ fun ReaderView(
             )
         }
 
+        BookTitleCaption(model, settings.showsBookTitle, edges.bottom, Modifier.align(Alignment.BottomCenter))
+
         if (coachShowing) {
             ReaderCoachOverlay(
                 theme = theme,
@@ -588,6 +594,42 @@ private fun PageContent(
             Modifier
                 .align(Alignment.TopCenter)
                 .padding(top = ReaderChrome.BAR_HEIGHT.dp + Metrics.spacing12, start = Metrics.spacing24, end = Metrics.spacing24),
+        )
+    }
+}
+
+/**
+ * The book's title, in the band the gesture bar holds under the footer.
+ *
+ * Drawn into the navigation band rather than added to the footer, as on the
+ * iPhone: the page is already padded by [band] and [ReaderChrome] already
+ * counts it, so a line set there takes nothing from the page and no setting
+ * or chrome toggle can re-paginate the chapter. Centred, at 55% of the page's
+ * ink, one line, not tappable, and held to the default type size so it cannot
+ * grow into the gesture handle. Drawn only where [ReaderChrome.showsBookTitle]
+ * says so: never under three-button navigation.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun BookTitleCaption(model: ReaderModel, setting: Boolean, band: Dp, modifier: Modifier = Modifier) {
+    val density = LocalDensity.current
+    val navBar = with(density) { WindowInsets.navigationBarsIgnoringVisibility.getBottom(density).toDp().value.toDouble() }
+    val tappable = with(density) { WindowInsets.tappableElementIgnoringVisibility.getBottom(density).toDp().value.toDouble() }
+    if (!ReaderChrome.showsBookTitle(setting, model.chromeVisible, navBar, tappable)) return
+    CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale = 1f)) {
+        Text(
+            model.book.title,
+            style = Typography.caption,
+            color = model.style.theme.text.withAlpha(0.55).color,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+            modifier = modifier
+                .fillMaxWidth()
+                .height(band)
+                .padding(horizontal = model.style.pageMargin.dp)
+                .padding(top = Metrics.spacing4)
+                .testTag("reader.bookTitle"),
         )
     }
 }

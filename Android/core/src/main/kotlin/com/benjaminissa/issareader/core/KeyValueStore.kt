@@ -24,6 +24,15 @@ interface KeyValueStore {
 
     fun putBoolean(key: String, value: Boolean)
 
+    /**
+     * The stored flag, or null when the reader never chose — `object(forKey:) as? Bool`.
+     *
+     * [getBoolean] reads an absent key as off, which is right for a switch that
+     * starts off and wrong for one that starts on: there the absence has to be
+     * told from a choice.
+     */
+    fun getBooleanOrNull(key: String): Boolean?
+
     fun remove(key: String)
 }
 
@@ -38,6 +47,8 @@ class InMemoryKeyValueStore : KeyValueStore {
     }
 
     @Synchronized override fun getBoolean(key: String): Boolean = values[key] as? Boolean ?: false
+
+    @Synchronized override fun getBooleanOrNull(key: String): Boolean? = values[key] as? Boolean
 
     @Synchronized override fun putBoolean(key: String, value: Boolean) {
         values[key] = value

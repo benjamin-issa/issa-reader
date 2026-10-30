@@ -127,6 +127,27 @@ class PlaybackSettings(
         }
 
     /**
+     * Whether the reader prints the book's title in small type under the
+     * footer's controls, where the navigation bar leaves a band to hold it.
+     *
+     * Beside [pageTurn] and out of [readerStyle] for the same reason: the title
+     * is drawn in the band the system's navigation bar holds, which the page's
+     * size already counts, so showing or hiding it cannot move a line, and it
+     * should cost the reader nothing, least of all their place.
+     *
+     * On unless the reader turned it off: an absent key is the default, not a
+     * choice, so [KeyValueStore.getBoolean] (which reads absent as off) is not
+     * what reads it, and nothing is stored until the switch is first moved.
+     */
+    private var showsBookTitleState by mutableStateOf(defaults.getBooleanOrNull(SHOWS_BOOK_TITLE_KEY) ?: true)
+    var showsBookTitle: Boolean
+        get() = showsBookTitleState
+        set(value) {
+            showsBookTitleState = value
+            defaults.putBoolean(SHOWS_BOOK_TITLE_KEY, value)
+        }
+
+    /**
      * Per-book departures from [readerStyle], keyed by book uuid. Device-local
      * and deliberately not synced: a size that suits a phone is wrong on a
      * television.
@@ -295,6 +316,7 @@ class PlaybackSettings(
         const val PROGRESS_SCOPE_KEY = "issa.progressScope"
         const val ASK_ENABLED_KEY = "issa.askAboutBook"
         const val PAGE_TURN_KEY = "issa.pageTurn"
+        const val SHOWS_BOOK_TITLE_KEY = "issa.showBookTitle"
         const val FACE_MIGRATION_KEY = "issa.migratedDefaultFaceToLiterata"
 
         private val bookStylesSerializer = MapSerializer(String.serializer(), ReaderStyleOverride.serializer())

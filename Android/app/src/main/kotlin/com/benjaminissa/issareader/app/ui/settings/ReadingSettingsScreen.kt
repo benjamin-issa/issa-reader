@@ -10,6 +10,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import com.benjaminissa.issareader.app.model.FontImport
 import com.benjaminissa.issareader.app.model.PlaybackSettings
@@ -52,6 +53,8 @@ internal fun ReadingSettingsScreen(
 ) {
     val context = LocalContext.current
     val motionRemoved = reduceMotion ?: remember(context) { ReadingSettings.animationsRemoved(context) }
+    // The switch is a phone's: on a tablet the reader draws no title, as on the iPad.
+    val showsTitleSwitch = ReadingSettings.offersBookTitle(LocalConfiguration.current.smallestScreenWidthDp)
     val style = settings.readerStyle
     val theme = style.theme
     var customFamilies by remember(fontImport) { mutableStateOf(fontImport?.customFonts?.families().orEmpty()) }
@@ -123,7 +126,7 @@ internal fun ReadingSettingsScreen(
             )
         }
 
-        paperSection(key = "pages", header = "Pages", footer = ReadingSettings.pagesNote(motionRemoved)) {
+        paperSection(key = "pages", header = "Pages", footer = ReadingSettings.pagesNote(motionRemoved, showsTitleSwitch)) {
             row {
                 // Shown as None and left alone underneath, so the reader's own
                 // choice is still there when animations come back.
@@ -135,6 +138,11 @@ internal fun ReadingSettingsScreen(
                     onSelect = { settings.pageTurn = it },
                     enabled = !motionRemoved,
                 )
+            }
+            if (showsTitleSwitch) {
+                row {
+                    ToggleRow("Show book title", settings.showsBookTitle, { settings.showsBookTitle = it })
+                }
             }
         }
 
@@ -202,11 +210,18 @@ internal object ReadingSettings {
      * The Pages section's note, which says first why the picker cannot be used
      * when it cannot — a disabled control with no reason given reads as broken.
      */
-    fun pagesNote(animationsRemoved: Boolean): String {
+    fun pagesNote(animationsRemoved: Boolean, showsBookTitleSwitch: Boolean = false): String {
         val styles = "Slide moves the next page in beside the current one. Cover slides the page away over the next. None changes the page instantly."
-        if (!animationsRemoved) return styles
-        return "Remove animations is on, so pages change instantly. To choose how they move, turn it off in Settings › Accessibility › Color and motion. $styles"
+        // Named only where the switch is, so the note never describes a control that is not there.
+        val title = if (showsBookTitleSwitch) " $BOOK_TITLE_NOTE" else ""
+        if (!animationsRemoved) return styles + title
+        return "Remove animations is on, so pages change instantly. To choose how they move, turn it off in Settings › Accessibility › Color and motion. $styles$title"
     }
+
+    const val BOOK_TITLE_NOTE = "Show book title prints the title in small type under the controls at the foot of the page, wherever there is room for it."
+
+    /** Phones only: from 600 dp of smallest width a screen is a tablet, as `LocalDevice.noun` decides. */
+    fun offersBookTitle(smallestScreenWidthDp: Int): Boolean = smallestScreenWidthDp < 600
 
     /**
      * One page colour's highlighter. Choosing nothing removes the key rather
