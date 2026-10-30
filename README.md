@@ -5,7 +5,7 @@ ebooks, audiobooks, and synchronised read-along on iPhone, iPad, Apple TV and th
 and its Android counterpart, for phones and Android Auto.
 
 Written in Swift 6 for iOS 26, macOS 26 and tvOS 26, built with Xcode 27. The
-Android app is written in Kotlin with Jetpack Compose for Android 12 and later;
+Android app is written in Kotlin with Jetpack Compose for Android 11 and later;
 see [Android](#android).
 
 ![Read-along on iPhone](docs/screenshots/ios-09-readalong-highlight.png)

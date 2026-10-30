@@ -135,7 +135,7 @@ tests" on Android means all of these:
    `/tmp/pw*.epub` files as item 2 above, copied from the same place. Under
    the release switch they fail rather than skip when the files are absent.
 3. **Live checks, against each server, on a phone or emulator running Android
-   12 or later.** `scripts/android-live-check.sh <server> <label>` installs the
+   11 or later.** `scripts/android-live-check.sh <server> <label>` installs the
    app fresh (`--serial` names the device; the only one attached by default).
    It then:
    - pairs the app by device code, approved through `approve-device.mjs`;

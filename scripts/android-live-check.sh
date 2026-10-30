@@ -157,7 +157,7 @@ export ANDROID_SERIAL="$SERIAL"
 adb get-state >/dev/null 2>&1 || die "device $SERIAL is not ready (adb devices)"
 SDK=$(adb shell getprop ro.build.version.sdk | tr -d '\r')
 DEVICE="$SERIAL, $(adb shell getprop ro.product.model | tr -d '\r'), Android $(adb shell getprop ro.build.version.release | tr -d '\r') (API $SDK)"
-[ "${SDK:-0}" -ge 31 ] || die "the app needs Android 12 (API 31) or later; $SERIAL is API $SDK"
+[ "${SDK:-0}" -ge 30 ] || die "the app needs Android 11 (API 30) or later; $SERIAL is API $SDK"
 echo "▸ $DEVICE"
 
 # ── The server ────────────────────────────────────────────────────────────

@@ -11,7 +11,7 @@ android {
     namespace = "com.benjaminissa.issareader.render.android"
     compileSdk = 37
     defaultConfig {
-        minSdk = 31
+        minSdk = 30
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     compileOptions {

@@ -36,7 +36,9 @@ android {
 
     defaultConfig {
         applicationId = "com.benjaminissa.issareader"
-        minSdk = 31
+        // Android 11: the first Boox Palma, an e-ink phone a reader is made
+        // for, never got Android 12. Every newer call is gated (lint's NewApi).
+        minSdk = 30
         targetSdk = 36
         versionName = marketingVersion
         versionCode = buildNumber
