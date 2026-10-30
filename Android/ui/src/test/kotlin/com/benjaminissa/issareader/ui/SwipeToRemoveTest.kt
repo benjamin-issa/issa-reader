@@ -12,6 +12,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.click
+import androidx.compose.ui.test.down
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import androidx.compose.ui.test.moveBy
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.up
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performTouchInput
@@ -79,6 +84,48 @@ class SwipeToRemoveTest {
         compose.waitForIdle()
         assertEquals(1, removed)
         assertNull(openRow)
+    }
+
+    /**
+     * Swift's `.cancelled` is "reset, don't remove": a drag the system takes
+     * back (a call, a gesture it claims, a scroll that wins) must not delete a
+     * book because the finger happened to be past the commit distance.
+     */
+    @Test
+    fun `a drag past the commit distance that is cancelled removes nothing and puts the row back`() {
+        show()
+        compose.onNodeWithTag("row").performTouchInput {
+            down(Offset(right - 10f, centerY))
+            moveBy(Offset(-120.dp.toPx(), 0f))
+            moveBy(Offset(-120.dp.toPx(), 0f))
+            moveBy(Offset(-120.dp.toPx(), 0f))
+            cancel()
+        }
+        compose.waitForIdle()
+        assertEquals("a cancelled drag is not a removal", 0, removed)
+        assertNull("and leaves no row open", openRow)
+        assertEquals(0, tapped)
+        compose.mainClock.advanceTimeBy(1_000)
+        compose.waitForIdle()
+        assertEquals(
+            "the row is back where it was",
+            0f, compose.onNodeWithText("You always know after you are two.").getUnclippedBoundsInRoot().left.value, 0.5f,
+        )
+    }
+
+    /** The same finger, released where it is, still removes: the cancelled test is not a test that nothing removes. */
+    @Test
+    fun `the same drag released normally removes`() {
+        show()
+        compose.onNodeWithTag("row").performTouchInput {
+            down(Offset(right - 10f, centerY))
+            moveBy(Offset(-120.dp.toPx(), 0f))
+            moveBy(Offset(-120.dp.toPx(), 0f))
+            moveBy(Offset(-120.dp.toPx(), 0f))
+            up()
+        }
+        compose.waitForIdle()
+        assertEquals(1, removed)
     }
 
     @Test

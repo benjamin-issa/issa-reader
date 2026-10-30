@@ -5,9 +5,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.gestures.Orientation
-import androidx.compose.foundation.gestures.draggable
-import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -18,12 +16,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -72,6 +73,10 @@ fun SwipeToRemove(
     val reveal = with(density) { REVEAL_WIDTH.toPx() }
     val commit = with(density) { COMMIT_DISTANCE.toPx() }
     val isOpen = openRow == id
+    // The drag's callbacks outlive a recomposition, so they read the latest.
+    val currentIsOpen by rememberUpdatedState(isOpen)
+    val currentOnOpenRowChange by rememberUpdatedState(onOpenRowChange)
+    val currentOnRemove by rememberUpdatedState(onRemove)
     val offset = remember { Animatable(0f) }
     val scope = rememberCoroutineScope()
     LaunchedEffect(isOpen) { offset.animateTo(if (isOpen) -reveal else 0f) }
@@ -102,30 +107,44 @@ fun SwipeToRemove(
         Box(
             Modifier
                 .offset { IntOffset(offset.value.roundToInt(), 0) }
-                .draggable(
-                    orientation = Orientation.Horizontal,
-                    state = rememberDraggableState { delta ->
-                        scope.launch { offset.snapTo((offset.value + delta).coerceAtMost(0f)) }
-                    },
-                    onDragStopped = {
-                        val travelled = -offset.value
-                        when {
-                            travelled > commit -> {
-                                onOpenRowChange(null)
-                                offset.snapTo(0f)
-                                onRemove()
+                // detectHorizontalDragGestures rather than `draggable`: draggable
+                // reports a drag the system cancelled exactly as one the finger
+                // ended, so a cancel past the commit distance removed the row.
+                // Swift's `.cancelled` is "reset, don't remove".
+                .pointerInput(reveal, commit) {
+                    detectHorizontalDragGestures(
+                        onDragEnd = {
+                            scope.launch {
+                                val travelled = -offset.value
+                                when {
+                                    travelled > commit -> {
+                                        currentOnOpenRowChange(null)
+                                        offset.snapTo(0f)
+                                        currentOnRemove()
+                                    }
+                                    travelled > reveal / 2 -> {
+                                        currentOnOpenRowChange(id)
+                                        offset.animateTo(-reveal)
+                                    }
+                                    else -> {
+                                        if (currentIsOpen) currentOnOpenRowChange(null)
+                                        offset.animateTo(0f)
+                                    }
+                                }
                             }
-                            travelled > reveal / 2 -> {
-                                onOpenRowChange(id)
-                                offset.animateTo(-reveal)
-                            }
-                            else -> {
-                                if (isOpen) onOpenRowChange(null)
-                                offset.animateTo(0f)
-                            }
-                        }
-                    },
-                )
+                        },
+                        // Back to where the row was before the finger came down,
+                        // and nothing else: no removal, and the open row stays
+                        // as it was.
+                        onDragCancel = {
+                            scope.launch { offset.animateTo(if (currentIsOpen) -reveal else 0f) }
+                        },
+                        onHorizontalDrag = { change, delta ->
+                            change.consume()
+                            scope.launch { offset.snapTo((offset.value + delta).coerceAtMost(0f)) }
+                        },
+                    )
+                }
                 .then(
                     if (onTap != null || onLongPress != null) {
                         Modifier.combinedClickable(
