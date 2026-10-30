@@ -217,6 +217,8 @@ struct IssaCommands: Commands {
             .keyboardShortcut(.leftArrow, modifiers: [.command, .shift])
             .disabled(nowPlaying.coordinator == nil)
 
+            StopNarrationCommand()
+
             Divider()
             // Posted, not opened here: `openWindow` reads from the environment,
             // and a `Commands` body has none — the action resolves to a no-op
@@ -300,6 +302,21 @@ struct PlayPauseCommand: View {
         .disabled(!KeyReaderNarration.playEnabled(
             hasCoordinator: nowPlaying.coordinator != nil,
             narratedReaderIsKey: keyReader.narratedReaderIsKey))
+    }
+}
+
+/// Playback › Stop Narration: clears the highlight the voice left on the book
+/// in front, so the next Play starts on its page.
+///
+/// A view for the same reason `PlayPauseCommand` is one: it has to observe
+/// which reader window is key. Enabled only while that window's book has a
+/// mark — with none lit there is nothing for it to clear.
+struct StopNarrationCommand: View {
+    private let keyReader = KeyReaderNarration.shared
+
+    var body: some View {
+        Button("Stop Narration") { ReaderCommand.stopNarration.post() }
+            .disabled(!keyReader.keyReaderHasMarker)
     }
 }
 

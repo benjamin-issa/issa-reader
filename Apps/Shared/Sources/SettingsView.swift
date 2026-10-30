@@ -73,9 +73,9 @@ public struct SettingsView: View {
 
             #if !os(tvOS)
             // Between reading and the machinery, because that is what it is: a
-            // reading feature, off by default, that most readers will decide
-            // about once and never revisit. Not on the television, which has no
-            // Apple Intelligence to ask.
+            // reading feature, on by default where the device can run it, that
+            // most readers will decide about once and never revisit. Not on the
+            // television, which has no Apple Intelligence to ask.
             AskSettingsSection()
             #endif
 

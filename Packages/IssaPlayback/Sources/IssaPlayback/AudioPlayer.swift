@@ -542,12 +542,46 @@ public final class AudioPlayer {
         return .loaded
     }
 
-    /// Bumped by every `load`. Guards what belongs to the *item*: its
-    /// duration, its audio mix, the volume fallback that depends on the mix.
+    /// Takes the loaded file out of the player, leaving it paused and empty.
+    ///
+    /// `load` with nothing to load: for a coordinator that is putting its
+    /// position back to the start, which has to stop the player describing a
+    /// file. The periodic observer is attached to the player rather than to the
+    /// item, and it fires on a pause and on a seek as well as on playback — so
+    /// while `currentAudioHref` names a file, every tick is a question a
+    /// coordinator can answer with a sentence in it. Cleared, `advance(to:)`
+    /// has nothing to resolve the clock against.
+    ///
+    /// Both generations are bumped, so a `load` still opening its file comes
+    /// back `.superseded` and a seek still landing returns without writing the
+    /// clock or the rate, exactly as if a newer load had replaced them. The
+    /// rate the listener chose, and the level, are untouched: they belong to the
+    /// player, not to the file.
+    ///
+    /// The next `load` is a new item and plays, as after any other.
+    func unload() {
+        pause()
+        itemGeneration &+= 1
+        playheadGeneration &+= 1
+        placementPending = false
+        // The end and failure observers go with the item they were watching,
+        // and a notification that item had already queued goes with them — see
+        // `ReadalongCoordinator.advanceToNextFile`.
+        observers.removeItemObservers()
+        player.currentItem?.cancelPendingSeeks()
+        player.removeAllItems()
+        currentAudioHref = nil
+        currentTime = 0
+        duration = 0
+    }
+
+    /// Bumped by every `load` and by `unload`. Guards what belongs to the
+    /// *item*: its duration, its audio mix, the volume fallback that depends on
+    /// the mix.
     private var itemGeneration = 0
-    /// Bumped by every `load` and every `seek(to:)`. Guards what belongs to the
-    /// *playhead*: `currentTime`, a load's trailing seek, and the rate restore
-    /// that follows a seek. Readable for tests.
+    /// Bumped by every `load`, every `seek(to:)` and `unload`. Guards what
+    /// belongs to the *playhead*: `currentTime`, a load's trailing seek, and the
+    /// rate restore that follows a seek. Readable for tests.
     private(set) var playheadGeneration = 0
     /// Whether the newest load's item has yet to be put where it belongs.
     ///

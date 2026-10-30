@@ -152,22 +152,75 @@ struct LibraryStoreTests {
 
     /// The LIKE fallback takes what was typed as text. `%` and `_` used to be
     /// wildcards, so a search for either returned the whole library.
+    ///
+    /// Each literal title has a rival spelled without the punctuation. FTS
+    /// reads `%`, `_` and `\` as separators, so before these queries skipped
+    /// it, `100%` found "100 Ways" too and never reached the literal match.
     @Test("a search for % or _ finds those characters, not everything")
     func likeWildcardsAreLiteral() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = try LibraryStore(serverKey: "http://example.test", directory: directory)
-        var books = Array(try sampleBooks().prefix(4))
-        try #require(books.count == 4)
+        // Six rows from however many the capture holds, each its own book.
+        let captured = try sampleBooks()
+        try #require(!captured.isEmpty)
+        var books = (0..<6).map { index in
+            var book = captured[index % captured.count]
+            book.uuid = UUID().uuidString.lowercased()
+            return book
+        }
         books[0].title = "100% Pure"
         books[1].title = "a_b"
         books[2].title = "back\\slash"
+        books[3].title = "100 Ways"
+        books[4].title = "a b"
+        books[5].title = "back slash"
         try await store.replaceCatalogue(books)
 
         #expect(try await store.search("%").map(\.title) == ["100% Pure"])
         #expect(try await store.search("_").map(\.title) == ["a_b"])
         #expect(try await store.search("100%").map(\.title) == ["100% Pure"])
+        #expect(try await store.search("a_b").map(\.title) == ["a_b"])
+        #expect(try await store.search("back\\slash").map(\.title) == ["back\\slash"])
         #expect(try await store.search("\\").map(\.title) == ["back\\slash"])
+        // The rivals are still found the ordinary way.
+        #expect(try await store.search("100").map(\.title).sorted() == ["100 Ways", "100% Pure"])
+    }
+
+    /// Keeping a literal query off FTS cost the words around the punctuation:
+    /// one contiguous substring cannot match a reordered title, or a title
+    /// beside its author. Such a query runs through FTS and keeps the rows
+    /// that hold each marked term as typed.
+    @Test("a query with % or _ still matches words in any order and any field")
+    func literalTermsKeepFullTextSearch() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try LibraryStore(serverKey: "http://example.test", directory: directory)
+        let captured = try sampleBooks()
+        try #require(!captured.isEmpty)
+        var books = (0..<5).map { index in
+            var book = captured[index % captured.count]
+            book.uuid = UUID().uuidString.lowercased()
+            return book
+        }
+        books[0].title = "100% Pure"
+        books[0].authors = [Creator(uuid: "tolkien", name: "J. R. R. Tolkien")]
+        books[1].title = "100 Ways"
+        books[1].authors = [Creator(uuid: "tolkien", name: "J. R. R. Tolkien")]
+        books[2].title = "Café_Noir"
+        books[3].title = "Cafe Noir"
+        books[4].title = "Pure Gold"
+        try await store.replaceCatalogue(books)
+
+        // Reordered, and in the other direction.
+        #expect(try await store.search("Pure 100%").map(\.title) == ["100% Pure"])
+        #expect(try await store.search("100% pure").map(\.title) == ["100% Pure"])
+        // Across fields: the title carries the percent sign, the byline the name.
+        #expect(try await store.search("100% tolkien").map(\.title) == ["100% Pure"])
+        #expect(try await store.search("tolkien 100%").map(\.title) == ["100% Pure"])
+        // FTS's Unicode folding survives; LIKE would not fold the accent.
+        #expect(try await store.search("cafe_noir").map(\.title) == ["Café_Noir"])
+        #expect(try await store.search("CAFÉ_NOIR").map(\.title) == ["Café_Noir"])
     }
 
     @Test("a single character still searches rather than returning nothing")

@@ -395,6 +395,14 @@ public struct ReaderView: View {
             PlayerView(
                 book: model.book, session: model.readerSession,
                 coordinator: model.readalong, chapterTitle: model.chapterTitle,
+                // Before narration has started the coordinator holds nothing,
+                // so the sheet is told where Play would begin and given the
+                // footer's own Play to begin there.
+                fromPage: NarrationFromPage(
+                    pending: { model.pendingNarrationStart },
+                    start: { await togglePlaybackForThisBook() },
+                    cue: { await model.cueNarration(toBookProgress: $0) },
+                ),
             )
                 .presentationDetents([.large])
                 // The sheet's own backdrop, which is what shows behind the
@@ -599,7 +607,8 @@ public struct ReaderView: View {
 
     private func reportNarration() {
         KeyReaderNarration.shared.update(
-            token: narrationToken, isKey: isActiveScene, isNarrated: model.hasNarration)
+            token: narrationToken, isKey: isActiveScene, isNarrated: model.hasNarration,
+            hasMarker: model.hasNarrationMarker)
     }
 
     /// What each reading command does, in one place.
@@ -623,6 +632,11 @@ public struct ReaderView: View {
         case .ask:
             guard showsAskPill else { return }
             showsAsk = true
+        // Guarded as the menu item is enabled, so a stale post cannot clear a
+        // place that is not there.
+        case .stopNarration:
+            guard model.hasNarration, model.hasNarrationMarker else { return }
+            Task { await stopNarrationForThisBook() }
         case .playPause:
             guard model.hasNarration else { return }
             Task { await model.togglePlayback() }
@@ -673,57 +687,6 @@ public struct ReaderView: View {
         #endif
     }
 
-    /// Bookmark, and the rest behind an ellipsis.
-    @ViewBuilder
-    private var readerActions: some View {
-        #if !os(tvOS)
-        let askJob = ask.job(for: model.book.uuid)
-        if showsAskPill {
-            // A bare glyph, so the bar's own font and ink reach it exactly as
-            // they reach the three beside it. A tinted capsule with a word in
-            // it read as a different class of control — an advertisement in a
-            // row of tools — which is not what asking a question is. The two
-            // states it still has to show are said with the glyph itself, the
-            // way the Mac toolbar has always said them.
-            Button { showsAsk = true } label: {
-                Image(systemName: "sparkles")
-                    .symbolEffect(
-                        .pulse.byLayer, options: .repeating,
-                        isActive: askJob?.state.isWorking ?? false,
-                    )
-                    .overlay(alignment: .topTrailing) {
-                        if askJob?.state.isAnswered == true {
-                            Circle()
-                                .fill(model.style.theme.accent)
-                                .frame(width: 6, height: 6)
-                                .offset(x: 3, y: -2)
-                        }
-                    }
-            }
-            .accessibilityIdentifier("reader.ask")
-            .accessibilityLabel(askLabel(for: askJob))
-        }
-        #endif
-
-        Button { showsTypography = true } label: {
-            Image(systemName: "textformat.size")
-        }
-        .accessibilityLabel("Text options for this book")
-
-        Button { model.toggleBookmark() } label: {
-            Image(systemName: model.isPageBookmarked ? "bookmark.fill" : "bookmark")
-        }
-        .accessibilityLabel(model.isPageBookmarked ? "Remove bookmark" : "Bookmark this page")
-
-        Menu {
-            Button("Find in book", systemImage: "magnifyingglass") { showsSearch = true }
-            Button("Marks", systemImage: "bookmark.square") { showsAnnotations = true }
-            Button("Contents", systemImage: "list.bullet") { showsContents = true }
-        } label: {
-            Image(systemName: "ellipsis.circle")
-        }
-    }
-
     #if os(iOS)
     /// The sparkle that stays while the chrome is away.
     @ViewBuilder
@@ -743,19 +706,160 @@ public struct ReaderView: View {
         }
     }
 
-    /// The reader's own top bar, floating over the page.
-    private var topBar: some View {
-        HStack(spacing: Metrics.spacing16) {
+    /// How much of the top bar's tools stand in the bar, and how much has been
+    /// folded into the ellipsis menu to make the row fit.
+    ///
+    /// Three rows, in the order `ViewThatFits` tries them: everything, then
+    /// without Find, then without Find and Marks. Both are still one tap away
+    /// in the menu when they go, so a narrow window loses a shortcut and not a
+    /// feature.
+    private enum TopBarFit {
+        case full
+        case findInMenu
+        case findAndMarksInMenu
+
+        var showsFind: Bool { self == .full }
+        var showsMarks: Bool { self != .findAndMarksInMenu }
+    }
+
+    /// The tools on the right of the top bar: Ask when it is on offer, Find,
+    /// text options, Marks, the bookmark, and an ellipsis menu holding
+    /// whatever `fit` has folded into it, Contents and, in a narrated book,
+    /// Stop Narration. Where that would be Contents alone, Contents is a
+    /// button of its own instead (`ReaderOverflow`).
+    ///
+    /// Find and Marks are the Mac toolbar's own glyphs and words, so the same
+    /// two actions look the same on every platform that has room to show them.
+    @ViewBuilder
+    private func readerActions(_ fit: TopBarFit) -> some View {
+        let askJob = ask.job(for: model.book.uuid)
+        if showsAskPill {
+            // A bare glyph, so the bar's own font and ink reach it exactly as
+            // they reach the ones beside it. A tinted capsule with a word in
+            // it read as a different class of control — an advertisement in a
+            // row of tools — which is not what asking a question is. The two
+            // states it still has to show are said with the glyph itself, the
+            // way the Mac toolbar has always said them.
+            Button { showsAsk = true } label: {
+                Image(systemName: "sparkles")
+                    .symbolEffect(
+                        .pulse.byLayer, options: .repeating,
+                        isActive: askJob?.state.isWorking ?? false,
+                    )
+                    .overlay(alignment: .topTrailing) {
+                        if askJob?.state.isAnswered == true {
+                            Circle()
+                                .fill(model.style.theme.accent)
+                                .frame(width: 6, height: 6)
+                                .offset(x: 3, y: -2)
+                        }
+                    }
+                    .topBarTarget()
+            }
+            .accessibilityIdentifier("reader.ask")
+            .accessibilityLabel(askLabel(for: askJob))
+        }
+
+        if fit.showsFind {
+            Button { showsSearch = true } label: {
+                Image(systemName: "magnifyingglass").topBarTarget()
+            }
+            .accessibilityIdentifier("reader.find")
+            .accessibilityLabel("Find in book")
+        }
+
+        Button { showsTypography = true } label: {
+            Image(systemName: "textformat.size").topBarTarget()
+        }
+        .accessibilityLabel("Text options for this book")
+
+        if fit.showsMarks {
+            Button { showsAnnotations = true } label: {
+                Image(systemName: "bookmark.square").topBarTarget()
+            }
+            .accessibilityIdentifier("reader.marks")
+            .accessibilityLabel("Bookmarks and highlights")
+        }
+
+        Button { model.toggleBookmark() } label: {
+            Image(systemName: model.isPageBookmarked ? "bookmark.fill" : "bookmark")
+                .topBarTarget()
+        }
+        .accessibilityLabel(model.isPageBookmarked ? "Remove bookmark" : "Bookmark this page")
+
+        switch ReaderOverflow(
+            foldsFind: !fit.showsFind, foldsMarks: !fit.showsMarks,
+            hasNarration: model.hasNarration,
+        ) {
+        case .contentsButton:
+            Button { showsContents = true } label: {
+                Image(systemName: "list.bullet").topBarTarget()
+            }
+            .accessibilityIdentifier("reader.contents")
+            .accessibilityLabel("Contents")
+        case .menu(let rows):
+            Menu {
+                ForEach(rows, id: \.self) { row in
+                    switch row {
+                    case .find:
+                        Button("Find in book", systemImage: "magnifyingglass") { showsSearch = true }
+                    case .marks:
+                        Button("Marks", systemImage: "bookmark.square") { showsAnnotations = true }
+                    case .contents:
+                        Button("Contents", systemImage: "list.bullet") { showsContents = true }
+                    case .stopNarration:
+                        // A view of its own, so that what it reads is its own
+                        // to be redrawn for. Whether narration has left a
+                        // sentence lit changes with every sentence while it
+                        // plays, and read here it made this whole screen —
+                        // three top-bar rows, the footer, the overlays —
+                        // recompute every few seconds for a menu item that is
+                        // almost always closed.
+                        StopNarrationMenuItem(model: model) {
+                            Task { await stopNarrationForThisBook() }
+                        }
+                    }
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle").topBarTarget()
+            }
+            .accessibilityIdentifier("reader.more")
+        }
+    }
+
+    /// One candidate row of the top bar: the way back, then the tools.
+    ///
+    /// No spacing between its items. Every glyph already stands in its own
+    /// 44-point square (`topBarTarget`), which is as far apart as two targets
+    /// need to be, and the first row has to fit a 375-point phone with Ask
+    /// showing: seven squares and the bar's margins are 316 points of it.
+    private func topBarRow(_ fit: TopBarFit) -> some View {
+        HStack(spacing: 0) {
             Button { dismiss() } label: {
-                Image(systemName: "chevron.left")
+                Image(systemName: "chevron.left").topBarTarget()
             }
             .accessibilityLabel("Back to the book")
-            Spacer()
-            readerActions
+            Spacer(minLength: 0)
+            readerActions(fit)
+        }
+    }
+
+    /// The reader's own top bar, floating over the page.
+    ///
+    /// The fullest row that fits, by `ViewThatFits`: on any phone that is all
+    /// of them, and the folded rows are for a narrow iPad window.
+    private var topBar: some View {
+        ViewThatFits(in: .horizontal) {
+            topBarRow(.full)
+            topBarRow(.findInMenu)
+            topBarRow(.findAndMarksInMenu)
         }
         .font(.system(size: 17, weight: .semibold))
         .foregroundStyle(model.style.theme.text)
-        .padding(.horizontal, Metrics.spacing16)
+        // Small, because the glyphs no longer stand at the bar's edge: each is
+        // centred in a 44-point square, so the square already carries about
+        // the 16 points of margin the glyph used to be given by padding.
+        .padding(.horizontal, Metrics.spacing4)
         .frame(height: ReaderChrome.barHeight)
         .padding(.top, deviceInsets.top)
         .background {
@@ -1107,11 +1211,18 @@ public struct ReaderView: View {
         .onReceive(NotificationCenter.default.publisher(for: ReaderCommand.playPause.notification)) { _ in
             if isActiveScene { perform(.playPause) }
         }
+        .onReceive(NotificationCenter.default.publisher(for: ReaderCommand.stopNarration.notification)) { _ in
+            if isActiveScene { perform(.stopNarration) }
+        }
         // Says whether this is the narrated book in front, for Playback ›
         // Play — which otherwise had nothing to act on until narration had
         // been started from the page. Each window clears only itself.
         .onChange(of: isActiveScene, initial: true) { reportNarration() }
         .onChange(of: model.hasNarration) { reportNarration() }
+        // Stop Narration is enabled only while there is a mark to clear. Said
+        // from a view of its own: the mark changes with every sentence, and
+        // observed here it redrew this whole screen on each.
+        .background(NarrationMarkerReporter(model: model, report: reportNarration))
         .onDisappear { KeyReaderNarration.shared.left(narrationToken) }
         #endif
         // A re-resolve, not an assignment: `model.style = settings.readerStyle`
@@ -1143,7 +1254,14 @@ public struct ReaderView: View {
                     Button {
                         model.annotate(kind: .highlight, tint: tint)
                     } label: {
-                        Label(tint.title, systemImage: "circle.fill")
+                        // The tint's own colour as a bitmap, not a symbol: a
+                        // menu paints a template symbol in the accent, which
+                        // made all five swatches tangerine.
+                        Label {
+                            Text(tint.title)
+                        } icon: {
+                            ReaderPalette.swatchIcon(for: tint)
+                        }
                     }
                 }
             } label: {
@@ -1264,6 +1382,32 @@ public struct ReaderView: View {
             return
         }
         await model.togglePlayback()
+    }
+
+    /// Puts narration back to a book just opened, whichever engine is holding it.
+    ///
+    /// After listening, the last sentence stays lit and Play resumes there, pages
+    /// behind a reader who has read on. This stops the sound, lets go of the lock
+    /// screen, and forgets the place — `ReaderModel.clearNarration` — so the next
+    /// Play begins from the page. The reader's own place and the stored audio
+    /// anchor are not touched.
+    ///
+    /// Mirrors `togglePlaybackForThisBook`, including its refusal during a
+    /// hand-off: until the book has changed engines there is no telling which
+    /// one a stop should reach, and the next tap acts on the one that owns it.
+    private func stopNarrationForThisBook() async {
+        guard !app.isHandingOffToReader(model.book.uuid) else { return }
+        if app.listeningBook?.uuid == model.book.uuid {
+            // The audiobook engine holds the book, so that is the thing playing.
+            // Its position is written first: this is the reader's own stop, and
+            // the writer's last tick can be most of a quarter-minute behind.
+            await app.stopListeningWritingPosition(of: model.book.uuid, nowPlaying: nowPlaying)
+        } else if app.reader === model {
+            // Only if this book is the one narrating. `stopNarration` stops
+            // whichever is, and on the Mac another window's book may be.
+            app.stopNarration()
+        }
+        model.clearNarration()
     }
 
     /// The strip below the page.
@@ -1395,8 +1539,71 @@ public struct ReaderView: View {
                     showsPlayer = true
                 },
         )
+        // After the gesture, so the title is not part of what it listens to.
+        .overlay(alignment: .bottom) { bookTitle }
         #endif
     }
+
+    #if os(iOS)
+    /// The least the band under the footer can measure and still carry a line
+    /// of caption clear of the home indicator.
+    ///
+    /// The indicator is five points tall and rests eight above the screen's
+    /// edge, so it takes the band's last thirteen; the caption's line is
+    /// fourteen, set four below the footer; and the rest is air. A notched
+    /// iPhone's band is 34 in portrait and passes. An iPad's is 20, and a
+    /// phone turned on its side 21: both would put the line on the indicator,
+    /// so they leave the title out rather than draw over it. A home-button
+    /// phone has no band at all.
+    static let bookTitleBandMinimum: CGFloat = 32
+
+    /// Whether a band of this height can hold the title.
+    static func bandFitsBookTitle(_ band: CGFloat) -> Bool {
+        band >= bookTitleBandMinimum
+    }
+
+    /// The book's title, in the band below the footer's controls.
+    ///
+    /// Drawn into the home indicator's band rather than added to the footer,
+    /// and the whole design is that distinction. The page is already padded by
+    /// `deviceInsets.bottom`, and `ReaderChrome.bottomReserve` already counts
+    /// it, so a line set there takes nothing from the page: the footer stays
+    /// 44 points, the controls stay where they were, and no setting or chrome
+    /// toggle can re-paginate the chapter. An overlay offset down by the band,
+    /// not a row in the footer, is what keeps that true.
+    ///
+    /// Centred, under controls that sit to the left. The footer's own ends are
+    /// the play button and the percentage, and a title set flush left under
+    /// the first would read as a label for the play button; centred it reads
+    /// as the foot of the page, which is what it is.
+    ///
+    /// Held at the default type size: the band is a fixed 34 points and the
+    /// indicator is in it, so a title that grew with Dynamic Type would grow
+    /// into the indicator. It is a caption for the reader's orientation, and
+    /// the book's title is also on the page they came from.
+    @ViewBuilder
+    private var bookTitle: some View {
+        if settings.showsBookTitle, model.chromeVisible,
+           Self.bandFitsBookTitle(deviceInsets.bottom) {
+            Text(model.book.title)
+                .font(Typography.caption)
+                .foregroundStyle(model.style.theme.text.opacity(0.55))
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .dynamicTypeSize(...DynamicTypeSize.large)
+                .padding(.horizontal, model.style.pageMargin)
+                .padding(.top, Metrics.spacing4)
+                // Exactly the band's height, text at its top, so that the
+                // offset below puts the band's top edge on the footer's
+                // bottom edge whatever the text measures.
+                .frame(maxWidth: .infinity, alignment: .top)
+                .frame(height: deviceInsets.bottom, alignment: .top)
+                .offset(y: deviceInsets.bottom)
+                .allowsHitTesting(false)
+                .accessibilityIdentifier("reader.bookTitle")
+        }
+    }
+    #endif
 
     private func narrationSkipButton(
         seconds: TimeInterval, symbol: String, action: PlaybackAction, label: String,
@@ -1419,6 +1626,97 @@ public struct ReaderView: View {
         .accessibilityLabel("\(label) \(Int(seconds)) seconds")
     }
 }
+
+#if os(iOS)
+/// What the last square of the reader's top bar holds: the ellipsis menu, or
+/// Contents on its own.
+///
+/// Never a menu of one row. iOS opens a menu out of the button it came from,
+/// so a menu of one row sits on the bar itself, over Find, the text options,
+/// Marks and the bookmark, in a thinner glass that lets them show through. A
+/// menu of two rows or more reaches below the bar. A narrated book's menu
+/// always has two, Contents and Stop Narration; a book with nothing to narrate
+/// and nothing folded into the menu has only Contents, which then stands in
+/// the bar as a button of its own.
+enum ReaderOverflow: Equatable {
+    enum Row: Hashable {
+        case find, marks, contents, stopNarration
+    }
+
+    /// The ellipsis menu, with these rows in this order. Always two or more.
+    case menu([Row])
+    /// Contents alone, as a top-bar button.
+    case contentsButton
+
+    init(foldsFind: Bool, foldsMarks: Bool, hasNarration: Bool) {
+        var rows: [Row] = []
+        if foldsFind { rows.append(.find) }
+        if foldsMarks { rows.append(.marks) }
+        rows.append(.contents)
+        if hasNarration { rows.append(.stopNarration) }
+        self = rows.count < 2 ? .contentsButton : .menu(rows)
+    }
+}
+
+/// The ellipsis menu's Stop Narration item, which reads for itself whether
+/// there is a mark to clear.
+///
+/// Always in a narrated book's menu, and greyed out while nothing is lit, as
+/// the Mac's Playback item is. Hidden instead, it left Contents alone in the
+/// menu whenever no sentence was lit, and iOS opens a one-row menu on top of
+/// the button it came from: a see-through pill over the bar's other tools
+/// rather than a menu below them (`ReaderOverflow`). Also greyed during a
+/// hand-off, while the book changes engines.
+///
+/// A struct, not a branch in `ReaderView.body`, because `hasNarrationMarker`
+/// reads the coordinator's active sentence, which moves every few seconds
+/// while narration plays. Under Observation only the body that reads a
+/// property is invalidated by it, so read here it redraws this item and
+/// nothing else.
+private struct StopNarrationMenuItem: View {
+    let model: ReaderModel
+    let stop: () -> Void
+    @Environment(AppModel.self) private var app
+
+    var body: some View {
+        Button("Stop Narration", systemImage: "stop.circle", action: stop)
+            .disabled(!model.hasNarrationMarker || app.isHandingOffToReader(model.book.uuid))
+    }
+}
+
+private extension View {
+    /// The square a finger touches a top-bar glyph through.
+    ///
+    /// `ReaderChrome.barHeight` is "also the smallest square a finger can
+    /// reliably hit", and a bare 17-point glyph was well under it. The content
+    /// shape is what makes the whole square the button: without it only the
+    /// glyph's own pixels are hit, and the frame is just empty space.
+    func topBarTarget() -> some View {
+        frame(width: ReaderChrome.barHeight, height: ReaderChrome.barHeight)
+            .contentShape(Rectangle())
+    }
+}
+#endif
+
+#if os(macOS)
+/// Tells the Playback menu when this window's book gains or loses a mark for
+/// Stop Narration to clear.
+///
+/// Its own view for the reason `StopNarrationMenuItem` is: `hasNarrationMarker`
+/// changes with every sentence while narration plays, and an `onChange` on it
+/// in `ReaderView.body` made that body read it and recompute the whole screen
+/// each time. Drawn as nothing, behind the page.
+private struct NarrationMarkerReporter: View {
+    let model: ReaderModel
+    let report: () -> Void
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .onChange(of: model.hasNarrationMarker) { report() }
+    }
+}
+#endif
 
 /// Installs the read-aloud double tap only where it could actually fire.
 ///
