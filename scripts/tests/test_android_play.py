@@ -17,10 +17,11 @@ What they hold the client to:
 import importlib.util
 import json
 import os
+import socketserver
 import tempfile
 import threading
 import unittest
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -29,9 +30,19 @@ play = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(play)
 
 
+class LoopbackServer(ThreadingHTTPServer):
+    """A server that skips HTTPServer's reverse-DNS lookup of its own address,
+    which a Mac can take half a minute to answer for 127.0.0.1."""
+
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
+
+
 class Stub(BaseHTTPRequestHandler):
     """Play's edits, as far as the client uses them."""
     seen = []
+    queries = []
     fail_track = False
 
     def log_message(self, *args):
@@ -55,7 +66,9 @@ class Stub(BaseHTTPRequestHandler):
             parsed = json.loads(raw) if raw else None
         except ValueError:
             parsed = f"<{len(raw)} bytes>"
-        Stub.seen.append((self.command, self.path.split("?")[0], parsed))
+        path, _, query = self.path.partition("?")
+        Stub.seen.append((self.command, path, parsed))
+        Stub.queries.append((self.command, path, query))
 
     def do_POST(self):
         self.record()
@@ -83,7 +96,7 @@ class Stub(BaseHTTPRequestHandler):
 class AndroidPlayTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.server = HTTPServer(("127.0.0.1", 0), Stub)
+        cls.server = LoopbackServer(("127.0.0.1", 0), Stub)
         threading.Thread(target=cls.server.serve_forever, daemon=True).start()
         base = f"http://127.0.0.1:{cls.server.server_port}"
         play.HOST = base
@@ -96,6 +109,7 @@ class AndroidPlayTests(unittest.TestCase):
 
     def setUp(self):
         Stub.seen = []
+        Stub.queries = []
         Stub.fail_track = False
         self.tmp = tempfile.TemporaryDirectory()
         self.dir = Path(self.tmp.name)
@@ -121,6 +135,9 @@ class AndroidPlayTests(unittest.TestCase):
         self.assertEqual(release["versionCodes"], ["7"])
         self.assertEqual(release["releaseNotes"], [{"language": "en-US", "text": "First release."}])
         self.assertEqual(Stub.seen[-1][:2], ("POST", f"/androidpublisher/v3/applications/{play.PACKAGE}/edits/edit-1:commit"))
+        # The bundle goes to the upload host, as a media upload.
+        uploads = [(path, query) for method, path, query in Stub.queries if path.endswith("/bundles")]
+        self.assertEqual(uploads, [(f"/upload/androidpublisher/v3/applications/{play.PACKAGE}/edits/edit-1/bundles", "uploadType=media")])
 
     def test_a_failed_command_deletes_its_edit_instead_of_committing(self):
         Stub.fail_track = True

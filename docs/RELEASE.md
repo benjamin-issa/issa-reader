@@ -244,10 +244,35 @@ on every platform. The build number is Android's own counter, because Play
 counts per app and refuses any number it has seen. Commit
 `version.properties` with the release.
 
-Uploading is done in the Play Console, not by the script. A new app's first
-bundle can only be uploaded there. The console is also where the track
-(internal, closed, open or production), the release notes and the staged
-rollout are chosen.
+Uploading is `scripts/android-play.py`, the Play Developer API's twin of
+`asc-api.py`. It signs in as the service account in
+`~/.google-play-sa-creds.json` (or `ISSA_PLAY_CREDENTIALS`), which needs access
+to the app under the Console's Users and permissions:
+
+```bash
+scripts/android-play.py upload .build/android-release/IssaReader-<version>-<build>.aab \
+  --track alpha --notes Android/play/listing/en-US/release-notes.txt
+scripts/android-play.py listing Android/play/listing   # text, icon, feature graphic, screenshots
+scripts/android-play.py status                          # each track and its releases
+```
+
+`upload` creates a *draft* release: an app that has never been published takes
+nothing else. Sending it for review is done in the Console (Publishing
+overview), once the app's declarations below are complete. The Console is also
+where the testers and the staged rollout are chosen. The tracks are `internal`,
+`alpha` (closed testing), `beta` (open testing) and `production`.
+
+**Production needs a closed test first.** The Play developer account is a
+personal one created after November 2023, so Google requires a closed test with
+at least 12 opted-in testers, kept for 14 days in a row, before it grants
+production access. Until then releases go to the closed track (`alpha`), which
+Google still reviews. Once the 14 days are met, apply for production access in
+the Console's Dashboard.
+
+The store listing lives in `Android/play/listing/en-US/`: the title, the short
+and full descriptions, the release notes, `graphics/` (the icon and the feature
+graphic, drawn by `Android/play/make-graphics.py`) and `phoneScreenshots/`
+(1080×1920, taken on an emulator signed into the local v2 server).
 
 ### The upload key
 

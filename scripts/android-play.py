@@ -20,6 +20,8 @@ the system's openssl is needed.
 that has never been published, and a draft is what the Console then sends for
 review once the app's declarations are complete. See docs/RELEASE.md, "Android".
 """
+from __future__ import annotations
+
 import argparse
 import base64
 import json
@@ -43,6 +45,12 @@ UPLOAD_TIMEOUT = 600
 LANGUAGE = "en-US"
 
 _token_cache = {}
+
+
+class PlayError(Exception):
+    def __init__(self, status, message):
+        super().__init__(f"HTTP {status}: {message}")
+        self.status = status
 
 
 def _credentials():
@@ -83,15 +91,14 @@ def _token():
     body = urllib.parse.urlencode({
         "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer", "assertion": assertion,
     }).encode()
-    with urllib.request.urlopen(urllib.request.Request(TOKEN_URL, data=body), timeout=TIMEOUT) as reply:
-        _token_cache["token"] = json.load(reply)["access_token"]
+    try:
+        with urllib.request.urlopen(urllib.request.Request(TOKEN_URL, data=body), timeout=TIMEOUT) as reply:
+            _token_cache["token"] = json.load(reply)["access_token"]
+    except urllib.error.HTTPError as error:
+        raise PlayError(error.code, f"the service account could not sign in: {error.read().decode()[:300]}") from None
+    except (urllib.error.URLError, TimeoutError) as error:
+        raise PlayError(0, f"could not reach Google to sign in: {error}") from None
     return _token_cache["token"]
-
-
-class PlayError(Exception):
-    def __init__(self, status, message):
-        super().__init__(f"HTTP {status}: {message}")
-        self.status = status
 
 
 def call(method, path, body=None, *, data=None, content_type=None, timeout=TIMEOUT):
@@ -123,6 +130,8 @@ def call(method, path, body=None, *, data=None, content_type=None, timeout=TIMEO
         raise PlayError(error.code, detail) from None
     except TimeoutError:
         raise PlayError(0, f"no answer from Play within {timeout} seconds") from None
+    except urllib.error.URLError as error:
+        raise PlayError(0, f"could not reach Play: {error.reason}") from None
 
 
 def _app(path=""):
@@ -147,9 +156,10 @@ class Edit:
         if kind is None and self.commit:
             call("POST", self.path(":commit"))
         else:
+            # Best effort, and never in place of the error that brought us here.
             try:
                 call("DELETE", self.path())
-            except PlayError:
+            except Exception:
                 pass
         return False
 

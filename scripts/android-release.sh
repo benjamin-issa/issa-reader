@@ -6,10 +6,9 @@
 #   scripts/android-release.sh --build 18      # build this number, no raise
 #
 # The signed bundle, its R8 mapping and a note of what was built land in
-# .build/android-release/. Uploading is done in the Play Console, not here:
-# the first upload of a new app has to be made by hand there, and the console
-# is where the track, the release notes and the rollout are chosen. See
-# docs/RELEASE.md, "Android".
+# .build/android-release/. Uploading is scripts/android-play.py's, as a draft
+# release the Play Console then sends for review. See docs/RELEASE.md,
+# "Android".
 #
 # The version name is the Apple apps' MARKETING_VERSION, read from project.yml
 # by the build itself; the build number is Android/version.properties.
@@ -104,4 +103,5 @@ cp "$AAB" "$OUT/$name.aab"
 } > "$OUT/$name.txt"
 cat "$OUT/$name.txt"
 echo
-echo "Upload $name.aab in the Play Console, and commit Android/version.properties at $next."
+echo "Upload it with scripts/android-play.py upload $OUT/$name.aab --track alpha --notes Android/play/listing/en-US/release-notes.txt,"
+echo "and commit Android/version.properties at $next."
