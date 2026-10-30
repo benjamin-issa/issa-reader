@@ -105,14 +105,22 @@ class ReaderChrome(
          */
         const val BAR_HEIGHT = 44.0
 
-        /** The least a navigation band must be, in dp, to hold the book's title under the footer. */
-        const val BOOK_TITLE_BAND_MINIMUM = 16.0
+        /**
+         * The least a navigation band must be, in dp, to hold the book's title
+         * under the footer. Android draws its gesture handle across the middle
+         * of the band, not at its foot as the iPhone does, so the title set at
+         * the band's top has only the upper half: a line of caption type (13
+         * dp) and a little air above the handle's 4 dp need 34. The usual 24
+         * dp gesture bar has no room, and a title there was drawn through the
+         * handle.
+         */
+        const val BOOK_TITLE_BAND_MINIMUM = 34.0
 
         /**
          * Whether the book's title is drawn in the band under the footer.
          *
          * The setting, the chrome showing, gestural navigation, and a band tall
-         * enough to hold a line of caption type. Gestural navigation is read off
+         * enough to hold a line of caption type above the gesture handle. Gestural navigation is read off
          * the insets: the bar is there (navigation bars' bottom is more than
          * zero) but nothing in it is tappable (tappable element's bottom is
          * zero). Three-button navigation has buttons in the band, which a title

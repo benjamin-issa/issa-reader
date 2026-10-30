@@ -610,9 +610,11 @@ private fun PageContent(
  * iPhone: the page is already padded by [band] and [ReaderChrome] already
  * counts it, so a line set there takes nothing from the page and no setting
  * or chrome toggle can re-paginate the chapter. Centred, at 55% of the page's
- * ink, one line, not tappable, and held to the default type size so it cannot
- * grow into the gesture handle. Drawn only where [ReaderChrome.showsBookTitle]
- * says so — never under three-button navigation — and only on a phone.
+ * ink, one line, not tappable, set at the band's top and held to the default
+ * type size so it stays above the gesture handle across the band's middle.
+ * Drawn only where [ReaderChrome.showsBookTitle] says so — never under
+ * three-button navigation, nor in a band too short to clear the handle — and
+ * only on a phone.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -636,7 +638,6 @@ private fun BookTitleCaption(model: ReaderModel, setting: Boolean, band: Dp, mod
                 .fillMaxWidth()
                 .height(band)
                 .padding(horizontal = model.style.pageMargin.dp)
-                .padding(top = Metrics.spacing4)
                 .testTag("reader.bookTitle"),
         )
     }
