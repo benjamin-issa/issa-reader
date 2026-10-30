@@ -170,6 +170,15 @@ final class DuoLayoutTests: XCTestCase {
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.4, dy: 0.5)).tap()
         XCTAssertTrue(back.waitForNonExistence(timeout: 5), "the middle tap did not take the rail away")
         XCTAssertEqual(page.frame, pageFrame, "hiding the rail moved the page")
+        // With the rail away, its band turns the page as the page's own
+        // right edge does.
+        let before = page.value as? String
+        app.coordinate(withNormalizedOffset: CGVector(
+            dx: (railMinX + reading.trailing / 2) / window.width, dy: 0.5)).tap()
+        let turned = NSPredicate { _, _ in (page.value as? String) != before }
+        XCTAssertEqual(
+            XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: turned, object: nil)], timeout: 5),
+            .completed, "a tap in the empty band did not turn the page from \(before ?? "?")")
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.4, dy: 0.5)).tap()
         XCTAssertTrue(back.waitForExistence(timeout: 5), "the rail did not come back")
         XCTAssertEqual(back.frame.minY, railBack.minY, accuracy: 1, "the rail came back somewhere else")

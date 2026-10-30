@@ -546,19 +546,38 @@ public struct ReaderView: View {
         }
         .overlay {
             if case let .rail(side, width, top) = readerLayout.tools {
-                ReaderRail(width: width, top: top, theme: model.style.theme, visible: model.chromeVisible) {
-                    Button { dismiss() } label: {
-                        Image(systemName: "chevron.left").topBarTarget()
+                ZStack(alignment: side == .leading ? .topLeading : .topTrailing) {
+                    // With the tools away the band is the page's outer edge to
+                    // a thumb, so a tap there turns the page the way that edge
+                    // of the page does.
+                    if !model.chromeVisible {
+                        Color.clear
+                            .frame(width: width)
+                            .frame(maxHeight: .infinity)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                if model.selection != nil {
+                                    model.clearSelection()
+                                } else {
+                                    turner.requestTurn(forward: side == .trailing)
+                                }
+                            }
+                            .accessibilityHidden(true)
                     }
-                    .accessibilityLabel("Back to the book")
-                } tools: {
-                    // Ask, text options, the bookmark and the menu: the fit
-                    // with Find and Marks in the menu, so the menu always has
-                    // rows enough not to open as a single one.
-                    readerActions(.findAndMarksInMenu)
+                    ReaderRail(width: width, top: top, theme: model.style.theme, visible: model.chromeVisible) {
+                        Button { dismiss() } label: {
+                            Image(systemName: "chevron.left").topBarTarget()
+                        }
+                        .accessibilityLabel("Back to the book")
+                    } tools: {
+                        // Ask, text options, the bookmark and the menu: the
+                        // fit with Find and Marks in the menu, so the menu
+                        // always has rows enough not to open as a single one.
+                        readerActions(.findAndMarksInMenu)
+                    }
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(model.style.theme.text)
                 }
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(model.style.theme.text)
                 // The whole window, so the rail stands in the unsafe band
                 // itself rather than against the safe area's edge.
                 .frame(
