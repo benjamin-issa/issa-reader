@@ -92,6 +92,11 @@ internal class QuietBackend : MediaBackend {
         return Item(listener).also { item = it }
     }
 
+    override fun clearItem() {
+        item = null
+        playhead = Double.NaN
+    }
+
     override fun cancelPendingSeeks() = Unit
 
     override suspend fun seek(to: MediaTime): Boolean {

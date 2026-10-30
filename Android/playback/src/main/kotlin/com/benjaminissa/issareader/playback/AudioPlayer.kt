@@ -488,15 +488,49 @@ class AudioPlayer(private val backend: MediaBackend) : Observed() {
     }
 
     /**
-     * Bumped by every [load]. Guards what belongs to the *item*: its duration,
-     * its gain stage, the volume fallback that depends on it.
+     * Takes the loaded file out of the player, leaving it paused and empty.
+     *
+     * [load] with nothing to load: for a coordinator that is putting its
+     * position back to the start, which has to stop the player describing a
+     * file. The periodic clock fires on a pause and on a seek as well as on
+     * playback, so while [currentAudioHref] names a file, every tick is a
+     * question a coordinator can answer with a sentence in it. Cleared, the
+     * clock has nothing to resolve against.
+     *
+     * Both generations are bumped, so a [load] still opening its file comes
+     * back `SUPERSEDED` and a seek still landing returns without writing the
+     * clock or the rate, exactly as if a newer load had replaced them. The
+     * rate the listener chose, and the level, are untouched: they belong to
+     * the player, not to the file.
+     *
+     * The next [load] is a new item and plays, as after any other.
+     */
+    fun unload() {
+        pause()
+        itemGeneration += 1
+        playheadGeneration += 1
+        placementPending = false
+        // The item's listener goes with it, and an ending or a failure that
+        // item had already queued goes with it too — see
+        // `ReadalongCoordinator.advanceToNextFile`.
+        backend.cancelPendingSeeks()
+        backend.clearItem()
+        currentAudioHref = null
+        currentTime = 0.0
+        duration = 0.0
+    }
+
+    /**
+     * Bumped by every [load] and by [unload]. Guards what belongs to the
+     * *item*: its duration, its gain stage, the volume fallback that depends
+     * on it.
      */
     private var itemGeneration = 0
 
     /**
-     * Bumped by every [load] and every [seek]. Guards what belongs to the
-     * *playhead*: [currentTime], a load's trailing seek, and the rate restore
-     * that follows a seek. Readable for tests.
+     * Bumped by every [load], every [seek] and [unload]. Guards what belongs
+     * to the *playhead*: [currentTime], a load's trailing seek, and the rate
+     * restore that follows a seek. Readable for tests.
      */
     internal var playheadGeneration = 0
         private set

@@ -1,5 +1,6 @@
 package com.benjaminissa.issareader.playback
 
+import com.benjaminissa.issareader.core.diagnostics.IssaLog
 import com.benjaminissa.issareader.core.model.AudioAnchor
 import com.benjaminissa.issareader.core.model.asProgression
 import com.benjaminissa.issareader.core.toEpochSecondsDouble
@@ -93,6 +94,18 @@ class ReadalongCoordinator(
      */
     internal var movesInFlight = 0
         private set
+
+    /**
+     * How many times [clearPosition] has run.
+     *
+     * A move reads it before it starts and again when its audio has opened: a
+     * clear that landed in between has taken the position back, and finishing
+     * the move would put it straight back — and [play] would then press play
+     * over a player with nothing in it. Counted rather than flagged, for the
+     * reason [movesInFlight] is: a Stop followed at once by a new start must
+     * not be mistaken, by the start it overtook, for its own.
+     */
+    private var clearances = 0
 
     init {
         player.onTimeUpdate = { time -> advance(time) }
@@ -216,9 +229,48 @@ class ReadalongCoordinator(
         }
         // Book progress uses the virtual timeline so it advances smoothly across
         // chapter and track boundaries.
-        val elapsedWithin = maxOf(0.0, time - entry.start)
-        bookProgress = timeline.progressionAtBookTime(entry.cumulativeEnd - entry.duration + elapsedWithin)
+        bookProgress = progression(entry, within = maxOf(0.0, time - entry.start))
     }
+
+    /**
+     * How far through the book a place [within] seconds into an entry is.
+     *
+     * The one answer to that question. The clock ([advance]), a move ([move])
+     * and [readout] each worked it out with their own copy of the arithmetic,
+     * and the last of those is what the player sheet shows before anything has
+     * played — beside a position that, once narration starts, the other two
+     * publish. A sheet that opened a rounding error away from where Play then
+     * put the thumb would be a small lie told at the worst moment, so they
+     * share this instead of agreeing by coincidence.
+     */
+    private fun progression(entry: SmilEntry, within: Double): Double =
+        timeline.progressionAtBookTime(entry.cumulativeEnd - entry.duration + within)
+
+    /** What [readout] answers: the book clock and the chapter bar for one sentence. */
+    data class Readout(val bookProgress: Double, val chapterSpan: ChapterSpan?)
+
+    /**
+     * What the book clock and the chapter bar would read with the narration on
+     * this sentence, without putting it there.
+     *
+     * For a surface that has to show where Play *would* begin before anything
+     * has played — the player sheet opened on a read-along nobody has started,
+     * which would otherwise draw the start of the book. Pure: it loads
+     * nothing, cues nothing and leaves [activeEntry] where it is. Cueing the
+     * player with [prepare] to read these numbers off it was the alternative,
+     * and it leaves a position behind: the reader closes the sheet, reads on,
+     * and Play resumes pages back.
+     *
+     * The same numbers [move] publishes for this entry at its start, and
+     * [chapterSpan] reports once it is active, because it is the same code.
+     */
+    fun readout(at: SmilEntry): Readout = Readout(
+        bookProgress = progression(at, within = 0.0),
+        // The run the entry is actually in. A document the spine references
+        // twice has two, and the merged range used to span both plus
+        // everything between them.
+        chapterSpan = timeline.spanOfDocumentContaining(at)?.let { ChapterSpan(it.start, it.duration) },
+    )
 
     private suspend fun advanceToNextFile() {
         // An ending that arrives while a move is in flight is not one to act on:
@@ -251,9 +303,14 @@ class ReadalongCoordinator(
         // where `activeEntry` is still the one before it. The next entry
         // replayed that sub-second clip once before moving on; the next file
         // does not, and the clip has already been heard.
-        val entry = activeEntry
-        val next = entry?.let { timeline.entryFollowingFileOf(it) }
-        if (entry == null || next == null) {
+        //
+        // And not at all when there is no sentence to advance from. That is the
+        // narration put back by [clearPosition] — a file that ended in the
+        // moment before — and it is not the end of the book: it must neither
+        // read as one nor give the audio route away.
+        val entry = activeEntry ?: return
+        val next = timeline.entryFollowingFileOf(entry)
+        if (next == null) {
             // The end of the book: stopped, and the audio route given back so
             // whatever the narration interrupted can resume.
             player.endSession()
@@ -321,6 +378,35 @@ class ReadalongCoordinator(
     suspend fun prepare(at: SmilEntry): Boolean = move(at)
 
     /**
+     * Puts the narration back to where it was before it first played.
+     *
+     * Paused, the file unloaded, and no sentence, highlight or progress: the
+     * state of a coordinator nobody has pressed play on. "Stop Narration" in
+     * the reader: after listening, the last sentence stays lit and
+     * [activeEntry] stays put while the reader reads on, so Play resumes pages
+     * back (and, following the narration, turns the page there).
+     *
+     * The file has to go as well as the entry. The player's clock fires on a
+     * pause and on a seek as well as on playback, and [advance] re-derives
+     * [activeEntry] from whichever file the player still holds, so a
+     * coordinator that only forgot its entry had it back at the next tick.
+     * With nothing loaded the clock has nothing to read, and the next [play]
+     * opens its file afresh, as it does for any other move into a file the
+     * player does not hold.
+     *
+     * Announces nothing: not [onFragmentChange], [onChapterChange] or
+     * [onSeek]. Nobody named a place, and the reader that asked for this
+     * clears its own copy of the highlight.
+     */
+    fun clearPosition() {
+        clearances += 1
+        player.unload()
+        activeEntry = null
+        activeFragmentId = null
+        bookProgress = 0.0
+    }
+
+    /**
      * [play] for a place the listener named: the seek is announced once the
      * move has happened, and not at all if it did not.
      */
@@ -362,6 +448,7 @@ class ReadalongCoordinator(
         } else {
             0.0
         }
+        val clearancesAtStart = clearances
 
         // Everything published BEFORE the suspension, for the reason
         // `AudiobookCoordinator.seekToBookTime` publishes before its own: the
@@ -381,7 +468,7 @@ class ReadalongCoordinator(
         // Set here rather than left to the time observer: a paused player's
         // clock does not tick, so without this a paused scrub never reached the
         // scrubber or the lock screen.
-        bookProgress = timeline.progressionAtBookTime(entry.cumulativeEnd - entry.duration + within)
+        bookProgress = progression(entry, within)
         onFragmentChange?.invoke(entry.fragmentId)
         // The boundary, announced from the one funnel every seek, skip,
         // sentence, paragraph and chapter command passes through.
@@ -432,7 +519,11 @@ class ReadalongCoordinator(
                 player.seek(entry.start + within)
                 if (player.itemHasFailed) return false
             }
-            return true
+            // A position taken back while the audio was opening is a move that
+            // did not happen. [clearPosition] has already emptied the player,
+            // which is why the load above came back superseded rather than
+            // failed, and the caller's `true` would press play over nothing.
+            return clearancesAtStart == clearances
         } finally {
             movesInFlight -= 1
         }
@@ -448,12 +539,23 @@ class ReadalongCoordinator(
      * item down: the player had stopped once, when it failed, and every later
      * press played over it.
      *
+     * With no sentence there is nothing to carry on from: nothing has been
+     * loaded yet, or [clearPosition] unloaded it. [AudioPlayer.play] would
+     * still claim the audio route and call that playing, so the transport drew
+     * Pause over silence. Where to begin is the caller's to choose; the reader
+     * starts from its page.
+     *
      * @return whether the narration is playing now. False when the file still
-     *   will not open, which the caller can tell the reader.
+     *   will not open, which the caller can tell the reader, and when there is
+     *   no sentence to carry on from.
      */
     suspend fun resume(): Boolean {
         val entry = activeEntry
-        if (player.itemHasFailed && entry != null) return play(entry)
+        if (entry == null) {
+            IssaLog.info("resume refused: the narration has no place yet", emptyMap())
+            return false
+        }
+        if (player.itemHasFailed) return play(entry)
         player.play()
         return player.isPlaying
     }
@@ -620,10 +722,7 @@ class ReadalongCoordinator(
      * two, and a merged range used to span both plus everything between them.
      */
     override val chapterSpan: ChapterSpan?
-        get() {
-            val entry = activeEntry ?: return null
-            return timeline.spanOfDocumentContaining(entry)?.let { ChapterSpan(it.start, it.duration) }
-        }
+        get() = activeEntry?.let { readout(it).chapterSpan }
 
     companion object {
         /**

@@ -224,6 +224,7 @@ private class SilentBackend : MediaBackend {
     override fun deactivateSession() = Unit
     override val currentItem: MediaBackend.Item? = null
     override fun replaceItem(location: AudioLocation, listener: MediaBackend.ItemListener): MediaBackend.Item = error("not used")
+    override fun clearItem() = Unit
     override fun cancelPendingSeeks() = Unit
     override suspend fun seek(to: MediaTime): Boolean = true
     override var rate: Float = 0f

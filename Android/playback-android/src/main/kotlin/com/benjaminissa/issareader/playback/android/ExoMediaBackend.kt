@@ -233,6 +233,14 @@ class ExoMediaBackend(
         return made
     }
 
+    override fun clearItem() {
+        item?.retire()
+        item = null
+        cancelPendingSeeks()
+        exoPlayer.stop()
+        exoPlayer.clearMediaItems()
+    }
+
     private fun mediaSource(location: AudioLocation): MediaSource = when (location) {
         is AudioLocation.LocalFile -> ProgressiveMediaSource.Factory(DefaultDataSource.Factory(context), localExtractors)
             .createMediaSource(MediaItem.fromUri(Uri.fromFile(location.file)))

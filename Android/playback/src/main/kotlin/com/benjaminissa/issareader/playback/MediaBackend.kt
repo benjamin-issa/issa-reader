@@ -110,6 +110,13 @@ interface MediaBackend {
      */
     fun replaceItem(location: AudioLocation, listener: ItemListener): Item
 
+    /**
+     * Drops the current item and leaves the engine empty and stopped, as if
+     * nothing had been opened. Events about the dropped item are not reported
+     * again, and [currentItem] is null until the next [replaceItem].
+     */
+    fun clearItem()
+
     /** Releases any seek still waiting on the current item, answering it `false`. */
     fun cancelPendingSeeks()
 

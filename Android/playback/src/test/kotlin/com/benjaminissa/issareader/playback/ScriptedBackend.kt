@@ -76,6 +76,11 @@ internal class ScriptedBackend(
         return made
     }
 
+    override fun clearItem() {
+        item = null
+        playhead = Double.NaN
+    }
+
     override fun cancelPendingSeeks() = Unit
 
     override suspend fun seek(to: MediaTime): Boolean {

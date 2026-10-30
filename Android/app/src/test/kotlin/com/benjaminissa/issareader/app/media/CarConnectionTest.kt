@@ -39,6 +39,7 @@ private class SilentBackend : MediaBackend {
             override val hasFailed: Boolean = false
             override val failureReason: String? = null
         }
+    override fun clearItem() = Unit
     override fun cancelPendingSeeks() = Unit
     override suspend fun seek(to: MediaTime): Boolean = true
     override var rate: Float = 0f
