@@ -209,8 +209,8 @@ python3 scripts/tests/test_asc_api.py
 ## Before a release: the layout sweep
 
 ```bash
-scripts/layout-sweep.sh          # 375 / 402 / 440, about 8 minutes
-scripts/layout-sweep.sh --all    # every width and the iPad, about 25 minutes
+scripts/layout-sweep.sh          # 375 / 402 / 440 and the Duo, about 1 h 45 min
+scripts/layout-sweep.sh --all    # every width and the iPad, about 3.5 h
 ```
 
 Builds once, then runs the layout invariants on one simulator at a time,
@@ -226,8 +226,9 @@ drifted, and no assertion can see them: the text inside a `TextField` is not an
 accessibility element and has no frame. **The contact sheets are the only
 coverage for that class**, so do not drop them for being slow.
 
-`--all` includes iPhone Duo's outer display (`iphone-duo-outer`, on iOS
-27.1), where `DuoLayoutTests` measures the reader's rail and the shelf. The
+The quick pass and `--all` both include iPhone Duo's outer display
+(`iphone-duo-outer`, on iOS 27.1), where `DuoLayoutTests` measures the
+reader's rail and the shelf. The
 inner display cannot be reached from the command line: powering the outer
 screen off with `simctl io … screenConfig` wedges the simulator. The inner
 display held wide and tall, and the book and table poses, are walked in Device

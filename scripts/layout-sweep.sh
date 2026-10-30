@@ -3,7 +3,7 @@
 # Layout sweep: build once, then run the layout invariants on one simulator
 # width at a time, keep the screenshots, and delete the device.
 #
-#   scripts/layout-sweep.sh                     # the three-width quick pass
+#   scripts/layout-sweep.sh                     # the quick pass: three widths and the Duo
 #   scripts/layout-sweep.sh --all               # every width, plus iPad
 #   scripts/layout-sweep.sh --devices 375,440   # named widths
 #   scripts/layout-sweep.sh --keep-devices      # leave them, for iterating
@@ -83,8 +83,9 @@ ALL_DEVICES=(
 )
 # 375 is where things break, 440 is where they stop breaking -- the 430-in-402
 # bug fitted on a Pro Max, which is exactly why it survived review -- and 402 is
-# this machine's daily simulator.
-QUICK_SLUGS="iphone-se3 iphone-17-pro iphone-17-pro-max"
+# this machine's daily simulator. iPhone Duo's outer display is the one layout
+# that runs the reader's tools down the side, so it is in the quick pass too.
+QUICK_SLUGS="iphone-se3 iphone-17-pro iphone-17-pro-max iphone-duo-outer"
 
 MODE=quick
 KEEP_DEVICES=0
