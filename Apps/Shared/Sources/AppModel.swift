@@ -3771,20 +3771,35 @@ public final class AppModel {
     ///
     /// Paused first, so the sound ends when the reader asked and not when the
     /// write has drained a slow network; the position is then the one they
-    /// stopped at. And for the book that was asked about: the write suspends,
-    /// and a hand-off or another book that took the slot meanwhile is not
-    /// this call's to stop.
+    /// stopped at. And for the engine that was asked about: the write
+    /// suspends, for as long as a slow network takes, and a hand-off or
+    /// another book that took the slot meanwhile is not this call's to stop.
+    ///
+    /// That is the same coordinator, not only the same book. Switching to
+    /// another book and back installs a new coordinator under the same uuid,
+    /// and a uuid check let this old Stop cancel its writer, pause it and
+    /// detach its Now Playing. Nor is a coordinator the reader pressed Play on
+    /// while the write was out: Stop paused it, so playing again is a later
+    /// choice than this one.
     ///
     /// - Parameter bookUUID: the book the reader stopped.
     public func stopListeningWritingPosition(
         of bookUUID: String, nowPlaying: NowPlayingController?,
     ) async {
-        guard listeningBook?.uuid == bookUUID else { return }
-        listening?.player.pause()
+        guard listeningBook?.uuid == bookUUID, let coordinator = listening else { return }
+        coordinator.player.pause()
+        await beforeWritingListeningPosition?()
         await writeListeningPositionNow()
-        guard listeningBook?.uuid == bookUUID else { return }
+        guard listening === coordinator, !coordinator.player.isPlaying else { return }
         stopListening(nowPlaying: nowPlaying)
     }
+
+    /// Awaited by `stopListeningWritingPosition` between its pause and its
+    /// write. A test seam, nil in production, as `beforeQueueingStatus` is:
+    /// the write's only suspensions are the store and the network, and
+    /// nothing outside the model can hold either open to put a second
+    /// coordinator in the slot meanwhile.
+    @ObservationIgnored var beforeWritingListeningPosition: (@MainActor () async -> Void)?
 
     /// Which downloaded edition a source reads, if any.
     ///

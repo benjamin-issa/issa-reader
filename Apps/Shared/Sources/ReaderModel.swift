@@ -1692,13 +1692,19 @@ public final class ReaderModel {
     /// sheet that has moved the voice into another chapter has to show the
     /// reader where it went.
     ///
+    /// The chapter it loads is the reader's choice, as the seek was. `onSeek`
+    /// marks the position `.chosen` when the seek lands, and the follow used to
+    /// relabel it `.derived` straight after, as for a chapter the voice crossed
+    /// into. A move back past `PositionGuard`'s tolerance was then refused on
+    /// save, and the place the reader had scrubbed away from stayed stored.
+    ///
     /// - Parameter progress: a fraction of the whole narrated book, as
     ///   `ReadalongCoordinator.seek(toBookProgress:)` takes it.
     public func cueNarration(toBookProgress progress: Double) async {
         guard let readalong else { return }
         await readalong.seek(toBookProgress: progress)
         guard let entry = readalong.activeEntry else { return }
-        await followNarration(toDocument: entry.textHref, fragment: entry.fragmentID)
+        await followNarration(toDocument: entry.textHref, fragment: entry.fragmentID, origin: .chosen)
     }
 
     /// Puts narration back to the state of a book just opened: no sentence lit,
@@ -1733,7 +1739,12 @@ public final class ReaderModel {
     }
 
     /// Turns the book to the page a narrated fragment is on, loading its chapter.
-    private func followNarration(toDocument href: String, fragment: String?) async {
+    ///
+    /// - Parameter origin: `.derived` for a chapter the voice crossed into;
+    ///   `.chosen` when the reader named the place, as a cue does.
+    private func followNarration(
+        toDocument href: String, fragment: String?, origin: PositionOrigin = .derived,
+    ) async {
         guard let package,
               let index = package.spine.firstIndex(where: { $0.href == href }),
               index != chapterIndex else { return }
@@ -1744,11 +1755,11 @@ public final class ReaderModel {
             )
         }
         guard await loadChapter(index, restoring: anchor) else { return }
-        // A chapter the voice crossed into, not one the reader picked. The
-        // fragment change that precedes this cannot classify it — the sentence
-        // belongs to the *next* document, so it never resolves in the layout
-        // still on screen and the move looked like nobody's.
-        positionOrigin = .derived
+        // By default a chapter the voice crossed into, not one the reader
+        // picked. The fragment change that precedes this cannot classify it —
+        // the sentence belongs to the *next* document, so it never resolves in
+        // the layout still on screen and the move looked like nobody's.
+        positionOrigin = origin
         IssaLog.info("narration crossed chapter", [
             "book": book.title, "to": String(index),
             "fragment": fragment ?? "none", "page": String(pageIndex),

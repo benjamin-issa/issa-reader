@@ -171,6 +171,33 @@ struct ReadalongClearTests {
         #expect(subject.player.engineTime.isFinite, "an item is in the engine again")
     }
 
+    /// Play with no sentence: a coordinator nothing has started, and one the
+    /// reader cleared. Before, `resume()` pressed `AudioPlayer.play()` anyway,
+    /// which claimed the audio route and set `isPlaying` over a player with no
+    /// file in it, so the transport drew Pause over silence. The lock screen's
+    /// play and the player sheet past the last narrated chapter both reach it.
+    @Test("play with no sentence plays nothing", arguments: [true, false])
+    func playWithNoSentencePlaysNothing(cleared: Bool) async throws {
+        let (subject, timeline, directory) = try Self.make(v2: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        subject.player.onTimeUpdate = nil
+        subject.player.onFinishedFile = nil
+        if cleared {
+            #expect(await subject.play(from: timeline.entries[3]))
+            subject.player.pause()
+            subject.clearPosition()
+        }
+        try #require(subject.activeEntry == nil)
+
+        #expect(await subject.resume() == false)
+        await subject.perform(.playPause, using: CommandMap())
+        await subject.perform(.play, using: CommandMap())
+
+        #expect(!subject.player.isPlaying, "Play drew Pause over a player with nothing in it")
+        #expect(subject.activeEntry == nil)
+        #expect(subject.player.currentAudioHref == nil)
+    }
+
     /// A start still opening its file when the clear lands. The move is
     /// overtaken: finishing it would put the position back, and `play(from:)`
     /// would press play over a player with nothing in it.

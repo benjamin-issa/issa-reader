@@ -332,10 +332,14 @@ public struct PlayerView: View {
             )
             Button {
                 Task {
-                    // From the page when the voice has no place yet. The
-                    // coordinator's own play would press play on a player with
-                    // no file in it and call that playing.
-                    if let fromPage, fromPage.pending() != nil {
+                    // Through the reader whenever the sheet came from one. Its
+                    // transport starts from the page when the voice has no
+                    // place, carries on when it has, and does nothing past the
+                    // last narrated chapter, where there is no start ahead and
+                    // no sentence either: the coordinator's own play there
+                    // pressed play on a player with no file in it and called
+                    // that playing.
+                    if let fromPage {
                         await fromPage.start()
                     } else {
                         await coordinator?.perform(.playPause, using: settings.commandMap)

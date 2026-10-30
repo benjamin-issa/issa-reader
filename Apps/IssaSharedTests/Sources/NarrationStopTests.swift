@@ -173,6 +173,25 @@ struct NarrationStopTests {
         #expect(model.pendingNarrationStart == nil)
     }
 
+    /// The player sheet's Play there. With no start ahead the sheet once fell
+    /// through to the coordinator's own play, which pressed play on a player
+    /// with no file in it and drew Pause over silence. It goes through the
+    /// reader's transport now, and so does the lock screen's play, which
+    /// reaches the coordinator directly.
+    @Test("Play past the last narrated chapter plays nothing")
+    func playPastTheNarrationPlaysNothing() async throws {
+        let (model, directory) = try await Self.pastTheNarration()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let readalong = try #require(model.readalong)
+        try #require(model.pendingNarrationStart == nil)
+
+        await model.togglePlayback()
+        await readalong.perform(.playPause, using: CommandMap())
+
+        #expect(readalong.activeEntry == nil)
+        #expect(!readalong.player.isPlaying, "Play drew Pause over a player with nothing in it")
+    }
+
     /// Drawing the sheet is not pressing Play. The refusals `narrationStartIfNear`
     /// logs are for a Play that did nothing, and the diagnostics a reader exports
     /// must not carry ones that never happened. A title of its own, since the log
@@ -372,6 +391,56 @@ struct NarrationStopTests {
         #expect(model.chapterIndex == 1)
     }
 
+    /// The scrubber or a skip back into the chapter before. `onSeek` marked
+    /// the position `.chosen` when the seek landed, and following the voice
+    /// into that chapter relabelled it `.derived`, as for a chapter the voice
+    /// had crossed into. A move back past `PositionGuard`'s tolerance was then
+    /// refused on save, and the place the reader scrubbed away from stayed.
+    @Test("a cue back into another chapter saves as the reader's choice")
+    func aCueBackAcrossChaptersIsChosen() async throws {
+        let (model, directory) = try await Self.opened(atChapter: 1)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let saves = SaveCapture()
+        model.enqueuePosition = { locator, _, origin in
+            saves.record(locator, origin)
+            return true
+        }
+        let readalong = try #require(model.readalong)
+        let total = try #require(model.timeline).totalDuration
+        let pending = try #require(model.pendingNarrationStart)
+
+        await model.cueNarration(toBookProgress: pending.progress(skippingBy: -1, inBookOf: total))
+        try #require(readalong.activeEntry?.textHref == Self.chapterOne)
+        try #require(model.chapterIndex == 0, "the page has to have followed the voice back")
+        model.cancelPendingSave()
+        await model.saveProgress()
+
+        #expect(saves.lastOrigin == .chosen, "the scrub back was saved as a move nobody made")
+    }
+
+    /// The control: a cue that loads nothing was already the reader's choice,
+    /// and still is.
+    @Test("a cue within the chapter on screen saves as the reader's choice")
+    func aCueWithinTheChapterIsChosen() async throws {
+        let (model, directory) = try await Self.opened(atChapter: 0)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let saves = SaveCapture()
+        model.enqueuePosition = { locator, _, origin in
+            saves.record(locator, origin)
+            return true
+        }
+        let timeline = try #require(model.timeline)
+        let target = try #require(timeline.exactEntry(forFragment: "ch01-s3", inDocument: Self.chapterOne))
+
+        await model.cueNarration(
+            toBookProgress: (target.cumulativeEnd - target.duration) / timeline.totalDuration)
+        try #require(model.chapterIndex == 0)
+        model.cancelPendingSave()
+        await model.saveProgress()
+
+        #expect(saves.lastOrigin == .chosen)
+    }
+
     // MARK: - Stopping the audiobook engine
 
     /// The reader's Stop on a book the audiobook engine holds. `stopListening`
@@ -403,6 +472,73 @@ struct NarrationStopTests {
 
         #expect(fixture.app.listeningBook?.uuid == ListeningFlushTests.uuid)
         #expect(try await fixture.queuedPositions().isEmpty)
+    }
+
+    /// The write suspends for as long as the network takes. Switching to
+    /// another book and back meanwhile puts a new coordinator in the slot
+    /// under the same uuid, and the old Stop checked only the uuid: it
+    /// cancelled the new engine's writer, paused it and took it off the
+    /// screen.
+    @Test("a stop held on its write leaves a coordinator that replaced it alone")
+    func aHeldStopLeavesAReplacementAlone() async throws {
+        let fixture = try ListeningFlushTests.listening()
+        defer { fixture.tearDown() }
+        let app = fixture.app
+        let hold = StopWriteHold()
+        app.beforeWritingListeningPosition = { await hold.arrive() }
+
+        let stopping = Task {
+            await app.stopListeningWritingPosition(of: ListeningFlushTests.uuid, nowPlaying: nil)
+        }
+        try #require(await waitUntil { hold.arrivals == 1 }, "the stop has to be held on its write")
+        app.stopListening(nowPlaying: nil)
+        let replacement = Self.silentCoordinator()
+        app.installListening(replacement, book: fixture.book, reading: .audiobook)
+        app.watchListeningProgress(book: fixture.book, coordinator: replacement, every: .seconds(3_600))
+        hold.release()
+        await stopping.value
+
+        #expect(app.listening === replacement, "the old stop took the new engine out of the slot")
+        #expect(app.isWritingListeningPosition, "and cancelled its writer")
+    }
+
+    /// Stop pauses first, so a coordinator playing again once the write is
+    /// done was played by the reader after they pressed Stop.
+    @Test("a stop held on its write leaves the book playing if Play came after it")
+    func aHeldStopLeavesALaterPlayAlone() async throws {
+        let fixture = try ListeningFlushTests.listening()
+        defer { fixture.tearDown() }
+        let app = fixture.app
+        let hold = StopWriteHold()
+        app.beforeWritingListeningPosition = { await hold.arrive() }
+
+        let stopping = Task {
+            await app.stopListeningWritingPosition(of: ListeningFlushTests.uuid, nowPlaying: nil)
+        }
+        try #require(await waitUntil { hold.arrivals == 1 }, "the stop has to be held on its write")
+        try #require(!fixture.coordinator.player.isPlaying, "Stop pauses before it writes")
+        fixture.coordinator.player.play()
+        try #require(fixture.coordinator.player.isPlaying)
+        hold.release()
+        await stopping.value
+
+        #expect(app.listening === fixture.coordinator, "the reader's later Play was stopped")
+        #expect(app.isWritingListeningPosition)
+    }
+
+    /// The listening fixture's shape, for a second engine on the same book.
+    private static func silentCoordinator() -> AudiobookCoordinator {
+        let coordinator = AudiobookCoordinator(
+            manifest: AudiobookManifest(
+                metadata: .init(title: ["und": "A Book"]),
+                readingOrder: (0 ..< 3).map { index in
+                    .init(href: "t\(index).mp3", type: "audio/mpeg", duration: 1_000)
+                },
+            ),
+            source: .local(URL(fileURLWithPath: "/dev/null")),
+        )
+        coordinator.player.onTimeUpdate = nil
+        return coordinator
     }
 
     // MARK: - Stopping
@@ -600,5 +736,26 @@ private final class StopTokens: TokenPersisting, @unchecked Sendable {
     func delete(account: String) -> Bool {
         lock.withLock { _ = stored.removeValue(forKey: account) }
         return true
+    }
+}
+
+/// Holds the first stop that reaches `AppModel.beforeWritingListeningPosition`
+/// until released, and lets every later one straight through.
+@MainActor
+private final class StopWriteHold {
+    private(set) var arrivals = 0
+    private var released = false
+    private var waiting: CheckedContinuation<Void, Never>?
+
+    func arrive() async {
+        arrivals += 1
+        guard arrivals == 1, !released else { return }
+        await withCheckedContinuation { waiting = $0 }
+    }
+
+    func release() {
+        released = true
+        waiting?.resume()
+        waiting = nil
     }
 }
