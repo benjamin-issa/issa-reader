@@ -343,9 +343,17 @@ that takes a request and a wait.
 - **Foreground services.** The app declares two foreground-service types, and
   Play asks for each to be justified with a short video:
   - `mediaPlayback`: audiobook and read-along narration that keeps playing with
-    the screen off;
+    the screen off (ticked as "Media playback");
   - `dataSync`: book and audio downloads the reader started, which run to the
-    end with the app closed.
+    end with the app closed (ticked as network processing, "Other").
+
+  App content shows nothing to declare until a release is previewed; the
+  release's preview then refuses to save without it. The videos are
+  `adb shell screenrecord` clips from the emulator: narration started, then
+  carrying on from the notification shade; and an audiobook's "Save for
+  offline" with its download notification filling in the shade (an ebook
+  finishes too fast to show one). They are linked from Drive, shared as anyone
+  with the link, which reviewers must be able to open signed out.
 - **Android Auto.** The app is a media app (`automotive_app_desc.xml`). Opt in
   under Advanced settings › Release types. Review checks Google's
   car-media-app quality rules: browsing within its limits, voice search, and
