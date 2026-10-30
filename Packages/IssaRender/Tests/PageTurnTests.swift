@@ -276,10 +276,20 @@ struct PageTurnTests {
             #expect(abs(along(thrown, at: t) - measured) < 1.5)
         }
     }
+
+    @Test("a spread turns at once, whatever was chosen; one page turns as chosen")
+    func spreadTurnsInstantly() {
+        for style in PageTurnStyle.allCases {
+            #expect(PageTurn.effectiveStyle(style, reduceMotion: false, spread: true) == .instant)
+            #expect(PageTurn.effectiveStyle(style, reduceMotion: false, spread: false) == style)
+            #expect(PageTurn.effectiveStyle(style, reduceMotion: true, spread: false) == .instant)
+        }
+    }
 }
 
 private extension BinaryFloatingPoint {
     func isClose(to other: Self, within tolerance: Self = 0.001) -> Bool {
         abs(self - other) <= tolerance
     }
+
 }

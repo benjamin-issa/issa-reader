@@ -152,4 +152,28 @@ struct ReaderChromeTests {
             .pageSize(in: Self.window)
         #expect(before == after)
     }
+
+    // MARK: - A rail down the side (iPhone Duo)
+
+    @Test("without a rail, every number is the one 1.5.2 used")
+    func noRailIsUnchanged() {
+        let plain = ReaderChrome(safeAreaTop: 59, safeAreaBottom: 34, margin: 24)
+        let zero = ReaderChrome(safeAreaTop: 59, safeAreaBottom: 34, margin: 24, railWidth: 0)
+        #expect(plain == zero)
+        #expect(plain.drawsOwnTopBar)
+        #expect(plain.topReserve == 59 + ReaderChrome.barHeight)
+        #expect(plain.pageSize(in: Self.window) == CGSize(width: 402 - 48, height: 874 - 103 - 102))
+    }
+
+    @Test("a rail takes its band out of the width and the top bar's place at the top")
+    func railTakesTheSide() {
+        let rail = ReaderChrome(safeAreaTop: 0, safeAreaBottom: 34, margin: 24, railWidth: 84)
+        let window = CGSize(width: 466, height: 678)
+        #expect(!rail.drawsOwnTopBar, "the tools are in the rail, not across the top")
+        #expect(rail.topReserve == 24, "the margin is spent at the top, as on the Mac")
+        let size = rail.pageSize(in: window)
+        #expect(size.width == window.width - 84 - 48)
+        #expect(rail.topReserve + size.height + rail.bottomReserve == window.height)
+        #expect(rail.fits(window))
+    }
 }

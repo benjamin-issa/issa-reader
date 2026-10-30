@@ -8,8 +8,8 @@
 #   scripts/layout-sweep.sh --devices 375,440   # named widths
 #   scripts/layout-sweep.sh --keep-devices      # leave them, for iterating
 #   scripts/layout-sweep.sh --purge             # clean up after a hard kill
-#   scripts/layout-sweep.sh --only DuoLayoutTests iphone-duo-outer
-#                                               # one class, sheets untouched
+#   scripts/layout-sweep.sh --only DuoLayoutTests,LayoutSweepTests iphone-duo-outer
+#                                               # some classes, sheets untouched
 #
 # Four of this app's recent bugs were one bug: a subview with a rigid minimum
 # width larger than its container, or a margin that drifted from the token.
@@ -116,11 +116,14 @@ for arg in "$@"; do
   esac
 done
 [ "$EXPECT_ONLY" = 0 ] || { echo "error: --only needs a test class" >&2; usage; }
+ONLY_ARGS=()
 if [ -n "$ONLY_TESTS" ]; then
   OUT="$WORK/only"
-  ONLY_ARG="-only-testing:IssaLayoutUITests/$ONLY_TESTS"
+  # Commas name more than one class.
+  IFS=',' read -r -a only_list <<< "$ONLY_TESTS"
+  for name in "${only_list[@]}"; do ONLY_ARGS+=("-only-testing:IssaLayoutUITests/$name"); done
 else
-  ONLY_ARG="-only-testing:IssaLayoutUITests"
+  ONLY_ARGS=("-only-testing:IssaLayoutUITests")
 fi
 
 SELECTED=()
@@ -250,7 +253,7 @@ for row in "${SELECTED[@]}"; do
   # whose tests had all finished would never reach the next device.
   xcodebuild test-without-building \
       -xctestrun "$RUN_FILE" \
-      "$ONLY_ARG" \
+      "${ONLY_ARGS[@]}" \
       -destination "platform=iOS Simulator,id=$CURRENT_UDID" \
       -resultBundlePath "$RESULT" \
       -parallel-testing-enabled NO \

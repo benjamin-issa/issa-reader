@@ -248,7 +248,16 @@ public struct BookGrid: View {
     #if os(tvOS)
     private let columns = [GridItem(.adaptive(minimum: 300, maximum: 340), spacing: Metrics.spacing16)]
     #else
-    private let columns = [GridItem(.adaptive(minimum: 108, maximum: 160), spacing: Metrics.spacing16)]
+    @Environment(\.adaptiveSignals) private var adaptiveSignals
+
+    /// A little narrower where the system runs its bars down a side (iPhone
+    /// Duo): its outer display's 350 points between the margin and the bar
+    /// hold three covers at 104 and only two at 108. Nowhere else, where 104
+    /// would add a column at some iPad widths that 1.5.2 drew one fewer at.
+    private var columns: [GridItem] {
+        let minimum: CGFloat = adaptiveSignals.bars == .top ? 108 : 104
+        return [GridItem(.adaptive(minimum: minimum, maximum: 160), spacing: Metrics.spacing16)]
+    }
     #endif
 
     public var body: some View {
@@ -509,11 +518,20 @@ struct MacSelectionRing: View {
     let bookID: String
     #if os(macOS)
     @Environment(MacBookSelection.self) private var selection: MacBookSelection?
+    #elseif os(iOS)
+    /// iPhone Duo's inner display rings the book beside the shelf the same
+    /// way, because its page sits beside the grid rather than over it.
+    @Environment(SplitBookSelection.self) private var split: SplitBookSelection?
     #endif
 
     var body: some View {
         #if os(macOS)
         if selection?.bookID == bookID {
+            RoundedRectangle(cornerRadius: Metrics.radiusSmall)
+                .strokeBorder(Palette.tangerine, lineWidth: 3)
+        }
+        #elseif os(iOS)
+        if split?.book?.uuid == bookID {
             RoundedRectangle(cornerRadius: Metrics.radiusSmall)
                 .strokeBorder(Palette.tangerine, lineWidth: 3)
         }

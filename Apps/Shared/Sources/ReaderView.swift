@@ -93,8 +93,15 @@ public struct ReaderScreen: View {
                 #endif
             }
         }
+        // Again for the cover, which is the window's size and sits over the
+        // root that read them first.
+        .readsAdaptiveSignals()
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("screen.reader")
+        #if ISSA_UITEST_FIXTURE
+        // The cover hides the root's probes; see `DuoProbe`.
+        .overlay(alignment: .topLeading) { DuoProbes(scope: "reader") }
+        #endif
     }
 }
 
@@ -133,7 +140,15 @@ public struct ReaderView: View {
     /// position fetch with it and logging a failure for something nothing was
     /// waiting on any more.
     @State private var deviceInsets = ReaderInsets.current()
-    /// Whether the reader draws its own bar across the top of the page.
+    /// What the system says about the window; see `AdaptiveSignals`.
+    @Environment(\.adaptiveSignals) private var adaptiveSignals
+    /// Where the tools and the pages go: a top bar and one page, or, on iPhone
+    /// Duo, a rail down the side and on its inner display two pages. The body
+    /// works it out from the window each pass and hands it to the page; this
+    /// copy is for the overlays drawn outside its geometry reader.
+    @State private var readerLayout = ReaderLayout.standard
+    /// Whether the reader can draw its own bar across the top of the page.
+    /// Where it does is `drawsTopBar(in:)`.
     ///
     /// The Mac does not: it has a real window toolbar, declared a few hundred
     /// lines below with `.toolbar` and `.toolbarBackground`. Everywhere else
@@ -235,13 +250,26 @@ public struct ReaderView: View {
             // Both bars are reserved, not just the footer. Subtracting a
             // single 44 left the top bar nothing, so every page laid its first
             // lines into the strip the toolbar paints over.
+            let layout = ReaderLayout.resolve(
+                adaptiveSignals, window: geometry.size,
+                insets: AdaptiveLayout.Insets(
+                    top: deviceInsets.top, leading: deviceInsets.leading,
+                    bottom: deviceInsets.bottom, trailing: deviceInsets.trailing),
+                margin: model.style.pageMargin,
+            )
             let chrome = ReaderChrome(
                 safeAreaTop: deviceInsets.top,
                 safeAreaBottom: deviceInsets.bottom,
                 margin: model.style.pageMargin,
                 drawsOwnTopBar: Self.drawsOwnTopBar,
+                railWidth: layout.railWidth,
             )
-            let pageSize = chrome.pageSize(in: geometry.size)
+            // A spread lays the chapter out a page at a time like any other
+            // device, each page as tall as the one page would be and as wide
+            // as the spread allows.
+            let pageSize = layout.spread.map {
+                CGSize(width: $0.pageWidth, height: chrome.pageSize(in: geometry.size).height)
+            } ?? chrome.pageSize(in: geometry.size)
 
             ZStack {
                 model.style.theme.background.ignoresSafeArea()
@@ -278,7 +306,7 @@ public struct ReaderView: View {
                     }
                     .padding(Metrics.spacing32)
                 case .ready:
-                    pageContent(size: pageSize)
+                    pageContent(size: pageSize, layout: layout, width: geometry.size.width - layout.railWidth)
                 }
             }
             // Keyed on the page size rather than the window's, because the
@@ -286,7 +314,10 @@ public struct ReaderView: View {
             // the two is not defined: whichever ran second, the chapter used to
             // be laid out against whatever the first one saw, and `resize` — which
             // guards on the size having changed — could never correct it.
-            .task(id: pageSize) {
+            .task(id: PageGeometry(size: pageSize, pagesShown: layout.pagesShown)) {
+                // Before the chapter is laid out, so the first page drawn is
+                // already a spread where there is room for one.
+                model.pagesShown = layout.pagesShown
                 // Set before open(), not in pageContent's onAppear — that only
                 // renders once the book is already open, so the reader always
                 // fell back to the old blocking foreground download.
@@ -321,6 +352,13 @@ public struct ReaderView: View {
             // than observed, so nothing the chrome does can move it.
             .padding(.top, deviceInsets.top)
             .padding(.bottom, deviceInsets.bottom)
+            // And clear of the rail, which stands in the unsafe band down the
+            // side where the system runs its bars (iPhone Duo).
+            .padding(.leading, layout.railSide == .leading ? layout.railWidth : 0)
+            .padding(.trailing, layout.railSide == .trailing ? layout.railWidth : 0)
+            .onChange(of: layout, initial: true) { _, layout in
+                readerLayout = layout.keepingRailTop(of: readerLayout)
+            }
             // Re-sample on a genuine size change — a rotation or a split view
             // — where the unsafe edges really are different. A chrome toggle
             // does not change the window's size, so it never lands here.
@@ -384,6 +422,7 @@ public struct ReaderView: View {
                 ChapterListView(model: model) { index, fragment in
                     Task { await model.go(toChapter: index, fragment: fragment) }
                 }
+                .closesWhenBarsRunDownTheSide()
             }
             .presentationDetents([.medium, .large])
             .macSheetSize()
@@ -392,18 +431,7 @@ public struct ReaderView: View {
         // share rather than a sheet owned by whichever one summoned it.
         #if !os(macOS)
         .sheet(isPresented: $showsPlayer) {
-            PlayerView(
-                book: model.book, session: model.readerSession,
-                coordinator: model.readalong, chapterTitle: model.chapterTitle,
-                // Before narration has started the coordinator holds nothing,
-                // so the sheet is told where Play would begin and given the
-                // footer's own Play to begin there.
-                fromPage: NarrationFromPage(
-                    pending: { model.pendingNarrationStart },
-                    start: { await togglePlaybackForThisBook() },
-                    cue: { await model.cueNarration(toBookProgress: $0) },
-                ),
-            )
+            readerPlayer(.stacked)
                 .presentationDetents([.large])
                 // The sheet's own backdrop, which is what shows behind the
                 // corner radius and under the home indicator. Without it the
@@ -426,6 +454,7 @@ public struct ReaderView: View {
                         )
                     }
                 }
+                .closesWhenBarsRunDownTheSide()
             }
             .macSheetSize()
         }
@@ -434,6 +463,7 @@ public struct ReaderView: View {
                 AnnotationsView(model: model) { annotation in
                     Task { await model.go(to: annotation) }
                 }
+                .closesWhenBarsRunDownTheSide()
             }
             .presentationDetents([.medium, .large])
             .macSheetSize()
@@ -507,8 +537,36 @@ public struct ReaderView: View {
         .overlay { coachOverlay }
         #else
         // Drawn over the page rather than above it, so showing it cannot
-        // change the page's size.
-        .overlay(alignment: .top) { topBar }
+        // change the page's size. Or, where the system runs its bars down a
+        // side (iPhone Duo), the same tools in a rail down that side, in the
+        // band the page already keeps clear of.
+        .overlay { tablePose }
+        .overlay(alignment: .top) {
+            if Self.drawsTopBar(in: readerLayout) { topBar }
+        }
+        .overlay {
+            if case let .rail(side, width, top) = readerLayout.tools {
+                ReaderRail(width: width, top: top, theme: model.style.theme, visible: model.chromeVisible) {
+                    Button { dismiss() } label: {
+                        Image(systemName: "chevron.left").topBarTarget()
+                    }
+                    .accessibilityLabel("Back to the book")
+                } tools: {
+                    // Ask, text options, the bookmark and the menu: the fit
+                    // with Find and Marks in the menu, so the menu always has
+                    // rows enough not to open as a single one.
+                    readerActions(.findAndMarksInMenu)
+                }
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(model.style.theme.text)
+                // The whole window, so the rail stands in the unsafe band
+                // itself rather than against the safe area's edge.
+                .frame(
+                    maxWidth: .infinity, maxHeight: .infinity,
+                    alignment: side == .leading ? .topLeading : .topTrailing)
+                .ignoresSafeArea()
+            }
+        }
         // The one cue that survives the chrome going away. Reading with the bars
         // hidden is the ordinary case, and it is exactly when a reader is most
         // likely to have closed the sheet and be waiting — without this the only
@@ -678,6 +736,49 @@ public struct ReaderView: View {
     }
     #endif
 
+    #if !os(macOS) && !os(tvOS)
+    /// The player for this book, as the sheet shows it and as the flat half of
+    /// a table pose does.
+    private func readerPlayer(_ arrangement: PlayerView.Arrangement) -> PlayerView {
+        PlayerView(
+            book: model.book, session: model.readerSession,
+            coordinator: model.readalong, chapterTitle: model.chapterTitle,
+            // Before narration has started the coordinator holds nothing,
+            // so the player is told where Play would begin and given the
+            // footer's own Play to begin there.
+            fromPage: NarrationFromPage(
+                pending: { model.pendingNarrationStart },
+                start: { await togglePlaybackForThisBook() },
+                cue: { await model.cueNarration(toBookProgress: $0) },
+            ),
+            arrangement: arrangement,
+        )
+    }
+
+    /// iPhone Duo's inner display propped open like a laptop, on a narrated
+    /// book: the sentence being read, large, on the upright half, and the
+    /// whole player on the flat half below the fold, where a press is steady.
+    /// Over the page rather than instead of it, so the page keeps its place
+    /// and comes back as it was when the phone is opened flat.
+    @ViewBuilder
+    private var tablePose: some View {
+        if model.hasNarration, let fold = ReaderLayout.tableFold(adaptiveSignals) {
+            VStack(spacing: 0) {
+                NarratedPassageView(model: model)
+                    .frame(height: max(fold.minY, 0))
+                Color.clear.frame(height: fold.height)
+                readerPlayer(.landscape)
+                    .padding(.trailing, readerLayout.railSide == .trailing ? readerLayout.railWidth : 0)
+                    .padding(.leading, readerLayout.railSide == .leading ? readerLayout.railWidth : 0)
+            }
+            .background(model.style.theme.background)
+            .ignoresSafeArea()
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("reader.tablePose")
+        }
+    }
+    #endif
+
     /// Opens the full player: a window on the Mac, a sheet everywhere else.
     private func openPlayer() {
         #if os(macOS)
@@ -688,6 +789,11 @@ public struct ReaderView: View {
     }
 
     #if os(iOS)
+    /// Where a rail's tools begin, below the sensor bar, or nil with a top bar.
+    private var railTop: CGFloat? {
+        if case let .rail(_, _, top) = readerLayout.tools { top } else { nil }
+    }
+
     /// The sparkle that stays while the chrome is away.
     @ViewBuilder
     private var askBadge: some View {
@@ -698,8 +804,9 @@ public struct ReaderView: View {
                 AskStatusBadge(theme: model.style.theme, job: job)
             }
             .buttonStyle(.plain)
-            // Inside the notch, like the bar it stands in for.
-            .padding(.top, deviceInsets.top + Metrics.spacing8)
+            // Inside the notch, like the bar it stands in for. Or at the head
+            // of the rail, below the sensor bar, where there is one.
+            .padding(.top, railTop.map { $0 + Metrics.spacing8 } ?? deviceInsets.top + Metrics.spacing8)
             .padding(.trailing, Metrics.spacing16)
             .transition(.opacity)
             .animation(.easeInOut(duration: 0.2), value: model.chromeVisible)
@@ -914,7 +1021,7 @@ public struct ReaderView: View {
     #endif
 
     @ViewBuilder
-    private func pageContent(size: CGSize) -> some View {
+    private func pageContent(size: CGSize, layout: ReaderLayout, width: CGFloat) -> some View {
         VStack(spacing: 0) {
             // The top bar's reserve, held whether or not the chrome is showing,
             // exactly as the footer holds its own — so toggling can never
@@ -927,27 +1034,44 @@ public struct ReaderView: View {
             // own toolbar is the top chrome, and `deviceInsets.top` is what
             // holds the page clear of it. Reserving 44 here as well put the
             // page's first line 8 points under a 52-point toolbar.
-            if Self.drawsOwnTopBar {
+            if Self.drawsTopBar(in: layout) {
                 Color.clear.frame(height: ReaderChrome.barHeight)
             }
 
-            // Each page carries its margins with it, so a turning page takes
-            // the whole width of the reader across rather than being cut by a
-            // margin that stays put.
-            PageTrackView(
-                model: model,
-                turner: turner,
-                pageSize: size,
-                // And the top margin, where there is no bar standing in for
-                // it — which is the Mac. It has to be drawn as well as
-                // reserved: `ReaderChrome.topReserve` takes it out of the
-                // page's height budget, and if nothing then puts it on screen
-                // the page simply sits that much higher, back under the
-                // toolbar with the space spent at the bottom instead.
-                insets: EdgeInsets(
-                    top: pageTopMargin, leading: model.style.pageMargin,
-                    bottom: model.style.pageMargin, trailing: model.style.pageMargin),
-            )
+            Group {
+                if let spread = layout.spread {
+                    // Two pages, mirrored around the fold rather than the
+                    // window. The spread is placed in window coordinates and
+                    // this view begins after a leading rail, if there is one.
+                    let start = layout.railSide == .leading ? layout.railWidth : 0
+                    ReaderSpreadView(
+                        model: model, pageSize: size,
+                        leftX: spread.leftX - start, rightX: spread.rightX - start, width: width,
+                        insets: EdgeInsets(
+                            top: pageTopMargin(in: layout), leading: 0,
+                            bottom: model.style.pageMargin, trailing: 0),
+                    )
+                } else {
+                    // Each page carries its margins with it, so a turning page
+                    // takes the whole width of the reader across rather than
+                    // being cut by a margin that stays put.
+                    PageTrackView(
+                        model: model,
+                        turner: turner,
+                        pageSize: size,
+                        // And the top margin, where there is no bar standing in
+                        // for it — which is the Mac, and iPhone Duo's rail. It
+                        // has to be drawn as well as reserved:
+                        // `ReaderChrome.topReserve` takes it out of the page's
+                        // height budget, and if nothing then puts it on screen
+                        // the page simply sits that much higher, back under the
+                        // toolbar with the space spent at the bottom instead.
+                        insets: EdgeInsets(
+                            top: pageTopMargin(in: layout), leading: model.style.pageMargin,
+                            bottom: model.style.pageMargin, trailing: model.style.pageMargin),
+                    )
+                }
+            }
             .modifier(PageAccessibility(model: model) { forward in
                 turner.requestTurn(forward: forward, carriesNarration: true) {
                     PageAccessibility.announcePage(model)
@@ -968,7 +1092,8 @@ public struct ReaderView: View {
                         // The sentence under the finger, on a page at rest.
                         turner.finish()
                         model.clearSelection()
-                        Task { await model.playSentence(at: canvasPoint(location)) }
+                        let point = pagePoint(location)
+                        Task { await model.playSentence(at: point.point, facing: point.facing) }
                     },
                 )
                 .onTapGesture { location in
@@ -979,8 +1104,12 @@ public struct ReaderView: View {
                         model.clearSelection()
                         return
                     }
+                    // A spread's edges are the whole width's: back on the far
+                    // left, forward on the far right, the chrome between.
                     switch ReaderTapZone.of(
-                        x: location.x, pageWidth: size.width, margin: model.style.pageMargin,
+                        x: location.x,
+                        pageWidth: layout.spread == nil ? size.width : width - model.style.pageMargin * 2,
+                        margin: model.style.pageMargin,
                     ) {
                     case .back: turner.requestTurn(forward: false)
                     case .forward: turner.requestTurn(forward: true)
@@ -1027,7 +1156,8 @@ public struct ReaderView: View {
                                 }
                                 return
                             }
-                            model.extendSelection(to: canvasPoint(value.location))
+                            let point = pagePoint(value.location)
+                            model.extendSelection(to: point.point, facing: point.facing)
                         }
                         .onEnded { value in
                             touching = false
@@ -1066,7 +1196,8 @@ public struct ReaderView: View {
                             // what is under the finger now, which is not where
                             // the words will be.
                             turner.finish()
-                            model.beginSelection(at: canvasPoint(touchPoint))
+                            let point = pagePoint(touchPoint)
+                            model.beginSelection(at: point.point, facing: point.facing)
                             // Claim the touch only if there was text under it.
                             // A long press on an illustration or a margin
                             // selects nothing, and the finger should still be
@@ -1098,7 +1229,7 @@ public struct ReaderView: View {
             ChapterNoticeBanner(model: model, style: .reader)
                 .padding(.horizontal, Metrics.spacing24)
                 .padding(.top, Metrics.spacing12)
-                .padding(.top, Self.drawsOwnTopBar ? ReaderChrome.barHeight : 0)
+                .padding(.top, Self.drawsTopBar(in: layout) ? ReaderChrome.barHeight : 0)
         }
         .animation(.easeInOut(duration: 0.2), value: model.chapterNotice)
         // Turning the page dismisses a selection left behind on the old one,
@@ -1112,7 +1243,11 @@ public struct ReaderView: View {
         // Anything but the turner's own turn moving the page — narration, a
         // jump — shows it where it now is, at once.
         .onChange(of: model.pageKey) { _, key in turner.modelKeyChanged(key) }
-        .onChange(of: PageTurn.effectiveStyle(settings.pageTurn, reduceMotion: reduceMotion), initial: true) {
+        .onChange(
+            of: PageTurn.effectiveStyle(
+                settings.pageTurn, reduceMotion: reduceMotion, spread: layout.spread != nil),
+            initial: true,
+        ) {
             _, style in turner.adopt(style: style)
         }
         // Also on chapter change: a jump that lands on the same page index (both
@@ -1336,25 +1471,43 @@ public struct ReaderView: View {
         .padding(Metrics.spacing32)
     }
 
-    /// The page's top margin, drawn only where nothing else is standing in for
-    /// it — which is the Mac, where the top chrome is a window toolbar rather
-    /// than one of the reader's own bars.
-    ///
-    /// One value because two things must agree about it: the padding that puts
-    /// it on screen, and `canvasPoint`, which has to take it back off again.
-    private var pageTopMargin: CGFloat {
-        Self.drawsOwnTopBar ? 0 : model.style.pageMargin
+    /// Whether the reader draws its own bar across the top of the page: not on
+    /// the Mac, which has a window toolbar, and not where its tools stand in a
+    /// rail down the side (iPhone Duo).
+    static func drawsTopBar(in layout: ReaderLayout) -> Bool {
+        drawsOwnTopBar && layout.tools == .topBar
     }
 
-    /// A point in the padded page's coordinates, in the canvas's own.
+    /// The page's top margin, drawn only where nothing else is standing in for
+    /// it — which is the Mac, where the top chrome is a window toolbar rather
+    /// than one of the reader's own bars, and iPhone Duo's rail, which stands
+    /// beside the page rather than above it.
+    ///
+    /// One value because two things must agree about it: the padding that puts
+    /// it on screen, and `pagePoint`, which has to take it back off again.
+    private func pageTopMargin(in layout: ReaderLayout) -> CGFloat {
+        Self.drawsTopBar(in: layout) ? 0 : model.style.pageMargin
+    }
+
+    /// A point in the padded page's coordinates, in the canvas's own, and
+    /// which page of a spread it is on.
     ///
     /// Tap coordinates arrive in the padded frame's space; the layout speaks in
     /// the canvas's, which starts one margin in from the side — and, where the
     /// reader draws no top bar, one `pageTopMargin` down as well. Off the Mac
-    /// that term is zero: there the top margin is the bar's reserve sitting
-    /// above this view entirely.
-    private func canvasPoint(_ point: CGPoint) -> CGPoint {
-        CGPoint(x: point.x - model.style.pageMargin, y: point.y - pageTopMargin)
+    /// and the rail that term is zero: there the top margin is the bar's
+    /// reserve sitting above this view entirely. In a spread the canvas is
+    /// whichever page the point is beside: the right one past the fold.
+    private func pagePoint(_ point: CGPoint) -> (point: CGPoint, facing: Bool) {
+        let layout = readerLayout
+        let y = point.y - pageTopMargin(in: layout)
+        guard let spread = layout.spread else {
+            return (CGPoint(x: point.x - model.style.pageMargin, y: y), false)
+        }
+        let start = layout.railSide == .leading ? layout.railWidth : 0
+        let facing = point.x >= spread.divider - start
+        let origin = (facing ? spread.rightX : spread.leftX) - start
+        return (CGPoint(x: point.x - origin, y: y), facing)
     }
 
     /// Whether this book is playing, by whichever engine happens to own it.
@@ -1517,7 +1670,13 @@ public struct ReaderView: View {
                 }
             }
         }
-        .padding(.horizontal, model.style.pageMargin)
+        // In a spread, from the left page's edge: the narration controls stand
+        // under the left page and the count under the right, whose edge is a
+        // margin short of the rail.
+        .padding(.leading, readerLayout.spread.map {
+            $0.leftX - (readerLayout.railSide == .leading ? readerLayout.railWidth : 0)
+        } ?? model.style.pageMargin)
+        .padding(.trailing, model.style.pageMargin)
         .frame(height: ReaderChrome.barHeight)
         // Swipe up on the strip to open the full player, as well as tapping the
         // waveform. The whole bar is the target: without a content shape an

@@ -76,6 +76,15 @@ bring them up is in the README, under "A local server to talk to".
    read-along (it plays through the speakers, so ask first) and `--fresh` to
    make the pairing a real one rather than a token the simulator kept.
 
+   On iPhone Duo, `--device "iPhone Duo"` (iOS 27.1) runs the same checks on
+   its outer display, against each server. The inner display and the folded
+   poses cannot be reached headless (`simctl io … screenConfig` power-off
+   wedges the simulator), so they are walked in Device Hub by hand: open
+   wide (a spread, the shelf and book side by side), open tall, the book
+   pose (Contents beside the fold, with Close), the table pose (the
+   sentence above the fold, the player below), and opening and closing
+   mid-read (the place and the selected book kept). Record what was seen.
+
    On Apple TV, `--platform tvos` runs `Apps/IssaLiveTVUITests` on the Apple
    TV 4K simulator, moving by the remote: the pairing, the library, the
    session surviving the covers and Settings' server version. The
@@ -92,8 +101,10 @@ bring them up is in the README, under "A local server to talk to".
    taller than a standard control or one a window should have is missing,
    writing `.build/mac-check/<label>.txt` as the record.
 
-4. **The layout sweep** (`scripts/layout-sweep.sh`), which uses the built-in
-   fixture rather than a server.
+4. **The layout sweep** (`scripts/layout-sweep.sh --all`), which uses the
+   built-in fixture rather than a server. It includes iPhone Duo's outer
+   display (`iphone-duo-outer`, iOS 27.1), where `DuoLayoutTests` measures
+   the reader's rail and the shelf.
 
 If either server cannot be brought up, the release waits. It does not ship on
 the strength of one generation.

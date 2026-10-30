@@ -149,7 +149,7 @@ final class MenuTargetingFlowTests: XCTestCase {
             app.buttons["View details"].firstMatch.tap()
             assertBookPage(showing: target.title, in: app, after: books)
 
-            app.navigationBars.buttons.firstMatch.tap()
+            app.goBack()
             XCTAssertTrue(
                 downloadsRow(target, in: app).waitForExistence(timeout: 15),
                 "Back did not return to the Downloads screen")
@@ -234,7 +234,7 @@ final class MenuTargetingFlowTests: XCTestCase {
             app.buttons["View details"].firstMatch.tap()
             assertBookPage(showing: title, in: app, after: books)
 
-            app.navigationBars.buttons.firstMatch.tap()
+            app.goBack()
             XCTAssertTrue(
                 app.descendants(matching: .any)["screen.reading"].waitForExistence(timeout: 15),
                 "Back did not return to the Reading tab")
@@ -341,7 +341,7 @@ final class MenuTargetingFlowTests: XCTestCase {
             app.buttons["View details"].firstMatch.tap()
             assertBookPage(showing: title, in: app, after: books)
 
-            app.navigationBars.buttons.firstMatch.tap()
+            app.goBack()
             XCTAssertTrue(
                 app.descendants(matching: .any)[screen].waitForExistence(timeout: 15),
                 "Back did not return to \(screen)")
