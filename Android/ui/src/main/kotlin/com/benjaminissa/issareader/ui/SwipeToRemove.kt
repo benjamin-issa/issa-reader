@@ -77,6 +77,10 @@ fun SwipeToRemove(
     val currentIsOpen by rememberUpdatedState(isOpen)
     val currentOnOpenRowChange by rememberUpdatedState(onOpenRowChange)
     val currentOnRemove by rememberUpdatedState(onRemove)
+    // Read through state, as the callbacks are: the gesture block below is
+    // keyed on the distances only, so a slot reused for another row must not
+    // open the row it was first composed for.
+    val currentId by rememberUpdatedState(id)
     val offset = remember { Animatable(0f) }
     val scope = rememberCoroutineScope()
     LaunchedEffect(isOpen) { offset.animateTo(if (isOpen) -reveal else 0f) }
@@ -123,7 +127,7 @@ fun SwipeToRemove(
                                         currentOnRemove()
                                     }
                                     travelled > reveal / 2 -> {
-                                        currentOnOpenRowChange(id)
+                                        currentOnOpenRowChange(currentId)
                                         offset.animateTo(-reveal)
                                     }
                                     else -> {

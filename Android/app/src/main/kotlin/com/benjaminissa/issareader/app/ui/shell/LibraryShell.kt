@@ -181,7 +181,11 @@ fun LibraryShell(state: RootState) {
                 val coordinator = app.playback
                 if (book != null && coordinator != null) {
                     key(coordinator) {
-                        MiniPlayer(book, coordinator, Modifier.align(Alignment.BottomCenter)) { state.showsPlayer = true }
+                        MiniPlayer(book, coordinator, Modifier.align(Alignment.BottomCenter)) {
+                            // About whatever is playing, not a reader's book.
+                            state.playerFromReader = null
+                            state.showsPlayer = true
+                        }
                     }
                 }
             }

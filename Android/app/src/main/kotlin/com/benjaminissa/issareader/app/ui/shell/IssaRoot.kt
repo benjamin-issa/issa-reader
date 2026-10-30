@@ -55,7 +55,16 @@ fun IssaRoot(environment: AppEnvironment) {
         val actions = remember(rootNav, state, app) { RootActions(rootNav, state, app) }
         // Nothing to expand into once the book has stopped — unless the sheet
         // is the reader's own, for a read-along that has not started.
-        val fromReader = state.playerFromReader?.takeIf { it.hasNarration && !app.hasLeft(it) }
+        // Only while that reader is still the one on screen: a reader closed
+        // under the sheet (a link, a removal) takes its sheet with it, and is
+        // not kept alive by it.
+        val fromReader = state.playerFromReader?.takeIf { it.hasNarration && !app.hasLeft(it) && app.visibleReader === it }
+        LaunchedEffect(state.playerFromReader != null && fromReader == null) {
+            if (state.playerFromReader != null && fromReader == null) {
+                state.playerFromReader = null
+                state.showsPlayer = false
+            }
+        }
         LaunchedEffect(app.playback == null && fromReader == null) {
             if (app.playback == null && fromReader == null) state.showsPlayer = false
         }
@@ -132,7 +141,10 @@ fun IssaRoot(environment: AppEnvironment) {
                 // reader's waveform raises it as the mini bar does.
                 if (state.showsPlayer) {
                     PlayerSheet(
-                        onDismiss = { state.showsPlayer = false },
+                        onDismiss = {
+                            state.showsPlayer = false
+                            state.playerFromReader = null
+                        },
                         onReadAlong = {
                             state.showsPlayer = false
                             app.playbackBook?.let { actions.openReader(it.uuid, local = it.isLocal) }

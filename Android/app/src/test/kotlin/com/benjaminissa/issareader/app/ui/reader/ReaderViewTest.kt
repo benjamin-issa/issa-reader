@@ -324,6 +324,29 @@ class ReaderViewTest {
         assertFalse(model.isPlaying)
     }
 
+    /**
+     * The menu reads the same state the stop clears: a menu opened again after
+     * the stop has to find Stop Narration waiting for the next lit sentence,
+     * not still offered for one that is gone.
+     */
+    @Test
+    fun `Stop Narration is disabled again once it has stopped`() {
+        val model = show(Fixtures.playback("readalong.epub"), narrated = true)
+        compose.waitUntil(10_000) { model.readalong != null }
+        compose.onRoot().performTouchInput { doubleClick(page(150f, 150f)) }
+        compose.waitUntil(5_000) { model.hasNarrationMarker }
+        compose.onNodeWithTag("reader.more").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("reader.menu.stop_narration").assertIsEnabled().performClick()
+        compose.waitUntil(5_000) { !model.hasNarrationMarker }
+        compose.waitForIdle()
+
+        compose.onNodeWithTag("reader.more").performClick()
+        compose.waitForIdle()
+
+        compose.onNodeWithTag("reader.menu.stop_narration").assertExists().assertIsNotEnabled()
+    }
+
     private companion object {
         const val INSET_TOP = 40f
         const val INSET_BOTTOM = 24f

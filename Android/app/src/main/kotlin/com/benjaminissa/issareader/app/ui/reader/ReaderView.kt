@@ -113,6 +113,7 @@ import com.benjaminissa.issareader.app.ui.ask.AskSparkle
 import com.benjaminissa.issareader.app.ui.ask.AskStatusBadge
 import com.benjaminissa.issareader.app.ui.ask.pillState
 import com.benjaminissa.issareader.app.ui.ask.showsBadge
+import com.benjaminissa.issareader.app.ui.settings.ReadingSettings
 import com.benjaminissa.issareader.core.KeyValueStore
 import com.benjaminissa.issareader.core.model.Annotation
 import com.benjaminissa.issareader.core.model.ByteCountText
@@ -332,8 +333,12 @@ fun ReaderView(
             onClose = onClose,
             onSheet = { sheet = it },
             stopNarrationEnabled = model.hasNarrationMarker && environment.app?.isHandingOffToReader(model.book.uuid) != true,
+            // On the app's scope, not the screen's: a stop that writes an
+            // audiobook's position first must not be cut off halfway by the
+            // reader closing during the write.
             onStopNarration = {
-                scope.launch { environment.app?.stopNarrationForThisBook(model) ?: model.clearNarration() }
+                val app = environment.app
+                if (app != null) app.stopNarrationSoon(model) else scope.launch { model.clearNarration() }
             },
             modifier = Modifier
                 .align(Alignment.TopCenter)
@@ -607,7 +612,7 @@ private fun PageContent(
  * or chrome toggle can re-paginate the chapter. Centred, at 55% of the page's
  * ink, one line, not tappable, and held to the default type size so it cannot
  * grow into the gesture handle. Drawn only where [ReaderChrome.showsBookTitle]
- * says so: never under three-button navigation.
+ * says so — never under three-button navigation — and only on a phone.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -616,6 +621,9 @@ private fun BookTitleCaption(model: ReaderModel, setting: Boolean, band: Dp, mod
     val navBar = with(density) { WindowInsets.navigationBarsIgnoringVisibility.getBottom(density).toDp().value.toDouble() }
     val tappable = with(density) { WindowInsets.tappableElementIgnoringVisibility.getBottom(density).toDp().value.toDouble() }
     if (!ReaderChrome.showsBookTitle(setting, model.chromeVisible, navBar, tappable)) return
+    // Phones only, as on the iPhone: a tablet offers no switch for it, so it
+    // must not draw a title nobody can turn off.
+    if (!ReadingSettings.offersBookTitle(LocalConfiguration.current.smallestScreenWidthDp)) return
     CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale = 1f)) {
         Text(
             model.book.title,

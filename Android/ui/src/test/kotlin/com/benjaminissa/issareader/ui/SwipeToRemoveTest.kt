@@ -41,6 +41,7 @@ class SwipeToRemoveTest {
     val compose = createComposeRule()
 
     private var openRow: String? by mutableStateOf(null)
+    private var rowId: String by mutableStateOf("row")
     private var removed = 0
     private var tapped = 0
 
@@ -48,7 +49,7 @@ class SwipeToRemoveTest {
         compose.setContent {
             IssaTheme(darkTheme = false) {
                 SwipeToRemove(
-                    id = "row",
+                    id = rowId,
                     openRow = openRow,
                     onOpenRowChange = { openRow = it },
                     onRemove = { removed += 1 },
@@ -75,6 +76,25 @@ class SwipeToRemoveTest {
         assertEquals(1, removed)
         assertNull(openRow)
         assertEquals(0, tapped)
+    }
+
+    /**
+     * The gesture block is keyed on the distances only, so a slot reused for
+     * another row (a list that scrolled, a row removed above it) keeps the
+     * block it started with. It must report the row the slot holds now, not
+     * the one it was first composed for.
+     */
+    @Test
+    fun `a swipe opens the row the slot holds now, not the one it began with`() {
+        show()
+        compose.runOnIdle { rowId = "b" }
+        compose.waitForIdle()
+
+        compose.onNodeWithTag("row").performTouchInput { swipeLeft(startX = right - 10f, endX = right - 10f - 100.dp.toPx()) }
+        compose.waitForIdle()
+
+        assertEquals("the stale row was opened", "b", openRow)
+        assertEquals(0, removed)
     }
 
     @Test

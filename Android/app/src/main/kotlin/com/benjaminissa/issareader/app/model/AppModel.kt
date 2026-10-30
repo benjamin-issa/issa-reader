@@ -2326,15 +2326,19 @@ class AppModel(
      * same book: switching to another book and back installs a new one under
      * the same uuid. Nor a coordinator the reader pressed Play on while the
      * write was out: Stop paused it, so playing again is a later choice.
+     *
+     * @return whether it stopped the engine: false when it was not this book's,
+     *   or the stop was declined for one of those reasons.
      */
-    suspend fun stopListeningWritingPosition(bookUuid: String, nowPlaying: NowPlayingController?) {
-        if (listeningBook?.uuid != bookUuid) return
-        val coordinator = listening ?: return
+    suspend fun stopListeningWritingPosition(bookUuid: String, nowPlaying: NowPlayingController?): Boolean {
+        if (listeningBook?.uuid != bookUuid) return false
+        val coordinator = listening ?: return false
         coordinator.player.pause()
         beforeWritingListeningPosition?.invoke()
         writeListeningPositionNow()
-        if (listening !== coordinator || coordinator.player.isPlaying) return
+        if (listening !== coordinator || coordinator.player.isPlaying) return false
         stopListening(nowPlaying)
+        return true
     }
 
     /**
@@ -2353,6 +2357,15 @@ class AppModel(
      * book has changed engines there is no telling which one a stop should
      * reach, and the next tap acts on the one that owns it.
      */
+    /**
+     * [stopNarrationForThisBook] on the app's own scope, for the reader's menu:
+     * a stop that is writing an audiobook's position must run to the end even
+     * if the reader closes during the write.
+     */
+    fun stopNarrationSoon(model: ReaderModel) {
+        scope.launch { stopNarrationForThisBook(model) }
+    }
+
     suspend fun stopNarrationForThisBook(model: ReaderModel) {
         val uuid = model.book.uuid
         if (isHandingOffToReader(uuid)) return
@@ -2360,8 +2373,10 @@ class AppModel(
             // The audiobook engine holds the book, so that is the thing
             // playing. Its position is written first: this is the reader's own
             // stop, and the writer's last tick can be most of a quarter-minute
-            // behind.
-            stopListeningWritingPosition(uuid, nowPlayingController)
+            // behind. A stop it declined — a hand-off or a Play that came while
+            // the write was out — leaves the reader's narration alone too:
+            // clearing it would unload a read-along the hand-off just started.
+            if (!stopListeningWritingPosition(uuid, nowPlayingController)) return
         } else if (reader === model) {
             // Only if this book is the one narrating: `stopNarration` stops
             // whichever is.

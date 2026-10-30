@@ -100,15 +100,18 @@ class NarrationStopTest : AppSuite() {
      *
      * @param takingTheClock whether to take it, which is nearly always; a test
      *   that wants to drive a tick itself leaves it on the player.
+     * @param uuid the book's, for a test that has the audiobook engine hold the
+     *   same book.
      */
     private suspend fun opened(
         scope: CoroutineScope,
         atChapter: Int = 0,
         takingTheClock: Boolean = true,
         backend: () -> MediaBackend = { ScriptedBackend() },
+        uuid: String = "narration-stop-uuid",
     ): Opened {
         val server = StubServer { Answer(404) }
-        val model = model(scope, server, "Fixture", "narration-stop-uuid", backend)
+        val model = model(scope, server, "Fixture", uuid, backend)
         model.epubPackage = EpubPackage.open(Fixtures.epub("readalong.epub"))
         val epubPackage = checkNotNull(model.epubPackage)
         val timeline = SmilParser.timeline(epubPackage)
@@ -805,6 +808,107 @@ class NarrationStopTest : AppSuite() {
             assertFalse("the engine was not paused", fixture.coordinator.player.isPlaying)
         } finally {
             server.close()
+            fixture.tearDown()
+        }
+    }
+
+    /**
+     * A Stop the write held, and a Play pressed on the engine meanwhile: the
+     * stop is declined, and says so.
+     */
+    @Test
+    fun aDeclinedStopSaysSo() = mainTest {
+        val fixture = listening()
+        try {
+            val app = fixture.app
+            val hold = FirstArrivalHold()
+            app.beforeWritingListeningPosition = { hold.arrive() }
+
+            val stopping = async { app.stopListeningWritingPosition(listeningUuid, nowPlaying = null) }
+            assertTrue("the stop has to be held on its write", waitUntil { hold.arrivals == 1 })
+            fixture.coordinator.player.play()
+            hold.release()
+
+            assertFalse("a stop the reader's Play overtook reported success", stopping.await())
+            assertTrue(app.listening === fixture.coordinator)
+        } finally {
+            fixture.tearDown()
+        }
+    }
+
+    /** The controls: a stop that went through says so, and one for another book does not. */
+    @Test
+    fun aStopThatWentThroughSaysSo() = mainTest {
+        val fixture = listening()
+        try {
+            assertFalse(fixture.app.stopListeningWritingPosition("another-book", nowPlaying = null))
+            assertNotNull(fixture.app.listening)
+
+            assertTrue(fixture.app.stopListeningWritingPosition(listeningUuid, nowPlaying = null))
+            assertNull(fixture.app.listening)
+        } finally {
+            fixture.tearDown()
+        }
+    }
+
+    /**
+     * Stop Narration on a book the engine holds, the stop declined because
+     * the reader pressed Play while the write was out. The engine is playing
+     * again, so the reader's narration is not the app's to put back: clearing
+     * it would unload a read-along the hand-off just started.
+     */
+    @Test
+    fun aDeclinedStopLeavesTheReadersNarrationAlone() = mainTest {
+        val fixture = listening()
+        val reader = opened(fixture.scope, atChapter = 0, uuid = listeningUuid)
+        try {
+            val model = reader.model
+            val timeline = checkNotNull(model.timeline)
+            val later = checkNotNull(timeline.exactEntryForFragment("ch01-s3", chapterOne))
+            assertTrue(model.resumeNarration(later, playing = false))
+            assertTrue(model.hasNarrationMarker)
+            assertEquals("ch01-s3", model.activeFragmentId)
+            val app = fixture.app
+            val hold = FirstArrivalHold()
+            app.beforeWritingListeningPosition = { hold.arrive() }
+
+            val stopping = async { app.stopNarrationForThisBook(model) }
+            assertTrue("the stop has to be held on its write", waitUntil { hold.arrivals == 1 })
+            fixture.coordinator.player.play()
+            hold.release()
+            stopping.await()
+
+            assertTrue("the reader's Play was stopped", app.listening === fixture.coordinator)
+            assertEquals("the declined stop cleared the lit sentence", "ch01-s3", model.activeFragmentId)
+            assertEquals(later, model.readalong?.activeEntry)
+            assertTrue(model.hasNarrationMarker)
+            assertNull("the coordinator's numbers are still the truth", model.pendingNarrationStart)
+        } finally {
+            reader.tearDown()
+            fixture.tearDown()
+        }
+    }
+
+    /** The control: the same Stop Narration, undisturbed, does put the narration back. */
+    @Test
+    fun aStopThatWentThroughClearsTheReadersNarration() = mainTest {
+        val fixture = listening()
+        val reader = opened(fixture.scope, atChapter = 0, uuid = listeningUuid)
+        try {
+            val model = reader.model
+            val timeline = checkNotNull(model.timeline)
+            val later = checkNotNull(timeline.exactEntryForFragment("ch01-s3", chapterOne))
+            assertTrue(model.resumeNarration(later, playing = false))
+            assertTrue(model.hasNarrationMarker)
+
+            fixture.app.stopNarrationForThisBook(model)
+
+            assertNull(fixture.app.listening)
+            assertNull(model.activeFragmentId)
+            assertNull(model.readalong?.activeEntry)
+            assertFalse(model.hasNarrationMarker)
+        } finally {
+            reader.tearDown()
             fixture.tearDown()
         }
     }

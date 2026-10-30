@@ -280,7 +280,15 @@ class ReaderModel(
      * on, or one lit on the page — playing or paused. What there is to put
      * back with [clearNarration], and so whether the reader is offered it.
      */
-    val hasNarrationMarker: Boolean get() = readalong?.activeEntry != null || activeFragmentId != null
+    val hasNarrationMarker: Boolean
+        get() {
+            // Both read, every time: with `||` a lit sentence short-circuited
+            // the read of the highlight, so a composition that asked while
+            // narration was lit never heard the stop clear it.
+            val lit = activeFragmentId
+            val entry = readalong?.activeEntry
+            return entry != null || lit != null
+        }
 
     /** The one in-flight response to a style change. Superseded, not stacked. */
     private var styleTask: Job? = null
@@ -942,7 +950,12 @@ class ReaderModel(
             // `onFragmentChange` fires first, so this is the sentence that
             // crossed the boundary.
             val fragment = narratedFragment
-            services.scope.launch { followNarration(href, fragment) }
+            val generation = narrationGeneration
+            services.scope.launch {
+                // Not for a move a stop overtook: the stop has put the book
+                // back, and turning the page to where it was going would undo it.
+                if (generation == narrationGeneration) followNarration(href, fragment)
+            }
         }
         coordinator.onSeek = { positionOrigin = PositionOrigin.CHOSEN }
         readalong = coordinator

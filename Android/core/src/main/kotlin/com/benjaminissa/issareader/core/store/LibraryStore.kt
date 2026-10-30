@@ -142,7 +142,8 @@ class LibraryStore(
         if (trimmed.isEmpty()) return allBooks()
         // The terms FTS cannot be trusted with: the ones carrying a character
         // its tokenizer discards.
-        val literalTerms = trimmed.split(Regex("\\s+"))
+        // Split on any whitespace, a pasted non-breaking space included.
+        val literalTerms = trimmed.split(Regex("(?U)\\s+"))
             .filter { term -> term.any { it == '%' || it == '_' || it == '\\' } }
 
         return reading { db ->
@@ -506,13 +507,6 @@ class LibraryStore(
         }
 
         /**
-         * GRDB's `FTS5Pattern(matchingAllPrefixesIn:)`: the text split the way
-         * SQLite's `ascii` tokenizer splits it — runs of ASCII letters and
-         * digits, and of anything beyond ASCII, with ASCII letters lowercased —
-         * each made a prefix query, all of them required. Null when there is
-         * no token at all.
-         */
-        /**
          * Whether [term] appears as written in any of [fields], ignoring case
          * and diacritics: the check FTS cannot make for `%`, `_` and `\`. The
          * fields are the ones the FTS index and the LIKE scan carry.
@@ -528,6 +522,13 @@ class LibraryStore(
 
         private val combiningMarks = Regex("\\p{M}+")
 
+        /**
+         * GRDB's `FTS5Pattern(matchingAllPrefixesIn:)`: the text split the way
+         * SQLite's `ascii` tokenizer splits it — runs of ASCII letters and
+         * digits, and of anything beyond ASCII, with ASCII letters lowercased —
+         * each made a prefix query, all of them required. Null when there is
+         * no token at all.
+         */
         internal fun prefixPattern(text: String): String? {
             val tokens = mutableListOf<String>()
             val current = StringBuilder()
