@@ -2,6 +2,7 @@ package com.benjaminissa.issareader.live
 
 import android.content.Context
 import android.content.Intent
+import android.graphics.Rect
 import android.net.Uri
 import android.os.SystemClock
 import android.util.Base64
@@ -242,8 +243,15 @@ class LiveCheckTest {
             return
         }
         capture("status")
-        val shown = pill.stateDescription?.toString() ?: ""
-        record("statusLabel", shown == expected, "\"$title\" shows \"$shown\", expected \"$expected\"")
+        // What the pill draws, and what a screen reader is told it holds. The
+        // drawn label is not the pill's child in the accessibility tree but a
+        // node of its own beside it, so it is found by lying inside the pill.
+        val pillBounds = Rect().also(pill::getBoundsInScreen)
+        val shown = node { candidate ->
+            !candidate.text.isNullOrEmpty() && pillBounds.contains(Rect().also(candidate::getBoundsInScreen))
+        }?.text?.toString() ?: ""
+        val spoken = pill.stateDescription?.toString() ?: ""
+        record("statusLabel", shown == expected, "\"$title\" shows \"$shown\" (spoken \"$spoken\"), expected \"$expected\"")
         device.pressBack()
     }
 

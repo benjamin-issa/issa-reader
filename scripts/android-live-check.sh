@@ -376,8 +376,11 @@ adb shell pm clear "$PACKAGE" >/dev/null
 # prompt does not sit over the screens the test reads.
 adb shell pm grant "$PACKAGE" android.permission.POST_NOTIFICATIONS >/dev/null 2>&1 || true
 
-# A file the test wrote, or nothing.
-remote() { adb exec-out run-as "$PACKAGE" cat "$REMOTE/$1" 2>/dev/null || true; }
+# A file the test wrote, or nothing. The redirect is the device shell's:
+# exec-out carries the remote command's errors on the same stream as its
+# output, so a host-side 2>/dev/null would let "No such file" through as if
+# the test had written it.
+remote() { adb exec-out "run-as $PACKAGE cat $REMOTE/$1 2>/dev/null" || true; }
 
 # Approves the pairing code the moment the test writes it, as live-check.sh's
 # approver does; stopped when the test ends.
