@@ -178,14 +178,20 @@ def status():
 
 
 def listing(directory: Path):
-    """The listing text, the icon, the feature graphic and the phone screenshots, replaced whole."""
+    """The contact details, the listing text, the icon, the feature graphic and the phone screenshots, replaced whole."""
     locale = directory / LANGUAGE
     text = {name: (locale / f"{name}.txt").read_text().strip() for name in ("title", "short_description", "full_description")}
     if len(text["title"]) > 30 or len(text["short_description"]) > 80 or len(text["full_description"]) > 4000:
         sys.exit("error: the listing text is over Play's limits (30, 80, 4000 characters)")
     graphics = locale / "graphics"
     screenshots = sorted((locale / "phoneScreenshots").glob("*.png"))
+    details = directory / "details.json"
     with Edit() as edit:
+        if details.is_file():
+            # The app's contact details and default language: what the
+            # listing shows under "App support".
+            call("PUT", edit.path("/details"), json.loads(details.read_text()))
+            print("  details: contact email, website and default language")
         call("PUT", edit.path(f"/listings/{LANGUAGE}"), {
             "language": LANGUAGE, "title": text["title"],
             "shortDescription": text["short_description"], "fullDescription": text["full_description"],
