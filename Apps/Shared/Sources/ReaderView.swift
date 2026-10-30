@@ -147,6 +147,8 @@ public struct ReaderView: View {
     /// works it out from the window each pass and hands it to the page; this
     /// copy is for the overlays drawn outside its geometry reader.
     @State private var readerLayout = ReaderLayout.standard
+    /// The window `readerLayout` was worked out for.
+    @State private var layoutWindow = CGSize.zero
     /// Whether the reader can draw its own bar across the top of the page.
     /// Where it does is `drawsTopBar(in:)`.
     ///
@@ -357,12 +359,42 @@ public struct ReaderView: View {
             .padding(.leading, layout.railSide == .leading ? layout.railWidth : 0)
             .padding(.trailing, layout.railSide == .trailing ? layout.railWidth : 0)
             .onChange(of: layout, initial: true) { _, layout in
-                readerLayout = layout.keepingRailTop(of: readerLayout)
+                // Held only in the same window: the status bar coming and
+                // going moves the rail's top and not the window, while a new
+                // pose — the phone opened, closed or turned — is a new window
+                // whose rail starts again.
+                readerLayout = geometry.size == layoutWindow ? layout.keepingRailTop(of: readerLayout) : layout
+                layoutWindow = geometry.size
             }
             // Re-sample on a genuine size change — a rotation or a split view
             // — where the unsafe edges really are different. A chrome toggle
             // does not change the window's size, so it never lands here.
-            .onChange(of: geometry.size, initial: true) { deviceInsets = ReaderInsets.current() }
+            .onChange(of: geometry.size, initial: true) { _, new in
+                deviceInsets = ReaderInsets.current()
+                // Then twice more as the pose settles, where the layout turns
+                // out to fold or to run its bars down a side (iPhone Duo),
+                // from the window this size rather than the first scene's,
+                // which on a phone with a display each side need not be this
+                // one. Sampled with the new size, the safe area can still be
+                // the old pose's — from the inner display held tall back to
+                // wide the status bar's top inset was kept with the bar gone
+                // to the side, and the page started 88 points down for good —
+                // and what the system says about the window can be the old
+                // one's too, so whether to look again is asked of the layout
+                // once it has settled, not of the moment. Every other device
+                // settles to the standard layout and never looks again.
+                Task { @MainActor in
+                    for wait in [400, 1_100] {
+                        try? await Task.sleep(for: .milliseconds(wait))
+                        guard readerLayout.railSide != nil || readerLayout.pose != .flat
+                            || readerLayout.spread != nil else { return }
+                        let settled = ReaderInsets.current(in: new)
+                        guard settled != deviceInsets else { continue }
+                        deviceInsets = settled
+                        Self.logInsets("settled", new, settled)
+                    }
+                }
+            }
         }
         // Measure the window, not the safe-area content box.
         .ignoresSafeArea()
@@ -784,6 +816,11 @@ public struct ReaderView: View {
         if model.hasNarration, let fold = ReaderLayout.tableFold(adaptiveSignals) {
             VStack(spacing: 0) {
                 NarratedPassageView(model: model)
+                    // Below the tools where they run across the top, as they
+                    // do with the fold across the middle: held that way the
+                    // display is tall, and the system puts its bars there.
+                    .padding(.top, Self.drawsTopBar(in: readerLayout)
+                        ? deviceInsets.top + ReaderChrome.barHeight : 0)
                     .frame(height: max(fold.minY, 0))
                     // The passage stands over the page, so it takes the tap
                     // that brings the tools back; without it a reader who hid
@@ -1493,6 +1530,15 @@ public struct ReaderView: View {
                 .foregroundStyle(model.style.theme.textSecondary)
         }
         .padding(Metrics.spacing32)
+    }
+
+    /// What the reader measured on a display that folds, for the diagnostics
+    /// a reader can export: the window and its unsafe edges.
+    static func logInsets(_ when: String, _ size: CGSize, _ insets: EdgeInsets) {
+        IssaLog.info("reader insets", [
+            "when": when, "size": "\(Int(size.width))x\(Int(size.height))",
+            "insets": "\(Int(insets.top)),\(Int(insets.leading)),\(Int(insets.bottom)),\(Int(insets.trailing))",
+        ])
     }
 
     /// Whether the reader draws its own bar across the top of the page: not on

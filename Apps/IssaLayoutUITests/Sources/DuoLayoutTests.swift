@@ -228,4 +228,69 @@ final class DuoLayoutTests: XCTestCase {
         XCTAssertGreaterThan(tab.frame.minX, window.midX, "the tab bar is not down the side: \(tab.frame)")
         capture(app, "library")
     }
+
+    // MARK: - The inner display, held wide
+
+    /// The inner display, open and held wide: the shelf and the chosen book
+    /// side by side, and a book as two pages either side of the fold.
+    ///
+    /// Not a sweep row: the simulator cannot be opened from the command line,
+    /// so this runs against a Duo that Device Hub has opened, with
+    /// ISSA_SWEEP_DEVICE set to iphone-duo-inner.
+    func testInnerDisplayHeldWide() throws {
+        try XCTSkipUnless(deviceSlug == "iphone-duo-inner", "not iPhone Duo's inner display")
+        let app = launch()
+        let window = app.windows.firstMatch.frame
+        XCTAssertGreaterThan(window.width, window.height, "the inner display is not held wide: \(window)")
+        let appProbe = app.descendants(matching: .any)["probe.duo.app"].firstMatch
+        XCTAssertTrue(appProbe.waitForExistence(timeout: 10))
+        let probeText = appProbe.value as? String ?? ""
+        let note = XCTAttachment(string: probeText + "\nbars=" + bars(app, "app"))
+        note.name = "\(deviceSlug)__probe-app.txt"
+        note.lifetime = .keepAlways
+        add(note)
+        XCTAssertTrue(probeText.contains("h=regular;v=regular"), "not regular both ways: \(probeText)")
+
+        // The shelf, with the pane beside it waiting for a book.
+        selectLibrary(app)
+        let detail = app.descendants(matching: .any)["split.detail"].firstMatch
+        XCTAssertTrue(detail.waitForExistence(timeout: 15), "no pane beside the shelf")
+        capture(app, "inner-library")
+        let search = app.textFields["Title, author, narrator, series, tag"]
+        XCTAssertTrue(search.waitForExistence(timeout: 15))
+        XCTAssertLessThan(search.frame.maxX, window.midX + 1, "the shelf runs past the fold: \(search.frame)")
+        search.tap()
+        search.typeText("Peter and Wendy\n")
+        let book = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@",
+                                  "cell.book.", "Peter and Wendy"))
+            .firstMatch
+        XCTAssertTrue(book.waitForExistence(timeout: 15))
+        book.tap()
+        // The book's page opens in the pane, the shelf stays where it was.
+        let bookScreen = app.descendants(matching: .any)["screen.bookDetail"].firstMatch
+        XCTAssertTrue(bookScreen.waitForExistence(timeout: 15), "the book did not open beside the shelf")
+        XCTAssertGreaterThan(bookScreen.frame.minX, window.midX - 2, "the book's page is not in the pane: \(bookScreen.frame)")
+        XCTAssertTrue(search.exists, "choosing a book took the shelf away")
+        capture(app, "inner-split")
+
+        // The reader, beside the rail. Coordinate taps from XCUITest do not
+        // reach a second display, so turning the spread is checked by hand in
+        // Device Hub; see CLAUDE.md.
+        let read = app.descendants(matching: .any)["action.read"].firstMatch
+        XCTAssertTrue(read.waitForExistence(timeout: 15))
+        read.tap()
+        let page = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "value BEGINSWITH %@", "Page"))
+            .firstMatch
+        XCTAssertTrue(page.waitForExistence(timeout: 60), "the reader never drew a page")
+        let readerProbe = app.descendants(matching: .any)["probe.duo.reader"].firstMatch
+        let readerNote = XCTAttachment(
+            string: (readerProbe.value as? String ?? "absent") + "\nbars=" + bars(app, "reader")
+                + "\npage=\(page.frame) \(page.value as? String ?? "")")
+        readerNote.name = "\(deviceSlug)__probe-reader.txt"
+        readerNote.lifetime = .keepAlways
+        add(readerNote)
+        XCTAssertLessThanOrEqual(page.frame.maxX, window.maxX - 44, "the page runs under the rail: \(page.frame)")
+    }
 }

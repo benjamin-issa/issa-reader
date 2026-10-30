@@ -70,6 +70,10 @@ struct LibrarySplit<Stack: View>: View {
                 ContentUnavailableView(
                     "Choose a Book", systemImage: "books.vertical",
                     description: Text("Its details open here, beside the shelf."))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    // The shelf's paper, as the book's own page has, not the
+                    // system's white.
+                    .background(Palette.paper)
             }
         }
         .accessibilityIdentifier("split.detail")

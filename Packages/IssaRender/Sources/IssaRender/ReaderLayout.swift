@@ -68,7 +68,7 @@ public struct ReaderLayout: Equatable, Sendable {
     public func keepingRailTop(of previous: ReaderLayout) -> ReaderLayout {
         guard case let .rail(side, width, top) = tools,
               case let .rail(oldSide, oldWidth, oldTop) = previous.tools,
-              side == oldSide, width == oldWidth, oldTop > top else { return self }
+              side == oldSide, width == oldWidth, pose == previous.pose, oldTop > top else { return self }
         var held = self
         held.tools = .rail(side: side, width: width, top: oldTop)
         return held
@@ -93,6 +93,15 @@ public struct ReaderLayout: Equatable, Sendable {
         _ signals: AdaptiveLayout.Signals, window: CGSize,
         insets: AdaptiveLayout.Insets, margin: CGFloat,
     ) -> ReaderLayout {
+        // Regions are in the coordinates of the window they were read in. For
+        // a moment after the phone opens, closes or turns they still describe
+        // the old one, and a fold from there read as a table pose here and
+        // put the rail's tools half way down the screen.
+        var signals = signals
+        if signals.window != .zero, signals.window != window {
+            signals.folds = []
+            signals.occlusions = []
+        }
         var tools = tools(signals, window: window, insets: insets)
         // Propped open like a laptop, the tools move down with the controls to
         // the flat half, below the fold; the status stays at the top.

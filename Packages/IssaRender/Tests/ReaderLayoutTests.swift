@@ -150,4 +150,28 @@ struct ReaderLayoutTests {
         #expect(rotated.keepingRailTop(of: shown) == rotated, "a new window starts again")
         #expect(ReaderLayout.standard.keepingRailTop(of: shown) == .standard)
     }
+
+    @Test("regions read in another window are not this one's")
+    func staleRegionsAreIgnored() {
+        // The inner display's fold, still published a moment after closing.
+        let fold = Region(frame: CGRect(x: 0, y: 310, width: 951, height: 48), isActive: true)
+        var signals = Self.outerSignals
+        signals.folds = [fold]
+        signals.window = Self.inner
+        let layout = ReaderLayout.resolve(signals, window: Self.outer, insets: Self.outerInsets, margin: 24)
+        #expect(layout.pose == .flat)
+        #expect(layout.tools == .rail(side: .trailing, width: 84, top: 0))
+        // Read in this window, they count.
+        signals.window = Self.outer
+        signals.folds = []
+        let settled = ReaderLayout.resolve(signals, window: Self.outer, insets: Self.outerInsets, margin: 24)
+        #expect(settled.tools == .rail(side: .trailing, width: 84, top: 170))
+    }
+
+    @Test("a rail's top from another pose is not held")
+    func railTopIsNotHeldAcrossPoses() {
+        let table = ReaderLayout(tools: .rail(side: .trailing, width: 84, top: 358), spread: nil, pose: .table)
+        let flat = ReaderLayout(tools: .rail(side: .trailing, width: 84, top: 170), spread: nil, pose: .flat)
+        #expect(flat.keepingRailTop(of: table) == flat)
+    }
 }
