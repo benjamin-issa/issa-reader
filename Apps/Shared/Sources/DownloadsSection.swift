@@ -1,6 +1,9 @@
 import IssaCore
 import IssaUI
 import SwiftUI
+#if os(iOS)
+import UIKit
+#endif
 
 /// What is on this device, and the one way to take it off again.
 ///
@@ -21,6 +24,15 @@ import SwiftUI
 /// has. The swipe below is written out by hand for that reason, and the hold
 /// menu exists on every platform because a gesture nobody can see is not an
 /// affordance and VoiceOver cannot perform one at all.
+///
+/// The phone's Downloads screen is the same shape, and must stay it. Each card
+/// carries its own `.bookMenu`, and that only opens the right book's menu when
+/// the card is a view of its own: put them in a `List` — as that screen did,
+/// all of them inside one row — and UIKit attaches the menu to the collection
+/// view's cell instead, so every press opens the first card's menu (and, as
+/// reported, iOS 27 adds an "Ask Siri" item to such a menu). The Mac's
+/// Downloads list is a `List` and so cannot avoid the equivalent; see
+/// `listRows` for what it does instead.
 struct DownloadsSection: View {
     /// Which surface is drawing it.
     enum Placement {
@@ -126,6 +138,13 @@ struct DownloadsSection: View {
     /// (F1). As rows, each card is tagged with its item's id, selectable, and
     /// the list's own menu, double-click and ⌫ act on the row they name
     /// (`DownloadsView`, `DownloadsRowCommands`).
+    ///
+    /// The phone had the same bug (a long press opened the first card's menu)
+    /// and leaves the `List` rather than taking this fix: every row of a touch
+    /// `List` is a collection-view cell, which is what UIKit hangs a menu from
+    /// (and, as reported, iOS 27 gives such a menu an "Ask Siri" item that
+    /// nothing can remove). Its Downloads screen is not a `List` any more, so
+    /// the cards are views of their own and `stacked` is right for it.
     @ViewBuilder
     private var listRows: some View {
         if showsTransfers {
@@ -144,6 +163,7 @@ struct DownloadsSection: View {
                     .tag(item.id)
                     .accessibilityElement(children: .combine)
                     .accessibilityLabel(accessibilityLabel(item))
+                    .accessibilityIdentifier(Self.rowIdentifier(item))
                     .bookDetailsAccessibilityAction(item.book)
                     .accessibilityAction(named: "Remove download") { remove(item) }
             }
@@ -336,6 +356,7 @@ struct DownloadsSection: View {
         .bookMenu(item.book, focusEdition: item.format, onRemoveFocused: { remove(item) })
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilityLabel(item))
+        .accessibilityIdentifier(Self.rowIdentifier(item))
         .accessibilityAction(named: "Open") { open(item.book) }
         .bookDetailsAccessibilityAction(item.book)
         .accessibilityAction(named: "Remove download") { remove(item) }
@@ -346,6 +367,7 @@ struct DownloadsSection: View {
             .bookMenu(item.book, focusEdition: item.format, onRemoveFocused: { remove(item) })
             .accessibilityElement(children: .combine)
             .accessibilityLabel(accessibilityLabel(item))
+            .accessibilityIdentifier(Self.rowIdentifier(item))
             .bookDetailsAccessibilityAction(item.book)
             .accessibilityAction(named: "Remove download") { remove(item) }
         #endif
@@ -394,6 +416,15 @@ struct DownloadsSection: View {
 
     private func accessibilityLabel(_ item: DownloadsInventory.DownloadedItem) -> String {
         "\(item.book.title), \(metaLine(item)), \(ByteCountText.text(item.bytes))"
+    }
+
+    /// What a UI test finds a row by. Book *and* edition, as the row is: a book
+    /// with a read-along and an ebook on the device is two rows with one title,
+    /// and a test that pressed "the Peter and Wendy row" would be choosing
+    /// between them by luck. A label match ("Title, ") cannot say which row it
+    /// pressed; this can.
+    static func rowIdentifier(_ item: DownloadsInventory.DownloadedItem) -> String {
+        "downloads.row.\(item.id)"
     }
 
     private func isSelected(_ item: DownloadsInventory.DownloadedItem) -> Bool {
@@ -595,6 +626,12 @@ struct DownloadsSection: View {
 /// The gesture only takes over once the drag is more horizontal than vertical.
 /// Claiming every drag would break scrolling in the tab this row lives in,
 /// which is a far worse bug than a swipe that occasionally has to be repeated.
+/// That is what `HorizontalPan` is for: a SwiftUI `DragGesture` on the row
+/// claimed every drag that began on it, even as a `simultaneousGesture` that
+/// ignored the vertical ones, so a finger that landed on a row could not
+/// scroll the screen. It went unnoticed while the rows were a few inches of the
+/// Reading tab and a `List` had them on the Downloads screen; once those rows
+/// are most of a `ScrollView`, it is most of the screen.
 ///
 /// Shared with the list of books from the reader's files, whose button says
 /// Remove — its book's original stays in Files — rather than Delete.
@@ -621,42 +658,38 @@ struct SwipeToRemove<Content: View>: View {
         self.content = content
     }
 
-    /// The revealed button's width, and the distance past which the swipe
-    /// means it without being tapped.
-    private static var revealWidth: CGFloat { 88 }
-    private static var commitDistance: CGFloat { 200 }
-
     @State private var drag: CGFloat = 0
 
     private var isOpen: Bool { openRow == id }
-    private var offset: CGFloat { min(0, (isOpen ? -Self.revealWidth : 0) + drag) }
+    private var offset: CGFloat { min(0, (isOpen ? -SwipeDecision.revealWidth : 0) + drag) }
 
     var body: some View {
         ZStack(alignment: .trailing) {
             deleteButton
             content()
                 .offset(x: offset)
-                .simultaneousGesture(
-                    DragGesture(minimumDistance: 12, coordinateSpace: .local)
-                        .onChanged { value in
-                            guard abs(value.translation.width) > abs(value.translation.height)
-                            else { return }
-                            drag = value.translation.width
-                        }
-                        .onEnded { value in
-                            let travelled = -offset
+                .gesture(
+                    HorizontalPan(
+                        onChanged: { translation in
+                            guard SwipeDecision.isHorizontal(translation) else { return }
+                            drag = translation.width
+                        },
+                        onEnded: { translation in
                             drag = 0
-                            guard abs(value.translation.width) > abs(value.translation.height)
-                            else { return }
-                            if travelled > Self.commitDistance {
+                            switch SwipeDecision.outcome(translation: translation, isOpen: isOpen) {
+                            case .ignore:
+                                break
+                            case .commit:
                                 openRow = nil
                                 onRemove()
-                            } else if travelled > Self.revealWidth / 2 {
+                            case .reveal:
                                 withAnimation(.snappy) { openRow = id }
-                            } else {
+                            case .close:
                                 withAnimation(.snappy) { if isOpen { openRow = nil } }
                             }
                         },
+                        onCancelled: { drag = 0 },
+                    ),
                 )
                 .onTapGesture {
                     // A tap on an open row puts it away rather than opening the
@@ -687,12 +720,112 @@ struct SwipeToRemove<Content: View>: View {
                 // and a pale rose in dark — so white on it is unreadable in
                 // the dark theme, where it is the *light* half of the pair.
                 .foregroundStyle(Palette.paper)
-                .frame(width: max(Self.revealWidth, -offset))
+                .frame(width: max(SwipeDecision.revealWidth, -offset))
                 .frame(maxHeight: .infinity)
                 .background(Palette.alert)
         }
         .buttonStyle(.plain)
         .accessibilityHidden(true)
+    }
+}
+
+/// What a swipe on a `SwipeToRemove` row means, apart from the view.
+///
+/// The decision is a function of the pan's whole translation, not its
+/// horizontal part. `HorizontalPan` asks only whether a pan *begins* more
+/// horizontal than vertical, so a finger that starts sideways and then
+/// scrolls the screen down while drifting left would, judged on x alone, have
+/// travelled past the commit distance and removed a download the reader was
+/// scrolling past. The old `DragGesture` checked dominance at every change and
+/// at the end; the same check is made here, in one place both of them ask.
+enum SwipeDecision {
+    /// What the end of a swipe does to the row.
+    enum Outcome: Equatable {
+        /// Not a swipe: the pan turned vertical. The row is left as it was.
+        case ignore
+        /// Short of half the button: put the row away if it was open.
+        case close
+        /// Past half the button: leave it open on the Delete button.
+        case reveal
+        /// Past the commit distance: remove without waiting for a tap.
+        case commit
+    }
+
+    /// The revealed button's width, and the distance past which the swipe
+    /// means it without being tapped.
+    static var revealWidth: CGFloat { 88 }
+    static var commitDistance: CGFloat { 200 }
+
+    /// Whether the pan is more sideways than down. Equal is not: a diagonal
+    /// is a scroll that has not made up its mind, and the scroll view wins.
+    static func isHorizontal(_ translation: CGSize) -> Bool {
+        abs(translation.width) > abs(translation.height)
+    }
+
+    /// The outcome of a swipe that ended with this translation on a row that
+    /// was, or was not, already open on its Delete button.
+    static func outcome(translation: CGSize, isOpen: Bool) -> Outcome {
+        guard isHorizontal(translation) else { return .ignore }
+        let travelled = -min(0, (isOpen ? -revealWidth : 0) + translation.width)
+        if travelled > commitDistance { return .commit }
+        if travelled > revealWidth / 2 { return .reveal }
+        return .close
+    }
+}
+
+/// A pan that begins only for a horizontal one, and lets a vertical one go to
+/// the scroll view the row is in.
+///
+/// UIKit rather than `DragGesture`, because the decision has to be made
+/// before the gesture begins and SwiftUI offers no hook for it: a recognizer
+/// that has begun owns the touch, and `DragGesture` begins on any movement
+/// past its minimum distance. This one asks `gestureRecognizerShouldBegin`
+/// and says no to a pan that starts more vertical than horizontal, so the
+/// scroll view's own pan is the only one there is. It still runs beside that
+/// pan when it does begin — a swipe that wanders a little downhill keeps
+/// swiping — as `simultaneousGesture` did.
+struct HorizontalPan: UIGestureRecognizerRepresentable {
+    /// The pan's travel so far, in points, left negative. Both axes, so the
+    /// receiver can tell a swipe that wandered downhill from a scroll that
+    /// wandered sideways; the recognizer can only say how the pan began.
+    let onChanged: (CGSize) -> Void
+    /// The travel when the finger lifted.
+    let onEnded: (CGSize) -> Void
+    /// The system took the touch away — a call, a drag begun elsewhere.
+    let onCancelled: () -> Void
+
+    func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator { Coordinator() }
+
+    func makeUIGestureRecognizer(context: Context) -> UIPanGestureRecognizer {
+        let pan = UIPanGestureRecognizer()
+        pan.delegate = context.coordinator
+        return pan
+    }
+
+    func handleUIGestureRecognizerAction(_ pan: UIPanGestureRecognizer, context: Context) {
+        let point = pan.translation(in: pan.view)
+        let translation = CGSize(width: point.x, height: point.y)
+        switch pan.state {
+        case .changed: onChanged(translation)
+        case .ended: onEnded(translation)
+        case .cancelled, .failed: onCancelled()
+        default: break
+        }
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool {
+            guard let pan = recognizer as? UIPanGestureRecognizer else { return true }
+            let velocity = pan.velocity(in: pan.view)
+            return abs(velocity.x) > abs(velocity.y)
+        }
+
+        func gestureRecognizer(
+            _ recognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer,
+        ) -> Bool {
+            true
+        }
     }
 }
 #endif

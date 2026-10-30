@@ -322,6 +322,29 @@ final class LayoutSweepTests: XCTestCase {
         assertHorizontallyContained(try shelf.snapshot(), reference, screen: "settings")
         capture(shelf, "settings")
 
+        // Downloads & storage, pushed from it. Unlike Settings it is a
+        // `ScrollView` and not a `List` on the phone — a `List` made every
+        // card's long press open the first card's menu — so its margin is
+        // ours to assert, as the Reading tab's is, and it has a screenshot at
+        // every width: the storage card, the Wi-Fi rule, and the rows.
+        let downloadsLink = shelf.buttons["Downloads & storage"].firstMatch
+        for _ in 0..<4 where !(downloadsLink.exists && downloadsLink.isHittable) {
+            shelf.collectionViews.firstMatch.swipeUp(velocity: .slow)
+        }
+        XCTAssertTrue(downloadsLink.waitForExistence(timeout: 15), "no Downloads & storage row in Settings")
+        downloadsLink.tap()
+        try check(shelf, screen: "downloads", root: "screen.downloads", content: "content.downloads")
+        // The rows are the fixture's planted downloads: a screen that drew the
+        // storage card and no rows would still have a margin.
+        XCTAssertTrue(
+            shelf.descendants(matching: .any)
+                .matching(NSPredicate(format: "identifier BEGINSWITH %@", "downloads.row."))
+                .firstMatch.waitForExistence(timeout: 15),
+            "the Downloads screen listed none of the planted downloads")
+        shelf.navigationBars.buttons.firstMatch.tap()
+        XCTAssertTrue(shelf.descendants(matching: .any)["screen.settings"].waitForExistence(timeout: 15),
+                      "Back did not return to Settings")
+
         // Advanced, open, with the row to the books from Files, and the list
         // it pushes — the signed-in placement, inside the Settings tab.
         // Near the foot of the list, below the fold on a phone.
@@ -378,8 +401,10 @@ final class LayoutSweepTests: XCTestCase {
     /// Reached the way a reader would: the shelf's search, the book screen,
     /// Read. The window reference is read on the book screen, before the
     /// reader covers the probe.
-    func testReaderScreen() throws {
-        let app = launch(["-issa.library.mode", "all"])
+    ///
+    /// Returns the window reference and the page, with the bars showing; nil
+    /// after recording the failure when the reader never got that far.
+    private func openReader(_ app: XCUIApplication) throws -> (reference: LayoutReference, page: XCUIElement)? {
         waitForLibrary(app)
         selectTab("Library", in: app)
         let search = app.textFields["Title, author, narrator, series, tag"]
@@ -391,7 +416,8 @@ final class LayoutSweepTests: XCTestCase {
                                   "cell.book.", "Peter and Wendy"))
             .firstMatch
         guard book.waitForExistence(timeout: 15) else {
-            return XCTFail("the read-along book is not on the shelf")
+            XCTFail("the read-along book is not on the shelf")
+            return nil
         }
         book.tap()
         XCTAssertTrue(app.descendants(matching: .any)["screen.bookDetail"].waitForExistence(timeout: 15))
@@ -399,7 +425,10 @@ final class LayoutSweepTests: XCTestCase {
         recordReference(reference)
 
         let read = app.descendants(matching: .any)["action.read"].firstMatch
-        guard read.waitForExistence(timeout: 15) else { return XCTFail("no Read action on the book screen") }
+        guard read.waitForExistence(timeout: 15) else {
+            XCTFail("no Read action on the book screen")
+            return nil
+        }
         read.tap()
 
         // The first-run guide is modal to accessibility, and takes the first
@@ -417,7 +446,8 @@ final class LayoutSweepTests: XCTestCase {
             .firstMatch
         guard page.waitForExistence(timeout: 60) else {
             capture(app, "reader")
-            return XCTFail("the reader never drew a page: is the planted EPUB on disk under this book's name?")
+            XCTFail("the reader never drew a page: is the planted EPUB on disk under this book's name?")
+            return nil
         }
         // The bars, so their layout is measured too. The middle of the page
         // toggles them; the edges would turn it.
@@ -426,8 +456,434 @@ final class LayoutSweepTests: XCTestCase {
             app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
             XCTAssertTrue(back.waitForExistence(timeout: 10), "the reader's bars never showed")
         }
+        return (reference, page)
+    }
+
+    func testReaderScreen() throws {
+        let app = launch(["-issa.library.mode", "all"])
+        guard let (reference, page) = try openReader(app) else { return }
         assertHorizontallyContained(try app.snapshot(), reference, screen: "reader")
+        assertReaderTopBar(app, reference)
+        assertBookTitleUnderFooter(app, reference)
         capture(app, "reader")
+
+        // After the capture, which is the chrome as a reader first sees it.
+        assertChromeLeavesThePageAlone(app, page)
+        assertEllipsisMenuHoldsContents(app)
+    }
+
+    // MARK: - The reader's chrome
+
+    /// The top bar: every tool in its own 44-point square, in the order the
+    /// design gives, all of them in the bar rather than folded into the menu.
+    ///
+    /// At every width this sweep visits — 375 is the narrowest phone, and the
+    /// full row is 316 points of it with Ask showing — so a regression that
+    /// pushes Find into the ellipsis on a phone fails here before anyone sees
+    /// it. The folded rows are for an iPad window too narrow to reach from
+    /// here.
+    private func assertReaderTopBar(_ app: XCUIApplication, _ reference: LayoutReference) {
+        let ask = app.buttons["reader.ask"].firstMatch
+        let bookmark = app.buttons
+            .matching(NSPredicate(format: "label IN %@", ["Bookmark this page", "Remove bookmark"]))
+            .firstMatch
+        // Left to right. Ask is on a capable device's bar only, so it is
+        // measured when it is there and not required.
+        var row: [(name: String, element: XCUIElement)] = [
+            ("back", app.buttons["Back to the book"].firstMatch),
+        ]
+        if ask.exists { row.append(("ask", ask)) }
+        row += [
+            ("find", app.buttons["reader.find"].firstMatch),
+            ("text options", app.buttons["Text options for this book"].firstMatch),
+            ("marks", app.buttons["reader.marks"].firstMatch),
+            ("bookmark", bookmark),
+            ("more", app.descendants(matching: .any)["reader.more"].firstMatch),
+        ]
+
+        var previousEdge = reference.window.minX
+        for (name, element) in row {
+            guard element.exists else {
+                XCTFail("the top bar has no \(name) button")
+                continue
+            }
+            let frame = element.frame
+            XCTAssertGreaterThanOrEqual(
+                frame.width, 43.5, "\(name) is \(frame.width) points wide, under a finger's 44")
+            XCTAssertGreaterThanOrEqual(
+                frame.height, 43.5, "\(name) is \(frame.height) points tall, under a finger's 44")
+            XCTAssertGreaterThanOrEqual(
+                frame.minX, previousEdge - 0.5, "\(name) overlaps what is to its left")
+            XCTAssertLessThanOrEqual(
+                frame.maxX, reference.window.maxX + 0.5, "\(name) runs off the right edge")
+            previousEdge = frame.maxX
+        }
+
+        // The square is the button, not just the glyph in it: a tap near the
+        // corner of the bookmark's square, well clear of its 15-point glyph,
+        // has to toggle it.
+        guard bookmark.exists else { return }
+        let before = bookmark.label
+        bookmark.coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.08)).tap()
+        let flipped = app.buttons
+            .matching(NSPredicate(format: "label IN %@ AND label != %@",
+                                  ["Bookmark this page", "Remove bookmark"], before))
+            .firstMatch
+        XCTAssertTrue(flipped.waitForExistence(timeout: 5),
+                      "a tap in the corner of the bookmark's square did nothing")
+        // And back, so what follows sees the page as it found it.
+        flipped.tap()
+        XCTAssertTrue(app.buttons[before].waitForExistence(timeout: 5))
+    }
+
+    /// Whether this device has a band under the footer tall enough to hold the
+    /// title (`ReaderView.bookTitleBandMinimum`): a notched phone's 34 points
+    /// does; the sweep's home-button phone has none, and an iPad's 20 would
+    /// put the line on the home indicator, so neither shows it. Nil for a run
+    /// the script did not name, which then checks the title only if it is
+    /// there.
+    private var deviceHasTitleBand: Bool? {
+        switch deviceSlug {
+        case "device": nil
+        case "iphone-se3", "ipad-a16": false
+        default: true
+        }
+    }
+
+    /// The book's title sits below the footer's controls, in the home
+    /// indicator's band, clear of the indicator and of the controls.
+    private func assertBookTitleUnderFooter(_ app: XCUIApplication, _ reference: LayoutReference) {
+        let title = app.descendants(matching: .any)["reader.bookTitle"].firstMatch
+        switch deviceHasTitleBand {
+        case false?:
+            XCTAssertFalse(title.waitForExistence(timeout: 2),
+                           "a device with no band under the footer drew the title anyway")
+            return
+        case true?:
+            XCTAssertTrue(title.waitForExistence(timeout: 10), "no book title under the footer")
+        case nil:
+            guard title.waitForExistence(timeout: 3) else { return }
+        }
+        let frame = title.frame
+        XCTAssertTrue(title.label.contains("Peter and Wendy"), "the title says \(title.label)")
+        // The band is the bottom 34 points on a notched phone, and the
+        // indicator rests in its last 13.
+        XCTAssertGreaterThanOrEqual(frame.minY, reference.window.maxY - 34 - 0.5,
+                                    "the title is above the band, in the footer")
+        XCTAssertLessThanOrEqual(frame.maxY, reference.window.maxY - 13 + 0.5,
+                                 "the title reaches the home indicator")
+        XCTAssertGreaterThanOrEqual(frame.minX, reference.window.minX)
+        XCTAssertLessThanOrEqual(frame.maxX, reference.window.maxX)
+        XCTAssertEqual(frame.midX, reference.window.midX, accuracy: 2, "the title is not centred")
+
+        // Below every control in the footer, not beside or over any.
+        let lowest = app.buttons.allElementsBoundByIndex
+            .map(\.frame)
+            .filter { $0.minY > reference.window.maxY * 0.8 && $0.maxY < frame.minY + 1 }
+            .map(\.maxY)
+            .max()
+        XCTAssertNotNil(lowest, "no footer control found above the title")
+        let overlapping = app.buttons.allElementsBoundByIndex
+            .map(\.frame)
+            .filter { $0.minY > reference.window.maxY * 0.8 && $0.intersects(frame) }
+        XCTAssertTrue(overlapping.isEmpty, "the title overlaps a footer control: \(overlapping)")
+    }
+
+    /// Hiding the chrome takes the title with it and moves nothing: the page
+    /// is exactly where it was, so no line re-paginated.
+    private func assertChromeLeavesThePageAlone(_ app: XCUIApplication, _ page: XCUIElement) {
+        let title = app.descendants(matching: .any)["reader.bookTitle"].firstMatch
+        let back = app.buttons["Back to the book"].firstMatch
+        let hadTitle = title.exists
+        let before = page.frame
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        // Not "does not exist": a bar faded to nothing and made untappable is
+        // still in the accessibility tree.
+        let gone = NSPredicate(format: "isHittable == false")
+        let hidden = XCTNSPredicateExpectation(predicate: gone, object: back)
+        XCTAssertEqual(XCTWaiter().wait(for: [hidden], timeout: 5), .completed,
+                       "the middle tap did not hide the bars")
+        if hadTitle {
+            XCTAssertFalse(title.exists, "the title stayed on screen with the chrome hidden")
+        }
+        XCTAssertEqual(page.frame, before, "hiding the chrome moved the page")
+        // Back, for whatever follows.
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        let shown = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "isHittable == true"), object: back)
+        XCTAssertEqual(XCTWaiter().wait(for: [shown], timeout: 10), .completed,
+                       "the bars did not come back")
+        if hadTitle {
+            XCTAssertTrue(title.waitForExistence(timeout: 5), "the title did not come back")
+        }
+        XCTAssertEqual(page.frame, before, "showing the chrome moved the page")
+    }
+
+    /// Find and Marks are in the bar, so the menu holds Contents and Stop
+    /// Narration and neither of them. Marks is told apart by its label: the
+    /// bar's is "Bookmarks and highlights", the menu's is "Marks".
+    ///
+    /// And the open menu reaches below the bar. iOS opens a menu out of its
+    /// button, so a menu of one row sits on the bar itself, over the tools
+    /// beside the button, in a glass they show through. 1.5.2's first build did
+    /// that whenever no sentence was lit, and this sheet showed it with nothing
+    /// here measuring it.
+    private func assertEllipsisMenuHoldsContents(_ app: XCUIApplication) {
+        let more = app.descendants(matching: .any)["reader.more"].firstMatch
+        guard more.exists else { return }
+        let barBottom = app.buttons["Back to the book"].firstMatch.frame.maxY
+        more.tap()
+        let contents = app.descendants(matching: .any)["Contents"].firstMatch
+        XCTAssertTrue(contents.waitForExistence(timeout: 5), "the ellipsis menu has no Contents")
+        XCTAssertFalse(app.buttons["Marks"].exists, "Marks is in the menu as well as the bar")
+        let stop = stopNarrationItem(app)
+        XCTAssertTrue(stop.exists, "a narrated book's menu has no Stop Narration")
+        if stop.exists, !usesAccessibilityTextSize {
+            XCTAssertFalse(stop.isEnabled, "Stop Narration is enabled with nothing lit")
+        }
+        let lowest = max(contents.frame.maxY, stop.exists ? stop.frame.maxY : 0)
+        XCTAssertGreaterThan(lowest, barBottom + 0.5,
+                             "the open menu ends at \(lowest), on the top bar (which ends at \(barBottom))")
+        capture(app, "readerMore")
+        closeMenu(app, below: lowest)
+        XCTAssertTrue(app.buttons["Back to the book"].firstMatch.waitForExistence(timeout: 5))
+    }
+
+    /// Whether the run is at an accessibility text size, where a menu's rows
+    /// stop being buttons to the accessibility tree and so carry no enabled
+    /// state worth reading.
+    private var usesAccessibilityTextSize: Bool {
+        UIScreen.main.traitCollection.preferredContentSizeCategory.isAccessibilityCategory
+    }
+
+    /// Out of an open menu without choosing anything: a tap below its lowest
+    /// row, never at a fixed spot. At an accessibility text size the menu
+    /// reaches halfway down the screen, and the tap at 30 % that used to close
+    /// it landed on Stop Narration and chose it.
+    private func closeMenu(_ app: XCUIApplication, below lowest: CGFloat) {
+        let window = app.windows.firstMatch.frame
+        let y = min(lowest + 60, window.maxY * 0.8) / window.height
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: y)).tap()
+    }
+
+    // MARK: - Stop Narration
+
+    /// The menu's Stop Narration item. Any element type, not just buttons: at
+    /// an accessibility text size the menu's rows stop being buttons to the
+    /// accessibility tree, and a `buttons` query could not find it on the
+    /// sweep's extra-large phone.
+    private func stopNarrationItem(_ app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any)["Stop Narration"].firstMatch
+    }
+
+    /// Opens the ellipsis menu and says whether its Stop Narration item is
+    /// enabled, then closes the menu without choosing anything. The item has
+    /// to be there either way: a narrated book always lists it.
+    private func ellipsisMenuStopIsEnabled(_ app: XCUIApplication, capturing screen: String? = nil) -> Bool {
+        let more = app.descendants(matching: .any)["reader.more"].firstMatch
+        XCTAssertTrue(more.waitForExistence(timeout: 10), "no ellipsis menu")
+        more.tap()
+        let contents = app.descendants(matching: .any)["Contents"].firstMatch
+        XCTAssertTrue(contents.waitForExistence(timeout: 5), "the ellipsis menu did not open")
+        let stop = stopNarrationItem(app)
+        XCTAssertTrue(stop.exists, "a narrated book's menu has no Stop Narration")
+        let enabled = stop.exists && stop.isEnabled
+        if let screen { capture(app, screen) }
+        closeMenu(app, below: max(contents.frame.maxY, stop.exists ? stop.frame.maxY : 0))
+        return enabled
+    }
+
+    /// Stop Narration is enabled only once narration has left a sentence lit,
+    /// and choosing it takes the highlight away again.
+    ///
+    /// Narration is started from the footer's own play button, which is how a
+    /// reader starts it; the fixture's audio is a placeholder, so nothing is
+    /// heard, but the sentence is lit all the same. Paused again before the
+    /// menu is opened, so the marker is the only thing the item depends on.
+    ///
+    /// The enabled state is read only at standard text sizes: at an
+    /// accessibility size the menu's rows are not buttons to the tree, and
+    /// there the test still checks the item is listed and that choosing it
+    /// works.
+    func testStopNarrationFollowsTheMarker() throws {
+        let app = launch(["-issa.library.mode", "all"])
+        guard try openReader(app) != nil else { return }
+        let readsEnabled = !usesAccessibilityTextSize
+
+        let enabledBefore = ellipsisMenuStopIsEnabled(app)
+        if readsEnabled {
+            XCTAssertFalse(enabledBefore, "Stop Narration is enabled before narration has lit anything")
+        }
+
+        let play = app.buttons["Play narration"].firstMatch
+        guard play.waitForExistence(timeout: 10) else {
+            return XCTFail("the read-along book has no play button in its footer")
+        }
+        play.tap()
+        // The sweep's book has stub audio a fraction of a second long under
+        // clips that claim seconds, so narration can start, run off the end of
+        // the book and stop before a poll ever sees "Pause narration". It
+        // failed that way on every 375-point phone, from a reader resumed in
+        // the last chapter. What it leaves behind is the lit sentence, which
+        // is what this test is about, so the pause is taken if it is seen and
+        // not required.
+        let pause = app.buttons["Pause narration"].firstMatch
+        if pause.waitForExistence(timeout: 5) { pause.tap() }
+        guard app.buttons["Play narration"].firstMatch.waitForExistence(timeout: 60) else {
+            capture(app, "readerStopNotStarted")
+            return XCTFail("narration never came to rest, so there is no marker to clear")
+        }
+
+        let enabledWhileLit = ellipsisMenuStopIsEnabled(app, capturing: "readerMoreStop")
+        if readsEnabled {
+            XCTAssertTrue(enabledWhileLit, "Stop Narration is greyed out while a sentence is lit")
+        }
+
+        app.descendants(matching: .any)["reader.more"].firstMatch.tap()
+        let stop = stopNarrationItem(app)
+        XCTAssertTrue(stop.waitForExistence(timeout: 5))
+        stop.tap()
+        let enabledAfter = ellipsisMenuStopIsEnabled(app)
+        if readsEnabled {
+            XCTAssertFalse(enabledAfter,
+                           "choosing Stop Narration left the highlight in place, and the item enabled")
+        }
+    }
+
+    // MARK: - The highlight colours
+
+    /// Each colour in the Highlight menu is drawn in its own colour.
+    ///
+    /// A menu paints a template symbol in the app's accent, so the five
+    /// swatches were all tangerine and Plum, Rose, Slate and Moss could not be
+    /// told apart by looking. Nothing but looking at the pixels shows that:
+    /// the accessibility tree is the same whatever the icons are painted.
+    ///
+    /// The press-and-hold is how a reader selects, so it is how this does. If
+    /// the page under it has no text the menu never appears, and that is
+    /// reported as the selection having failed, not as a colour being wrong.
+    func testHighlightMenuColours() throws {
+        let app = launch(["-issa.library.mode", "all"])
+        guard let (reference, _) = try openReader(app) else { return }
+
+        // A third of the way down the page, in the text and clear of the tap
+        // zones' edges.
+        let spot = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35))
+        spot.press(forDuration: 0.9)
+        let highlight = app.buttons["Highlight"].firstMatch
+        guard highlight.waitForExistence(timeout: 10) else {
+            capture(app, "readerHighlightMenu")
+            return XCTFail("pressing and holding on the page selected nothing, so there is no Highlight menu to look at")
+        }
+        highlight.tap()
+        let items = Dictionary(uniqueKeysWithValues: Self.highlightTints.map { tint in
+            (tint.name, app.buttons[tint.name].firstMatch)
+        })
+        guard items["Plum"]?.waitForExistence(timeout: 10) == true else {
+            capture(app, "readerHighlightMenu")
+            return XCTFail("the Highlight menu never listed its colours")
+        }
+        capture(app, "readerHighlightMenu")
+
+        let screenshot = XCUIScreen.main.screenshot().image
+        guard let cgImage = screenshot.cgImage else { return XCTFail("no screenshot pixels") }
+        // Points to pixels, from the screenshot itself rather than a guessed
+        // device scale.
+        let scale = CGFloat(cgImage.width) / reference.window.width
+
+        // At an accessibility text size the system draws no icon in a menu
+        // row, in any app, so there is no swatch to find: the sweep's
+        // extra-large phone showed five bare names, and sampling there found
+        // only the label's ink. What a swatch-less menu can still get wrong is
+        // painting the accent where a colour should be, so that is all this
+        // asks there. The runner is a UIKit app on the same simulator, so its
+        // own trait collection carries the device's text size.
+        let iconless = usesAccessibilityTextSize
+        var dominant: [String: [Int]] = [:]
+        for tint in Self.highlightTints {
+            guard let item = items[tint.name], item.exists else {
+                XCTFail("no \(tint.name) item in the Highlight menu")
+                continue
+            }
+            let frame = item.frame
+            // The whole row: the swatch is at one end of it and the label at
+            // the other, and which end is the platform's business. The label
+            // is dark or white ink, which no tint is within tolerance of.
+            let counts = Self.pixelCounts(
+                in: cgImage,
+                rect: CGRect(x: frame.minX * scale, y: frame.minY * scale,
+                             width: frame.width * scale, height: frame.height * scale),
+                near: Self.highlightTints.map(\.rgb), tolerance: 14)
+            dominant[tint.name] = counts
+            if iconless {
+                let tangerine = counts[Self.highlightTints.firstIndex { $0.name == "Tangerine" }!]
+                XCTAssertLessThan(
+                    tangerine, 20, "\(tint.name)'s row is drawn in the accent with no icon to carry it: \(counts)")
+                continue
+            }
+            let own = counts[Self.highlightTints.firstIndex { $0.name == tint.name }!]
+            XCTAssertGreaterThan(
+                own, 60, "\(tint.name)'s swatch is not drawn in \(tint.name): \(counts) pixels near each tint")
+            // And not in the accent instead, which is what a template does.
+            if tint.name != "Tangerine" {
+                let tangerine = counts[Self.highlightTints.firstIndex { $0.name == "Tangerine" }!]
+                XCTAssertLessThan(
+                    tangerine, 20, "\(tint.name)'s row is drawn in the accent: \(counts)")
+            }
+        }
+        // Five different swatches: each row's strongest colour is its own.
+        guard !iconless else { return }
+        let strongest = Self.highlightTints.compactMap { tint -> Int? in
+            dominant[tint.name]?.enumerated().max { $0.element < $1.element }?.offset
+        }
+        XCTAssertEqual(Set(strongest).count, Self.highlightTints.count,
+                       "the five swatches are not five different colours: \(strongest)")
+    }
+
+    /// The five tints, as `ReaderPalette` states them.
+    ///
+    /// Copied rather than read from the app, because the app's `ReaderPalette`
+    /// is what is under test and this is the independent statement of it: the
+    /// hex values in the brief for the highlighter colours.
+    private static let highlightTints: [(name: String, rgb: [Int])] = [
+        ("Tangerine", [0xE2, 0x85, 0x3A]),
+        ("Moss", [0x7C, 0x8A, 0x5A]),
+        ("Slate", [0x2F, 0x3A, 0x3F]),
+        ("Rose", [0xC4, 0x6A, 0x6A]),
+        ("Plum", [0x8A, 0x6A, 0xA8]),
+    ]
+
+    /// How many pixels in `rect` lie within `tolerance` of each colour.
+    private static func pixelCounts(
+        in image: CGImage, rect: CGRect, near colours: [[Int]], tolerance: Int,
+    ) -> [Int] {
+        let width = image.width, height = image.height
+        var data = [UInt8](repeating: 0, count: width * height * 4)
+        guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(
+                  data: &data, width: width, height: height, bitsPerComponent: 8,
+                  bytesPerRow: width * 4, space: space,
+                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return colours.map { _ in 0 } }
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+
+        var counts = colours.map { _ in 0 }
+        let minX = max(0, Int(rect.minX)), maxX = min(width, Int(rect.maxX))
+        let minY = max(0, Int(rect.minY)), maxY = min(height, Int(rect.maxY))
+        guard minX < maxX, minY < maxY else { return counts }
+        for y in minY ..< maxY {
+            for x in minX ..< maxX {
+                let offset = (y * width + x) * 4
+                let r = Int(data[offset]), g = Int(data[offset + 1]), b = Int(data[offset + 2])
+                for (index, colour) in colours.enumerated()
+                where abs(r - colour[0]) <= tolerance
+                    && abs(g - colour[1]) <= tolerance
+                    && abs(b - colour[2]) <= tolerance {
+                    counts[index] += 1
+                }
+            }
+        }
+        return counts
     }
 
     /// `content:` is accepted and ignored, deliberately — see below.

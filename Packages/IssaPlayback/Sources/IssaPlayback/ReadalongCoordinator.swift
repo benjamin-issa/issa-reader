@@ -64,6 +64,15 @@ public final class ReadalongCoordinator {
     /// second must not reopen the clock while the first is still in flight.
     /// Internal rather than private so a test can see the window it opens.
     var movesInFlight = 0
+    /// How many times `clearPosition()` has run.
+    ///
+    /// A move reads it before it starts and again when its audio has opened: a
+    /// clear that landed in between has taken the position back, and finishing
+    /// the move would put it straight back — and `play(from:)` would then press
+    /// play over a player with nothing in it. Counted rather than flagged, for
+    /// the reason `movesInFlight` is: a Stop followed at once by a new start
+    /// must not be mistaken, by the start it overtook, for its own.
+    private var clearances = 0
 
     public init(timeline: SMILTimeline, audioFiles: [String: URL], player: AudioPlayer = AudioPlayer()) {
         self.timeline = timeline
@@ -196,9 +205,44 @@ public final class ReadalongCoordinator {
         }
         // Book progress uses the virtual timeline so it advances smoothly across
         // chapter and track boundaries.
-        let elapsedWithin = max(0, time - entry.start)
-        bookProgress = timeline.progression(
-            atBookTime: entry.cumulativeEnd - entry.duration + elapsedWithin,
+        bookProgress = progression(of: entry, within: max(0, time - entry.start))
+    }
+
+    /// How far through the book a place `within` seconds into an entry is.
+    ///
+    /// The one answer to that question. The clock (`advance(to:)`), a move
+    /// (`move(to:)`) and `readout(at:)` each worked it out with their own copy
+    /// of the arithmetic, and the last of those is what the player sheet shows
+    /// before anything has played — beside a position that, once narration
+    /// starts, the other two publish. A sheet that opened a rounding error away
+    /// from where Play then put the thumb would be a small lie told at the
+    /// worst moment, so they share this instead of agreeing by coincidence.
+    private func progression(of entry: SMILEntry, within: TimeInterval) -> Double {
+        timeline.progression(atBookTime: entry.cumulativeEnd - entry.duration + within)
+    }
+
+    /// What the book clock and the chapter bar would read with the narration on
+    /// this sentence, without putting it there.
+    ///
+    /// For a surface that has to show where Play *would* begin before anything
+    /// has played — the player sheet opened on a read-along nobody has started,
+    /// which would otherwise draw the start of the book. Pure: it loads
+    /// nothing, cues nothing and leaves `activeEntry` where it is. Cueing the
+    /// player with `prepare(at:)` to read these numbers off it was the
+    /// alternative, and it leaves a position behind: the reader closes the
+    /// sheet, reads on, and Play resumes pages back.
+    ///
+    /// The same numbers `move(to:)` publishes for this entry at its start, and
+    /// `chapterSpan` reports once it is active, because it is the same code.
+    public func readout(at entry: SMILEntry) -> (
+        bookProgress: Double, chapterSpan: (start: TimeInterval, duration: TimeInterval)?,
+    ) {
+        (
+            bookProgress: progression(of: entry, within: 0),
+            // The run the entry is actually in. A document the spine references
+            // twice has two, and the merged range used to span both plus
+            // everything between them.
+            chapterSpan: timeline.span(ofDocumentContaining: entry),
         )
     }
 
@@ -236,7 +280,13 @@ public final class ReadalongCoordinator {
         // where `activeEntry` is still the one before it. The next entry
         // replayed that sub-second clip once before moving on; the next file
         // does not, and the clip has already been heard.
-        guard let entry = activeEntry, let next = timeline.entry(followingFileOf: entry) else {
+        //
+        // And not at all when there is no sentence to advance from. That is the
+        // narration put back by `clearPosition()` — a file that ended in the
+        // moment before — and it is not the end of the book: it must neither
+        // read as one nor give the audio route away.
+        guard let entry = activeEntry else { return }
+        guard let next = timeline.entry(followingFileOf: entry) else {
             // The end of the book: stopped, and the audio route given back so
             // whatever the narration interrupted can resume.
             player.endSession()
@@ -302,6 +352,33 @@ public final class ReadalongCoordinator {
         await move(to: entry)
     }
 
+    /// Puts the narration back to where it was before it first played.
+    ///
+    /// Paused, the file unloaded, and no sentence, highlight or progress — the
+    /// state of a coordinator nobody has pressed play on. "Stop narration" in
+    /// the reader: after listening, the last sentence stays lit and `activeEntry`
+    /// stays put while the reader reads on, so Play resumes pages back (and,
+    /// following the narration, turns the page there).
+    ///
+    /// The file has to go as well as the entry. The player's periodic observer
+    /// fires on a pause and on a seek as well as on playback, and `advance(to:)`
+    /// re-derives `activeEntry` from whichever file the player still holds — so
+    /// a coordinator that only forgot its entry had it back at the next tick.
+    /// With nothing loaded the clock has nothing to read, and the next
+    /// `play(from:)` opens its file afresh, as it does for any other move into
+    /// a file the player does not hold.
+    ///
+    /// Announces nothing: not `onFragmentChange`, `onChapterChange` or `onSeek`.
+    /// Nobody named a place, and the reader that asked for this clears its own
+    /// copy of the highlight.
+    public func clearPosition() {
+        clearances += 1
+        player.unload()
+        activeEntry = nil
+        activeFragmentID = nil
+        bookProgress = 0
+    }
+
     /// `play(from:)` for a place the listener named: the seek is announced once
     /// the move has happened, and not at all if it did not.
     private func jump(to entry: SMILEntry) async {
@@ -327,7 +404,9 @@ public final class ReadalongCoordinator {
     /// Moves the playhead and the highlight without touching whether audio is
     /// playing. False when the entry's audio file is missing and nothing moved,
     /// or is there and would not open, in which case the highlight has moved
-    /// and the player has stopped.
+    /// and the player has stopped — or when `clearPosition()` took the position
+    /// back while the audio was opening, in which case the move was undone as
+    /// it finished.
     ///
     /// Split out of `play(from:)` because `seek(toBookProgress:)` is a protocol
     /// requirement with a neutral contract — the audiobook implementation moves
@@ -357,6 +436,7 @@ public final class ReadalongCoordinator {
         }
         let within = offset.isFinite
             ? min(max(0, offset), max(0, entry.duration - Self.endOfEntryMargin)) : 0
+        let clearancesAtStart = clearances
 
         // Everything published BEFORE the await, for the reason
         // `AudiobookCoordinator.seek(toBookTime:)` publishes before its own: the
@@ -375,7 +455,7 @@ public final class ReadalongCoordinator {
         // Set here rather than left to the time observer: a paused player's
         // clock does not tick, so without this a paused scrub never reached
         // the scrubber or the Lock Screen.
-        bookProgress = timeline.progression(atBookTime: entry.cumulativeEnd - entry.duration + within)
+        bookProgress = progression(of: entry, within: within)
         onFragmentChange?(entry.fragmentID)
         // The boundary, announced from the one funnel every seek, skip,
         // sentence, paragraph and chapter command passes through.
@@ -429,7 +509,11 @@ public final class ReadalongCoordinator {
             await player.seek(to: entry.start + within)
             if player.itemHasFailed { return false }
         }
-        return true
+        // A position taken back while the audio was opening is a move that did
+        // not happen. `clearPosition()` has already emptied the player, which
+        // is why the load above came back superseded rather than failed, and
+        // the caller's `true` would press play over nothing.
+        return clearancesAtStart == clearances
     }
 
     /// Carries on from where the narration is: the play button, and every
@@ -613,11 +697,6 @@ extension ReadalongCoordinator: PlaybackDriving {
     /// The timeline precomputes these, so this is a dictionary lookup rather
     /// than a walk over every entry in the book.
     public var chapterSpan: (start: TimeInterval, duration: TimeInterval)? {
-        guard let href = activeEntry?.textHref else { return nil }
-        // The run the listener is actually in. A document the spine
-        // references twice has two, and the merged range used to span both
-        // plus everything between them.
-        if let entry = activeEntry { return timeline.span(ofDocumentContaining: entry) }
-        return timeline.span(ofDocument: href)
+        activeEntry.flatMap { readout(at: $0).chapterSpan }
     }
 }

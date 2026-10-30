@@ -49,12 +49,16 @@ public final class PlaybackSettings {
 
     /// Whether the reader offers to answer questions about the book.
     ///
-    /// Off until asked for, and stored beside `progressScope` rather than in
-    /// `readerStyle` for the same reason: a reading style change re-paginates
-    /// the open book, and turning a toolbar button on or off should not cost
-    /// the reader their place. It is also not a *style* — it decides whether a
-    /// whole feature exists, which is a settings-screen question rather than an
-    /// Aa-sheet one.
+    /// On for a reader who has never touched the switch, and stored beside
+    /// `progressScope` rather than in `readerStyle` for the same reason: a
+    /// reading style change re-paginates the open book, and turning a toolbar
+    /// button on or off should not cost the reader their place. It is also not
+    /// a *style* — it decides whether a whole feature exists, which is a
+    /// settings-screen question rather than an Aa-sheet one.
+    ///
+    /// On does not mean shown. The sparkle and the Settings section both also
+    /// ask `AskAvailability`, so a device that cannot run Apple Intelligence
+    /// never offers Ask whatever this says.
     public var askEnabled: Bool {
         didSet { defaults.set(askEnabled, forKey: Self.askEnabledKey) }
     }
@@ -69,6 +73,19 @@ public final class PlaybackSettings {
     /// television.
     public var pageTurn: PageTurnStyle {
         didSet { defaults.set(pageTurn.rawValue, forKey: Self.pageTurnKey) }
+    }
+
+    /// Whether the reader prints the book's title in small type under the
+    /// footer's controls, on the iPhone and iPad.
+    ///
+    /// Beside `pageTurn` and out of `readerStyle` for the same reason: the
+    /// title is drawn in the band the home indicator holds, which the page's
+    /// size already counts, so showing or hiding it cannot move a line — but a
+    /// change to the style re-lays out the open book regardless of what it
+    /// touches, and this should cost the reader nothing, least of all their
+    /// place. Device-local like the rest.
+    public var showsBookTitle: Bool {
+        didSet { defaults.set(showsBookTitle, forKey: Self.showsBookTitleKey) }
     }
 
     /// Per-book departures from `readerStyle`, keyed by book uuid.
@@ -131,6 +148,7 @@ public final class PlaybackSettings {
     private static let progressScopeKey = "issa.progressScope"
     private static let askEnabledKey = "issa.askAboutBook"
     private static let pageTurnKey = "issa.pageTurn"
+    private static let showsBookTitleKey = "issa.showBookTitle"
     private static let faceMigrationKey = "issa.migratedDefaultFaceToLiterata"
 
     /// The observer token, in a box `deinit` can reach.
@@ -202,14 +220,28 @@ public final class PlaybackSettings {
         // alone everyone who did.
         progressScope = store.string(forKey: Self.progressScopeKey)
             .flatMap(ProgressScope.init(rawValue:)) ?? .chapter
-        // `bool(forKey:)` is false for an absent key, which is the default this
-        // wants: a reader who has never seen the switch has not turned it on.
-        askEnabled = store.bool(forKey: Self.askEnabledKey)
+        // On unless the reader chose otherwise, and `bool(forKey:)` cannot say
+        // that: it is false for an absent key, which would read a reader who
+        // never saw the switch as one who turned it off. Asking for the object
+        // tells "never chose" from "chose off", so anyone who set it either way
+        // keeps their choice and everyone else gets the default. Absent until
+        // the switch is first moved, as `progressScope` is.
+        //
+        // On by default only because the sole answerer is the on-device
+        // `SystemAnswerModel` (IssaAsk): nothing a reader asks or reads leaves
+        // the device, so there is no data decision here for them to have made.
+        // Any future path that does send a question or a passage off the
+        // device — Private Cloud Compute included — must have a setting of its
+        // own that defaults to off, and must not ride on this one.
+        askEnabled = store.object(forKey: Self.askEnabledKey) as? Bool ?? true
         // Slide unless the reader chose otherwise — including a value this
         // build cannot read, which a later build might one day write. Absent
         // until the picker is first moved, as `progressScope` is.
         pageTurn = store.string(forKey: Self.pageTurnKey)
             .flatMap(PageTurnStyle.init(rawValue:)) ?? .slide
+        // On unless the reader turned it off. `bool(forKey:)` would read an
+        // absent key as off, and the title is a default, not a choice.
+        showsBookTitle = store.object(forKey: Self.showsBookTitleKey) as? Bool ?? true
         moveOffTheOldDefaultFace()
         // Assignments in `init` do not fire `didSet`, so the levels this build
         // just converted are written back by hand — once, and only when they

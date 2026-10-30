@@ -83,6 +83,11 @@ public struct ReadingSettingsView: View {
                 // Shown as None and left alone underneath, so the reader's own
                 // choice is still there when Reduce Motion is turned off again.
                 .disabled(reduceMotion)
+                #if os(iOS)
+                if showsBookTitleToggle {
+                    Toggle("Show book title", isOn: $settings.showsBookTitle)
+                }
+                #endif
             } header: {
                 Text("Pages")
             }
@@ -154,18 +159,46 @@ public struct ReadingSettingsView: View {
         )
     }
 
+    #if os(iOS)
+    /// Whether this device can show the book's title at all.
+    ///
+    /// The reader draws it only in the band under the footer, and only where
+    /// that band is `ReaderView.bookTitleBandMinimum` tall. An iPad's is the
+    /// home indicator's twenty points, so there the switch would change
+    /// nothing; it is left out rather than offered as a control that does
+    /// nothing.
+    static func showsBookTitleToggle(idiom: UIUserInterfaceIdiom) -> Bool {
+        idiom != .pad
+    }
+
+    private var showsBookTitleToggle: Bool {
+        Self.showsBookTitleToggle(idiom: UIDevice.current.userInterfaceIdiom)
+    }
+    #endif
+
     /// The Pages section's note, which says first why the picker cannot be
     /// used when it cannot — a disabled control with no reason given reads as
-    /// broken.
+    /// broken. It names "Show book title" only where that switch is shown.
     private var pagesNote: String {
+        #if os(iOS)
+        Self.pagesNote(reduceMotion: reduceMotion, mentionsBookTitle: showsBookTitleToggle)
+        #else
+        Self.pagesNote(reduceMotion: reduceMotion, mentionsBookTitle: false)
+        #endif
+    }
+
+    static func pagesNote(reduceMotion: Bool, mentionsBookTitle: Bool) -> String {
         let styles = "Slide moves the next page in beside the current one. Cover slides the page away over the next. None changes the page instantly."
-        guard reduceMotion else { return styles }
+        let title = mentionsBookTitle
+            ? " Show book title prints the title in small type under the controls at the foot of the page, wherever there is room for it."
+            : ""
+        guard reduceMotion else { return styles + title }
         #if os(macOS)
         let path = "System Settings › Accessibility › Display"
         #else
         let path = "Settings › Accessibility › Motion"
         #endif
-        return "Reduce Motion is on, so pages change instantly. To choose how they move, turn it off in \(path). " + styles
+        return "Reduce Motion is on, so pages change instantly. To choose how they move, turn it off in \(path). " + styles + title
     }
 
     /// A quiet line naming what the control under it applies to.

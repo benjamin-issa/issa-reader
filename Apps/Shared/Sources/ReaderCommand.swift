@@ -32,6 +32,10 @@ enum ReaderCommand: String, Sendable {
     /// Playback › Play with no player yet: the narrated book in front starts
     /// its narration, as its page's play button would (`KeyReaderNarration`).
     case playPause
+    /// Playback › Stop Narration: clears the highlight the voice left, so the
+    /// next Play starts on the page the reader is on. Aimed like Play, at the
+    /// key reader, since a marker belongs to one book's window.
+    case stopNarration
 
     var notification: Notification.Name { Notification.Name("issa.reader.\(rawValue)") }
 
@@ -55,22 +59,36 @@ final class KeyReaderNarration {
     /// The reader window that is key and narrated, by a token of its own.
     private(set) var owner: UUID?
 
+    /// Whether that window's book has a sentence marked by narration, which is
+    /// what Playback › Stop Narration has to clear.
+    private var ownerHasMarker = false
+
     var narratedReaderIsKey: Bool { owner != nil }
 
-    /// A reader window's state: whether it is key, and whether its book has
-    /// narration. Windows report in any order — the one losing the key can
-    /// speak after the one gaining it — so one only ever clears itself.
-    func update(token: UUID, isKey: Bool, isNarrated: Bool) {
+    /// Whether Stop Narration has anything to do: the key reader is narrated
+    /// and narration has left a mark on it.
+    var keyReaderHasMarker: Bool { owner != nil && ownerHasMarker }
+
+    /// A reader window's state: whether it is key, whether its book has
+    /// narration, and whether narration has left a mark on it. Windows report
+    /// in any order — the one losing the key can speak after the one gaining
+    /// it — so one only ever clears itself.
+    func update(token: UUID, isKey: Bool, isNarrated: Bool, hasMarker: Bool = false) {
         if isKey, isNarrated {
             owner = token
+            ownerHasMarker = hasMarker
         } else if owner == token {
             owner = nil
+            ownerHasMarker = false
         }
     }
 
     /// The window has closed.
     func left(_ token: UUID) {
-        if owner == token { owner = nil }
+        if owner == token {
+            owner = nil
+            ownerHasMarker = false
+        }
     }
 
     /// Play is offered with a player to toggle, or a narrated reader in front

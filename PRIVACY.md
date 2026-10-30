@@ -117,10 +117,11 @@ device, and nothing about them leaves it.
 Foundation Models framework — the on-device model behind Apple Intelligence —
 running on the device in your hand. Your question, and the excerpts from your own
 book that it is answered from, are processed there and sent to no one: not to the
-developer, not to Apple, and not to your server. The feature is off unless you
-turn it on in Settings, and it needs a device that supports Apple Intelligence;
-where the hardware cannot run the model, the feature is simply not offered rather
-than being answered somewhere else.
+developer, not to Apple, and not to your server. On a device that supports Apple
+Intelligence the feature is on until you turn it off in Settings; where the
+hardware cannot run the model, the feature is simply not offered rather than
+being answered somewhere else. It is on by default only because it runs on the
+device: an answer computed anywhere else would be something you turn on yourself.
 
 **If you choose to share a diagnostics log**, the export goes wherever *you* send
 it — mail, messages, a file. Credentials are redacted before they are written, but

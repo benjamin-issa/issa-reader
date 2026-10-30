@@ -9,8 +9,18 @@ import XCTest
 ///
 /// Written against the fixture library, which plants one download per book, so
 /// the rows below are the ones `FixtureLibrary.plantDownloads` writes.
+///
+/// The row removed is "Pride and Prejudice", in the middle of the list, and
+/// "Dracula" — the first row — is the one that has to be left alone. Removing
+/// the first row proves little: a screen whose every gesture landed on the
+/// first row would pass it, and the phone's Downloads screen once did exactly
+/// that with its menu.
 @MainActor
 final class DownloadRemovalFlowTests: XCTestCase {
+    /// The row removed, and the first row, which must survive it.
+    private static let removed = "Pride and Prejudice"
+    private static let first = "Dracula"
+
     override func setUp() {
         super.setUp()
         continueAfterFailure = true
@@ -44,11 +54,11 @@ final class DownloadRemovalFlowTests: XCTestCase {
     /// At the largest text sizes the storage summary fills the first screen
     /// and the first row starts below the fold, where a swipe has nothing to
     /// land on. What is under test is the gesture, not where the row sits, so
-    /// the list is scrolled until the row can be touched.
+    /// the screen is scrolled until the row can be touched.
     private func bringIntoView(_ row: XCUIElement, in app: XCUIApplication) {
-        let list = app.collectionViews.firstMatch
+        let screen = app.scrollViews["screen.downloads"]
         for _ in 0..<6 where !row.isHittable {
-            list.swipeUp(velocity: .slow)
+            screen.swipeUp(velocity: .slow)
         }
         XCTAssertTrue(row.isHittable, "the row never scrolled into view")
     }
@@ -58,10 +68,14 @@ final class DownloadRemovalFlowTests: XCTestCase {
     /// The button is deliberately `accessibilityHidden` — VoiceOver gets the
     /// "Remove download" action instead — so it is tapped by position at the
     /// row's trailing edge, which is also the only way to prove the swipe
-    /// actually revealed it.
-    private func swipeToDelete(_ row: XCUIElement) {
+    /// actually revealed it. The edge is read before the swipe, because the
+    /// card's own frame can slide with it.
+    private func swipeToDelete(_ row: XCUIElement, in app: XCUIApplication) {
+        let frame = row.frame
         row.swipeLeft()
-        row.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        app.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: frame.maxX - 24, dy: frame.midY))
+            .tap()
     }
 
     /// The whole point of the deferral: the row goes at once, and the reader is
@@ -71,22 +85,25 @@ final class DownloadRemovalFlowTests: XCTestCase {
         let app = launch()
         openDownloads(app)
 
-        let dracula = row("Dracula", in: app)
-        XCTAssertTrue(dracula.waitForExistence(timeout: 30), "no Dracula row to remove")
-        bringIntoView(dracula, in: app)
-        swipeToDelete(dracula)
+        let removed = row(Self.removed, in: app)
+        let first = row(Self.first, in: app)
+        XCTAssertTrue(removed.waitForExistence(timeout: 30), "no \(Self.removed) row to remove")
+        bringIntoView(removed, in: app)
+        swipeToDelete(removed, in: app)
 
         let undo = app.buttons["Undo"].firstMatch
         XCTAssertTrue(undo.waitForExistence(timeout: 5), "the removal offered no undo")
-        XCTAssertFalse(dracula.exists, "the row should go at once, not when the window closes")
+        XCTAssertFalse(removed.exists, "the row should go at once, not when the window closes")
+        XCTAssertTrue(first.exists, "the swipe removed the first row (\(Self.first)), not the one it was on")
         undo.tap()
 
-        XCTAssertTrue(dracula.waitForExistence(timeout: 5), "Undo did not put the row back")
+        XCTAssertTrue(removed.waitForExistence(timeout: 5), "Undo did not put the row back")
         // Past the window the removal would have fired in. Nothing was deleted,
         // so this is the assertion that the timer was actually cancelled rather
         // than merely hidden.
         Thread.sleep(forTimeInterval: 8)
-        XCTAssertTrue(dracula.exists, "the cancelled removal fired anyway")
+        XCTAssertTrue(removed.exists, "the cancelled removal fired anyway")
+        XCTAssertTrue(first.exists)
         XCTAssertFalse(app.buttons["Undo"].firstMatch.exists, "the toast outstayed its window")
     }
 
@@ -97,15 +114,17 @@ final class DownloadRemovalFlowTests: XCTestCase {
         let app = launch()
         openDownloads(app)
 
-        let dracula = row("Dracula", in: app)
-        XCTAssertTrue(dracula.waitForExistence(timeout: 30), "no Dracula row to remove")
-        bringIntoView(dracula, in: app)
-        swipeToDelete(dracula)
+        let removed = row(Self.removed, in: app)
+        let first = row(Self.first, in: app)
+        XCTAssertTrue(removed.waitForExistence(timeout: 30), "no \(Self.removed) row to remove")
+        bringIntoView(removed, in: app)
+        swipeToDelete(removed, in: app)
 
         XCTAssertTrue(app.buttons["Undo"].firstMatch.waitForExistence(timeout: 5))
         Thread.sleep(forTimeInterval: 9)
 
         XCTAssertFalse(app.buttons["Undo"].firstMatch.exists, "the toast outstayed its window")
-        XCTAssertFalse(dracula.exists, "the removal did not happen when the window closed")
+        XCTAssertFalse(removed.exists, "the removal did not happen when the window closed")
+        XCTAssertTrue(first.exists, "the removal took the first row (\(Self.first)) with it")
     }
 }
