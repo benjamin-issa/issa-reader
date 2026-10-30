@@ -1,0 +1,30 @@
+Issa Reader is a native reader for Storyteller, the self-hosted server that lines an ebook up with its audiobook so you can move between reading and listening without losing your place.
+
+REQUIRES A STORYTELLER SERVER
+Issa Reader is a client, not a bookshop. It has no catalogue of its own and nothing to sell you. Point it at a Storyteller server you run, sign in, and read your own library. It also opens EPUB books from your own files, with no server at all, and keeps them on your phone.
+
+READ
+A real typesetting engine, not a web view. Pages are laid out natively, so turning one is instant and the type is properly set. Six bundled reading faces, including Literata, Source Serif 4 and OpenDyslexic, or add a font of your own. Four page colours for daylight, lamplight and the middle of the night. Size, line spacing and justification are yours to set, per book or for everything. Highlights, bookmarks and Find in book are a tap away.
+
+LISTEN
+Variable speed with pitch kept natural, chapter and sentence navigation, skip controls, a sleep timer, and media controls on the lock screen and in the notification shade.
+
+READ ALONG
+This is what Storyteller is for. Where a book has narration aligned to its text, the words light up as they are spoken, the page turns itself to follow, and tapping any line starts the narrator there. Stop reading, keep listening, and pick up on the same sentence: the two stay in step.
+
+IN THE CAR
+Android Auto gives you your recent books, your library and your downloads as proper lists, with a resume that lands on the sentence you left, not somewhere near it. Steering-wheel buttons, headphone controls and on-screen controls can each be remapped independently, so the same button can do different things in different places.
+
+YOUR WHOLE LIBRARY, ON YOUR PHONE
+The catalogue is fetched once and kept locally, so searching by title, author, narrator, series or tag is instant and works with no signal at all. Shelves are built on your phone from what you actually have. Download books to read and listen offline.
+
+ASK ABOUT YOUR BOOK
+On phones that can run Gemini Nano, ask a question about the book you are reading and get an answer drawn only from the pages you have read, worked out on the phone itself. It is off until you turn it on.
+
+ON YOUR HOME SCREEN
+A widget with your current book, chapter and progress, and shortcuts that open the books you are reading.
+
+PRIVATE BY DESIGN
+No account with us, no analytics, no advertising and no tracking. Your books and your place in them travel only between your phone and your own server.
+
+Issa Reader is an independent client and is not affiliated with the Storyteller project.
