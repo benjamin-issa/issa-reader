@@ -16,13 +16,16 @@ the system's openssl is needed.
     scripts/android-play.py listing Android/play/listing      # the store listing: text, icon, graphic, screenshots
     scripts/android-play.py upload <bundle.aab> --track alpha --notes <file>
     scripts/android-play.py upload <bundle.aab> --track internal --track alpha --notes <file>
+    scripts/android-play.py upload <bundle.aab> --track internal --publish --notes <file>
 
 `upload` creates the release as a draft, on every track named, from one
 upload: Play takes a version code once, so a second upload of the same bundle
 for another track would be refused. A draft, because Play takes only drafts
 for an app that has never been published, and a draft is what the Console
-then sends for review once the app's declarations are complete. See
-docs/RELEASE.md, "Android".
+then sends for review once the app's declarations are complete. With
+`--publish` the release is rolled out instead: for internal testing, which
+Google does not review, that puts it on the testers' phones within the hour.
+See docs/RELEASE.md, "Android".
 """
 from __future__ import annotations
 
@@ -213,18 +216,18 @@ def listing(directory: Path):
     print(f"listing for {LANGUAGE} committed")
 
 
-def upload(bundle: Path, tracks: list[str], notes: Path | None):
-    """The bundle, uploaded once, and a draft release of it on each of `tracks`."""
+def upload(bundle: Path, tracks: list[str], notes: Path | None, publish: bool = False):
+    """The bundle, uploaded once, and a release of it on each of `tracks`: a draft, or rolled out with `publish`."""
     with Edit() as edit:
         made = call("POST", f"{UPLOAD_HOST}{edit.path('/bundles')}?uploadType=media",
                     data=bundle.read_bytes(), content_type="application/octet-stream", timeout=UPLOAD_TIMEOUT)
         code = str(made["versionCode"])
-        release = {"versionCodes": [code], "status": "draft"}
+        release = {"versionCodes": [code], "status": "completed" if publish else "draft"}
         if notes:
             release["releaseNotes"] = [{"language": LANGUAGE, "text": notes.read_text().strip()}]
         for track in tracks:
             call("PUT", edit.path(f"/tracks/{track}"), {"track": track, "releases": [release]})
-    print(f"version code {code} uploaded as a draft release on {', '.join(tracks)}")
+    print(f"version code {code} uploaded as a {'published' if publish else 'draft'} release on {', '.join(tracks)}")
 
 
 def main(argv=None):
@@ -238,6 +241,8 @@ def main(argv=None):
     upload_parser.add_argument("--track", action="append", dest="tracks",
                                help="internal, alpha (closed), beta (open) or production; repeat for several (default alpha)")
     upload_parser.add_argument("--notes", type=Path)
+    upload_parser.add_argument("--publish", action="store_true",
+                               help="roll the release out rather than leave a draft (internal testing goes live without review)")
     args = parser.parse_args(argv)
     try:
         if args.command == "status":
@@ -245,7 +250,7 @@ def main(argv=None):
         elif args.command == "listing":
             listing(args.directory)
         else:
-            upload(args.bundle, args.tracks or ["alpha"], args.notes)
+            upload(args.bundle, args.tracks or ["alpha"], args.notes, args.publish)
     except PlayError as error:
         sys.exit(f"error: {error}")
 

@@ -148,6 +148,11 @@ class AndroidPlayTests(unittest.TestCase):
         for release in puts.values():
             self.assertEqual(release, {"versionCodes": ["7"], "status": "draft"})
 
+    def test_publish_rolls_the_release_out_instead_of_leaving_a_draft(self):
+        play.upload(self.bundle(), ["internal"], None, publish=True)
+        puts = [body for method, path, body in Stub.seen if method == "PUT"]
+        self.assertEqual(puts[0]["releases"][0]["status"], "completed")
+
     def test_a_failed_command_deletes_its_edit_instead_of_committing(self):
         Stub.fail_track = True
         with self.assertRaises(play.PlayError):
