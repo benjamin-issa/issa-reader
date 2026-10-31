@@ -24,6 +24,7 @@ import java.io.File
 import java.io.IOException
 import java.net.ConnectException
 import java.net.SocketTimeoutException
+import java.util.concurrent.TimeUnit
 import java.net.URI
 import java.net.UnknownHostException
 import java.nio.file.Files
@@ -389,9 +390,23 @@ class ApiClient(
     companion object {
         /**
          * The transport every client shares unless it is handed one — what
-         * `URLSession.shared` is to the Swift client.
+         * `URLSession.shared` is to the Swift client, and with its patience:
+         * [IDLE_TIMEOUT_SECONDS] without a byte before a request gives up,
+         * where OkHttp's own default is 10. A server, or a proxy in front of
+         * it, can take longer than 10 seconds to start sending a read-along of
+         * several hundred megabytes, and every such download failed with
+         * "timeout" on Android while the iPhone, waiting 60, carried it.
          */
-        val sharedHttpClient: OkHttpClient by lazy { OkHttpClient() }
+        val sharedHttpClient: OkHttpClient by lazy {
+            OkHttpClient.Builder()
+                .connectTimeout(IDLE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                .readTimeout(IDLE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                .writeTimeout(IDLE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                .build()
+        }
+
+        /** `URLSessionConfiguration`'s default `timeoutIntervalForRequest`. */
+        const val IDLE_TIMEOUT_SECONDS = 60L
 
         /** The server's `{"message": "…"}`, when its error body has one. */
         private fun message(data: ByteArray): String? = runCatching {
