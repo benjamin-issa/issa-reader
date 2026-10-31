@@ -267,7 +267,12 @@ fun ReaderView(
         val barsBottom = WindowInsets.systemBarsIgnoringVisibility.getBottom(density)
         val cutoutTop = WindowInsets.displayCutout.getTop(density)
         val edges = insets ?: remember(maxWidth, maxHeight, barsTop, barsBottom, cutoutTop) { ReaderInsets.current(view) }
-        val chrome = ReaderChrome(edges.top.value.toDouble(), edges.bottom.value.toDouble(), model.style.pageMargin)
+        // The book's title under the footer: in the navigation band where it
+        // fits, and where it does not, in a row of its own that the page gives
+        // up — kept whether or not the chrome shows, like the bars' reserves.
+        val titlePlacement = bookTitlePlacement(settings.showsBookTitle)
+        val titleRow = if (titlePlacement == ReaderChrome.BookTitlePlacement.ROW) ReaderChrome.BOOK_TITLE_ROW.dp else 0.dp
+        val chrome = ReaderChrome(edges.top.value.toDouble(), (edges.bottom + titleRow).value.toDouble(), model.style.pageMargin)
         val size = chrome.pageSize(maxWidth.value.toDouble(), maxHeight.value.toDouble())
         val pageWidth = size.width.dp
         val pageHeight = size.height.dp
@@ -297,7 +302,7 @@ fun ReaderView(
         Box(
             Modifier
                 .fillMaxSize()
-                .padding(top = edges.top, bottom = edges.bottom)
+                .padding(top = edges.top, bottom = edges.bottom + titleRow)
                 .then(if (coachShowing) Modifier.clearAndSetSemantics {} else Modifier),
             contentAlignment = Alignment.Center,
         ) {
@@ -368,7 +373,7 @@ fun ReaderView(
             )
         }
 
-        BookTitleCaption(model, settings.showsBookTitle, edges.bottom, Modifier.align(Alignment.BottomCenter))
+        BookTitleCaption(model, titlePlacement, band = edges.bottom, row = titleRow, Modifier.align(Alignment.BottomCenter))
 
         if (coachShowing) {
             ReaderCoachOverlay(
@@ -604,28 +609,31 @@ private fun PageContent(
 }
 
 /**
- * The book's title, in the band the gesture bar holds under the footer.
+ * The book's title under the footer, where [placement] puts it.
  *
- * Drawn into the navigation band rather than added to the footer, as on the
- * iPhone: the page is already padded by [band] and [ReaderChrome] already
- * counts it, so a line set there takes nothing from the page and no setting
- * or chrome toggle can re-paginate the chapter. Centred, at 55% of the page's
- * ink, one line, not tappable, set at the band's top and held to the default
- * type size so it stays above the gesture handle across the band's middle.
- * Drawn only where [ReaderChrome.showsBookTitle] says so — never under
- * three-button navigation, nor in a band too short to clear the handle — and
- * only on a phone.
+ * In the navigation band where it fits, as on the iPhone: the page is already
+ * padded by [band] and [ReaderChrome] already counts it, so a line set there
+ * takes nothing from the page. Where the band cannot hold it — three-button
+ * navigation, a gesture bar too short to clear its handle, or no navigation
+ * bar at all, as on a Boox phone — in a [row] of its own just above the band,
+ * which the page has already given up. Either way no chrome toggle can
+ * re-paginate the chapter: the place is kept, and only the words come and go
+ * with the chrome.
+ *
+ * Centred, at 55% of the page's ink, one line, not tappable, and held to the
+ * default type size so it keeps to its line and clear of the gesture handle.
  */
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun BookTitleCaption(model: ReaderModel, setting: Boolean, band: Dp, modifier: Modifier = Modifier) {
+private fun BookTitleCaption(
+    model: ReaderModel,
+    placement: ReaderChrome.BookTitlePlacement,
+    band: Dp,
+    row: Dp,
+    modifier: Modifier = Modifier,
+) {
+    if (placement == ReaderChrome.BookTitlePlacement.NONE || !model.chromeVisible) return
     val density = LocalDensity.current
-    val navBar = with(density) { WindowInsets.navigationBarsIgnoringVisibility.getBottom(density).toDp().value.toDouble() }
-    val tappable = with(density) { WindowInsets.tappableElementIgnoringVisibility.getBottom(density).toDp().value.toDouble() }
-    if (!ReaderChrome.showsBookTitle(setting, model.chromeVisible, navBar, tappable)) return
-    // Phones only, as on the iPhone: a tablet offers no switch for it, so it
-    // must not draw a title nobody can turn off.
-    if (!ReadingSettings.offersBookTitle(LocalConfiguration.current.smallestScreenWidthDp)) return
+    val inRow = placement == ReaderChrome.BookTitlePlacement.ROW
     CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale = 1f)) {
         Text(
             model.book.title,
@@ -635,12 +643,28 @@ private fun BookTitleCaption(model: ReaderModel, setting: Boolean, band: Dp, mod
             overflow = TextOverflow.Ellipsis,
             textAlign = TextAlign.Center,
             modifier = modifier
+                .padding(bottom = if (inRow) band else 0.dp)
                 .fillMaxWidth()
-                .height(band)
+                .height(if (inRow) row else band)
                 .padding(horizontal = model.style.pageMargin.dp)
                 .testTag("reader.bookTitle"),
         )
     }
+}
+
+/**
+ * Where this window puts the book's title: [ReaderChrome.bookTitlePlacement]
+ * on its navigation insets. Phones only, as on the iPhone: a tablet offers no
+ * switch for it, so it must not draw a title nobody can turn off.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun bookTitlePlacement(setting: Boolean): ReaderChrome.BookTitlePlacement {
+    val density = LocalDensity.current
+    val navBar = with(density) { WindowInsets.navigationBarsIgnoringVisibility.getBottom(density).toDp().value.toDouble() }
+    val tappable = with(density) { WindowInsets.tappableElementIgnoringVisibility.getBottom(density).toDp().value.toDouble() }
+    val phone = ReadingSettings.offersBookTitle(LocalConfiguration.current.smallestScreenWidthDp)
+    return ReaderChrome.bookTitlePlacement(setting && phone, navBar, tappable)
 }
 
 private class TouchState {

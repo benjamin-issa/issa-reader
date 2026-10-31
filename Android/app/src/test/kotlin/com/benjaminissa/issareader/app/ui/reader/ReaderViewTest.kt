@@ -18,6 +18,8 @@ import androidx.compose.ui.test.doubleClick
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.getBoundsInRoot
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipe
 import androidx.compose.ui.test.swipeUp
@@ -76,6 +78,7 @@ class ReaderViewTest {
         narrated: Boolean = false,
         turn: PageTurnStyle = PageTurnStyle.SLIDE,
         coach: Boolean = false,
+        showsBookTitle: Boolean = true,
         prepare: suspend (ReaderModel) -> Unit = {},
     ): ReaderModel {
         val opening = ReaderOpening(fixture.readBytes(), narrated = narrated).also { openings += it }
@@ -87,7 +90,10 @@ class ReaderViewTest {
                 putBoolean(SEEN_NARRATION_TIP_KEY, true)
             }
         }
-        val settings = PlaybackSettings(InMemoryKeyValueStore()).apply { pageTurn = turn }
+        val settings = PlaybackSettings(InMemoryKeyValueStore()).apply {
+            pageTurn = turn
+            this.showsBookTitle = showsBookTitle
+        }
         compose.setContent {
             IssaTheme(darkTheme = false) {
                 ReaderView(
@@ -124,6 +130,32 @@ class ReaderViewTest {
         compose.waitUntil(5_000) { model.pageIndex == 1 }
         tap(12f)
         compose.waitUntil(5_000) { model.pageIndex == 0 }
+    }
+
+    /**
+     * A window with no navigation bar — a Boox Palma's, and this test's —
+     * has no band to print the title in, so it gets a row of its own between
+     * the footer and the window's bottom edge. Until it did, the Palma never
+     * showed the title at all.
+     */
+    @Test
+    fun `with no navigation bar the title has a row of its own, under the footer`() {
+        val model = show { it.go(2) }
+        val title = compose.onNodeWithTag("reader.bookTitle", useUnmergedTree = true).assertExists().getBoundsInRoot()
+        val root = compose.onRoot().getBoundsInRoot()
+        assertEquals("a row's height", ReaderChrome.BOOK_TITLE_ROW.toFloat(), (title.bottom - title.top).value, 0.5f)
+        assertEquals("just above the window's bottom edge", (root.bottom - INSET_BOTTOM.dp).value, title.bottom.value, 0.5f)
+        val before = model.currentPage
+        tap(200f)
+        assertFalse(model.chromeVisible)
+        assertFalse("the words go with the chrome", compose.onAllNodesWithTag("reader.bookTitle", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty())
+        assertEquals("their place is kept, so the page did not move", before, model.currentPage)
+    }
+
+    @Test
+    fun `the setting off prints no title`() {
+        show(showsBookTitle = false) { it.go(2) }
+        assertFalse(compose.onAllNodesWithTag("reader.bookTitle", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty())
     }
 
     @Test

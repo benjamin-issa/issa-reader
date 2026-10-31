@@ -97,6 +97,24 @@ class ReaderChrome(
 
     override fun hashCode(): Int = listOf(safeAreaTop, safeAreaBottom, margin, drawsOwnTopBar).hashCode()
 
+    /** Where the book's title goes under the footer, if anywhere. */
+    enum class BookTitlePlacement {
+        /** Not drawn: the setting is off, or the screen is not a phone's. */
+        NONE,
+
+        /** In the navigation band, which already pads the page: it costs the page nothing. */
+        BAND,
+
+        /**
+         * In a [BOOK_TITLE_ROW] of its own between the footer and the
+         * window's bottom edge, which the page gives up. Where the band
+         * cannot hold it: three-button navigation, whose buttons fill
+         * it; a gesture bar too short to clear its handle; or no
+         * navigation bar at all, as on a Boox phone.
+         */
+        ROW,
+    }
+
     companion object {
         /**
          * Both of the reader's bars are this tall. It is also the smallest
@@ -117,21 +135,33 @@ class ReaderChrome(
         const val BOOK_TITLE_BAND_MINIMUM = 34.0
 
         /**
-         * Whether the book's title is drawn in the band under the footer.
+         * The row the book's title gets of its own, in dp, under the footer,
+         * where the navigation band cannot hold it: a line of caption type
+         * and a little air.
+         */
+        const val BOOK_TITLE_ROW = 16.0
+
+        /**
+         * Where the book's title goes, from the window's navigation insets.
          *
-         * The setting, the chrome showing, gestural navigation, and a band tall
-         * enough to hold a line of caption type above the gesture handle. Gestural navigation is read off
-         * the insets: the bar is there (navigation bars' bottom is more than
-         * zero) but nothing in it is tappable (tappable element's bottom is
-         * zero). Three-button navigation has buttons in the band, which a title
-         * would sit among, so it never gets one.
+         * Never from the chrome's visibility: the row is part of the page's
+         * reserve, and a reserve that followed the chrome would re-paginate
+         * the chapter on every tap. The title is drawn only while the chrome
+         * shows; its place is kept either way.
          *
-         * A pure function of its inputs, so the rule is tested without a window.
+         * Gestural navigation is read off the insets: the bar is there
+         * (navigation bars' bottom is more than zero) but nothing in it is
+         * tappable (tappable element's bottom is zero). A pure function of its
+         * inputs, so the rule is tested without a window.
          *
+         * @param shows the setting, on a phone (a tablet has no switch for it).
          * @param navBarBottomDp the navigation bar's bottom inset, ignoring visibility.
          * @param tappableBottomDp the tappable-element bottom inset, ignoring visibility.
          */
-        fun showsBookTitle(setting: Boolean, chromeVisible: Boolean, navBarBottomDp: Double, tappableBottomDp: Double): Boolean =
-            setting && chromeVisible && tappableBottomDp <= 0.0 && navBarBottomDp >= BOOK_TITLE_BAND_MINIMUM
+        fun bookTitlePlacement(shows: Boolean, navBarBottomDp: Double, tappableBottomDp: Double): BookTitlePlacement = when {
+            !shows -> BookTitlePlacement.NONE
+            tappableBottomDp <= 0.0 && navBarBottomDp >= BOOK_TITLE_BAND_MINIMUM -> BookTitlePlacement.BAND
+            else -> BookTitlePlacement.ROW
+        }
     }
 }
