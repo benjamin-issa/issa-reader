@@ -166,6 +166,19 @@ struct CatalogueTests {
         #expect(books[position].title == "Here", "the copy held here, not the row that failed")
     }
 
+    /// Counted from the raw row, the second kept book landed one place late,
+    /// past the fresh book that follows it.
+    @Test("a row with no copy held here does not push the next one along")
+    func keptAfterARowNotHeld() throws {
+        let stranger = "44444444-4444-4444-8444-444444444444"
+        let catalogue = try Self.decode([
+            Self.unreadableRow(stranger), Self.unreadableRow(Self.uuids[0]),
+            Self.row(Self.uuids[1]), Self.unreadableRow(Self.uuids[2]),
+        ])
+        let books = catalogue.shelf(fresh: catalogue.books, previous: try held())
+        #expect(books.map(\.uuid) == Self.uuids)
+    }
+
     @Test("what was not listed is not kept")
     func keptOnlyIfListed() throws {
         let books = try shelf([Self.row(Self.uuids[0]), Self.unreadableRow(Self.uuids[1])])

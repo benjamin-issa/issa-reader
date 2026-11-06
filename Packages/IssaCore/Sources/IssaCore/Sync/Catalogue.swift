@@ -54,9 +54,15 @@ public struct Catalogue: Decodable, Sendable {
         let held = Dictionary(previous.map { ($0.uuid, $0) }, uniquingKeysWith: { first, _ in first })
         var shelf = fresh
         var present = Set(fresh.map(\.uuid))
+        // A row with nothing to put back takes no place on the shelf, so the
+        // rows after it sit that much earlier than the server listed them.
+        var empty = 0
         for failure in failures {
-            guard let uuid = failure.uuid, !present.contains(uuid), let book = held[uuid] else { continue }
-            shelf.insert(book, at: min(failure.row, shelf.count))
+            guard let uuid = failure.uuid, !present.contains(uuid), let book = held[uuid] else {
+                empty += 1
+                continue
+            }
+            shelf.insert(book, at: min(failure.row - empty, shelf.count))
             present.insert(uuid)
         }
         if hasUnnamedRows {
