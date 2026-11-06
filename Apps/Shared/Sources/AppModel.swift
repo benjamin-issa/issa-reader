@@ -3296,6 +3296,16 @@ public final class AppModel {
         book.readaloud != nil && isDownloaded(book, format: .readaloud)
     }
 
+    /// The edition Read opens, and so the one a cancel has to stop.
+    ///
+    /// Through `isDownloaded`, not the disk: a read-along inside its undo
+    /// window is on its way out, and choosing it would send the open down the
+    /// download path, which takes the removal back.
+    public func readingFormat(for book: Book) -> BookContentService.Format? {
+        BookContentService.preferredReadingFormat(
+            for: book, readaloudOnDevice: isDownloaded(book, format: .readaloud))
+    }
+
     public func startListening(
         to book: Book, nowPlaying: NowPlayingController, settings: PlaybackSettings,
     ) async {

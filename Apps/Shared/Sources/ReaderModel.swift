@@ -652,7 +652,8 @@ public final class ReaderModel {
         switch source {
         case let .server(session):
             let content = BookContentService(client: session.client, cacheDirectory: booksDirectory)
-            guard let preferred = content.preferredReadingFormat(for: book) else {
+            guard let preferred = downloadHost?.readingFormat(for: book)
+                ?? content.preferredReadingFormat(for: book) else {
                 phase = .failed("This book has no readable edition on the server.")
                 return
             }
@@ -1022,7 +1023,9 @@ public final class ReaderModel {
     /// Stops an in-progress download and closes the book.
     public func cancelDownload() {
         // A local book has nothing to download.
-        guard !isLocal, let format = BookContentService.preferredReadingFormat(for: book) else { return }
+        guard !isLocal,
+              let format = downloadHost?.readingFormat(for: book)
+              ?? BookContentService.preferredReadingFormat(for: book) else { return }
         downloadHost?.downloads?.cancel(.init(bookUUID: book.uuid, format: format))
         phase = .failed("Download cancelled.")
     }

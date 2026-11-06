@@ -98,6 +98,25 @@ struct DownloadRemovalTests {
         #expect(app.playsOwnChunks(of: book))
     }
 
+    /// Asked of the disk, the read-along was still there to choose, and the
+    /// open went down the download path, which took the removal back.
+    @Test("a read-along being removed is not the edition Read opens")
+    func readingFormatSeesTheUndoWindow() throws {
+        let app = AppModel(keychain: InMemoryTokens(), notificationCentre: NotificationCenter())
+        let uuid = Self.freshUUID()
+        var book = SharedFixtures.book("Dracula", uuid: uuid, readaloud: true)
+        book.readaloud?.status = "PROCESSING"
+        #expect(app.readingFormat(for: book) == .ebook, "not on the device, and the server's is being redone")
+
+        let file = try Self.plant(uuid, format: .readaloud)
+        defer { try? FileManager.default.removeItem(at: file) }
+        #expect(app.readingFormat(for: book) == .readaloud)
+
+        app.removeDownload(bookUUID: uuid, format: .readaloud, title: "Dracula", undoWindow: .seconds(600))
+        #expect(FileManager.default.fileExists(atPath: file.path), "still in its undo window")
+        #expect(app.readingFormat(for: book) == .ebook)
+    }
+
     // MARK: - One edition, not the book
 
     /// The book screen removes a single edition, and the model refreshes a set

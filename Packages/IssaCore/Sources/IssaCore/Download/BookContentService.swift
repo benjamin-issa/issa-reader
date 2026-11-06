@@ -229,8 +229,14 @@ public struct BookContentService: Sendable {
     /// the ebook, a reader offline with no ebook downloaded could not open a
     /// book they had with them.
     public func preferredReadingFormat(for book: Book) -> Format? {
-        if book.readaloud != nil, isDownloaded(book, format: .readaloud) { return .readaloud }
-        return Self.preferredReadingFormat(for: book)
+        Self.preferredReadingFormat(for: book, readaloudOnDevice: isDownloaded(book, format: .readaloud))
+    }
+
+    /// The same, for a caller with its own view of the disk: `AppModel` counts
+    /// an edition inside its undo window as gone.
+    public static func preferredReadingFormat(for book: Book, readaloudOnDevice: Bool) -> Format? {
+        if book.readaloud != nil, readaloudOnDevice { return .readaloud }
+        return preferredReadingFormat(for: book)
     }
 
     /// Every book with at least one file on disk, from a single directory read.
