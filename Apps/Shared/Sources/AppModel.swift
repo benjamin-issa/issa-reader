@@ -96,6 +96,20 @@ public final class AppModel {
     /// the library and detail screens agree without extra requests.
     public var ratings: [String: Double] = [:]
     public var loadError: String?
+    /// Whether the last catalogue to arrive was every book the server listed.
+    /// See `knowsWholeLibrary`.
+    public private(set) var catalogueIsComplete = true
+
+    /// Whether this device can say what is *not* in the library.
+    ///
+    /// Absent from `books` is not the same claim as gone from the server: a
+    /// failed refresh shows a cached shelf or none, and a catalogue with a row
+    /// it could not read may have left out a book the reader still owns, with
+    /// no copy here to stand in for it on a first sync. Nothing that offers to
+    /// delete a file for having no book behind it may run on less than this.
+    public var knowsWholeLibrary: Bool {
+        !books.isEmpty && loadError == nil && catalogueIsComplete
+    }
     /// Whether a library refresh is in flight for the account signed in now.
     ///
     /// A count rather than a flag. The flag was set by every refresh and
@@ -1164,7 +1178,8 @@ public final class AppModel {
             // control was still expanded. The scroll view then re-measured and
             // adopted the inflated inset as its resting layout, leaving the
             // words permanently pushed down.
-            let fetched = try await service.allBooks()
+            let catalogue = try await service.catalogue()
+            let fetched = catalogue.books
             let fetchedStatuses = (try? await service.statuses()) ?? statuses
             let fetchedRatings = (try? await service.myRatings()) ?? ratings
             // The in-memory half of the fence the detached write below checks.
@@ -1189,12 +1204,19 @@ public final class AppModel {
             // here to the assignment suspends, so a position recorded while
             // this runs cannot fall between reading `books` and replacing it.
             let known = Dictionary(books.map { ($0.uuid, $0) }, uniquingKeysWith: { first, _ in first })
+            // A book the server listed and this client could not read stays as
+            // it was. Left out, it would leave the shelf as if deleted, and
+            // `recordPosition` drops a write for a book not in `books`, so a
+            // chapter finished while its read-along was being redone would be
+            // lost. Its server state goes stale until it can be read again,
+            // which is the smaller loss.
             let merged = fetched.map { fresh in
                 guard let mine = known[fresh.uuid] else { return fresh }
                 return mine.reconciled(
                     with: fresh, keepingStatus: keepsLocal(.status, fresh.uuid, given: fence))
-            }
+            } + catalogue.unreadable.sorted().compactMap { known[$0] }
             books = merged
+            catalogueIsComplete = catalogue.isComplete
             reseedGuards(against: merged)
             rebuildDerived()
             statuses = fetchedStatuses
@@ -1229,7 +1251,8 @@ public final class AppModel {
             Task { [weak self] in
                 guard let self, self.catalogueGeneration == generation, self.session === session
                 else { return }
-                try? await self.store?.replaceCatalogue(merged)
+                try? await self.store?.replaceCatalogue(
+                    merged, keeping: catalogue.unreadable, prunes: !catalogue.hasUnnamedRows)
                 // Behind the same fence as the catalogue. This write sat in
                 // the body above, outside every generation check, and the
                 // `rating` table has no account column — so a refresh racing

@@ -22,7 +22,37 @@ public struct LibraryService: Sendable {
     }
 
     public func allBooks() async throws -> [Book] {
-        Self.refusingUnsafeIdentifiers(try await client.get(Endpoint.books))
+        try await catalogue().books
+    }
+
+    /// The library, less any row that could not be read.
+    public func catalogue() async throws -> Catalogue {
+        try Self.checked(try await client.get(Endpoint.books))
+    }
+
+    /// What this client will take from a decoded catalogue.
+    ///
+    /// Logs each row it could not read, because the reason is exactly what the
+    /// reader cannot see. Throws only when no row could be read: then this is
+    /// not one book the model does not understand but an answer it does not
+    /// understand at all, and the reader should be told so rather than shown
+    /// an empty shelf.
+    static func checked(_ decoded: Catalogue) throws -> Catalogue {
+        var catalogue = decoded
+        for failure in catalogue.failures {
+            IssaLog.failure("catalogue row skipped", failure.error, ["book": failure.uuid ?? "unnamed"])
+        }
+        if catalogue.books.isEmpty, let first = catalogue.failures.first {
+            throw StorytellerError.decoding(String(describing: first.error))
+        }
+        catalogue.books = refusingUnsafeIdentifiers(catalogue.books)
+        // A uuid that could not name a path never reached the store, so there
+        // is nothing to keep for it, and carrying it on would hand a hostile
+        // server the row `refusingUnsafeIdentifiers` exists to refuse.
+        catalogue.failures.removeAll { failure in
+            failure.uuid.map { !$0.isBareUUID } ?? false
+        }
+        return catalogue
     }
 
     /// Drops catalogue entries whose uuid could not safely name a path.
