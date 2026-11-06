@@ -554,7 +554,6 @@ public struct ReadaloudFormat: Codable, Hashable, Sendable {
     public var currentStage: String?
     public var stageProgress: Double?
     public var queuePosition: Int?
-    public var restartPending: Bool?
     public var fingerprint: String?
     public var pageCount: Int?
     public var duration: Double?
