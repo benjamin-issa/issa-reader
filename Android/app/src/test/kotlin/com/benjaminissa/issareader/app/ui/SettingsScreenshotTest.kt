@@ -49,10 +49,11 @@ class SettingsScreenshotTest {
     @After
     fun tearDown() = fixture.close()
 
-    private fun shot(name: String, dark: Boolean = false, content: @Composable () -> Unit) {
+    private fun shot(name: String, dark: Boolean = false, eink: Boolean = false, content: @Composable () -> Unit) {
         fixture.withLibrary().withLocalBooks()
+        fixture.settings.einkMode = eink
         captureRoboImage("build/settings-shots/$name.png") {
-            IssaTheme(darkTheme = dark) {
+            IssaTheme(darkTheme = dark, eink = eink) {
                 CompositionLocalProvider(LocalAppEnvironment provides fixture.environment) {
                     Box(Modifier.fillMaxSize().background(Palette.paper)) { content() }
                 }
@@ -96,6 +97,24 @@ class SettingsScreenshotTest {
 
     @Test
     fun settingsRootDark() = shot("settings-402-dark", dark = true) { Root() }
+
+    @Test
+    @Config(qualifiers = "w402dp-h1640dp-xxhdpi")
+    fun settingsRootEInk() = shot("settings-eink-402", eink = true) { Root(advanced = true) }
+
+    @Test
+    fun controlsEInk() = shot("controls-eink-402", eink = true) { ControlsSettingsScreen(fixture.settings, onBack = {}) }
+
+    @Test
+    @Config(qualifiers = "w402dp-h1960dp-xxhdpi")
+    fun readingEInk() = shot("reading-eink-402", eink = true) {
+        ReadingSettingsScreen(fixture.settings, onBack = {}, onOpenLicences = {}, reduceMotion = false)
+    }
+
+    @Test
+    fun downloadsEInk() = shot("downloads-eink-402", eink = true) {
+        DownloadsScreen(fixture.app, onBack = {}, scanned = downloadsInventory())
+    }
 
     @Test
     fun controls() = shot("controls-402") { ControlsSettingsScreen(fixture.settings, onBack = {}) }

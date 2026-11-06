@@ -28,6 +28,41 @@ class PaletteTest {
         assertEquals(hex(0xEE9B57), IssaColors.Dark.tangerine)
     }
 
+    /** WCAG's contrast ratio between two colours. */
+    private fun contrast(a: Color, b: Color): Float {
+        val (light, dark) = listOf(a.luminance(), b.luminance()).sortedDescending()
+        return (light + 0.05f) / (dark + 0.05f)
+    }
+
+    @Test
+    fun `E-Ink mode has no colour in it`() {
+        with(IssaColors.EInk) {
+            val all = listOf(
+                paper, surface, surfaceRaised, border, borderStrong, ink, inkSecondary, inkTertiary, inkQuaternary,
+                tangerine, tangerinePressed, moss, slate, alert,
+            )
+            for (token in all) {
+                assertEquals("$token is not a grey", token.red, token.green)
+                assertEquals("$token is not a grey", token.green, token.blue)
+                assertEquals("$token is not opaque", 1f, token.alpha)
+            }
+        }
+    }
+
+    @Test
+    fun `E-Ink mode's contrast is what the design promises`() {
+        with(IssaColors.EInk) {
+            assertEquals(21f, contrast(ink, paper), 0.01f)
+            assertEquals("black, so white on it is a white label", ink, tangerine)
+            assertTrue(contrast(Color.White, tangerine) >= 7f)
+            assertTrue(contrast(inkTertiary, paper) >= 7f)
+            assertTrue(contrast(inkQuaternary, paper) >= 7f)
+            assertTrue("drawn for a light page, whatever the system says", !isDark)
+            assertTrue(isEInk)
+        }
+        assertTrue("and only there", !IssaColors.Light.isEInk && !IssaColors.Dark.isEInk)
+    }
+
     @Test
     fun `a server colour string is read or refused, never guessed`() {
         assertEquals(Color(0xFF123456), colorFromHexString(" #123456 "))

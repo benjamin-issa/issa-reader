@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.padding
@@ -158,6 +159,7 @@ internal fun <T> SegmentedPicker(
                 } else {
                     SegmentedButtonDefaults.itemShape(index, options.size)
                 },
+                modifier = if (eink) Modifier.heightIn(min = EInk.target) else Modifier,
                 enabled = enabled,
                 icon = {},
                 border = SegmentedButtonDefaults.borderStroke(

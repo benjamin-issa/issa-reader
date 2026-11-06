@@ -49,11 +49,13 @@ class AppDriver(
         dark: Boolean = false,
         statusBar: Dp = STATUS_BAR,
         catalogue: FixtureServer.Catalogue = FixtureServer.Catalogue.WHOLE,
+        eink: Boolean = false,
     ): AppEnvironment {
         FixtureServer.catalogue = catalogue
         environment = Sweep.environment(root, signedIn)
+        environment.settings.einkMode = eink
         compose.setContent {
-            IssaTheme(darkTheme = dark) {
+            IssaTheme(darkTheme = dark, eink = eink) {
                 Column(Modifier.fillMaxSize().background(Palette.paper)) {
                     Spacer(Modifier.height(statusBar))
                     IssaRoot(environment)

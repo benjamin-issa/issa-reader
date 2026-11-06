@@ -7,6 +7,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.junit4.createComposeRule
 import com.benjaminissa.issareader.app.ui.settings.ChoiceDialog
 import com.benjaminissa.issareader.app.ui.settings.DialogChoice
+import com.benjaminissa.issareader.app.ui.settings.DisplaySettings
 import com.benjaminissa.issareader.ui.IssaTheme
 import com.benjaminissa.issareader.ui.Palette
 import com.github.takahirom.roborazzi.captureScreenRoboImage
@@ -42,5 +43,43 @@ class SettingsDialogScreenshotTest {
         }
         compose.waitForIdle()
         captureScreenRoboImage("build/settings-shots/settings-sign-out-402.png")
+    }
+
+    /** The warning, as a reader sees it: in the app's own theme, since the switch has not moved. */
+    @Test
+    fun turnOnEInk() {
+        compose.setContent {
+            IssaTheme(darkTheme = false) {
+                Box(Modifier.fillMaxSize().background(Palette.paper))
+                ChoiceDialog(
+                    title = DisplaySettings.WARNING_TITLE,
+                    message = DisplaySettings.WARNING,
+                    choices = listOf(DialogChoice("Turn on") {}),
+                    onDismiss = {},
+                )
+            }
+        }
+        compose.waitForIdle()
+        captureScreenRoboImage("build/settings-shots/settings-eink-warning-402.png")
+    }
+
+    /** Sign out in E-Ink mode: outlined, on white, with nothing dimmed behind it. */
+    @Test
+    fun signOutEInk() {
+        compose.setContent {
+            IssaTheme(darkTheme = false, eink = true) {
+                Box(Modifier.fillMaxSize().background(Palette.paper))
+                ChoiceDialog(
+                    title = "Sign out?",
+                    choices = listOf(
+                        DialogChoice("Sign out and keep downloads") {},
+                        DialogChoice("Sign out and delete downloads", destructive = true) {},
+                    ),
+                    onDismiss = {},
+                )
+            }
+        }
+        compose.waitForIdle()
+        captureScreenRoboImage("build/settings-shots/settings-sign-out-eink-402.png")
     }
 }

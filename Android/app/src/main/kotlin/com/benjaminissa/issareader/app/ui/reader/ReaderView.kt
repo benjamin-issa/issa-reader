@@ -996,6 +996,8 @@ private fun Footer(
     onOpenPlayer: () -> Unit,
 ) {
     val theme = model.style.theme
+    // E-Ink mode's targets take the width the gaps had, or the chapter's name goes.
+    val gap = if (theme.isEInk) Metrics.spacing4 else Metrics.spacing12
     val scope = rememberCoroutineScope()
     val settings = environment.settings
     val app = environment.app
@@ -1040,7 +1042,7 @@ private fun Footer(
             }
             .padding(horizontal = model.style.pageMargin.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(Metrics.spacing12),
+        horizontalArrangement = Arrangement.spacedBy(gap),
     ) {
         if (!model.chromeVisible) return@Row
         if (model.hasNarration) {
@@ -1076,7 +1078,7 @@ private fun Footer(
         Row(
             Modifier.weight(1f),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(Metrics.spacing12),
+            horizontalArrangement = Arrangement.spacedBy(gap),
         ) {
             Row(
                 Modifier

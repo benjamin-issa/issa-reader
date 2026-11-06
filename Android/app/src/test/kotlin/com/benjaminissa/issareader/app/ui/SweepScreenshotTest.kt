@@ -8,6 +8,7 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
+import com.benjaminissa.issareader.app.NoMotion
 import com.benjaminissa.issareader.app.model.AppModel
 import com.benjaminissa.issareader.app.ui.fixture.AppDriver
 import com.benjaminissa.issareader.app.ui.fixture.FixtureServer
@@ -15,6 +16,7 @@ import com.benjaminissa.issareader.app.ui.fixture.Sweep
 import com.benjaminissa.issareader.ui.Metrics
 import com.github.takahirom.roborazzi.captureRoboImage
 import java.io.File
+import kotlin.coroutines.EmptyCoroutineContext
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -34,8 +36,9 @@ import org.robolectric.annotation.GraphicsMode
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
-abstract class SweepScreenshotTest(private val device: Sweep.Device) {
-    @get:Rule val compose = createComposeRule()
+abstract class SweepScreenshotTest(private val device: Sweep.Device, private val eink: Boolean = false) {
+    // As E-Ink mode's activity has it: nothing in the composition animates.
+    @get:Rule val compose = createComposeRule(if (eink) NoMotion else EmptyCoroutineContext)
 
     @get:Rule val temp = TemporaryFolder()
 
@@ -43,7 +46,7 @@ abstract class SweepScreenshotTest(private val device: Sweep.Device) {
 
     private fun capture(screen: String) {
         driver.settle()
-        compose.onRoot().captureRoboImage("build/sweep/${device.width}/$screen.png")
+        compose.onRoot().captureRoboImage("build/sweep/${device.width}/$screen${if (eink) "-eink" else ""}.png")
         recordReference()
     }
 
@@ -63,13 +66,13 @@ abstract class SweepScreenshotTest(private val device: Sweep.Device) {
 
     @Test
     fun signIn() {
-        driver.launch(signedIn = false)
+        driver.launch(signedIn = false, eink = eink)
         capture("signIn")
     }
 
     @Test
     fun deviceCode() {
-        driver.launch(signedIn = false)
+        driver.launch(signedIn = false, eink = eink)
         compose.onNode(hasSetTextAction()).performTextInput(FixtureServer.SERVER)
         compose.onNode(hasText("Use a device code")).performClick()
         driver.waitForNode(hasText("APPROVE THIS DEVICE"))
@@ -78,14 +81,14 @@ abstract class SweepScreenshotTest(private val device: Sweep.Device) {
 
     @Test
     fun library() {
-        driver.launch(signedIn = true)
+        driver.launch(signedIn = true, eink = eink)
         driver.tab("Library")
         capture("library")
     }
 
     @Test
     fun libraryUnreadable() {
-        driver.launch(signedIn = true, catalogue = FixtureServer.Catalogue.UNREADABLE_ROW)
+        driver.launch(signedIn = true, catalogue = FixtureServer.Catalogue.UNREADABLE_ROW, eink = eink)
         driver.tab("Library")
         driver.waitForNode(hasTestTag("notice.unreadableBooks"))
         capture("libraryUnreadable")
@@ -93,7 +96,7 @@ abstract class SweepScreenshotTest(private val device: Sweep.Device) {
 
     @Test
     fun libraryGrid() {
-        driver.launch(signedIn = true)
+        driver.launch(signedIn = true, eink = eink)
         driver.tab("Library")
         compose.onNode(hasText("All books")).performClick()
         capture("libraryGrid")
@@ -101,7 +104,7 @@ abstract class SweepScreenshotTest(private val device: Sweep.Device) {
 
     @Test
     fun reading() {
-        val app = driver.launch(signedIn = true).app
+        val app = driver.launch(signedIn = true, eink = eink).app
         // The Downloaded section's walk of the disk, which runs off the main
         // thread; its rows may be below the fold, and so not composed.
         driver.waitFor { app.downloadedUuids.size == 6 }
@@ -117,7 +120,7 @@ abstract class SweepScreenshotTest(private val device: Sweep.Device) {
 
     @Test
     fun series() {
-        driver.launch(signedIn = true)
+        driver.launch(signedIn = true, eink = eink)
         driver.tab("Library")
         // Through the Series rail's "See all", which is on screen at every
         // width; the tile itself is below the fold on the smallest phone.
@@ -130,7 +133,7 @@ abstract class SweepScreenshotTest(private val device: Sweep.Device) {
 
     @Test
     fun settings() {
-        driver.launch(signedIn = true)
+        driver.launch(signedIn = true, eink = eink)
         driver.tab("Settings")
         driver.waitForNode(hasTestTag("screen.settings"))
         capture("settings")
@@ -138,6 +141,8 @@ abstract class SweepScreenshotTest(private val device: Sweep.Device) {
 
     @Test
     fun libraryDark() {
+        // E-Ink mode has no dark appearance to draw.
+        if (eink) return
         driver.launch(signedIn = true, dark = true)
         driver.tab("Library")
         capture("library-dark")
@@ -145,12 +150,13 @@ abstract class SweepScreenshotTest(private val device: Sweep.Device) {
 
     @Test
     fun bookDetailDark() {
+        if (eink) return
         bookDetail(dark = true)
         capture("bookDetail-dark")
     }
 
     private fun bookDetail(dark: Boolean) {
-        val environment = driver.launch(signedIn = true, dark = dark)
+        val environment = driver.launch(signedIn = true, dark = dark, eink = eink)
         driver.tab("Library")
         environment.app.requestBook(TIME_WAR, AppModel.PendingBook.Destination.DETAILS)
         driver.waitForNode(hasText("Rate"))
@@ -175,3 +181,19 @@ class Sweep360ScreenshotTest : SweepScreenshotTest(Sweep.COMPACT)
 
 @Config(qualifiers = "w412dp-h915dp-xxhdpi")
 class Sweep412ScreenshotTest : SweepScreenshotTest(Sweep.PIXEL)
+
+/** The same screens in E-Ink mode, written beside the others as `<screen>-eink.png`. */
+@Config(qualifiers = "w375dp-h667dp-xxhdpi")
+class SweepEInk375ScreenshotTest : SweepScreenshotTest(Sweep.SE, eink = true)
+
+@Config(qualifiers = "w402dp-h874dp-xxhdpi")
+class SweepEInk402ScreenshotTest : SweepScreenshotTest(Sweep.PRO, eink = true)
+
+@Config(qualifiers = "w440dp-h956dp-xxhdpi")
+class SweepEInk440ScreenshotTest : SweepScreenshotTest(Sweep.PRO_MAX, eink = true)
+
+@Config(qualifiers = "w360dp-h800dp-xxhdpi")
+class SweepEInk360ScreenshotTest : SweepScreenshotTest(Sweep.COMPACT, eink = true)
+
+@Config(qualifiers = "w412dp-h915dp-xxhdpi")
+class SweepEInk412ScreenshotTest : SweepScreenshotTest(Sweep.PIXEL, eink = true)
