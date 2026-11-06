@@ -121,11 +121,19 @@ class ChapterLayout(
     private var lines: List<LineBox> = emptyList()
 
     /**
+     * Bumped by every [layout]. The same layout can be re-paginated in place,
+     * so this is what tells two paginations of it apart.
+     */
+    var pagination = 0
+        private set
+
+    /**
      * Re-flows for a new page size. Cheap enough to call on rotation, and the
      * only operation that costs a full layout pass.
      */
     fun layout(width: Double, height: Double) {
         if (!(width > 0) || !(height > 0)) return
+        pagination += 1
         pageWidth = width
         pageHeight = height
         reindent(width / scale)

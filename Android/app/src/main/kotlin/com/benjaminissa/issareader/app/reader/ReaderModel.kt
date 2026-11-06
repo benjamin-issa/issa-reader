@@ -172,6 +172,11 @@ class ReaderModel(
     var layoutRevision: Int by mutableIntStateOf(0)
         private set
 
+    /** Where the last reflow left the reader, in characters, and the page that landed on: see [relayoutCurrentChapter]. */
+    private var reflowPlace: ReflowPlace? = null
+
+    private data class ReflowPlace(val offset: Int, val chapter: Int, val page: Int)
+
     /** Exactly which page is on screen. */
     data class PageKey(val chapter: Int, val page: Int, val revision: Int)
 
@@ -1538,23 +1543,33 @@ class ReaderModel(
         if (!loadChapter(chapterIndex)) return
         val layout = layout ?: return
         val page = fragment?.let { layout.pageContainingFragment(it) }
-        pageIndex = page?.index ?: (
-            layout.pages.indexOfFirst { anchor in it.characterRange }.takeIf { it >= 0 }
-                ?: if (anchor >= (layout.pages.lastOrNull()?.characterRange?.location ?: 0)) maxOf(layout.pages.size - 1, 0) else 0
-            )
+        pageIndex = page?.index ?: pageIndexHolding(anchor, layout.pages)
     }
 
     private fun relayoutCurrentChapter() {
         val layout = layout ?: return
         if (pageSize.isEmpty) return
         // The same words across a reflow rather than the same page number.
-        val anchor = layout.pages.getOrNull(pageIndex)?.characterRange?.location ?: 0
+        //
+        // The same words through a run of reflows too. Each one lands on the
+        // page holding the anchor, whose start is earlier than the anchor, and
+        // taking the next anchor from that start walked the reader backwards:
+        // a window settling reflows several times in a second, and that was
+        // enough to reach the top of the chapter. So the anchor stands until
+        // the page number says the reader has moved.
+        val held = reflowPlace
+        val anchor = if (held != null && held.chapter == chapterIndex && held.page == pageIndex) {
+            held.offset
+        } else {
+            layout.pages.getOrNull(pageIndex)?.characterRange?.location ?: 0
+        }
         layout.layout(pageSize.width, pageSize.height)
         layoutRevision += 1
         // Re-flowed, not re-parsed: not what a fresh layout at the new size
         // would be, so not to be kept as a neighbour.
         layoutKey = null
-        pageIndex = layout.pages.indexOfFirst { anchor in it.characterRange }.takeIf { it >= 0 } ?: 0
+        pageIndex = pageIndexHolding(anchor, layout.pages)
+        reflowPlace = ReflowPlace(anchor, chapterIndex, pageIndex)
     }
 
     /**
@@ -1602,6 +1617,7 @@ class ReaderModel(
         this.layout = layout
         chapterIndex = index
         layoutRevision += 1
+        reflowPlace = null
         layoutKey = key
         anchorAnnotations()
         val offset = restoring?.let { LocatorAnchoring.characterOffset(it, layout.text, layout.fragmentRanges) }
@@ -1934,6 +1950,7 @@ class ReaderModel(
         selection: TextRange?,
     ): PageSnapshot = PageSnapshot(
         layout = layout,
+        revision = layout.pagination,
         page = page,
         activeFragment = activeFragment,
         annotations = annotations,
@@ -2493,6 +2510,21 @@ class ReaderModel(
     }
 
     companion object {
+        /**
+         * The page an anchor is on.
+         *
+         * A page's range holds no offset when it is empty, and a chapter can
+         * end on such a page, so an anchor at the very end matched no page and
+         * a reflow sent the reader to the top of the chapter. Past the last
+         * page's start it falls back to that last page, which is where the
+         * anchor actually is.
+         */
+        internal fun pageIndexHolding(anchor: Int, pages: List<RenderedPage>): Int {
+            val found = pages.indexOfFirst { anchor in it.characterRange }
+            if (found >= 0) return found
+            return if (anchor >= (pages.lastOrNull()?.characterRange?.location ?: 0)) maxOf(pages.size - 1, 0) else 0
+        }
+
         private const val XHTML = "application/xhtml+xml"
 
         /** How long a burst of style changes is allowed to run together. */

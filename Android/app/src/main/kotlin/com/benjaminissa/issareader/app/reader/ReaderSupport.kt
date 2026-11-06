@@ -240,6 +240,12 @@ data class AnnotationBlock(val lines: List<List<PageRect>>, val tint: Annotation
  */
 class PageSnapshot(
     val layout: ChapterLayout,
+    /**
+     * Which pagination of [layout] this is (`ChapterLayout.pagination`). A
+     * reflow can keep the page's number, so without it a page drawn from the
+     * last pagination could pass for this one and never be redrawn.
+     */
+    val revision: Int,
     val page: RenderedPage,
     val activeFragment: String?,
     val annotations: List<AnnotationBlock>,
@@ -250,7 +256,7 @@ class PageSnapshot(
 ) {
     /** The layout by identity: two snapshots of different layouts are different pages whatever their numbers say. */
     override fun equals(other: Any?): Boolean =
-        other is PageSnapshot && other.layout === layout && other.page == page &&
+        other is PageSnapshot && other.layout === layout && other.revision == revision && other.page == page &&
             other.activeFragment == activeFragment && other.annotations == annotations &&
             other.selection == selection && other.theme == theme && other.highlight == highlight &&
             other.highlightStyle == highlightStyle
