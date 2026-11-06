@@ -3287,6 +3287,15 @@ public final class AppModel {
         // extraction and a duration measurement further on. Until this existed a
         // removal arriving in that window found nothing playing and did nothing.
         // The format is unknown yet: which download this will read is what the
+    /// Whether Listen plays this book from the read-along on the device.
+    ///
+    /// By the file, not the server's status: a re-alignment says PROCESSING for
+    /// as long as it runs, while the finished read-along here plays as well as
+    /// it did, and the server's manifest would lose the reader's place.
+    func playsOwnChunks(of book: Book) -> Bool {
+        book.readaloud != nil && isDownloaded(book, format: .readaloud)
+    }
+
         // next hundred lines decide.
         startingListening = (book.uuid, nil)
         defer {
@@ -3351,7 +3360,7 @@ public final class AppModel {
         // Downloaded only. Streaming a book chunk by chunk is a different
         // feature, and this path is exactly as offline as the read-along it
         // borrows the audio from.
-        if book.readaloud?.isAligned == true, isDownloaded(book, format: .readaloud) {
+        if playsOwnChunks(of: book) {
             // The claim narrows. From here to the attach this start is reading
             // the read-along's own extracted chunks, so a removal of *that*
             // edition must stop it and a removal of the audiobook beside it must

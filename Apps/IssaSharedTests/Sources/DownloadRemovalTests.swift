@@ -77,6 +77,27 @@ struct DownloadRemovalTests {
         return await condition()
     }
 
+    // MARK: - While the server redoes its copy
+
+    /// A re-alignment reports PROCESSING for as long as it runs. Listen went by
+    /// that and fell to the server's manifest, whose tracks match nothing this
+    /// app has stored about the book, so the drive started at chapter one.
+    @Test("a read-along on the device plays from its own chunks while the server redoes it")
+    func listeningOutlivesARealignment() throws {
+        let app = AppModel(keychain: InMemoryTokens(), notificationCentre: NotificationCenter())
+        let uuid = Self.freshUUID()
+        var book = SharedFixtures.book("Dracula", uuid: uuid, readaloud: true)
+        book.readaloud?.status = "PROCESSING"
+        app.refreshDownloadedSet()
+        #expect(!app.playsOwnChunks(of: book), "nothing on the device to play yet")
+
+        let file = try Self.plant(uuid, format: .readaloud)
+        defer { try? FileManager.default.removeItem(at: file) }
+        app.refreshDownloadedSet()
+
+        #expect(app.playsOwnChunks(of: book))
+    }
+
     // MARK: - One edition, not the book
 
     /// The book screen removes a single edition, and the model refreshes a set

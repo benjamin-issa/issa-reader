@@ -221,8 +221,16 @@ public struct BookContentService: Sendable {
         return nil
     }
 
+    /// The edition to open on this device.
+    ///
+    /// The server's status is about the copy it is building. A re-alignment
+    /// reports PROCESSING for as long as it runs, which can be hours, and the
+    /// finished read-along already here is no less readable for that: sent to
+    /// the ebook, a reader offline with no ebook downloaded could not open a
+    /// book they had with them.
     public func preferredReadingFormat(for book: Book) -> Format? {
-        Self.preferredReadingFormat(for: book)
+        if book.readaloud != nil, isDownloaded(book, format: .readaloud) { return .readaloud }
+        return Self.preferredReadingFormat(for: book)
     }
 
     /// Every book with at least one file on disk, from a single directory read.
