@@ -57,6 +57,37 @@ struct SpreadPagingTests {
         return (model, directory)
     }
 
+    /// With no voice to bound it, Ask stops at the end of what is on screen.
+    /// It stopped at the left page, so the right page's text was out of every
+    /// answer on a spread, however long the reader had been looking at it.
+    @Test("Ask reads as far as the right page of a spread")
+    func askReadsTheRightPage() async throws {
+        let (model, directory) = try await Self.opened(pagesShown: 2)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let layout = try #require(model.layout)
+        let left = try #require(model.currentPage)
+        let right = try #require(model.facingPage)
+
+        let boundary = try #require(model.readingBoundary())
+
+        #expect(boundary.charOffset == NSMaxRange(layout.paintedCharacterRange(for: right)))
+        #expect(boundary.charOffset > NSMaxRange(layout.paintedCharacterRange(for: left)))
+        #expect(boundary.pageNumber == 2)
+    }
+
+    @Test("Ask stops at the end of a single page when one is shown")
+    func askReadsOnePage() async throws {
+        let (model, directory) = try await Self.opened(pagesShown: 1)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let layout = try #require(model.layout)
+        let page = try #require(model.currentPage)
+
+        let boundary = try #require(model.readingBoundary())
+
+        #expect(boundary.charOffset == NSMaxRange(layout.paintedCharacterRange(for: page)))
+        #expect(boundary.pageNumber == 1)
+    }
+
     @Test("a spread turns two pages, and back two")
     func turnsByTwo() async throws {
         let (model, directory) = try await Self.opened(pagesShown: 2)
