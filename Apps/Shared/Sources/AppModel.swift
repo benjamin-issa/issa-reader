@@ -96,11 +96,19 @@ public final class AppModel {
     /// the library and detail screens agree without extra requests.
     public var ratings: [String: Double] = [:]
     public var loadError: String?
-    /// The account a whole catalogue last arrived for, by its generation. Nil
-    /// until one has this launch, and again after a refresh that fell short.
-    /// By generation so that leaving an account withdraws it with no reset to
-    /// forget. See `knowsWholeLibrary`.
-    private var wholeCatalogueGeneration: Int?
+    /// The last catalogue to arrive: whose it was, by its account's generation,
+    /// and how many of the rows it listed could not be read. Nil until one has
+    /// this launch, and again after a refresh that failed. By generation so
+    /// that leaving an account withdraws it with no reset to forget.
+    private var lastCatalogue: (generation: Int, unreadable: Int)?
+
+    /// How many books the server listed that this client could not read.
+    /// The shelf says so (`UnreadableBooksNotice`): a kept copy looks like any
+    /// other book, and on a first sync there is no copy to show.
+    public var unreadableBookCount: Int {
+        guard let lastCatalogue, lastCatalogue.generation == catalogueGeneration else { return 0 }
+        return lastCatalogue.unreadable
+    }
 
     /// Whether this device can say what is *not* in the library.
     ///
@@ -111,7 +119,8 @@ public final class AppModel {
     /// for a whole catalogue, this launch, for this account. Nothing that
     /// offers to delete a file for having no book behind it may run on less.
     public var knowsWholeLibrary: Bool {
-        !books.isEmpty && loadError == nil && wholeCatalogueGeneration == catalogueGeneration
+        !books.isEmpty && loadError == nil && lastCatalogue?.generation == catalogueGeneration
+            && lastCatalogue?.unreadable == 0
     }
 
     /// What a shelf with no books to show has to say about why.
@@ -1231,13 +1240,14 @@ public final class AppModel {
             // chapter finished while its read-along was being redone would be
             // lost. Its server state goes stale until it can be read again,
             // which is the smaller loss.
-            let merged = fetched.map { fresh in
+            let fresh = fetched.map { fresh in
                 guard let mine = known[fresh.uuid] else { return fresh }
                 return mine.reconciled(
                     with: fresh, keepingStatus: keepsLocal(.status, fresh.uuid, given: fence))
-            } + catalogue.carriedForward(from: known)
+            }
+            let merged = catalogue.shelf(fresh: fresh, previous: books)
             books = merged
-            wholeCatalogueGeneration = catalogue.isComplete ? generation : nil
+            lastCatalogue = (generation, catalogue.failures.count)
             reseedGuards(against: merged)
             rebuildDerived()
             statuses = fetchedStatuses
@@ -1272,8 +1282,11 @@ public final class AppModel {
             Task { [weak self] in
                 guard let self, self.catalogueGeneration == generation, self.session === session
                 else { return }
+                // What was read. A kept book's row is left as it is: it may hold
+                // a position newer than this copy, and with its own row
+                // unreadable no later refresh would put that right.
                 try? await self.store?.replaceCatalogue(
-                    merged, keeping: catalogue.unreadable, prunes: !catalogue.hasUnnamedRows)
+                    fresh, keeping: catalogue.unreadable, prunes: !catalogue.hasUnnamedRows)
                 // Behind the same fence as the catalogue. This write sat in
                 // the body above, outside every generation check, and the
                 // `rating` table has no account column — so a refresh racing
@@ -1301,7 +1314,7 @@ public final class AppModel {
                 books = cached
                 rebuildDerived()
             }
-            wholeCatalogueGeneration = nil
+            lastCatalogue = nil
             loadError = books.isEmpty ? Self.message(for: error) : nil
         }
     }
@@ -3274,6 +3287,15 @@ public final class AppModel {
 
     /// Starts a plain audiobook: fetch the manifest, resume where the server
     /// says we were, and hand it to the Now Playing centre.
+    /// Whether Listen plays this book from the read-along on the device.
+    ///
+    /// By the file, not the server's status: a re-alignment says PROCESSING for
+    /// as long as it runs, while the finished read-along here plays as well as
+    /// it did, and the server's manifest would lose the reader's place.
+    func playsOwnChunks(of book: Book) -> Bool {
+        book.readaloud != nil && isDownloaded(book, format: .readaloud)
+    }
+
     public func startListening(
         to book: Book, nowPlaying: NowPlayingController, settings: PlaybackSettings,
     ) async {
@@ -3287,15 +3309,6 @@ public final class AppModel {
         // extraction and a duration measurement further on. Until this existed a
         // removal arriving in that window found nothing playing and did nothing.
         // The format is unknown yet: which download this will read is what the
-    /// Whether Listen plays this book from the read-along on the device.
-    ///
-    /// By the file, not the server's status: a re-alignment says PROCESSING for
-    /// as long as it runs, while the finished read-along here plays as well as
-    /// it did, and the server's manifest would lose the reader's place.
-    func playsOwnChunks(of book: Book) -> Bool {
-        book.readaloud != nil && isDownloaded(book, format: .readaloud)
-    }
-
         // next hundred lines decide.
         startingListening = (book.uuid, nil)
         defer {

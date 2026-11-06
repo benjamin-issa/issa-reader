@@ -89,7 +89,7 @@ struct CatalogueTests {
         }
     }
 
-    /// One book the model cannot read is a shelf with a gap. No book it can
+    /// Some books the model cannot read is a shelf with gaps. No book it can
     /// read is a client that no longer understands this server, which has to
     /// reach the reader as an error rather than as "No books yet".
     @Test("no readable row at all is an error, not an empty library")
@@ -104,18 +104,16 @@ struct CatalogueTests {
         }
     }
 
-    /// Read from the other side: one bad row of three is a gap in a shelf.
-    @Test("most rows unreadable is a server this client does not understand, not a small library")
+    /// Any row that can be read is worth having, with the positions and
+    /// statuses it carries, however many beside it cannot. Dropping the answer
+    /// because most of it failed stalled sync for the books that were fine.
+    @Test("one readable row is worth having, however many beside it are not")
     func mostRowsUnreadable() throws {
-        let most = try Self.decode([
-            Self.row(Self.uuids[0]), Self.unreadableRow(Self.uuids[1]), Self.unreadableRow(Self.uuids[2]),
-        ])
-        #expect(throws: StorytellerError.self) { try LibraryService.checked(most) }
-
-        let one = try Self.decode([
-            Self.row(Self.uuids[0]), Self.row(Self.uuids[1]), Self.unreadableRow(Self.uuids[2]),
-        ])
-        #expect(try LibraryService.checked(one).books.count == 2)
+        let catalogue = try LibraryService.checked(try Self.decode([
+            Self.unreadableRow(Self.uuids[0]), Self.row(Self.uuids[1]), Self.unreadableRow(Self.uuids[2]),
+        ]))
+        #expect(catalogue.books.map(\.uuid) == [Self.uuids[1]])
+        #expect(catalogue.unreadable == [Self.uuids[0], Self.uuids[2]])
     }
 
     /// Weighed after the refusal, or a row refused as a book still counts as
@@ -146,28 +144,52 @@ struct CatalogueTests {
 
     // MARK: - What a device keeps
 
-    private func held() throws -> [String: Book] {
-        let books = try Self.decode(Self.uuids.map { Self.row($0, title: "Here") }).books
-        return Dictionary(uniqueKeysWithValues: books.map { ($0.uuid, $0) })
+    private func held() throws -> [Book] {
+        try Self.decode(Self.uuids.map { Self.row($0, title: "Here") }).books
     }
 
-    @Test("what was listed and could not be read is kept, and what was not listed is not")
+    private func shelf(_ rows: [Any]) throws -> [Book] {
+        let catalogue = try Self.decode(rows)
+        return catalogue.shelf(fresh: catalogue.books, previous: try held())
+    }
+
+    /// First, middle and last, by identity and by place. Appended instead, a
+    /// book being re-aligned jumped to the end of the grid for the whole job.
+    @Test("a book that could not be read stays where the server listed it", arguments: 0 ..< uuids.count)
+    func keptInPlace(_ position: Int) throws {
+        var rows = Self.uuids.map { Self.row($0, title: "Fresh") }
+        rows[position] = Self.unreadableRow(Self.uuids[position])
+
+        let books = try shelf(rows)
+
+        #expect(books.map(\.uuid) == Self.uuids)
+        #expect(books[position].title == "Here", "the copy held here, not the row that failed")
+    }
+
+    @Test("what was not listed is not kept")
     func keptOnlyIfListed() throws {
-        let catalogue = try Self.decode([Self.row(Self.uuids[0]), Self.unreadableRow(Self.uuids[1])])
-        #expect(catalogue.carriedForward(from: try held()).map(\.uuid) == [Self.uuids[1]])
+        let books = try shelf([Self.row(Self.uuids[0]), Self.unreadableRow(Self.uuids[1])])
+        #expect(books.map(\.uuid) == [Self.uuids[0], Self.uuids[1]])
     }
 
     @Test("a row that could be any book keeps every book the answer left out")
     func unnamedRowKeepsEverything() throws {
-        let catalogue = try Self.decode([Self.row(Self.uuids[0]), 42])
-        #expect(catalogue.carriedForward(from: try held()).map(\.uuid) == [Self.uuids[1], Self.uuids[2]])
+        let books = try shelf([Self.row(Self.uuids[0]), 42])
+        #expect(books.map(\.uuid) == Self.uuids)
     }
 
     /// A shelf with one uuid on it twice is a grid with one identity twice.
     @Test("a book listed both ways is not held twice")
     func listedBothWays() throws {
-        let catalogue = try Self.decode([Self.row(Self.uuids[0]), Self.unreadableRow(Self.uuids[0])])
-        #expect(catalogue.carriedForward(from: try held()).isEmpty)
+        let books = try shelf([Self.row(Self.uuids[0]), Self.unreadableRow(Self.uuids[0])])
+        #expect(books.map(\.uuid) == [Self.uuids[0]])
+    }
+
+    @Test("a complete answer is the shelf as it stands")
+    func completeAnswer() throws {
+        let catalogue = try Self.decode(Self.uuids.reversed().map { Self.row($0) })
+        #expect(catalogue.shelf(fresh: catalogue.books, previous: try held()).map(\.uuid)
+            == Self.uuids.reversed())
     }
 
     // MARK: - The store

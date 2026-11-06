@@ -28,11 +28,11 @@ public struct LibraryService: Sendable {
 
     /// What this client will take from a decoded catalogue.
     ///
-    /// Throws when most rows could not be read. A few are books this model
-    /// does not understand; most is a server it does not understand, and a
-    /// reader who has just installed the app should be told so rather than
-    /// shown 3 books of 500 as if that were their library. The reader with a
-    /// shelf here keeps it, as after any failed refresh.
+    /// Throws only when no row could be read: that is an answer this client
+    /// does not understand at all, and the reader should be told so rather than
+    /// shown an empty shelf. Any row it can read is worth having, with the
+    /// positions and statuses it carries, however many beside it could not be
+    /// read, and the reader is told how many (`AppModel.unreadableBookCount`).
     ///
     /// Logged once a refresh rather than once a row, so a change that breaks
     /// every book does not write the whole library to the log each time, and
@@ -50,7 +50,7 @@ public struct LibraryService: Sendable {
         IssaLog.failure("catalogue rows skipped", first.error, [
             "rows": String(catalogue.failures.count), "book": first.uuid ?? "unnamed",
         ])
-        if catalogue.failures.count > catalogue.books.count {
+        if catalogue.books.isEmpty {
             throw StorytellerError.decoding(String(describing: first.error))
         }
         return catalogue

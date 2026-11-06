@@ -191,7 +191,9 @@ struct LibraryLoadingTests {
         #expect(app.bookByUUID[other]?.title == "Arrived", "the rest of the library has to come in")
         #expect(Set(app.books.map(\.uuid)) == Set(Self.library.map(\.uuid)))
         #expect(app.bookByUUID[bad]?.title == title, "kept as it was")
+        #expect(app.books.map(\.uuid) == Self.library.map(\.uuid), "and where it was")
         #expect(app.loadError == nil)
+        #expect(app.unreadableBookCount == 1, "and the reader is told")
         #expect(!app.knowsWholeLibrary, "and nothing may be swept on this answer")
 
         try #require(await waitUntil { (try? await store.book(other)?.title) == "Arrived" })
@@ -206,6 +208,34 @@ struct LibraryLoadingTests {
         Self.answerWithLibrary(on: fixture.server)
         await app.refreshLibrary()
         #expect(app.knowsWholeLibrary)
+        #expect(app.unreadableBookCount == 0)
+    }
+
+    /// What is stored for a kept book may be newer than the copy in memory, and
+    /// with its own row unreadable no later refresh would put a loss right.
+    @Test("a refresh leaves a book it could not read as the store holds it")
+    func aKeptBookIsNotRewritten() async throws {
+        let (fixture, store, directory) = try await Self.withTheLibraryHere()
+        defer {
+            fixture.tearDown()
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let app = fixture.app
+        let bad = Self.library[1]
+        let other = Self.library[0].uuid
+        // The memory's copy and the store's disagree, as they do when a
+        // position is saved while a refresh is on its way.
+        let index = try #require(app.books.firstIndex { $0.uuid == bad.uuid })
+        app.books[index].title = "Only in memory"
+        var rows: [[String: Any]] = Self.library.map { ScriptedServer.book($0.uuid, title: $0.title) }
+        rows[0]["title"] = "Arrived"
+        rows[1]["rating"] = "five"
+        ScriptedServer.answer(Endpoint.books, on: fixture.server, json: rows)
+
+        await app.refreshLibrary()
+
+        try #require(await waitUntil { (try? await store.book(other)?.title) == "Arrived" })
+        #expect(try await store.book(bad.uuid)?.title == bad.title)
     }
 
     /// The first thing the reporter saw: a fresh install has no copy to keep.
@@ -224,7 +254,34 @@ struct LibraryLoadingTests {
 
         #expect(app.books.map(\.uuid).sorted() == [Self.library[0].uuid, Self.library[2].uuid].sorted())
         #expect(app.loadError == nil, "a shelf with a gap is not a failed library")
+        #expect(app.unreadableBookCount == 1, "but the reader is told of the gap")
         #expect(!app.knowsWholeLibrary, "a file for the book left out is not an orphan")
+    }
+
+    /// Two of three unreadable used to drop the answer, with the third book's
+    /// position and status, and on a shelf nothing said so.
+    @Test("most of a library unreadable still brings in the rest, and says so")
+    func mostRowsUnreadable() async throws {
+        let (fixture, _, directory) = try await Self.withTheLibraryHere()
+        defer {
+            fixture.tearDown()
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let app = fixture.app
+        var rows: [[String: Any]] = Self.library.map { book in
+            var row = ScriptedServer.book(book.uuid, title: "Changed on the server")
+            row["rating"] = "five"
+            return row
+        }
+        rows[1] = ScriptedServer.book(Self.library[1].uuid, title: "Arrived")
+        ScriptedServer.answer(Endpoint.books, on: fixture.server, json: rows)
+
+        await app.refreshLibrary()
+
+        #expect(app.bookByUUID[Self.library[1].uuid]?.title == "Arrived")
+        #expect(app.books.map(\.title) == [Self.library[0].title, "Arrived", Self.library[2].title])
+        #expect(app.unreadableBookCount == 2)
+        #expect(app.loadError == nil)
     }
 
     @Test("a library with no readable row reaches the reader as an error")
