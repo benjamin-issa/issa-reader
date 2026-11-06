@@ -369,30 +369,36 @@ public struct ReaderView: View {
             // Re-sample on a genuine size change — a rotation or a split view
             // — where the unsafe edges really are different. A chrome toggle
             // does not change the window's size, so it never lands here.
-            .onChange(of: geometry.size, initial: true) { _, new in
+            .onChange(of: geometry.size, initial: true) { _, _ in
                 deviceInsets = ReaderInsets.current()
-                // Then twice more as the pose settles, where the layout turns
-                // out to fold or to run its bars down a side (iPhone Duo),
-                // from the window this size rather than the first scene's,
-                // which on a phone with a display each side need not be this
-                // one. Sampled with the new size, the safe area can still be
-                // the old pose's — from the inner display held tall back to
-                // wide the status bar's top inset was kept with the bar gone
-                // to the side, and the page started 88 points down for good —
-                // and what the system says about the window can be the old
-                // one's too, so whether to look again is asked of the layout
-                // once it has settled, not of the moment. Every other device
-                // settles to the standard layout and never looks again.
-                Task { @MainActor in
-                    for wait in [400, 1_100] {
-                        try? await Task.sleep(for: .milliseconds(wait))
-                        guard readerLayout.railSide != nil || readerLayout.pose != .flat
-                            || readerLayout.spread != nil else { return }
-                        let settled = ReaderInsets.current(in: new)
-                        guard settled != deviceInsets else { continue }
-                        deviceInsets = settled
-                        Self.logInsets("settled", new, settled)
-                    }
+            }
+            // Then twice more as the pose settles, where the layout turns
+            // out to fold or to run its bars down a side (iPhone Duo),
+            // from the window this size rather than the first scene's,
+            // which on a phone with a display each side need not be this
+            // one. Sampled with the new size, the safe area can still be
+            // the old pose's — from the inner display held tall back to
+            // wide the status bar's top inset was kept with the bar gone
+            // to the side, and the page started 88 points down for good —
+            // and what the system says about the window can be the old
+            // one's too, so whether to look again is asked of the layout
+            // once it has settled, not of the moment. Every other device
+            // settles to the standard layout and never looks again.
+            //
+            // Keyed by the size, so a pose that changes again inside those
+            // seconds ends this one, rather than leaving it to publish the
+            // last display's insets over the current one.
+            .task(id: geometry.size) {
+                let size = geometry.size
+                for wait in [400, 1_100] {
+                    try? await Task.sleep(for: .milliseconds(wait))
+                    guard !Task.isCancelled,
+                          readerLayout.railSide != nil || readerLayout.pose != .flat
+                          || readerLayout.spread != nil else { return }
+                    let settled = ReaderInsets.current(in: size)
+                    guard settled != deviceInsets else { continue }
+                    deviceInsets = settled
+                    Self.logInsets("settled", size, settled)
                 }
             }
         }
