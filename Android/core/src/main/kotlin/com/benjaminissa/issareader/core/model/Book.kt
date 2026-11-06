@@ -726,7 +726,6 @@ data class ReadaloudFormat(
     val currentStage: String? = null,
     val stageProgress: Double? = null,
     val queuePosition: Long? = null,
-    val restartPending: Boolean? = null,
     val fingerprint: String? = null,
     val pageCount: Long? = null,
     val duration: Double? = null,

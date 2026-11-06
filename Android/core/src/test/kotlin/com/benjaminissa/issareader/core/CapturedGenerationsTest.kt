@@ -86,6 +86,27 @@ class CapturedGenerationsTest {
         }
     }
 
+    /**
+     * A library with a read-along being redone decodes. Every other capture
+     * was taken with the server idle, which is how a `restartPending` declared
+     * as a Boolean lasted until a reader's server was re-aligning a book: the
+     * column holds the job's restart mode, a string, for as long as the job
+     * runs, and only then goes back to the null an idle server sends. On every
+     * generation, 2.14.21 included.
+     */
+    @Test
+    fun booksDecodeMidRestart() {
+        for (server in CapturedServer.entries) {
+            val name = server.fixture("books-restarting")
+            // That this capture is what it says, so an idle one put in its
+            // place cannot pass here.
+            assertTrue("$server", fixture(name).contains("\"restartPending\": \"full\""))
+            val book = fixtureBooks(name).firstOrNull { it.title == "The Gap Book" }
+                ?: error("no Gap Book in the $server capture")
+            assertEquals("$server", "PROCESSING", book.readaloud?.status)
+        }
+    }
+
     /** The statuses capture decodes, with the three built-in names. */
     @Test
     fun statusesDecode() {
