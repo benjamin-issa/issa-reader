@@ -19,10 +19,13 @@ struct SpreadPagingTests {
 
     /// Forty narrated sentences, one to a paragraph, then a plain chapter of
     /// the same length: several pages each at this size.
-    static func opened(pagesShown: Int) async throws -> (model: ReaderModel, directory: URL) {
+    static func opened(
+        pagesShown: Int, sentenceLength: Int = 1,
+    ) async throws -> (model: ReaderModel, directory: URL) {
         func paragraphs(_ prefix: String, narrated: Bool) -> String {
             (0 ..< 40).map { index in
-                let text = "Sentence \(index) of the \(prefix) chapter, long enough to take a line or two of the page."
+                let sentence = "Sentence \(index) of the \(prefix) chapter, long enough to take a line or two of the page."
+                let text = String(repeating: sentence + " ", count: sentenceLength)
                 return narrated ? "<p><span id=\"\(prefix)\(index)\">\(text)</span></p>" : "<p>\(text)</p>"
             }.joined()
         }
@@ -245,6 +248,29 @@ struct SpreadPagingTests {
 
         #expect(boundary.kind == .narratedSentence)
         #expect(boundary.pageNumber == right.index + 1)
+    }
+
+    /// The offset is the sentence's end, so a number taken from its start named
+    /// the page before the one the offset is on.
+    @Test("Ask numbers the page a sentence crossing a break ends on")
+    func askNumbersTheSentencesLastPage() async throws {
+        let (model, directory) = try await Self.opened(pagesShown: 1, sentenceLength: 8)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let readalong = try #require(model.readalong)
+        let layout = try #require(model.layout)
+        func lastPage(_ range: NSRange) -> Int? { layout.page(containingOffset: NSMaxRange(range) - 1)?.index }
+        let crossing = try #require((0 ..< 40).map { "a\($0)" }.first { fragment in
+            guard let range = layout.fragmentRange(for: fragment) else { return false }
+            return layout.page(containingOffset: range.location)?.index != lastPage(range)
+        })
+        let range = try #require(layout.fragmentRange(for: crossing))
+        let last = try #require(lastPage(range))
+        let href = TestEPUB.href(of: TestEPUB.Chapter(id: "one", title: "", body: ""))
+        await readalong.seek(toFragment: crossing, inDocument: href)
+        readalong.player.play()
+        defer { readalong.player.pause() }
+
+        #expect(model.readingBoundary()?.pageNumber == last + 1)
     }
 
     @Test("Ask stops at the end of a single page when one is shown")
