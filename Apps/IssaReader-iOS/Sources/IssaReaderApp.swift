@@ -287,8 +287,7 @@ struct LibraryTabs: View {
             readingPath = NavigationPath()
             readingPath.append(pending.book)
         case .library, .settings:
-            libraryPath = NavigationPath()
-            libraryPath.append(pending.book)
+            splitSelection.show(pending.book, in: &libraryPath)
         }
     }
 
@@ -321,6 +320,8 @@ struct LibraryTabs: View {
                             .navigationTitle("Library")
                             .navigationDestination(for: Book.self) { book in
                                 BookDetailView(book: book)
+                                    .onAppear { splitSelection.pageAppeared(book) }
+                                    .onDisappear { splitSelection.pageDisappeared(book) }
                             }
                     }
                     .id(libraryStackGeneration)

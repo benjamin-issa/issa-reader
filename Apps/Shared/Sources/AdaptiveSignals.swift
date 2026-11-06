@@ -78,9 +78,18 @@ private struct SideBarClose: ViewModifier {
 @Observable
 final class SplitBookSelection {
     var book: Book?
+    /// Whether the pane is showing, and so where a book asked for goes.
+    var isSplit = false
+    /// Counts the books asked for, so that asking for the one already in the
+    /// pane builds its page again and a request to read it is taken up.
+    private(set) var requests = 0
     /// The book a close pushed onto the stack, and the stack it left: what
     /// `open` needs to know that page is still the one showing.
     private var collapsed: (book: Book, path: NavigationPath)?
+    /// Whether another page has been pushed over that one. Most screens are
+    /// pushed by `NavigationLink(destination:)` and never appear in a path, so
+    /// the page has to say so itself.
+    private var pageIsCovered = false
 
     /// Closed: the selected book's page becomes the one the stack shows, so
     /// the outer display carries on where the inner one was, and Back goes to
@@ -89,21 +98,57 @@ final class SplitBookSelection {
         guard let book else { return }
         path.append(book)
         collapsed = (book, path)
+        pageIsCovered = false
         self.book = nil
     }
 
     /// Opened again: the page that close pushed goes back into the pane, if
-    /// the stack is as close left it. On the outer display the reader may have
-    /// gone Back from that page, or followed a link to another book, and
-    /// taking the last page then would remove the one they are on and bring
-    /// back the one they left. Compared whole, because a link can replace the
-    /// page with another at the same depth.
+    /// the stack is as close left it. Back from that page empties it, and a
+    /// link replaces it, and then there is nothing of close's left to move.
+    /// Compared whole, because a link can replace it at the same depth.
     func open(_ path: inout NavigationPath) {
         guard let collapsed else { return }
         self.collapsed = nil
         guard path == collapsed.path else { return }
         path.removeLast()
         book = collapsed.book
+    }
+
+    /// Whether a page stands over the one close pushed, so that the split has
+    /// to wait for the reader to come back to it. Taking that page from under
+    /// them would take theirs with it. Not once Back has left it, or a link has
+    /// replaced it: then it is not on the stack to be covered.
+    func holdsSplit(given path: NavigationPath) -> Bool {
+        pageIsCovered && collapsed?.path == path
+    }
+
+    /// The page for this book came into view, or was uncovered.
+    func pageAppeared(_ book: Book) {
+        if collapsed?.book.uuid == book.uuid { pageIsCovered = false }
+    }
+
+    /// The page for this book left view, and if it is still the stack's, a
+    /// page has been pushed over it.
+    func pageDisappeared(_ book: Book) {
+        if collapsed?.book.uuid == book.uuid { pageIsCovered = true }
+    }
+
+    /// A book asked for from outside: a link, a widget, Handoff. In the pane
+    /// where there is one. Otherwise on the stack, as the page close would have
+    /// pushed, so that opening the phone puts it beside the shelf rather than
+    /// leaving it in the shelf's half of the display.
+    func show(_ book: Book, in path: inout NavigationPath) {
+        path = NavigationPath()
+        requests &+= 1
+        if isSplit {
+            collapsed = nil
+            self.book = book
+        } else {
+            self.book = nil
+            path.append(book)
+            collapsed = (book, path)
+            pageIsCovered = false
+        }
     }
 }
 
