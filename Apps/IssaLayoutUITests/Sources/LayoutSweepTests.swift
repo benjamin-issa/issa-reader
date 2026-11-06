@@ -377,6 +377,19 @@ final class LayoutSweepTests: XCTestCase {
 
     /// Every book cell's identifier on the screen, scrolling to find them: the
     /// grid is lazy, so a cell below the fold does not exist until it is near.
+    /// A catalogue with a row that cannot be read, through the real decode: the
+    /// shelf comes up with the rest and says what it is missing.
+    func testUnreadableBookNotice() throws {
+        let app = launch(["-issa.library.mode", "all", "-IssaUITestFixtureUnreadableRow"])
+        XCTAssertTrue(waitForLibrary(app), "the rows that could be read never arrived")
+        selectTab("Library", in: app)
+        let notice = app.descendants(matching: .any)["notice.unreadableBooks"].firstMatch
+        XCTAssertTrue(notice.waitForExistence(timeout: 15), "nothing said a book could not be read")
+        XCTAssertTrue(app.staticTexts["1 book couldn't be read"].exists)
+        XCTAssertTrue(notice.buttons["Try again"].exists)
+        capture(app, "libraryUnreadable")
+    }
+
     private func bookCells(in app: XCUIApplication) -> Set<String> {
         let query = app.descendants(matching: .any)
             .matching(NSPredicate(format: "identifier BEGINSWITH %@", "cell.book."))

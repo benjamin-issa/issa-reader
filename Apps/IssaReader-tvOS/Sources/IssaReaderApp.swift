@@ -265,6 +265,7 @@ struct TVLibraryView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Metrics.spacing48) {
+                UnreadableBooksNotice()
                 if !app.derivation.continueReading.isEmpty {
                     section("Continue reading") {
                         // A row rather than a grid, so the shelf reads as
