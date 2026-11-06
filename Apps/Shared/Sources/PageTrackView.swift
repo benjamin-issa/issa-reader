@@ -9,6 +9,13 @@ import SwiftUI
 /// page by the time it moves — it is this, taken just before.
 struct PageSnapshot: Equatable {
     let layout: ChapterLayout
+    /// Which pagination of `layout` this is. It is re-paginated in place, so
+    /// nothing about the class says it changed, and a reflow that keeps the
+    /// page number moves nothing else a view observes: read here, every view
+    /// that takes a snapshot draws again. A page drawn from the last pagination
+    /// was blank on iPhone Duo's outer display, and on its spread stopped short
+    /// of lines the next page did not start with.
+    let revision: Int
     let page: RenderedPage
     let activeFragment: String?
     let annotations: [PageSurface.AnnotationBlock]
@@ -21,7 +28,7 @@ struct PageSnapshot: Equatable {
     /// snapshots of different layouts are different pages whatever their
     /// numbers say.
     static func == (lhs: PageSnapshot, rhs: PageSnapshot) -> Bool {
-        lhs.layout === rhs.layout && lhs.page == rhs.page
+        lhs.layout === rhs.layout && lhs.revision == rhs.revision && lhs.page == rhs.page
             && lhs.activeFragment == rhs.activeFragment && lhs.annotations == rhs.annotations
             && lhs.selection == rhs.selection && lhs.theme == rhs.theme
             && lhs.highlight == rhs.highlight && lhs.highlightStyle == rhs.highlightStyle

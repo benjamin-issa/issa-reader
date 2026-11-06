@@ -2003,6 +2003,8 @@ struct PageSurface: View {
     }
 
     let layout: ChapterLayout
+    /// Which pagination of `layout`; see `PageSnapshot.revision`.
+    let revision: Int
     let page: RenderedPage
     let activeFragment: String?
     let annotations: [AnnotationBlock]
@@ -2060,6 +2062,7 @@ extension PageSurface: Equatable {
     init(_ snapshot: PageSnapshot, size: CGSize) {
         self.init(
             layout: snapshot.layout,
+            revision: snapshot.revision,
             page: snapshot.page,
             activeFragment: snapshot.activeFragment,
             annotations: snapshot.annotations,
@@ -2075,7 +2078,8 @@ extension PageSurface: Equatable {
     /// page that has not changed is not redrawn for every frame of a turn that
     /// only moves it.
     nonisolated static func == (lhs: PageSurface, rhs: PageSurface) -> Bool {
-        lhs.layout === rhs.layout && lhs.page == rhs.page && lhs.activeFragment == rhs.activeFragment
+        lhs.layout === rhs.layout && lhs.revision == rhs.revision && lhs.page == rhs.page
+            && lhs.activeFragment == rhs.activeFragment
             && lhs.annotations == rhs.annotations && lhs.selection == rhs.selection
             && lhs.theme == rhs.theme && lhs.highlight == rhs.highlight
             && lhs.highlightStyle == rhs.highlightStyle && lhs.size == rhs.size

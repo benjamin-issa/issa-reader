@@ -81,6 +81,9 @@ public final class ReaderModel {
     /// turn moved the page, so that it lets go rather than sliding the wrong
     /// page out.
     public private(set) var layoutRevision = 0
+    /// Where the last reflow left the reader, in characters, and the page that
+    /// landed on: see `relayoutCurrentChapter`. Not observed: nothing draws it.
+    @ObservationIgnored private var reflowPlace: (offset: Int, chapter: Int, page: Int)?
 
     /// Exactly which page is on screen.
     public struct PageKey: Hashable, Sendable {
@@ -2174,9 +2177,22 @@ public final class ReaderModel {
         guard let layout, pageSize != .zero else { return }
         // Keep the reader on the same words across a reflow rather than the same
         // page number, which would move the reader arbitrarily.
-        let anchor = layout.pages.indices.contains(pageIndex)
-            ? layout.pages[pageIndex].characterRange.location
-            : 0
+        //
+        // The same words through a run of reflows too. Each one lands on the
+        // page holding the anchor, whose start is earlier than the anchor, and
+        // taking the next anchor from that start walked the reader backwards:
+        // closing iPhone Duo reflows half a dozen times in a second, while the
+        // window, the insets and the pages shown arrive one at a time, and
+        // that was enough to reach the top of the chapter. So the anchor stands
+        // until the page number says the reader has moved.
+        let anchor: Int
+        if let held = reflowPlace, held.chapter == chapterIndex, held.page == pageIndex {
+            anchor = held.offset
+        } else {
+            anchor = layout.pages.indices.contains(pageIndex)
+                ? layout.pages[pageIndex].characterRange.location
+                : 0
+        }
         layout.layout(pageSize: pageSize)
         layoutRevision &+= 1
         // Re-flowed, not re-parsed: a plate's size and a percentage margin
@@ -2185,6 +2201,7 @@ public final class ReaderModel {
         // neighbour once the reader turns away from it.
         layoutKey = nil
         pageIndex = layout.pages.firstIndex { NSLocationInRange(anchor, $0.characterRange) } ?? 0
+        reflowPlace = (anchor, chapterIndex, pageIndex)
     }
 
     /// Loads a chapter, leaving the model untouched if it cannot be read.
@@ -2252,6 +2269,7 @@ public final class ReaderModel {
         self.layout = layout
         chapterIndex = index
         layoutRevision &+= 1
+        reflowPlace = nil
         layoutKey = key
         // Here rather than before the parse: the parse can throw, and a chapter
         // that failed to load must leave the one on screen — and its anchors —
@@ -2703,6 +2721,7 @@ public final class ReaderModel {
     ) -> PageSnapshot {
         PageSnapshot(
             layout: layout,
+            revision: layoutRevision,
             page: page,
             activeFragment: activeFragment,
             annotations: annotations,

@@ -57,6 +57,103 @@ struct SpreadPagingTests {
         return (model, directory)
     }
 
+    /// What closing iPhone Duo does to the page, as the app logged it: a run
+    /// of layouts in under a second, none of them the reader's, while the
+    /// window, the insets and the pages shown arrive one at a time. Ending
+    /// where it began, so that the place can be asked for exactly.
+    static let settling: [(size: CGSize, shown: Int)] = [
+        (CGSize(width: 640, height: 300), 1),
+        (CGSize(width: 250, height: 310), 1),
+        (CGSize(width: 300, height: 290), 1),
+        (CGSize(width: 660, height: 280), 1),
+        (CGSize(width: 660, height: 240), 1),
+        (CGSize(width: 280, height: 260), 2),
+        (pageSize, 2),
+    ]
+
+    static func settle(_ model: ReaderModel) async {
+        for step in settling {
+            model.pagesShown = step.shown
+            await model.resize(to: step.size)
+        }
+    }
+
+    /// Each layout snapped to the start of the page holding the place, and
+    /// that start became the next layout's place, so a close and an open
+    /// walked the reader back to the top of the chapter.
+    @Test("a page size settling through several layouts keeps the place")
+    func settlingKeepsThePlace() async throws {
+        let (model, directory) = try await Self.opened(pagesShown: 2)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try #require(model.pageCount >= 5, "the chapter has to run to several spreads")
+        await model.nextPage()
+        await model.nextPage()
+        let page = try #require(model.currentPage)
+
+        await Self.settle(model)
+
+        #expect(model.pageIndex == page.index)
+        #expect(model.currentPage?.characterRange.location == page.characterRange.location)
+    }
+
+    /// The place held through a settling is the reader's until they move it.
+    @Test("a turn after a layout settled is the place the next one keeps")
+    func aTurnMovesThePlace() async throws {
+        let (model, directory) = try await Self.opened(pagesShown: 2)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try #require(model.pageCount >= 5, "the chapter has to run to several spreads")
+        await model.nextPage()
+        await Self.settle(model)
+        await model.nextPage()
+        let page = try #require(model.currentPage)
+
+        await Self.settle(model)
+
+        #expect(model.pageIndex == page.index)
+    }
+
+    /// A chapter of its own has offsets of its own.
+    @Test("another chapter does not inherit the place held in the last one")
+    func anotherChapter() async throws {
+        let (model, directory) = try await Self.opened(pagesShown: 2)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        await model.nextPage()
+        await Self.settle(model)
+        await model.go(toChapter: 1)
+        #expect(model.pageIndex == 0)
+
+        await Self.settle(model)
+
+        #expect(model.pageIndex == 0)
+        #expect(model.chapterIndex == 1)
+    }
+
+    /// The page drawn after a layout that kept the page number was the one
+    /// from before it: blank on the Duo's outer display, and short of its last
+    /// lines on the spread, with the words below them never shown. No
+    /// accessibility query can see a canvas, so this asks what SwiftUI asks.
+    @Test("a layout that keeps the page number still redraws the pages", arguments: [1, 2])
+    func sameNumberNewLayout(pagesShown: Int) async throws {
+        let (model, directory) = try await Self.opened(pagesShown: pagesShown)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try #require(model.pageIndex == 0)
+        final class Flag: @unchecked Sendable { var fired = false }
+        let flag = Flag()
+        let before = model.currentSnapshot()
+        withObservationTracking {
+            _ = model.currentSnapshot()
+            _ = model.facingSnapshot()
+        } onChange: {
+            flag.fired = true
+        }
+
+        await model.resize(to: CGSize(width: Self.pageSize.width, height: Self.pageSize.height - 20))
+
+        #expect(model.pageIndex == 0, "the page number has to be what stayed the same")
+        #expect(flag.fired, "nothing told the page to draw again")
+        #expect(model.currentSnapshot() != before)
+    }
+
     /// With no voice to bound it, Ask stops at the end of what is on screen.
     /// It stopped at the left page, so the right page's text was out of every
     /// answer on a spread, however long the reader had been looking at it.
