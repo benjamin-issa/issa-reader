@@ -59,6 +59,20 @@ class LibraryLoadScreensTest {
         assertFalse(driver.exists(notice))
     }
 
+    /** The refresh swaps the failure for a spinner, which takes the button off the screen: on the screen's own scope it cancelled itself. */
+    @Test
+    fun `Try again on a failed load finishes, from the Reading tab`() {
+        val app = driver.launch(signedIn = true, catalogue = FixtureServer.Catalogue.FAILS).app
+        driver.tab("Reading")
+        driver.waitForNode(hasText("Couldn't load your library"))
+
+        FixtureServer.catalogue = FixtureServer.Catalogue.WHOLE
+        compose.onNodeWithText("Try again").performClick()
+
+        driver.waitFor { app.books.isNotEmpty() }
+        assertFalse(driver.exists(hasText("Couldn't load your library")))
+    }
+
     /** "Nothing in progress" over a library that failed to load sends a reader looking in the wrong place. */
     @Test
     fun `Reading says the library could not be loaded, not that nothing is in progress`() {

@@ -526,6 +526,13 @@ class ReaderModel(
     val currentPage: RenderedPage? get() = layout?.pages?.getOrNull(pageIndex)
 
     /** What `open` reads the book from: the server's edition, or the reader's own copy. */
+    /**
+     * The edition this open chose, which is the job a cancel has to stop. Held,
+     * not asked again: the answer goes by what is on the device, which can
+     * change while the download runs.
+     */
+    private var openingFormat: BookContentService.Format? = null
+
     private sealed interface Opening {
         data class Server(val session: Session, val format: BookContentService.Format) : Opening
         data class Local(val files: LocalBookFiles) : Opening
@@ -543,6 +550,7 @@ class ReaderModel(
                     phase = Phase.Failed("This book has no readable edition on the server.")
                     return
                 }
+                openingFormat = preferred
                 Opening.Server(source.session, preferred)
             }
             is Source.Local -> {
@@ -793,7 +801,7 @@ class ReaderModel(
     /** Stops an in-progress download and closes the book. */
     fun cancelDownload() {
         if (isLocal) return
-        val format = downloadHost?.readingFormat(book) ?: BookContentService.preferredReadingFormat(book) ?: return
+        val format = openingFormat ?: return
         downloadHost?.downloads?.cancel(DownloadManager.Job(book.uuid, format))
         phase = Phase.Failed("Download cancelled.")
     }

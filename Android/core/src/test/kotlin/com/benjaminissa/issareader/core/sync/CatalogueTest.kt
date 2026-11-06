@@ -126,6 +126,15 @@ class CatalogueTest {
         assertThrows(StorytellerError.Decoding::class.java) { LibraryService.checked(catalogue) }
     }
 
+    /** Refused or unreadable, nothing came of these rows. Called empty, the answer would clear the store. */
+    @Test
+    fun `an answer every row of which was refused is an error, not an empty library`() {
+        val unreadable = decode(listOf(unreadableRow("../../Documents/x")))
+        assertThrows(StorytellerError.Decoding::class.java) { LibraryService.checked(unreadable) }
+        val readable = decode(listOf(row("../../Documents/x")))
+        assertThrows(StorytellerError.Decoding::class.java) { LibraryService.checked(readable) }
+    }
+
     @Test
     fun `a uuid that could not name a path is not kept for`() {
         val catalogue = LibraryService.checked(decode(listOf(row(uuids[0]), unreadableRow("../../Documents/x"))))

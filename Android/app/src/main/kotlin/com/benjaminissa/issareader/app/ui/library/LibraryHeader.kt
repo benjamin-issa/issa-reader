@@ -22,7 +22,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -44,7 +43,6 @@ import com.benjaminissa.issareader.ui.SortCapsule
 import com.benjaminissa.issareader.ui.Symbols
 import com.benjaminissa.issareader.ui.SystemText
 import com.benjaminissa.issareader.ui.Typography
-import kotlinx.coroutines.launch
 
 /**
  * The library's navigation, made visible: the search capsule, the Browse and
@@ -92,7 +90,6 @@ fun LibraryHeader(search: String, onSearchChange: (String) -> Unit, displayedCou
 internal fun UnreadableBooksNotice(app: AppModel, modifier: Modifier = Modifier) {
     val count = app.unreadableBookCount
     if (count <= 0) return
-    val scope = rememberCoroutineScope()
     Row(
         modifier.fillMaxWidth().testTag("notice.unreadableBooks"),
         verticalAlignment = Alignment.CenterVertically,
@@ -114,7 +111,7 @@ internal fun UnreadableBooksNotice(app: AppModel, modifier: Modifier = Modifier)
             "Try again",
             style = Typography.caption.copy(fontWeight = FontWeight.SemiBold),
             color = Palette.tangerinePressed,
-            modifier = Modifier.clickable(role = Role.Button) { scope.launch { app.refreshLibrary() } },
+            modifier = Modifier.clickable(role = Role.Button, onClick = app::retryLibrary),
         )
     }
 }

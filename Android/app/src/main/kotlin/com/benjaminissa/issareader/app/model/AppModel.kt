@@ -787,6 +787,15 @@ class AppModel(
         }
     }
 
+    /**
+     * A retry a reader asked for, on the model's scope. Never the screen's: the
+     * refresh turns a failure into a spinner, which takes the screen's "Try
+     * again" and its scope off the screen, and that cancelled the retry.
+     */
+    fun retryLibrary() {
+        scope.launch { refreshLibrary() }
+    }
+
     suspend fun refreshLibrary() {
         val session = session ?: return
         // Not for a server `connect` is leaving: its exit has moved the fence.
@@ -1263,11 +1272,6 @@ class AppModel(
     }
 
     /**
-     * Whether this edition is on the device and staying there: the
-     * per-edition question, which sees a removal decided but not yet carried
-     * out.
-     */
-    /**
      * Whether Listen plays this book from the read-along on the device.
      *
      * By the file, not the server's status: a re-alignment says PROCESSING for
@@ -1288,6 +1292,11 @@ class AppModel(
         book, readaloudOnDevice = isDownloaded(book, BookContentService.Format.READALOUD),
     )
 
+    /**
+     * Whether this edition is on the device and staying there: the
+     * per-edition question, which sees a removal decided but not yet carried
+     * out.
+     */
     fun isDownloaded(book: Book, format: BookContentService.Format): Boolean = isDownloaded(book.uuid, format)
 
     fun isDownloaded(bookUuid: String, format: BookContentService.Format): Boolean {

@@ -11,6 +11,8 @@ import com.benjaminissa.issareader.core.networking.Endpoint
 import com.benjaminissa.issareader.core.networking.QueryItem
 import com.benjaminissa.issareader.core.networking.StorytellerError
 import com.benjaminissa.issareader.core.toEpochSecondsDouble
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import java.text.Normalizer
@@ -33,8 +35,14 @@ import java.time.Instant
  * its cover is.
  */
 class LibraryService(private val client: ApiClient) {
-    /** The library, less any row that could not be read. */
-    suspend fun catalogue(): Catalogue = checked(client.get(Endpoint.books, Catalogue.Deserializer))
+    /**
+     * The library, less any row that could not be read. Off the main thread,
+     * which a refresh is on: a library is read twice over now, as a tree and
+     * then a row at a time.
+     */
+    suspend fun catalogue(): Catalogue = withContext(Dispatchers.Default) {
+        checked(client.get(Endpoint.books, Catalogue.Deserializer))
+    }
 
     suspend fun statuses(): List<Status> = client.get(Endpoint.statuses, ListSerializer(Status.serializer()))
 
@@ -234,14 +242,20 @@ class LibraryService(private val client: ApiClient) {
             // there is nothing to keep for it, and carrying it on would hand a
             // hostile server the row [refusingUnsafeIdentifiers] exists to refuse.
             val failures = decoded.failures.filter { it.uuid?.isBareUuid ?: true }
-            val catalogue = Catalogue(books, failures)
-            val first = failures.firstOrNull() ?: return catalogue
-            IssaLog.failure(
-                "catalogue rows skipped", first.error,
-                mapOf("rows" to failures.size.toString(), "book" to (first.uuid ?: "unnamed")),
-            )
-            if (books.isEmpty()) throw StorytellerError.Decoding(first.error.toString())
-            return catalogue
+            val first = decoded.failures.firstOrNull()
+            if (first != null) {
+                IssaLog.failure(
+                    "catalogue rows skipped", first.error,
+                    mapOf("rows" to decoded.failures.size.toString(), "book" to (first.uuid ?: "unnamed")),
+                )
+            }
+            // Before the refusals are taken off the count: rows that came to
+            // nothing are not an empty library, and an empty library is what
+            // clears the store.
+            if (books.isEmpty() && (first != null || decoded.books.isNotEmpty())) {
+                throw StorytellerError.Decoding(first?.error?.toString() ?: "No row of the catalogue could be used.")
+            }
+            return Catalogue(books, failures)
         }
 
         /**

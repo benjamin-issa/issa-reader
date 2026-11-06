@@ -14,7 +14,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -37,7 +36,6 @@ import com.benjaminissa.issareader.ui.LocalPlayerBand
 import com.benjaminissa.issareader.ui.Metrics
 import com.benjaminissa.issareader.ui.PalettePlaceholder
 import com.benjaminissa.issareader.ui.Symbols
-import kotlinx.coroutines.launch
 
 /**
  * The Library tab: the header that owns search and the Browse / shelf chips,
@@ -123,13 +121,12 @@ internal fun LibraryLoadOverlay(otherwise: @Composable () -> Unit) {
     when (val load = app.libraryLoad) {
         AppModel.LibraryLoad.Loading -> LoadingOverlay()
         is AppModel.LibraryLoad.Failed -> CenteredPlaceholder {
-            val scope = rememberCoroutineScope()
             PalettePlaceholder(
                 symbol = Symbols.exclamationmarkTriangle,
                 title = "Couldn't load your library",
                 message = load.reason,
                 actionTitle = "Try again",
-                action = { scope.launch { app.refreshLibrary() } },
+                action = app::retryLibrary,
             )
         }
         AppModel.LibraryLoad.Settled -> otherwise()

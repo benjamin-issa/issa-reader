@@ -107,7 +107,6 @@ class DownloadRemovalTest : AppSuite() {
         }
     }
 
-    /** Removing one edition leaves the other on the device. */
     /**
      * A re-alignment reports PROCESSING for as long as it runs. Listen went by
      * that and fell to the server's manifest, whose tracks match nothing this
@@ -145,6 +144,7 @@ class DownloadRemovalTest : AppSuite() {
         return book.copy(readaloud = book.readaloud?.copy(status = "PROCESSING"))
     }
 
+    /** Removing one edition leaves the other on the device. */
     @Test
     fun removingOneEditionLeavesTheOther() = run { app, _, _ ->
         val uuid = freshUuid()

@@ -149,7 +149,9 @@ internal fun DownloadsScreen(app: AppModel, onBack: (() -> Unit)?, scanned: Down
         }
     }
 
-    if (confirmingSweep) {
+    // Gated as the section is: a refresh landing while this is open can take
+    // back the claim that these books have gone.
+    if (confirmingSweep && app.knowsWholeLibrary) {
         AlertDialog(
             onDismissRequest = { confirmingSweep = false },
             containerColor = Palette.surface,
