@@ -794,8 +794,12 @@ final class LayoutSweepTests: XCTestCase {
         guard let (reference, _) = try openReader(app) else { return }
 
         // A third of the way down the page, in the text and clear of the tap
-        // zones' edges.
-        let spot = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35))
+        // zones' edges. On iPhone Duo's outer display the book that opens is
+        // on a short page, whose text has ended by there, so the press found
+        // bare paper and this reported a selection failure on that row alone.
+        // Its first line of body text is a sixth of the way down.
+        let depth = ProcessInfo.processInfo.environment["ISSA_SWEEP_DEVICE"] == "iphone-duo-outer" ? 0.155 : 0.35
+        let spot = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: depth))
         spot.press(forDuration: 0.9)
         let highlight = app.buttons["Highlight"].firstMatch
         guard highlight.waitForExistence(timeout: 10) else {
