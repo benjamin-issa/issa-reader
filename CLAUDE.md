@@ -89,8 +89,11 @@ bring them up is in the README, under "A local server to talk to".
    (XCUITest's coordinate taps and screenshots do not reach the inner
    display): a page turn on the spread; the table pose (the sentence above
    the fold, the player below); and opening, closing and turning mid-read
-   three times over, with the place kept, the page at the same height and
-   the rail below the sensor bar each time. Record what was seen.
+   three times over, starting past a chapter's first spread, with the place
+   kept, every page full and none blank, and the rail below the sensor bar
+   each time. From the first spread a lost place cannot show: the blank page
+   and the walk back to the top of the chapter shipped in 1.6.0 under a walk
+   that began there. Record what was seen.
 
    On Apple TV, `--platform tvos` runs `Apps/IssaLiveTVUITests` on the Apple
    TV 4K simulator, moving by the remote: the pairing, the library, the
