@@ -42,7 +42,8 @@ extension ReaderModel {
                 spineIndex: chapterIndex,
                 charOffset: NSMaxRange(range),
                 chapterTitle: chapterTitle,
-                pageNumber: pageIndex + 1,
+                // The voice's own page, which on a spread can be the right one.
+                pageNumber: (layout.page(containingOffset: range.location)?.index ?? pageIndex) + 1,
                 kind: .narratedSentence,
             )
         }

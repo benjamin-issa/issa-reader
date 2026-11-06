@@ -225,6 +225,28 @@ struct SpreadPagingTests {
         #expect(boundary.pageNumber == 2)
     }
 
+    /// The footer names the page the boundary is on, and with the voice on
+    /// the right page of a spread that is not the left one.
+    @Test("Ask numbers the voice's page on a spread")
+    func askNumbersTheVoicesPage() async throws {
+        let (model, directory) = try await Self.opened(pagesShown: 2)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let readalong = try #require(model.readalong)
+        let layout = try #require(model.layout)
+        let right = try #require(model.facingPage)
+        let onRight = try #require(
+            (0 ..< 40).map { "a\($0)" }.first { layout.page(containingFragment: $0)?.index == right.index })
+        let href = TestEPUB.href(of: TestEPUB.Chapter(id: "one", title: "", body: ""))
+        await readalong.seek(toFragment: onRight, inDocument: href)
+        readalong.player.play()
+        defer { readalong.player.pause() }
+
+        let boundary = try #require(model.readingBoundary())
+
+        #expect(boundary.kind == .narratedSentence)
+        #expect(boundary.pageNumber == right.index + 1)
+    }
+
     @Test("Ask stops at the end of a single page when one is shown")
     func askReadsOnePage() async throws {
         let (model, directory) = try await Self.opened(pagesShown: 1)
