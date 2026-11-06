@@ -2475,7 +2475,10 @@ class ReaderModel(
         ) {
             val range = layout.fragmentRange(entry.fragmentId)
             if (range != null) {
-                return ReadingBoundary(chapterIndex, range.end, chapterTitle, pageIndex + 1, ReadingBoundary.Kind.NARRATED_SENTENCE)
+                // The page the sentence ends on, as the offset is its end: a
+                // sentence crossing a break was numbered a page too early.
+                val page = layout.pageContainingOffset(maxOf(range.location, range.end - 1))?.index ?: pageIndex
+                return ReadingBoundary(chapterIndex, range.end, chapterTitle, page + 1, ReadingBoundary.Kind.NARRATED_SENTENCE)
             }
         }
         // An empty painted range means nothing laid out on this page: the
