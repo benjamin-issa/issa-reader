@@ -2162,15 +2162,21 @@ public final class ReaderModel {
         if let fragment, let page = layout.page(containingFragment: fragment) {
             pageIndex = page.index
         } else {
-            // `NSLocationInRange` is false for a zero-length range, and
-            // `computePages` can emit a synthetic trailing page at
-            // {totalLength, 0} — so an anchor at the very end matched no page
-            // and `?? 0` sent the reader to the top of the chapter. Fall back
-            // to the last page, which is where that anchor actually is.
-            pageIndex = layout.pages.firstIndex { NSLocationInRange(anchor, $0.characterRange) }
-                ?? (anchor >= (layout.pages.last?.characterRange.location ?? 0)
-                    ? max(layout.pages.count - 1, 0) : 0)
+            pageIndex = Self.pageIndex(holding: anchor, in: layout)
         }
+    }
+
+    /// The page an anchor is on.
+    ///
+    /// `NSLocationInRange` is false for a zero-length range, and `computePages`
+    /// can emit a synthetic trailing page at {totalLength, 0}, so an anchor at
+    /// the very end matched no page and `?? 0` sent the reader to the top of
+    /// the chapter. Past the last page's start it falls back to that last page,
+    /// which is where the anchor actually is.
+    static func pageIndex(holding anchor: Int, in layout: ChapterLayout) -> Int {
+        layout.pages.firstIndex { NSLocationInRange(anchor, $0.characterRange) }
+            ?? (anchor >= (layout.pages.last?.characterRange.location ?? 0)
+                ? max(layout.pages.count - 1, 0) : 0)
     }
 
     private func relayoutCurrentChapter() async {
@@ -2200,7 +2206,7 @@ public final class ReaderModel {
         // what a fresh one at the new size would be, and must not be kept as a
         // neighbour once the reader turns away from it.
         layoutKey = nil
-        pageIndex = layout.pages.firstIndex { NSLocationInRange(anchor, $0.characterRange) } ?? 0
+        pageIndex = Self.pageIndex(holding: anchor, in: layout)
         reflowPlace = (anchor, chapterIndex, pageIndex)
     }
 

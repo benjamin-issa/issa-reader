@@ -128,6 +128,59 @@ struct SpreadPagingTests {
         #expect(model.chapterIndex == 1)
     }
 
+    /// An anchor past every page's range is at the end of the chapter, not
+    /// the top of it. `computePages` can end a chapter on a page of no
+    /// characters, whose location is in no range, and a reflow used to send
+    /// that reader to the first page. The parser trims trailing newlines, so
+    /// no chapter it makes ends that way today, which is why this asks the
+    /// rule itself rather than building one.
+    @Test("an anchor at the end of a chapter is on its last page, and the rest on their own")
+    func anchorAtTheEnd() async throws {
+        let (model, directory) = try await Self.opened(pagesShown: 1)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let layout = try #require(model.layout)
+        let last = try #require(layout.pages.last)
+        try #require(layout.pages.count >= 3)
+        let middle = layout.pages[layout.pages.count / 2]
+
+        #expect(ReaderModel.pageIndex(holding: 0, in: layout) == 0)
+        #expect(ReaderModel.pageIndex(holding: middle.characterRange.location, in: layout) == middle.index)
+        #expect(ReaderModel.pageIndex(holding: NSMaxRange(last.characterRange), in: layout) == last.index)
+    }
+
+    /// A style change lays the chapter out again and lands on a page number
+    /// of its own. If that number is the one a reflow left, the place held
+    /// from before the change would be taken for the reader's.
+    @Test("a reload does not inherit the place held before it")
+    func aReloadClearsTheHeldPlace() async throws {
+        let (model, directory) = try await Self.opened(pagesShown: 1)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try #require(model.pageCount >= 4, "the chapter has to run to several pages")
+        await model.nextPage()
+        await model.nextPage()
+        await model.resize(to: CGSize(width: Self.pageSize.width, height: Self.pageSize.height + 30))
+        let heldPage = model.pageIndex
+        let heldWords = try #require(model.currentPage).characterRange.location
+
+        // Bigger type, so the words held are on a later page than they were.
+        let revision = model.layoutRevision
+        var style = model.style
+        style.fontSize *= 2
+        model.style = style
+        try #require(await waitUntil { model.layoutRevision != revision })
+        // And the reader on the page number the reflow left, which is all the
+        // held place is keyed to.
+        model.pageIndex = heldPage
+        let page = try #require(model.currentPage)
+        try #require(!NSLocationInRange(heldWords, page.characterRange),
+                     "the held words have to have moved off this page for this to test anything")
+
+        await model.resize(to: CGSize(width: Self.pageSize.width, height: Self.pageSize.height + 31))
+
+        let after = try #require(model.currentPage)
+        #expect(NSLocationInRange(page.characterRange.location, after.characterRange))
+    }
+
     /// The page drawn after a layout that kept the page number was the one
     /// from before it: blank on the Duo's outer display, and short of its last
     /// lines on the spread, with the words below them never shown. No
