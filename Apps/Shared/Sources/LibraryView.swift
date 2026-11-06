@@ -187,15 +187,7 @@ public struct LibraryView: View {
             if app.books.isEmpty, app.isLoadingLibrary {
                 ProgressView()
             } else if app.books.isEmpty, let error = app.loadError {
-                // A failed fetch is not an empty library, and showing "no books"
-                // for a decode error sends you looking in entirely the wrong place.
-                PalettePlaceholder(
-                    symbol: "exclamationmark.triangle",
-                    title: "Couldn't load your library",
-                    message: error,
-                    actionTitle: "Try again",
-                    action: { Task { await app.refreshLibrary() } },
-                )
+                LibraryLoadFailure(reason: error)
             } else if app.books.isEmpty {
                 PalettePlaceholder(
                     symbol: "books.vertical",
@@ -204,6 +196,24 @@ public struct LibraryView: View {
                 )
             }
         }
+    }
+}
+
+/// What every shelf says when the library could not be fetched and nothing is
+/// cached. A failed fetch is not an empty library, and showing "no books" for a
+/// decode error sends you looking in entirely the wrong place.
+struct LibraryLoadFailure: View {
+    @Environment(AppModel.self) private var app
+    let reason: String
+
+    var body: some View {
+        PalettePlaceholder(
+            symbol: "exclamationmark.triangle",
+            title: "Couldn't load your library",
+            message: reason,
+            actionTitle: "Try again",
+            action: { Task { await app.refreshLibrary() } },
+        )
     }
 }
 

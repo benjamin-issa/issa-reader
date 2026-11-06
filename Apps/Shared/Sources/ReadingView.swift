@@ -55,6 +55,8 @@ public struct ReadingView: View {
         .overlay {
             if app.books.isEmpty, app.isLoadingLibrary {
                 ProgressView()
+            } else if app.books.isEmpty, let error = app.loadError {
+                LibraryLoadFailure(reason: error)
             } else if home.isEmpty {
                 PalettePlaceholder(
                     symbol: "bookmark",

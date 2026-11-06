@@ -42,7 +42,9 @@ public struct ListeningView: View {
         .background(Palette.paper)
         .bookRoutes(place: .shelf)
         .overlay {
-            if readalongs.isEmpty, audiobooks.isEmpty {
+            if app.books.isEmpty, let error = app.loadError {
+                LibraryLoadFailure(reason: error)
+            } else if readalongs.isEmpty, audiobooks.isEmpty {
                 // Styled from the palette: on this tab it is the entire screen
                 // for a library with no aligned narration, so system greys on
                 // warm paper is the whole first impression.

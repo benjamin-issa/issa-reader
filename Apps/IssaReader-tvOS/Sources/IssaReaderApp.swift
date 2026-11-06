@@ -301,6 +301,11 @@ struct TVLibraryView: View {
         }
         .background(Palette.paper)
         .accessibilityIdentifier("screen.tvLibrary")
+        .overlay {
+            if app.books.isEmpty, let error = app.loadError {
+                LibraryLoadFailure(reason: error)
+            }
+        }
         // The router a poster's menu says a refusal through. Reading and
         // Listening install theirs; this shelf had none, so a Save or Resume
         // the Wi-Fi rule held back wrote its alert to nowhere and the press
