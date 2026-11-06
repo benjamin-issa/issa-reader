@@ -2725,9 +2725,14 @@ public final class ReaderModel {
         _ layout: ChapterLayout, _ page: RenderedPage, activeFragment: String?,
         annotations: [PageSurface.AnnotationBlock], selection: NSRange?,
     ) -> PageSnapshot {
-        PageSnapshot(
+        // Read so that a view taking a snapshot draws again after any reflow,
+        // even one that keeps the page number. The revision it carries is the
+        // layout's own, so a prepared neighbour's page is the same page once a
+        // turn has committed it.
+        _ = layoutRevision
+        return PageSnapshot(
             layout: layout,
-            revision: layoutRevision,
+            revision: layout.pagination,
             page: page,
             activeFragment: activeFragment,
             annotations: annotations,

@@ -9,12 +9,11 @@ import SwiftUI
 /// page by the time it moves — it is this, taken just before.
 struct PageSnapshot: Equatable {
     let layout: ChapterLayout
-    /// Which pagination of `layout` this is. It is re-paginated in place, so
-    /// nothing about the class says it changed, and a reflow that keeps the
-    /// page number moves nothing else a view observes: read here, every view
-    /// that takes a snapshot draws again. A page drawn from the last pagination
-    /// was blank on iPhone Duo's outer display, and on its spread stopped short
-    /// of lines the next page did not start with.
+    /// Which pagination of `layout` this is (`ChapterLayout.pagination`). It is
+    /// re-paginated in place, so nothing about the class says it changed, and a
+    /// page drawn from the last pagination was blank on iPhone Duo's outer
+    /// display, and on its spread stopped short of lines the next page did not
+    /// start with.
     let revision: Int
     let page: RenderedPage
     let activeFragment: String?

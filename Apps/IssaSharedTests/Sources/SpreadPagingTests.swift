@@ -204,7 +204,7 @@ struct SpreadPagingTests {
 
         #expect(model.pageIndex == 0, "the page number has to be what stayed the same")
         #expect(flag.fired, "nothing told the page to draw again")
-        #expect(model.currentSnapshot() != before)
+        #expect(model.currentSnapshot()?.revision != before?.revision)
     }
 
     /// With no voice to bound it, Ask stops at the end of what is on screen.
