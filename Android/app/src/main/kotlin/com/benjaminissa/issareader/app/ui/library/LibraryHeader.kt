@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import com.benjaminissa.issareader.app.model.AppModel
 import com.benjaminissa.issareader.app.ui.shell.appModel
 import com.benjaminissa.issareader.core.sync.LibraryArrangement
+import com.benjaminissa.issareader.ui.EInk
 import com.benjaminissa.issareader.ui.LibrarySearchField
 import com.benjaminissa.issareader.ui.Metrics
 import com.benjaminissa.issareader.ui.Palette
@@ -175,7 +176,7 @@ private fun TagsChip(app: AppModel) {
                         app.arrangement = app.arrangement.copy(tags = emptySet())
                     },
                 )
-                HorizontalDivider(thickness = 0.5.dp, color = Palette.border)
+                HorizontalDivider(thickness = if (Palette.isEInk) EInk.divider else 0.5.dp, color = Palette.border)
             }
             for (tag in app.facets.tagCounts.take(12)) {
                 val isOn = tag.name in app.arrangement.tags
@@ -260,7 +261,7 @@ private fun SortMenu(app: AppModel) {
                     },
                 )
             }
-            HorizontalDivider(thickness = 0.5.dp, color = Palette.border)
+            HorizontalDivider(thickness = if (Palette.isEInk) EInk.divider else 0.5.dp, color = Palette.border)
             DropdownMenuItem(
                 text = { Text("Reverse order", style = SystemText.body, color = Palette.ink) },
                 trailingIcon = if (arrangement.ascending) {

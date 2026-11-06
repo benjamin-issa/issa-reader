@@ -27,6 +27,7 @@ import com.benjaminissa.issareader.app.ui.shell.appModel
 import com.benjaminissa.issareader.core.download.BookContentService
 import com.benjaminissa.issareader.core.download.BookMenu
 import com.benjaminissa.issareader.core.model.Book
+import com.benjaminissa.issareader.ui.EInk
 import com.benjaminissa.issareader.ui.Metrics
 import com.benjaminissa.issareader.ui.Palette
 import com.benjaminissa.issareader.ui.PaperMenu
@@ -193,7 +194,7 @@ fun stars(count: Int): String = if (count == 1) "1 star" else "$count stars"
 
 @Composable
 private fun MenuDivider() {
-    HorizontalDivider(thickness = 0.5.dp, color = Palette.border)
+    HorizontalDivider(thickness = if (Palette.isEInk) EInk.divider else 0.5.dp, color = Palette.border)
 }
 
 @Composable
