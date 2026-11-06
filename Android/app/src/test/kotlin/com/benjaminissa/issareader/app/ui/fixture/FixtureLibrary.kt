@@ -84,6 +84,11 @@ object FixtureLibrary {
             "what they decide to do once they know. It is long enough here to wrap several times at every width this " +
             "sweep runs at, which is the entire point of putting it in a fixture."
 
+    /** The catalogue with one row the model cannot read, listed last, for the shelf's notice. */
+    val booksJsonWithUnreadableRow: String by lazy {
+        booksJson.trimEnd().dropLast(1) + """,{"uuid":"00000000-0000-4000-8000-0000000000bd","title":7}]"""
+    }
+
     /** The catalogue as the server sends it: one key per format, `series` always present. */
     val booksJson: String by lazy {
         val books: JsonArray = buildJsonArray {

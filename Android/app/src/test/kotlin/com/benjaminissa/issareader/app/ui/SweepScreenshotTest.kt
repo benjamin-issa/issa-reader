@@ -84,6 +84,14 @@ abstract class SweepScreenshotTest(private val device: Sweep.Device) {
     }
 
     @Test
+    fun libraryUnreadable() {
+        driver.launch(signedIn = true, catalogue = FixtureServer.Catalogue.UNREADABLE_ROW)
+        driver.tab("Library")
+        driver.waitForNode(hasTestTag("notice.unreadableBooks"))
+        capture("libraryUnreadable")
+    }
+
+    @Test
     fun libraryGrid() {
         driver.launch(signedIn = true)
         driver.tab("Library")

@@ -26,9 +26,9 @@ import com.benjaminissa.issareader.app.ui.book.BookRoutes
 import com.benjaminissa.issareader.app.ui.downloads.DownloadsPlacement
 import com.benjaminissa.issareader.app.ui.downloads.downloadsSection
 import com.benjaminissa.issareader.app.ui.downloads.rememberDownloadsSectionState
+import com.benjaminissa.issareader.app.ui.library.LibraryLoadOverlay
 import com.benjaminissa.issareader.app.ui.shell.BookDetailRoute
 import com.benjaminissa.issareader.app.ui.shell.LargeTitleScreen
-import com.benjaminissa.issareader.app.ui.shell.LoadingOverlay
 import com.benjaminissa.issareader.app.ui.shell.LocalShellActions
 import com.benjaminissa.issareader.app.ui.shell.LocalTabNavigator
 import com.benjaminissa.issareader.app.ui.shell.Refreshable
@@ -119,17 +119,17 @@ fun ReadingScreen() {
 
 @Composable
 private fun ReadingStates(app: AppModel, isEmpty: Boolean, goToLibrary: () -> Unit) {
-    if (app.books.isEmpty() && app.isLoadingLibrary) {
-        LoadingOverlay()
-    } else if (isEmpty) {
-        Box(Modifier.fillMaxSize().padding(bottom = LocalPlayerBand.current), contentAlignment = Alignment.Center) {
-            PalettePlaceholder(
-                symbol = Symbols.bookmark,
-                title = "Nothing in progress",
-                message = "Pick something from your Library and it will be waiting here.",
-                actionTitle = "Go to Library",
-                action = goToLibrary,
-            )
+    LibraryLoadOverlay {
+        if (isEmpty) {
+            Box(Modifier.fillMaxSize().padding(bottom = LocalPlayerBand.current), contentAlignment = Alignment.Center) {
+                PalettePlaceholder(
+                    symbol = Symbols.bookmark,
+                    title = "Nothing in progress",
+                    message = "Pick something from your Library and it will be waiting here.",
+                    actionTitle = "Go to Library",
+                    action = goToLibrary,
+                )
+            }
         }
     }
 }

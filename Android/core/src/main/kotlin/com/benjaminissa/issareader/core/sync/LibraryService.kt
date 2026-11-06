@@ -33,8 +33,8 @@ import java.time.Instant
  * its cover is.
  */
 class LibraryService(private val client: ApiClient) {
-    suspend fun allBooks(): List<Book> =
-        refusingUnsafeIdentifiers(client.get(Endpoint.books, ListSerializer(Book.serializer())))
+    /** The library, less any row that could not be read. */
+    suspend fun catalogue(): Catalogue = checked(client.get(Endpoint.books, Catalogue.Deserializer))
 
     suspend fun statuses(): List<Status> = client.get(Endpoint.statuses, ListSerializer(Status.serializer()))
 
@@ -211,6 +211,37 @@ class LibraryService(private val client: ApiClient) {
                 }
             }
             return kept
+        }
+
+        /**
+         * What this client will take from a decoded catalogue.
+         *
+         * Throws only when no row could be read: that is an answer this client
+         * does not understand at all, and the reader should be told so rather
+         * than shown an empty shelf. Any row it can read is worth having, with
+         * the positions and statuses it carries, however many beside it could
+         * not be read, and the reader is told how many
+         * (`AppModel.unreadableBookCount`).
+         *
+         * Logged once a refresh rather than once a row, so a change that
+         * breaks every book does not write the whole library to the log each
+         * time, and with the first row's reason, which is what the reader
+         * cannot see.
+         */
+        fun checked(decoded: Catalogue): Catalogue {
+            val books = refusingUnsafeIdentifiers(decoded.books)
+            // A uuid that could not name a path never reached the store, so
+            // there is nothing to keep for it, and carrying it on would hand a
+            // hostile server the row [refusingUnsafeIdentifiers] exists to refuse.
+            val failures = decoded.failures.filter { it.uuid?.isBareUuid ?: true }
+            val catalogue = Catalogue(books, failures)
+            val first = failures.firstOrNull() ?: return catalogue
+            IssaLog.failure(
+                "catalogue rows skipped", first.error,
+                mapOf("rows" to failures.size.toString(), "book" to (first.uuid ?: "unnamed")),
+            )
+            if (books.isEmpty()) throw StorytellerError.Decoding(first.error.toString())
+            return catalogue
         }
 
         /**

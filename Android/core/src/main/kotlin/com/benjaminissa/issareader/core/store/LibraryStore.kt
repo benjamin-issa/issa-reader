@@ -86,11 +86,20 @@ class LibraryStore(
      * A whole-library replace rather than a merge, because that is exactly
      * what the server's endpoint returns — anything missing from it has been
      * deleted server-side and should disappear here too.
+     *
+     * Except what the answer listed and this client could not read
+     * (`Catalogue`), which has not gone anywhere.
+     *
+     * @param keeping books the server listed that could not be read, whose stored
+     *   rows stay as they are.
+     * @param prunes false when a row could not even say which book it was, so
+     *   that a book missing from [books] may yet be on the server. Nothing is
+     *   deleted on that answer.
      */
-    suspend fun replaceCatalogue(books: List<Book>) {
+    suspend fun replaceCatalogue(books: List<Book>, keeping: Set<String> = emptySet(), prunes: Boolean = true) {
         val rows = books.map { BookRow(it) }
         writing { db ->
-            deletedRowsCleanup(db, keeping = rows.map { it.uuid })
+            if (prunes) deletedRowsCleanup(db, keeping = rows.map { it.uuid } + keeping)
             for (row in rows) row.save(db)
         }
     }

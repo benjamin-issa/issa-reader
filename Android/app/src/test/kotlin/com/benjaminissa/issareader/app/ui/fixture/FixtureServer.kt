@@ -28,6 +28,9 @@ import okhttp3.ResponseBody.Companion.toResponseBody
  * screen can be drawn.
  */
 class FixtureServer : Interceptor {
+    /** How the catalogue answers. */
+    enum class Catalogue { WHOLE, UNREADABLE_ROW, FAILS }
+
     override fun intercept(chain: Interceptor.Chain): Response {
         val request = chain.request()
         val path = request.url.encodedPath
@@ -37,7 +40,11 @@ class FixtureServer : Interceptor {
             path == Endpoint.deviceToken -> 400 to """{"error":"authorization_pending"}"""
             !authorized -> 401 to ""
             path == Endpoint.user -> 200 to FixtureLibrary.USER_JSON
-            path == Endpoint.books -> 200 to FixtureLibrary.booksJson
+            path == Endpoint.books -> when (catalogue) {
+                Catalogue.WHOLE -> 200 to FixtureLibrary.booksJson
+                Catalogue.UNREADABLE_ROW -> 200 to FixtureLibrary.booksJsonWithUnreadableRow
+                Catalogue.FAILS -> 500 to """{"message":"no"}"""
+            }
             path in setOf(Endpoint.statuses, Endpoint.userRatings, Endpoint.tags, Endpoint.series, Endpoint.collections, Endpoint.creators) ->
                 200 to FixtureLibrary.EMPTY_ARRAY_JSON
             else -> 404 to ""
@@ -56,6 +63,9 @@ class FixtureServer : Interceptor {
 
         /** A scheme-qualified address, so `connect` has one candidate and probes nothing. */
         const val SERVER = "http://$HOST"
+
+        /** How the catalogue answers from now on: set by every launch (`AppDriver`), so none leaks into the next test. */
+        @Volatile var catalogue: Catalogue = Catalogue.WHOLE
 
         /** The app's client, answered by the fixture. */
         val client: OkHttpClient by lazy { OkHttpClient.Builder().addInterceptor(FixtureServer()).build() }

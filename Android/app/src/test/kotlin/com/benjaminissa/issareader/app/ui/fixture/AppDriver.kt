@@ -44,7 +44,13 @@ class AppDriver(
     val app: AppModel get() = environment.app
 
     /** The app, under a strip standing in for the phone's status bar, restored to signed in or not. */
-    fun launch(signedIn: Boolean, dark: Boolean = false, statusBar: Dp = STATUS_BAR): AppEnvironment {
+    fun launch(
+        signedIn: Boolean,
+        dark: Boolean = false,
+        statusBar: Dp = STATUS_BAR,
+        catalogue: FixtureServer.Catalogue = FixtureServer.Catalogue.WHOLE,
+    ): AppEnvironment {
+        FixtureServer.catalogue = catalogue
         environment = Sweep.environment(root, signedIn)
         compose.setContent {
             IssaTheme(darkTheme = dark) {
@@ -56,7 +62,7 @@ class AppDriver(
         }
         app.startRestore()
         if (signedIn) {
-            waitFor { app.phase == AppModel.Phase.READY && app.books.isNotEmpty() }
+            waitFor { app.phase == AppModel.Phase.READY && (app.books.isNotEmpty() || app.loadError != null) }
         } else {
             waitFor { app.phase == AppModel.Phase.CHOOSE_SERVER }
         }

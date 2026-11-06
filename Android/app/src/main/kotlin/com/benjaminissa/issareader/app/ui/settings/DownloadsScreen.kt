@@ -96,7 +96,7 @@ internal fun DownloadsScreen(app: AppModel, onBack: (() -> Unit)?, scanned: Down
         }
     }
 
-    val segments = DownloadsStorage.segments(inventory, accountsForLibrary = app.books.isNotEmpty() && app.loadError == null)
+    val segments = DownloadsStorage.segments(inventory, accountsForLibrary = app.knowsWholeLibrary)
     val sectionState = rememberDownloadsSectionState(DownloadsPlacement.MANAGE, inventory)
 
     SettingsPage(title = "Downloads", onBack = onBack) {
@@ -128,7 +128,7 @@ internal fun DownloadsScreen(app: AppModel, onBack: (() -> Unit)?, scanned: Down
         // has actually arrived: "absent from the library" is not the same
         // claim as "the reader no longer owns it" while a refresh has failed
         // or none has run.
-        if (inventory.orphans.isNotEmpty() && app.books.isNotEmpty() && app.loadError == null) {
+        if (inventory.orphans.isNotEmpty() && app.knowsWholeLibrary) {
             val count = inventory.orphans.size
             paperSection(
                 key = "orphans",

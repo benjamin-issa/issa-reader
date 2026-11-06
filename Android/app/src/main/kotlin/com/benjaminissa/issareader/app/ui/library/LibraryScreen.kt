@@ -94,30 +94,45 @@ fun LibraryScreen() {
     }
 }
 
-/** What the screen says over an empty library: loading, a failure with its reason, or nothing yet. */
+/** What the screen says over an empty library, once [LibraryLoadOverlay] has nothing to say. */
 @Composable
 private fun LibraryStates(app: AppModel) {
-    when {
-        app.books.isEmpty() && app.isLoadingLibrary -> LoadingOverlay()
-        // A failed fetch is not an empty library, and "no books" for a decode
-        // error sends you looking in entirely the wrong place.
-        app.books.isEmpty() && app.loadError != null -> CenteredPlaceholder {
+    LibraryLoadOverlay {
+        if (app.books.isEmpty()) {
+            CenteredPlaceholder {
+                PalettePlaceholder(
+                    symbol = Symbols.booksVertical,
+                    title = "No books yet",
+                    message = "Add books to your Storyteller server and they'll appear here.",
+                )
+            }
+        }
+    }
+}
+
+/**
+ * What a shelf draws over itself: the library on its way, or why it did not
+ * arrive, and only then what the shelf itself has to say about being empty.
+ *
+ * A failed fetch is not an empty library, and showing "no books" for a decode
+ * error sends you looking in entirely the wrong place.
+ */
+@Composable
+internal fun LibraryLoadOverlay(otherwise: @Composable () -> Unit) {
+    val app = appModel
+    when (val load = app.libraryLoad) {
+        AppModel.LibraryLoad.Loading -> LoadingOverlay()
+        is AppModel.LibraryLoad.Failed -> CenteredPlaceholder {
             val scope = rememberCoroutineScope()
             PalettePlaceholder(
                 symbol = Symbols.exclamationmarkTriangle,
                 title = "Couldn't load your library",
-                message = app.loadError ?: "",
+                message = load.reason,
                 actionTitle = "Try again",
                 action = { scope.launch { app.refreshLibrary() } },
             )
         }
-        app.books.isEmpty() -> CenteredPlaceholder {
-            PalettePlaceholder(
-                symbol = Symbols.booksVertical,
-                title = "No books yet",
-                message = "Add books to your Storyteller server and they'll appear here.",
-            )
-        }
+        AppModel.LibraryLoad.Settled -> otherwise()
     }
 }
 

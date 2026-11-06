@@ -204,6 +204,59 @@ class AppModel(
     var loadError: String? by mutableStateOf(null)
 
     /**
+     * The last catalogue to arrive: whose it was, by its account's generation,
+     * and how many of the rows it listed could not be read. Null until one has
+     * this launch, and again after a refresh that failed. By generation so
+     * that leaving an account withdraws it with no reset to forget.
+     */
+    private var lastCatalogue: LastCatalogue? by mutableStateOf(null)
+
+    private data class LastCatalogue(val generation: Int, val unreadable: Int)
+
+    /**
+     * How many books the server listed that this client could not read. The
+     * shelf says so (`UnreadableBooksNotice`): a kept copy looks like any
+     * other book, and on a first sync there is no copy to show.
+     */
+    val unreadableBookCount: Int
+        get() = lastCatalogue?.takeIf { it.generation == catalogueGeneration }?.unreadable ?: 0
+
+    /**
+     * Whether this device can say what is *not* in the library.
+     *
+     * Absent from [books] is not the same claim as gone from the server: a
+     * launch shows what was cached, a failed refresh goes on showing it, and
+     * a catalogue with a row it could not read may have left out a book the
+     * reader still owns, with no copy here to stand in for it. So this asks
+     * for a whole catalogue, this launch, for this account. Nothing that
+     * offers to delete a file for having no book behind it may run on less.
+     */
+    val knowsWholeLibrary: Boolean
+        get() = books.isNotEmpty() && loadError == null &&
+            lastCatalogue?.generation == catalogueGeneration && lastCatalogue?.unreadable == 0
+
+    /** What a shelf with no books to show has to say about why. */
+    sealed interface LibraryLoad {
+        data object Loading : LibraryLoad
+
+        data class Failed(val reason: String) : LibraryLoad
+
+        /**
+         * Nothing is on its way and nothing went wrong, so an empty shelf is
+         * really empty, or there are books to show.
+         */
+        data object Settled : LibraryLoad
+    }
+
+    /** One answer for every shelf (`LibraryLoadOverlay`). */
+    val libraryLoad: LibraryLoad
+        get() {
+            if (books.isNotEmpty()) return LibraryLoad.Settled
+            if (isLoadingLibrary) return LibraryLoad.Loading
+            return loadError?.let { LibraryLoad.Failed(it) } ?: LibraryLoad.Settled
+        }
+
+    /**
      * Whether a library refresh is in flight for the account signed in now. A
      * count rather than a flag: with two in flight the first to come back
      * took the spinner down while the other was still fetching.
@@ -757,7 +810,8 @@ class AppModel(
             try {
                 val service = LibraryService(session.client)
                 // Everything fetched into locals and published in one go.
-                val fetched = service.allBooks()
+                val catalogue = service.catalogue()
+                val fetched = catalogue.books
                 val fetchedStatuses = runCatchingCancellable { service.statuses() } ?: statuses
                 val fetchedRatings = runCatchingCancellable { service.myRatings() } ?: ratings
                 // The in-memory half of the fence, for the session it was asked with.
@@ -768,11 +822,19 @@ class AppModel(
                 // this device wrote and the server may not hold yet is kept.
                 val known = LinkedHashMap<String, Book>()
                 for (book in books) known.putIfAbsent(book.uuid, book)
-                val merged = fetched.map { fresh ->
+                // A book the server listed and this client could not read stays
+                // as it was. Left out, it would leave the shelf as if deleted,
+                // and a position recorded for a book not in `books` is dropped,
+                // so a chapter finished while its read-along was being redone
+                // would be lost. Its server state goes stale until it can be
+                // read again, which is the smaller loss.
+                val fresh = fetched.map { fresh ->
                     val mine = known[fresh.uuid] ?: return@map fresh
                     mine.reconciled(fresh, keepingStatus = keepsLocal(MutationQueue.Kind.STATUS, fresh.uuid, fence))
                 }
+                val merged = catalogue.shelf(fresh, books)
                 books = merged
+                lastCatalogue = LastCatalogue(generation, catalogue.failures.size)
                 reseedGuards(merged)
                 rebuildDerived()
                 statuses = fetchedStatuses
@@ -793,7 +855,10 @@ class AppModel(
                 val ratingsToPersist = mergedRatings.toMap()
                 scope.launch {
                     if (catalogueGeneration != generation || this@AppModel.session !== session) return@launch
-                    runCatching { store?.replaceCatalogue(merged) }
+                    // What was read. A kept book's row is left as it is: it may
+                    // hold a position newer than this copy, and with its own
+                    // row unreadable no later refresh would put that right.
+                    runCatching { store?.replaceCatalogue(fresh, catalogue.unreadable, prunes = !catalogue.hasUnnamedRows) }
                     if (catalogueGeneration != generation) return@launch
                     runCatching { store?.replaceRatings(ratingsToPersist) }
                     if (catalogueGeneration != generation) return@launch
@@ -811,6 +876,7 @@ class AppModel(
                     books = cached
                     rebuildDerived()
                 }
+                lastCatalogue = null
                 loadError = if (books.isEmpty()) message(e) else null
             }
         } finally {

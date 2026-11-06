@@ -1,6 +1,7 @@
 package com.benjaminissa.issareader.app.ui.library
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -9,6 +10,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.DropdownMenu
@@ -20,13 +22,16 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.benjaminissa.issareader.app.model.AppModel
 import com.benjaminissa.issareader.app.ui.shell.appModel
@@ -39,6 +44,7 @@ import com.benjaminissa.issareader.ui.SortCapsule
 import com.benjaminissa.issareader.ui.Symbols
 import com.benjaminissa.issareader.ui.SystemText
 import com.benjaminissa.issareader.ui.Typography
+import kotlinx.coroutines.launch
 
 /**
  * The library's navigation, made visible: the search capsule, the Browse and
@@ -65,6 +71,7 @@ fun LibraryHeader(search: String, onSearchChange: (String) -> Unit, displayedCou
     ) {
         LibrarySearchField(search, onSearchChange, Modifier.padding(horizontal = Metrics.screenMargin).testTag("field.librarySearch"))
         ShelfChips(app)
+        UnreadableBooksNotice(app, Modifier.padding(horizontal = Metrics.screenMargin))
         // A count and a sort describe a grid. Browse has rails, and search
         // results are already an answer — but the number of them is worth a
         // line. Mode and search are the reader's doing, never something that
@@ -72,6 +79,43 @@ fun LibraryHeader(search: String, onSearchChange: (String) -> Unit, displayedCou
         if (app.libraryMode == AppModel.LibraryMode.ALL || isSearching) {
             CountAndSort(app, displayedCount, isSearching, Modifier.padding(horizontal = Metrics.screenMargin))
         }
+    }
+}
+
+/**
+ * Says that the last catalogue came back with books this client could not
+ * read. A kept copy looks like any other book and a first sync has no copy to
+ * show, so nothing else on the shelf can say so. Nothing at all with a whole
+ * catalogue.
+ */
+@Composable
+internal fun UnreadableBooksNotice(app: AppModel, modifier: Modifier = Modifier) {
+    val count = app.unreadableBookCount
+    if (count <= 0) return
+    val scope = rememberCoroutineScope()
+    Row(
+        modifier.fillMaxWidth().testTag("notice.unreadableBooks"),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Metrics.spacing8),
+    ) {
+        Icon(
+            painterResource(Symbols.exclamationmarkTriangle),
+            contentDescription = null,
+            tint = Palette.inkTertiary,
+            modifier = Modifier.size(14.dp),
+        )
+        Text(
+            "$count book${if (count == 1) "" else "s"} couldn't be read",
+            style = Typography.caption,
+            color = Palette.inkSecondary,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            "Try again",
+            style = Typography.caption.copy(fontWeight = FontWeight.SemiBold),
+            color = Palette.tangerinePressed,
+            modifier = Modifier.clickable(role = Role.Button) { scope.launch { app.refreshLibrary() } },
+        )
     }
 }
 
