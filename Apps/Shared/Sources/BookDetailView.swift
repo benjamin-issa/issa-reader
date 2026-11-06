@@ -66,6 +66,11 @@ public struct BookDetailView: View {
     }
 
     private let layout: Layout
+    @Environment(\.adaptiveSignals) private var adaptiveSignals
+
+    /// Where the system runs its bars down a side (iPhone Duo), whose unsafe
+    /// band the container's width counts; see `pinnedToContainerWidth`.
+    private var barsRunDownTheSide: Bool { adaptiveSignals.bars != .top }
 
     public init(book: Book, layout: Layout = .full) {
         initialBook = book
@@ -119,7 +124,7 @@ public struct BookDetailView: View {
             // clipping inside one row instead — but where the width comes from
             // depends on whether this view is the screen or a column beside
             // one, so the two cases ask differently. See `pinnedToContainerWidth`.
-            .pinnedToContainerWidth(layout)
+            .pinnedToContainerWidth(layout, offered: barsRunDownTheSide)
         }
         .accessibilityIdentifier("screen.bookDetail")
         .background(Palette.paper)
@@ -1376,10 +1381,24 @@ private extension View {
     /// it: a flexible frame takes its child's size as a lower bound, so one
     /// rigid over-wide subview would move the whole screen again, which is the
     /// phone bug this pin was added to stop.
+    ///
+    /// - Parameter offered: take the width the scroll view offers instead.
+    ///   On iPhone Duo's outer display the container's length counts the
+    ///   unsafe band down the side where the system runs its bars, and the
+    ///   page laid out that much wider than the space beside it, centred over
+    ///   it, with its leading edge off the screen. There the flexible frame's
+    ///   risk is the lesser one: its narrowest content column, 350 points, is
+    ///   wider than the 343 a 375-point phone gives the same page. False, and
+    ///   so 1.5.2's container frame, everywhere else.
     @ViewBuilder
-    func pinnedToContainerWidth(_ layout: BookDetailView.Layout) -> some View {
+    func pinnedToContainerWidth(_ layout: BookDetailView.Layout, offered: Bool = false) -> some View {
         switch layout {
-        case .full: containerRelativeFrame(.horizontal)
+        case .full:
+            if offered {
+                frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                containerRelativeFrame(.horizontal)
+            }
         case .inspector: frame(maxWidth: .infinity, alignment: .leading)
         }
     }

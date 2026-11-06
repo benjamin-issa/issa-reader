@@ -381,8 +381,13 @@ extension XCTestCase {
                 node.frame.minX, reference.safe.minX, accuracy: 0.5,
                 "\(node.identifier) starts \(node.frame.minX - reference.safe.minX)pt in from the edge",
                 file: file, line: line)
-            XCTAssertEqual(
-                node.frame.maxX, reference.safe.maxX, accuracy: 0.5,
+            // At the safe edge, or the window's: down the side of iPhone
+            // Duo's outer display the system runs its bars in an unsafe band,
+            // and a rail scrolls under it the way the design draws it. On
+            // every other device the sweep visits the two are the same edge.
+            let ends = [reference.safe.maxX, reference.window.maxX]
+            XCTAssertTrue(
+                ends.contains { abs($0 - node.frame.maxX) <= 0.5 },
                 "\(node.identifier) stops \(reference.safe.maxX - node.frame.maxX)pt short of the edge",
                 file: file, line: line)
         }

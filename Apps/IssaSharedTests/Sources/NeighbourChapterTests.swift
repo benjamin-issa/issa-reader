@@ -114,6 +114,9 @@ struct NeighbourChapterTests {
                 return
             }
             #expect(model.layout === snapshot.layout, "the turn took the chapter already laid out")
+            // The page that slid in is the page now at rest. Told apart, it
+            // would be drawn a second time as the turn ends.
+            #expect(model.currentSnapshot() == snapshot)
         }
     }
 

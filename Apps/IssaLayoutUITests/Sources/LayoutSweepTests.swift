@@ -22,6 +22,11 @@ final class LayoutSweepTests: XCTestCase {
         ProcessInfo.processInfo.environment["ISSA_SWEEP_DEVICE"] ?? "device"
     }
 
+    /// Whether the reader's tools stand in a rail down the side rather than a
+    /// bar across the top: iPhone Duo. The top bar's own checks do not apply
+    /// there, and `DuoLayoutTests` measures the rail instead.
+    private var readerHasRail: Bool { deviceSlug.hasPrefix("iphone-duo") }
+
     override func setUp() {
         super.setUp()
         // The default, but stated: a recorded failure must not abort the test,
@@ -262,7 +267,7 @@ final class LayoutSweepTests: XCTestCase {
         // while quietly capturing neither this screen nor Settings. A pop needs
         // no new process and cannot be jetsammed.
         let shelf = grid
-        shelf.navigationBars.buttons.firstMatch.tap()
+        shelf.goBack()
         XCTAssertTrue(shelf.descendants(matching: .any)["screen.library"]
             .waitForExistence(timeout: 15), "the book screen did not pop back to the shelf")
         // Found through the library's own search rather than by scrolling: the
@@ -305,7 +310,7 @@ final class LayoutSweepTests: XCTestCase {
         tagLink.tap()
         try check(shelf, screen: "tag", root: "screen.tag", content: "content.tag")
         XCTAssertEqual(bookCells(in: shelf).count, 6, "the tag page lost some of its books")
-        shelf.navigationBars.buttons.firstMatch.tap()
+        shelf.goBack()
 
         let seriesLink = shelf.descendants(matching: .any)["bookDetail.series"]
         XCTAssertTrue(seriesLink.waitForExistence(timeout: 15), "no series link in the hero")
@@ -341,7 +346,7 @@ final class LayoutSweepTests: XCTestCase {
                 .matching(NSPredicate(format: "identifier BEGINSWITH %@", "downloads.row."))
                 .firstMatch.waitForExistence(timeout: 15),
             "the Downloads screen listed none of the planted downloads")
-        shelf.navigationBars.buttons.firstMatch.tap()
+        shelf.goBack()
         XCTAssertTrue(shelf.descendants(matching: .any)["screen.settings"].waitForExistence(timeout: 15),
                       "Back did not return to Settings")
 
@@ -372,6 +377,19 @@ final class LayoutSweepTests: XCTestCase {
 
     /// Every book cell's identifier on the screen, scrolling to find them: the
     /// grid is lazy, so a cell below the fold does not exist until it is near.
+    /// A catalogue with a row that cannot be read, through the real decode: the
+    /// shelf comes up with the rest and says what it is missing.
+    func testUnreadableBookNotice() throws {
+        let app = launch(["-issa.library.mode", "all", "-IssaUITestFixtureUnreadableRow"])
+        XCTAssertTrue(waitForLibrary(app), "the rows that could be read never arrived")
+        selectTab("Library", in: app)
+        let notice = app.descendants(matching: .any)["notice.unreadableBooks"].firstMatch
+        XCTAssertTrue(notice.waitForExistence(timeout: 15), "nothing said a book could not be read")
+        XCTAssertTrue(app.staticTexts["1 book couldn't be read"].exists)
+        XCTAssertTrue(notice.buttons["Try again"].exists)
+        capture(app, "libraryUnreadable")
+    }
+
     private func bookCells(in app: XCUIApplication) -> Set<String> {
         let query = app.descendants(matching: .any)
             .matching(NSPredicate(format: "identifier BEGINSWITH %@", "cell.book."))
@@ -462,14 +480,18 @@ final class LayoutSweepTests: XCTestCase {
     func testReaderScreen() throws {
         let app = launch(["-issa.library.mode", "all"])
         guard let (reference, page) = try openReader(app) else { return }
-        assertHorizontallyContained(try app.snapshot(), reference, screen: "reader")
-        assertReaderTopBar(app, reference)
+        // The rail stands in the unsafe band by design, so containment is the
+        // page's alone there, which `DuoLayoutTests` measures with the rail.
+        if !readerHasRail {
+            assertHorizontallyContained(try app.snapshot(), reference, screen: "reader")
+            assertReaderTopBar(app, reference)
+        }
         assertBookTitleUnderFooter(app, reference)
         capture(app, "reader")
 
         // After the capture, which is the chrome as a reader first sees it.
         assertChromeLeavesThePageAlone(app, page)
-        assertEllipsisMenuHoldsContents(app)
+        if !readerHasRail { assertEllipsisMenuHoldsContents(app) }
     }
 
     // MARK: - The reader's chrome
@@ -574,7 +596,9 @@ final class LayoutSweepTests: XCTestCase {
                                  "the title reaches the home indicator")
         XCTAssertGreaterThanOrEqual(frame.minX, reference.window.minX)
         XCTAssertLessThanOrEqual(frame.maxX, reference.window.maxX)
-        XCTAssertEqual(frame.midX, reference.window.midX, accuracy: 2, "the title is not centred")
+        // On the page's column: the window's middle on a phone, and short of
+        // the rail on iPhone Duo, which takes the unsafe band down the side.
+        XCTAssertEqual(frame.midX, reference.safe.midX, accuracy: 2, "the title is not centred")
 
         // Below every control in the footer, not beside or over any.
         let lowest = app.buttons.allElementsBoundByIndex
@@ -583,7 +607,10 @@ final class LayoutSweepTests: XCTestCase {
             .map(\.maxY)
             .max()
         XCTAssertNotNil(lowest, "no footer control found above the title")
+        // Not the title itself, which the tree also reports where it is laid
+        // out before its offset into the band.
         let overlapping = app.buttons.allElementsBoundByIndex
+            .filter { $0.label != title.label }
             .map(\.frame)
             .filter { $0.minY > reference.window.maxY * 0.8 && $0.intersects(frame) }
         XCTAssertTrue(overlapping.isEmpty, "the title overlaps a footer control: \(overlapping)")
@@ -598,9 +625,11 @@ final class LayoutSweepTests: XCTestCase {
         let before = page.frame
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         // Not "does not exist": a bar faded to nothing and made untappable is
-        // still in the accessibility tree.
-        let gone = NSPredicate(format: "isHittable == false")
-        let hidden = XCTNSPredicateExpectation(predicate: gone, object: back)
+        // still in the accessibility tree. A rail faded to nothing is not, and
+        // asking whether a missing element is hittable raises, so either will
+        // do.
+        let gone = NSPredicate { _, _ in !back.exists || !back.isHittable }
+        let hidden = XCTNSPredicateExpectation(predicate: gone, object: nil)
         XCTAssertEqual(XCTWaiter().wait(for: [hidden], timeout: 5), .completed,
                        "the middle tap did not hide the bars")
         if hadTitle {
@@ -610,7 +639,7 @@ final class LayoutSweepTests: XCTestCase {
         // Back, for whatever follows.
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         let shown = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "isHittable == true"), object: back)
+            predicate: NSPredicate { _, _ in back.exists && back.isHittable }, object: nil)
         XCTAssertEqual(XCTWaiter().wait(for: [shown], timeout: 10), .completed,
                        "the bars did not come back")
         if hadTitle {
@@ -660,6 +689,17 @@ final class LayoutSweepTests: XCTestCase {
     /// row, never at a fixed spot. At an accessibility text size the menu
     /// reaches halfway down the screen, and the tap at 30 % that used to close
     /// it landed on Stop Narration and chose it.
+    /// The bottom of the open menu's lowest row, whichever it is. A menu that
+    /// opens upward, as one from iPhone Duo's rail does, lists its rows the
+    /// other way up, so Contents and Stop are not always the last.
+    private func lowestMenuRow(_ app: XCUIApplication) -> CGFloat {
+        ["Find in book", "Marks", "Contents", "Stop Narration"]
+            .map { app.descendants(matching: .any)[$0].firstMatch }
+            .filter(\.exists)
+            .map(\.frame.maxY)
+            .max() ?? 0
+    }
+
     private func closeMenu(_ app: XCUIApplication, below lowest: CGFloat) {
         let window = app.windows.firstMatch.frame
         let y = min(lowest + 60, window.maxY * 0.8) / window.height
@@ -689,7 +729,7 @@ final class LayoutSweepTests: XCTestCase {
         XCTAssertTrue(stop.exists, "a narrated book's menu has no Stop Narration")
         let enabled = stop.exists && stop.isEnabled
         if let screen { capture(app, screen) }
-        closeMenu(app, below: max(contents.frame.maxY, stop.exists ? stop.frame.maxY : 0))
+        closeMenu(app, below: lowestMenuRow(app))
         return enabled
     }
 
@@ -767,8 +807,12 @@ final class LayoutSweepTests: XCTestCase {
         guard let (reference, _) = try openReader(app) else { return }
 
         // A third of the way down the page, in the text and clear of the tap
-        // zones' edges.
-        let spot = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35))
+        // zones' edges. On iPhone Duo's outer display the book that opens is
+        // on a short page, whose text has ended by there, so the press found
+        // bare paper and this reported a selection failure on that row alone.
+        // Its first line of body text is a sixth of the way down.
+        let depth = ProcessInfo.processInfo.environment["ISSA_SWEEP_DEVICE"] == "iphone-duo-outer" ? 0.155 : 0.35
+        let spot = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: depth))
         spot.press(forDuration: 0.9)
         let highlight = app.buttons["Highlight"].firstMatch
         guard highlight.waitForExistence(timeout: 10) else {

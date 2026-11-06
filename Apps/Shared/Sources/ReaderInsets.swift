@@ -14,11 +14,18 @@ import AppKit
 /// the status bar all change it, and anything measured against it re-paginates
 /// the chapter. Sampled once and held, so a chrome toggle cannot reach the page.
 enum ReaderInsets {
-    static func current() -> EdgeInsets {
+    /// - Parameter size: the size of the window being asked about, where it
+    ///   is known. iPhone Duo has a display on each side, and the first
+    ///   scene's key window need not be the one the reader is in; nil asks
+    ///   the first, as it always has.
+    static func current(in size: CGSize? = nil) -> EdgeInsets {
         #if canImport(UIKit) && !os(tvOS)
-        let window = UIApplication.shared.connectedScenes
-            .compactMap { ($0 as? UIWindowScene)?.keyWindow }
-            .first
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        let sized = size.flatMap { size in
+            let windows = scenes.flatMap { $0.windows }.filter { $0.bounds.size == size }
+            return windows.first { $0.isKeyWindow } ?? windows.first
+        }
+        let window = sized ?? scenes.compactMap { $0.keyWindow }.first
         guard let insets = window?.safeAreaInsets else { return EdgeInsets() }
         return EdgeInsets(
             top: insets.top, leading: insets.left,

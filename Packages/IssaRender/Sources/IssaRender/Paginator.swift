@@ -43,6 +43,9 @@ public final class ChapterLayout {
     /// `reindent(forColumnWidth:)`, the two things that change it — an ink and
     /// a first-line indent, never a character.
     public private(set) var attributedText: NSAttributedString
+    /// How many times this layout has been paginated. It is a class,
+    /// re-paginated in place, so this is what tells two paginations apart.
+    public private(set) var pagination = 0
     public private(set) var pages: [RenderedPage] = []
     public private(set) var pageSize: CGSize = .zero
 
@@ -67,6 +70,7 @@ public final class ChapterLayout {
     public func layout(pageSize size: CGSize) {
         guard size.width > 0, size.height > 0 else { return }
         pageSize = size
+        pagination &+= 1
         reindent(forColumnWidth: size.width)
         container.size = CGSize(width: size.width, height: CGFloat.greatestFiniteMagnitude)
         layoutManager.textViewportLayoutController.layoutViewport()

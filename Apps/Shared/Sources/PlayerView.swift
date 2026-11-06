@@ -96,15 +96,27 @@ public struct PlayerView: View {
     @State private var scrubbing = false
     @State private var scrubValue: Double = 0
 
+    /// How the player's pieces stand: in one column, as the sheet has always
+    /// drawn them, or in a row across a short, wide space — the flat half of
+    /// iPhone Duo's inner display propped open like a laptop.
+    public enum Arrangement: Sendable {
+        case stacked
+        case landscape
+    }
+
+    let arrangement: Arrangement
+
     public init(
         book: Book, session: Session?, coordinator: (any PlaybackDriving)?,
         chapterTitle: String? = nil, fromPage: NarrationFromPage? = nil,
+        arrangement: Arrangement = .stacked,
     ) {
         self.book = book
         self.session = session
         self.coordinator = coordinator
         self.chapterTitle = chapterTitle
         self.fromPage = fromPage
+        self.arrangement = arrangement
     }
 
     /// Where Play would begin, while the narration has no place of its own.
@@ -173,6 +185,58 @@ public struct PlayerView: View {
     private var total: TimeInterval { readout.spanDuration }
 
     public var body: some View {
+        switch arrangement {
+        case .stacked: stacked
+        case .landscape: landscape
+        }
+    }
+
+    /// The same pieces in a row: the book, then the scrubber over the
+    /// transport, then the rate over the sleep timer. Everything a hand
+    /// reaches for, on the half of the phone lying flat.
+    private var landscape: some View {
+        HStack(spacing: Metrics.spacing32) {
+            HStack(spacing: Metrics.spacing16) {
+                CoverImage(book: book, session: session, aspect: 1, shape: .square)
+                    .frame(width: 96, height: 96)
+                    .shadow(color: Palette.ink.opacity(0.18), radius: 12, y: 6)
+                VStack(alignment: .leading, spacing: Metrics.spacing4) {
+                    Text(book.title)
+                        .font(Typography.headline)
+                        .foregroundStyle(Palette.ink)
+                        .lineLimit(2)
+                    Text(byline)
+                        .font(Typography.caption)
+                        .foregroundStyle(Palette.inkTertiary)
+                        .lineLimit(1)
+                    if let nowPlayingChapter {
+                        Text(nowPlayingChapter)
+                            .font(Typography.caption)
+                            .foregroundStyle(Palette.inkQuaternary)
+                            .lineLimit(1)
+                    }
+                }
+            }
+            .frame(maxWidth: 260, alignment: .leading)
+
+            VStack(spacing: Metrics.spacing16) {
+                scrubber
+                transport
+            }
+            .frame(maxWidth: .infinity)
+
+            VStack(spacing: Metrics.spacing16) {
+                rateControl
+                sleepTimerControl
+            }
+            .fixedSize()
+        }
+        .padding(.horizontal, Metrics.spacing32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Palette.paper)
+    }
+
+    private var stacked: some View {
         VStack(spacing: Metrics.spacing24) {
             // Square art on the player, portrait on the shelf — the design uses
             // the two covers Storyteller stores by context.
@@ -332,10 +396,14 @@ public struct PlayerView: View {
             )
             Button {
                 Task {
-                    // From the page when the voice has no place yet. The
-                    // coordinator's own play would press play on a player with
-                    // no file in it and call that playing.
-                    if let fromPage, fromPage.pending() != nil {
+                    // Through the reader whenever the sheet came from one. Its
+                    // transport starts from the page when the voice has no
+                    // place, carries on when it has, and does nothing past the
+                    // last narrated chapter, where there is no start ahead and
+                    // no sentence either: the coordinator's own play there
+                    // pressed play on a player with no file in it and called
+                    // that playing.
+                    if let fromPage {
                         await fromPage.start()
                     } else {
                         await coordinator?.perform(.playPause, using: settings.commandMap)

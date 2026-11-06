@@ -47,6 +47,15 @@ public enum PageTurn {
         reduceMotion ? .instant : chosen
     }
 
+    /// The same, for a two-page spread, which changes at once whatever was
+    /// chosen: a slide or a cover moves one page across the width of one, and
+    /// a spread is two (iPhone Duo's inner display, 1.6.0).
+    public static func effectiveStyle(
+        _ chosen: PageTurnStyle, reduceMotion: Bool, spread: Bool,
+    ) -> PageTurnStyle {
+        spread ? .instant : effectiveStyle(chosen, reduceMotion: reduceMotion)
+    }
+
     // MARK: - The swipe that turns on lift-off
 
     /// The leading strip that belongs to the system. The reader is a

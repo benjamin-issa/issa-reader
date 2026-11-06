@@ -42,17 +42,26 @@ public struct ReaderChrome: Sendable, Equatable {
     /// the page's own margin sits below it — the bar that would otherwise have
     /// stood in for that margin is not there to do it.
     public let drawsOwnTopBar: Bool
+    /// The band down one side that the reader's tools stand in where the
+    /// system runs its bars down a side (iPhone Duo): the window's unsafe edge
+    /// there, held like the top and bottom ones. Zero everywhere else.
+    ///
+    /// With a rail there is no top bar, so `drawsOwnTopBar` is false and the
+    /// page's own margin is spent at the top, as on the Mac.
+    public let railWidth: CGFloat
 
     public init(
         safeAreaTop: CGFloat,
         safeAreaBottom: CGFloat,
         margin: CGFloat,
         drawsOwnTopBar: Bool = true,
+        railWidth: CGFloat = 0,
     ) {
         self.safeAreaTop = max(0, safeAreaTop)
         self.safeAreaBottom = max(0, safeAreaBottom)
         self.margin = max(0, margin)
-        self.drawsOwnTopBar = drawsOwnTopBar
+        self.railWidth = max(0, railWidth)
+        self.drawsOwnTopBar = drawsOwnTopBar && self.railWidth == 0
     }
 
     /// Distance from the top of the window to the first line of text.
@@ -83,7 +92,7 @@ public struct ReaderChrome: Sendable, Equatable {
     /// produce nothing at all.
     public func pageSize(in window: CGSize) -> CGSize {
         CGSize(
-            width: max(window.width - margin * 2, 1),
+            width: max(window.width - railWidth - margin * 2, 1),
             height: max(window.height - topReserve - bottomReserve, 1),
         )
     }
@@ -94,6 +103,6 @@ public struct ReaderChrome: Sendable, Equatable {
     /// worth being able to ask, because that is the state in which the layout's
     /// guarantees stop meaning anything.
     public func fits(_ window: CGSize) -> Bool {
-        window.height - topReserve - bottomReserve >= 1 && window.width - margin * 2 >= 1
+        window.height - topReserve - bottomReserve >= 1 && window.width - railWidth - margin * 2 >= 1
     }
 }

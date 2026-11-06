@@ -96,6 +96,50 @@ public final class AppModel {
     /// the library and detail screens agree without extra requests.
     public var ratings: [String: Double] = [:]
     public var loadError: String?
+    /// The last catalogue to arrive: whose it was, by its account's generation,
+    /// and how many of the rows it listed could not be read. Nil until one has
+    /// this launch, and again after a refresh that failed. By generation so
+    /// that leaving an account withdraws it with no reset to forget.
+    private var lastCatalogue: (generation: Int, unreadable: Int)?
+
+    /// How many books the server listed that this client could not read.
+    /// The shelf says so (`UnreadableBooksNotice`): a kept copy looks like any
+    /// other book, and on a first sync there is no copy to show.
+    public var unreadableBookCount: Int {
+        guard let lastCatalogue, lastCatalogue.generation == catalogueGeneration else { return 0 }
+        return lastCatalogue.unreadable
+    }
+
+    /// Whether this device can say what is *not* in the library.
+    ///
+    /// Absent from `books` is not the same claim as gone from the server: a
+    /// launch shows what was cached, a failed refresh goes on showing it, and
+    /// a catalogue with a row it could not read may have left out a book the
+    /// reader still owns, with no copy here to stand in for it. So this asks
+    /// for a whole catalogue, this launch, for this account. Nothing that
+    /// offers to delete a file for having no book behind it may run on less.
+    public var knowsWholeLibrary: Bool {
+        !books.isEmpty && loadError == nil && lastCatalogue?.generation == catalogueGeneration
+            && lastCatalogue?.unreadable == 0
+    }
+
+    /// What a shelf with no books to show has to say about why.
+    public enum LibraryLoad: Equatable {
+        case loading
+        case failed(String)
+        /// Nothing is on its way and nothing went wrong, so an empty shelf is
+        /// really empty, or there are books to show.
+        case settled
+    }
+
+    /// One answer for every shelf (`LibraryLoadOverlay`). Each used to work it
+    /// out for itself, and two of them forgot the spinner.
+    public var libraryLoad: LibraryLoad {
+        guard books.isEmpty else { return .settled }
+        if isLoadingLibrary { return .loading }
+        if let loadError { return .failed(loadError) }
+        return .settled
+    }
     /// Whether a library refresh is in flight for the account signed in now.
     ///
     /// A count rather than a flag. The flag was set by every refresh and
@@ -1164,7 +1208,8 @@ public final class AppModel {
             // control was still expanded. The scroll view then re-measured and
             // adopted the inflated inset as its resting layout, leaving the
             // words permanently pushed down.
-            let fetched = try await service.allBooks()
+            let catalogue = try await service.catalogue()
+            let fetched = catalogue.books
             let fetchedStatuses = (try? await service.statuses()) ?? statuses
             let fetchedRatings = (try? await service.myRatings()) ?? ratings
             // The in-memory half of the fence the detached write below checks.
@@ -1189,12 +1234,20 @@ public final class AppModel {
             // here to the assignment suspends, so a position recorded while
             // this runs cannot fall between reading `books` and replacing it.
             let known = Dictionary(books.map { ($0.uuid, $0) }, uniquingKeysWith: { first, _ in first })
-            let merged = fetched.map { fresh in
+            // A book the server listed and this client could not read stays as
+            // it was. Left out, it would leave the shelf as if deleted, and
+            // `recordPosition` drops a write for a book not in `books`, so a
+            // chapter finished while its read-along was being redone would be
+            // lost. Its server state goes stale until it can be read again,
+            // which is the smaller loss.
+            let fresh = fetched.map { fresh in
                 guard let mine = known[fresh.uuid] else { return fresh }
                 return mine.reconciled(
                     with: fresh, keepingStatus: keepsLocal(.status, fresh.uuid, given: fence))
             }
+            let merged = catalogue.shelf(fresh: fresh, previous: books)
             books = merged
+            lastCatalogue = (generation, catalogue.failures.count)
             reseedGuards(against: merged)
             rebuildDerived()
             statuses = fetchedStatuses
@@ -1229,7 +1282,11 @@ public final class AppModel {
             Task { [weak self] in
                 guard let self, self.catalogueGeneration == generation, self.session === session
                 else { return }
-                try? await self.store?.replaceCatalogue(merged)
+                // What was read. A kept book's row is left as it is: it may hold
+                // a position newer than this copy, and with its own row
+                // unreadable no later refresh would put that right.
+                try? await self.store?.replaceCatalogue(
+                    fresh, keeping: catalogue.unreadable, prunes: !catalogue.hasUnnamedRows)
                 // Behind the same fence as the catalogue. This write sat in
                 // the body above, outside every generation check, and the
                 // `rating` table has no account column — so a refresh racing
@@ -1257,6 +1314,7 @@ public final class AppModel {
                 books = cached
                 rebuildDerived()
             }
+            lastCatalogue = nil
             loadError = books.isEmpty ? Self.message(for: error) : nil
         }
     }
@@ -3229,6 +3287,25 @@ public final class AppModel {
 
     /// Starts a plain audiobook: fetch the manifest, resume where the server
     /// says we were, and hand it to the Now Playing centre.
+    /// Whether Listen plays this book from the read-along on the device.
+    ///
+    /// By the file, not the server's status: a re-alignment says PROCESSING for
+    /// as long as it runs, while the finished read-along here plays as well as
+    /// it did, and the server's manifest would lose the reader's place.
+    func playsOwnChunks(of book: Book) -> Bool {
+        book.readaloud != nil && isDownloaded(book, format: .readaloud)
+    }
+
+    /// The edition Read opens, and so the one a cancel has to stop.
+    ///
+    /// Through `isDownloaded`, not the disk: a read-along inside its undo
+    /// window is on its way out, and choosing it would send the open down the
+    /// download path, which takes the removal back.
+    public func readingFormat(for book: Book) -> BookContentService.Format? {
+        BookContentService.preferredReadingFormat(
+            for: book, readaloudOnDevice: isDownloaded(book, format: .readaloud))
+    }
+
     public func startListening(
         to book: Book, nowPlaying: NowPlayingController, settings: PlaybackSettings,
     ) async {
@@ -3306,7 +3383,7 @@ public final class AppModel {
         // Downloaded only. Streaming a book chunk by chunk is a different
         // feature, and this path is exactly as offline as the read-along it
         // borrows the audio from.
-        if book.readaloud?.isAligned == true, isDownloaded(book, format: .readaloud) {
+        if playsOwnChunks(of: book) {
             // The claim narrows. From here to the attach this start is reading
             // the read-along's own extracted chunks, so a removal of *that*
             // edition must stop it and a removal of the audiobook beside it must
@@ -3771,20 +3848,35 @@ public final class AppModel {
     ///
     /// Paused first, so the sound ends when the reader asked and not when the
     /// write has drained a slow network; the position is then the one they
-    /// stopped at. And for the book that was asked about: the write suspends,
-    /// and a hand-off or another book that took the slot meanwhile is not
-    /// this call's to stop.
+    /// stopped at. And for the engine that was asked about: the write
+    /// suspends, for as long as a slow network takes, and a hand-off or
+    /// another book that took the slot meanwhile is not this call's to stop.
+    ///
+    /// That is the same coordinator, not only the same book. Switching to
+    /// another book and back installs a new coordinator under the same uuid,
+    /// and a uuid check let this old Stop cancel its writer, pause it and
+    /// detach its Now Playing. Nor is a coordinator the reader pressed Play on
+    /// while the write was out: Stop paused it, so playing again is a later
+    /// choice than this one.
     ///
     /// - Parameter bookUUID: the book the reader stopped.
     public func stopListeningWritingPosition(
         of bookUUID: String, nowPlaying: NowPlayingController?,
     ) async {
-        guard listeningBook?.uuid == bookUUID else { return }
-        listening?.player.pause()
+        guard listeningBook?.uuid == bookUUID, let coordinator = listening else { return }
+        coordinator.player.pause()
+        await beforeWritingListeningPosition?()
         await writeListeningPositionNow()
-        guard listeningBook?.uuid == bookUUID else { return }
+        guard listening === coordinator, !coordinator.player.isPlaying else { return }
         stopListening(nowPlaying: nowPlaying)
     }
+
+    /// Awaited by `stopListeningWritingPosition` between its pause and its
+    /// write. A test seam, nil in production, as `beforeQueueingStatus` is:
+    /// the write's only suspensions are the store and the network, and
+    /// nothing outside the model can hold either open to put a second
+    /// coordinator in the slot meanwhile.
+    @ObservationIgnored var beforeWritingListeningPosition: (@MainActor () async -> Void)?
 
     /// Which downloaded edition a source reads, if any.
     ///

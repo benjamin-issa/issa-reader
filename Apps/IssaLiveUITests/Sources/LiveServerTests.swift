@@ -282,9 +282,17 @@ final class LiveServerTests: XCTestCase {
         }
         let before = pageReading(page)
         capture(app, "reader")
+        // The page's right edge turns forward; the middle would toggle the
+        // bars. The page's, not the screen's: on iPhone Duo's outer display
+        // the screen's right edge is the band the reader's tool rail stands
+        // in, and a tap there pressed the bookmark.
+        let frame = page.frame
+        let window = app.windows.firstMatch.frame
+        let edge = CGVector(
+            dx: (frame.maxX - 20 - window.minX) / window.width,
+            dy: (frame.midY - window.minY) / window.height)
         for _ in 0 ..< 3 {
-            // The right edge turns forward; the middle would toggle the bars.
-            app.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+            app.coordinate(withNormalizedOffset: edge).tap()
             Thread.sleep(forTimeInterval: 1.5)
         }
         let after = page.exists ? pageReading(page) : nil

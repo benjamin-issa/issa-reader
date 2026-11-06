@@ -76,6 +76,25 @@ bring them up is in the README, under "A local server to talk to".
    read-along (it plays through the speakers, so ask first) and `--fresh` to
    make the pairing a real one rather than a token the simulator kept.
 
+   On iPhone Duo, `--device "iPhone Duo"` (iOS 27.1) runs the same checks on
+   its outer display, against each server. The inner display and the folded
+   poses cannot be reached headless (`simctl io … screenConfig` power-off
+   wedges the simulator), so they are walked in Device Hub, with the screen:
+   its pose buttons close the phone, half-fold it like a book and open it
+   flat, and its rotate button turns a half-folded phone into the table
+   pose. On a Duo that Device Hub has opened, run
+   `DuoLayoutTests/testInnerDisplayHeldWide` with ISSA_SWEEP_DEVICE set to
+   `iphone-duo-inner` (copy the sweep's `.xctestrun` and set it with
+   `plutil`, as `layout-sweep.sh` does). Then by hand, clicking in Device Hub
+   (XCUITest's coordinate taps and screenshots do not reach the inner
+   display): a page turn on the spread; the table pose (the sentence above
+   the fold, the player below); and opening, closing and turning mid-read
+   three times over, starting past a chapter's first spread, with the place
+   kept, every page full and none blank, and the rail below the sensor bar
+   each time. From the first spread a lost place cannot show: the blank page
+   and the walk back to the top of the chapter shipped in 1.6.0 under a walk
+   that began there. Record what was seen.
+
    On Apple TV, `--platform tvos` runs `Apps/IssaLiveTVUITests` on the Apple
    TV 4K simulator, moving by the remote: the pairing, the library, the
    session surviving the covers and Settings' server version. The
@@ -93,7 +112,9 @@ bring them up is in the README, under "A local server to talk to".
    writing `.build/mac-check/<label>.txt` as the record.
 
 4. **The layout sweep** (`scripts/layout-sweep.sh`), which uses the built-in
-   fixture rather than a server.
+   fixture rather than a server. Its quick pass includes iPhone Duo's outer
+   display (`iphone-duo-outer`, iOS 27.1), where `DuoLayoutTests` measures
+   the reader's rail and the shelf.
 
 If either server cannot be brought up, the release waits. It does not ship on
 the strength of one generation.

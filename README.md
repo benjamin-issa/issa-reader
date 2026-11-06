@@ -4,7 +4,7 @@ A native Apple client suite for **[Storyteller](https://storyteller-platform.dev
 ebooks, audiobooks, and synchronised read-along on iPhone, iPad, Apple TV and the Mac —
 and its Android counterpart, for phones and Android Auto.
 
-Written in Swift 6 for iOS 26, macOS 26 and tvOS 26, built with Xcode 27. The
+Written in Swift 6 for iOS 26, macOS 26 and tvOS 26, built with Xcode 27.1. The
 Android app is written in Kotlin with Jetpack Compose for Android 11 and later;
 see [Android](#android).
 
@@ -50,6 +50,7 @@ accommodate it.
 | CarPlay | Shelves and chapters as CarPlay lists, Now Playing, and a resume that lands on the sentence you left — the reader and the audiobook share one position anchor |
 | Controls | Every external control remappable per surface — phone, CarPlay, headphones — including a car's steering-wheel buttons |
 | Apple TV | Device-code sign-in, poster-shelf library, and a real page of the book with the spoken sentence highlighted, chapter marks on a timeline, and page turns from the remote |
+| iPhone Duo | Closed, the reader's tools stand in a rail down the side below the sensor bar, and the shelf keeps three covers across. Open and held wide, a book reads as two pages either side of the fold, and the library shows the shelf and the chosen book side by side with the divider on the fold. Propped open like a laptop, a narrated book shows the sentence being read on the upright half and the player on the flat one. Every other iPhone and iPad draws what it did before |
 | Mac | Sidebar library, each book in its own window, menu-bar transport, `issareader://` links and Handoff |
 | Ask about a book | A question about the story so far, answered on the device by Apple Intelligence from the part you have actually read — never from further on. On by default where the device can run it, and off in Settings; iPhone, iPad and Mac with Apple Intelligence, not Apple TV |
 | Widget | Current book, chapter and progress from a shared App Group snapshot |
@@ -207,7 +208,12 @@ With a server up, `scripts/live-check.sh` runs the release rule's live checks
 ```bash
 scripts/live-check.sh http://$(ipconfig getifaddr en0):8003 v3-iphone
 scripts/live-check.sh http://$(ipconfig getifaddr en0):8001 v2-ipad --device "iPad Pro 11-inch (M5)"
+scripts/live-check.sh http://$(ipconfig getifaddr en0):8001 v2-duo --device "iPhone Duo"
 ```
+
+The iPhone Duo runs on its outer display: the simulator cannot be opened from
+the command line, so the inner display and the folded poses are checked in
+Device Hub.
 
 It installs the app afresh and signs it in by device code, approving the code
 through `approve-device.mjs` as the fixture admin. `Apps/IssaLiveUITests` then

@@ -6,6 +6,7 @@
 #   scripts/release-tests.sh --only packages   # the package suites alone
 #   scripts/release-tests.sh --only app        # IssaSharedTests alone, on a simulator
 #   scripts/release-tests.sh --device "iPhone 17 Pro"   # the device type it creates
+#   scripts/release-tests.sh --only app --device "iPhone Duo"   # on iOS 27.1
 #
 # Every package suite runs through `swift test --filter`, one at a time (a
 # second SwiftPM job waits on the first's .build lock and looks like a hang),
@@ -49,6 +50,11 @@ while [ $# -gt 0 ]; do
   shift
 done
 case "$ONLY" in all|packages|app) ;; *) usage ;; esac
+# iPhone Duo exists from iOS 27.1, which the 27.0 runtime does not list it
+# for. Every other device stays on 27.0, the runtime 1.5.2 was tested on.
+case "$DEVICE_TYPE" in
+  "iPhone Duo") RUNTIME="com.apple.CoreSimulator.SimRuntime.iOS-27-1" ;;
+esac
 
 export ISSA_RELEASE_RUN=1
 

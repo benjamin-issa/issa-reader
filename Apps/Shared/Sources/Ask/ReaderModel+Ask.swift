@@ -26,7 +26,10 @@ extension ReaderModel {
     /// the reader can see — which on a long paragraph is a page and a half of
     /// story they have not read.
     func readingBoundary() -> ReadingBoundary? {
-        guard let layout, let page = currentPage else { return nil }
+        // The last page on screen, not the first. The saved position stays on
+        // the left page, but the right one of a spread has been read as much,
+        // and bounding here left all of it out of every answer.
+        guard let layout, let page = shownPages.last else { return nil }
 
         // The voice, when it is in this chapter. A narrated entry from another
         // spine document has no range in this layout, and taking its offset
@@ -39,7 +42,10 @@ extension ReaderModel {
                 spineIndex: chapterIndex,
                 charOffset: NSMaxRange(range),
                 chapterTitle: chapterTitle,
-                pageNumber: pageIndex + 1,
+                // The page the sentence ends on, as `charOffset` does: the
+                // voice's own, which on a spread can be the right one.
+                pageNumber: (layout.page(containingOffset: max(range.location, NSMaxRange(range) - 1))?.index
+                    ?? pageIndex) + 1,
                 kind: .narratedSentence,
             )
         }
@@ -54,7 +60,7 @@ extension ReaderModel {
             spineIndex: chapterIndex,
             charOffset: NSMaxRange(bounded),
             chapterTitle: chapterTitle,
-            pageNumber: pageIndex + 1,
+            pageNumber: pageIndex + shownPages.count,
             kind: .pageEnd,
         )
     }

@@ -19,8 +19,11 @@ Uploading is the one outward-facing step, and it consumes a build number
 permanently. The script checks App Store Connect first and refuses to start a
 six-minute archive it already knows will be rejected.
 
-Building needs Xcode 27 (the 27.0 SDKs); the layout sweep below also needs the
-iOS 27 simulator runtime, which `xcodebuild -downloadPlatform iOS` installs.
+Building needs Xcode 27.1 (the 27.1 SDKs): iPhone Duo's reserved regions and
+`toolbarVerticalEdge` exist from 27.1, behind `#available`, so a 27.0 SDK does
+not compile them. The layout sweep below also needs the iOS 27.0 simulator
+runtime for every row but the Duo's, and 27.1 for the Duo's;
+`xcodebuild -downloadPlatform iOS` installs the latest.
 
 ## Credentials
 
@@ -206,8 +209,8 @@ python3 scripts/tests/test_asc_api.py
 ## Before a release: the layout sweep
 
 ```bash
-scripts/layout-sweep.sh          # 375 / 402 / 440, about 8 minutes
-scripts/layout-sweep.sh --all    # every width and the iPad, about 25 minutes
+scripts/layout-sweep.sh          # 375 / 402 / 440 and the Duo, about 1 h 45 min
+scripts/layout-sweep.sh --all    # every width and the iPad, about 3.5 h
 ```
 
 Builds once, then runs the layout invariants on one simulator at a time,
@@ -222,6 +225,17 @@ catchable by assertion. The other two are a control whose *inner* padding
 drifted, and no assertion can see them: the text inside a `TextField` is not an
 accessibility element and has no frame. **The contact sheets are the only
 coverage for that class**, so do not drop them for being slow.
+
+The quick pass and `--all` both include iPhone Duo's outer display
+(`iphone-duo-outer`, on iOS 27.1), where `DuoLayoutTests` measures the
+reader's rail and the shelf. The
+inner display cannot be reached from the command line: powering the outer
+screen off with `simctl io … screenConfig` wedges the simulator. The inner
+display held wide and tall, and the book and table poses, are walked in Device
+Hub by hand; see CLAUDE.md.
+
+`scripts/layout-sweep.sh --only DuoLayoutTests iphone-duo-outer` runs one test
+class on one row and leaves the tracked sheets alone.
 
 `LayoutInvariantsTests` is the test for the tests: it feeds the invariants
 hand-built trees shaped like each of the four bugs and asserts that each one
