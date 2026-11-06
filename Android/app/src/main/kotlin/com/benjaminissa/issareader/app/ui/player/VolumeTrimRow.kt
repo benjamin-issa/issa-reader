@@ -32,6 +32,7 @@ import com.benjaminissa.issareader.playback.VolumeTrim
 import com.benjaminissa.issareader.ui.Metrics
 import com.benjaminissa.issareader.ui.Palette
 import com.benjaminissa.issareader.ui.Typography
+import com.benjaminissa.issareader.ui.einkSliderTrack
 import kotlin.math.roundToInt
 
 /**
@@ -118,6 +119,7 @@ internal fun VolumeTrimRow(book: Book, coordinator: PlaybackDriving?, settings: 
             colors = PlayerControls.sliderColors(),
             modifier = Modifier
                 .fillMaxWidth()
+                .einkSliderTrack(Palette.isEInk, Palette.ink)
                 // "−6 dB" is read as "minus six D B", which says nothing about
                 // which way the sound moves.
                 .semantics {

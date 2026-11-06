@@ -68,11 +68,14 @@ import com.benjaminissa.issareader.core.model.Book
 import com.benjaminissa.issareader.core.model.ByteCountText
 import com.benjaminissa.issareader.core.model.LocalNotice
 import com.benjaminissa.issareader.core.model.ReadingProgress
+import com.benjaminissa.issareader.ui.EInk
+import com.benjaminissa.issareader.ui.EInkToast
 import com.benjaminissa.issareader.ui.Metrics
 import com.benjaminissa.issareader.ui.Palette
 import com.benjaminissa.issareader.ui.ProgressBar
 import com.benjaminissa.issareader.ui.Symbols
 import com.benjaminissa.issareader.ui.Typography
+import com.benjaminissa.issareader.ui.WaitingIndicator
 
 /*
  * The rows of the local books list (`LocalBooksScreen.swift`): a book's card,
@@ -109,9 +112,9 @@ internal fun LocalBookRow(
     Column(
         modifier
             .fillMaxWidth()
-            .then(if (isHighlighted) Modifier.shadow(3.dp, shape, ambientColor = Palette.tangerine, spotColor = Palette.tangerine) else Modifier)
+            .then(if (isHighlighted && !Palette.isEInk) Modifier.shadow(3.dp, shape, ambientColor = Palette.tangerine, spotColor = Palette.tangerine) else Modifier)
             .background(Palette.surface, shape)
-            .border(1.dp, outline, shape)
+            .border(if (Palette.isEInk && isHighlighted) EInk.focusRing else 1.dp, outline, shape)
             .padding(Metrics.spacing12),
         verticalArrangement = Arrangement.spacedBy(Metrics.spacing12),
     ) {
@@ -132,7 +135,7 @@ private fun RowCover(book: Book, isMissing: Boolean, width: androidx.compose.ui.
     Box(Modifier.width(width)) {
         // Decoded at the size drawn rather than 600 pixels for a thumbnail.
         BookCoverImage(book = book, session = null, localPixels = if (width > 40.dp) 260 else 180, cache = coverCache)
-        if (isMissing) {
+        if (isMissing && !Palette.isEInk) {
             Box(
                 Modifier
                     .matchParentSize()
@@ -192,7 +195,7 @@ private fun Details(book: Book, facts: LocalBookFacts, isMissing: Boolean, stack
         }
         facts.narration?.let { narration ->
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Metrics.spacing4)) {
-                Icon(painterResource(Symbols.waveform), contentDescription = null, tint = Palette.inkTertiary, modifier = Modifier.size(13.dp))
+                Icon(painterResource(Symbols.waveform), contentDescription = null, tint = Palette.symbolTertiary, modifier = Modifier.size(13.dp))
                 Text(narration, style = Typography.caption, color = Palette.inkTertiary)
             }
         }
@@ -236,6 +239,10 @@ private fun NoticeStrip(notice: LocalRowNotice, stacked: Boolean, onAction: () -
 /** A bar with no percentage: a 30 % segment moving across and back, or pulsing where it stands when animations are off. */
 @Composable
 internal fun LocalIndeterminateBar(reduceMotion: Boolean, modifier: Modifier = Modifier) {
+    if (Palette.isEInk) {
+        WaitingIndicator(color = Palette.ink, strokeWidth = 2.dp, size = 16.dp, modifier = modifier.fillMaxWidth())
+        return
+    }
     val transition = rememberInfiniteTransition(label = "indeterminate")
     val phase by transition.animateFloat(0f, 1f, infiniteRepeatable(tween(1200), RepeatMode.Reverse), label = "phase")
     BoxWithConstraints(modifier.fillMaxWidth().height(3.dp).clearAndSetSemantics {}) {
@@ -305,7 +312,7 @@ internal fun LocalImportRow(item: LocalImport, reduceMotion: Boolean, onCancel: 
                     .semantics { contentDescription = "Cancel adding ${item.fileName}" },
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(painterResource(Symbols.xmark), contentDescription = null, tint = Palette.inkTertiary, modifier = Modifier.size(20.dp))
+                Icon(painterResource(Symbols.xmark), contentDescription = null, tint = Palette.symbolTertiary, modifier = Modifier.size(20.dp))
             }
         }
     }
@@ -361,6 +368,10 @@ internal fun LocalProblemRow(item: LocalImport, error: LocalImportError, onActio
 @Composable
 internal fun LocalToast(message: String, action: String, spoken: String, onAction: () -> Unit, modifier: Modifier = Modifier) {
     Box(modifier.fillMaxWidth().padding(Metrics.screenMargin), contentAlignment = Alignment.BottomCenter) {
+        if (Palette.isEInk) {
+            EInkToast(message, action, onAction, Modifier.widthIn(max = 520.dp).semantics { contentDescription = spoken })
+            return
+        }
         Snackbar(
             modifier = Modifier
                 .widthIn(max = 520.dp)

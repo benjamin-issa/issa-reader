@@ -23,6 +23,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import com.benjaminissa.issareader.app.reader.ReaderModel
+import com.benjaminissa.issareader.ui.EInk
 import com.benjaminissa.issareader.ui.Metrics
 import com.benjaminissa.issareader.ui.Typography
 import com.benjaminissa.issareader.ui.color
@@ -59,11 +60,11 @@ fun ChapterNoticeBanner(model: ReaderModel, modifier: Modifier = Modifier) {
             color = theme.text.color,
             textAlign = TextAlign.Center,
             modifier = Modifier
-                .dropShadow(shape, Shadow(radius = 12.dp, color = Color.Black.copy(alpha = 0.15f), offset = DpOffset(0.dp, 4.dp)))
+                .then(if (theme.isEInk) Modifier else Modifier.dropShadow(shape, Shadow(radius = 12.dp, color = Color.Black.copy(alpha = 0.15f), offset = DpOffset(0.dp, 4.dp))))
                 // The page's own surface, as the selection menu has it: a
                 // system surface goes dark over a light page in dark theme.
                 .background(theme.background.color, shape)
-                .border(1.dp, theme.text.withAlpha(0.15).color, shape)
+                .border(if (theme.isEInk) EInk.outline else 1.dp, theme.ink(0.15).color, shape)
                 .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
                     model.dismissChapterNotice(showing)
                 }

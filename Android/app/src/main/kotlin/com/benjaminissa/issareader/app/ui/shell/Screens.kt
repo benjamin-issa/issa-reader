@@ -1,5 +1,6 @@
 package com.benjaminissa.issareader.app.ui.shell
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.PaddingValues
@@ -7,7 +8,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.TopAppBarDefaults
@@ -31,6 +32,8 @@ import com.benjaminissa.issareader.ui.LargeTitleBar
 import com.benjaminissa.issareader.ui.LocalPlayerBand
 import com.benjaminissa.issareader.ui.Metrics
 import com.benjaminissa.issareader.ui.Palette
+import com.benjaminissa.issareader.ui.WaitingIndicator
+import com.benjaminissa.issareader.ui.einkOutline
 import kotlinx.coroutines.launch
 
 /**
@@ -104,13 +107,27 @@ fun Refreshable(onRefresh: suspend () -> Unit, modifier: Modifier = Modifier, co
         modifier = modifier,
         state = state,
         indicator = {
-            PullToRefreshDefaults.Indicator(
-                state = state,
-                isRefreshing = refreshing,
-                modifier = Modifier.align(Alignment.TopCenter),
-                containerColor = Palette.surface,
-                color = Palette.tangerine,
-            )
+            if (!Palette.isEInk) {
+                PullToRefreshDefaults.Indicator(
+                    state = state,
+                    isRefreshing = refreshing,
+                    modifier = Modifier.align(Alignment.TopCenter),
+                    containerColor = Palette.surface,
+                    color = Palette.tangerine,
+                )
+            } else if (refreshing) {
+                WaitingIndicator(
+                    color = Palette.ink,
+                    strokeWidth = 2.dp,
+                    size = 24.dp,
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = Metrics.spacing8)
+                        .background(Palette.paper, CircleShape)
+                        .einkOutline(CircleShape)
+                        .padding(horizontal = Metrics.spacing16, vertical = Metrics.spacing8),
+                )
+            }
         },
         content = content,
     )
@@ -133,6 +150,6 @@ fun Modifier.bleed(margin: Dp = Metrics.screenMargin): Modifier = layout { measu
 @Composable
 fun LoadingOverlay(modifier: Modifier = Modifier) {
     Box(modifier.fillMaxSize().padding(bottom = LocalPlayerBand.current), contentAlignment = Alignment.Center) {
-        CircularProgressIndicator(color = Palette.inkTertiary, strokeWidth = 2.5.dp, modifier = Modifier.size(28.dp).padding(2.dp))
+        WaitingIndicator(color = Palette.inkTertiary, strokeWidth = 2.5.dp, size = 24.dp, modifier = Modifier.padding(2.dp))
     }
 }

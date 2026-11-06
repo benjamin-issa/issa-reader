@@ -534,7 +534,23 @@ class ChapterLayout(
      * does not walk the thirty-nine before it on every redraw — every page
      * turn, every narrated sentence, every tick of the highlight.
      */
-    fun draw(page: RenderedPage, canvas: Canvas) {
+    fun draw(page: RenderedPage, canvas: Canvas, ink: Int? = null) {
+        if (ink == null) {
+            drawParagraphs(page, canvas)
+            return
+        }
+        val ownInk = paint.color
+        paint.color = ink
+        plateSpans.forEach { it.isHidden = true }
+        try {
+            drawParagraphs(page, canvas)
+        } finally {
+            paint.color = ownInk
+            plateSpans.forEach { it.isHidden = false }
+        }
+    }
+
+    private fun drawParagraphs(page: RenderedPage, canvas: Canvas) {
         val saved = canvas.save()
         if (page.contentBottom.isFinite()) {
             canvas.clipRect(-100_000f, 0f, 100_000f, (page.contentBottom - page.yOffset).toFloat())

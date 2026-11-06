@@ -53,7 +53,7 @@ fun AskOriginPill(state: AskOriginState, modifier: Modifier = Modifier) {
         horizontalArrangement = Arrangement.spacedBy(Metrics.spacing4),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(painterResource(label.icon), contentDescription = null, tint = Palette.inkTertiary, modifier = Modifier.size(12.dp))
+        Icon(painterResource(label.icon), contentDescription = null, tint = Palette.symbolTertiary, modifier = Modifier.size(12.dp))
         Text(label.phrase, style = Typography.caption, color = Palette.inkTertiary)
     }
 }

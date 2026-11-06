@@ -1,5 +1,6 @@
 package com.benjaminissa.issareader.app.ui.settings
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -16,7 +17,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.BasicAlertDialog
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -50,6 +50,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.benjaminissa.issareader.playback.Observed
+import com.benjaminissa.issareader.ui.DialogTextButton
+import com.benjaminissa.issareader.ui.EInk
+import com.benjaminissa.issareader.ui.EInkDialogWindow
 import com.benjaminissa.issareader.ui.InlineTitleBar
 import com.benjaminissa.issareader.ui.LargeTitleBar
 import com.benjaminissa.issareader.ui.LocalPlayerBand
@@ -57,11 +60,14 @@ import com.benjaminissa.issareader.ui.Metrics
 import com.benjaminissa.issareader.ui.Overline
 import com.benjaminissa.issareader.ui.Palette
 import com.benjaminissa.issareader.ui.PaperList
+import com.benjaminissa.issareader.ui.PaperMenu
 import com.benjaminissa.issareader.ui.PaperRowContent
 import com.benjaminissa.issareader.ui.PaperRowFrame
 import com.benjaminissa.issareader.ui.Symbols
 import com.benjaminissa.issareader.ui.SystemText
 import com.benjaminissa.issareader.ui.Typography
+import com.benjaminissa.issareader.ui.pickerChoiceStyle
+import com.benjaminissa.issareader.ui.pickerValueStyle
 
 /*
  * The pieces every settings screen shares: the pushed page with its title
@@ -140,18 +146,27 @@ internal fun <T> SegmentedPicker(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
 ) {
+    val eink = Palette.isEInk
     SingleChoiceSegmentedButtonRow(modifier.fillMaxWidth()) {
         options.forEachIndexed { index, option ->
             val selected = option == selection
             SegmentedButton(
                 selected = selected,
                 onClick = { onSelect(option) },
-                shape = SegmentedButtonDefaults.itemShape(index, options.size),
+                shape = if (eink) {
+                    SegmentedButtonDefaults.itemShape(index, options.size, RoundedCornerShape(EInk.radius))
+                } else {
+                    SegmentedButtonDefaults.itemShape(index, options.size)
+                },
                 enabled = enabled,
                 icon = {},
+                border = SegmentedButtonDefaults.borderStroke(
+                    if (enabled) Palette.borderStrong else if (eink) Palette.inkTertiary else Palette.border,
+                    if (eink) EInk.outline else SegmentedButtonDefaults.BorderWidth,
+                ),
                 colors = SegmentedButtonDefaults.colors(
-                    activeContainerColor = Palette.surface,
-                    activeContentColor = Palette.ink,
+                    activeContainerColor = if (eink) Palette.ink else Palette.surface,
+                    activeContentColor = if (eink) Palette.paper else Palette.ink,
                     activeBorderColor = Palette.borderStrong,
                     inactiveContainerColor = Palette.surfaceRaised,
                     inactiveContentColor = Palette.ink,
@@ -166,7 +181,13 @@ internal fun <T> SegmentedPicker(
                 label = {
                     Text(
                         label(option),
-                        style = SystemText.subheadline.copy(fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium),
+                        style = SystemText.subheadline.copy(
+                            fontWeight = when {
+                                eink -> if (selected) FontWeight.Bold else FontWeight.Normal
+                                selected -> FontWeight.SemiBold
+                                else -> FontWeight.Medium
+                            },
+                        ),
                         maxLines = 1,
                     )
                 },
@@ -205,10 +226,10 @@ internal fun <T> SectionedPickerRow(
     Box(modifier) {
         PaperRowFrame(onClick = { open = true }) {
             Text(title, style = SystemText.body, color = Palette.ink, modifier = Modifier.weight(1f))
-            Text(label(selection), style = SystemText.body, color = Palette.tangerine, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(label(selection), style = pickerValueStyle(), color = Palette.tangerine, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Icon(painterResource(Symbols.chevronUpChevronDown), contentDescription = null, tint = Palette.tangerine, modifier = Modifier.size(16.dp))
         }
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }, containerColor = Palette.surface) {
+        PaperMenu(expanded = open, onDismissRequest = { open = false }) {
             groups.forEachIndexed { index, group ->
                 if (index > 0) HorizontalDivider(color = Palette.border, modifier = Modifier.padding(vertical = Metrics.spacing4))
                 if (group.title != null) {
@@ -221,7 +242,7 @@ internal fun <T> SectionedPickerRow(
                 }
                 for (option in group.options) {
                     DropdownMenuItem(
-                        text = { Text(label(option), style = SystemText.body, color = Palette.ink) },
+                        text = { Text(label(option), style = pickerChoiceStyle(option == selection), color = Palette.ink) },
                         trailingIcon = if (option == selection) {
                             { Icon(painterResource(Symbols.checkmark), contentDescription = "Selected", tint = Palette.tangerine) }
                         } else {
@@ -255,13 +276,16 @@ internal fun ChoiceDialog(
     message: String? = null,
     cancelTitle: String = "Cancel",
 ) {
+    val eink = Palette.isEInk
     BasicAlertDialog(onDismissRequest = onDismiss) {
+        EInkDialogWindow()
         // Material's alert frame: as wide as its content, between 280 and 560.
         Surface(
             modifier = Modifier.sizeIn(minWidth = 280.dp, maxWidth = 560.dp),
-            shape = RoundedCornerShape(28.dp),
+            shape = RoundedCornerShape(if (eink) EInk.radius else 28.dp),
             color = Palette.surface,
             tonalElevation = 0.dp,
+            border = if (eink) BorderStroke(EInk.dialogOutline, Palette.ink) else null,
         ) {
             Column(Modifier.width(IntrinsicSize.Max).padding(top = Metrics.spacing24, bottom = Metrics.spacing12)) {
                 Text(
@@ -281,10 +305,10 @@ internal fun ChoiceDialog(
                 Column(
                     Modifier.fillMaxWidth().padding(start = Metrics.spacing12, end = Metrics.spacing12, top = Metrics.spacing16),
                     horizontalAlignment = Alignment.End,
-                    verticalArrangement = Arrangement.spacedBy(0.dp),
+                    verticalArrangement = Arrangement.spacedBy(if (eink) Metrics.spacing8 else 0.dp),
                 ) {
                     for (choice in choices) {
-                        TextButton(onClick = choice.action, enabled = choice.enabled) {
+                        DialogTextButton(onClick = choice.action, enabled = choice.enabled) {
                             Text(
                                 choice.title,
                                 style = SystemText.subheadline.copy(fontWeight = FontWeight.SemiBold),
@@ -297,7 +321,7 @@ internal fun ChoiceDialog(
                             )
                         }
                     }
-                    TextButton(onClick = onDismiss) {
+                    DialogTextButton(onClick = onDismiss) {
                         Text(cancelTitle, style = SystemText.subheadline.copy(fontWeight = FontWeight.SemiBold), color = Palette.tangerinePressed)
                     }
                 }

@@ -8,6 +8,7 @@ import com.benjaminissa.issareader.core.model.StoredPosition
 import com.benjaminissa.issareader.core.sync.PositionOrigin
 import com.benjaminissa.issareader.epub.SmilEntry
 import com.benjaminissa.issareader.playback.ChapterSpan
+import com.benjaminissa.issareader.render.EInkNarrationMark
 import com.benjaminissa.issareader.render.HighlightBlock
 import com.benjaminissa.issareader.render.PageRect
 import com.benjaminissa.issareader.render.ReaderTheme
@@ -253,13 +254,15 @@ class PageSnapshot(
     val theme: ReaderTheme,
     val highlight: Rgba,
     val highlightStyle: HighlightBlock.Style,
+    /** How an E Ink page marks [activeFragment]; other pages use [highlight]. */
+    val narrationMark: EInkNarrationMark = EInkNarrationMark.UNDERLINE,
 ) {
     /** The layout by identity: two snapshots of different layouts are different pages whatever their numbers say. */
     override fun equals(other: Any?): Boolean =
         other is PageSnapshot && other.layout === layout && other.revision == revision && other.page == page &&
             other.activeFragment == activeFragment && other.annotations == annotations &&
             other.selection == selection && other.theme == theme && other.highlight == highlight &&
-            other.highlightStyle == highlightStyle
+            other.highlightStyle == highlightStyle && other.narrationMark == narrationMark
 
     override fun hashCode(): Int = System.identityHashCode(layout) * 31 + page.hashCode()
 }

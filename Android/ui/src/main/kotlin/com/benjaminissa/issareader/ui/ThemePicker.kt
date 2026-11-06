@@ -43,7 +43,7 @@ fun ThemePicker(selection: ReaderTheme, onSelect: (ReaderTheme) -> Unit, modifie
             .semantics { contentDescription = "Page colour" },
         horizontalArrangement = Arrangement.spacedBy(Metrics.spacing12),
     ) {
-        for (theme in ReaderTheme.entries) {
+        for (theme in ReaderTheme.offered) {
             val isSelected = theme == selection
             Column(
                 modifier = Modifier

@@ -17,6 +17,7 @@ import com.benjaminissa.issareader.core.model.Book
 import com.benjaminissa.issareader.render.ReaderStyle
 import com.benjaminissa.issareader.ui.ButtonRow
 import com.benjaminissa.issareader.ui.Metrics
+import com.benjaminissa.issareader.ui.Palette
 import com.benjaminissa.issareader.ui.PaperList
 import com.benjaminissa.issareader.ui.PaperRowContent
 import com.benjaminissa.issareader.ui.ThemePicker
@@ -78,18 +79,21 @@ fun BookTypographyView(
 
     Column(Modifier.fillMaxWidth()) {
         SheetInlineTitle(book.title, onDone)
+        val eink = Palette.isEInk
         PaperList(contentPadding = PaddingValues(bottom = Metrics.spacing32)) {
             // Bound to the global value, not to this sheet's style: a book's
             // override carries typeface, size, spacing and justification and
             // nothing else, so a theme written through it would appear to work
             // and then not persist.
-            paperSection(key = "theme", header = "Page colour", footer = "Applies to every book, unlike the settings below.") {
-                row {
-                    PaperRowContent {
-                        ThemePicker(settings.readerStyle.theme, onSelect = {
-                            settings.readerStyle = settings.readerStyle.copy(theme = it)
-                            onChange()
-                        })
+            if (!eink) {
+                paperSection(key = "theme", header = "Page colour", footer = "Applies to every book, unlike the settings below.") {
+                    row {
+                        PaperRowContent {
+                            ThemePicker(settings.readerStyle.theme, onSelect = {
+                                settings.readerStyle = settings.readerStyle.copy(theme = it)
+                                onChange()
+                            })
+                        }
                     }
                 }
             }

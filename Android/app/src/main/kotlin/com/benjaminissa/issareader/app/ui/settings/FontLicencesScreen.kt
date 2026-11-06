@@ -72,7 +72,7 @@ private fun LicenceRow(title: String, subtitle: String, onClick: () -> Unit) {
             Text(title, style = Typography.body, color = Palette.ink)
             Text(subtitle, style = Typography.caption, color = Palette.inkTertiary, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
-        Icon(painterResource(Symbols.chevronRight), contentDescription = null, tint = Palette.inkQuaternary, modifier = Modifier.size(20.dp))
+        Icon(painterResource(Symbols.chevronRight), contentDescription = null, tint = Palette.symbolQuaternary, modifier = Modifier.size(20.dp))
     }
 }
 

@@ -5,7 +5,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -30,6 +29,7 @@ import com.benjaminissa.issareader.core.download.BookMenu
 import com.benjaminissa.issareader.core.model.Book
 import com.benjaminissa.issareader.ui.Metrics
 import com.benjaminissa.issareader.ui.Palette
+import com.benjaminissa.issareader.ui.PaperMenu
 import com.benjaminissa.issareader.ui.Symbols
 import com.benjaminissa.issareader.ui.SystemText
 
@@ -91,13 +91,12 @@ fun BookMenuDropdown(
         submenu = null
         onDismiss()
     }
-    DropdownMenu(
+    PaperMenu(
         expanded = expanded,
         onDismissRequest = dismiss,
-        containerColor = Palette.surface,
         shape = RoundedCornerShape(Metrics.radiusLarge),
     ) {
-        if (!expanded) return@DropdownMenu
+        if (!expanded) return@PaperMenu
         // The live book: the cell that built the menu may hold a copy from
         // before a status or a position changed.
         val live = actions.app.bookByUuid[book.uuid] ?: book
@@ -235,7 +234,7 @@ private fun SubmenuRow(title: String, symbol: Int, onClick: () -> Unit) {
         trailingIcon = {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Metrics.spacing4)) {
                 MenuIcon(symbol, Palette.ink)
-                Icon(painterResource(Symbols.chevronRight), contentDescription = null, tint = Palette.inkTertiary, modifier = Modifier.size(14.dp))
+                Icon(painterResource(Symbols.chevronRight), contentDescription = null, tint = Palette.symbolTertiary, modifier = Modifier.size(14.dp))
             }
         },
         onClick = onClick,

@@ -86,7 +86,7 @@ fun DeviceCodeView(model: DeviceSignInModel, onGranted: (String) -> Unit, onCanc
 @Composable
 private fun Labelled(text: String) {
     Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(Metrics.spacing8)) {
-        CircularProgressIndicator(color = Palette.inkTertiary, strokeWidth = 2.5.dp, modifier = Modifier.size(24.dp))
+        if (!Palette.isEInk) CircularProgressIndicator(color = Palette.inkTertiary, strokeWidth = 2.5.dp, modifier = Modifier.size(24.dp))
         Text(text, style = Typography.body, color = Palette.inkSecondary)
     }
 }
@@ -230,7 +230,7 @@ private fun StatusRow(model: DeviceSignInModel, onCancel: () -> Unit) {
         }
     }
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Metrics.spacing12)) {
-        CircularProgressIndicator(color = Palette.inkTertiary, strokeWidth = 2.dp, modifier = Modifier.size(16.dp))
+        if (!Palette.isEInk) CircularProgressIndicator(color = Palette.inkTertiary, strokeWidth = 2.dp, modifier = Modifier.size(16.dp))
         val expiresAt = model.expiresAt
         val text = when {
             model.isRenewing -> "Getting a fresh code…"

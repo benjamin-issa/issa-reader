@@ -14,6 +14,7 @@ import com.benjaminissa.issareader.render.EInkNarrationMark
 import com.benjaminissa.issareader.render.PageTurnStyle
 import com.benjaminissa.issareader.render.ReaderStyle
 import com.benjaminissa.issareader.render.ReaderStyleOverride
+import com.benjaminissa.issareader.render.ReaderTheme
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
@@ -286,6 +287,12 @@ class PlaybackSettings(
 
     /** The style to set this book in: the global settings, with the book's own choices laid over them. */
     fun style(bookUuid: String): ReaderStyle = readerStyle.applying(bookStyles[bookUuid])
+
+    /** What the page is drawn in: [style], or E-Ink mode's page over it, which stays in memory and never in what is stored. */
+    fun pageStyle(bookUuid: String): ReaderStyle = style(bookUuid).let { if (einkMode) it.copy(theme = ReaderTheme.EINK) else it }
+
+    /** The page's colour before there is a book to ask about. */
+    val pageTheme: ReaderTheme get() = if (einkMode) ReaderTheme.EINK else readerStyle.theme
 
     fun override(bookUuid: String): ReaderStyleOverride? = bookStyles[bookUuid]
 

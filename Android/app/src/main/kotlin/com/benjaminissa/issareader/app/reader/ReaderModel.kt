@@ -38,6 +38,7 @@ import com.benjaminissa.issareader.playback.VolumeTrim
 import com.benjaminissa.issareader.render.ArchiveImageSource
 import com.benjaminissa.issareader.render.BookSearch
 import com.benjaminissa.issareader.render.ChapterParser
+import com.benjaminissa.issareader.render.EInkNarrationMark
 import com.benjaminissa.issareader.render.LocatorAnchoring
 import com.benjaminissa.issareader.render.ReaderStyle
 import com.benjaminissa.issareader.render.RenderedPage
@@ -340,6 +341,9 @@ class ReaderModel(
                 if (reparse) reloadCurrentChapter() else relayoutCurrentChapter()
             }
         }
+
+    /** How an E Ink page marks the narrated sentence: a setting of the mode's, not of [style]. */
+    var narrationMark: EInkNarrationMark by mutableStateOf(EInkNarrationMark.UNDERLINE)
 
     /** The server's session for a server book; null for a book from the reader's own files. */
     val readerSession: Session? get() = (source as? Source.Server)?.session
@@ -1966,6 +1970,7 @@ class ReaderModel(
         theme = style.theme,
         highlight = style.highlightColor,
         highlightStyle = layout.highlightStyle,
+        narrationMark = narrationMark,
     )
 
     suspend fun go(toChapter: Int, fragment: String? = null) {

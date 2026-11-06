@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -42,12 +41,15 @@ import com.benjaminissa.issareader.core.download.BookContentService
 import com.benjaminissa.issareader.core.download.DownloadsInventory
 import com.benjaminissa.issareader.core.model.ByteCountText
 import com.benjaminissa.issareader.ui.ButtonRow
+import com.benjaminissa.issareader.ui.DialogTextButton
 import com.benjaminissa.issareader.ui.Metrics
 import com.benjaminissa.issareader.ui.Palette
+import com.benjaminissa.issareader.ui.PaperAlertDialog
 import com.benjaminissa.issareader.ui.PaperRowContent
 import com.benjaminissa.issareader.ui.SystemText
 import com.benjaminissa.issareader.ui.ToggleRow
 import com.benjaminissa.issareader.ui.Typography
+import com.benjaminissa.issareader.ui.einkOutline
 import com.benjaminissa.issareader.ui.paperSection
 import kotlin.math.roundToInt
 
@@ -152,9 +154,8 @@ internal fun DownloadsScreen(app: AppModel, onBack: (() -> Unit)?, scanned: Down
     // Gated as the section is: a refresh landing while this is open can take
     // back the claim that these books have gone.
     if (confirmingSweep && app.knowsWholeLibrary) {
-        AlertDialog(
+        PaperAlertDialog(
             onDismissRequest = { confirmingSweep = false },
-            containerColor = Palette.surface,
             title = { Text("Remove ${ByteCountText.text(inventory.orphanBytes)} of downloads?", style = SystemText.title3, color = Palette.ink) },
             text = {
                 Text(
@@ -164,7 +165,7 @@ internal fun DownloadsScreen(app: AppModel, onBack: (() -> Unit)?, scanned: Down
                 )
             },
             confirmButton = {
-                TextButton(onClick = {
+                DialogTextButton(onClick = {
                     confirmingSweep = false
                     // Through `removeDownload`, one file at a time, so an
                     // orphan is deleted by exactly the code that deletes
@@ -175,7 +176,7 @@ internal fun DownloadsScreen(app: AppModel, onBack: (() -> Unit)?, scanned: Down
                 }) { Text("Remove", style = SystemText.subheadline.copy(fontWeight = FontWeight.SemiBold), color = dialogButtonColor(destructive = true)) }
             },
             dismissButton = {
-                TextButton(onClick = { confirmingSweep = false }) {
+                DialogTextButton(onClick = { confirmingSweep = false }) {
                     Text("Keep", style = SystemText.subheadline.copy(fontWeight = FontWeight.SemiBold), color = dialogButtonColor(destructive = false))
                 }
             },
@@ -224,12 +225,13 @@ private fun StorageSummary(totalBytes: Long, segments: List<DownloadsStorage.Seg
 @Composable
 private fun StorageBar(totalBytes: Long, segments: List<DownloadsStorage.Segment>) {
     val colors = segments.map { it.color() }
-    val empty = Palette.border
+    val empty = if (Palette.isEInk) Palette.paper else Palette.border
     Box(
         Modifier
             .fillMaxWidth()
             .height(10.dp)
             .clip(RoundedCornerShape(5.dp))
+            .einkOutline(RoundedCornerShape(5.dp))
             .clearAndSetSemantics { contentDescription = "Storage used: ${ByteCountText.text(totalBytes)}" },
     ) {
         if (segments.isEmpty()) {
@@ -282,11 +284,11 @@ internal object DownloadsStorage {
         // Narration extracted from a read-along for playback: real disk use
         // that no book row accounts for, so it gets its own band.
         Segment("Extracted narration", inventory.extractedAudioBytes) { Palette.borderStrong },
-        Segment("Book fonts", inventory.publisherFontBytes) { Palette.inkTertiary },
-        Segment("Covers", inventory.coverBytes) { Palette.inkQuaternary },
+        Segment("Book fonts", inventory.publisherFontBytes) { Palette.symbolTertiary },
+        Segment("Covers", inventory.coverBytes) { Palette.symbolQuaternary },
         // The question indexes: a full-text copy of a book's prose each, and
         // the largest derived store the app keeps.
-        Segment("Question indexes", inventory.askIndexBytes) { Palette.moss.copy(alpha = 0.55f) },
+        Segment("Question indexes", inventory.askIndexBytes) { Palette.moss.copy(alpha = if (Palette.isEInk) 1f else 0.55f) },
         if (accountsForLibrary) Segment("No longer in your library", inventory.unaccountedBytes) { Palette.alert } else null,
     ).filter { it.bytes > 0 }
 }

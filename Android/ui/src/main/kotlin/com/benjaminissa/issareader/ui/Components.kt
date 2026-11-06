@@ -3,6 +3,7 @@ package com.benjaminissa.issareader.ui
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -45,6 +46,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -55,7 +57,7 @@ import com.benjaminissa.issareader.core.model.asProgression
  * Upper-cased here, as SwiftUI's `textCase(.uppercase)` does.
  */
 @Composable
-fun Overline(text: String, modifier: Modifier = Modifier, color: Color = Palette.inkTertiary) {
+fun Overline(text: String, modifier: Modifier = Modifier, color: Color = if (Palette.isEInk) Palette.ink else Palette.inkTertiary) {
     Text(text.uppercase(), modifier = modifier, style = Typography.overline, color = color, maxLines = 1)
 }
 
@@ -65,7 +67,7 @@ fun RailHeader(title: String, modifier: Modifier = Modifier, trailing: String? =
     Row(
         // 44 tall whether or not there is a "See all": the link's tap floor,
         // which sets the rail's rhythm on the iPhone.
-        modifier.fillMaxWidth().heightIn(min = 44.dp).padding(horizontal = Metrics.screenMargin),
+        modifier.fillMaxWidth().heightIn(min = if (Palette.isEInk) EInk.target else 44.dp).padding(horizontal = Metrics.screenMargin),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Overline(title, Modifier.weight(1f))
@@ -73,7 +75,11 @@ fun RailHeader(title: String, modifier: Modifier = Modifier, trailing: String? =
         if (onSeeAll != null) {
             Text(
                 "See all",
-                style = Typography.caption.copy(fontWeight = FontWeight.SemiBold),
+                style = Typography.caption.copy(
+                    fontWeight = FontWeight.SemiBold,
+                    // With no accent to say so, a link says so with a line.
+                    textDecoration = if (Palette.isEInk) TextDecoration.Underline else null,
+                ),
                 color = Palette.tangerinePressed,
                 modifier = Modifier
                     .clickable(role = Role.Button, onClickLabel = "See all $title", onClick = onSeeAll)
@@ -86,20 +92,30 @@ fun RailHeader(title: String, modifier: Modifier = Modifier, trailing: String? =
 /**
  * A thin progress bar: the accent over a faint ink track, never narrower than
  * two points so a started book visibly is started. NaN is no progress, not a
- * full bar.
+ * full bar. E-Ink mode's is taller, ink in an outlined white track.
+ *
+ * @param einkThickness what [thickness] becomes in E-Ink mode.
  */
 @Composable
-fun ProgressBar(value: Double, modifier: Modifier = Modifier, thickness: Dp = 3.dp, track: Color = Palette.ink.copy(alpha = 0.25f)) {
+fun ProgressBar(
+    value: Double,
+    modifier: Modifier = Modifier,
+    thickness: Dp = 3.dp,
+    track: Color = Palette.ink.copy(alpha = 0.25f),
+    einkThickness: Dp = EInk.progress,
+) {
+    val eink = Palette.isEInk
+    val barHeight = if (eink) einkThickness else thickness
     Layout(
-        modifier = modifier.height(thickness),
+        modifier = modifier.height(barHeight),
         content = {
-            Box(Modifier.clip(CircleShape).background(track))
+            Box(Modifier.clip(CircleShape).background(if (eink) Palette.paper else track).einkOutline(CircleShape))
             Box(Modifier.clip(CircleShape).background(Palette.tangerine))
         },
     ) { measurables, constraints ->
         // Unbounded when asked for its intrinsic size: a bar has no width of its own.
         val width = if (constraints.hasBoundedWidth) constraints.maxWidth else constraints.minWidth
-        val height = thickness.roundToPx()
+        val height = barHeight.roundToPx()
         val fill = maxOf(2.dp.roundToPx(), (width * (value.asProgression ?: 0.0)).toInt()).coerceAtMost(width)
         val trackPlaceable = measurables[0].measure(androidx.compose.ui.unit.Constraints.fixed(width, height))
         val fillPlaceable = measurables[1].measure(androidx.compose.ui.unit.Constraints.fixed(fill, height))
@@ -128,7 +144,7 @@ fun PalettePlaceholder(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(Metrics.spacing12),
     ) {
-        Icon(painterResource(symbol), contentDescription = null, tint = Palette.inkQuaternary, modifier = Modifier.size(40.dp))
+        Icon(painterResource(symbol), contentDescription = null, tint = Palette.symbolQuaternary, modifier = Modifier.size(40.dp))
         Text(title, style = Typography.headline, color = Palette.ink, textAlign = TextAlign.Center)
         WrappingText(message, style = Typography.footnote, color = Palette.inkTertiary, textAlign = TextAlign.Center)
         if (actionTitle != null && action != null) {
@@ -148,7 +164,8 @@ fun BetaPill(modifier: Modifier = Modifier) {
         color = Palette.tangerine,
         modifier = modifier
             .clip(CircleShape)
-            .background(Palette.tangerine.copy(alpha = 0.15f))
+            .background(if (Palette.isEInk) Palette.paper else Palette.tangerine.copy(alpha = 0.15f))
+            .einkOutline(CircleShape)
             .padding(horizontal = Metrics.spacing8, vertical = Metrics.spacing4),
     )
 }
@@ -162,6 +179,9 @@ fun BetaPill(modifier: Modifier = Modifier) {
  * `PressedFillButtonStyle` reads the press and never `isEnabled`, so a button
  * disabled for an empty field looks the same and does nothing. TalkBack still
  * hears it as disabled.
+ *
+ * E-Ink mode has no second shade to darken to, so a press inverts it, and it
+ * does show when it can't be pressed: dashed and grey.
  */
 @Composable
 fun PrimaryButton(
@@ -174,27 +194,44 @@ fun PrimaryButton(
 ) {
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
+    val eink = Palette.isEInk
+    val hollow = eink && (pressed || !enabled)
+    val label = if (!hollow) Color.White else if (enabled) Palette.ink else Palette.inkTertiary
     val fill by animateColorAsState(
         when {
+            hollow -> Palette.paper
             pressed -> Palette.tangerinePressed
             else -> Palette.tangerine
         },
         animationSpec = tween(120),
         label = "pressed",
     )
+    val radius = if (eink) EInk.radius else Metrics.radiusMedium
+    val shape = RoundedCornerShape(radius)
     Row(
         modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(Metrics.radiusMedium))
+            .clip(shape)
             .background(fill)
+            .then(
+                when {
+                    eink && !enabled -> Modifier.dashedOutline(Palette.inkTertiary, radius)
+                    hollow -> Modifier.border(EInk.outline, Palette.ink, shape)
+                    else -> Modifier
+                },
+            )
             .clickable(interactionSource = interaction, indication = null, enabled = enabled && !working, role = Role.Button, onClick = onClick)
             .padding(vertical = 14.dp),
         horizontalArrangement = Arrangement.spacedBy(Metrics.spacing8, Alignment.CenterHorizontally),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (working) CircularProgressIndicator(color = Color.White, strokeWidth = 2.dp, modifier = Modifier.size(18.dp))
-        Text(title, style = Typography.headline, color = Color.White)
-        if (!working && trailingIcon != null) Icon(painterResource(trailingIcon), contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+        if (working && eink) {
+            Text(WORKING_TEXT, style = Typography.headline, color = label)
+        } else {
+            if (working) CircularProgressIndicator(color = label, strokeWidth = 2.dp, modifier = Modifier.size(18.dp))
+            Text(title, style = Typography.headline, color = label)
+            if (!working && trailingIcon != null) Icon(painterResource(trailingIcon), contentDescription = null, tint = label, modifier = Modifier.size(18.dp))
+        }
     }
 }
 
@@ -203,7 +240,7 @@ fun PrimaryButton(
 fun BackButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
     FilledTonalIconButton(
         onClick = onClick,
-        modifier = modifier.size(44.dp),
+        modifier = modifier.size(if (Palette.isEInk) EInk.target else 44.dp).einkOutline(CircleShape),
         colors = IconButtonDefaults.filledTonalIconButtonColors(containerColor = Palette.surface, contentColor = Palette.ink),
     ) {
         Icon(painterResource(Symbols.chevronLeft), contentDescription = "Back", modifier = Modifier.size(26.dp))

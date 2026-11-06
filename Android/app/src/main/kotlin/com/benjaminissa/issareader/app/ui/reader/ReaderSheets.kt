@@ -22,6 +22,9 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.foundation.layout.navigationBars
+import com.benjaminissa.issareader.ui.EInk
+import com.benjaminissa.issareader.ui.einkOutline
+import com.benjaminissa.issareader.ui.sheetScrim
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -63,6 +66,8 @@ fun ReaderSheet(
         scope.launch { state.hide() }.invokeOnCompletion { onDismiss() }
     }
     ModalBottomSheet(
+        modifier = Modifier.einkOutline(BottomSheetDefaults.ExpandedShape, EInk.dialogOutline),
+        scrimColor = sheetScrim,
         onDismissRequest = onDismiss,
         sheetState = state,
         containerColor = Palette.paper,
@@ -121,8 +126,9 @@ private val DONE_WIDTH: Dp = 76.dp
  */
 @Composable
 fun Modifier.groupedRow(index: Int, count: Int): Modifier {
-    val top = if (index == 0) PaperCardRadius else 0.dp
-    val bottom = if (index == count - 1) PaperCardRadius else 0.dp
+    val radius = if (Palette.isEInk) EInk.radius else PaperCardRadius
+    val top = if (index == 0) radius else 0.dp
+    val bottom = if (index == count - 1) radius else 0.dp
     return this
         .fillMaxWidth()
         .clip(RoundedCornerShape(topStart = top, topEnd = top, bottomStart = bottom, bottomEnd = bottom))
@@ -132,5 +138,5 @@ fun Modifier.groupedRow(index: Int, count: Int): Modifier {
 /** The hairline under a grouped row, inset to its text. */
 @Composable
 fun GroupedRowDivider(start: Dp = 16.dp) {
-    HorizontalDivider(modifier = Modifier.padding(start = start, end = 16.dp), thickness = 0.5.dp, color = Palette.border)
+    HorizontalDivider(modifier = Modifier.padding(start = start, end = 16.dp), thickness = if (Palette.isEInk) EInk.divider else 0.5.dp, color = Palette.border)
 }

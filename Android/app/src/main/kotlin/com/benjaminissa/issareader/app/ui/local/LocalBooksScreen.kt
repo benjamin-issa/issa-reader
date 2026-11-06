@@ -28,7 +28,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalIconButton
@@ -80,6 +79,7 @@ import com.benjaminissa.issareader.app.local.LocalLibrary
 import com.benjaminissa.issareader.app.local.LocalRowNotice
 import com.benjaminissa.issareader.app.ui.player.BookCoverImage
 import com.benjaminissa.issareader.app.ui.player.PlayerSheet
+import com.benjaminissa.issareader.app.ui.reader.rememberReduceMotion
 import com.benjaminissa.issareader.app.ui.settings.ReadingSettings
 import com.benjaminissa.issareader.app.ui.shell.AppEnvironment
 import com.benjaminissa.issareader.app.ui.shell.LocalAppEnvironment
@@ -97,6 +97,7 @@ import com.benjaminissa.issareader.ui.Metrics
 import com.benjaminissa.issareader.ui.MiniPlayerBar
 import com.benjaminissa.issareader.ui.Overline
 import com.benjaminissa.issareader.ui.Palette
+import com.benjaminissa.issareader.ui.PaperMenu
 import com.benjaminissa.issareader.ui.SwipeToRemove
 import com.benjaminissa.issareader.ui.Symbols
 import com.benjaminissa.issareader.ui.SystemText
@@ -157,7 +158,7 @@ internal fun LocalBooksContent(
 ) {
     val app = environment.app
     val context = LocalContext.current
-    val reduceMotion = remember(context) { ReadingSettings.animationsRemoved(context) }
+    val reduceMotion = rememberReduceMotion()
 
     var measuredSizes by remember { mutableStateOf(sizes ?: emptyMap()) }
     var measuredFree by remember { mutableStateOf(freeSpace) }
@@ -477,7 +478,7 @@ private fun EmptyState(onChoose: () -> Unit) {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(Metrics.spacing12),
     ) {
-        Icon(painterResource(Symbols.doc), contentDescription = null, tint = Palette.inkQuaternary, modifier = Modifier.size(38.dp))
+        Icon(painterResource(Symbols.doc), contentDescription = null, tint = Palette.symbolQuaternary, modifier = Modifier.size(38.dp))
         Text("No books on this ${LocalDevice.noun} yet", style = Typography.headline, color = Palette.ink, textAlign = TextAlign.Center)
         Text(LocalBooksText.emptyFootnote, style = Typography.footnote, color = Palette.inkTertiary, textAlign = TextAlign.Center)
         Text(
@@ -621,7 +622,7 @@ private fun LazyListScope.booksGroup(
                 }
                 // The row's menu, on a long press: Open and Book Info, or Add
                 // Again for a book whose file is missing; then Remove.
-                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }, containerColor = Palette.surface) {
+                PaperMenu(expanded = menu, onDismissRequest = { menu = false }) {
                     if (isMissing) {
                         MenuItem("Add Again…", Symbols.plus) { menu = false; onAddAgain(book) }
                     } else {

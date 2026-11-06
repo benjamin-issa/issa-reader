@@ -378,7 +378,7 @@ internal fun QuietLink(title: String, enabled: Boolean, onClick: () -> Unit, mod
             style = Typography.subhead.copy(fontWeight = FontWeight.Medium),
             color = Palette.inkTertiary,
             modifier = Modifier
-                .alpha(if (enabled) 1f else 0.55f)
+                .alpha(if (enabled || Palette.isEInk) 1f else 0.55f)
                 .drawBehind {
                     val y = size.height - 1.dp.toPx()
                     drawLine(underline, Offset(0f, y), Offset(size.width, y), strokeWidth = 1.dp.toPx())

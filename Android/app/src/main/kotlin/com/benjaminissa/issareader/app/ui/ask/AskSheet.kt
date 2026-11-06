@@ -35,6 +35,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
@@ -80,9 +81,13 @@ import com.benjaminissa.issareader.ask.AskSource
 import com.benjaminissa.issareader.ask.AskSuggestions
 import com.benjaminissa.issareader.ask.Passage
 import com.benjaminissa.issareader.ui.BetaPill
+import com.benjaminissa.issareader.ui.EInk
 import com.benjaminissa.issareader.ui.Metrics
 import com.benjaminissa.issareader.ui.Palette
 import com.benjaminissa.issareader.ui.Typography
+import com.benjaminissa.issareader.ui.WaitingIndicator
+import com.benjaminissa.issareader.ui.einkOutline
+import com.benjaminissa.issareader.ui.sheetScrim
 import kotlinx.coroutines.launch
 
 /**
@@ -140,6 +145,8 @@ fun AskSheet(model: ReaderModel, coordinator: AskCoordinator, onDismiss: () -> U
     }
 
     ModalBottomSheet(
+        modifier = Modifier.einkOutline(BottomSheetDefaults.ExpandedShape, EInk.dialogOutline),
+        scrimColor = sheetScrim,
         onDismissRequest = ::close,
         sheetState = sheetState,
         containerColor = Palette.paper,
@@ -547,6 +554,10 @@ private fun Unavailable(sentence: String) {
  */
 @Composable
 private fun PlaceholderBars() {
+    if (Palette.isEInk) {
+        WaitingIndicator(color = Palette.ink, strokeWidth = 2.dp, size = 16.dp, modifier = Modifier.semantics { contentDescription = "Working out the answer" })
+        return
+    }
     val moves = LocalAskMotion.current
     val transition = if (moves) rememberInfiniteTransition(label = "placeholder bars") else null
     Column(

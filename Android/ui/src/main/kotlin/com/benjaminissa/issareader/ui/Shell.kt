@@ -10,10 +10,15 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarDefaults
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Text
@@ -23,6 +28,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -41,6 +47,10 @@ data class TabItem(val title: String, val icon: Int)
  */
 @Composable
 fun IssaNavigationBar(items: List<TabItem>, selected: Int, onSelect: (Int) -> Unit, modifier: Modifier = Modifier) {
+    if (Palette.isEInk) {
+        EInkNavigationBar(items, selected, onSelect, modifier)
+        return
+    }
     Column(modifier) {
         HorizontalDivider(thickness = 0.5.dp, color = Palette.border)
         NavigationBar(containerColor = Palette.surface, tonalElevation = 0.dp) {
@@ -58,6 +68,44 @@ fun IssaNavigationBar(items: List<TabItem>, selected: Int, onSelect: (Int) -> Un
                         unselectedTextColor = Palette.ink,
                     ),
                 )
+            }
+        }
+    }
+}
+
+/**
+ * The tabs for an E Ink panel, drawn here because Material's item animates its
+ * pill in whatever the theme says: the selected tab an inverted pill over a
+ * bold label, under a line a panel can hold.
+ */
+@Composable
+private fun EInkNavigationBar(items: List<TabItem>, selected: Int, onSelect: (Int) -> Unit, modifier: Modifier) {
+    Column(modifier.background(Palette.surface)) {
+        HorizontalDivider(thickness = EInk.outline, color = Palette.ink)
+        Row(Modifier.fillMaxWidth().windowInsetsPadding(NavigationBarDefaults.windowInsets).selectableGroup()) {
+            items.forEachIndexed { index, item ->
+                val isSelected = index == selected
+                Column(
+                    Modifier
+                        .weight(1f)
+                        .selectable(selected = isSelected, role = Role.Tab, interactionSource = null, indication = null) { onSelect(index) }
+                        .padding(vertical = Metrics.spacing12),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(Metrics.spacing4),
+                ) {
+                    Box(
+                        Modifier.size(64.dp, 32.dp).background(if (isSelected) Palette.ink else Palette.surface, CircleShape),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(painterResource(item.icon), contentDescription = null, tint = if (isSelected) Palette.paper else Palette.ink, modifier = Modifier.size(26.dp))
+                    }
+                    Text(
+                        item.title,
+                        style = SystemText.tabLabel.copy(fontWeight = if (isSelected) FontWeight.Bold else SystemText.tabLabel.fontWeight),
+                        color = Palette.ink,
+                        maxLines = 1,
+                    )
+                }
             }
         }
     }
@@ -115,7 +163,7 @@ fun MiniPlayerBar(
             .clickable(onClick = onExpand)
             .semantics { contentDescription = "Now playing: $title" },
     ) {
-        ProgressBar(progress, Modifier.fillMaxWidth(), thickness = 2.dp, track = Palette.border)
+        ProgressBar(progress, Modifier.fillMaxWidth(), thickness = 2.dp, track = Palette.border, einkThickness = EInk.miniPlayerProgress)
         // The band's height, whatever the controls' touch targets would make
         // it: the bar floats over the content in the band the content already
         // leaves clear, so it may not be taller than that band.

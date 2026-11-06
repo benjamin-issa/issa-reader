@@ -26,6 +26,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.benjaminissa.issareader.app.ask.AskCoordinator
 import com.benjaminissa.issareader.render.ReaderTheme
+import com.benjaminissa.issareader.ui.EInk
+import com.benjaminissa.issareader.ui.Palette
 import com.benjaminissa.issareader.ui.Symbols
 import com.benjaminissa.issareader.ui.color
 
@@ -117,8 +119,8 @@ fun AskStatusBadge(theme: ReaderTheme, state: AskPillState, modifier: Modifier =
     Box(
         modifier
             .size(28.dp)
-            .background(theme.background.color.copy(alpha = 0.9f), CircleShape)
-            .border(1.dp, accent.copy(alpha = 0.3f), CircleShape)
+            .background(theme.ground(0.9).color, CircleShape)
+            .border(if (Palette.isEInk) EInk.outline else 1.dp, accent.copy(alpha = if (Palette.isEInk) 1f else 0.3f), CircleShape)
             .clearAndSetSemantics { contentDescription = if (state == AskPillState.READY) "Answer ready" else "Answer being prepared" },
         contentAlignment = Alignment.Center,
     ) {
@@ -141,7 +143,7 @@ val LocalAskMotion = staticCompositionLocalOf { true }
 /** The glyph's pulse while an answer is being worked out; fully drawn otherwise. */
 @Composable
 private fun pulse(active: Boolean): Float {
-    if (!active || !LocalAskMotion.current) return 1f
+    if (!active || !LocalAskMotion.current || Palette.isEInk) return 1f
     val transition = rememberInfiniteTransition(label = "ask pulse")
     val alpha = transition.animateFloat(
         initialValue = 1f,

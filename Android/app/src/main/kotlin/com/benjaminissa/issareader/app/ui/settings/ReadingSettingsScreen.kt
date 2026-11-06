@@ -53,6 +53,7 @@ internal fun ReadingSettingsScreen(
 ) {
     val context = LocalContext.current
     val motionRemoved = reduceMotion ?: remember(context) { ReadingSettings.animationsRemoved(context) }
+    val pagesFixed = motionRemoved || settings.einkMode
     // The switch is a phone's: on a tablet the reader draws no title, as on the iPad.
     val showsTitleSwitch = ReadingSettings.offersBookTitle(LocalConfiguration.current.smallestScreenWidthDp)
     val style = settings.readerStyle
@@ -71,40 +72,44 @@ internal fun ReadingSettingsScreen(
     }
 
     SettingsPage(title = "Reading", onBack = onBack, largeTitle = largeTitle) {
-        paperSection(
-            key = "highlighter",
-            header = "Highlighter",
-            footer = "The same control is in the reader under Aa. Page colour is one setting for every book, not a per-book choice like the type. Each page colour remembers its own highlighter for the sentence being read aloud.",
-        ) {
-            row { Caption("Page colour — ${theme.title}") }
-            row {
-                PaperRowContent {
-                    ThemePicker(selection = theme, onSelect = { settings.readerStyle = settings.readerStyle.copy(theme = it) })
-                }
-            }
-            row { Caption("Highlighter on ${theme.title}") }
-            row {
-                PaperRowContent {
-                    HighlighterPicker(
-                        theme = theme,
-                        selection = style.highlighters[theme],
-                        onSelect = { settings.readerStyle = ReadingSettings.choosingHighlighter(settings.readerStyle, theme, it) },
-                    )
-                }
-            }
-            row {
-                PaperRowContent {
-                    HighlightSample(theme = theme, highlight = style.highlightColor.color, fontFamily = style.resolvedFamily)
-                }
-            }
-            // Only once this page colour has departed from its default, so the
-            // row is an answer to "how do I undo this" rather than a permanent
-            // piece of furniture offering to undo nothing.
-            if (style.highlighters[theme] != null) {
+        // One page colour and no tints while E-Ink mode is on. The choices stay
+        // stored, and these come back with them when it goes off.
+        if (!settings.einkMode) {
+            paperSection(
+                key = "highlighter",
+                header = "Highlighter",
+                footer = "The same control is in the reader under Aa. Page colour is one setting for every book, not a per-book choice like the type. Each page colour remembers its own highlighter for the sentence being read aloud.",
+            ) {
+                row { Caption("Page colour — ${theme.title}") }
                 row {
-                    ButtonRow("Use default for ${theme.title}", onClick = {
-                        settings.readerStyle = ReadingSettings.choosingHighlighter(settings.readerStyle, theme, null)
-                    })
+                    PaperRowContent {
+                        ThemePicker(selection = theme, onSelect = { settings.readerStyle = settings.readerStyle.copy(theme = it) })
+                    }
+                }
+                row { Caption("Highlighter on ${theme.title}") }
+                row {
+                    PaperRowContent {
+                        HighlighterPicker(
+                            theme = theme,
+                            selection = style.highlighters[theme],
+                            onSelect = { settings.readerStyle = ReadingSettings.choosingHighlighter(settings.readerStyle, theme, it) },
+                        )
+                    }
+                }
+                row {
+                    PaperRowContent {
+                        HighlightSample(theme = theme, highlight = style.highlightColor.color, fontFamily = style.resolvedFamily)
+                    }
+                }
+                // Only once this page colour has departed from its default, so the
+                // row is an answer to "how do I undo this" rather than a permanent
+                // piece of furniture offering to undo nothing.
+                if (style.highlighters[theme] != null) {
+                    row {
+                        ButtonRow("Use default for ${theme.title}", onClick = {
+                            settings.readerStyle = ReadingSettings.choosingHighlighter(settings.readerStyle, theme, null)
+                        })
+                    }
                 }
             }
         }
@@ -126,17 +131,17 @@ internal fun ReadingSettingsScreen(
             )
         }
 
-        paperSection(key = "pages", header = "Pages", footer = ReadingSettings.pagesNote(motionRemoved, showsTitleSwitch)) {
+        paperSection(key = "pages", header = "Pages", footer = ReadingSettings.pagesNote(motionRemoved, showsTitleSwitch, settings.einkMode)) {
             row {
                 // Shown as None and left alone underneath, so the reader's own
                 // choice is still there when animations come back.
                 PickerRow(
                     "Page turn",
-                    selection = PageTurn.effectiveStyle(settings.pageTurn, reduceMotion = motionRemoved),
+                    selection = PageTurn.effectiveStyle(settings.pageTurn, reduceMotion = pagesFixed),
                     options = PageTurnStyle.entries,
                     label = { it.title },
                     onSelect = { settings.pageTurn = it },
-                    enabled = !motionRemoved,
+                    enabled = !pagesFixed,
                 )
             }
             if (showsTitleSwitch) {
@@ -210,10 +215,12 @@ internal object ReadingSettings {
      * The Pages section's note, which says first why the picker cannot be used
      * when it cannot — a disabled control with no reason given reads as broken.
      */
-    fun pagesNote(animationsRemoved: Boolean, showsBookTitleSwitch: Boolean = false): String {
+    fun pagesNote(animationsRemoved: Boolean, showsBookTitleSwitch: Boolean = false, einkMode: Boolean = false): String {
         val styles = "Slide moves the next page in beside the current one. Cover slides the page away over the next. None changes the page instantly."
         // Named only where the switch is, so the note never describes a control that is not there.
         val title = if (showsBookTitleSwitch) " $BOOK_TITLE_NOTE" else ""
+        // First, because it is the reason the picker can do something about.
+        if (einkMode) return "E-Ink mode is on, so pages change instantly. $styles$title"
         if (!animationsRemoved) return styles + title
         return "Remove animations is on, so pages change instantly. To choose how they move, turn it off in Settings › Accessibility › Color and motion. $styles$title"
     }

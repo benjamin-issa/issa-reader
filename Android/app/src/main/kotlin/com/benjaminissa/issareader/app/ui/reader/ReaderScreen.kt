@@ -88,7 +88,7 @@ fun ReaderScreen(bookUuid: String, local: Boolean, onClose: () -> Unit, onOpenPl
 
     // The page's own ground for the moment before the model lands, so a
     // reader that is opening is never briefly the wrong colour.
-    val theme = environment.settings.readerStyle.theme
+    val theme = environment.settings.pageTheme
     Box(
         Modifier
             .fillMaxSize()
@@ -111,7 +111,7 @@ fun ReaderScreen(bookUuid: String, local: Boolean, onClose: () -> Unit, onOpenPl
                     Text(
                         "That book is no longer in your library.",
                         style = Typography.footnote,
-                        color = theme.text.withAlpha(0.7).color,
+                        color = theme.ink(0.7).color,
                         textAlign = TextAlign.Center,
                     )
                 }

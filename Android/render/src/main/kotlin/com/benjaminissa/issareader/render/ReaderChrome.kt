@@ -36,6 +36,8 @@ class ReaderChrome(
      * stood in for that margin is not there to do it.
      */
     val drawsOwnTopBar: Boolean = true,
+    /** How tall the reader's two bars are: [BAR_HEIGHT], or [EINK_BAR_HEIGHT] in E-Ink mode. */
+    val barHeight: Double = BAR_HEIGHT,
 ) {
     /**
      * The device's unsafe top edge — a cutout or a status bar — as it is with
@@ -62,13 +64,13 @@ class ReaderChrome(
      * margin the other three edges get is not one the top can go without; it
      * is only ever waived because something taller is already standing there.
      */
-    val topReserve: Double get() = safeAreaTop + (if (drawsOwnTopBar) BAR_HEIGHT else margin)
+    val topReserve: Double get() = safeAreaTop + (if (drawsOwnTopBar) barHeight else margin)
 
     /**
      * Distance from the bottom of the window to the last line of text: the
      * gesture bar, the footer, and the page's own margin above it.
      */
-    val bottomReserve: Double get() = safeAreaBottom + BAR_HEIGHT + margin
+    val bottomReserve: Double get() = safeAreaBottom + barHeight + margin
 
     /**
      * The area the paginator lays text into.
@@ -93,9 +95,10 @@ class ReaderChrome(
         windowHeight - topReserve - bottomReserve >= 1 && windowWidth - margin * 2 >= 1
 
     override fun equals(other: Any?): Boolean = other is ReaderChrome && safeAreaTop == other.safeAreaTop &&
-        safeAreaBottom == other.safeAreaBottom && margin == other.margin && drawsOwnTopBar == other.drawsOwnTopBar
+        safeAreaBottom == other.safeAreaBottom && margin == other.margin && drawsOwnTopBar == other.drawsOwnTopBar &&
+        barHeight == other.barHeight
 
-    override fun hashCode(): Int = listOf(safeAreaTop, safeAreaBottom, margin, drawsOwnTopBar).hashCode()
+    override fun hashCode(): Int = listOf(safeAreaTop, safeAreaBottom, margin, drawsOwnTopBar, barHeight).hashCode()
 
     /** Where the book's title goes under the footer, if anywhere. */
     enum class BookTitlePlacement {
@@ -122,6 +125,9 @@ class ReaderChrome(
          * shorter to win the space back.
          */
         const val BAR_HEIGHT = 44.0
+
+        /** The same bars with E-Ink mode's larger targets, since a missed tap there costs a refresh. */
+        const val EINK_BAR_HEIGHT = 48.0
 
         /**
          * The least a navigation band must be, in dp, to hold the book's title

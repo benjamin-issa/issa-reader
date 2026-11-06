@@ -25,7 +25,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -41,6 +40,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
@@ -82,18 +82,21 @@ import com.benjaminissa.issareader.core.model.PublishedYearText
 import com.benjaminissa.issareader.core.model.ReadingProgress
 import com.benjaminissa.issareader.core.model.SeriesText
 import com.benjaminissa.issareader.core.networking.isWebLink
+import com.benjaminissa.issareader.ui.EInk
 import com.benjaminissa.issareader.ui.HtmlText
 import com.benjaminissa.issareader.ui.LastWords
 import com.benjaminissa.issareader.ui.LocalPlayerBand
 import com.benjaminissa.issareader.ui.Metrics
 import com.benjaminissa.issareader.ui.Overline
 import com.benjaminissa.issareader.ui.Palette
+import com.benjaminissa.issareader.ui.PaperMenu
 import com.benjaminissa.issareader.ui.ProgressBar
 import com.benjaminissa.issareader.ui.Symbols
 import com.benjaminissa.issareader.ui.SystemText
 import com.benjaminissa.issareader.ui.Typography
 import com.benjaminissa.issareader.ui.WrappingText
 import com.benjaminissa.issareader.ui.colorFromHexString
+import com.benjaminissa.issareader.ui.einkOutline
 import kotlinx.coroutines.launch
 import java.net.URI
 
@@ -293,7 +296,7 @@ private fun StatusControl(book: Book) {
             Text(book.status?.displayName ?: "Set status", style = Typography.caption, color = Palette.inkSecondary, maxLines = 1)
             Icon(painterResource(Symbols.chevronUpChevronDown), contentDescription = null, tint = Palette.inkSecondary, modifier = Modifier.size(10.dp))
         }
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }, containerColor = Palette.surface, shape = RoundedCornerShape(Metrics.radiusLarge)) {
+        PaperMenu(expanded = open, onDismissRequest = { open = false }, shape = RoundedCornerShape(Metrics.radiusLarge)) {
             for (status in app.statuses) {
                 DropdownMenuItem(
                     text = { Text(status.displayName, style = SystemText.body, color = Palette.ink) },
@@ -485,10 +488,14 @@ private fun ActionRow(book: Book) {
 /** The primary control's face: the tangerine capsule, with a ring while a download fills. */
 @Composable
 private fun PrimaryCapsule(action: BookPrimaryAction, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val eink = Palette.isEInk
+    val shape = if (eink) RoundedCornerShape(EInk.radius) else CircleShape
     Row(
         modifier
-            .background(Palette.tangerine, CircleShape)
+            .heightIn(min = if (eink) EInk.target else 0.dp)
+            .clip(shape)
             .clickable(role = Role.Button, onClick = onClick)
+            .background(Palette.tangerine, shape)
             .semantics { contentDescription = action.accessibilityLabel }
             .padding(horizontal = Metrics.spacing24, vertical = Metrics.spacing8),
         verticalAlignment = Alignment.CenterVertically,
@@ -497,7 +504,7 @@ private fun PrimaryCapsule(action: BookPrimaryAction, modifier: Modifier = Modif
         val fraction = action.fraction
         if (fraction != null && action.isDeterminate) {
             ProgressRing(fraction.toFloat())
-        } else if (!action.isDeterminate) {
+        } else if (!action.isDeterminate && !eink) {
             CircularProgressIndicator(color = Color.White, strokeWidth = 2.dp, modifier = Modifier.size(14.dp))
         }
         Text(action.title(), style = Typography.headline, color = Color.White)
@@ -508,12 +515,14 @@ private fun PrimaryCapsule(action: BookPrimaryAction, modifier: Modifier = Modif
 @Composable
 private fun ProgressRing(fraction: Float) {
     val progress by animateFloatAsState(fraction.coerceIn(0f, 1f), label = "ring")
+    // E-Ink mode has no faint track to fill, so a thin line and a thick one.
+    val eink = Palette.isEInk
     Box(
         Modifier.size(16.dp).drawBehind {
-            val stroke = 2.dp.toPx()
+            val stroke = (if (eink) 4.dp else 2.dp).toPx()
             val inset = stroke / 2
             val arcSize = Size(size.width - stroke, size.height - stroke)
-            drawArc(Color.White.copy(alpha = 0.35f), 0f, 360f, false, Offset(inset, inset), arcSize, style = Stroke(stroke))
+            drawArc(Color.White.copy(alpha = if (eink) 1f else 0.35f), 0f, 360f, false, Offset(inset, inset), arcSize, style = Stroke(if (eink) 1.dp.toPx() else stroke))
             drawArc(Color.White, -90f, 360f * progress, false, Offset(inset, inset), arcSize, style = Stroke(stroke, cap = StrokeCap.Round))
         },
     )
@@ -521,10 +530,13 @@ private fun ProgressRing(fraction: Float) {
 
 @Composable
 private fun ListenCapsule(isPlaying: Boolean, onClick: () -> Unit) {
+    val eink = Palette.isEInk
+    val shape = if (eink) RoundedCornerShape(EInk.radius) else CircleShape
     Row(
         Modifier
-            .background(Palette.surface, CircleShape)
-            .border(1.dp, Palette.borderStrong, CircleShape)
+            .heightIn(min = if (eink) EInk.target else 0.dp)
+            .background(Palette.surface, shape)
+            .border(if (eink) EInk.outline else 1.dp, Palette.borderStrong, shape)
             .clickable(role = Role.Button, onClick = onClick)
             .semantics { contentDescription = if (isPlaying) "Now playing. Open the player" else "Listen" }
             .padding(horizontal = Metrics.spacing16, vertical = Metrics.spacing8),
@@ -751,7 +763,7 @@ private fun EditionMenu(book: Book, format: BookContentService.Format, state: Do
         ) {
             Icon(painterResource(Symbols.ellipsisCircle), contentDescription = null, tint = Palette.tangerine, modifier = Modifier.size(22.dp))
         }
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }, containerColor = Palette.surface, shape = RoundedCornerShape(Metrics.radiusLarge)) {
+        PaperMenu(expanded = open, onDismissRequest = { open = false }, shape = RoundedCornerShape(Metrics.radiusLarge)) {
             val close = { open = false }
             if (state != null && state.isActive) {
                 MenuAction("Pause download", Symbols.pauseCircle, close) { app.downloads?.pause(job) }
@@ -802,11 +814,12 @@ private fun ExternalRatings(book: Book, modifier: Modifier) {
         Overline("Elsewhere")
         FlowRow(horizontalArrangement = Arrangement.spacedBy(Metrics.spacing8), verticalArrangement = Arrangement.spacedBy(Metrics.spacing8)) {
             for (rating in ratings) {
-                val tint = colorFromHexString(rating.sourceColor)
+                val tint = if (Palette.isEInk) null else colorFromHexString(rating.sourceColor)
                 val link = rating.sourceUrl?.let { runCatching { URI(it) }.getOrNull() }?.takeIf { it.isWebLink }
                 Row(
                     Modifier
-                        .background((tint ?: Palette.moss).copy(alpha = 0.12f), CircleShape)
+                        .background(if (Palette.isEInk) Palette.paper else (tint ?: Palette.moss).copy(alpha = 0.12f), CircleShape)
+                        .einkOutline(CircleShape)
                         .then(if (link != null) Modifier.clickable(role = Role.Button) { uriHandler.openUri(link.toString()) } else Modifier)
                         .padding(horizontal = Metrics.spacing12, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,

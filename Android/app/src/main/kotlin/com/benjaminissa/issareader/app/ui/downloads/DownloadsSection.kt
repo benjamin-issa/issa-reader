@@ -64,12 +64,15 @@ import com.benjaminissa.issareader.core.download.DownloadManager
 import com.benjaminissa.issareader.core.download.DownloadsInventory
 import com.benjaminissa.issareader.core.model.Book
 import com.benjaminissa.issareader.core.model.ByteCountText
+import com.benjaminissa.issareader.ui.EInkToast
 import com.benjaminissa.issareader.ui.Metrics
 import com.benjaminissa.issareader.ui.Overline
 import com.benjaminissa.issareader.ui.Palette
+import com.benjaminissa.issareader.ui.ProgressBar
 import com.benjaminissa.issareader.ui.SwipeToRemove
 import com.benjaminissa.issareader.ui.Symbols
 import com.benjaminissa.issareader.ui.Typography
+import com.benjaminissa.issareader.ui.WaitingIndicator
 import kotlinx.coroutines.launch
 
 /*
@@ -396,7 +399,13 @@ private fun TransferRow(app: AppModel, job: DownloadManager.Job, transfer: Downl
             }
         }
         if (transfer.isActive || transfer.fraction > 0) {
-            if (transfer.isIndeterminate) {
+            if (Palette.isEInk) {
+                if (transfer.isIndeterminate) {
+                    WaitingIndicator(color = Palette.ink, strokeWidth = 2.dp, size = 16.dp)
+                } else {
+                    ProgressBar(transfer.fraction, Modifier.fillMaxWidth())
+                }
+            } else if (transfer.isIndeterminate) {
                 LinearProgressIndicator(Modifier.fillMaxWidth(), color = Palette.tangerine, trackColor = Palette.border, strokeCap = StrokeCap.Round)
             } else {
                 LinearProgressIndicator(
@@ -473,6 +482,10 @@ fun DownloadRemovalToast(host: SnackbarHostState) {
 @Composable
 fun DownloadRemovalSnackbarHost(host: SnackbarHostState, modifier: Modifier = Modifier) {
     SnackbarHost(host, modifier) { data ->
+        if (Palette.isEInk) {
+            EInkToast(data.visuals.message, data.visuals.actionLabel.orEmpty(), data::performAction, Modifier.padding(horizontal = Metrics.screenMargin))
+            return@SnackbarHost
+        }
         Snackbar(
             data,
             modifier = Modifier.padding(horizontal = Metrics.screenMargin).border(1.dp, Palette.border, CircleShape),

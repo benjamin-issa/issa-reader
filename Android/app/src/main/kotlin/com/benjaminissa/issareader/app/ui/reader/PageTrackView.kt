@@ -25,6 +25,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import com.benjaminissa.issareader.app.reader.PageSnapshot
 import com.benjaminissa.issareader.app.reader.ReaderModel
+import com.benjaminissa.issareader.render.EInkNarrationMark
 import com.benjaminissa.issareader.render.PageTurn
 import com.benjaminissa.issareader.render.android.PageDrawing
 import com.benjaminissa.issareader.ui.color
@@ -207,14 +208,38 @@ fun PageSurface(snapshot: PageSnapshot, pageWidth: Dp, pageHeight: Dp, modifier:
             .size(pageWidth, pageHeight)
             .clipToBounds()
             .drawBehind {
-                val marks = buildList {
-                    for (block in kept.annotations) add(PageDrawing.Mark(block.lines, ReaderPalette.pageFill(block.tint)))
-                    kept.activeFragment?.let { add(PageDrawing.narration(kept.layout, it, kept.page, kept.highlight)) }
-                    kept.selection?.let { add(PageDrawing.Mark(kept.layout.lines(it, kept.page), kept.theme.selection)) }
-                }
                 drawIntoCanvas { canvas ->
-                    PageDrawing.draw(canvas.nativeCanvas, kept.layout, kept.page, marks, theme = null, style = kept.highlightStyle)
+                    PageDrawing.draw(canvas.nativeCanvas, kept.layout, kept.page, kept.marks(), theme = null, style = kept.highlightStyle)
                 }
             },
     )
 }
+
+/** What is marked on this page: its stored highlights, the sentence being read, and the selection, in that order. */
+internal fun PageSnapshot.marks(): List<PageDrawing.Mark> = buildList {
+    val eink = theme.isEInk
+    for (block in annotations) {
+        add(
+            if (eink) {
+                PageDrawing.Mark(block.lines, theme.text, PageDrawing.Treatment.DASHED_UNDERLINE)
+            } else {
+                PageDrawing.Mark(block.lines, ReaderPalette.pageFill(block.tint))
+            },
+        )
+    }
+    activeFragment?.let { fragment ->
+        val mark = PageDrawing.narration(layout, fragment, page, highlight)
+        add(if (eink) mark.copy(color = theme.text, treatment = narrationMark.treatment) else mark)
+    }
+    selection?.let { range ->
+        val lines = layout.lines(range, page)
+        add(if (eink) PageDrawing.Mark(lines, theme.text, PageDrawing.Treatment.INVERTED) else PageDrawing.Mark(lines, theme.selection))
+    }
+}
+
+private val EInkNarrationMark.treatment: PageDrawing.Treatment
+    get() = when (this) {
+        EInkNarrationMark.UNDERLINE -> PageDrawing.Treatment.UNDERLINE
+        EInkNarrationMark.OUTLINE -> PageDrawing.Treatment.OUTLINE
+        EInkNarrationMark.INVERTED -> PageDrawing.Treatment.INVERTED
+    }

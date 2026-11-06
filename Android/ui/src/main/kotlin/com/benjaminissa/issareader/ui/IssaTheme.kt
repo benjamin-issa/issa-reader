@@ -31,6 +31,7 @@ import androidx.compose.ui.unit.dp
 @Composable
 fun IssaTheme(darkTheme: Boolean = isSystemInDarkTheme(), eink: Boolean = false, content: @Composable () -> Unit) {
     val colors = if (eink) IssaColors.EInk else if (darkTheme) IssaColors.Dark else IssaColors.Light
+    Typography.smallest = if (eink) EInk.SMALLEST_TEXT else 0f
     CompositionLocalProvider(LocalIssaColors provides colors) {
         MaterialTheme(
             colorScheme = colorScheme(colors),

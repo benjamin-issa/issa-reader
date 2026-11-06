@@ -68,7 +68,7 @@ fun BrowserSignInView(
         }
         when (stage) {
             BrowserSignInModel.Stage.Starting -> StageRow("Opening your server's sign-in page…") {
-                CircularProgressIndicator(color = Palette.inkTertiary, strokeWidth = 2.dp, modifier = Modifier.size(16.dp))
+                if (!Palette.isEInk) CircularProgressIndicator(color = Palette.inkTertiary, strokeWidth = 2.dp, modifier = Modifier.size(16.dp))
             }
             is BrowserSignInModel.Stage.Granted -> StageRow("Signed in.") {
                 Icon(painterResource(Symbols.checkmarkCircleFill), contentDescription = null, tint = Palette.tangerine, modifier = Modifier.size(20.dp))

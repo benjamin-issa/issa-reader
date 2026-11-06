@@ -138,6 +138,9 @@ class PlateSpan(val plate: ChapterPlate, private val scale: Double) : Replacemen
     /** The column this plate lands in, in pixels; set by the layout before each pass. */
     var availableWidthPx: Double = Double.MAX_VALUE
 
+    /** Left out of a pass that redraws only the words, in another ink. */
+    var isHidden: Boolean = false
+
     private val bitmapPaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
 
     /** The size it is drawn at, in pixels. */
@@ -169,6 +172,7 @@ class PlateSpan(val plate: ChapterPlate, private val scale: Double) : Replacemen
         bottom: Int,
         paint: Paint,
     ) {
+        if (isHidden) return
         val bitmap = PlateBitmaps.bitmap(plate.artwork) ?: return
         val size = sizePx
         val width = size.width.roundToInt().toFloat()

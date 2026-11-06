@@ -47,19 +47,19 @@ fun CoverArt(
         modifier
             .aspectRatio(aspect)
             .clip(shape)
-            .border(0.5.dp, Palette.ink.copy(alpha = 0.10f), shape),
+            .then(if (Palette.isEInk) Modifier.border(1.dp, Palette.ink, shape) else Modifier.border(0.5.dp, Palette.ink.copy(alpha = 0.10f), shape)),
         contentAlignment = Alignment.Center,
     ) {
         if (image != null) {
             Image(image, contentDescription = contentDescription, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
         } else {
             val tint = CoverPlaceholder.tints()[CoverPlaceholder.tintIndex(uuid)]
-            Box(Modifier.fillMaxSize().background(tint.copy(alpha = 0.28f)), contentAlignment = Alignment.Center) {
+            Box(Modifier.fillMaxSize().background(if (Palette.isEInk) Palette.paper else tint.copy(alpha = 0.28f)), contentAlignment = Alignment.Center) {
                 // 34 points, shrinking to fit a small cover rather than being
                 // cut off, as the iPhone's `minimumScaleFactor` does.
                 BasicText(
                     CoverPlaceholder.initial(initialSource),
-                    style = Typography.serif(34f, FontWeight.Medium).copy(color = Palette.ink.copy(alpha = 0.55f), textAlign = TextAlign.Center),
+                    style = Typography.serif(34f, FontWeight.Medium).copy(color = Palette.ink.copy(alpha = if (Palette.isEInk) 1f else 0.55f), textAlign = TextAlign.Center),
                     maxLines = 1,
                     autoSize = TextAutoSize.StepBased(minFontSize = 7.sp, maxFontSize = 34.sp, stepSize = 1.sp),
                     modifier = Modifier.padding(2.dp),

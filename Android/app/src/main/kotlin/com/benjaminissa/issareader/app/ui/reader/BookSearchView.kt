@@ -61,6 +61,8 @@ import com.benjaminissa.issareader.ui.SwipeToRemove
 import com.benjaminissa.issareader.ui.Symbols
 import com.benjaminissa.issareader.ui.SystemText
 import com.benjaminissa.issareader.ui.Typography
+import com.benjaminissa.issareader.ui.WaitingIndicator
+import com.benjaminissa.issareader.ui.einkOutline
 
 /**
  * Finding a phrase inside the book you are reading: the Find in book sheet.
@@ -125,15 +127,16 @@ fun BookSearchView(model: ReaderModel, onOpen: (BookSearch.Hit) -> Unit, onDismi
                 }
             }
             if (model.isSearching) {
-                CircularProgressIndicator(
+                WaitingIndicator(
                     color = Palette.inkTertiary,
                     strokeWidth = 2.dp,
+                    size = 20.dp,
                     modifier = Modifier
                         .align(Alignment.TopCenter)
                         .padding(top = Metrics.spacing8)
                         .background(Palette.surfaceRaised, CircleShape)
-                        .padding(Metrics.spacing8)
-                        .size(20.dp),
+                        .einkOutline(CircleShape)
+                        .padding(Metrics.spacing8),
                 )
             }
         }
@@ -167,7 +170,7 @@ private fun SearchField(text: String, onChange: (String) -> Unit, modifier: Modi
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Metrics.spacing8),
     ) {
-        Icon(painterResource(Symbols.magnifyingglass), contentDescription = null, tint = Palette.inkTertiary, modifier = Modifier.size(20.dp))
+        Icon(painterResource(Symbols.magnifyingglass), contentDescription = null, tint = Palette.symbolTertiary, modifier = Modifier.size(20.dp))
         Box(Modifier.weight(1f)) {
             if (text.isEmpty()) Text("Find in this book", style = SystemText.body, color = Palette.inkQuaternary, maxLines = 1)
             BasicTextField(
@@ -269,7 +272,7 @@ private fun MarkRow(
                         .width(3.dp)
                         .fillMaxHeight()
                         .background(
-                            if (annotation.kind == Annotation.Kind.BOOKMARK) Palette.inkQuaternary else ReaderPalette.color(annotation.tint),
+                            if (annotation.kind == Annotation.Kind.BOOKMARK || Palette.isEInk) Palette.symbolQuaternary else ReaderPalette.color(annotation.tint),
                             RoundedCornerShape(2.dp),
                         ),
                 )

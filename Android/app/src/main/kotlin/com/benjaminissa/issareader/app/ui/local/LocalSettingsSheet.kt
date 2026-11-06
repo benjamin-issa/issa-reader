@@ -40,10 +40,13 @@ import com.benjaminissa.issareader.app.ui.settings.displaySection
 import com.benjaminissa.issareader.app.ui.settings.playbackRows
 import com.benjaminissa.issareader.core.model.ByteCountText
 import com.benjaminissa.issareader.ui.ButtonRow
+import com.benjaminissa.issareader.ui.EInk
 import com.benjaminissa.issareader.ui.LabeledRow
 import com.benjaminissa.issareader.ui.Palette
 import com.benjaminissa.issareader.ui.SystemText
+import com.benjaminissa.issareader.ui.einkOutline
 import com.benjaminissa.issareader.ui.paperSection
+import com.benjaminissa.issareader.ui.sheetScrim
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -62,6 +65,8 @@ import kotlinx.coroutines.withContext
 @Composable
 internal fun LocalSettingsSheet(environment: AppEnvironment, library: LocalLibrary, onDismiss: () -> Unit, onConnectServer: () -> Unit) {
     ModalBottomSheet(
+        modifier = Modifier.einkOutline(BottomSheetDefaults.ExpandedShape, EInk.dialogOutline),
+        scrimColor = sheetScrim,
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         containerColor = Palette.paper,

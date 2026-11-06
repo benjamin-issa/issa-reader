@@ -1,8 +1,6 @@
 package com.benjaminissa.issareader.app.ui.book
 
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -15,7 +13,9 @@ import com.benjaminissa.issareader.app.model.BookRouter
 import com.benjaminissa.issareader.app.ui.shell.LocalShellActions
 import com.benjaminissa.issareader.app.ui.shell.LocalTabNavigator
 import com.benjaminissa.issareader.core.download.BookMenu
+import com.benjaminissa.issareader.ui.DialogTextButton
 import com.benjaminissa.issareader.ui.Palette
+import com.benjaminissa.issareader.ui.PaperAlertDialog
 import com.benjaminissa.issareader.ui.SystemText
 
 /** This screen's router, found by a book's menu: Swift's `@Environment(BookRouter.self)`. */
@@ -64,15 +64,14 @@ fun BookRoutes(place: BookMenu.Place, content: @Composable () -> Unit) {
 /** A [BookAlert] as Material's dialog, with the one button Swift's has. */
 @Composable
 fun BookAlertDialog(alert: BookAlert, onDismiss: () -> Unit) {
-    AlertDialog(
+    PaperAlertDialog(
         onDismissRequest = onDismiss,
         confirmButton = {
-            TextButton(onClick = onDismiss) {
+            DialogTextButton(onClick = onDismiss) {
                 Text("OK", style = SystemText.body.copy(fontWeight = FontWeight.SemiBold), color = Palette.tangerine)
             }
         },
         title = { Text(alert.title, style = SystemText.headline, color = Palette.ink) },
         text = { Text(alert.message, style = SystemText.subheadline, color = Palette.inkSecondary) },
-        containerColor = Palette.surface,
     )
 }

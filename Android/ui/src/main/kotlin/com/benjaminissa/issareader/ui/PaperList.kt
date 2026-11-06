@@ -20,7 +20,6 @@ import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -28,6 +27,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -40,6 +40,7 @@ import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -124,17 +125,20 @@ fun PaperSection(
             Spacer(Modifier.padding(top = Metrics.spacing24))
         }
         if (scope.rows.isNotEmpty()) {
+            val eink = Palette.isEInk
+            val card = RoundedCornerShape(if (eink) EInk.radius else PaperCardRadius)
             Column(
                 Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(PaperCardRadius))
-                    .background(Palette.surface),
+                    .clip(card)
+                    .background(Palette.surface)
+                    .einkOutline(card),
             ) {
                 scope.rows.forEachIndexed { index, (dividerStart, content) ->
                     if (index > 0) {
                         HorizontalDivider(
-                            modifier = Modifier.padding(start = scope.rows[index - 1].first, end = ROW_PADDING),
-                            thickness = 0.5.dp,
+                            modifier = if (eink) Modifier else Modifier.padding(start = scope.rows[index - 1].first, end = ROW_PADDING),
+                            thickness = if (eink) EInk.divider else 0.5.dp,
                             color = Palette.border,
                         )
                     }
@@ -149,7 +153,7 @@ fun PaperSection(
 /** A section's header: the system face, sentence case, quiet. */
 @Composable
 fun SectionHeaderText(text: String, modifier: Modifier = Modifier) {
-    Text(text, modifier = modifier, style = SystemText.subheadline.copy(fontWeight = FontWeight.SemiBold), color = Palette.inkTertiary)
+    Text(text, modifier = modifier, style = SystemText.subheadline.copy(fontWeight = FontWeight.SemiBold), color = if (Palette.isEInk) Palette.ink else Palette.inkTertiary)
 }
 
 /** The sentence under a settings section, which says what its rows do. */
@@ -236,7 +240,7 @@ fun NavigationRow(title: String, onClick: () -> Unit, modifier: Modifier = Modif
         icon?.let { RowIcon(it) }
         Text(title, style = SystemText.body, color = Palette.ink, modifier = Modifier.weight(1f))
         if (value != null) Text(value, style = SystemText.body, color = Palette.inkTertiary, maxLines = 1)
-        Icon(painterResource(Symbols.chevronRight), contentDescription = null, tint = Palette.inkQuaternary, modifier = Modifier.size(20.dp))
+        Icon(painterResource(Symbols.chevronRight), contentDescription = null, tint = Palette.symbolQuaternary, modifier = Modifier.size(20.dp))
     }
 }
 
@@ -246,19 +250,23 @@ fun ToggleRow(title: String, checked: Boolean, onCheckedChange: (Boolean) -> Uni
     PaperRowFrame(modifier, onClick = if (enabled) ({ onCheckedChange(!checked) }) else null, role = Role.Switch) {
         icon?.let { RowIcon(it) }
         Text(title, style = SystemText.body, color = if (enabled) Palette.ink else Palette.inkTertiary, modifier = Modifier.weight(1f))
-        Switch(
-            checked = checked,
-            onCheckedChange = onCheckedChange,
-            enabled = enabled,
-            colors = SwitchDefaults.colors(
-                checkedThumbColor = Color.White,
-                checkedTrackColor = Palette.tangerine,
-                checkedBorderColor = Palette.tangerine,
-                uncheckedThumbColor = Palette.inkQuaternary,
-                uncheckedTrackColor = Palette.surfaceRaised,
-                uncheckedBorderColor = Palette.borderStrong,
-            ),
-        )
+        if (Palette.isEInk) {
+            EInkSwitch(checked, onCheckedChange, enabled)
+        } else {
+            Switch(
+                checked = checked,
+                onCheckedChange = onCheckedChange,
+                enabled = enabled,
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = Color.White,
+                    checkedTrackColor = Palette.tangerine,
+                    checkedBorderColor = Palette.tangerine,
+                    uncheckedThumbColor = Palette.inkQuaternary,
+                    uncheckedTrackColor = Palette.surfaceRaised,
+                    uncheckedBorderColor = Palette.borderStrong,
+                ),
+            )
+        }
     }
 }
 
@@ -283,13 +291,13 @@ fun <T> PickerRow(
         PaperRowFrame(onClick = if (enabled) ({ open = true }) else null) {
             icon?.let { RowIcon(it) }
             Text(title, style = SystemText.body, color = Palette.ink, modifier = Modifier.weight(1f))
-            Text(label(selection), style = SystemText.body, color = if (enabled) Palette.tangerine else Palette.inkTertiary, maxLines = 1)
+            Text(label(selection), style = pickerValueStyle(), color = if (enabled) Palette.tangerine else Palette.inkTertiary, maxLines = 1)
             Icon(painterResource(Symbols.chevronUpChevronDown), contentDescription = null, tint = if (enabled) Palette.tangerine else Palette.inkTertiary, modifier = Modifier.size(16.dp))
         }
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }, containerColor = Palette.surface) {
+        PaperMenu(expanded = open, onDismissRequest = { open = false }) {
             for (option in options) {
                 DropdownMenuItem(
-                    text = { Text(label(option), style = SystemText.body, color = Palette.ink) },
+                    text = { Text(label(option), style = pickerChoiceStyle(option == selection), color = Palette.ink) },
                     trailingIcon = if (option == selection) {
                         { Icon(painterResource(Symbols.checkmark), contentDescription = "Selected", tint = Palette.tangerine) }
                     } else {
@@ -304,6 +312,16 @@ fun <T> PickerRow(
         }
     }
 }
+
+/** A picker's value: bold in E-Ink mode, which can't set it apart in the accent. */
+@Composable
+@ReadOnlyComposable
+fun pickerValueStyle(): TextStyle = if (Palette.isEInk) SystemText.body.copy(fontWeight = FontWeight.SemiBold) else SystemText.body
+
+/** One choice of a picker's menu: E-Ink mode sets the current one bold, beside its check. */
+@Composable
+@ReadOnlyComposable
+fun pickerChoiceStyle(current: Boolean): TextStyle = if (current) pickerValueStyle() else SystemText.body
 
 /** A row that acts: in the accent colour, or the alert colour when it destroys something. */
 @Composable
@@ -341,7 +359,7 @@ fun StepperRow(
 @Composable
 fun Stepper(value: Double, range: ClosedFloatingPointRange<Double>, step: Double, onValueChange: (Double) -> Unit, modifier: Modifier = Modifier) {
     Row(
-        modifier.clip(RoundedCornerShape(50)).background(Palette.surfaceRaised),
+        modifier.clip(RoundedCornerShape(50)).background(Palette.surfaceRaised).einkOutline(RoundedCornerShape(50)),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         StepperHalf("−", enabled = value - step >= range.start - 1e-9, description = "Decrease") { onValueChange((value - step).coerceIn(range)) }
@@ -355,7 +373,7 @@ private fun StepperHalf(symbol: String, enabled: Boolean, description: String, o
     Box(
         Modifier
             .width(46.dp)
-            .heightIn(min = 34.dp)
+            .heightIn(min = if (Palette.isEInk) EInk.target else 34.dp)
             .clickable(enabled = enabled, role = Role.Button, onClickLabel = description, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {

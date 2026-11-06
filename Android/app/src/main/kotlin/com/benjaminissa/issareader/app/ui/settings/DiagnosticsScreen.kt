@@ -3,7 +3,6 @@ package com.benjaminissa.issareader.app.ui.settings
 import android.content.Context
 import android.content.Intent
 import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -21,8 +20,10 @@ import androidx.core.content.FileProvider
 import com.benjaminissa.issareader.app.model.Clipboard
 import com.benjaminissa.issareader.core.diagnostics.IssaLog
 import com.benjaminissa.issareader.ui.ButtonRow
+import com.benjaminissa.issareader.ui.DialogTextButton
 import com.benjaminissa.issareader.ui.LabeledRow
 import com.benjaminissa.issareader.ui.Palette
+import com.benjaminissa.issareader.ui.PaperAlertDialog
 import com.benjaminissa.issareader.ui.PaperRowContent
 import com.benjaminissa.issareader.ui.Symbols
 import com.benjaminissa.issareader.ui.SystemText
@@ -98,19 +99,18 @@ internal fun DiagnosticsScreen(onBack: (() -> Unit)?, preview: Pair<String, Int>
     }
 
     if (confirmingClear) {
-        AlertDialog(
+        PaperAlertDialog(
             onDismissRequest = { confirmingClear = false },
-            containerColor = Palette.surface,
             title = { Text("Clear the log?", style = SystemText.title3, color = Palette.ink) },
             confirmButton = {
-                TextButton(onClick = {
+                DialogTextButton(onClick = {
                     confirmingClear = false
                     IssaLog.clear()
                     revision += 1
                 }) { Text("Clear", style = SystemText.subheadline.copy(fontWeight = FontWeight.SemiBold), color = dialogButtonColor(destructive = true)) }
             },
             dismissButton = {
-                TextButton(onClick = { confirmingClear = false }) {
+                DialogTextButton(onClick = { confirmingClear = false }) {
                     Text("Cancel", style = SystemText.subheadline.copy(fontWeight = FontWeight.SemiBold), color = dialogButtonColor(destructive = false))
                 }
             },

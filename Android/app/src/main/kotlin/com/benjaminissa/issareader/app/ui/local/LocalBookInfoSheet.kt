@@ -51,6 +51,7 @@ import com.benjaminissa.issareader.app.ui.player.BookCoverImage
 import com.benjaminissa.issareader.core.model.Book
 import com.benjaminissa.issareader.core.model.ByteCountText
 import com.benjaminissa.issareader.core.model.LocalCopy
+import com.benjaminissa.issareader.ui.EInk
 import com.benjaminissa.issareader.ui.WrappingText
 import com.benjaminissa.issareader.ui.Metrics
 import com.benjaminissa.issareader.ui.Overline
@@ -59,6 +60,8 @@ import com.benjaminissa.issareader.ui.PrimaryButton
 import com.benjaminissa.issareader.ui.Symbols
 import com.benjaminissa.issareader.ui.SystemText
 import com.benjaminissa.issareader.ui.Typography
+import com.benjaminissa.issareader.ui.einkOutline
+import com.benjaminissa.issareader.ui.sheetScrim
 
 /**
  * Book info for a book from the reader's files, as a Material bottom sheet:
@@ -80,6 +83,8 @@ internal fun LocalBookInfoSheet(
     onRemove: () -> Unit,
 ) {
     ModalBottomSheet(
+        modifier = Modifier.einkOutline(BottomSheetDefaults.ExpandedShape, EInk.dialogOutline),
+        scrimColor = sheetScrim,
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         containerColor = Palette.paper,
@@ -166,7 +171,7 @@ internal fun LocalBookInfoContent(
 @Composable
 private fun Hero(book: Book, isMissing: Boolean, coverCache: CoverCache) {
     Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(Metrics.spacing16)) {
-        BookCoverImage(book, session = null, cache = coverCache, modifier = Modifier.width(96.dp).alpha(if (isMissing) 0.5f else 1f))
+        BookCoverImage(book, session = null, cache = coverCache, modifier = Modifier.width(96.dp).alpha(if (isMissing && !Palette.isEInk) 0.5f else 1f))
         Column(verticalArrangement = Arrangement.spacedBy(Metrics.spacing4)) {
             WrappingText(book.title, style = Typography.title, color = if (isMissing) Palette.inkSecondary else Palette.ink)
             if (book.byline.isNotEmpty()) Text(book.byline, style = Typography.body, color = Palette.inkSecondary)
@@ -175,7 +180,7 @@ private fun Hero(book: Book, isMissing: Boolean, coverCache: CoverCache) {
                 Text(LocalBooksCopy.notOnDevice, style = Typography.caption, color = Palette.inkTertiary)
             } else if (book.hasReadalong && seconds != null) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Metrics.spacing4)) {
-                    Icon(painterResource(Symbols.waveform), contentDescription = null, tint = Palette.inkTertiary, modifier = Modifier.size(13.dp))
+                    Icon(painterResource(Symbols.waveform), contentDescription = null, tint = Palette.symbolTertiary, modifier = Modifier.size(13.dp))
                     Text(LocalBookInfo.narratedLine(book, seconds), style = Typography.caption, color = Palette.inkTertiary)
                 }
             }

@@ -3,7 +3,6 @@ package com.benjaminissa.issareader.app.ui.reader
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
-import android.provider.Settings
 import android.view.View
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
@@ -26,6 +25,7 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsIgnoringVisibility
 import androidx.compose.foundation.layout.systemBarsIgnoringVisibility
 import androidx.compose.foundation.layout.tappableElementIgnoringVisibility
@@ -37,7 +37,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
@@ -47,6 +46,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -124,6 +124,10 @@ import com.benjaminissa.issareader.render.ReaderChrome
 import com.benjaminissa.issareader.render.ReaderTapZone
 import com.benjaminissa.issareader.render.ReaderTheme
 import com.benjaminissa.issareader.render.android.ReaderFonts
+import com.benjaminissa.issareader.ui.EInk
+import com.benjaminissa.issareader.ui.PaperMenu
+import com.benjaminissa.issareader.ui.ProgressBar
+import com.benjaminissa.issareader.ui.WaitingIndicator
 import com.benjaminissa.issareader.ui.WrappingText
 import com.benjaminissa.issareader.ui.Metrics
 import com.benjaminissa.issareader.ui.Palette
@@ -218,10 +222,11 @@ fun ReaderView(
     // opening and belongs to the book. Followed rather than assigned once: a
     // re-resolve, so this book's own settings survive a change of default.
     fun applyStyle() {
-        model.style = settings.style(uuid).copy(publisherFamily = model.style.publisherFamily)
+        model.style = settings.pageStyle(uuid).copy(publisherFamily = model.style.publisherFamily)
+        model.narrationMark = settings.einkNarrationMark
     }
     LaunchedEffect(model) {
-        snapshotFlow { settings.style(uuid) }.collect { applyStyle() }
+        snapshotFlow { settings.pageStyle(uuid) to settings.einkNarrationMark }.collect { applyStyle() }
     }
 
     // The back gesture closes the book, as the iPhone's swipe from the edge
@@ -272,7 +277,12 @@ fun ReaderView(
         // up — kept whether or not the chrome shows, like the bars' reserves.
         val titlePlacement = bookTitlePlacement(settings.showsBookTitle)
         val titleRow = if (titlePlacement == ReaderChrome.BookTitlePlacement.ROW) ReaderChrome.BOOK_TITLE_ROW.dp else 0.dp
-        val chrome = ReaderChrome(edges.top.value.toDouble(), (edges.bottom + titleRow).value.toDouble(), model.style.pageMargin)
+        val chrome = ReaderChrome(
+            edges.top.value.toDouble(),
+            (edges.bottom + titleRow).value.toDouble(),
+            model.style.pageMargin,
+            barHeight = readerBarHeight.value.toDouble(),
+        )
         val size = chrome.pageSize(maxWidth.value.toDouble(), maxHeight.value.toDouble())
         val pageWidth = size.width.dp
         val pageHeight = size.height.dp
@@ -311,7 +321,7 @@ fun ReaderView(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(Metrics.spacing12),
                 ) {
-                    CircularProgressIndicator(color = theme.textTertiary.color, strokeWidth = 2.5.dp, modifier = Modifier.size(24.dp))
+                    if (!theme.isEInk) CircularProgressIndicator(color = theme.textTertiary.color, strokeWidth = 2.5.dp, modifier = Modifier.size(24.dp))
                     Text(phase.message, style = Typography.footnote, color = theme.textTertiary.color)
                 }
                 is ReaderModel.Phase.Downloading -> DownloadingView(model, theme, phase.received, phase.total)
@@ -581,7 +591,7 @@ private fun PageContent(
             // The top bar's reserve, held whether or not the chrome is showing,
             // exactly as the footer holds its own — so toggling can never
             // re-paginate. It stands in for the page's top margin.
-            Spacer(Modifier.height(ReaderChrome.BAR_HEIGHT.dp))
+            Spacer(Modifier.height(readerBarHeight))
             Box(Modifier.pageGestures(handler)) {
                 PageTrackView(
                     model, turner, pageWidth, pageHeight, pageInsets,
@@ -603,7 +613,7 @@ private fun PageContent(
             model,
             Modifier
                 .align(Alignment.TopCenter)
-                .padding(top = ReaderChrome.BAR_HEIGHT.dp + Metrics.spacing12, start = Metrics.spacing24, end = Metrics.spacing24),
+                .padding(top = readerBarHeight + Metrics.spacing12, start = Metrics.spacing24, end = Metrics.spacing24),
         )
     }
 }
@@ -638,7 +648,7 @@ private fun BookTitleCaption(
         Text(
             model.book.title,
             style = Typography.caption,
-            color = model.style.theme.text.withAlpha(0.55).color,
+            color = model.style.theme.textTertiary.color,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             textAlign = TextAlign.Center,
@@ -742,9 +752,9 @@ private fun SelectionMenu(model: ReaderModel, modifier: Modifier = Modifier) {
     var tints by remember { mutableStateOf(false) }
     Row(
         modifier
-            .dropShadow(CircleShape, Shadow(radius = 12.dp, color = Color.Black.copy(alpha = 0.15f), offset = DpOffset(0.dp, 4.dp)))
+            .then(if (theme.isEInk) Modifier else Modifier.dropShadow(CircleShape, Shadow(radius = 12.dp, color = Color.Black.copy(alpha = 0.15f), offset = DpOffset(0.dp, 4.dp))))
             .background(theme.background.color, CircleShape)
-            .border(1.dp, theme.text.withAlpha(0.15).color, CircleShape)
+            .border(if (theme.isEInk) EInk.outline else 1.dp, theme.ink(0.15).color, CircleShape)
             .padding(horizontal = Metrics.spacing8, vertical = Metrics.spacing4),
         horizontalArrangement = Arrangement.spacedBy(Metrics.spacing4),
         verticalAlignment = Alignment.CenterVertically,
@@ -754,8 +764,11 @@ private fun SelectionMenu(model: ReaderModel, modifier: Modifier = Modifier) {
             model.clearSelection()
         }
         Box {
-            MenuGlyph(Symbols.highlighter, "Highlight", theme) { tints = true }
-            DropdownMenu(expanded = tints, onDismissRequest = { tints = false }, containerColor = Palette.surface) {
+            MenuGlyph(Symbols.highlighter, "Highlight", theme) {
+                // A page that can't show a tint has none to offer: one action.
+                if (theme.isEInk) model.annotate(Annotation.Kind.HIGHLIGHT, Annotation.Tint.entries.first()) else tints = true
+            }
+            PaperMenu(expanded = tints, onDismissRequest = { tints = false }) {
                 for (tint in Annotation.Tint.entries) {
                     DropdownMenuItem(
                         text = { Text(tint.title, style = SystemText.body, color = Palette.ink) },
@@ -794,7 +807,7 @@ private fun SelectionMenu(model: ReaderModel, modifier: Modifier = Modifier) {
 private fun MenuGlyph(icon: Int, label: String, theme: ReaderTheme, onClick: () -> Unit) {
     Box(
         Modifier
-            .size(40.dp)
+            .size(if (theme.isEInk) EInk.target else 40.dp)
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = ripple(bounded = false, radius = 20.dp),
@@ -836,16 +849,16 @@ private fun TopBar(
     // folded rows are for a narrow window.
     val fit = TopBarFit.fitting(
         LocalConfiguration.current.screenWidthDp.toFloat(), showsAsk,
-        glyphDp = BAR_GLYPH_WIDTH.value, paddingDp = 20f,
+        glyphDp = barGlyphWidth.value, paddingDp = 20f,
     )
     val overflow = ReaderOverflow.of(foldsFind = !fit.showsFind, foldsMarks = !fit.showsMarks, hasNarration = model.hasNarration)
     Row(
         modifier
             .fillMaxWidth()
             .graphicsLayer { this.alpha = alpha }
-            .background(theme.background.withAlpha(0.94).color)
+            .background(theme.ground(0.94).color)
             .padding(top = top)
-            .height(ReaderChrome.BAR_HEIGHT.dp)
+            .height(readerBarHeight)
             .padding(horizontal = 10.dp)
             .then(if (visible) Modifier else Modifier.clearAndSetSemantics {}),
         verticalAlignment = Alignment.CenterVertically,
@@ -893,7 +906,7 @@ private fun TopBar(
             ) { onSheet(ReaderSheetKind.CONTENTS) }
             is ReaderOverflow.Menu -> Box {
                 BarGlyph(Symbols.ellipsisCircle, "More", theme, enabled = visible, modifier = Modifier.testTag("reader.more")) { menu = true }
-                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }, containerColor = Palette.surface) {
+                PaperMenu(expanded = menu, onDismissRequest = { menu = false }) {
                     for (row in overflow.rows) {
                         val (title, icon) = when (row) {
                             ReaderOverflow.Row.FIND -> "Find in book" to Symbols.magnifyingglass
@@ -928,7 +941,12 @@ private fun TopBar(
 }
 
 /** How wide each of the top bar's squares is. */
-private val BAR_GLYPH_WIDTH = 38.dp
+private val barGlyphWidth: Dp
+    @Composable @ReadOnlyComposable get() = if (Palette.isEInk) EInk.target else 38.dp
+
+/** How tall the top bar and the footer are. */
+private val readerBarHeight: Dp
+    @Composable @ReadOnlyComposable get() = (if (Palette.isEInk) ReaderChrome.EINK_BAR_HEIGHT else ReaderChrome.BAR_HEIGHT).dp
 
 @Composable
 private fun BarGlyph(
@@ -943,7 +961,7 @@ private fun BarGlyph(
 ) {
     Box(
         modifier
-            .size(width = BAR_GLYPH_WIDTH, height = ReaderChrome.BAR_HEIGHT.dp)
+            .size(width = barGlyphWidth, height = readerBarHeight)
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = ripple(bounded = false, radius = 20.dp),
@@ -998,7 +1016,7 @@ private fun Footer(
     Row(
         Modifier
             .fillMaxWidth()
-            .height(ReaderChrome.BAR_HEIGHT.dp)
+            .height(readerBarHeight)
             .pointerInput(model) {
                 // Swipe up on the strip to open the player. The whole bar is
                 // the target; past the distance the buttons' taps are let go.
@@ -1030,7 +1048,7 @@ private fun Footer(
             // playing this book.
             Box(
                 Modifier
-                    .size(32.dp)
+                    .size(if (theme.isEInk) EInk.target else 32.dp)
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = ripple(bounded = false, radius = 20.dp),
@@ -1048,11 +1066,11 @@ private fun Footer(
                     painterResource(if (bookIsPlaying) Symbols.pauseCircleFill else Symbols.playCircleFill),
                     contentDescription = null,
                     tint = theme.accent.color,
-                    modifier = Modifier.size(31.dp),
+                    modifier = Modifier.size(if (theme.isEInk) 44.dp else 31.dp),
                 )
             }
             FooterGlyph("Open player", onOpenPlayer) {
-                Icon(painterResource(Symbols.waveform), contentDescription = null, tint = theme.textTertiary.color, modifier = Modifier.size(22.dp))
+                Icon(painterResource(Symbols.waveform), contentDescription = null, tint = theme.ink(0.55).color, modifier = Modifier.size(22.dp))
             }
         }
         Row(
@@ -1063,6 +1081,7 @@ private fun Footer(
             Row(
                 Modifier
                     .weight(1f, fill = false)
+                    .heightIn(min = if (theme.isEInk) EInk.target else 0.dp)
                     .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, role = Role.Button) {
                         onSheet(ReaderSheetKind.CONTENTS)
                     }
@@ -1070,7 +1089,7 @@ private fun Footer(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(Metrics.spacing4),
             ) {
-                val ink = theme.text.withAlpha(0.55).color
+                val ink = theme.ink(0.55).color
                 Icon(painterResource(Symbols.listBullet), contentDescription = null, tint = ink, modifier = Modifier.size(17.dp))
                 Text(model.chapterTitle, style = Typography.caption, color = ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
@@ -1086,7 +1105,7 @@ private fun Footer(
                             environment.nowPlaying?.publish()
                         }
                     }) {
-                        SkipGlyph(forward = forward, size = 22.dp, seconds = seconds.toInt(), tint = theme.textTertiary.color)
+                        SkipGlyph(forward = forward, size = 22.dp, seconds = seconds.toInt(), tint = theme.ink(0.55).color)
                     }
                 }
             }
@@ -1097,7 +1116,7 @@ private fun Footer(
             Text(
                 progress,
                 style = Typography.caption.copy(fontFeatureSettings = "tnum"),
-                color = theme.text.withAlpha(0.55).color,
+                color = theme.ink(0.55).color,
                 maxLines = 1,
                 // The page already says where the reader is, in words; this
                 // would follow it as "3 slash 12".
@@ -1111,7 +1130,7 @@ private fun Footer(
 private fun FooterGlyph(label: String, onClick: () -> Unit, content: @Composable () -> Unit) {
     Box(
         Modifier
-            .size(28.dp)
+            .size(if (Palette.isEInk) EInk.target else 28.dp)
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = ripple(bounded = false, radius = 18.dp),
@@ -1137,18 +1156,22 @@ private fun DownloadingView(model: ReaderModel, theme: ReaderTheme, received: Lo
         WrappingText(model.book.title, style = Typography.title, color = theme.text.color, textAlign = TextAlign.Center)
         val numbers = Typography.caption.copy(fontFeatureSettings = "tnum")
         if (total > 0) {
-            LinearProgressIndicator(
-                progress = { (received.toDouble() / total).toFloat().coerceIn(0f, 1f) },
-                color = theme.accent.color,
-                trackColor = theme.text.withAlpha(0.12).color,
-                drawStopIndicator = {},
-                modifier = Modifier.widthIn(max = 280.dp).fillMaxWidth(),
-            )
+            if (theme.isEInk) {
+                ProgressBar(received.toDouble() / total, Modifier.widthIn(max = 280.dp).fillMaxWidth())
+            } else {
+                LinearProgressIndicator(
+                    progress = { (received.toDouble() / total).toFloat().coerceIn(0f, 1f) },
+                    color = theme.accent.color,
+                    trackColor = theme.text.withAlpha(0.12).color,
+                    drawStopIndicator = {},
+                    modifier = Modifier.widthIn(max = 280.dp).fillMaxWidth(),
+                )
+            }
             Text("${ByteCountText.text(received)} of ${ByteCountText.text(total)}", style = numbers, color = theme.textTertiary.color)
         } else {
             // No length: an indeterminate spinner is honest, where a bar
             // pinned at zero looks exactly like a stall.
-            CircularProgressIndicator(color = theme.textTertiary.color, strokeWidth = 2.5.dp, modifier = Modifier.size(24.dp))
+            WaitingIndicator(color = theme.textTertiary.color, strokeWidth = 2.5.dp, size = 24.dp)
             Text(if (received > 0) ByteCountText.text(received) else "Starting…", style = numbers, color = theme.textTertiary.color)
         }
         Text(
@@ -1170,9 +1193,9 @@ private fun FailedView(theme: ReaderTheme, reason: String, onRetry: () -> Unit) 
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(Metrics.spacing12),
     ) {
-        Icon(painterResource(Symbols.bookClosed), contentDescription = null, tint = theme.text.withAlpha(0.45).color, modifier = Modifier.size(40.dp))
+        Icon(painterResource(Symbols.bookClosed), contentDescription = null, tint = theme.ink(0.45).color, modifier = Modifier.size(40.dp))
         Text("Couldn't open this book", style = Typography.headline, color = theme.text.color)
-        Text(reason, style = Typography.footnote, color = theme.text.withAlpha(0.7).color, textAlign = TextAlign.Center)
+        Text(reason, style = Typography.footnote, color = theme.ink(0.7).color, textAlign = TextAlign.Center)
         Text(
             "Try Again",
             style = Typography.callout.copy(fontWeight = FontWeight.SemiBold),
@@ -1227,18 +1250,18 @@ private tailrec fun Context.findActivity(): Activity? = when (this) {
 }
 
 /**
- * Whether the system has removed animations — Android's Reduce Motion. Read
- * again whenever the reader comes back to the front, since that is where the
- * setting is changed.
+ * Whether animation is off: the system has removed it, which is Android's
+ * Reduce Motion, or E-Ink mode has. Read again whenever the reader comes back
+ * to the front, since that is where the system's setting is changed.
  */
 @Composable
 internal fun rememberReduceMotion(): Boolean {
     val context = LocalContext.current
-    fun read(): Boolean = Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f
+    fun read(): Boolean = ReadingSettings.animationsRemoved(context)
     var reduced by remember { mutableStateOf(read()) }
     LifecycleResumeEffect(Unit) {
         reduced = read()
         onPauseOrDispose {}
     }
-    return reduced
+    return reduced || Palette.isEInk
 }

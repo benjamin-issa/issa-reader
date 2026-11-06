@@ -30,16 +30,23 @@ object Typography {
         IssaFonts.variableFamily(R.font.publicsans, R.font.publicsans_italic, opticalSize = null)
     }
 
+    /**
+     * The smallest size any style comes out at, set by the theme: E-Ink mode's
+     * [EInk.SMALLEST_TEXT], because thin strokes are what a panel dithers away,
+     * and nothing otherwise.
+     */
+    internal var smallest: Float = 0f
+
     fun serif(size: Float, weight: FontWeight = FontWeight.Normal): TextStyle = TextStyle(
         fontFamily = serifFamilies.getOrPut(size) {
             IssaFonts.variableFamily(R.font.newsreader, R.font.newsreader_italic, opticalSize = size.coerceIn(6f, 72f))
         },
         fontWeight = weight,
-        fontSize = size.sp,
+        fontSize = maxOf(size, smallest).sp,
     )
 
     fun sans(size: Float, weight: FontWeight = FontWeight.Normal): TextStyle =
-        TextStyle(fontFamily = sansFamily, fontWeight = weight, fontSize = size.sp)
+        TextStyle(fontFamily = sansFamily, fontWeight = weight, fontSize = maxOf(size, smallest).sp)
 
     // Display / reading
     val displayLarge: TextStyle get() = serif(34f, FontWeight.Medium)
@@ -78,8 +85,10 @@ object Typography {
 object SystemText {
     private val roboto = FontFamily.Default
 
-    private fun style(size: Float, weight: FontWeight = FontWeight.Normal, lineHeight: Float? = null) =
-        TextStyle(fontFamily = roboto, fontWeight = weight, fontSize = size.sp, lineHeight = lineHeight?.sp ?: TextStyle.Default.lineHeight)
+    private fun style(size: Float, weight: FontWeight = FontWeight.Normal, lineHeight: Float? = null): TextStyle {
+        val raised = maxOf(size, Typography.smallest) - size
+        return TextStyle(fontFamily = roboto, fontWeight = weight, fontSize = (size + raised).sp, lineHeight = lineHeight?.let { (it + raised).sp } ?: TextStyle.Default.lineHeight)
+    }
 
     val largeTitle = style(34f, FontWeight.Bold, 41f)
     val title1 = style(28f, FontWeight.Normal, 34f)
@@ -92,10 +101,10 @@ object SystemText {
     val callout = style(16f, FontWeight.Normal, 21f)
     val subheadline = style(15f, FontWeight.Normal, 20f)
     val footnote = style(13f, FontWeight.Normal, 18f)
-    val caption1 = style(12f, FontWeight.Normal, 16f)
-    val caption2 = style(11f, FontWeight.Normal, 13f)
+    val caption1 get() = style(12f, FontWeight.Normal, 16f)
+    val caption2 get() = style(11f, FontWeight.Normal, 13f)
     /** The tab bar's labels. */
-    val tabLabel = style(12f, FontWeight.Medium, 16f)
+    val tabLabel get() = style(12f, FontWeight.Medium, 16f)
     val link = body.copy(textDecoration = TextDecoration.Underline)
 }
 

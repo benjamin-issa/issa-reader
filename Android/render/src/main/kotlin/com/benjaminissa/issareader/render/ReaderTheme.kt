@@ -22,6 +22,13 @@ enum class ReaderTheme(
     @SerialName("sepia") SEPIA(0xF4EFE3, 0x221F1A, 0xE2853A),
     @SerialName("night") NIGHT(0x17150F, 0xE0D6C6, 0xEE9B57),
     @SerialName("slate") SLATE(0x1C2422, 0x9FB3AF, 0xEE9B57),
+
+    /**
+     * E-Ink mode's page, which stands in for the reader's choice and is never
+     * offered or stored: [offered] leaves it out, and a stored style goes on
+     * holding the page colour the reader chose. Android only.
+     */
+    @SerialName("eink") EINK(0xFFFFFF, 0x000000, 0x000000),
     ;
 
     /** The persisted spelling, shared with the Swift client's `rawValue`. */
@@ -35,8 +42,17 @@ enum class ReaderTheme(
      * controls and the messages shown while a book is opening are drawn *on the
      * page*, so they take their colour from the page.
      */
-    val textSecondary: Rgba get() = text.withAlpha(0.75)
-    val textTertiary: Rgba get() = text.withAlpha(0.55)
+    val textSecondary: Rgba get() = ink(0.75)
+    val textTertiary: Rgba get() = if (isEInk) Rgba.hex(EINK_GREY) else text.withAlpha(0.55)
+
+    /** Whether this is E-Ink mode's page, where a mark has to be a shape. */
+    val isEInk: Boolean get() = this == EINK
+
+    /** The page's ink at [alpha], for what is drawn on it: full on an E Ink page, which has no faint ink to give. */
+    fun ink(alpha: Double): Rgba = if (isEInk) text else text.withAlpha(alpha)
+
+    /** The page's ground at [alpha], for what floats over it: solid on an E Ink page. */
+    fun ground(alpha: Double): Rgba = if (isEInk) background else background.withAlpha(alpha)
 
     /** The accent for anything interactive drawn on the page. */
     val accent: Rgba get() = Rgba.hex(accentHex)
@@ -61,6 +77,7 @@ enum class ReaderTheme(
             SEPIA -> "Sepia"
             NIGHT -> "Night"
             SLATE -> "Slate"
+            EINK -> "E-Ink"
         }
 
     /**
@@ -94,5 +111,11 @@ enum class ReaderTheme(
 
     companion object {
         fun fromRawValue(raw: String): ReaderTheme? = entries.firstOrNull { it.rawValue == raw }
+
+        /** The page colours a reader can choose. */
+        val offered: List<ReaderTheme> get() = entries - EINK
+
+        /** The one grey on an E Ink page, for text only: 7:1 on white. */
+        private const val EINK_GREY = 0x595959
     }
 }

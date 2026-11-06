@@ -30,6 +30,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
@@ -64,7 +65,7 @@ fun LibrarySearchField(text: String, onTextChange: (String) -> Unit, modifier: M
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Metrics.spacing8),
     ) {
-        Icon(painterResource(Symbols.magnifyingglass), contentDescription = null, tint = Palette.inkTertiary, modifier = Modifier.size(18.dp))
+        Icon(painterResource(Symbols.magnifyingglass), contentDescription = null, tint = Palette.symbolTertiary, modifier = Modifier.size(18.dp))
         Box(Modifier.weight(1f)) {
             if (text.isEmpty()) Text(placeholder, style = Typography.callout, color = Palette.inkQuaternary, maxLines = 1)
             BasicTextField(
@@ -83,7 +84,7 @@ fun LibrarySearchField(text: String, onTextChange: (String) -> Unit, modifier: M
                 Icon(
                     painterResource(Symbols.xmarkCircleFill),
                     contentDescription = "Clear search",
-                    tint = Palette.inkQuaternary,
+                    tint = Palette.symbolQuaternary,
                     modifier = Modifier.size(18.dp).clickable(role = Role.Button) { onTextChange("") },
                 )
             }
@@ -96,10 +97,11 @@ fun LibrarySearchField(text: String, onTextChange: (String) -> Unit, modifier: M
 fun ShelfChip(title: String, count: Int?, isSelected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier, showsChevron: Boolean = false) {
     Row(
         modifier
-            .heightIn(min = 34.dp)
-            .background(if (isSelected) Palette.tangerine else Palette.surface, CircleShape)
-            .border(if (isSelected) 0.dp else 1.dp, if (isSelected) Color.Transparent else Palette.border, CircleShape)
+            .heightIn(min = if (Palette.isEInk) EInk.target else 34.dp)
+            .clip(CircleShape)
             .clickable(role = Role.Button, onClick = onClick)
+            .background(if (isSelected) Palette.tangerine else Palette.surface, CircleShape)
+            .border(if (isSelected) 0.dp else if (Palette.isEInk) EInk.outline else 1.dp, if (isSelected) Color.Transparent else Palette.border, CircleShape)
             .padding(horizontal = Metrics.spacing12, vertical = Metrics.spacing8),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Metrics.spacing4),
@@ -107,7 +109,7 @@ fun ShelfChip(title: String, count: Int?, isSelected: Boolean, onClick: () -> Un
         val style = Typography.caption.copy(fontWeight = FontWeight.SemiBold)
         Text(title, style = style, color = if (isSelected) Color.White else Palette.inkSecondary, maxLines = 1)
         if (count != null) {
-            Text("$count", style = style.copy(fontFeatureSettings = "tnum"), color = if (isSelected) Color.White.copy(alpha = 0.75f) else Palette.inkTertiary)
+            Text("$count", style = style.copy(fontFeatureSettings = "tnum"), color = if (isSelected) Color.White.copy(alpha = if (Palette.isEInk) 1f else 0.75f) else Palette.inkTertiary)
         }
         if (showsChevron) {
             Icon(painterResource(Symbols.chevronDown), contentDescription = null, tint = if (isSelected) Color.White else Palette.inkSecondary, modifier = Modifier.size(12.dp))
@@ -120,7 +122,7 @@ fun ShelfChip(title: String, count: Int?, isSelected: Boolean, onClick: () -> Un
 fun SortCapsule(title: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
     Row(
         modifier
-            .heightIn(min = 44.dp)
+            .heightIn(min = if (Palette.isEInk) EInk.target else 44.dp)
             .clickable(role = Role.Button, onClick = onClick),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -183,7 +185,7 @@ fun BookCell(
 @Composable
 fun FormatMarkBadge(mark: FormatMark, modifier: Modifier = Modifier) {
     Box(
-        modifier.size(20.dp).background(Palette.surface.copy(alpha = 0.92f), CircleShape),
+        modifier.size(20.dp).background(Palette.surface.copy(alpha = if (Palette.isEInk) 1f else 0.92f), CircleShape).einkOutline(CircleShape, 1.dp),
         contentAlignment = Alignment.Center,
     ) {
         Icon(
@@ -323,7 +325,7 @@ fun ContinueCard(
                     .clickable(role = Role.Button, onClickLabel = "Details for $title", onClick = onDetails),
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(painterResource(Symbols.chevronRight), contentDescription = "Details for $title", tint = Palette.inkTertiary, modifier = Modifier.size(20.dp))
+                Icon(painterResource(Symbols.chevronRight), contentDescription = "Details for $title", tint = Palette.symbolTertiary, modifier = Modifier.size(20.dp))
             }
         }
     }

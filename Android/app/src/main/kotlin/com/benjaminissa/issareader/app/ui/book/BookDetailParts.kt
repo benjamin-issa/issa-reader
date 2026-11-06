@@ -125,7 +125,7 @@ fun TagChip(name: String, isLinked: Boolean, modifier: Modifier = Modifier, onCl
     ) {
         Row(
             Modifier
-                .background(if (pressed) Palette.borderStrong.copy(alpha = 0.4f) else Palette.surface, CircleShape)
+                .background(if (pressed && !Palette.isEInk) Palette.borderStrong.copy(alpha = 0.4f) else Palette.surface, CircleShape)
                 .border(1.dp, Palette.border, CircleShape)
                 .padding(horizontal = Metrics.spacing8, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,

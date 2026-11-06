@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -66,6 +65,7 @@ import com.benjaminissa.issareader.playback.ProgressScope
 import com.benjaminissa.issareader.playback.SleepTimer
 import com.benjaminissa.issareader.playback.displayChapterTitle
 import com.benjaminissa.issareader.app.model.CoverCache
+import com.benjaminissa.issareader.ui.PaperMenu
 import com.benjaminissa.issareader.ui.WrappingText
 import com.benjaminissa.issareader.ui.Metrics
 import com.benjaminissa.issareader.ui.Palette
@@ -73,6 +73,8 @@ import com.benjaminissa.issareader.ui.SkipGlyph
 import com.benjaminissa.issareader.ui.Symbols
 import com.benjaminissa.issareader.ui.SystemText
 import com.benjaminissa.issareader.ui.Typography
+import com.benjaminissa.issareader.ui.dashedOutline
+import com.benjaminissa.issareader.ui.einkSliderTrack
 import kotlinx.coroutines.launch
 import java.text.DecimalFormat
 import java.text.DecimalFormatSymbols
@@ -201,7 +203,13 @@ internal fun PlayerView(
                 modifier = Modifier
                     .widthIn(max = 320.dp)
                     .aspectRatio(1f)
-                    .shadow(24.dp, RoundedCornerShape(Metrics.radiusSmall), ambientColor = Palette.ink.copy(alpha = 0.18f), spotColor = Palette.ink.copy(alpha = 0.18f))
+                    .then(
+                        if (Palette.isEInk) {
+                            Modifier
+                        } else {
+                            Modifier.shadow(24.dp, RoundedCornerShape(Metrics.radiusSmall), ambientColor = Palette.ink.copy(alpha = 0.18f), spotColor = Palette.ink.copy(alpha = 0.18f))
+                        },
+                    )
                     // On paper, so a placeholder's translucent tint is laid
                     // over the page as on the shelf, not over its own shadow.
                     .background(Palette.paper, RoundedCornerShape(Metrics.radiusSmall)),
@@ -234,7 +242,7 @@ internal fun PlayerView(
                 },
                 enabled = coordinator != null,
                 colors = PlayerControls.sliderColors(),
-                modifier = Modifier.fillMaxWidth().testTag("player.scrubber"),
+                modifier = Modifier.fillMaxWidth().einkSliderTrack(Palette.isEInk, Palette.ink).testTag("player.scrubber"),
             )
             Row(Modifier.fillMaxWidth()) {
                 val style = Typography.caption.copy(fontFeatureSettings = "tnum")
@@ -313,9 +321,8 @@ private fun Transport(
         Box(
             Modifier
                 .size(68.dp)
-                .alpha(if (enabled) 1f else 0.5f)
+                .alpha(if (enabled || Palette.isEInk) 1f else 0.5f)
                 .clip(CircleShape)
-                .background(Palette.tangerine)
                 .clickable(enabled = enabled, role = Role.Button) {
                     scope.launch {
                         // Through the reader whenever the sheet came from one.
@@ -331,6 +338,12 @@ private fun Transport(
                         nowPlaying.publish()
                     }
                 }
+                .then(
+                    when {
+                        enabled || !Palette.isEInk -> Modifier.background(Palette.tangerine)
+                        else -> Modifier.dashedOutline(Palette.inkTertiary, 34.dp)
+                    },
+                )
                 .semantics {
                     contentDescription = if (isPlaying) "Pause" else "Play"
                     if (hint != null) stateDescription = hint
@@ -341,7 +354,7 @@ private fun Transport(
             Icon(
                 painterResource(if (isPlaying) Symbols.pauseFill else Symbols.playFill),
                 contentDescription = null,
-                tint = Color.White,
+                tint = if (enabled || !Palette.isEInk) Color.White else Palette.inkTertiary,
                 modifier = Modifier.size(36.dp),
             )
         }
@@ -392,7 +405,7 @@ private fun RateControl(coordinator: PlaybackDriving?, settings: PlaybackSetting
                 .semantics { contentDescription = "Playback speed ${PlayerText.rateText(rate)}" }
                 .padding(horizontal = Metrics.spacing12, vertical = Metrics.spacing8),
         )
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }, containerColor = Palette.surface) {
+        PaperMenu(expanded = open, onDismissRequest = { open = false }) {
             for (option in PlaybackRate.ladder) {
                 DropdownMenuItem(
                     text = { Text(PlayerText.rateText(option), style = SystemText.body, color = Palette.ink) },
@@ -436,7 +449,7 @@ private fun SleepTimerControl(timer: SleepTimer?) {
             Icon(painterResource(if (off) Symbols.moon else Symbols.moonFill), contentDescription = null, tint = tint, modifier = Modifier.size(18.dp))
             timer?.remainingText?.let { Text(it, style = Typography.caption.copy(fontFeatureSettings = "tnum"), color = tint) }
         }
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }, containerColor = Palette.surface) {
+        PaperMenu(expanded = open, onDismissRequest = { open = false }) {
             for (mode in SleepTimer.presets) {
                 DropdownMenuItem(
                     text = { Text(mode.title, style = SystemText.body, color = Palette.ink) },
@@ -467,12 +480,12 @@ internal object PlayerControls {
     fun sliderColors() = SliderDefaults.colors(
         thumbColor = Palette.tangerine,
         activeTrackColor = Palette.tangerine,
-        inactiveTrackColor = Palette.ink.copy(alpha = 0.14f),
+        inactiveTrackColor = if (Palette.isEInk) Color.Transparent else Palette.ink.copy(alpha = 0.14f),
         activeTickColor = Color.Transparent,
         inactiveTickColor = Color.Transparent,
-        disabledThumbColor = Palette.inkQuaternary,
-        disabledActiveTrackColor = Palette.inkQuaternary,
-        disabledInactiveTrackColor = Palette.ink.copy(alpha = 0.08f),
+        disabledThumbColor = Palette.symbolQuaternary,
+        disabledActiveTrackColor = Palette.symbolQuaternary,
+        disabledInactiveTrackColor = if (Palette.isEInk) Color.Transparent else Palette.ink.copy(alpha = 0.08f),
     )
 }
 

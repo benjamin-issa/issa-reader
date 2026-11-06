@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -38,6 +37,7 @@ import com.benjaminissa.issareader.core.sync.LibraryArrangement
 import com.benjaminissa.issareader.ui.LibrarySearchField
 import com.benjaminissa.issareader.ui.Metrics
 import com.benjaminissa.issareader.ui.Palette
+import com.benjaminissa.issareader.ui.PaperMenu
 import com.benjaminissa.issareader.ui.ShelfChip
 import com.benjaminissa.issareader.ui.SortCapsule
 import com.benjaminissa.issareader.ui.Symbols
@@ -166,7 +166,7 @@ private fun TagsChip(app: AppModel) {
             showsChevron = true,
             modifier = Modifier.semantics { contentDescription = tagFilterLabel(selected.size) },
         )
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }, containerColor = Palette.surface, shape = RoundedCornerShape(Metrics.radiusLarge)) {
+        PaperMenu(expanded = open, onDismissRequest = { open = false }, shape = RoundedCornerShape(Metrics.radiusLarge)) {
             if (selected.isNotEmpty()) {
                 DropdownMenuItem(
                     text = { Text("Clear tags", style = SystemText.body, color = Palette.ink) },
@@ -245,7 +245,7 @@ private fun SortMenu(app: AppModel) {
             onClick = { open = true },
             modifier = Modifier.semantics { contentDescription = "Sort by ${arrangement.sort.title}" },
         )
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }, containerColor = Palette.surface, shape = RoundedCornerShape(Metrics.radiusLarge)) {
+        PaperMenu(expanded = open, onDismissRequest = { open = false }, shape = RoundedCornerShape(Metrics.radiusLarge)) {
             for (sort in LibraryArrangement.Sort.entries) {
                 DropdownMenuItem(
                     text = { Text(sort.title, style = SystemText.body, color = Palette.ink) },

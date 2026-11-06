@@ -94,6 +94,10 @@ object Palette {
     val alert: Color @Composable @ReadOnlyComposable get() = LocalIssaColors.current.alert
     val isDark: Boolean @Composable @ReadOnlyComposable get() = LocalIssaColors.current.isDark
     val isEInk: Boolean @Composable @ReadOnlyComposable get() = LocalIssaColors.current.isEInk
+
+    // A symbol is a shape, and on a panel only text can carry the grey.
+    val symbolTertiary: Color @Composable @ReadOnlyComposable get() = if (isEInk) ink else inkTertiary
+    val symbolQuaternary: Color @Composable @ReadOnlyComposable get() = if (isEInk) ink else inkQuaternary
 }
 
 /** A `0xRRGGBB` literal, which is how the design canvas expresses every colour. */

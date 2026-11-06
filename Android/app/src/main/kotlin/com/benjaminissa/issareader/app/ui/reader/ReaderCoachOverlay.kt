@@ -35,6 +35,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.benjaminissa.issareader.render.ReaderTheme
+import com.benjaminissa.issareader.ui.EInk
 import com.benjaminissa.issareader.ui.Metrics
 import com.benjaminissa.issareader.ui.Symbols
 import com.benjaminissa.issareader.ui.Typography
@@ -102,7 +103,7 @@ fun ReaderCoachOverlay(
             // A full-bleed catcher over the whole window: a tap anywhere is
             // the only way out, so it must cover the page, both bars and the
             // unsafe edges. The page's own colour dimmed over itself.
-            .background(theme.background.withAlpha(if (theme.isDark) 0.80 else 0.84).color)
+            .background(theme.ground(if (theme.isDark) 0.80 else 0.84).color)
             // The whole layer takes the tap that dismisses it, so the page
             // beneath does not also turn a page on the way out.
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onDismiss)
@@ -156,8 +157,8 @@ private fun Zone(theme: ReaderTheme, icon: Int, title: String, subtitle: String,
     val shape = RoundedCornerShape(Metrics.radiusMedium)
     Column(
         modifier
-            .background(theme.text.withAlpha(0.06).color, shape)
-            .border(1.dp, theme.text.withAlpha(0.12).color, shape)
+            .background(if (theme.isEInk) theme.background.color else theme.text.withAlpha(0.06).color, shape)
+            .border(if (theme.isEInk) EInk.outline else 1.dp, theme.ink(0.12).color, shape)
             .padding(vertical = Metrics.spacing16),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(Metrics.spacing8),
