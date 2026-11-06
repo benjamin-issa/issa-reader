@@ -318,6 +318,8 @@ struct LibraryTabs: View {
                     NavigationStack(path: $libraryPath) {
                         LibraryView()
                             .navigationTitle("Library")
+                            .onAppear { splitSelection.shelfAppeared() }
+                            .onDisappear { splitSelection.shelfDisappeared() }
                             .navigationDestination(for: Book.self) { book in
                                 BookDetailView(book: book)
                                     .onAppear { splitSelection.pageAppeared(book) }

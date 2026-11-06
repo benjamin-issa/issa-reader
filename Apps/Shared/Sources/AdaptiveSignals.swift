@@ -90,12 +90,19 @@ final class SplitBookSelection {
     /// pushed by `NavigationLink(destination:)` and never appear in a path, so
     /// the page has to say so itself.
     private var pageIsCovered = false
+    /// Whether a page stands over the shelf, which the shelf has to say for the
+    /// same reason.
+    private var shelfIsCovered = false
 
     /// Closed: the selected book's page becomes the one the stack shows, so
     /// the outer display carries on where the inner one was, and Back goes to
     /// the shelf.
+    ///
+    /// Not over a page the path cannot see. Changing the path takes such a page
+    /// off the stack, and Back from the book then skipped it. The book stays
+    /// chosen instead, and is in the pane when the phone opens.
     func close(_ path: inout NavigationPath) {
-        guard let book else { return }
+        guard let book, !shelfIsCovered else { return }
         path.append(book)
         collapsed = (book, path)
         pageIsCovered = false
@@ -120,6 +127,16 @@ final class SplitBookSelection {
     /// replaced it: then it is not on the stack to be covered.
     func holdsSplit(given path: NavigationPath) -> Bool {
         pageIsCovered && collapsed?.path == path
+    }
+
+    /// The shelf came into view, or was uncovered.
+    func shelfAppeared() {
+        shelfIsCovered = false
+    }
+
+    /// The shelf left view: a page has been pushed over it.
+    func shelfDisappeared() {
+        shelfIsCovered = true
     }
 
     /// The page for this book came into view, or was uncovered.

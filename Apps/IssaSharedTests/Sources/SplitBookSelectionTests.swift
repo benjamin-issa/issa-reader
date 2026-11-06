@@ -47,6 +47,40 @@ struct SplitBookSelectionTests {
         #expect(selection.book == nil)
     }
 
+    /// A series page in the shelf's column is not in the path, and pushing the
+    /// book took it off the stack: Back from the book went past it to the shelf.
+    @Test("closing leaves the stack alone while a page stands over the shelf")
+    func aPageOverTheShelfStays() {
+        let selection = SplitBookSelection()
+        selection.book = Self.dracula
+        selection.shelfDisappeared()
+        var path = NavigationPath()
+
+        selection.close(&path)
+
+        #expect(path.isEmpty, "that page goes if the path changes")
+        #expect(selection.book?.uuid == Self.dracula.uuid, "still chosen for the pane")
+
+        selection.open(&path)
+
+        #expect(path.isEmpty)
+        #expect(selection.book?.uuid == Self.dracula.uuid)
+    }
+
+    @Test("closing moves the page to the stack again once the shelf is uncovered")
+    func theShelfUncovered() {
+        let selection = SplitBookSelection()
+        selection.book = Self.emma
+        selection.shelfDisappeared()
+        selection.shelfAppeared()
+        var path = NavigationPath()
+
+        selection.close(&path)
+
+        #expect(path.count == 1)
+        #expect(selection.book == nil)
+    }
+
     /// The reported bug. Read, or a link, on the outer display leaves the path
     /// exactly as close left it, so the path alone said the page was free, and
     /// opening took it out from under whatever had been opened from it.
