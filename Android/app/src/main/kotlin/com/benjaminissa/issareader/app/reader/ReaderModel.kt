@@ -534,7 +534,7 @@ class ReaderModel(
         val opening: Opening = when (val source = source) {
             is Source.Server -> {
                 val content = BookContentService(source.session.client, booksDirectory)
-                val preferred = content.preferredReadingFormat(book) ?: run {
+                val preferred = downloadHost?.readingFormat(book) ?: content.preferredReadingFormat(book) ?: run {
                     phase = Phase.Failed("This book has no readable edition on the server.")
                     return
                 }
@@ -788,7 +788,7 @@ class ReaderModel(
     /** Stops an in-progress download and closes the book. */
     fun cancelDownload() {
         if (isLocal) return
-        val format = BookContentService.preferredReadingFormat(book) ?: return
+        val format = downloadHost?.readingFormat(book) ?: BookContentService.preferredReadingFormat(book) ?: return
         downloadHost?.downloads?.cancel(DownloadManager.Job(book.uuid, format))
         phase = Phase.Failed("Download cancelled.")
     }

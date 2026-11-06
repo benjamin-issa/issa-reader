@@ -1267,6 +1267,27 @@ class AppModel(
      * per-edition question, which sees a removal decided but not yet carried
      * out.
      */
+    /**
+     * Whether Listen plays this book from the read-along on the device.
+     *
+     * By the file, not the server's status: a re-alignment says PROCESSING for
+     * as long as it runs, while the finished read-along here plays as well as
+     * it did, and the server's manifest would lose the reader's place.
+     */
+    fun playsOwnChunks(book: Book): Boolean =
+        book.readaloud != null && isDownloaded(book, BookContentService.Format.READALOUD)
+
+    /**
+     * The edition Read opens, and so the one a cancel has to stop.
+     *
+     * Through [isDownloaded], not the disk: a read-along inside its undo
+     * window is on its way out, and choosing it would send the open down the
+     * download path, which takes the removal back.
+     */
+    fun readingFormat(book: Book): BookContentService.Format? = BookContentService.preferredReadingFormat(
+        book, readaloudOnDevice = isDownloaded(book, BookContentService.Format.READALOUD),
+    )
+
     fun isDownloaded(book: Book, format: BookContentService.Format): Boolean = isDownloaded(book.uuid, format)
 
     fun isDownloaded(bookUuid: String, format: BookContentService.Format): Boolean {
@@ -2108,7 +2129,7 @@ class AppModel(
             // An aligned read-along already on the device plays from its own
             // narration chunks, through a manifest synthesised over them, so the
             // two engines share a track list by construction. Downloaded only.
-            if (book.readaloud?.isAligned == true && isDownloaded(book, BookContentService.Format.READALOUD)) {
+            if (playsOwnChunks(book)) {
                 startingListening = book.uuid to BookContentService.Format.READALOUD
                 val built = synthesisedListening(book, content)
                 if (built != null) {

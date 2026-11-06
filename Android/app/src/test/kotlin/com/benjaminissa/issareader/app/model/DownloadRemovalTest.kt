@@ -108,6 +108,43 @@ class DownloadRemovalTest : AppSuite() {
     }
 
     /** Removing one edition leaves the other on the device. */
+    /**
+     * A re-alignment reports PROCESSING for as long as it runs. Listen went by
+     * that and fell to the server's manifest, whose tracks match nothing this
+     * app has stored about the book, so the drive started at chapter one.
+     */
+    @Test
+    fun aReadalongOnTheDevicePlaysWhileTheServerRedoesIt() = run { app, _, _ ->
+        val uuid = freshUuid()
+        val book = redoing(uuid)
+        assertFalse("nothing on the device to play yet", app.playsOwnChunks(book))
+
+        plant(uuid, BookContentService.Format.READALOUD)
+
+        assertTrue(app.playsOwnChunks(book))
+    }
+
+    /** Asked of the disk, the read-along was still there to choose, and the open went down the download path, which took the removal back. */
+    @Test
+    fun aReadalongBeingRemovedIsNotTheEditionReadOpens() = run { app, _, _ ->
+        val uuid = freshUuid()
+        val book = redoing(uuid)
+        assertEquals("not on the device, and the server's is being redone", BookContentService.Format.EBOOK, app.readingFormat(book))
+
+        val file = plant(uuid, BookContentService.Format.READALOUD)
+        assertEquals(BookContentService.Format.READALOUD, app.readingFormat(book))
+
+        app.removeDownload(uuid, BookContentService.Format.READALOUD, "Dracula", undoWindowMillis = 600_000)
+        assertTrue("still in its undo window", file.exists())
+        assertEquals(BookContentService.Format.EBOOK, app.readingFormat(book))
+    }
+
+    /** A book whose read-along the server is doing over: its status says PROCESSING, and its file is still listed. */
+    private fun redoing(uuid: String): Book {
+        val book = SharedFixtures.book("Dracula", uuid = uuid, readaloud = true)
+        return book.copy(readaloud = book.readaloud?.copy(status = "PROCESSING"))
+    }
+
     @Test
     fun removingOneEditionLeavesTheOther() = run { app, _, _ ->
         val uuid = freshUuid()

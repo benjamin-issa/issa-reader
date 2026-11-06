@@ -75,7 +75,17 @@ class BookContentService(private val client: ApiClient, cacheDirectory: File? = 
 
     fun isDownloaded(book: Book, format: Format): Boolean = localUrl(book, format).exists()
 
-    fun preferredReadingFormat(book: Book): Format? = Companion.preferredReadingFormat(book)
+    /**
+     * The edition to open on this device.
+     *
+     * The server's status is about the copy it is building. A re-alignment
+     * reports PROCESSING for as long as it runs, which can be hours, and the
+     * finished read-along already here is no less readable for that: sent to
+     * the ebook, a reader offline with no ebook downloaded could not open a
+     * book they had with them.
+     */
+    fun preferredReadingFormat(book: Book): Format? =
+        Companion.preferredReadingFormat(book, readaloudOnDevice = isDownloaded(book, Format.READALOUD))
 
     /**
      * Downloads the file if it is not already cached, and returns its location.
@@ -216,6 +226,15 @@ class BookContentService(private val client: ApiClient, cacheDirectory: File? = 
             if (ebookUsable) return Format.EBOOK
             if (readaloudUsable) return Format.READALOUD
             return null
+        }
+
+        /**
+         * The same, for a caller with its own view of the disk: `AppModel`
+         * counts an edition inside its undo window as gone.
+         */
+        fun preferredReadingFormat(book: Book, readaloudOnDevice: Boolean): Format? {
+            if (book.readaloud != null && readaloudOnDevice) return Format.READALOUD
+            return preferredReadingFormat(book)
         }
 
         /**

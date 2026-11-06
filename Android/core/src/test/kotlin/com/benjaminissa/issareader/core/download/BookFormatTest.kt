@@ -58,6 +58,34 @@ class BookFormatTest {
 
     // Which file the reader opens
 
+    /**
+     * The server's status is about the copy it is building. A re-alignment
+     * keeps `filepath` and reports PROCESSING for as long as it runs, and the
+     * finished read-along on this device is no less readable for that. Sent to
+     * the ebook, a reader offline with no ebook downloaded could not open a
+     * book they had on the device.
+     */
+    @Test
+    fun `a read-along on the device is read while the server redoes its own`() {
+        val directory = temporaryDirectory("issa-format")
+        try {
+            val content = BookContentService(ApiClient(baseUrl = URI("file:///tmp/does-not-matter"), tokens = NoTokens()), directory)
+            val subject = book(ebook = Edition(), readaloud = Edition(filepath = "r.epub", aligned = false))
+
+            assertEquals("not on the device yet", BookContentService.Format.EBOOK, content.preferredReadingFormat(subject))
+
+            content.localUrl(subject, BookContentService.Format.READALOUD).writeBytes(ByteArray(1))
+
+            assertEquals(BookContentService.Format.READALOUD, content.preferredReadingFormat(subject))
+            assertEquals(
+                "what is asked of a book alone still goes by the server's word",
+                BookContentService.Format.EBOOK, BookContentService.preferredReadingFormat(subject),
+            )
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
     /** An audiobook-only book has nothing to read: the reader offered "Read" and failed on the next screen. */
     @Test
     fun audiobookOnlyHasNoReadingFormat() {
