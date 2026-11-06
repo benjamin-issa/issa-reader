@@ -21,8 +21,39 @@ public struct LibraryService: Sendable {
         self.client = client
     }
 
-    public func allBooks() async throws -> [Book] {
-        Self.refusingUnsafeIdentifiers(try await client.get(Endpoint.books))
+    /// The library, less any row that could not be read.
+    public func catalogue() async throws -> Catalogue {
+        try Self.checked(try await client.get(Endpoint.books))
+    }
+
+    /// What this client will take from a decoded catalogue.
+    ///
+    /// Throws only when no row could be read: that is an answer this client
+    /// does not understand at all, and the reader should be told so rather than
+    /// shown an empty shelf. Any row it can read is worth having, with the
+    /// positions and statuses it carries, however many beside it could not be
+    /// read, and the reader is told how many (`AppModel.unreadableBookCount`).
+    ///
+    /// Logged once a refresh rather than once a row, so a change that breaks
+    /// every book does not write the whole library to the log each time, and
+    /// with the first row's reason, which is what the reader cannot see.
+    static func checked(_ decoded: Catalogue) throws -> Catalogue {
+        var catalogue = decoded
+        catalogue.books = refusingUnsafeIdentifiers(catalogue.books)
+        // A uuid that could not name a path never reached the store, so there
+        // is nothing to keep for it, and carrying it on would hand a hostile
+        // server the row `refusingUnsafeIdentifiers` exists to refuse.
+        catalogue.failures.removeAll { failure in
+            failure.uuid.map { !$0.isBareUUID } ?? false
+        }
+        guard let first = catalogue.failures.first else { return catalogue }
+        IssaLog.failure("catalogue rows skipped", first.error, [
+            "rows": String(catalogue.failures.count), "book": first.uuid ?? "unnamed",
+        ])
+        if catalogue.books.isEmpty {
+            throw StorytellerError.decoding(String(describing: first.error))
+        }
+        return catalogue
     }
 
     /// Drops catalogue entries whose uuid could not safely name a path.

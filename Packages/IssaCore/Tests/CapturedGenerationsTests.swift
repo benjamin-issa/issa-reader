@@ -46,6 +46,12 @@ enum CapturedServer: String, CaseIterable, CustomTestStringConvertible, Sendable
         try JSONDecoder().decode([Book].self, from: BookDecodingTests.fixture(fixture("books")))
     }
 
+    /// The library with The Gap Book's read-along being redone: captured
+    /// while `POST /books/{id}/process?restart=full` was running.
+    func booksMidRestart() throws -> Data {
+        try BookDecodingTests.fixture(fixture("books-restarting"))
+    }
+
     func statuses() throws -> [Status] {
         try JSONDecoder().decode([Status].self, from: BookDecodingTests.fixture(fixture("statuses")))
     }
@@ -62,6 +68,30 @@ struct CapturedGenerationsTests {
         #expect(LibraryService.refusingUnsafeIdentifiers(books).count == books.count)
         #expect(books.allSatisfy { !$0.uuid.isEmpty && !$0.title.isEmpty })
         #expect(books.allSatisfy { !$0.availableFormats.isEmpty }, "every captured book has a file")
+    }
+
+    /// Every other capture was taken with the server idle, which is how a
+    /// `restartPending` declared as a `Bool` lasted until a reader's server
+    /// was re-aligning a book: the column holds the job's restart mode, a
+    /// string, for as long as the job runs, and only then does it go back to
+    /// the `null` an idle server sends. On every generation, 2.14.21 included.
+    @Test("a library with a read-along being redone decodes", arguments: CapturedServer.allCases)
+    func booksDecodeMidRestart(_ server: CapturedServer) throws {
+        let data = try server.booksMidRestart()
+
+        // That this capture is what it says, so an idle one put in its place
+        // cannot pass here.
+        let raw = try #require(try JSONSerialization.jsonObject(with: data) as? [[String: Any]])
+        let gap = try #require(raw.first { $0["title"] as? String == "The Gap Book" })
+        let readaloud = try #require(gap["readaloud"] as? [String: Any])
+        #expect(readaloud["restartPending"] as? String == "full")
+        #expect(readaloud["status"] as? String == "PROCESSING")
+
+        let books = try JSONDecoder().decode([Book].self, from: data)
+        #expect(books.count == raw.count)
+        let book = try #require(books.first { $0.title == "The Gap Book" })
+        #expect(book.readaloud?.status == "PROCESSING")
+        #expect(book.readaloud?.isAligned == false)
     }
 
     @Test("the statuses capture decodes, with the three built-in names", arguments: CapturedServer.allCases)

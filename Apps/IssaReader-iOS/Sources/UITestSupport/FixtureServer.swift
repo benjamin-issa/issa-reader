@@ -37,7 +37,8 @@ final class FixtureServer: URLProtocol {
                 // The catalogue once, then a revoked token: the session ends
                 // while the app is in use (`SignInAgainFlowTests`).
                 Self.revocation.catalogueServed()
-                return (200, FixtureLibrary.booksJSON)
+                return (200, Self.servesUnreadableRow
+                    ? FixtureLibrary.booksJSONWithUnreadableRow : FixtureLibrary.booksJSON)
             case Endpoint.statuses, Endpoint.userRatings, Endpoint.tags,
                  Endpoint.series, Endpoint.collections, Endpoint.creators:
                 return (200, FixtureLibrary.emptyArrayJSON)
@@ -59,6 +60,11 @@ final class FixtureServer: URLProtocol {
     }
 
     override func stopLoading() {}
+
+    /// `-IssaUITestFixtureUnreadableRow`: the catalogue carries a row the model
+    /// cannot read, through the real decode and the real shelf.
+    static let servesUnreadableRow = ProcessInfo.processInfo.arguments
+        .contains("-IssaUITestFixtureUnreadableRow")
 
     /// `-IssaUITestFixtureRevokeAfterLoad`: every request after the first
     /// catalogue is refused, as a server refuses a revoked device grant.

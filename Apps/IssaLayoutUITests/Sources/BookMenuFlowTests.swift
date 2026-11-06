@@ -72,7 +72,7 @@ final class BookMenuFlowTests: XCTestCase {
         viewDetails(app)
         assertBookPage(showing: title, in: app)
 
-        app.navigationBars.buttons.firstMatch.tap()
+        app.goBack()
         XCTAssertTrue(
             app.descendants(matching: .any)["screen.reading"].waitForExistence(timeout: 15),
             "Back did not return to the Reading tab")

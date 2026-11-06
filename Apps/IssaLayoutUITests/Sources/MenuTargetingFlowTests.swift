@@ -149,7 +149,7 @@ final class MenuTargetingFlowTests: XCTestCase {
             app.buttons["View details"].firstMatch.tap()
             assertBookPage(showing: target.title, in: app, after: books)
 
-            app.navigationBars.buttons.firstMatch.tap()
+            app.goBack()
             XCTAssertTrue(
                 downloadsRow(target, in: app).waitForExistence(timeout: 15),
                 "Back did not return to the Downloads screen")
@@ -234,7 +234,7 @@ final class MenuTargetingFlowTests: XCTestCase {
             app.buttons["View details"].firstMatch.tap()
             assertBookPage(showing: title, in: app, after: books)
 
-            app.navigationBars.buttons.firstMatch.tap()
+            app.goBack()
             XCTAssertTrue(
                 app.descendants(matching: .any)["screen.reading"].waitForExistence(timeout: 15),
                 "Back did not return to the Reading tab")
@@ -341,7 +341,7 @@ final class MenuTargetingFlowTests: XCTestCase {
             app.buttons["View details"].firstMatch.tap()
             assertBookPage(showing: title, in: app, after: books)
 
-            app.navigationBars.buttons.firstMatch.tap()
+            app.goBack()
             XCTAssertTrue(
                 app.descendants(matching: .any)[screen].waitForExistence(timeout: 15),
                 "Back did not return to \(screen)")
@@ -353,11 +353,25 @@ final class MenuTargetingFlowTests: XCTestCase {
     /// At the largest text sizes, or below a long list, an element can start
     /// below the fold or under the tab bar, where a long press has nothing to
     /// land on.
+    ///
+    /// Toward the element, whichever way it lies, until its middle — where a
+    /// press lands — is well inside the window. `isHittable` alone said yes to
+    /// a row two points onto iPhone Duo's short outer display and to a cell
+    /// scrolled away above the top after the walk down to list them, and the
+    /// press went off the screen.
     private func bringIntoView(_ element: XCUIElement, in app: XCUIApplication) {
         XCTAssertTrue(element.waitForExistence(timeout: 15), "\(element) is not on the screen at all")
         let scroller = mainScroller(in: app)
-        for _ in 0 ..< 10 where !element.isHittable {
-            scroller.swipeUp(velocity: .slow)
+        let window = app.windows.firstMatch.frame
+        let band = window.insetBy(dx: 0, dy: 110)
+        for _ in 0 ..< 12 {
+            let middle = element.frame.midY
+            if element.isHittable, band.minY ... band.maxY ~= middle { break }
+            if middle < band.minY {
+                scroller.swipeDown(velocity: .slow)
+            } else {
+                scroller.swipeUp(velocity: .slow)
+            }
         }
         XCTAssertTrue(element.isHittable, "\(element) never scrolled into view")
     }

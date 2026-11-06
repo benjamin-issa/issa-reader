@@ -57,9 +57,13 @@ struct RootView: View {
 
     var body: some View {
         content
+            // Here, at the window's root, where the size classes are still the
+            // window's own; see `AdaptiveSignals`.
+            .readsAdaptiveSignals()
         #if ISSA_UITEST_FIXTURE
             // Zero-sized and invisible; see `LayoutProbe`.
             .overlay(alignment: .topLeading) { LayoutProbe() }
+            .overlay(alignment: .topLeading) { DuoProbes(scope: "app") }
         #endif
     }
 
@@ -220,6 +224,9 @@ struct LibraryTabs: View {
     /// path is not enough: most screens are pushed by
     /// `NavigationLink(destination:)` and never appear in it.
     @State private var libraryStackGeneration = 0
+    /// The book beside the shelf on iPhone Duo's inner display; see
+    /// `LibrarySplit`.
+    @State private var splitSelection = SplitBookSelection()
 
     /// No Playing tab. There used to be one, and the mini player was removed
     /// while it was showing so the same transport was not on screen twice —
@@ -280,8 +287,7 @@ struct LibraryTabs: View {
             readingPath = NavigationPath()
             readingPath.append(pending.book)
         case .library, .settings:
-            libraryPath = NavigationPath()
-            libraryPath.append(pending.book)
+            splitSelection.show(pending.book, in: &libraryPath)
         }
     }
 
@@ -308,19 +314,25 @@ struct LibraryTabs: View {
     private var tabs: some View {
         TabView(selection: $selectedTab) {
             Tab("Library", systemImage: "books.vertical", value: Destination.library) {
-                NavigationStack(path: $libraryPath) {
-                    LibraryView()
-                        .navigationTitle("Library")
-                        .navigationDestination(for: Book.self) { book in
-                            BookDetailView(book: book)
-                        }
+                LibrarySplit(selection: splitSelection, path: $libraryPath) {
+                    NavigationStack(path: $libraryPath) {
+                        LibraryView()
+                            .navigationTitle("Library")
+                            .onAppear { splitSelection.shelfAppeared() }
+                            .onDisappear { splitSelection.shelfDisappeared() }
+                            .navigationDestination(for: Book.self) { book in
+                                BookDetailView(book: book)
+                                    .onAppear { splitSelection.pageAppeared(book) }
+                                    .onDisappear { splitSelection.pageDisappeared(book) }
+                            }
+                    }
+                    .id(libraryStackGeneration)
+                    .background(AccessoryBandReservation(height: reservedBand))
+                    // Per tab, on the stack: a book's menu can remove a download
+                    // from any screen in it, and the undo has to be where the
+                    // reader is. See `downloadRemovalToast`.
+                    .downloadRemovalToast()
                 }
-                .id(libraryStackGeneration)
-                .background(AccessoryBandReservation(height: reservedBand))
-                // Per tab, on the stack: a book's menu can remove a download
-                // from any screen in it, and the undo has to be where the
-                // reader is. See `downloadRemovalToast`.
-                .downloadRemovalToast()
             }
 
             Tab("Reading", systemImage: "bookmark", value: Destination.reading) {

@@ -525,11 +525,22 @@ public final class ReadalongCoordinator {
     /// stood that item down: the player had stopped once, when it failed, and
     /// every later press played over it.
     ///
+    /// With no sentence there is nothing to carry on from: nothing has been
+    /// loaded yet, or `clearPosition` unloaded it. `AudioPlayer.play()` would
+    /// still claim the audio route and call that playing, so the transport drew
+    /// Pause over silence. Where to begin is the caller's to choose; the reader
+    /// starts from its page.
+    ///
     /// - Returns: whether the narration is playing now. False when the file
-    ///   still will not open, which the caller can tell the reader.
+    ///   still will not open, which the caller can tell the reader, and when
+    ///   there is no sentence to carry on from.
     @discardableResult
     public func resume() async -> Bool {
-        if player.itemHasFailed, let entry = activeEntry {
+        guard let entry = activeEntry else {
+            IssaLog.info("resume refused: the narration has no place yet", [:])
+            return false
+        }
+        if player.itemHasFailed {
             return await play(from: entry)
         }
         player.play()

@@ -77,6 +77,46 @@ struct DownloadRemovalTests {
         return await condition()
     }
 
+    // MARK: - While the server redoes its copy
+
+    /// A re-alignment reports PROCESSING for as long as it runs. Listen went by
+    /// that and fell to the server's manifest, whose tracks match nothing this
+    /// app has stored about the book, so the drive started at chapter one.
+    @Test("a read-along on the device plays from its own chunks while the server redoes it")
+    func listeningOutlivesARealignment() throws {
+        let app = AppModel(keychain: InMemoryTokens(), notificationCentre: NotificationCenter())
+        let uuid = Self.freshUUID()
+        var book = SharedFixtures.book("Dracula", uuid: uuid, readaloud: true)
+        book.readaloud?.status = "PROCESSING"
+        app.refreshDownloadedSet()
+        #expect(!app.playsOwnChunks(of: book), "nothing on the device to play yet")
+
+        let file = try Self.plant(uuid, format: .readaloud)
+        defer { try? FileManager.default.removeItem(at: file) }
+        app.refreshDownloadedSet()
+
+        #expect(app.playsOwnChunks(of: book))
+    }
+
+    /// Asked of the disk, the read-along was still there to choose, and the
+    /// open went down the download path, which took the removal back.
+    @Test("a read-along being removed is not the edition Read opens")
+    func readingFormatSeesTheUndoWindow() throws {
+        let app = AppModel(keychain: InMemoryTokens(), notificationCentre: NotificationCenter())
+        let uuid = Self.freshUUID()
+        var book = SharedFixtures.book("Dracula", uuid: uuid, readaloud: true)
+        book.readaloud?.status = "PROCESSING"
+        #expect(app.readingFormat(for: book) == .ebook, "not on the device, and the server's is being redone")
+
+        let file = try Self.plant(uuid, format: .readaloud)
+        defer { try? FileManager.default.removeItem(at: file) }
+        #expect(app.readingFormat(for: book) == .readaloud)
+
+        app.removeDownload(bookUUID: uuid, format: .readaloud, title: "Dracula", undoWindow: .seconds(600))
+        #expect(FileManager.default.fileExists(atPath: file.path), "still in its undo window")
+        #expect(app.readingFormat(for: book) == .ebook)
+    }
+
     // MARK: - One edition, not the book
 
     /// The book screen removes a single edition, and the model refreshes a set

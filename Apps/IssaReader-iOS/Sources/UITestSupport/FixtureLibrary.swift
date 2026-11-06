@@ -151,6 +151,13 @@ enum FixtureLibrary {
         IssaLog.info("planted fixture downloads", ["count": String(planted)])
     }
 
+    /// The catalogue with one row more, which no `Book` can be read from.
+    static var booksJSONWithUnreadableRow: Data {
+        var rows = (try? JSONSerialization.jsonObject(with: booksJSON)) as? [Any] ?? []
+        rows.insert(["uuid": "00000000-0000-4000-8000-0000000000bd", "title": 7], at: 1)
+        return (try? JSONSerialization.data(withJSONObject: rows)) ?? booksJSON
+    }
+
     static var booksJSON: Data {
         let objects = rows.map { row -> [String: Any] in
             var book: [String: Any] = [

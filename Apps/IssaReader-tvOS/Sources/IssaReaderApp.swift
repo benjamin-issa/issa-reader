@@ -265,6 +265,7 @@ struct TVLibraryView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Metrics.spacing48) {
+                UnreadableBooksNotice()
                 if !app.derivation.continueReading.isEmpty {
                     section("Continue reading") {
                         // A row rather than a grid, so the shelf reads as
@@ -301,6 +302,7 @@ struct TVLibraryView: View {
         }
         .background(Palette.paper)
         .accessibilityIdentifier("screen.tvLibrary")
+        .overlay { LibraryLoadOverlay { EmptyView() } }
         // The router a poster's menu says a refusal through. Reading and
         // Listening install theirs; this shelf had none, so a Save or Resume
         // the Wi-Fi rule held back wrote its alert to nowhere and the press

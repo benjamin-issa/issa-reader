@@ -108,6 +108,8 @@ struct BookLink<Label: View>: View {
     #if os(macOS)
     @Environment(\.openWindow) private var openWindow
     @Environment(MacBookSelection.self) private var selection: MacBookSelection?
+    #elseif os(iOS)
+    @Environment(SplitBookSelection.self) private var split: SplitBookSelection?
     #endif
 
     init(
@@ -167,12 +169,23 @@ struct BookLink<Label: View>: View {
         }
         .buttonStyle(.plain)
         #else
-        NavigationLink {
-            BookDetailView(book: book)
-        } label: {
-            label()
+        if let split {
+            // Into the pane beside the shelf, on iPhone Duo's inner display,
+            // rather than pushed over the shelf the pane is there to keep.
+            Button {
+                split.book = book
+            } label: {
+                label()
+            }
+            .buttonStyle(.plain)
+        } else {
+            NavigationLink {
+                BookDetailView(book: book)
+            } label: {
+                label()
+            }
+            .buttonStyle(.plain)
         }
-        .buttonStyle(.plain)
         #endif
     }
 

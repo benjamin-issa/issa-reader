@@ -61,7 +61,17 @@ public final class ReaderModel {
     public private(set) var timeline: SMILTimeline?
     public private(set) var layout: ChapterLayout?
     public private(set) var chapterIndex = 0
+    /// The page on screen; in a two-page spread, the left one.
+    ///
+    /// The left page is the position: it is what is saved, anchored and
+    /// re-found after a re-pagination, exactly as the one page is everywhere
+    /// else. A spread is any two pages side by side, not only an even and an
+    /// odd one, so opening the phone never moves the reader to make a pair.
     public var pageIndex = 0
+    /// How many pages stand side by side: two in a spread on iPhone Duo's inner
+    /// display held wide (`ReaderLayout`), one everywhere else. Set by the view
+    /// before it lays the chapter out, and every turn steps by it.
+    public var pagesShown = 1
     /// Bumped whenever the chapter on screen is replaced or re-paginated.
     ///
     /// A chapter and page number alone cannot say whether the page changed: a
@@ -71,6 +81,9 @@ public final class ReaderModel {
     /// turn moved the page, so that it lets go rather than sliding the wrong
     /// page out.
     public private(set) var layoutRevision = 0
+    /// Where the last reflow left the reader, in characters, and the page that
+    /// landed on: see `relayoutCurrentChapter`. Not observed: nothing draws it.
+    @ObservationIgnored private var reflowPlace: (offset: Int, chapter: Int, page: Int)?
 
     /// Exactly which page is on screen.
     public struct PageKey: Hashable, Sendable {
@@ -524,8 +537,8 @@ public final class ReaderModel {
     /// overflow, so the two differ — and reading a sighted reader's clipped
     /// text aloud describes a page they are not looking at.
     public var currentPageText: String {
-        guard let layout, let page = currentPage else { return "" }
-        return layout.spokenText(on: page)
+        guard let layout else { return "" }
+        return shownPages.map { layout.spokenText(on: $0) }.filter { !$0.isEmpty }.joined(separator: "\n\n")
     }
 
     /// The label VoiceOver reads for the page, never empty: a focusable element
@@ -551,7 +564,7 @@ public final class ReaderModel {
             return ReadingProgress.percentText(bookProgress)
         case .chapterPage:
             guard pageCount > 0 else { return "" }
-            return "\(pageIndex + 1) / \(pageCount)"
+            return PageNumbering.text(first: pageIndex + 1, shown: shownPages.count, count: pageCount)
         }
     }
 
@@ -560,7 +573,9 @@ public final class ReaderModel {
     /// pages long.
     public var spokenPagePosition: String {
         guard pageCount > 0 else { return chapterTitle }
-        let place = "Page \(pageIndex + 1) of \(pageCount)"
+        let place = facingPage == nil
+            ? "Page \(pageIndex + 1) of \(pageCount)"
+            : "Pages \(pageIndex + 1) and \(pageIndex + 2) of \(pageCount)"
         let title = chapterTitle
         return title.isEmpty ? place : "\(place) in \(title)"
     }
@@ -569,6 +584,43 @@ public final class ReaderModel {
     public var currentPage: RenderedPage? {
         guard let layout, layout.pages.indices.contains(pageIndex) else { return nil }
         return layout.pages[pageIndex]
+    }
+
+    /// The right page of a spread, when there is one: nil with one page shown,
+    /// and on a chapter's last page when it falls on the left.
+    public var facingPage: RenderedPage? {
+        guard pagesShown > 1, let layout, layout.pages.indices.contains(pageIndex + 1) else { return nil }
+        return layout.pages[pageIndex + 1]
+    }
+
+    /// The paragraph the voice is in, and where its sentence sits in it: what
+    /// iPhone Duo's inner display shows above the fold when it is propped open
+    /// like a laptop, large enough to follow from across a desk. Nil when no
+    /// sentence is lit, or the lit one is not in the chapter on screen.
+    public var narratedPassage: (text: String, sentence: NSRange)? {
+        guard let layout, let id = activeFragmentID, narratedDocument == nil || narratedDocument == currentSpineHref,
+              let range = layout.fragmentRange(for: id) else { return nil }
+        let string = layout.attributedText.string as NSString
+        let paragraph = string.paragraphRange(for: range)
+        var text = string.substring(with: paragraph)
+        while text.last?.isNewline == true { text.removeLast() }
+        let sentence = NSRange(location: range.location - paragraph.location, length: range.length)
+        return (text, NSIntersectionRange(sentence, NSRange(location: 0, length: (text as NSString).length)))
+    }
+
+    /// Every page on screen, left to right.
+    var shownPages: [RenderedPage] {
+        [currentPage, facingPage].compactMap { $0 }
+    }
+
+    /// Whether a page of the chapter on screen is one the reader can see.
+    func isShown(page index: Int) -> Bool {
+        index >= pageIndex && index < pageIndex + max(pagesShown, 1)
+    }
+
+    /// The page a point was made on: the facing page when `facing`.
+    private func page(facing: Bool) -> RenderedPage? {
+        facing ? facingPage : currentPage
     }
 
     /// What a book from the reader's files says when its copy has gone — a
@@ -600,7 +652,8 @@ public final class ReaderModel {
         switch source {
         case let .server(session):
             let content = BookContentService(client: session.client, cacheDirectory: booksDirectory)
-            guard let preferred = content.preferredReadingFormat(for: book) else {
+            guard let preferred = downloadHost?.readingFormat(for: book)
+                ?? content.preferredReadingFormat(for: book) else {
                 phase = .failed("This book has no readable edition on the server.")
                 return
             }
@@ -970,7 +1023,9 @@ public final class ReaderModel {
     /// Stops an in-progress download and closes the book.
     public func cancelDownload() {
         // A local book has nothing to download.
-        guard !isLocal, let format = BookContentService.preferredReadingFormat(for: book) else { return }
+        guard !isLocal,
+              let format = downloadHost?.readingFormat(for: book)
+              ?? BookContentService.preferredReadingFormat(for: book) else { return }
         downloadHost?.downloads?.cancel(.init(bookUUID: book.uuid, format: format))
         phase = .failed("Download cancelled.")
     }
@@ -1281,7 +1336,7 @@ public final class ReaderModel {
             var moved = false
             if style.followNarration, let layout, document == currentSpineHref,
                let page = layout.page(containingFragment: fragment),
-               page.index != pageIndex {
+               !isShown(page: page.index) {
                 pageIndex = page.index
                 moved = true
             }
@@ -1337,9 +1392,11 @@ public final class ReaderModel {
     /// page: a tap in the margin, on a heading, or on an illustration has to
     /// keep doing what a tap always did.
     @discardableResult
-    public func playSentence(at point: CGPoint) async -> Bool {
+    ///
+    /// - Parameter facing: the point is on the right page of a spread.
+    public func playSentence(at point: CGPoint, facing: Bool = false) async -> Bool {
         positionOrigin = .chosen
-        guard let readalong, let layout, let page = currentPage else {
+        guard let readalong, let layout, let page = page(facing: facing) else {
             IssaLog.warning("tap to play refused", ["why": "noReadalongOrPage"])
             return false
         }
@@ -1692,13 +1749,19 @@ public final class ReaderModel {
     /// sheet that has moved the voice into another chapter has to show the
     /// reader where it went.
     ///
+    /// The chapter it loads is the reader's choice, as the seek was. `onSeek`
+    /// marks the position `.chosen` when the seek lands, and the follow used to
+    /// relabel it `.derived` straight after, as for a chapter the voice crossed
+    /// into. A move back past `PositionGuard`'s tolerance was then refused on
+    /// save, and the place the reader had scrubbed away from stayed stored.
+    ///
     /// - Parameter progress: a fraction of the whole narrated book, as
     ///   `ReadalongCoordinator.seek(toBookProgress:)` takes it.
     public func cueNarration(toBookProgress progress: Double) async {
         guard let readalong else { return }
         await readalong.seek(toBookProgress: progress)
         guard let entry = readalong.activeEntry else { return }
-        await followNarration(toDocument: entry.textHref, fragment: entry.fragmentID)
+        await followNarration(toDocument: entry.textHref, fragment: entry.fragmentID, origin: .chosen)
     }
 
     /// Puts narration back to the state of a book just opened: no sentence lit,
@@ -1733,7 +1796,12 @@ public final class ReaderModel {
     }
 
     /// Turns the book to the page a narrated fragment is on, loading its chapter.
-    private func followNarration(toDocument href: String, fragment: String?) async {
+    ///
+    /// - Parameter origin: `.derived` for a chapter the voice crossed into;
+    ///   `.chosen` when the reader named the place, as a cue does.
+    private func followNarration(
+        toDocument href: String, fragment: String?, origin: PositionOrigin = .derived,
+    ) async {
         guard let package,
               let index = package.spine.firstIndex(where: { $0.href == href }),
               index != chapterIndex else { return }
@@ -1744,11 +1812,11 @@ public final class ReaderModel {
             )
         }
         guard await loadChapter(index, restoring: anchor) else { return }
-        // A chapter the voice crossed into, not one the reader picked. The
-        // fragment change that precedes this cannot classify it — the sentence
-        // belongs to the *next* document, so it never resolves in the layout
-        // still on screen and the move looked like nobody's.
-        positionOrigin = .derived
+        // By default a chapter the voice crossed into, not one the reader
+        // picked. The fragment change that precedes this cannot classify it —
+        // the sentence belongs to the *next* document, so it never resolves in
+        // the layout still on screen and the move looked like nobody's.
+        positionOrigin = origin
         IssaLog.info("narration crossed chapter", [
             "book": book.title, "to": String(index),
             "fragment": fragment ?? "none", "page": String(pageIndex),
@@ -1798,7 +1866,7 @@ public final class ReaderModel {
         // sentence there.
         guard entry.textHref == currentSpineHref, let layout,
               let page = layout.page(containingFragment: entry.fragmentID),
-              page.index != pageIndex
+              !isShown(page: page.index)
         else { return }
         pageIndex = page.index
         // Catching up with the voice is the textbook derived move, and it was
@@ -1935,10 +2003,11 @@ public final class ReaderModel {
         return firstNarratedFragment(in: reach, carriedOver: false)
     }
 
-    /// Whether the voice is speaking a sentence on the page being shown.
+    /// Whether the voice is speaking a sentence on a page being shown: either
+    /// page of a spread.
     private var narrationIsOnVisiblePage: Bool {
-        guard let layout, let page = currentPage, let href = currentSpineHref else { return false }
-        return narrationIsOn(page: page, of: layout, inDocument: href)
+        guard let layout, let href = currentSpineHref else { return false }
+        return shownPages.contains { narrationIsOn(page: $0, of: layout, inDocument: href) }
     }
 
     /// Whether the sentence the voice is on — playing or paused — is on a given
@@ -2096,24 +2165,43 @@ public final class ReaderModel {
         if let fragment, let page = layout.page(containingFragment: fragment) {
             pageIndex = page.index
         } else {
-            // `NSLocationInRange` is false for a zero-length range, and
-            // `computePages` can emit a synthetic trailing page at
-            // {totalLength, 0} — so an anchor at the very end matched no page
-            // and `?? 0` sent the reader to the top of the chapter. Fall back
-            // to the last page, which is where that anchor actually is.
-            pageIndex = layout.pages.firstIndex { NSLocationInRange(anchor, $0.characterRange) }
-                ?? (anchor >= (layout.pages.last?.characterRange.location ?? 0)
-                    ? max(layout.pages.count - 1, 0) : 0)
+            pageIndex = Self.pageIndex(holding: anchor, in: layout)
         }
+    }
+
+    /// The page an anchor is on.
+    ///
+    /// `NSLocationInRange` is false for a zero-length range, and `computePages`
+    /// can emit a synthetic trailing page at {totalLength, 0}, so an anchor at
+    /// the very end matched no page and `?? 0` sent the reader to the top of
+    /// the chapter. Past the last page's start it falls back to that last page,
+    /// which is where the anchor actually is.
+    static func pageIndex(holding anchor: Int, in layout: ChapterLayout) -> Int {
+        layout.pages.firstIndex { NSLocationInRange(anchor, $0.characterRange) }
+            ?? (anchor >= (layout.pages.last?.characterRange.location ?? 0)
+                ? max(layout.pages.count - 1, 0) : 0)
     }
 
     private func relayoutCurrentChapter() async {
         guard let layout, pageSize != .zero else { return }
         // Keep the reader on the same words across a reflow rather than the same
         // page number, which would move the reader arbitrarily.
-        let anchor = layout.pages.indices.contains(pageIndex)
-            ? layout.pages[pageIndex].characterRange.location
-            : 0
+        //
+        // The same words through a run of reflows too. Each one lands on the
+        // page holding the anchor, whose start is earlier than the anchor, and
+        // taking the next anchor from that start walked the reader backwards:
+        // closing iPhone Duo reflows half a dozen times in a second, while the
+        // window, the insets and the pages shown arrive one at a time, and
+        // that was enough to reach the top of the chapter. So the anchor stands
+        // until the page number says the reader has moved.
+        let anchor: Int
+        if let held = reflowPlace, held.chapter == chapterIndex, held.page == pageIndex {
+            anchor = held.offset
+        } else {
+            anchor = layout.pages.indices.contains(pageIndex)
+                ? layout.pages[pageIndex].characterRange.location
+                : 0
+        }
         layout.layout(pageSize: pageSize)
         layoutRevision &+= 1
         // Re-flowed, not re-parsed: a plate's size and a percentage margin
@@ -2121,7 +2209,8 @@ public final class ReaderModel {
         // what a fresh one at the new size would be, and must not be kept as a
         // neighbour once the reader turns away from it.
         layoutKey = nil
-        pageIndex = layout.pages.firstIndex { NSLocationInRange(anchor, $0.characterRange) } ?? 0
+        pageIndex = Self.pageIndex(holding: anchor, in: layout)
+        reflowPlace = (anchor, chapterIndex, pageIndex)
     }
 
     /// Loads a chapter, leaving the model untouched if it cannot be read.
@@ -2189,6 +2278,7 @@ public final class ReaderModel {
         self.layout = layout
         chapterIndex = index
         layoutRevision &+= 1
+        reflowPlace = nil
         layoutKey = key
         // Here rather than before the parse: the parse can throw, and a chapter
         // that failed to load must leave the one on screen — and its anchors —
@@ -2239,8 +2329,8 @@ public final class ReaderModel {
     public func nextPage() async {
         guard let layout else { return }
         positionOrigin = .chosen
-        if pageIndex + 1 < layout.pages.count {
-            pageIndex += 1
+        if pageIndex + max(pagesShown, 1) < layout.pages.count {
+            pageIndex += max(pagesShown, 1)
         } else if let package, chapterIndex + 1 < package.spine.count {
             await move(toChapter: chapterIndex + 1, landingOnLastPage: false)
         }
@@ -2251,7 +2341,7 @@ public final class ReaderModel {
         guard layout != nil else { return }
         positionOrigin = .chosen
         if pageIndex > 0 {
-            pageIndex -= 1
+            pageIndex = max(pageIndex - max(pagesShown, 1), 0)
         } else if chapterIndex > 0 {
             await move(toChapter: chapterIndex - 1, landingOnLastPage: true)
         }
@@ -2314,7 +2404,7 @@ public final class ReaderModel {
     /// The page a turn across a chapter boundary arrives on, and what it says
     /// about any chapter it had to step over.
     private func land(onLastPage: Bool, skipped: [Int]) {
-        pageIndex = onLastPage ? max((layout?.pages.count ?? 1) - 1, 0) : 0
+        pageIndex = onLastPage ? max((layout?.pages.count ?? 1) - max(pagesShown, 1), 0) : 0
         if let first = skipped.first {
             let title = title(inSpineItem: first, atOffset: 0)
             chapterNotice = ChapterNotice(message: title.map {
@@ -2572,6 +2662,12 @@ public final class ReaderModel {
         return snapshot(layout, page)
     }
 
+    /// The right page of a spread, drawn as the left one is.
+    func facingSnapshot() -> PageSnapshot? {
+        guard let layout, let page = facingPage else { return nil }
+        return snapshot(layout, page)
+    }
+
     /// What a turn one page that way would show.
     ///
     /// Inside the chapter it is simply the next page of the same layout. Across
@@ -2632,8 +2728,14 @@ public final class ReaderModel {
         _ layout: ChapterLayout, _ page: RenderedPage, activeFragment: String?,
         annotations: [PageSurface.AnnotationBlock], selection: NSRange?,
     ) -> PageSnapshot {
-        PageSnapshot(
+        // Read so that a view taking a snapshot draws again after any reflow,
+        // even one that keeps the page number. The revision it carries is the
+        // layout's own, so a prepared neighbour's page is the same page once a
+        // turn has committed it.
+        _ = layoutRevision
+        return PageSnapshot(
             layout: layout,
+            revision: layout.pagination,
             page: page,
             activeFragment: activeFragment,
             annotations: annotations,
@@ -2661,10 +2763,12 @@ public final class ReaderModel {
 
     /// Element ids appearing on the current page, for marking the contents list.
     public func visibleFragments() -> Set<String> {
-        guard let layout, let page = currentPage else { return [] }
+        guard let layout else { return [] }
         var found: Set<String> = []
-        layout.attributedText.enumerateAttribute(.issaFragmentID, in: page.characterRange) { value, _, _ in
-            if let id = value as? String { found.insert(id) }
+        for page in shownPages {
+            layout.attributedText.enumerateAttribute(.issaFragmentID, in: page.characterRange) { value, _, _ in
+                if let id = value as? String { found.insert(id) }
+            }
         }
         return found
     }
@@ -2876,8 +2980,8 @@ public final class ReaderModel {
     /// usually too little to quote — the aligner has already split this text
     /// into sentences, so that is the unit offered first. Dragging then adjusts
     /// it a character at a time.
-    public func beginSelection(at point: CGPoint) {
-        guard let layout, let page = currentPage,
+    public func beginSelection(at point: CGPoint, facing: Bool = false) {
+        guard let layout, let page = page(facing: facing),
               let index = layout.characterIndex(at: point, on: page) else { return }
         let range = layout.sentenceRange(at: index) ?? layout.wordRange(at: index)
         selectionAnchor = index
@@ -2885,8 +2989,8 @@ public final class ReaderModel {
         selectionChapter = chapterIndex
     }
 
-    public func extendSelection(to point: CGPoint) {
-        guard let layout, let page = currentPage, let anchor = selectionAnchor,
+    public func extendSelection(to point: CGPoint, facing: Bool = false) {
+        guard let layout, let page = page(facing: facing), let anchor = selectionAnchor,
               let index = layout.characterIndex(at: point, on: page) else { return }
         let lower = min(anchor, index)
         let upper = max(anchor, index)
@@ -2914,8 +3018,8 @@ public final class ReaderModel {
     /// the one the jump exists to leave, survives.
     public func clearSelectionIfStale() {
         guard let selection else { return }
-        if selectionChapter == chapterIndex, let page = currentPage,
-           NSIntersectionRange(selection, page.characterRange).length > 0 { return }
+        if selectionChapter == chapterIndex,
+           shownPages.contains(where: { NSIntersectionRange(selection, $0.characterRange).length > 0 }) { return }
         clearSelection()
     }
 
