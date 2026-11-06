@@ -44,7 +44,7 @@ struct LibrarySplit<Stack: View>: View {
         }
         .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minX } action: { minX = $0 }
         .onChange(of: divider != nil) { _, split in
-            if split { opened() } else { closed() }
+            if split { selection.open(&path) } else { selection.close(&path) }
         }
     }
 
@@ -77,23 +77,5 @@ struct LibrarySplit<Stack: View>: View {
             }
         }
         .accessibilityIdentifier("split.detail")
-    }
-
-    /// Closed: the selected book's page becomes the one the stack shows, so
-    /// the outer display carries on where the inner one was, and Back goes to
-    /// the shelf.
-    private func closed() {
-        guard let book = selection.book else { return }
-        path.append(book)
-        selection.collapsed = book
-        selection.book = nil
-    }
-
-    /// Opened again: the page that close pushed goes back into the pane.
-    private func opened() {
-        guard let book = selection.collapsed else { return }
-        selection.collapsed = nil
-        if !path.isEmpty { path.removeLast() }
-        selection.book = book
     }
 }

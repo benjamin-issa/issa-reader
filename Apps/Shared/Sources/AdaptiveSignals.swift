@@ -78,9 +78,33 @@ private struct SideBarClose: ViewModifier {
 @Observable
 final class SplitBookSelection {
     var book: Book?
-    /// The book a close pushed onto the stack, so opening again can take it
-    /// back into the pane rather than leave its page in the narrow column.
-    var collapsed: Book?
+    /// The book a close pushed onto the stack, and the stack it left: what
+    /// `open` needs to know that page is still the one showing.
+    private var collapsed: (book: Book, path: NavigationPath)?
+
+    /// Closed: the selected book's page becomes the one the stack shows, so
+    /// the outer display carries on where the inner one was, and Back goes to
+    /// the shelf.
+    func close(_ path: inout NavigationPath) {
+        guard let book else { return }
+        path.append(book)
+        collapsed = (book, path)
+        self.book = nil
+    }
+
+    /// Opened again: the page that close pushed goes back into the pane, if
+    /// the stack is as close left it. On the outer display the reader may have
+    /// gone Back from that page, or followed a link to another book, and
+    /// taking the last page then would remove the one they are on and bring
+    /// back the one they left. Compared whole, because a link can replace the
+    /// page with another at the same depth.
+    func open(_ path: inout NavigationPath) {
+        guard let collapsed else { return }
+        self.collapsed = nil
+        guard path == collapsed.path else { return }
+        path.removeLast()
+        book = collapsed.book
+    }
 }
 
 @available(iOS 27.1, *)
