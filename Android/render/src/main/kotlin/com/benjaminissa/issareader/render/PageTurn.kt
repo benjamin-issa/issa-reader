@@ -39,6 +39,26 @@ enum class PageTurnStyle(val rawValue: String, val title: String) {
 }
 
 /**
+ * How E-Ink mode marks the sentence being read aloud, where colour cannot.
+ *
+ * Underline is the default: it changes the fewest pixels, so it is the
+ * gentlest on a panel that has to redraw for every sentence. Android only: the
+ * Swift client has no E-Ink mode and never reads this.
+ */
+enum class EInkNarrationMark(val rawValue: String, val title: String) {
+    UNDERLINE("underline", "Underline"),
+    OUTLINE("outline", "Outline"),
+    INVERTED("inverted", "Inverted"),
+    ;
+
+    val id: String get() = rawValue
+
+    companion object {
+        fun fromRawValue(raw: String): EInkNarrationMark? = entries.firstOrNull { it.rawValue == raw }
+    }
+}
+
+/**
  * The rules a page turn follows: when a drag becomes a turn, where each page
  * is at every point of one, and how long it takes to get there.
  *

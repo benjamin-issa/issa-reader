@@ -1,7 +1,10 @@
 package com.benjaminissa.issareader.ui
 
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.ColorScheme
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.LocalRippleConfiguration
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.darkColorScheme
@@ -21,37 +24,52 @@ import androidx.compose.ui.unit.dp
  * Material's dynamic colour, so they sit on the same warm paper as everything
  * the app draws itself. Their text is Roboto at the iPhone's system sizes
  * ([SystemText]).
+ *
+ * @param eink E-Ink mode, which outranks [darkTheme]: a panel has no dark
+ *   appearance worth having, and the mode's palette is one pair of colours.
  */
 @Composable
-fun IssaTheme(darkTheme: Boolean = isSystemInDarkTheme(), content: @Composable () -> Unit) {
-    val colors = if (darkTheme) IssaColors.Dark else IssaColors.Light
+fun IssaTheme(darkTheme: Boolean = isSystemInDarkTheme(), eink: Boolean = false, content: @Composable () -> Unit) {
+    val colors = if (eink) IssaColors.EInk else if (darkTheme) IssaColors.Dark else IssaColors.Light
     CompositionLocalProvider(LocalIssaColors provides colors) {
         MaterialTheme(
             colorScheme = colorScheme(colors),
             typography = materialTypography,
-            shapes = Shapes(
-                extraSmall = RoundedCornerShape(Metrics.radiusSmall),
-                small = RoundedCornerShape(Metrics.radiusMedium),
-                medium = RoundedCornerShape(Metrics.radiusLarge),
-                large = RoundedCornerShape(26.dp),
-                extraLarge = RoundedCornerShape(28.dp),
-            ),
-            content = content,
-        )
+            shapes = if (eink) einkShapes else issaShapes,
+        ) {
+            // The same tree in both modes, because saved state is found by its
+            // place in the tree: the restart that follows the switch has to
+            // bring back the screen it was on.
+            CompositionLocalProvider(values = if (eink) einkLocals() else emptyArray(), content = content)
+        }
     }
 }
+
+/** No ripple on anything: Material's own read the configuration, and what clicks read is the press. */
+@OptIn(ExperimentalMaterial3Api::class)
+private fun einkLocals() = arrayOf(LocalRippleConfiguration provides null, LocalIndication provides EInkIndication)
+
+private val issaShapes = Shapes(
+    extraSmall = RoundedCornerShape(Metrics.radiusSmall),
+    small = RoundedCornerShape(Metrics.radiusMedium),
+    medium = RoundedCornerShape(Metrics.radiusLarge),
+    large = RoundedCornerShape(26.dp),
+    extraLarge = RoundedCornerShape(28.dp),
+)
+
+private val einkShapes = RoundedCornerShape(EInk.radius).let { Shapes(it, it, it, it, it) }
 
 internal fun colorScheme(c: IssaColors): ColorScheme {
     val base = if (c.isDark) darkColorScheme() else lightColorScheme()
     return base.copy(
         primary = c.tangerine,
         onPrimary = Color.White,
-        primaryContainer = c.tangerine.copy(alpha = 0.16f),
+        primaryContainer = if (c.isEInk) c.paper else c.tangerine.copy(alpha = 0.16f),
         onPrimaryContainer = c.ink,
         inversePrimary = c.tangerinePressed,
         secondary = c.moss,
         onSecondary = Color.White,
-        secondaryContainer = c.tangerine.copy(alpha = 0.14f),
+        secondaryContainer = if (c.isEInk) c.paper else c.tangerine.copy(alpha = 0.14f),
         onSecondaryContainer = c.ink,
         tertiary = c.slate,
         onTertiary = Color.White,
@@ -75,7 +93,7 @@ internal fun colorScheme(c: IssaColors): ColorScheme {
         outlineVariant = c.border,
         error = c.alert,
         onError = Color.White,
-        scrim = Color.Black.copy(alpha = 0.32f),
+        scrim = if (c.isEInk) Color.Transparent else Color.Black.copy(alpha = 0.32f),
     )
 }
 

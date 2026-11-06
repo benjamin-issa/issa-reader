@@ -3,15 +3,16 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 /**
  * The marketing version is the Apple apps' (`project.yml`), so one release
- * carries one number on every platform. Play's build number is its own
- * counter, in `version.properties`, which `scripts/android-release.sh` raises.
+ * carries one number on every platform, unless `version.properties` names an
+ * Android-only release of its own with `versionName`. Play's build number is
+ * its own counter, in the same file, which `scripts/android-release.sh` raises.
  */
-val marketingVersion: String = rootProject.file("../project.yml").readLines()
-    .firstNotNullOfOrNull { Regex("""^\s*MARKETING_VERSION:\s*"?([^"\s]+)"?""").find(it)?.groupValues?.get(1) }
+val versionProperties = Properties().apply { rootProject.file("version.properties").inputStream().use(::load) }
+val marketingVersion: String = versionProperties.getProperty("versionName")
+    ?: rootProject.file("../project.yml").readLines()
+        .firstNotNullOfOrNull { Regex("""^\s*MARKETING_VERSION:\s*"?([^"\s]+)"?""").find(it)?.groupValues?.get(1) }
     ?: error("MARKETING_VERSION is missing from project.yml")
-val buildNumber: Int = Properties()
-    .apply { rootProject.file("version.properties").inputStream().use(::load) }
-    .getProperty("versionCode").toInt()
+val buildNumber: Int = versionProperties.getProperty("versionCode").toInt()
 
 /**
  * The upload key's properties file — `storeFile`, `storePassword`, `keyAlias`,

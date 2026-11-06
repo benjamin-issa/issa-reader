@@ -11,7 +11,8 @@
 # "Android".
 #
 # The version name is the Apple apps' MARKETING_VERSION, read from project.yml
-# by the build itself; the build number is Android/version.properties.
+# by the build itself, unless Android/version.properties names an Android-only
+# release with versionName; the build number is in that same file.
 
 set -euo pipefail
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
@@ -56,7 +57,9 @@ fi
 if [ "$next" != "$current" ]; then
   sed -i.bak "s/^versionCode=.*/versionCode=$next/" "$VERSION_FILE" && rm -f "$VERSION_FILE.bak"
 fi
-version=$(sed -n 's/^[[:space:]]*MARKETING_VERSION:[[:space:]]*"\{0,1\}\([^"[:space:]]*\)"\{0,1\}.*/\1/p' "$ROOT/project.yml" | head -1)
+# Android-only releases name their own version; otherwise it's the Apple apps'.
+version=$(sed -n 's/^versionName=//p' "$VERSION_FILE")
+[ -n "$version" ] || version=$(sed -n 's/^[[:space:]]*MARKETING_VERSION:[[:space:]]*"\{0,1\}\([^"[:space:]]*\)"\{0,1\}.*/\1/p' "$ROOT/project.yml" | head -1)
 echo "▸ Issa Reader for Android $version ($next)"
 
 cd "$ROOT/Android"

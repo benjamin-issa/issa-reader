@@ -252,10 +252,12 @@ That raises `versionCode` in `Android/version.properties` by one, builds
 `:app:bundleRelease` (R8-minified, signed with the upload key), checks that the
 bundle is signed and that no dex file holds the UI-test fixture, and leaves
 `IssaReader-<version>-<build>.aab`, its R8 mapping and a note of what was built
-in `.build/android-release/`. The version name is not Android's own: the build
-reads `MARKETING_VERSION` from `project.yml`, so one release carries one number
-on every platform. The build number is Android's own counter, because Play
-counts per app and refuses any number it has seen. Commit
+in `.build/android-release/`. The version name is normally not Android's own:
+the build reads `MARKETING_VERSION` from `project.yml`, so one release carries
+one number on every platform. An Android-only release sets `versionName` in
+`version.properties`, which wins (1.6.2, E-Ink mode, is the first); delete that
+line once the Apple apps reach the number. The build number is Android's own
+counter, because Play counts per app and refuses any number it has seen. Commit
 `version.properties` with the release.
 
 Uploading is `scripts/android-play.py`, the Play Developer API's twin of

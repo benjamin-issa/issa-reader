@@ -186,6 +186,8 @@ internal fun SettingsRootList(
             playbackRows(settings, onNavigate, includeDownloads = true)
         }
 
+        displaySection(settings)
+
         // Between reading and the machinery, because that is what it is: a
         // reading feature, off by default, that most readers will decide about
         // once and never revisit.

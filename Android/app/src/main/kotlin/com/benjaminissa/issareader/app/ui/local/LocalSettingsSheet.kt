@@ -36,6 +36,7 @@ import com.benjaminissa.issareader.app.ui.settings.ReadingSettingsScreen
 import com.benjaminissa.issareader.app.ui.shell.AppEnvironment
 import com.benjaminissa.issareader.app.ui.settings.SettingsPage
 import com.benjaminissa.issareader.app.ui.settings.SettingsRoutes
+import com.benjaminissa.issareader.app.ui.settings.displaySection
 import com.benjaminissa.issareader.app.ui.settings.playbackRows
 import com.benjaminissa.issareader.core.model.ByteCountText
 import com.benjaminissa.issareader.ui.ButtonRow
@@ -153,6 +154,7 @@ private fun LocalSettingsRoot(
         paperSection(key = "playback", header = "Playback & reading") {
             playbackRows(environment.settings, onNavigate, includeDownloads = false)
         }
+        displaySection(environment.settings)
         paperSection(
             key = "server",
             header = "Server",

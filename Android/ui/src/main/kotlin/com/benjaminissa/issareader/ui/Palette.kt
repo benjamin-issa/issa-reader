@@ -37,6 +37,8 @@ data class IssaColors(
     /** Something went wrong, or is missing. */
     val alert: Color,
     val isDark: Boolean,
+    /** Drawing for an E Ink panel: state is shape and position, never colour. */
+    val isEInk: Boolean = false,
 ) {
     companion object {
         val Light = IssaColors(
@@ -52,6 +54,19 @@ data class IssaColors(
             ink = hex(0xF4EFE3), inkSecondary = hex(0xC9BEAC), inkTertiary = hex(0x9A9080), inkQuaternary = hex(0x7A7263),
             tangerine = hex(0xEE9B57), tangerinePressed = hex(0xF0AC74), moss = hex(0x9DAE74), slate = hex(0x8FA6B0),
             alert = hex(0xE08C84), isDark = true,
+        )
+
+        /**
+         * E-Ink mode. Pure black on pure white, because a panel renders two
+         * levels fast and cleanly and greys slowly, with ghosting, plus the one
+         * grey text needs: #595959 is 7:1 on white.
+         */
+        val EInk = IssaColors(
+            paper = hex(0xFFFFFF), surface = hex(0xFFFFFF), surfaceRaised = hex(0xFFFFFF),
+            border = hex(0x000000), borderStrong = hex(0x000000),
+            ink = hex(0x000000), inkSecondary = hex(0x000000), inkTertiary = hex(0x595959), inkQuaternary = hex(0x595959),
+            tangerine = hex(0x000000), tangerinePressed = hex(0x000000), moss = hex(0x000000), slate = hex(0x000000),
+            alert = hex(0x000000), isDark = false, isEInk = true,
         )
     }
 }
@@ -78,6 +93,7 @@ object Palette {
     val slate: Color @Composable @ReadOnlyComposable get() = LocalIssaColors.current.slate
     val alert: Color @Composable @ReadOnlyComposable get() = LocalIssaColors.current.alert
     val isDark: Boolean @Composable @ReadOnlyComposable get() = LocalIssaColors.current.isDark
+    val isEInk: Boolean @Composable @ReadOnlyComposable get() = LocalIssaColors.current.isEInk
 }
 
 /** A `0xRRGGBB` literal, which is how the design canvas expresses every colour. */

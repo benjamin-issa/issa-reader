@@ -1,9 +1,12 @@
 package com.benjaminissa.issareader.app
 
 import android.content.Intent
+import android.graphics.Color
+import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Box
@@ -17,6 +20,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import com.benjaminissa.issareader.app.ui.shell.AppEnvironment
 import com.benjaminissa.issareader.app.ui.shell.IssaRoot
 import com.benjaminissa.issareader.ui.IssaTheme
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.net.URI
 
@@ -33,8 +37,12 @@ class MainActivity : ComponentActivity() {
     private val graph: AppGraph get() = (application as IssaApplication).graph
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        enableEdgeToEdge()
+        // Fixed for the activity's life: turning E-Ink mode on or off restarts
+        // it, since a composition's motion is set when it is created.
+        val eink = graph.settings.einkMode
+        if (eink) enableEdgeToEdge(EInkBars, EInkBars) else enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        if (eink) window.setBackgroundDrawable(ColorDrawable(Color.WHITE))
         // Registered while the activity is being created, as the launcher requires.
         graph.authTab.attach(this)
         graph.app.announce = { window.decorView.announceForAccessibility(it) }
@@ -54,9 +62,13 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) { graph.app.watchForExpiry() }
         }
+        lifecycleScope.launch {
+            snapshotFlow { graph.settings.einkMode }.first { it != eink }
+            recreate()
+        }
         val environment = AppEnvironment.from(graph)
-        setContent {
-            IssaTheme {
+        setContent(parent = if (eink) motionlessComposition() else null) {
+            IssaTheme(eink = eink) {
                 // Test tags as resource ids, so UI Automator — the live check
                 // driving the real app — finds what Swift's identifiers name.
                 Box(Modifier.semantics { testTagsAsResourceId = true }) {
@@ -77,3 +89,6 @@ class MainActivity : ComponentActivity() {
         graph.app.open(url)
     }
 }
+
+/** Dark icons on nothing, whatever the system's appearance: E-Ink mode's paper is white in both. */
+private val EInkBars = SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT)

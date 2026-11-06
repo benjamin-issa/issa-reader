@@ -10,6 +10,7 @@ import com.benjaminissa.issareader.playback.ControlSurface
 import com.benjaminissa.issareader.playback.PlaybackRate
 import com.benjaminissa.issareader.playback.ProgressScope
 import com.benjaminissa.issareader.playback.VolumeTrim
+import com.benjaminissa.issareader.render.EInkNarrationMark
 import com.benjaminissa.issareader.render.PageTurnStyle
 import com.benjaminissa.issareader.render.ReaderStyle
 import com.benjaminissa.issareader.render.ReaderStyleOverride
@@ -145,6 +146,37 @@ class PlaybackSettings(
         set(value) {
             showsBookTitleState = value
             defaults.putBoolean(SHOWS_BOOK_TITLE_KEY, value)
+        }
+
+    /**
+     * Whether the app draws for an E Ink screen: black and white, without
+     * animation. Off until asked for (an absent key reads false), and never
+     * turned on by detection: the Palma 2 Pro is a colour panel.
+     *
+     * Beside [pageTurn] and out of [readerStyle], whose shape Swift shares and
+     * whose changes re-paginate the open book. The page colour, highlighter and
+     * page turn it overrides stay stored, so turning it off restores them.
+     */
+    private var einkModeState by mutableStateOf(defaults.getBoolean(EINK_MODE_KEY))
+    var einkMode: Boolean
+        get() = einkModeState
+        set(value) {
+            einkModeState = value
+            defaults.putBoolean(EINK_MODE_KEY, value)
+        }
+
+    /**
+     * How [einkMode] marks the sentence being read aloud. Underline unless the
+     * reader chose otherwise, including a value this build cannot read.
+     */
+    private var einkNarrationMarkState by mutableStateOf(
+        defaults.getString(EINK_NARRATION_MARK_KEY)?.let(EInkNarrationMark::fromRawValue) ?: EInkNarrationMark.UNDERLINE,
+    )
+    var einkNarrationMark: EInkNarrationMark
+        get() = einkNarrationMarkState
+        set(value) {
+            einkNarrationMarkState = value
+            defaults.putString(EINK_NARRATION_MARK_KEY, value.rawValue)
         }
 
     /**
@@ -317,6 +349,8 @@ class PlaybackSettings(
         const val ASK_ENABLED_KEY = "issa.askAboutBook"
         const val PAGE_TURN_KEY = "issa.pageTurn"
         const val SHOWS_BOOK_TITLE_KEY = "issa.showBookTitle"
+        const val EINK_MODE_KEY = "issa.einkMode"
+        const val EINK_NARRATION_MARK_KEY = "issa.einkNarrationMark"
         const val FACE_MIGRATION_KEY = "issa.migratedDefaultFaceToLiterata"
 
         private val bookStylesSerializer = MapSerializer(String.serializer(), ReaderStyleOverride.serializer())
