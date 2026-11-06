@@ -96,19 +96,40 @@ public final class AppModel {
     /// the library and detail screens agree without extra requests.
     public var ratings: [String: Double] = [:]
     public var loadError: String?
-    /// Whether the last catalogue to arrive was every book the server listed.
-    /// See `knowsWholeLibrary`.
-    public private(set) var catalogueIsComplete = true
+    /// The account a whole catalogue last arrived for, by its generation. Nil
+    /// until one has this launch, and again after a refresh that fell short.
+    /// By generation so that leaving an account withdraws it with no reset to
+    /// forget. See `knowsWholeLibrary`.
+    private var wholeCatalogueGeneration: Int?
 
     /// Whether this device can say what is *not* in the library.
     ///
     /// Absent from `books` is not the same claim as gone from the server: a
-    /// failed refresh shows a cached shelf or none, and a catalogue with a row
-    /// it could not read may have left out a book the reader still owns, with
-    /// no copy here to stand in for it on a first sync. Nothing that offers to
-    /// delete a file for having no book behind it may run on less than this.
+    /// launch shows what was cached, a failed refresh goes on showing it, and
+    /// a catalogue with a row it could not read may have left out a book the
+    /// reader still owns, with no copy here to stand in for it. So this asks
+    /// for a whole catalogue, this launch, for this account. Nothing that
+    /// offers to delete a file for having no book behind it may run on less.
     public var knowsWholeLibrary: Bool {
-        !books.isEmpty && loadError == nil && catalogueIsComplete
+        !books.isEmpty && loadError == nil && wholeCatalogueGeneration == catalogueGeneration
+    }
+
+    /// What a shelf with no books to show has to say about why.
+    public enum LibraryLoad: Equatable {
+        case loading
+        case failed(String)
+        /// Nothing is on its way and nothing went wrong, so an empty shelf is
+        /// really empty, or there are books to show.
+        case settled
+    }
+
+    /// One answer for every shelf (`LibraryLoadOverlay`). Each used to work it
+    /// out for itself, and two of them forgot the spinner.
+    public var libraryLoad: LibraryLoad {
+        guard books.isEmpty else { return .settled }
+        if isLoadingLibrary { return .loading }
+        if let loadError { return .failed(loadError) }
+        return .settled
     }
     /// Whether a library refresh is in flight for the account signed in now.
     ///
@@ -1214,9 +1235,9 @@ public final class AppModel {
                 guard let mine = known[fresh.uuid] else { return fresh }
                 return mine.reconciled(
                     with: fresh, keepingStatus: keepsLocal(.status, fresh.uuid, given: fence))
-            } + catalogue.unreadable.sorted().compactMap { known[$0] }
+            } + catalogue.carriedForward(from: known)
             books = merged
-            catalogueIsComplete = catalogue.isComplete
+            wholeCatalogueGeneration = catalogue.isComplete ? generation : nil
             reseedGuards(against: merged)
             rebuildDerived()
             statuses = fetchedStatuses
@@ -1280,6 +1301,7 @@ public final class AppModel {
                 books = cached
                 rebuildDerived()
             }
+            wholeCatalogueGeneration = nil
             loadError = books.isEmpty ? Self.message(for: error) : nil
         }
     }

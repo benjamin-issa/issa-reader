@@ -184,36 +184,43 @@ public struct LibraryView: View {
             results = await app.search(search)
         }
         .overlay {
-            if app.books.isEmpty, app.isLoadingLibrary {
-                ProgressView()
-            } else if app.books.isEmpty, let error = app.loadError {
-                LibraryLoadFailure(reason: error)
-            } else if app.books.isEmpty {
-                PalettePlaceholder(
-                    symbol: "books.vertical",
-                    title: "No books yet",
-                    message: "Add books to your Storyteller server and they'll appear here.",
-                )
+            LibraryLoadOverlay {
+                if app.books.isEmpty {
+                    PalettePlaceholder(
+                        symbol: "books.vertical",
+                        title: "No books yet",
+                        message: "Add books to your Storyteller server and they'll appear here.",
+                    )
+                }
             }
         }
     }
 }
 
-/// What every shelf says when the library could not be fetched and nothing is
-/// cached. A failed fetch is not an empty library, and showing "no books" for a
-/// decode error sends you looking in entirely the wrong place.
-struct LibraryLoadFailure: View {
+/// What a shelf draws over itself: the library on its way, or why it did not
+/// arrive, and only then what the shelf itself has to say about being empty.
+///
+/// A failed fetch is not an empty library, and showing "no books" for a decode
+/// error sends you looking in entirely the wrong place.
+struct LibraryLoadOverlay<Otherwise: View>: View {
     @Environment(AppModel.self) private var app
-    let reason: String
+    @ViewBuilder var otherwise: () -> Otherwise
 
     var body: some View {
-        PalettePlaceholder(
-            symbol: "exclamationmark.triangle",
-            title: "Couldn't load your library",
-            message: reason,
-            actionTitle: "Try again",
-            action: { Task { await app.refreshLibrary() } },
-        )
+        switch app.libraryLoad {
+        case .loading:
+            ProgressView()
+        case let .failed(reason):
+            PalettePlaceholder(
+                symbol: "exclamationmark.triangle",
+                title: "Couldn't load your library",
+                message: reason,
+                actionTitle: "Try again",
+                action: { Task { await app.refreshLibrary() } },
+            )
+        case .settled:
+            otherwise()
+        }
     }
 }
 

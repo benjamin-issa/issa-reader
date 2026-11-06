@@ -42,25 +42,25 @@ public struct ListeningView: View {
         .background(Palette.paper)
         .bookRoutes(place: .shelf)
         .overlay {
-            if app.books.isEmpty, let error = app.loadError {
-                LibraryLoadFailure(reason: error)
-            } else if readalongs.isEmpty, audiobooks.isEmpty {
-                // Styled from the palette: on this tab it is the entire screen
-                // for a library with no aligned narration, so system greys on
-                // warm paper is the whole first impression.
-                VStack(spacing: Metrics.spacing12) {
-                    Image(systemName: "headphones")
-                        .font(.system(size: Metrics.scale * 44))
-                        .foregroundStyle(Palette.inkQuaternary)
-                    Text("Nothing to listen to yet")
-                        .font(Typography.title)
-                        .foregroundStyle(Palette.ink)
-                    Text("Books with narration will appear here once your server has aligned them.")
-                        .font(Typography.body)
-                        .foregroundStyle(Palette.inkTertiary)
-                        .multilineTextAlignment(.center)
+            LibraryLoadOverlay {
+                if readalongs.isEmpty, audiobooks.isEmpty {
+                    // Styled from the palette: on this tab it is the entire screen
+                    // for a library with no aligned narration, so system greys on
+                    // warm paper is the whole first impression.
+                    VStack(spacing: Metrics.spacing12) {
+                        Image(systemName: "headphones")
+                            .font(.system(size: Metrics.scale * 44))
+                            .foregroundStyle(Palette.inkQuaternary)
+                        Text("Nothing to listen to yet")
+                            .font(Typography.title)
+                            .foregroundStyle(Palette.ink)
+                        Text("Books with narration will appear here once your server has aligned them.")
+                            .font(Typography.body)
+                            .foregroundStyle(Palette.inkTertiary)
+                            .multilineTextAlignment(.center)
+                    }
+                    .padding(Metrics.spacing32)
                 }
-                .padding(Metrics.spacing32)
             }
         }
     }

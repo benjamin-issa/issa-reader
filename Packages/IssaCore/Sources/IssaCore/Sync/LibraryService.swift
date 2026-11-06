@@ -21,10 +21,6 @@ public struct LibraryService: Sendable {
         self.client = client
     }
 
-    public func allBooks() async throws -> [Book] {
-        try await catalogue().books
-    }
-
     /// The library, less any row that could not be read.
     public func catalogue() async throws -> Catalogue {
         try Self.checked(try await client.get(Endpoint.books))
@@ -32,25 +28,30 @@ public struct LibraryService: Sendable {
 
     /// What this client will take from a decoded catalogue.
     ///
-    /// Logs each row it could not read, because the reason is exactly what the
-    /// reader cannot see. Throws only when no row could be read: then this is
-    /// not one book the model does not understand but an answer it does not
-    /// understand at all, and the reader should be told so rather than shown
-    /// an empty shelf.
+    /// Throws when most rows could not be read. A few are books this model
+    /// does not understand; most is a server it does not understand, and a
+    /// reader who has just installed the app should be told so rather than
+    /// shown 3 books of 500 as if that were their library. The reader with a
+    /// shelf here keeps it, as after any failed refresh.
+    ///
+    /// Logged once a refresh rather than once a row, so a change that breaks
+    /// every book does not write the whole library to the log each time, and
+    /// with the first row's reason, which is what the reader cannot see.
     static func checked(_ decoded: Catalogue) throws -> Catalogue {
         var catalogue = decoded
-        for failure in catalogue.failures {
-            IssaLog.failure("catalogue row skipped", failure.error, ["book": failure.uuid ?? "unnamed"])
-        }
-        if catalogue.books.isEmpty, let first = catalogue.failures.first {
-            throw StorytellerError.decoding(String(describing: first.error))
-        }
         catalogue.books = refusingUnsafeIdentifiers(catalogue.books)
         // A uuid that could not name a path never reached the store, so there
         // is nothing to keep for it, and carrying it on would hand a hostile
         // server the row `refusingUnsafeIdentifiers` exists to refuse.
         catalogue.failures.removeAll { failure in
             failure.uuid.map { !$0.isBareUUID } ?? false
+        }
+        guard let first = catalogue.failures.first else { return catalogue }
+        IssaLog.failure("catalogue rows skipped", first.error, [
+            "rows": String(catalogue.failures.count), "book": first.uuid ?? "unnamed",
+        ])
+        if catalogue.failures.count > catalogue.books.count {
+            throw StorytellerError.decoding(String(describing: first.error))
         }
         return catalogue
     }

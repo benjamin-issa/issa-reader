@@ -255,4 +255,90 @@ struct LibraryLoadingTests {
         }
         #expect(fixture.app.knowsWholeLibrary)
     }
+
+    /// What a launch has before its refresh comes back. A first sync that left
+    /// a book out wrote a shelf without it, and the claim used to default to
+    /// true: that book's files read as orphans on the next launch.
+    @Test("a shelf read from the store is not a library this device can vouch for")
+    func aCachedShelfIsNotKnown() async throws {
+        let (fixture, _, directory) = try await Self.withAStore()
+        defer {
+            fixture.tearDown()
+            try? FileManager.default.removeItem(at: directory)
+        }
+        fixture.app.books = [SharedFixtures.book("Cached", uuid: Self.first, progress: 0.1)]
+        #expect(fixture.app.loadError == nil)
+        #expect(!fixture.app.knowsWholeLibrary)
+    }
+
+    @Test("a refresh that fails leaves the shelf and withdraws the claim")
+    func aFailedRefreshWithdrawsIt() async throws {
+        let (fixture, _, directory) = try await Self.withTheLibraryHere()
+        defer {
+            fixture.tearDown()
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let app = fixture.app
+        try #require(app.knowsWholeLibrary)
+        ScriptedServer.answer(Endpoint.books, on: fixture.server, status: 500, json: ["message": "no"])
+
+        await app.refreshLibrary()
+
+        #expect(app.books.count == Self.library.count)
+        #expect(app.loadError == nil, "a shelf is on screen, so there is nothing to apologise for")
+        #expect(!app.knowsWholeLibrary)
+    }
+
+    /// The store deletes nothing on this answer, and the shelf has to agree
+    /// with it, or the book is gone until the next launch brings it back.
+    @Test("a row that cannot say which book it was leaves every book where it is")
+    func anUnnamedRowKeepsEveryBook() async throws {
+        let (fixture, store, directory) = try await Self.withTheLibraryHere()
+        defer {
+            fixture.tearDown()
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let app = fixture.app
+        var unnamed = ScriptedServer.book(Self.library[1].uuid, title: "No uuid")
+        unnamed["uuid"] = nil
+        ScriptedServer.answer(Endpoint.books, on: fixture.server, json: [
+            ScriptedServer.book(Self.first, title: "Arrived"), unnamed,
+        ])
+
+        await app.refreshLibrary()
+
+        #expect(app.bookByUUID[Self.first]?.title == "Arrived")
+        #expect(Set(app.books.map(\.uuid)) == Set(Self.library.map(\.uuid)))
+        #expect(!app.knowsWholeLibrary)
+        try #require(await waitUntil { (try? await store.book(Self.first)?.title) == "Arrived" })
+        #expect(try await store.allBooks().count == Self.library.count)
+    }
+
+    /// One answer for all four shelves, which is why it is tested here and not
+    /// on each: Library, Reading, Listening and the television draw it through
+    /// `LibraryLoadOverlay`.
+    @Test("a shelf with nothing to show says the library is coming, then why it did not")
+    func whatAShelfSays() async throws {
+        let fixture = try await Self.signedInAsA()
+        defer { fixture.tearDown() }
+        let app = fixture.app
+        #expect(app.libraryLoad == .settled)
+
+        Self.answerWithLibrary(on: fixture.server, unreadable: Set(Self.library.map(\.uuid)))
+        let failing = Task { await app.refreshLibrary() }
+        try #require(await waitUntil { ScriptedServer.held(Endpoint.books, on: fixture.server) == 1 })
+        #expect(app.libraryLoad == .loading)
+
+        ScriptedServer.release(Endpoint.books, on: fixture.server)
+        await failing.value
+        guard case .failed = app.libraryLoad else {
+            Issue.record("expected the failure, got \(app.libraryLoad)")
+            return
+        }
+
+        Self.answerWithLibrary(on: fixture.server)
+        await app.refreshLibrary()
+        #expect(app.libraryLoad == .settled)
+        #expect(app.books.count == Self.library.count)
+    }
 }

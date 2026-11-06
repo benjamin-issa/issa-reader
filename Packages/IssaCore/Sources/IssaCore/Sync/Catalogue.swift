@@ -37,6 +37,17 @@ public struct Catalogue: Decodable, Sendable {
     /// Whether this is every book the server listed.
     public var isComplete: Bool { failures.isEmpty }
 
+    /// The books held here that this answer cannot be taken to replace.
+    ///
+    /// Those it listed and could not read. And when a row could not say which
+    /// book it was, every book it left out, any one of which that row could
+    /// be: the same reason `LibraryStore.replaceCatalogue` deletes nothing on
+    /// such an answer, so that the shelf and the store tell one story.
+    public func carriedForward(from known: [String: Book]) -> [Book] {
+        let unsure = hasUnnamedRows ? Set(known.keys) : unreadable
+        return unsure.subtracting(books.map(\.uuid)).sorted().compactMap { known[$0] }
+    }
+
     public init(from decoder: any Decoder) throws {
         // A body that is not an array throws: that is not a row to skip but an
         // answer that is not a catalogue.

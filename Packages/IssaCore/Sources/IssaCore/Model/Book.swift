@@ -498,11 +498,11 @@ extension CoverReference {
     /// `sha256` becomes an unusable reference, which every reader of this type
     /// already treats as no cover at all.
     ///
-    /// Throwing would not stay local. It would fail the format, the format
-    /// would fail its `Book`, and one book fails the single `[Book]` decode
-    /// behind `LibraryService.allBooks()` — so one reshaped cover would stop
-    /// the whole catalogue refreshing, where 1.2.0 ignored the key and read
-    /// on. beta.40 always sends a string hash, but this client follows a beta
+    /// Throwing would not stay local. It would fail the format, and the format
+    /// would fail its `Book` — so a reshaped cover on most books would stop
+    /// the catalogue refreshing (`LibraryService.checked`), where 1.2.0 ignored
+    /// the key and read on, and on one book would leave it behind its copy
+    /// here. beta.40 always sends a string hash, but this client follows a beta
     /// line, and an unreadable cover already has an answer: the placeholder.
     /// That is the opposite trade from `FlexibleDate`, which throws because a
     /// wrong date is silent; a missing cover is visible and costs one image.

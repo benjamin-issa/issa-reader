@@ -53,18 +53,16 @@ public struct ReadingView: View {
         .bookRoutes(place: .shelf)
         .refreshable { await app.refreshLibrary() }
         .overlay {
-            if app.books.isEmpty, app.isLoadingLibrary {
-                ProgressView()
-            } else if app.books.isEmpty, let error = app.loadError {
-                LibraryLoadFailure(reason: error)
-            } else if home.isEmpty {
-                PalettePlaceholder(
-                    symbol: "bookmark",
-                    title: "Nothing in progress",
-                    message: "Pick something from your Library and it will be waiting here.",
-                    actionTitle: "Go to Library",
-                    action: { showLibrary(nil) },
-                )
+            LibraryLoadOverlay {
+                if home.isEmpty {
+                    PalettePlaceholder(
+                        symbol: "bookmark",
+                        title: "Nothing in progress",
+                        message: "Pick something from your Library and it will be waiting here.",
+                        actionTitle: "Go to Library",
+                        action: { showLibrary(nil) },
+                    )
+                }
             }
         }
     }
