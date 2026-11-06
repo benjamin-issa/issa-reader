@@ -273,8 +273,10 @@ scripts/android-play.py status                          # each track and its rel
 `upload` sends the bundle once and creates a *draft* release of it on every
 track named: Play takes a version code only once, so a second upload of the
 same bundle for another track is refused, and an app that has never been
-published takes nothing but drafts. Internal testing is the quickest way onto
-your own phone; the closed track is the one Google reviews. Sending it for review is done in the Console (Publishing
+published takes nothing but drafts. Once the first review has passed, `--publish`
+rolls the release out instead: internal testing goes live at once, and a closed
+track goes to Google's review. Internal testing is the quickest way onto your
+own phone; the closed track is the one Google reviews. Sending it for review is done in the Console (Publishing
 overview), once the app's declarations below are complete. The Console is also
 where the testers and the staged rollout are chosen. The tracks are `internal`,
 `alpha` (closed testing), `beta` (open testing) and `production`.
