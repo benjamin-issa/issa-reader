@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -103,6 +104,21 @@ class EInkThemeTest {
             assertEquals(11f, caption)
             assertEquals(12f, tab)
         }
+    }
+
+    /** Material's own text too: a dialog or a menu reads its type from the theme. */
+    @Test
+    fun `Material's type stops at 13 too`() {
+        var eink by mutableStateOf(true)
+        var small = 0f
+        compose.setContent {
+            IssaTheme(darkTheme = false, eink = eink) {
+                small = MaterialTheme.typography.labelSmall.fontSize.value
+            }
+        }
+        compose.runOnIdle { assertEquals(13f, small) }
+        eink = false
+        compose.runOnIdle { assertEquals(11f, small) }
     }
 
     @Composable

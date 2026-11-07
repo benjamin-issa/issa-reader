@@ -111,6 +111,36 @@ library's store runs on the host's SQLite through the bundled driver's JVM
 natives (`hostSqlite` in `app/build.gradle.kts`). "iPhone" in the copy deck is
 "phone"; CarPlay is Android Auto; Spotlight is the launcher's dynamic shortcuts.
 
+### E-Ink mode is Android's alone
+
+Not a port: the Swift apps have no E-Ink mode and nothing here is shared with
+them. Its settings are keys of their own (`issa.einkMode`,
+`issa.einkNarrationMark`), never `ReaderStyle`, and `ReaderTheme.EINK` stands in
+for the page colour in memory and is never stored, so turning the mode off
+restores what the reader chose and a Swift client never sees the value. It is
+off unless turned on, with no detection: the Palma 2 Pro is a colour panel.
+
+It is built from a few parts, rather than a check at every place that animates:
+
+- **Motion is one switch.** `MainActivity` parents the composition on a
+  recomposer with a zero `MotionDurationScale` (`NoMotion`), which every
+  animation in Compose, Material and the app reads, so none is wrapped. The
+  scale is fixed when a composition is created, so the switch restarts the
+  activity. A `withFrameNanos` loop ignores the scale; the page turn's is the
+  only one, and it does not run at `PageTurnStyle.INSTANT`.
+- **`IssaTheme(eink = true)`** gives `IssaColors.EInk`, no ripple, a press that
+  inverts (`EInkIndication`), a 13 sp floor on the type and 12 dp corners. Its
+  tree has the same shape in both modes, or the restart cannot find its saved
+  state.
+- **`Palette.isEInk` and `ReaderTheme.isEInk`** are what a component asks. Under
+  them a fill becomes an outline, a spinner becomes `WaitingIndicator`, and
+  anything translucent goes solid, because a panel dithers it to grey.
+- **`PageDrawing.Treatment`** is how the page marks a sentence.
+
+`scripts/android-layout-sweep.sh` draws every screen a second time, as
+`<screen>-eink.png`. Whether it looks right on a panel, and how the panel copes
+with a sentence redrawing, is only known on a real one.
+
 ### Not ported
 
 | Suite or test | Reason |

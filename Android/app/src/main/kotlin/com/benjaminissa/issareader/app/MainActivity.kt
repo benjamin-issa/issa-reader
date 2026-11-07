@@ -46,7 +46,9 @@ class MainActivity : ComponentActivity() {
         // Registered while the activity is being created, as the launcher requires.
         graph.authTab.attach(this)
         graph.app.announce = { window.decorView.announceForAccessibility(it) }
-        handle(intent)
+        // Once: a restart brings the same intent back, and the book it named
+        // would open again over wherever the reader had got to.
+        if (savedInstanceState == null) handle(intent)
         // The display held awake while a book is open: one flag for the
         // window, decided by the model.
         lifecycleScope.launch {

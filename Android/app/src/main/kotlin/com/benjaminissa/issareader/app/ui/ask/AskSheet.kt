@@ -37,7 +37,6 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -84,10 +83,9 @@ import com.benjaminissa.issareader.ui.BetaPill
 import com.benjaminissa.issareader.ui.EInk
 import com.benjaminissa.issareader.ui.Metrics
 import com.benjaminissa.issareader.ui.Palette
+import com.benjaminissa.issareader.ui.PaperSheet
 import com.benjaminissa.issareader.ui.Typography
 import com.benjaminissa.issareader.ui.WaitingIndicator
-import com.benjaminissa.issareader.ui.einkOutline
-import com.benjaminissa.issareader.ui.sheetScrim
 import kotlinx.coroutines.launch
 
 /**
@@ -144,12 +142,9 @@ fun AskSheet(model: ReaderModel, coordinator: AskCoordinator, onDismiss: () -> U
         }
     }
 
-    ModalBottomSheet(
-        modifier = Modifier.einkOutline(BottomSheetDefaults.ExpandedShape, EInk.dialogOutline),
-        scrimColor = sheetScrim,
+    PaperSheet(
         onDismissRequest = ::close,
         sheetState = sheetState,
-        containerColor = Palette.paper,
         contentColor = Palette.ink,
         dragHandle = { SheetGrabber() },
     ) {

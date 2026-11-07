@@ -95,11 +95,11 @@ fun SwipeToRemove(
                     .align(Alignment.CenterEnd)
                     .fillMaxHeight()
                     .width(width)
-                    .background(Palette.alert)
                     .clickable {
                         onOpenRowChange(null)
                         onRemove()
                     }
+                    .background(Palette.alert)
                     .clearAndSetSemantics {},
                 contentAlignment = Alignment.Center,
             ) {

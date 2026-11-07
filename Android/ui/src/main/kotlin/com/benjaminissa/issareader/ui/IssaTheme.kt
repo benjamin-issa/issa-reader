@@ -12,6 +12,7 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.material3.Typography as MaterialTypography
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.remember
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
@@ -35,7 +36,7 @@ fun IssaTheme(darkTheme: Boolean = isSystemInDarkTheme(), eink: Boolean = false,
     CompositionLocalProvider(LocalIssaColors provides colors) {
         MaterialTheme(
             colorScheme = colorScheme(colors),
-            typography = materialTypography,
+            typography = remember(eink) { materialTypography() },
             shapes = if (eink) einkShapes else issaShapes,
         ) {
             // The same tree in both modes, because saved state is found by its
@@ -98,7 +99,8 @@ internal fun colorScheme(c: IssaColors): ColorScheme {
     )
 }
 
-private val materialTypography = MaterialTypography(
+/** Built here rather than held, so that it comes out at the theme's [Typography.smallest]. */
+private fun materialTypography() = MaterialTypography(
     displayLarge = SystemText.largeTitle,
     displayMedium = SystemText.largeTitle,
     displaySmall = SystemText.title1,

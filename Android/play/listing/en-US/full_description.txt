@@ -24,6 +24,9 @@ On phones that can run Gemini Nano, ask a question about the book you are readin
 ON YOUR HOME SCREEN
 A widget with your current book, chapter and progress, and shortcuts that open the books you are reading.
 
+ON AN E INK SCREEN
+E-Ink mode draws the app in black and white with no animation, in outlines rather than colour, for screens such as the Boox Palma. The sentence being read aloud can be underlined, outlined or inverted.
+
 PRIVATE BY DESIGN
 No account with us, no analytics, no advertising and no tracking. Your books and your place in them travel only between your phone and your own server.
 

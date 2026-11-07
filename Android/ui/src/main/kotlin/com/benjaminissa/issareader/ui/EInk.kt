@@ -11,6 +11,7 @@ import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -24,8 +25,11 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MenuDefaults
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.SheetState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.contentColorFor
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.ReadOnlyComposable
@@ -202,11 +206,51 @@ fun Modifier.einkSliderTrack(eink: Boolean, ink: Color): Modifier = if (!eink) t
 /** Material's slider track. */
 private val SliderTrackHeight: Dp = 16.dp
 
-/** What dims the app behind a bottom sheet: nothing, in E-Ink mode, where it would be a screenful of grey. */
-val sheetScrim: Color
-    @OptIn(ExperimentalMaterial3Api::class)
-    @Composable
-    get() = if (Palette.isEInk) Color.Transparent else BottomSheetDefaults.ScrimColor
+/**
+ * Material's bottom sheet on paper. In E-Ink mode nothing dims the app behind
+ * it, which would be a screenful of grey, and an outline stands in for that.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun PaperSheet(
+    onDismissRequest: () -> Unit,
+    sheetState: SheetState,
+    dragHandle: @Composable () -> Unit,
+    tonalElevation: Dp = BottomSheetDefaults.Elevation,
+    contentColor: Color = contentColorFor(Palette.paper),
+    contentWindowInsets: (@Composable () -> WindowInsets)? = null,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    val outline = Modifier.einkOutline(BottomSheetDefaults.ExpandedShape, EInk.dialogOutline)
+    val scrim = if (Palette.isEInk) Color.Transparent else BottomSheetDefaults.ScrimColor
+    // Two calls, because Material's default for the insets is its own to name.
+    if (contentWindowInsets == null) {
+        ModalBottomSheet(
+            onDismissRequest = onDismissRequest,
+            modifier = outline,
+            sheetState = sheetState,
+            containerColor = Palette.paper,
+            contentColor = contentColor,
+            tonalElevation = tonalElevation,
+            scrimColor = scrim,
+            dragHandle = dragHandle,
+            content = content,
+        )
+    } else {
+        ModalBottomSheet(
+            onDismissRequest = onDismissRequest,
+            modifier = outline,
+            sheetState = sheetState,
+            containerColor = Palette.paper,
+            contentColor = contentColor,
+            tonalElevation = tonalElevation,
+            scrimColor = scrim,
+            dragHandle = dragHandle,
+            contentWindowInsets = contentWindowInsets,
+            content = content,
+        )
+    }
+}
 
 /**
  * E-Ink mode's undo toast: one line and one action in an outline. Material's
@@ -282,6 +326,10 @@ internal fun EInkSwitch(checked: Boolean, onCheckedChange: ((Boolean) -> Unit)?,
  * What a click shows in E-Ink mode, in place of the ripple: the control
  * inverted while it is held, and a ring around it while the keys are on it.
  * Both appear and go in one frame.
+ *
+ * It inverts what the click draws, so a filled control keeps its fill inside
+ * the click: `.clickable { }.background(fill)`. Outside it, the fill is not
+ * inverted and a label in the paper's colour disappears while held.
  */
 internal object EInkIndication : IndicationNodeFactory {
     override fun create(interactionSource: InteractionSource): DelegatableNode = EInkIndicationNode(interactionSource)

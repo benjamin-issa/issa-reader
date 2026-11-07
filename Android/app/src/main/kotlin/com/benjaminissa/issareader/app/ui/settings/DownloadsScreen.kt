@@ -203,7 +203,8 @@ private fun StorageSummary(totalBytes: Long, segments: List<DownloadsStorage.Seg
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(Metrics.spacing8),
                     ) {
-                        Box(Modifier.size(10.dp).clip(RoundedCornerShape(2.dp)).background(segment.color()))
+                        // Every band is the same ink here, so a swatch would name none of them.
+                        if (!Palette.isEInk) Box(Modifier.size(10.dp).clip(RoundedCornerShape(2.dp)).background(segment.color()))
                         Text(segment.label, style = Typography.caption, color = Palette.inkSecondary, modifier = Modifier.weight(1f))
                         Text(
                             ByteCountText.text(segment.bytes),

@@ -14,9 +14,16 @@ import com.benjaminissa.issareader.render.EInkNarrationMark
 import com.benjaminissa.issareader.render.PageTurnStyle
 import com.benjaminissa.issareader.ui.color
 import kotlin.math.floor
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toPixelMap
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.mutableStateOf
 import com.benjaminissa.issareader.app.model.PlaybackSettings
@@ -255,6 +262,41 @@ class ReaderScreenshotTest {
         val after = compose.runOnIdle { shown.model.currentSnapshot() }
         assertNotEquals(before, after)
         assertEquals(PageDrawing.Treatment.INVERTED, after?.marks()?.single()?.treatment)
+    }
+
+    /** A bar's glyph answers a press, as a row does, though its ripple is off. */
+    @Test
+    fun einkGlyphInverts() {
+        show(alice(), eink = EInkNarrationMark.UNDERLINE)
+        val glyph = compose.onNodeWithContentDescription("Find in book")
+        fun corner() = glyph.captureToImage().toPixelMap()[2, 2]
+        assertEquals(Color.White, corner())
+        glyph.performTouchInput { down(center) }
+        compose.mainClock.advanceTimeBy(200)
+        assertEquals("the press showed nothing", Color.Black, corner())
+    }
+
+    /** One way to highlight, for TalkBack as for the eye, on a page that has no tints. */
+    @Test
+    fun einkHasOneHighlightAction() {
+        show(alice(), eink = EInkNarrationMark.UNDERLINE) { model -> model.go(2) }
+        val labels = compose.onAllNodes(SemanticsMatcher.keyIsDefined(SemanticsActions.CustomActions)).fetchSemanticsNodes()
+            .flatMap { node -> node.config[SemanticsActions.CustomActions].map { it.label } }
+        assertEquals(listOf("Highlight page"), labels.filter { it.startsWith("Highlight") })
+    }
+
+    /** The first frame the view gets: what `ReaderScreen` does before it hands the model over. */
+    @Test
+    fun aModelFollowsThePageBeforeItIsDrawn() {
+        val opening = ReaderOpening(alice().readBytes(), title = "Alice's Adventures in Wonderland").also { openings += it }
+        val model = opening.model(scope, Dispatchers.Main, scale = 1.0)
+        val settings = PlaybackSettings(InMemoryKeyValueStore())
+        settings.einkMode = true
+        settings.einkNarrationMark = EInkNarrationMark.OUTLINE
+        assertEquals("the fixture has to start somewhere else", ReaderTheme.PAPER, model.style.theme)
+        model.followPage(settings)
+        assertEquals(ReaderTheme.EINK, model.style.theme)
+        assertEquals(EInkNarrationMark.OUTLINE, model.narrationMark)
     }
 
     /** The bars' controls, with the chrome up, on a narrated book. */

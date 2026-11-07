@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -40,13 +39,11 @@ import com.benjaminissa.issareader.app.ui.settings.displaySection
 import com.benjaminissa.issareader.app.ui.settings.playbackRows
 import com.benjaminissa.issareader.core.model.ByteCountText
 import com.benjaminissa.issareader.ui.ButtonRow
-import com.benjaminissa.issareader.ui.EInk
 import com.benjaminissa.issareader.ui.LabeledRow
 import com.benjaminissa.issareader.ui.Palette
+import com.benjaminissa.issareader.ui.PaperSheet
 import com.benjaminissa.issareader.ui.SystemText
-import com.benjaminissa.issareader.ui.einkOutline
 import com.benjaminissa.issareader.ui.paperSection
-import com.benjaminissa.issareader.ui.sheetScrim
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -64,12 +61,9 @@ import kotlinx.coroutines.withContext
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun LocalSettingsSheet(environment: AppEnvironment, library: LocalLibrary, onDismiss: () -> Unit, onConnectServer: () -> Unit) {
-    ModalBottomSheet(
-        modifier = Modifier.einkOutline(BottomSheetDefaults.ExpandedShape, EInk.dialogOutline),
-        scrimColor = sheetScrim,
+    PaperSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-        containerColor = Palette.paper,
         dragHandle = { BottomSheetDefaults.DragHandle(color = Palette.borderStrong) },
     ) {
         LocalSettingsContent(

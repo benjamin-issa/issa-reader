@@ -12,7 +12,6 @@ import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
@@ -35,12 +34,10 @@ import com.benjaminissa.issareader.core.model.Book
 import com.benjaminissa.issareader.core.model.BookFormat
 import com.benjaminissa.issareader.core.model.isLocal
 import com.benjaminissa.issareader.playback.PlaybackDriving
-import com.benjaminissa.issareader.ui.EInk
 import com.benjaminissa.issareader.ui.Palette
+import com.benjaminissa.issareader.ui.PaperSheet
 import com.benjaminissa.issareader.ui.Symbols
 import com.benjaminissa.issareader.ui.SystemText
-import com.benjaminissa.issareader.ui.einkOutline
-import com.benjaminissa.issareader.ui.sheetScrim
 
 /**
  * The full player for whatever is running, expanded from the mini bar:
@@ -75,12 +72,9 @@ fun PlayerSheet(onDismiss: () -> Unit, onReadAlong: () -> Unit, fromReader: Read
             cue = { reader.cueNarration(it) },
         )
     }
-    ModalBottomSheet(
-        modifier = Modifier.einkOutline(BottomSheetDefaults.ExpandedShape, EInk.dialogOutline),
-        scrimColor = sheetScrim,
+    PaperSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-        containerColor = Palette.paper,
         dragHandle = { BottomSheetDefaults.DragHandle(color = Palette.borderStrong) },
     ) {
         NowPlayingSheetContent(

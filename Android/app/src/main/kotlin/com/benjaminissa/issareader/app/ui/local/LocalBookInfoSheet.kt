@@ -25,7 +25,6 @@ import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -52,6 +51,7 @@ import com.benjaminissa.issareader.core.model.Book
 import com.benjaminissa.issareader.core.model.ByteCountText
 import com.benjaminissa.issareader.core.model.LocalCopy
 import com.benjaminissa.issareader.ui.EInk
+import com.benjaminissa.issareader.ui.PaperSheet
 import com.benjaminissa.issareader.ui.WrappingText
 import com.benjaminissa.issareader.ui.Metrics
 import com.benjaminissa.issareader.ui.Overline
@@ -60,8 +60,6 @@ import com.benjaminissa.issareader.ui.PrimaryButton
 import com.benjaminissa.issareader.ui.Symbols
 import com.benjaminissa.issareader.ui.SystemText
 import com.benjaminissa.issareader.ui.Typography
-import com.benjaminissa.issareader.ui.einkOutline
-import com.benjaminissa.issareader.ui.sheetScrim
 
 /**
  * Book info for a book from the reader's files, as a Material bottom sheet:
@@ -82,12 +80,9 @@ internal fun LocalBookInfoSheet(
     onAddAgain: () -> Unit,
     onRemove: () -> Unit,
 ) {
-    ModalBottomSheet(
-        modifier = Modifier.einkOutline(BottomSheetDefaults.ExpandedShape, EInk.dialogOutline),
-        scrimColor = sheetScrim,
+    PaperSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-        containerColor = Palette.paper,
         dragHandle = { BottomSheetDefaults.DragHandle(color = Palette.borderStrong) },
     ) {
         LocalBookInfoContent(

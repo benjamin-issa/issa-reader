@@ -58,8 +58,15 @@ if [ "$next" != "$current" ]; then
   sed -i.bak "s/^versionCode=.*/versionCode=$next/" "$VERSION_FILE" && rm -f "$VERSION_FILE.bak"
 fi
 # Android-only releases name their own version; otherwise it's the Apple apps'.
+# Once the Apple apps reach it the override has served its purpose, and left in
+# place it would hold Android back without a word.
+apple=$(sed -n 's/^[[:space:]]*MARKETING_VERSION:[[:space:]]*"\{0,1\}\([^"[:space:]]*\)"\{0,1\}.*/\1/p' "$ROOT/project.yml" | head -1)
 version=$(sed -n 's/^versionName=//p' "$VERSION_FILE")
-[ -n "$version" ] || version=$(sed -n 's/^[[:space:]]*MARKETING_VERSION:[[:space:]]*"\{0,1\}\([^"[:space:]]*\)"\{0,1\}.*/\1/p' "$ROOT/project.yml" | head -1)
+if [ -n "$version" ] && [ "$(printf '%s\n%s\n' "$version" "$apple" | sort -V | tail -1)" != "$version" -o "$version" = "$apple" ]; then
+  echo "error: versionName $version in $VERSION_FILE is not ahead of project.yml's $apple; delete the line" >&2
+  exit 1
+fi
+[ -n "$version" ] || version="$apple"
 echo "▸ Issa Reader for Android $version ($next)"
 
 cd "$ROOT/Android"

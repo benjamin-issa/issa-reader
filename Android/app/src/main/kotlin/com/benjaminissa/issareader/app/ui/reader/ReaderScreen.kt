@@ -66,13 +66,17 @@ fun ReaderScreen(bookUuid: String, local: Boolean, onClose: () -> Unit, onOpenPl
         if (model != null) return@LaunchedEffect
         // Every face the reader imported is registered at launch
         // (`AppGraph.start`), before the first page is set in one.
-        model = if (local) {
+        val opened = if (local) {
             shell.localBook(bookUuid)?.let { app.reader(it.book, it.persistence) }
         } else {
             val book = app.bookByUuid[bookUuid] ?: app.books.firstOrNull { it.uuid == bookUuid }
             val session = app.session
             if (book != null && session != null) app.reader(book, session) else null
         }
+        // Before the view sees it, so its first frame is the right page: on an
+        // E Ink panel one cream frame stays as a ghost.
+        opened?.followPage(environment.settings)
+        model = opened
         missing = model == null
     }
 

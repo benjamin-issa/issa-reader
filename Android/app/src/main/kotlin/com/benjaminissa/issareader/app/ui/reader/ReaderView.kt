@@ -10,6 +10,8 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.Indication
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -218,13 +220,9 @@ fun ReaderView(
 
     // Puts the settings, this book's own departures from them, and the face
     // found inside the book together into the style the page is set in.
-    // `publisherFamily` is carried across by hand: it is discovered while
-    // opening and belongs to the book. Followed rather than assigned once: a
-    // re-resolve, so this book's own settings survive a change of default.
-    fun applyStyle() {
-        model.style = settings.pageStyle(uuid).copy(publisherFamily = model.style.publisherFamily)
-        model.narrationMark = settings.einkNarrationMark
-    }
+    // Followed rather than assigned once: a re-resolve, so this book's own
+    // settings survive a change of default.
+    fun applyStyle() = model.followPage(settings)
     LaunchedEffect(model) {
         snapshotFlow { settings.pageStyle(uuid) to settings.einkNarrationMark }.collect { applyStyle() }
     }
@@ -733,11 +731,18 @@ private fun Modifier.pageAccessibility(
         // Selection is made with a long press and a drag, which TalkBack
         // consumes — so highlighting, and playing a sentence, are otherwise
         // unreachable. These act on the top of the page.
-        for (tint in Annotation.Tint.entries) {
-            add(CustomAccessibilityAction("Highlight page in ${tint.title}") { model.annotatePage(tint); true })
+        if (model.style.theme.isEInk) {
+            add(CustomAccessibilityAction("Highlight page") { model.annotatePage(EInkHighlightTint); true })
+        } else {
+            for (tint in Annotation.Tint.entries) {
+                add(CustomAccessibilityAction("Highlight page in ${tint.title}") { model.annotatePage(tint); true })
+            }
         }
     }
 }
+
+/** The tint a highlight made on an E Ink page is stored with, for the devices that can show it. */
+private val EInkHighlightTint = Annotation.Tint.entries.first()
 
 /**
  * What to do with the selected text. Copy first, because that is what a
@@ -766,7 +771,7 @@ private fun SelectionMenu(model: ReaderModel, modifier: Modifier = Modifier) {
         Box {
             MenuGlyph(Symbols.highlighter, "Highlight", theme) {
                 // A page that can't show a tint has none to offer: one action.
-                if (theme.isEInk) model.annotate(Annotation.Kind.HIGHLIGHT, Annotation.Tint.entries.first()) else tints = true
+                if (theme.isEInk) model.annotate(Annotation.Kind.HIGHLIGHT, EInkHighlightTint) else tints = true
             }
             PaperMenu(expanded = tints, onDismissRequest = { tints = false }) {
                 for (tint in Annotation.Tint.entries) {
@@ -810,7 +815,7 @@ private fun MenuGlyph(icon: Int, label: String, theme: ReaderTheme, onClick: () 
             .size(if (theme.isEInk) EInk.target else 40.dp)
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
-                indication = ripple(bounded = false, radius = 20.dp),
+                indication = glyphIndication(20.dp),
                 role = Role.Button,
                 onClickLabel = null,
                 onClick = onClick,
@@ -940,6 +945,11 @@ private fun TopBar(
     }
 }
 
+/** What a glyph on the page's bars shows when pressed: a ripple around it, or E-Ink mode's press, since its ripples are off. */
+@Composable
+private fun glyphIndication(radius: Dp): Indication =
+    if (Palette.isEInk) LocalIndication.current else ripple(bounded = false, radius = radius)
+
 /** How wide each of the top bar's squares is. */
 private val barGlyphWidth: Dp
     @Composable @ReadOnlyComposable get() = if (Palette.isEInk) EInk.target else 38.dp
@@ -964,7 +974,7 @@ private fun BarGlyph(
             .size(width = barGlyphWidth, height = readerBarHeight)
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
-                indication = ripple(bounded = false, radius = 20.dp),
+                indication = glyphIndication(20.dp),
                 enabled = enabled,
                 role = Role.Button,
                 onClick = onClick,
@@ -1053,7 +1063,7 @@ private fun Footer(
                     .size(if (theme.isEInk) EInk.target else 32.dp)
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
-                        indication = ripple(bounded = false, radius = 20.dp),
+                        indication = glyphIndication(20.dp),
                         role = Role.Button,
                     ) { scope.launch { togglePlaybackForThisBook() } }
                     .semantics {
@@ -1135,7 +1145,7 @@ private fun FooterGlyph(label: String, onClick: () -> Unit, content: @Composable
             .size(if (Palette.isEInk) EInk.target else 28.dp)
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
-                indication = ripple(bounded = false, radius = 18.dp),
+                indication = glyphIndication(18.dp),
                 role = Role.Button,
                 onClick = onClick,
             )
@@ -1249,6 +1259,15 @@ private tailrec fun Context.findActivity(): Activity? = when (this) {
     is Activity -> this
     is ContextWrapper -> baseContext.findActivity()
     else -> null
+}
+
+/**
+ * Sets the model's page from the settings. `publisherFamily` is carried across
+ * by hand: it is discovered while opening and belongs to the book.
+ */
+internal fun ReaderModel.followPage(settings: PlaybackSettings) {
+    style = settings.pageStyle(book.uuid).copy(publisherFamily = style.publisherFamily)
+    narrationMark = settings.einkNarrationMark
 }
 
 /**
