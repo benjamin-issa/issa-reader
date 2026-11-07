@@ -98,7 +98,7 @@ fun ShelfChip(title: String, count: Int?, isSelected: Boolean, onClick: () -> Un
     Row(
         modifier
             .heightIn(min = if (Palette.isEInk) EInk.target else 34.dp)
-            .clip(CircleShape)
+            .then(if (Palette.isEInk) Modifier.clip(CircleShape) else Modifier)
             .clickable(role = Role.Button, onClick = onClick)
             .background(if (isSelected) Palette.tangerine else Palette.surface, CircleShape)
             .border(if (isSelected) 0.dp else if (Palette.isEInk) EInk.outline else 1.dp, if (isSelected) Color.Transparent else Palette.border, CircleShape)

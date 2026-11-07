@@ -493,7 +493,7 @@ private fun PrimaryCapsule(action: BookPrimaryAction, modifier: Modifier = Modif
     Row(
         modifier
             .heightIn(min = if (eink) EInk.target else 0.dp)
-            .clip(shape)
+            .then(if (eink) Modifier.clip(shape) else Modifier)
             .clickable(role = Role.Button, onClick = onClick)
             .background(Palette.tangerine, shape)
             .semantics { contentDescription = action.accessibilityLabel }
