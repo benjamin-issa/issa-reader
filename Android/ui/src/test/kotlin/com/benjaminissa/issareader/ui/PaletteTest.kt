@@ -1,7 +1,9 @@
 package com.benjaminissa.issareader.ui
 
+import androidx.compose.material3.surfaceColorAtElevation
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.unit.dp
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -61,6 +63,15 @@ class PaletteTest {
             assertTrue(isEInk)
         }
         assertTrue("and only there", !IssaColors.Light.isEInk && !IssaColors.Dark.isEInk)
+    }
+
+    /** A raised surface is tinted, and a tint on a panel is a sheet of dithered grey: the player's was. */
+    @Test
+    fun `nothing raised in E-Ink mode comes out grey`() {
+        val scheme = colorScheme(IssaColors.EInk)
+        for (elevation in listOf(1, 3, 6, 12)) {
+            assertEquals(Color.White, scheme.surfaceColorAtElevation(elevation.dp))
+        }
     }
 
     @Test

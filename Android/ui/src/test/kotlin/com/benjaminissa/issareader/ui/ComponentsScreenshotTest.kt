@@ -1,14 +1,19 @@
 package com.benjaminissa.issareader.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberTopAppBarState
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.unit.dp
@@ -91,6 +96,53 @@ class ComponentsScreenshotTest {
                         selected = 1,
                         onSelect = {},
                     )
+                }
+            }
+        }
+    }
+
+    /** The E-Ink components, one of each state, for comparing by eye with the design's component sheet. */
+    @Test
+    fun einkComponents() {
+        captureRoboImage("build/specimen/eink.png") {
+            IssaTheme(darkTheme = false, eink = true) {
+                Column(
+                    Modifier.size(402.dp, 874.dp).background(Palette.paper).padding(Metrics.spacing16),
+                    verticalArrangement = Arrangement.spacedBy(Metrics.spacing12),
+                ) {
+                    PrimaryButton("Primary", {})
+                    PrimaryButton("Disabled", {}, enabled = false)
+                    PrimaryButton("Working", {}, working = true)
+                    Row(horizontalArrangement = Arrangement.spacedBy(Metrics.spacing8), verticalAlignment = Alignment.CenterVertically) {
+                        BackButton({})
+                        BetaPill()
+                        ShelfChip("Reading", 7, isSelected = true, onClick = {})
+                        ShelfChip("To read", 18, isSelected = false, onClick = {})
+                    }
+                    PaperSection {
+                        row { ToggleRow("On", true, {}) }
+                        row { ToggleRow("Off", false, {}) }
+                        row { ToggleRow("Disabled", false, {}, enabled = false) }
+                        row { StepperRow("Text size", 18.0, 12.0..32.0, {}, format = { "${it.toInt()}pt" }) }
+                    }
+                    ProgressBar(0.03, Modifier.fillMaxWidth())
+                    ProgressBar(0.41, Modifier.fillMaxWidth())
+                    ProgressBar(1.0, Modifier.fillMaxWidth())
+                    ProgressBar(0.4, Modifier.fillMaxWidth(), einkThickness = EInk.miniPlayerProgress)
+                    WaitingIndicator(color = Palette.ink, strokeWidth = 2.dp, size = 16.dp)
+                    EInkToast("Removed Dracula", "Undo", {})
+                    MiniPlayerBar(
+                        cover = { Box(Modifier.fillMaxSize().background(Palette.paper)) },
+                        title = "Dracula",
+                        chapter = "Chapter 15",
+                        isPlaying = true,
+                        progress = 0.33,
+                        onPlayPause = {},
+                        onSkipBack = {},
+                        onSkipForward = {},
+                        onExpand = {},
+                    )
+                    IssaNavigationBar(listOf(TabItem("Library", Symbols.bookmark), TabItem("Reading", Symbols.bookmark)), selected = 1, onSelect = {})
                 }
             }
         }

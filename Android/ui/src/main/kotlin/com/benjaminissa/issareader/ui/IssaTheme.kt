@@ -81,7 +81,9 @@ internal fun colorScheme(c: IssaColors): ColorScheme {
         onSurface = c.ink,
         surfaceVariant = c.surfaceRaised,
         onSurfaceVariant = c.inkSecondary,
-        surfaceTint = Color.Transparent,
+        // Paper in E-Ink mode: Material takes this at an alpha for a raised
+        // surface, and transparent at an alpha is black, so a grey sheet.
+        surfaceTint = if (c.isEInk) c.paper else Color.Transparent,
         surfaceBright = c.surface,
         surfaceDim = c.paper,
         surfaceContainerLowest = c.surface,
