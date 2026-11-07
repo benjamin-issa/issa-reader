@@ -153,6 +153,20 @@ class AndroidPlayTests(unittest.TestCase):
         puts = [body for method, path, body in Stub.seen if method == "PUT"]
         self.assertEqual(puts[0]["releases"][0]["status"], "completed")
 
+    def test_promote_rolls_out_a_code_play_already_has_without_uploading(self):
+        notes = self.dir / "notes.txt"
+        notes.write_text("Promoted.\n")
+        play.promote(5, ["alpha"], notes)
+        self.assertFalse([path for _, path, _ in Stub.seen if path.endswith("/bundles")], "nothing should be uploaded")
+        puts = [entry for entry in Stub.seen if entry[0] == "PUT"]
+        self.assertEqual(len(puts), 1)
+        self.assertTrue(puts[0][1].endswith("/edits/edit-1/tracks/alpha"))
+        release = puts[0][2]["releases"][0]
+        self.assertEqual(release["versionCodes"], ["5"])
+        self.assertEqual(release["status"], "completed")
+        self.assertEqual(release["releaseNotes"], [{"language": "en-US", "text": "Promoted."}])
+        self.assertEqual(Stub.seen[-1][:2], ("POST", f"/androidpublisher/v3/applications/{play.PACKAGE}/edits/edit-1:commit"))
+
     def test_a_failed_command_deletes_its_edit_instead_of_committing(self):
         Stub.fail_track = True
         with self.assertRaises(play.PlayError):

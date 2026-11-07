@@ -268,6 +268,7 @@ to the app under the Console's Users and permissions:
 ```bash
 scripts/android-play.py upload .build/android-release/IssaReader-<version>-<build>.aab \
   --track internal --track alpha --notes Android/play/listing/en-US/release-notes.txt
+scripts/android-play.py promote <version code> --track alpha --notes <notes>   # a build already on Play, onward
 scripts/android-play.py listing Android/play/listing   # text, icon, feature graphic, screenshots
 scripts/android-play.py status                          # each track and its releases
 ```

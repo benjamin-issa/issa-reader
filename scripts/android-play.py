@@ -17,6 +17,7 @@ the system's openssl is needed.
     scripts/android-play.py upload <bundle.aab> --track alpha --notes <file>
     scripts/android-play.py upload <bundle.aab> --track internal --track alpha --notes <file>
     scripts/android-play.py upload <bundle.aab> --track internal --publish --notes <file>
+    scripts/android-play.py promote <version code> --track alpha --notes <file>
 
 `upload` creates the release as a draft, on every track named, from one
 upload: Play takes a version code once, so a second upload of the same bundle
@@ -230,6 +231,17 @@ def upload(bundle: Path, tracks: list[str], notes: Path | None, publish: bool = 
     print(f"version code {code} uploaded as a {'published' if publish else 'draft'} release on {', '.join(tracks)}")
 
 
+def promote(code: int, tracks: list[str], notes: Path | None):
+    """A version code Play already has, rolled out on each of `tracks`: a build tried on internal testing, going on."""
+    with Edit() as edit:
+        release = {"versionCodes": [str(code)], "status": "completed"}
+        if notes:
+            release["releaseNotes"] = [{"language": LANGUAGE, "text": notes.read_text().strip()}]
+        for track in tracks:
+            call("PUT", edit.path(f"/tracks/{track}"), {"track": track, "releases": [release]})
+    print(f"version code {code} rolled out on {', '.join(tracks)}")
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     commands = parser.add_subparsers(dest="command", required=True)
@@ -243,12 +255,19 @@ def main(argv=None):
     upload_parser.add_argument("--notes", type=Path)
     upload_parser.add_argument("--publish", action="store_true",
                                help="roll the release out rather than leave a draft (internal testing goes live without review)")
+    promote_parser = commands.add_parser("promote")
+    promote_parser.add_argument("code", type=int, help="a version code already uploaded")
+    promote_parser.add_argument("--track", action="append", dest="tracks", required=True,
+                                help="alpha (closed), beta (open) or production; a track Google reviews takes it from there")
+    promote_parser.add_argument("--notes", type=Path)
     args = parser.parse_args(argv)
     try:
         if args.command == "status":
             status()
         elif args.command == "listing":
             listing(args.directory)
+        elif args.command == "promote":
+            promote(args.code, args.tracks, args.notes)
         else:
             upload(args.bundle, args.tracks or ["alpha"], args.notes, args.publish)
     except PlayError as error:
