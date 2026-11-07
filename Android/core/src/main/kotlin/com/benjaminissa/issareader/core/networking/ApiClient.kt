@@ -131,6 +131,10 @@ class ApiClient(
      */
     suspend fun download(path: String, query: List<QueryItem> = emptyList(), destination: File): DownloadResponse {
         val request = authorised(request(path, "GET", query))
+        return withContext(Dispatchers.IO) { fetch(request, destination) }
+    }
+
+    private suspend fun fetch(request: Request, destination: File): DownloadResponse {
         val url = request.url
         val (response, _) = try {
             follow(request, RedirectMode.SYSTEM)
@@ -149,16 +153,14 @@ class ApiClient(
             failure(response.code, null, invalidatingOnUnauthorized = true)?.let { throw it }
 
             val arrived = try {
-                withContext(Dispatchers.IO) {
-                    val temporary = File.createTempFile("issa-download", ".tmp")
-                    try {
-                        response.body.byteStream().use { input -> temporary.outputStream().use { input.copyTo(it) } }
-                    } catch (e: IOException) {
-                        temporary.delete()
-                        throw e
-                    }
-                    temporary
+                val temporary = File.createTempFile("issa-download", ".tmp")
+                try {
+                    response.body.byteStream().use { input -> temporary.outputStream().use { input.copyTo(it) } }
+                } catch (e: IOException) {
+                    temporary.delete()
+                    throw e
                 }
+                temporary
             } catch (e: IOException) {
                 IssaLog.failure("download", e, mapOf("path" to url.encodedPath))
                 throw StorytellerError.Transport(e.readableReason())
@@ -170,14 +172,12 @@ class ApiClient(
             // folder that cannot be created — and `Download` is the case that
             // carries them through.
             try {
-                withContext(Dispatchers.IO) {
-                    destination.parentFile?.let { parent ->
-                        if (!parent.isDirectory && !parent.mkdirs()) {
-                            throw IOException("Couldn't create the folder “${parent.name}”.")
-                        }
+                destination.parentFile?.let { parent ->
+                    if (!parent.isDirectory && !parent.mkdirs()) {
+                        throw IOException("Couldn't create the folder “${parent.name}”.")
                     }
-                    Files.move(arrived.toPath(), destination.toPath(), StandardCopyOption.REPLACE_EXISTING)
                 }
+                Files.move(arrived.toPath(), destination.toPath(), StandardCopyOption.REPLACE_EXISTING)
             } catch (e: Exception) {
                 arrived.delete()
                 IssaLog.failure("download move", e, mapOf("path" to url.encodedPath))
@@ -208,8 +208,10 @@ class ApiClient(
             return null
         }
         return try {
-            val (response, _) = follow(request, RedirectMode.SYSTEM)
-            response.use { ProbeResponse(it.code, withContext(Dispatchers.IO) { it.body.bytes() }) }
+            withContext(Dispatchers.IO) {
+                val (response, _) = follow(request, RedirectMode.SYSTEM)
+                response.use { ProbeResponse(it.code, it.body.bytes()) }
+            }
         } catch (_: IOException) {
             null
         }
@@ -312,8 +314,10 @@ class ApiClient(
     ): Pair<ByteArray, Int> {
         val authorised = authorised(request)
         val (data, status, redirected) = try {
-            val (response, redirected) = follow(authorised, redirects)
-            response.use { Triple(withContext(Dispatchers.IO) { it.body.bytes() }, it.code, redirected) }
+            withContext(Dispatchers.IO) {
+                val (response, redirected) = follow(authorised, redirects)
+                response.use { Triple(it.body.bytes(), it.code, redirected) }
+            }
         } catch (e: IOException) {
             IssaLog.failure("request", e, mapOf("path" to authorised.url.encodedPath))
             throw StorytellerError.Transport(e.readableReason())
@@ -419,6 +423,12 @@ class ApiClient(
 /**
  * Sends this call and suspends until the response headers arrive, cancelling
  * the call if the caller is cancelled.
+ *
+ * Call it inside `withContext(Dispatchers.IO)`, reading and closing the
+ * response there too. Closing a response with its body unread reads the rest of
+ * it off the socket, and a caller cancelled just as the answer lands closes it
+ * on the caller's own thread; on the main thread that is a
+ * `NetworkOnMainThreadException`, which takes the app down.
  */
 internal suspend fun Call.await(): Response = suspendCancellableCoroutine { continuation ->
     enqueue(object : Callback {

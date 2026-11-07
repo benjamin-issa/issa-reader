@@ -52,8 +52,8 @@ class HttpDeviceGrantTransport(
             .header("Accept", "application/json")
             .build()
 
-        val (status, data) = http.newCall(request).await().use { response ->
-            response.code to withContext(Dispatchers.IO) { response.body.bytes() }
+        val (status, data) = withContext(Dispatchers.IO) {
+            http.newCall(request).await().use { response -> response.code to response.body.bytes() }
         }
         if (status != 200) throw StorytellerError.Server(status, "device/start failed")
         return IssaJson.decodeFromString(DeviceAuthorization.serializer(), data.decodeToString())
@@ -67,8 +67,8 @@ class HttpDeviceGrantTransport(
                 .post(body.toRequestBody("application/json".toMediaType()))
                 .header("Origin", baseUrl.toString())
                 .build()
-            val (status, data) = http.newCall(request).await().use { response ->
-                response.code to withContext(Dispatchers.IO) { response.body.bytes() }
+            val (status, data) = withContext(Dispatchers.IO) {
+                http.newCall(request).await().use { response -> response.code to response.body.bytes() }
             }
             val text = data.decodeToString()
             if (status == 200) {

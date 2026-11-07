@@ -114,7 +114,7 @@ object AppTokenGrant {
         val (status, data) = try {
             val call = http.newCall(request)
             call.timeout().timeout(15, TimeUnit.SECONDS)
-            call.await().use { response -> response.code to withContext(Dispatchers.IO) { response.body.bytes() } }
+            withContext(Dispatchers.IO) { call.await().use { response -> response.code to response.body.bytes() } }
         } catch (e: IOException) {
             // A timeout here is fatal in a way it is not elsewhere: the token
             // being traded is good for five minutes and there is no way to ask
