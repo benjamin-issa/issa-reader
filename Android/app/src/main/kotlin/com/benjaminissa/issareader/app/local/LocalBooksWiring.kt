@@ -64,6 +64,9 @@ class LocalBooksRoute(private val defaults: KeyValueStore) {
 
     private var showsListState by mutableStateOf(defaults.getBoolean(SHOWS_LIST_KEY))
 
+    /** Whether this launch has had [libraryLoaded]; the route outlives a window, and a launch happens once. */
+    private var launchSettled = false
+
     var showsListSignedOut: Boolean
         get() = showsListState
         set(value) {
@@ -127,7 +130,14 @@ class LocalBooksRoute(private val defaults: KeyValueStore) {
      */
     fun observe(app: AppModel, local: LocalLibrary, scope: CoroutineScope): Job = scope.launch {
         launch {
-            snapshotFlow { local.isLoaded }.filter { it }.collect { libraryLoaded(local.hasAnything) }
+            // Once, or a window coming back (a rotation, E-Ink mode's restart)
+            // would send a reader looking at an empty list to sign-in.
+            snapshotFlow { local.isLoaded }.filter { it }.collect {
+                if (!launchSettled) {
+                    launchSettled = true
+                    libraryLoaded(local.hasAnything)
+                }
+            }
         }
         launch {
             var old = app.phase

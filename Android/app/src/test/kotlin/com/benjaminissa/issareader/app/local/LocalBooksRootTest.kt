@@ -223,6 +223,37 @@ class RootWindowTest : AppSuite() {
         }
     }
 
+    /**
+     * The launch rule is the launch's. A window comes back on a rotation, and
+     * on E-Ink mode's restart from the settings sheet, and a reader looking at
+     * their empty list stays there.
+     */
+    @Test
+    fun aWindowComingBackIsNotALaunch() = mainTest {
+        val scope = testScope()
+        val local = LocalFixtures(scope)
+        var watching: Job? = null
+        try {
+            local.library.load()
+            val app = testApp(scope)
+            app.phase = AppModel.Phase.CHOOSE_SERVER
+            val route = LocalBooksRoute(SharedFixtures.scratchDefaults())
+            route.showsListSignedOut = true
+            watching = route.observe(app, local.library, scope)
+            assertTrue("a launch on an empty list opens on sign-in", waitUntil(5.seconds) { !route.showsListSignedOut })
+
+            // "Read a book from your files", and then the window restarts.
+            route.showsListSignedOut = true
+            watching.cancel()
+            watching = route.observe(app, local.library, scope)
+            assertFalse("the restart sent the reader back to sign-in", waitUntil(1.seconds) { !route.showsListSignedOut })
+        } finally {
+            watching?.cancel()
+            local.tearDown()
+            scope.close()
+        }
+    }
+
     /** R-43: a server book's link takes down the local reader to be seen. */
     @Test
     fun serverLinkClosesTheLocalReader() = mainTest {
