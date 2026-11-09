@@ -243,6 +243,14 @@ fails. If those ever start passing, the sweep has stopped working.
 
 ## Android
 
+**Until Play approves the app for production, Android follows the Apple
+apps' production releases on the closed track.** When a release goes
+READY_FOR_SALE on the App Store, the same version goes to Play's closed
+testing track (`alpha`): its changes ported, the Android release rule in
+`CLAUDE.md` run, and the build tried on internal testing first, then
+promoted (`android-play.py promote`). An update to the closed track waits for
+Google's review, so the review server stays up until it clears.
+
 ```
 scripts/android-release.sh                # raise the build number, build the bundle
 scripts/android-release.sh --build 18     # build this number, no raise
