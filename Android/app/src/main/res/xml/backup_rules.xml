@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    data_extraction_rules.xml, in the form Android 11 reads: Android 12 and
+    later read that file and ignore this one, and Android 11 (the first Boox
+    Palma) reads only this one. Without it Android 11 backed up everything the
+    app keeps, downloads and the diagnostics log included, against what
+    PRIVACY-ANDROID.md says. The same three paths, so both say the same thing.
+-->
+<full-backup-content>
+    <include domain="sharedpref" path="." />
+    <include domain="file" path="datastore/" />
+    <include domain="file" path="Store/" />
+</full-backup-content>

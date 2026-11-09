@@ -1,0 +1,18 @@
+ML Kit GenAI Prompt API
+Copyright Google LLC
+
+Used for "Ask about your book", which runs Gemini Nano on this device.
+
+ML Kit is not open-source software. It is provided by Google under the
+ML Kit Terms of Service:
+
+    https://developers.google.com/ml-kit/terms
+
+Use of ML Kit is also subject to the Google APIs Terms of Service:
+
+    https://developers.google.com/terms
+
+ML Kit brings Google Play services libraries with it, which are provided
+under the Android Software Development Kit License Agreement:
+
+    https://developer.android.com/studio/terms

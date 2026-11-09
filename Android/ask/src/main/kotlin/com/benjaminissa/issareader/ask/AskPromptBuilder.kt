@@ -1,0 +1,248 @@
+package com.benjaminissa.issareader.ask
+
+import kotlinx.coroutines.CancellationException
+import kotlin.math.ceil
+
+/**
+ * Everything the model is told, and nothing else.
+ *
+ * Three rules govern this file, and all three are spoiler defence rather than
+ * prompt craft:
+ *
+ * 1. **The question never goes in the instructions.** Instructions are trusted
+ *    and constant; user text in them is an injection surface.
+ * 2. **The title and the author are never sent.** The model has read the
+ *    canon. Tell it the book is *Alice's Adventures in Wonderland* and it will
+ *    happily answer about the Queen of Hearts from memory, forty chapters
+ *    ahead of the reader.
+ * 3. **Chapters are ordinals, never navigation titles.** "Down the
+ *    Rabbit-Hole" identifies the book as surely as its title does, and a title
+ *    like "The Death of Ned Stark" is a spoiler in itself.
+ */
+object AskPromptBuilder {
+    // Instructions
+
+    /**
+     * Constant, trusted, and carrying one invented example.
+     *
+     * The example is invented — "Tobias", a character in no book —
+     * deliberately. A few-shot example drawn from real fiction teaches the
+     * model that recalling published work is what this task is for, which is
+     * the one behaviour these instructions exist to forbid.
+     *
+     * "DO NOT" in capitals because an on-device model responds to it where it
+     * ignores a politely-phrased constraint; the length is stated explicitly
+     * because it otherwise writes either one clause or a page.
+     *
+     * The Swift client's text, byte for byte: the scorecards that tuned it are
+     * the only measurements there are, and a second wording would be a second
+     * prompt nobody has measured.
+     */
+    val instructions: String = """
+        You answer a reader's question about a novel they are part-way through.
+
+        You are given numbered excerpts from the part of the book they have already read, in reading order. They are the only thing you know about this story.
+
+        Rules:
+        - Answer ONLY from the excerpts. DO NOT use anything you remember about any book, film, play or author, even if you recognise the story.
+        - DO NOT guess, predict or hint at what happens later in the book.
+        - If the excerpts do not contain the answer, reply with exactly: The story hasn't revealed that yet.
+        - If the excerpts only mention a person in passing, say only what they state about them.
+        - Write two to four sentences of plain prose. No lists, no headings.
+        - End with a final line naming the excerpts you used, like: Sources: 1, 3
+
+        Example:
+
+        Excerpts:
+        [1] (Section 2) Tobias set down the lantern and counted the coins again. Nineteen. Not enough for the crossing, and the ferryman would not wait.
+        [2] (Section 3) "You're the smith's boy," said the woman. Tobias nodded, and did not say that the smith had thrown him out a fortnight since.
+
+        Question: What is Tobias short of?
+
+        Answer:
+        Tobias is short of money for the crossing — he counts nineteen coins and knows it is not enough, and the ferryman will not wait. He is also without a home, having been thrown out by the smith a fortnight earlier.
+        Sources: 1, 2
+    """.trimIndent()
+
+    // Budget
+
+    /** The numbers that decide how much of the book fits. */
+    object Budget {
+        /** What the answer is allowed to take. */
+        const val responseTokens = 250
+
+        /**
+         * Slack for the tokeniser disagreeing with the estimate, and for
+         * whatever the framework adds around a prompt. Cheap insurance: the
+         * cost of being wrong is a full retry, several seconds each.
+         */
+        const val margin = 256
+
+        /**
+         * The ceiling on passages at the window this was measured on, and the
+         * number [passageCeiling] grows from — to at most twice this, so a
+         * bigger window does not silently start sending a quarter of the book.
+         *
+         * Raised with the excerpt count, and it had to be: fifteen 90-word
+         * excerpts are about 7,530 characters, which the cheap `/3.6` pass
+         * below scores at roughly 2,092 tokens. That pass runs first and never
+         * un-does itself, so at 1,800 the set was trimmed back to about twelve
+         * before the real tokeniser was ever consulted.
+         */
+        const val passageCeiling = 3_000
+
+        /**
+         * Lower with a tool registered: its schema is in the window, and its
+         * output has to fit in what remains when it is called. Never reached on
+         * Android, where no tool is registered; kept so the arithmetic matches
+         * the Swift client's.
+         */
+        const val passageCeilingWithTool = 2_400
+
+        /**
+         * The window both ceilings were measured against: Apple's on-device
+         * model's 4,096 tokens. Gemini Nano's input limit is close to it, and
+         * `GeminiNanoAnswerModel` reports that limit plus [responseTokens] as
+         * its context size, so this arithmetic packs the same prompt for it.
+         */
+        const val tunedContextSize = 4_096
+
+        /**
+         * The ceiling for a window this size.
+         *
+         * Exactly [passageCeiling] or [passageCeilingWithTool] at 4,096, and
+         * every token past that goes to passages — up to twice the tuned
+         * ceiling. A smaller window than 4,096 is not shrunk here; the
+         * subtraction in [build] already handles that.
+         */
+        fun passageCeiling(contextSize: Int, hasTool: Boolean): Int {
+            val tuned = if (hasTool) passageCeilingWithTool else passageCeiling
+            val extra = maxOf(0, contextSize - tunedContextSize)
+            return minOf(tuned * 2, tuned + extra)
+        }
+
+        /**
+         * Characters per token. Measured against English prose with Apple's
+         * tokeniser; used only to avoid asking the model to count something
+         * obviously far too large, and when the model cannot count at all.
+         */
+        const val charactersPerToken = 3.6
+    }
+
+    /** A cheap estimate, for the first pass before the real count is asked for. */
+    fun estimatedTokens(text: String): Int = ceil(text.graphemeCount() / Budget.charactersPerToken).toInt()
+
+    /**
+     * Counts tokens for real. Injected so the whole builder is testable without
+     * a model: the tests fake a tokeniser with known arithmetic and assert on
+     * the trimming, which is the part that can lose a passage.
+     */
+    fun interface TokenCounter {
+        suspend fun count(text: String): Int
+    }
+
+    // Building
+
+    /** What was sent, and what survived the trimming. */
+    data class Built(
+        val prompt: String,
+        /**
+         * Book order, which is also the order they were numbered in, so
+         * citation `[2]` maps back to an excerpt the sheet can show.
+         */
+        val passages: List<Passage>,
+        val promptTokens: Int,
+        /** How many were dropped to make it fit — logged, never shown. */
+        val dropped: Int,
+    )
+
+    /**
+     * Packs as many of the ranked passages as fit and numbers what survives,
+     * in reading order.
+     *
+     * Never splits a passage. Half a paragraph is worse than none: the model
+     * answers from the half it was given and cites it with confidence, and the
+     * sentence that qualified it is the one that was cut.
+     *
+     * @param ranked in book order, each carrying its `priority`.
+     *   [PassageRanker.best] decides which survive and this only decides how
+     *   many, because trimming on position alone drops the passages nearest
+     *   the reader.
+     * @param hasTool whether a tool is registered, which lowers the ceiling to
+     *   leave room for its schema and its output.
+     */
+    suspend fun build(
+        question: String,
+        ranked: List<PassageRanker.Ranked>,
+        contextSize: Int,
+        hasTool: Boolean,
+        tokenCount: TokenCounter,
+    ): Built {
+        val ceiling = Budget.passageCeiling(contextSize, hasTool)
+        val instructionTokens = counted(tokenCount, instructions)
+        val emptyFrame = frame(question, "")
+        val framingTokenCount = counted(tokenCount, emptyFrame)
+        val available = minOf(
+            ceiling,
+            contextSize - instructionTokens - Budget.responseTokens - framingTokenCount - Budget.margin,
+        )
+
+        // How many, never which: `best` answers that, and it answers it the
+        // same way every time round, so each pass through is a subset of the
+        // last rather than a fresh selection.
+        var count = ranked.size
+        var kept = PassageRanker.best(ranked, count).map { it.retrieved.passage }
+        // Cheap pass first: an obviously oversized set is trimmed on the
+        // character estimate before the model is asked to count anything,
+        // which on a phone is a real cost per call.
+        while (count > 1 && estimatedTokens(excerpts(kept)) > available) {
+            count -= 1
+            kept = PassageRanker.best(ranked, count).map { it.retrieved.passage }
+        }
+        // Then the real count, which is the one that decides.
+        while (kept.isNotEmpty()) {
+            val text = excerpts(kept)
+            val tokens = counted(tokenCount, text)
+            if (tokens <= available || kept.size == 1) {
+                return Built(
+                    prompt = frame(question, text),
+                    passages = kept,
+                    promptTokens = tokens + framingTokenCount,
+                    dropped = ranked.size - count,
+                )
+            }
+            count -= 1
+            kept = PassageRanker.best(ranked, count).map { it.retrieved.passage }
+        }
+        return Built(
+            prompt = frame(question, ""),
+            passages = emptyList(),
+            promptTokens = framingTokenCount,
+            dropped = ranked.size - count,
+        )
+    }
+
+    /** The model's count, or the estimate when the model cannot give one. */
+    private suspend fun counted(tokenCount: TokenCounter, text: String): Int = try {
+        tokenCount.count(text)
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        estimatedTokens(text)
+    }
+
+    // Text
+
+    /**
+     * The numbered excerpts, exactly as the model sees them.
+     *
+     * `(Section k)` from `spineIndex`, one-based, never the navigation title.
+     */
+    fun excerpts(passages: List<Passage>): String =
+        passages.withIndex().joinToString("\n\n") { (index, passage) ->
+            "[${index + 1}] (Section ${passage.spineIndex + 1}) ${passage.displayText}"
+        }
+
+    /** The prompt around the excerpts. The question goes here, and only here. */
+    fun frame(question: String, excerpts: String): String = "Excerpts:\n$excerpts\n\nQuestion: $question\n\nAnswer:"
+}

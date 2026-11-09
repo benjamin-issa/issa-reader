@@ -240,3 +240,172 @@ class on one row and leaves the tracked sheets alone.
 `LayoutInvariantsTests` is the test for the tests: it feeds the invariants
 hand-built trees shaped like each of the four bugs and asserts that each one
 fails. If those ever start passing, the sweep has stopped working.
+
+## Android
+
+**Until Play approves the app for production, Android follows the Apple
+apps' production releases on the closed track.** When a release goes
+READY_FOR_SALE on the App Store, the same version goes to Play's closed
+testing track (`alpha`): its changes ported, the Android release rule in
+`CLAUDE.md` run, and the build tried on internal testing first, then
+promoted (`android-play.py promote`). An update to the closed track waits for
+Google's review, so the review server stays up until it clears.
+
+```
+scripts/android-release.sh                # raise the build number, build the bundle
+scripts/android-release.sh --build 18     # build this number, no raise
+```
+
+That raises `versionCode` in `Android/version.properties` by one, builds
+`:app:bundleRelease` (R8-minified, signed with the upload key), checks that the
+bundle is signed and that no dex file holds the UI-test fixture, and leaves
+`IssaReader-<version>-<build>.aab`, its R8 mapping and a note of what was built
+in `.build/android-release/`. The version name is normally not Android's own:
+the build reads `MARKETING_VERSION` from `project.yml`, so one release carries
+one number on every platform. An Android-only release sets `versionName` in
+`version.properties`, which wins (1.6.2, E-Ink mode, is the first); delete that
+line once the Apple apps reach the number. The build number is Android's own
+counter, because Play counts per app and refuses any number it has seen. Commit
+`version.properties` with the release.
+
+Uploading is `scripts/android-play.py`, the Play Developer API's twin of
+`asc-api.py`. It signs in as the service account in
+`~/.google-play-sa-creds.json` (or `ISSA_PLAY_CREDENTIALS`), which needs access
+to the app under the Console's Users and permissions:
+
+```bash
+scripts/android-play.py upload .build/android-release/IssaReader-<version>-<build>.aab \
+  --track internal --track alpha --notes Android/play/listing/en-US/release-notes.txt
+scripts/android-play.py promote <version code> --track alpha --notes <notes>   # a build already on Play, onward
+scripts/android-play.py listing Android/play/listing   # text, icon, feature graphic, screenshots
+scripts/android-play.py status                          # each track and its releases
+```
+
+`upload` sends the bundle once and creates a *draft* release of it on every
+track named: Play takes a version code only once, so a second upload of the
+same bundle for another track is refused, and an app that has never been
+published takes nothing but drafts. Once the first review has passed, `--publish`
+rolls the release out instead: internal testing goes live at once, and a closed
+track goes to Google's review. Internal testing is the quickest way onto your
+own phone; the closed track is the one Google reviews. Sending it for review is done in the Console (Publishing
+overview), once the app's declarations below are complete. The Console is also
+where the testers and the staged rollout are chosen. The tracks are `internal`,
+`alpha` (closed testing), `beta` (open testing) and `production`.
+
+**Production needs a closed test first.** The Play developer account is a
+personal one created after November 2023, so Google requires a closed test with
+at least 12 opted-in testers, kept for 14 days in a row, before it grants
+production access. Until then releases go to the closed track (`alpha`), which
+Google still reviews. Once the 14 days are met, apply for production access in
+the Console's Dashboard.
+
+The store listing lives in `Android/play/listing/en-US/`: the title, the short
+and full descriptions, the release notes, `graphics/` (the icon and the feature
+graphic, drawn by `Android/play/make-graphics.py`) and `phoneScreenshots/`
+(1080×1920, taken on an emulator signed into a local v2 server).
+
+To take them: `adb shell wm size 1080x1920` and `wm density 420`, System UI's
+demo mode for a 9:41 clock and full bars (`-e fully true` on the wifi, or it
+shows no internet), and the media volume at zero so a read-along can play for
+its highlight in silence. The fixture's Gap Book has no cover, so file it as
+To read for the shots and put it back afterwards, with every other book the
+shots touched. Look at each one before it goes up, and convert them to RGB:
+Play refuses a PNG with an alpha channel. Reset `wm size` and `wm density`
+afterwards.
+
+The listing describes what this build does: nothing about Android Auto until
+it has passed `android-auto-check.sh` and Play has approved the opt-in below.
+
+### The upload key
+
+Play App Signing holds the key that signs what users install. The repository
+holds neither that key nor the upload key that signs what is sent to Play. The
+upload key's properties file lives outside it, at
+`~/.android-upload-key.properties` or wherever `ISSA_ANDROID_UPLOAD_KEY` points:
+
+```
+storeFile=/Users/you/keys/issa-upload.jks
+storePassword=…
+keyAlias=upload
+keyPassword=…
+```
+
+`Android/app/build.gradle.kts` reads it. Without it a release build is
+unsigned and `android-release.sh` refuses to go on. To make the key:
+
+```bash
+keytool -genkeypair -v -keystore ~/keys/issa-upload.jks -alias upload \
+  -keyalg RSA -keysize 4096 -validity 10000
+```
+
+Back it up. If it is lost, Play can reset the upload key from the console, but
+that takes a request and a wait.
+
+### The Play Console, once
+
+- **App access.** Reviewers need to sign in. Give them the App Review server
+  (CLAUDE.md: Storyteller 2, `web-v2.14.21`, address and credentials kept
+  outside this repository) and the steps: the server address, then "Continue
+  in browser" and the account.
+- **Data safety.** This follows PRIVACY-ANDROID.md. The answers below are a
+  recommendation, and the form's answers are the developer's to give:
+  - **Data the app sends to the reader's own server.** This goes to a server
+    the reader chose and runs, not to the developer or anyone acting for them,
+    so it is not declared as collected. Self-hosted media clients commonly
+    answer the same way.
+  - **ML Kit's diagnostics.** Declare these as collected, because they leave
+    the phone for Google:
+    - data types: "Device or other IDs", plus "App info and performance" ›
+      "Diagnostics" and "Other app performance data";
+    - purpose: "Analytics";
+    - shared: no (Google's ML Kit disclosure says it passes them to no third
+      party);
+    - processed ephemerally: no;
+    - collection: optional, because it starts only when the reader turns Ask
+      on;
+    - encrypted in transit: yes.
+  - **Deletion.** The developer holds no data, so there is nothing to request
+    deleted. Point to PRIVACY-ANDROID.md.
+  - **Privacy policy URL.** PRIVACY-ANDROID.md as published (the Apple apps keep PRIVACY.md).
+- **Foreground services.** The app declares two foreground-service types, and
+  Play asks for each to be justified with a short video:
+  - `mediaPlayback`: audiobook and read-along narration that keeps playing with
+    the screen off (ticked as "Media playback");
+  - `dataSync`: book and audio downloads the reader started, which run to the
+    end with the app closed (ticked as network processing, "Other").
+
+  App content shows nothing to declare until a release is previewed; the
+  release's preview then refuses to save without it. The videos are
+  `adb shell screenrecord` clips from the emulator: narration started, then
+  carrying on from the notification shade; and an audiobook's "Save for
+  offline" with its download notification filling in the shade (an ebook
+  finishes too fast to show one). They are linked from Drive, shared as anyone
+  with the link, which reviewers must be able to open signed out.
+- **Android Auto.** The app is a media app (`automotive_app_desc.xml`). Opt in
+  under Advanced settings › Release types. Review checks Google's
+  car-media-app quality rules: browsing within its limits, voice search, and
+  errors shown on the car's screen. `scripts/android-auto-check.sh` walks the
+  same ground on the Desktop Head Unit first.
+- **Content rating and target audience.** A reading app that shows whatever the
+  reader's own server holds: no user-generated content, no ads, not directed
+  at children.
+
+### Before a release: the tests
+
+The whole rule is in CLAUDE.md, "Android releases". Its first two items are
+one command:
+
+```bash
+scripts/android-release-tests.sh                        # every module's suites
+scripts/android-release-tests.sh --ask-device SERIAL    # and the real-model Ask suites on that phone
+```
+
+`.build/android-release-tests/summary.txt` is the record. The parity goldens
+it checks are written on the Mac:
+
+```bash
+ISSA_WRITE_PARITY_GOLDENS=1 swift test --filter ParityGoldenTests
+```
+
+Write them again, and commit them, whenever the Swift chapter parser's output
+changes.

@@ -1,0 +1,150 @@
+package com.benjaminissa.issareader.ui
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.rememberTopAppBarState
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.unit.dp
+import com.github.takahirom.roborazzi.captureRoboImage
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
+
+/** The grouped list and its rows, laid out as the iPhone's Settings screen is, for comparing by eye. */
+@RunWith(RobolectricTestRunner::class)
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
+@Config(qualifiers = "w402dp-h874dp-xxhdpi")
+class ComponentsScreenshotTest {
+    @OptIn(ExperimentalMaterial3Api::class)
+    @Test
+    fun settingsShapedList() {
+        captureRoboImage("build/specimen/settings.png") {
+            IssaTheme(darkTheme = false) {
+                val behavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior(rememberTopAppBarState())
+                Box(Modifier.size(402.dp, 874.dp).background(Palette.paper)) {
+                    Scaffold(
+                        modifier = Modifier.fillMaxSize().nestedScroll(behavior.nestedScrollConnection),
+                        containerColor = Palette.paper,
+                        topBar = { LargeTitleBar("Settings", behavior) },
+                    ) { padding ->
+                        PaperList(Modifier.fillMaxSize(), contentPadding = padding) {
+                            paperSection(header = "Account") {
+                                row { LabeledRow("Signed in as", "sweep") }
+                                row { LabeledRow("Server", "http://issa-fixture.test") }
+                            }
+                            paperSection(header = "Library") {
+                                row { LabeledRow("Books", "6") }
+                                row { LabeledRow("With narration", "2") }
+                            }
+                            paperSection(
+                                header = "Playback & reading",
+                                footer = "The player, the lock screen and Android Auto all show the chapter you are in.",
+                            ) {
+                                row { PickerRow("Progress bar", "Current chapter", listOf("Current chapter", "Whole book"), { it }, {}) }
+                                row(dividerStart = 54.dp) { NavigationRow("Controls & remapping", {}, icon = Symbols.sliderHorizontal3) }
+                                row(dividerStart = 54.dp) { NavigationRow("Reading & highlights", {}, icon = Symbols.textformat) }
+                                row { NavigationRow("Downloads & storage", {}, icon = Symbols.arrowDownCircle) }
+                            }
+                            paperSection(header = "Ask AI about this book", headerContent = { BetaPill() }) {
+                                row { ToggleRow("Ask about your book", false, {}) }
+                            }
+                            item {
+                                Column {
+                                    PalettePlaceholder(Symbols.bookmark, "Nothing in progress", "Books you start reading appear here.", actionTitle = "Go to Library", action = {})
+                                    ProgressBar(0.51, Modifier.size(200.dp, 3.dp))
+                                    StepperRow("Text size", 18.0, 12.0..32.0, {}, format = { "${it.toInt()}pt" })
+                                    PrimaryButton("Continue in browser", {}, trailingIcon = Symbols.arrowUpRight)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    fun shellBars() {
+        captureRoboImage("build/specimen/shell.png") {
+            IssaTheme(darkTheme = false) {
+                Column(Modifier.size(402.dp, 220.dp).background(Palette.paper)) {
+                    androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
+                    MiniPlayerBar(
+                        cover = { CoverArt(null, "peter", "J. M. Barrie", aspect = 1f) },
+                        title = "Peter and Wendy",
+                        chapter = "Chapter I · Peter Breaks Through",
+                        isPlaying = true,
+                        progress = 0.2,
+                        onPlayPause = {}, onSkipBack = {}, onSkipForward = {}, onExpand = {},
+                    )
+                    IssaNavigationBar(
+                        listOf(TabItem("Library", Symbols.booksVerticalFill), TabItem("Reading", Symbols.bookmarkFill), TabItem("Settings", Symbols.gearshapeFill)),
+                        selected = 1,
+                        onSelect = {},
+                    )
+                }
+            }
+        }
+    }
+
+    /** The E-Ink components, one of each state, for comparing by eye with the design's component sheet. */
+    @Test
+    fun einkComponents() {
+        captureRoboImage("build/specimen/eink.png") {
+            IssaTheme(darkTheme = false, eink = true) {
+                Column(
+                    Modifier.size(402.dp, 874.dp).background(Palette.paper).padding(Metrics.spacing16),
+                    verticalArrangement = Arrangement.spacedBy(Metrics.spacing12),
+                ) {
+                    PrimaryButton("Primary", {})
+                    PrimaryButton("Disabled", {}, enabled = false)
+                    PrimaryButton("Working", {}, working = true)
+                    Row(horizontalArrangement = Arrangement.spacedBy(Metrics.spacing8), verticalAlignment = Alignment.CenterVertically) {
+                        BackButton({})
+                        BetaPill()
+                        ShelfChip("Reading", 7, isSelected = true, onClick = {})
+                        ShelfChip("To read", 18, isSelected = false, onClick = {})
+                    }
+                    PaperSection {
+                        row { ToggleRow("On", true, {}) }
+                        row { ToggleRow("Off", false, {}) }
+                        row { ToggleRow("Disabled", false, {}, enabled = false) }
+                        row { StepperRow("Text size", 18.0, 12.0..32.0, {}, format = { "${it.toInt()}pt" }) }
+                    }
+                    ProgressBar(0.03, Modifier.fillMaxWidth())
+                    ProgressBar(0.41, Modifier.fillMaxWidth())
+                    ProgressBar(1.0, Modifier.fillMaxWidth())
+                    ProgressBar(0.4, Modifier.fillMaxWidth(), einkThickness = EInk.miniPlayerProgress)
+                    WaitingIndicator(color = Palette.ink, strokeWidth = 2.dp, size = 16.dp)
+                    EInkToast("Removed Dracula", "Undo", {})
+                    MiniPlayerBar(
+                        cover = { Box(Modifier.fillMaxSize().background(Palette.paper)) },
+                        title = "Dracula",
+                        chapter = "Chapter 15",
+                        isPlaying = true,
+                        progress = 0.33,
+                        onPlayPause = {},
+                        onSkipBack = {},
+                        onSkipForward = {},
+                        onExpand = {},
+                    )
+                    IssaNavigationBar(listOf(TabItem("Library", Symbols.bookmark), TabItem("Reading", Symbols.bookmark)), selected = 1, onSelect = {})
+                }
+            }
+        }
+    }
+}

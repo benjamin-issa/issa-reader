@@ -1,0 +1,1 @@
+New: E-Ink mode, for E Ink screens such as the Boox Palma. Turn it on in Settings › Display for black and white with no animation, and outlines and underlines in place of colour. You choose how the sentence being read aloud is marked: underlined, outlined or inverted.
