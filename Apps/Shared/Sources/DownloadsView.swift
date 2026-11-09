@@ -319,7 +319,7 @@ public struct DownloadsView: View {
 
     /// Drawn only when "not in your library" is a claim this app can make.
     private var unaccountedSegment: Segment? {
-        guard !app.books.isEmpty, app.loadError == nil else { return nil }
+        guard app.knowsWholeLibrary else { return nil }
         return Segment(label: "No longer in your library", bytes: inventory.unaccountedBytes,
                        color: Palette.alert)
     }
@@ -440,12 +440,13 @@ public struct DownloadsView: View {
     /// Offered rather than swept automatically, and only once the catalogue has
     /// actually arrived. "Absent from `app.books`" is not the same claim as
     /// "the reader no longer owns it": a failed refresh shows a cached shelf, a
-    /// cold launch shows none at all, and deleting a library's worth of
-    /// downloads because a server was briefly unreachable is not a bug anyone
-    /// gets to make twice. So: a number the reader can see, a button they have
-    /// to press, and a confirmation that says how much goes.
+    /// cold launch shows none at all, a row that could not be read leaves its
+    /// book out, and deleting a library's worth of downloads because a server
+    /// was briefly unreachable is not a bug anyone gets to make twice. So: a
+    /// number the reader can see, a button they have to press, and a
+    /// confirmation that says how much goes.
     private var offersSweep: Bool {
-        !inventory.orphans.isEmpty && !app.books.isEmpty && app.loadError == nil
+        !inventory.orphans.isEmpty && app.knowsWholeLibrary
     }
 
     // `orphanBytes`, not `unaccountedBytes`. The sweep deletes the files this

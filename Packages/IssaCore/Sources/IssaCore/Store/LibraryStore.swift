@@ -290,10 +290,24 @@ public actor LibraryStore {
     /// A whole-library replace rather than a merge, because that is exactly what
     /// the server's endpoint returns — anything missing from it has been deleted
     /// server-side and should disappear here too.
-    public func replaceCatalogue(_ books: [Book]) throws {
+    ///
+    /// Except what the answer listed and this client could not read
+    /// (`Catalogue`), which has not gone anywhere.
+    ///
+    /// - Parameters:
+    ///   - kept: books the server listed that could not be read, whose stored
+    ///     rows stay as they are.
+    ///   - prunes: false when a row could not even say which book it was, so
+    ///     that a book missing from `books` may yet be on the server. Nothing
+    ///     is deleted on that answer.
+    public func replaceCatalogue(
+        _ books: [Book], keeping kept: Set<String> = [], prunes: Bool = true,
+    ) throws {
         let rows = try books.map { try BookRow(book: $0) }
         try dbQueue.write { db in
-            try Book.deletedRowsCleanup(db, keeping: rows.map(\.uuid))
+            if prunes {
+                try Book.deletedRowsCleanup(db, keeping: rows.map(\.uuid) + kept)
+            }
             for row in rows { try row.save(db) }
         }
     }

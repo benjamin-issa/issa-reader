@@ -184,25 +184,42 @@ public struct LibraryView: View {
             results = await app.search(search)
         }
         .overlay {
-            if app.books.isEmpty, app.isLoadingLibrary {
-                ProgressView()
-            } else if app.books.isEmpty, let error = app.loadError {
-                // A failed fetch is not an empty library, and showing "no books"
-                // for a decode error sends you looking in entirely the wrong place.
-                PalettePlaceholder(
-                    symbol: "exclamationmark.triangle",
-                    title: "Couldn't load your library",
-                    message: error,
-                    actionTitle: "Try again",
-                    action: { Task { await app.refreshLibrary() } },
-                )
-            } else if app.books.isEmpty {
-                PalettePlaceholder(
-                    symbol: "books.vertical",
-                    title: "No books yet",
-                    message: "Add books to your Storyteller server and they'll appear here.",
-                )
+            LibraryLoadOverlay {
+                if app.books.isEmpty {
+                    PalettePlaceholder(
+                        symbol: "books.vertical",
+                        title: "No books yet",
+                        message: "Add books to your Storyteller server and they'll appear here.",
+                    )
+                }
             }
+        }
+    }
+}
+
+/// What a shelf draws over itself: the library on its way, or why it did not
+/// arrive, and only then what the shelf itself has to say about being empty.
+///
+/// A failed fetch is not an empty library, and showing "no books" for a decode
+/// error sends you looking in entirely the wrong place.
+struct LibraryLoadOverlay<Otherwise: View>: View {
+    @Environment(AppModel.self) private var app
+    @ViewBuilder var otherwise: () -> Otherwise
+
+    var body: some View {
+        switch app.libraryLoad {
+        case .loading:
+            ProgressView()
+        case let .failed(reason):
+            PalettePlaceholder(
+                symbol: "exclamationmark.triangle",
+                title: "Couldn't load your library",
+                message: reason,
+                actionTitle: "Try again",
+                action: { Task { await app.refreshLibrary() } },
+            )
+        case .settled:
+            otherwise()
         }
     }
 }
@@ -248,7 +265,16 @@ public struct BookGrid: View {
     #if os(tvOS)
     private let columns = [GridItem(.adaptive(minimum: 300, maximum: 340), spacing: Metrics.spacing16)]
     #else
-    private let columns = [GridItem(.adaptive(minimum: 108, maximum: 160), spacing: Metrics.spacing16)]
+    @Environment(\.adaptiveSignals) private var adaptiveSignals
+
+    /// A little narrower where the system runs its bars down a side (iPhone
+    /// Duo): its outer display's 350 points between the margin and the bar
+    /// hold three covers at 104 and only two at 108. Nowhere else, where 104
+    /// would add a column at some iPad widths that 1.5.2 drew one fewer at.
+    private var columns: [GridItem] {
+        let minimum: CGFloat = adaptiveSignals.bars == .top ? 108 : 104
+        return [GridItem(.adaptive(minimum: minimum, maximum: 160), spacing: Metrics.spacing16)]
+    }
     #endif
 
     public var body: some View {
@@ -509,11 +535,20 @@ struct MacSelectionRing: View {
     let bookID: String
     #if os(macOS)
     @Environment(MacBookSelection.self) private var selection: MacBookSelection?
+    #elseif os(iOS)
+    /// iPhone Duo's inner display rings the book beside the shelf the same
+    /// way, because its page sits beside the grid rather than over it.
+    @Environment(SplitBookSelection.self) private var split: SplitBookSelection?
     #endif
 
     var body: some View {
         #if os(macOS)
         if selection?.bookID == bookID {
+            RoundedRectangle(cornerRadius: Metrics.radiusSmall)
+                .strokeBorder(Palette.tangerine, lineWidth: 3)
+        }
+        #elseif os(iOS)
+        if split?.book?.uuid == bookID {
             RoundedRectangle(cornerRadius: Metrics.radiusSmall)
                 .strokeBorder(Palette.tangerine, lineWidth: 3)
         }

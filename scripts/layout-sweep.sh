@@ -3,11 +3,13 @@
 # Layout sweep: build once, then run the layout invariants on one simulator
 # width at a time, keep the screenshots, and delete the device.
 #
-#   scripts/layout-sweep.sh                     # the three-width quick pass
+#   scripts/layout-sweep.sh                     # the quick pass: three widths and the Duo
 #   scripts/layout-sweep.sh --all               # every width, plus iPad
 #   scripts/layout-sweep.sh --devices 375,440   # named widths
 #   scripts/layout-sweep.sh --keep-devices      # leave them, for iterating
 #   scripts/layout-sweep.sh --purge             # clean up after a hard kill
+#   scripts/layout-sweep.sh --only DuoLayoutTests,LayoutSweepTests iphone-duo-outer
+#                                               # some classes, sheets untouched
 #
 # Four of this app's recent bugs were one bug: a subview with a rigid minimum
 # width larger than its container, or a margin that drifted from the token.
@@ -26,7 +28,7 @@ SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 ROOT="$PWD"
 
-usage() { sed -n '6,10p' "$SELF" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '6,12p' "$SELF" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 RUNTIME="com.apple.CoreSimulator.SimRuntime.iOS-27-0"
 SCHEME="IssaReader-iOS"
@@ -63,7 +65,11 @@ if [ -z "$FIXTURE_READALONG_UUID" ]; then
     exit 1
 fi
 
-# width | slug | device type | extra
+# width | slug | device type | extra | runtime (empty: $RUNTIME)
+#
+# iPhone Duo needs iOS 27.1, which the 27.0 runtime does not list it for. Its
+# rows name the runtime rather than the whole sweep moving, so every other
+# device's sheet is still the 27.0 one 1.5.2 shipped against.
 ALL_DEVICES=(
   "375|iphone-se3|com.apple.CoreSimulator.SimDeviceType.iPhone-SE-3rd-generation|"
   "375|iphone-13-mini|com.apple.CoreSimulator.SimDeviceType.iPhone-13-mini|"
@@ -73,17 +79,26 @@ ALL_DEVICES=(
   "440|iphone-17-pro-max|com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro-Max|"
   "820|ipad-a16|com.apple.CoreSimulator.SimDeviceType.iPad-A16|"
   "402|iphone-17-pro-axxl|com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro|content_size=accessibility-extra-large"
+  "466|iphone-duo-outer|com.apple.CoreSimulator.SimDeviceType.iPhone-Duo||com.apple.CoreSimulator.SimRuntime.iOS-27-1"
 )
 # 375 is where things break, 440 is where they stop breaking -- the 430-in-402
 # bug fitted on a Pro Max, which is exactly why it survived review -- and 402 is
-# this machine's daily simulator.
-QUICK_SLUGS="iphone-se3 iphone-17-pro iphone-17-pro-max"
+# this machine's daily simulator. iPhone Duo's outer display is the one layout
+# that runs the reader's tools down the side, so it is in the quick pass too.
+QUICK_SLUGS="iphone-se3 iphone-17-pro iphone-17-pro-max iphone-duo-outer"
 
 MODE=quick
 KEEP_DEVICES=0
 WANTED=""
+# One test class (or class/method) instead of the whole UI suite. Its
+# screenshots stay in $WORK and the tracked contact sheets are not touched:
+# sheets from a partial run would hold only that run's screens.
+ONLY_TESTS=""
+EXPECT_ONLY=0
 for arg in "$@"; do
+  if [ "$EXPECT_ONLY" = 1 ]; then ONLY_TESTS="$arg"; EXPECT_ONLY=0; continue; fi
   case "$arg" in
+    --only) EXPECT_ONLY=1 ;;
     --all) MODE=all ;;
     --keep-devices) KEEP_DEVICES=1 ;;
     --devices) MODE=named ;;
@@ -101,10 +116,20 @@ for arg in "$@"; do
     *) WANTED="$arg"; MODE=named ;;
   esac
 done
+[ "$EXPECT_ONLY" = 0 ] || { echo "error: --only needs a test class" >&2; usage; }
+ONLY_ARGS=()
+if [ -n "$ONLY_TESTS" ]; then
+  OUT="$WORK/only"
+  # Commas name more than one class.
+  IFS=',' read -r -a only_list <<< "$ONLY_TESTS"
+  for name in "${only_list[@]}"; do ONLY_ARGS+=("-only-testing:IssaLayoutUITests/$name"); done
+else
+  ONLY_ARGS=("-only-testing:IssaLayoutUITests")
+fi
 
 SELECTED=()
 for row in "${ALL_DEVICES[@]}"; do
-  IFS='|' read -r width slug devtype extra <<< "$row"
+  IFS='|' read -r width slug devtype extra runtime <<< "$row"
   case "$MODE" in
     all) SELECTED+=("$row") ;;
     quick) [[ " $QUICK_SLUGS " == *" $slug "* ]] && SELECTED+=("$row") ;;
@@ -156,6 +181,7 @@ xcodebuild build-for-testing \
     > "$WORK/build.log" 2>&1 \
   || { echo "build failed — $WORK/build.log" >&2; grep -m 5 "error:" "$WORK/build.log" >&2; exit 1; }
 
+rm -f "$DERIVED"/Build/Products/sweep-*.xctestrun
 XCTESTRUN=$(ls -t "$DERIVED"/Build/Products/*.xctestrun | head -1)
 PRODUCTS="$DERIVED/Build/Products/Debug-iphonesimulator"
 APP="$PRODUCTS/IssaReader-iOS.app"
@@ -171,10 +197,10 @@ FAILED=0
 RESULTS=()
 
 for row in "${SELECTED[@]}"; do
-  IFS='|' read -r width slug devtype extra <<< "$row"
+  IFS='|' read -r width slug devtype extra runtime <<< "$row"
   echo "▸ $slug (${width}pt)"
 
-  CURRENT_UDID=$(xcrun simctl create "issa-sweep-$slug-$$" "$devtype" "$RUNTIME")
+  CURRENT_UDID=$(xcrun simctl create "issa-sweep-$slug-$$" "$devtype" "${runtime:-$RUNTIME}")
   xcrun simctl bootstatus "$CURRENT_UDID" -b >/dev/null
 
   xcrun simctl ui "$CURRENT_UDID" appearance light >/dev/null 2>&1 || true
@@ -206,6 +232,14 @@ for row in "${SELECTED[@]}"; do
 
   RESULT="$WORK/$slug.xcresult"
   rm -rf "$RESULT"
+  # The slug written into a copy of the test run, beside the original because
+  # its paths are relative to the file (`__TESTROOT__`). Xcode 27.1 no longer
+  # hands a TEST_RUNNER_ setting given with -xctestrun to the runner: every
+  # test saw no ISSA_SWEEP_DEVICE, named its screenshots "device" and took the
+  # default for every per-device rule.
+  RUN_FILE="$(dirname "$XCTESTRUN")/sweep-$slug.xctestrun"
+  cp "$XCTESTRUN" "$RUN_FILE"
+  plutil -replace IssaLayoutUITests.EnvironmentVariables.ISSA_SWEEP_DEVICE -string "$slug" "$RUN_FILE"
   set +e
   # The UI suite alone. IssaSharedTests joined the scheme's Test action on
   # this branch, and with ~60 unit tests in the same xctestrun the "zero tests
@@ -219,8 +253,8 @@ for row in "${SELECTED[@]}"; do
   # diagnose` once a session ends and waits on it indefinitely, so a sweep
   # whose tests had all finished would never reach the next device.
   xcodebuild test-without-building \
-      -xctestrun "$XCTESTRUN" \
-      -only-testing:IssaLayoutUITests \
+      -xctestrun "$RUN_FILE" \
+      "${ONLY_ARGS[@]}" \
       -destination "platform=iOS Simulator,id=$CURRENT_UDID" \
       -resultBundlePath "$RESULT" \
       -parallel-testing-enabled NO \
@@ -269,7 +303,9 @@ done
 # Not `|| true`. Without Pillow the import raises, every device still reported
 # "ok", and the script named a sheets directory it had never written — while
 # the sheets are documented as the only coverage for inner-padding drift.
-if ! python3 Tools/scripts/make-contact-sheet.py "$OUT"; then
+if [ -n "$ONLY_TESTS" ]; then
+  : # a partial run; the tracked sheets stay as they are
+elif ! python3 Tools/scripts/make-contact-sheet.py "$OUT"; then
   echo "error: contact sheets were not written" >&2
   FAILED=1
   RESULTS+=("contact sheets: FAILED")

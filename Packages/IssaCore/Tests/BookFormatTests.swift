@@ -58,6 +58,34 @@ struct BookFormatTests {
         #expect(BookContentService.preferredReadingFormat(for: subject) == nil)
     }
 
+    /// The server's status is about the copy it is building. A re-alignment
+    /// keeps `filepath` and reports PROCESSING for as long as it runs, and the
+    /// finished read-along on this device is no less readable for that. Sent to
+    /// the ebook, a reader offline with no ebook downloaded could not open a
+    /// book they had on the device.
+    @Test("a read-along on the device is read while the server redoes its own")
+    func aDownloadedReadalongOutlivesARealignment() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "issa-format-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let client = APIClient(
+            baseURL: URL(string: "https://library.example")!, tokens: FormatTokens(),
+            session: URLSession(configuration: .ephemeral))
+        let content = BookContentService(client: client, cacheDirectory: directory)
+        let subject = book(
+            ebook: (missing: nil, ()),
+            readaloud: (filepath: "r.epub", aligned: false, missing: nil))
+
+        #expect(content.preferredReadingFormat(for: subject) == .ebook, "not on the device yet")
+
+        try Data([0]).write(to: content.localURL(for: subject, format: .readaloud))
+
+        #expect(content.preferredReadingFormat(for: subject) == .readaloud)
+        #expect(BookContentService.preferredReadingFormat(for: subject) == .ebook,
+                "what is asked of a book alone still goes by the server's word")
+    }
+
     /// `isReadable` gates whether a "resume reading" request opens the reader or
     /// the detail screen, and the Continue card's VoiceOver hint. It must agree
     /// with "has an ebook or a readaloud that is actually servable".
@@ -249,5 +277,10 @@ struct DownloadFilenameTests {
 
 private struct NoTokens: TokenProviding {
     func currentToken() async -> String? { nil }
+    func invalidate() async {}
+}
+
+private struct FormatTokens: TokenProviding {
+    func currentToken() async -> String? { "token" }
     func invalidate() async {}
 }

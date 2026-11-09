@@ -48,6 +48,7 @@ struct LibraryHeader: View {
             #else
             countAndSort
             #endif
+            UnreadableBooksNotice()
         }
         .padding(.horizontal, Metrics.screenMargin)
         .padding(.top, Metrics.spacing8)
@@ -299,6 +300,36 @@ struct LibraryHeader: View {
         #endif
     }
     #endif
+}
+
+/// Says that the last catalogue came back with books this client could not
+/// read. A kept copy looks like any other book and a first sync has no copy to
+/// show, so nothing else on the shelf can say so. Nothing at all with a whole
+/// catalogue.
+struct UnreadableBooksNotice: View {
+    @Environment(AppModel.self) private var app
+
+    var body: some View {
+        let count = app.unreadableBookCount
+        if count > 0 {
+            HStack(spacing: Metrics.spacing8) {
+                Image(systemName: "exclamationmark.triangle")
+                    .foregroundStyle(Palette.inkTertiary)
+                Text("\(count) book\(count == 1 ? "" : "s") couldn't be read")
+                    .foregroundStyle(Palette.inkSecondary)
+                Spacer(minLength: Metrics.spacing8)
+                Button("Try again") { Task { await app.refreshLibrary() } }
+                    .font(Typography.caption.weight(.semibold))
+                    .foregroundStyle(Palette.tangerinePressed)
+                    #if !os(tvOS)
+                    .buttonStyle(.plain)
+                    #endif
+            }
+            .font(Typography.caption)
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("notice.unreadableBooks")
+        }
+    }
 }
 
 #if os(iOS)

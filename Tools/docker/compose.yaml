@@ -48,7 +48,7 @@ services:
     restart: unless-stopped
 
   keycloak:
-    image: quay.io/keycloak/keycloak:26.4
+    image: quay.io/keycloak/keycloak:26.8
     container_name: issa-keycloak
     command:
       - start-dev
