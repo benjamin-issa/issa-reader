@@ -1183,6 +1183,24 @@ public struct ReaderView: View {
             }
             .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: marginPreview.isShowing)
             #endif
+            #if ISSA_UITEST_FIXTURE
+            // Where the text stands, for the margin tests: the page's inset
+            // box, which no accessibility element of the page itself exposes
+            // (its own frame includes the margins). One page only; a spread's
+            // text boxes are not one rectangle.
+            .overlay {
+                if layout.spread == nil {
+                    Color.clear
+                        .accessibilityElement()
+                        .accessibilityIdentifier("probe.reader.textFrame")
+                        .accessibilityLabel("text frame probe")
+                        .allowsHitTesting(false)
+                        .padding(EdgeInsets(
+                            top: pageTopMargin(in: layout), leading: model.style.pageMargin,
+                            bottom: model.style.pageMargin, trailing: model.style.pageMargin))
+                }
+            }
+            #endif
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { turner.width = $0 }
             .contentShape(Rectangle())
                 #if !os(tvOS)
