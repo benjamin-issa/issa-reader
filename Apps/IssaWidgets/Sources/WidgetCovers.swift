@@ -79,8 +79,11 @@ enum SmallCoverStyle {
     /// darkened copy of itself that fills the square. Nothing is cropped.
     case fitOverBlur
 
-    /// The one switch. Changed here, and nowhere else, when the choice is made.
-    static let current: SmallCoverStyle = .fill
+    /// The one switch. Fit over blur: rendered with ten real jackets from the
+    /// test library, the fill cut printed lettering off eight of the nine
+    /// portrait ones (A Doll's House lost "A Doll's", Frankenstein its name,
+    /// The War of the Worlds "The War of"), and the fit kept every title.
+    static let current: SmallCoverStyle = .fitOverBlur
 }
 
 /// A cover at a given size, in one of two fits.
