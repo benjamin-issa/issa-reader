@@ -134,6 +134,13 @@ public struct OtherBook: Codable, Sendable, Hashable {
     /// 0...1 through the whole book.
     public var progress: Double
     public var coverIsSquare: Bool
+    /// Whether the portrait cover has been asked for. These books are drawn
+    /// only in portrait slots, so the portrait cover is asked for first; a
+    /// square one stored by an earlier build was fetched without asking, and
+    /// is looked for again once. Set when that ask has been answered, so a
+    /// book with no portrait art is not asked again at every update. Absent
+    /// in a snapshot written before this existed, which is what says "ask".
+    public var portraitChecked: Bool?
 
     /// The most the snapshot carries: large's row.
     public static let limit = 4
@@ -149,6 +156,10 @@ public struct OtherBook: Codable, Sendable, Hashable {
         self.coverIsSquare = coverIsSquare
     }
 
+    /// Whether a cover stored for this book is square and the book may have a
+    /// portrait one that has not been asked for.
+    public var needsPortraitCover: Bool { coverIsSquare && portraitChecked != true }
+
     /// Rounded the way the current book's is.
     public var percent: Int { ReadingProgress.percent(progress) }
 
@@ -160,11 +171,13 @@ public struct OtherBook: Codable, Sendable, Hashable {
     ///
     /// `existing` lends a book its known cover shape: the cover's real shape
     /// is learnt when it is fetched, and a rebuilt list must not forget it.
+    /// A book not known yet is seeded portrait, and square only where an
+    /// audiobook is all it has.
     public static func selection(
         from books: [Book], excluding currentID: String?, existing: [OtherBook] = [],
         limit: Int = OtherBook.limit,
     ) -> [OtherBook] {
-        let known = Dictionary(existing.map { ($0.bookID, $0.coverIsSquare) }, uniquingKeysWith: { first, _ in first })
+        let known = Dictionary(existing.map { ($0.bookID, $0) }, uniquingKeysWith: { first, _ in first })
         // The first of a repeated uuid wins, in order: the widget's rows are
         // identified by book id, and a repeat would be a duplicate id.
         var seen = Set<String>()
@@ -176,11 +189,15 @@ public struct OtherBook: Codable, Sendable, Hashable {
             .filter { seen.insert($0.uuid).inserted }
             .prefix(limit)
             .map {
-                OtherBook(
+                var other = OtherBook(
                     bookID: $0.uuid, title: $0.title, author: $0.byline.isEmpty ? nil : $0.byline,
                     progress: $0.position?.locator.totalProgression ?? 0,
-                    // The audiobook art is square, and is what is asked for first.
-                    coverIsSquare: known[$0.uuid] ?? $0.servableFormats.contains(.audiobook))
+                    // Drawn only in portrait slots, so the text's portrait art
+                    // is what is asked for first; square is the fallback, and
+                    // the first guess only for an audiobook with no text.
+                    coverIsSquare: known[$0.uuid]?.coverIsSquare ?? !$0.mayHavePortraitCover)
+                other.portraitChecked = known[$0.uuid]?.portraitChecked
+                return other
             }
     }
 
@@ -311,5 +328,14 @@ public enum CurrentBookSnapshotStore {
     /// server its owner runs, so there is no domain to associate with.
     public static func deepLink(bookID: String) -> URL? {
         URL(string: "issareader://book/\(bookID)")
+    }
+}
+
+public extension Book {
+    /// Whether the book may have a portrait cover: any book but one whose
+    /// only edition is the audiobook, whose art is square and nothing else.
+    var mayHavePortraitCover: Bool {
+        let formats = servableFormats
+        return !(formats.contains(.audiobook) && !formats.contains(.ebook) && !formats.contains(.readaloud))
     }
 }

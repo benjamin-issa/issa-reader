@@ -324,10 +324,16 @@ final class CurrentBookPublisher {
         guard let session = librarySession else { return }
         let now = self.now()
         let wanted = others.compactMap { other -> Book? in
-            guard !CurrentBookSnapshotStore.hasOtherCover(bookID: other.bookID),
-                  otherCoverAttempts[other.bookID].map({ now.timeIntervalSince($0) >= Self.coverRetry }) ?? true,
+            guard otherCoverAttempts[other.bookID].map({ now.timeIntervalSince($0) >= Self.coverRetry }) ?? true,
                   let book = library.first(where: { $0.uuid == other.bookID && !$0.isLocal })
             else { return nil }
+            // Missing, or a square one from before these books were asked for
+            // in portrait: looked for again once, and treated like a missing
+            // one until the answer is in (`portraitChecked`). The square one
+            // stays until then, so the card is never left bare. A book with
+            // no text has no portrait art to look for.
+            let stale = other.needsPortraitCover && book.mayHavePortraitCover
+            guard !CurrentBookSnapshotStore.hasOtherCover(bookID: other.bookID) || stale else { return nil }
             return book
         }
         guard !wanted.isEmpty else { return }
@@ -340,8 +346,10 @@ final class CurrentBookPublisher {
             defer { self?.otherFetchesInFlight -= 1 }
             var landed = false
             for book in wanted {
-                let square = Self.prefersSquareCover(book)
-                let fetched = await fetch(book, session, square ? .square : .portrait)
+                // Always portrait first: these books are drawn only in portrait
+                // slots. A book with no portrait art comes back square, which
+                // the cache falls back to, and is drawn over a blurred copy.
+                let fetched = await fetch(book, session, .portrait)
                 guard let self, generation == self.othersGeneration else { return }
                 guard let fetched else { continue }
                 await write(fetched.data, book.uuid)
@@ -365,6 +373,7 @@ final class CurrentBookPublisher {
                     continue
                 }
                 snapshot.others[index].coverIsSquare = fetched.isSquare
+                snapshot.others[index].portraitChecked = true
                 CurrentBookSnapshotStore.write(snapshot)
                 landed = true
             }

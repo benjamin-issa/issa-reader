@@ -102,12 +102,28 @@ struct OtherBooksTests {
         #expect(first[0].title == "Narrated")
         #expect(first[0].author == "Author of Narrated")
         #expect(first[0].percent == 43)
-        #expect(first[0].coverIsSquare)          // audiobook art is asked for first
+        #expect(first[0].coverIsSquare)          // audio alone: square is all it has
+        #expect(first[0].portraitChecked == nil)
         #expect(!first[1].coverIsSquare)
         // A fetch that found only portrait art taught the list so; a rebuild keeps it.
         var learnt = first
         learnt[0].coverIsSquare = false
         #expect(!OtherBook.selection(from: books, excluding: nil, existing: learnt)[0].coverIsSquare)
+    }
+
+    @Test("a stored snapshot without the portrait record decodes, and asks for the portrait once")
+    func portraitRecord() throws {
+        let old = try JSONDecoder().decode(
+            OtherBook.self,
+            from: Data(#"{"bookID": "a", "title": "A", "progress": 0.1, "coverIsSquare": true}"#.utf8))
+        #expect(old.portraitChecked == nil)
+        #expect(old.needsPortraitCover)
+        var settled = old
+        settled.portraitChecked = true
+        #expect(!settled.needsPortraitCover)
+        #expect(!OtherBook(bookID: "a", title: "A", progress: 0.1, coverIsSquare: false).needsPortraitCover)
+        let books = [book("A", status: "Reading", progress: 0.1, timestamp: 1)]
+        #expect(OtherBook.selection(from: books, excluding: nil, existing: [settled])[0].portraitChecked == true)
     }
 
     // MARK: - When a change is worth writing

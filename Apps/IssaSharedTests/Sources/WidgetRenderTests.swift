@@ -409,6 +409,35 @@ extension WidgetStorage {
             }
         }
 
+        /// The other books are drawn only in portrait slots (medium's card, large's
+        /// row), so a portrait cover fills its slot and the square fallback of an
+        /// audiobook-only book is fitted over a blurred copy of itself.
+        @Test("medium and large: the other books' portrait covers and square fallbacks both draw")
+        func othersInPortraitSlots() {
+            let portrait = Self.covers.portrait[0].data
+            let square = Self.covers.square[0].data
+            func entry(_ covers: [(Data, Bool)]) -> CurrentBookEntry {
+                var entry = Self.entry(others: 0)
+                entry.others = covers.enumerated().map { index, cover in
+                    Self.other("mixed-\(index)", "Other \(index)", 0.2 + Double(index) * 0.1, square: cover.1, cover: cover.0)
+                }
+                return entry
+            }
+            for slot in Self.medium + Self.large {
+                for (scheme, colour) in Self.schemes {
+                    let cases: [(String, CurrentBookEntry)] = [
+                        ("others-portrait", entry([(portrait, false), (portrait, false), (portrait, false), (portrait, false)])),
+                        ("others-square", entry([(square, true), (square, true), (square, true), (square, true)])),
+                        ("others-mixed", entry([(portrait, false), (square, true), (portrait, false), (square, true)])),
+                    ]
+                    for (name, entry) in cases {
+                        let image = Self.render(CurrentBookView(entry: entry), slot: slot, scheme: colour)
+                        Self.check(image, slot: slot, name: "\(slot.label)-\(scheme)-\(name)")
+                    }
+                }
+            }
+        }
+
         /// The row of four used to be a fixed 310 pt wide inside 14 pt of padding
         /// and 139 pt tall under a 150 pt block, which needs a 338 x 354 widget.
         /// On an SE and a mini the fourth cover ran past the padding and the

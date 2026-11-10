@@ -430,5 +430,180 @@ extension WidgetStorage {
             #expect(CurrentBookSnapshotStore.hasOtherCover(bookID: "b"))
             #expect(CurrentBookSnapshotStore.hasOtherCover(bookID: "c"))
         }
+
+        // MARK: - Which shape the other books' covers are asked for in
+
+        /// A book in progress that may have either edition, or one of them.
+        private static func edition(
+            _ id: String, at timestamp: Double, ebook: Bool, audiobook: Bool,
+        ) -> Book {
+            SharedFixtures.book(
+                id, uuid: id, status: "Reading", progress: 0.3, positionTimestamp: timestamp,
+                audiobook: audiobook, ebook: ebook)
+        }
+
+        private func inScratchDirectory(_ body: () async throws -> Void) async throws {
+            let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+                .appending(path: "issa-widget-\(UUID().uuidString)", directoryHint: .isDirectory)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            CurrentBookSnapshotStore.directoryOverride = directory
+            defer {
+                CurrentBookSnapshotStore.directoryOverride = nil
+                try? FileManager.default.removeItem(at: directory)
+            }
+            try await body()
+        }
+
+        @Test("a book with both editions is asked for its portrait cover for the list, and keeps it")
+        func bothEditionsPublishPortrait() async throws {
+            try await inScratchDirectory {
+                let publisher = CurrentBookPublisher()
+                var shapes: [String: [LibraryService.CoverShape]] = [:]
+                publisher.coverFetcher = { book, _, shape in
+                    shapes[book.uuid, default: []].append(shape)
+                    return (Data("\(book.uuid)-\(shape)".utf8), shape == .square)
+                }
+                seed(publisher)
+                let library = [
+                    Self.reading("current", 0.5, at: 900),
+                    Self.edition("both", at: 800, ebook: true, audiobook: true),
+                ]
+                #expect(publisher.updateLibrary(library, session: Self.stubSession()))
+                try await settle(publisher)
+                #expect(shapes["both"] == [.portrait])
+                #expect(CurrentBookSnapshotStore.readOtherCover(bookID: "both") == Data("both-portrait".utf8))
+                #expect(CurrentBookSnapshotStore.read()?.others.first?.coverIsSquare == false)
+            }
+        }
+
+        @Test("an audiobook-only book falls back to its square cover and is left alone after")
+        func audiobookOnlyFallsBackToSquare() async throws {
+            try await inScratchDirectory {
+                let publisher = CurrentBookPublisher()
+                var clock = Date(timeIntervalSince1970: 1_800_000_000)
+                publisher.now = { clock }
+                var asked = 0
+                publisher.coverFetcher = { book, _, _ in
+                    asked += 1
+                    // The cache tries portrait, finds none, and hands back square.
+                    return (Data("\(book.uuid)-square".utf8), true)
+                }
+                seed(publisher)
+                let library = [
+                    Self.reading("current", 0.5, at: 900),
+                    Self.edition("audio", at: 800, ebook: false, audiobook: true),
+                ]
+                #expect(publisher.updateLibrary(library, session: Self.stubSession()))
+                try await settle(publisher)
+                #expect(CurrentBookSnapshotStore.readOtherCover(bookID: "audio") == Data("audio-square".utf8))
+                #expect(CurrentBookSnapshotStore.read()?.others.first?.coverIsSquare == true)
+                let first = asked
+                clock.addTimeInterval(CurrentBookPublisher.coverRetry + 1)
+                _ = publisher.updateLibrary(library, session: Self.stubSession())
+                try await settle(publisher)
+                #expect(asked == first, "a settled square cover is not asked for again")
+            }
+        }
+
+        @Test("a square cover stored by an earlier build is replaced once by the portrait one")
+        func storedSquareIsReplacedOnce() async throws {
+            try await inScratchDirectory {
+                let publisher = CurrentBookPublisher()
+                var clock = Date(timeIntervalSince1970: 1_800_000_000)
+                publisher.now = { clock }
+                var asked = 0
+                publisher.coverFetcher = { book, _, shape in
+                    asked += 1
+                    return (Data("new-\(shape)".utf8), false)
+                }
+                // As the previous build left it: a square cover, no record of
+                // portrait having been asked for.
+                CurrentBookSnapshotStore.write(CurrentBookSnapshot(
+                    bookID: "current", title: "current", author: "", progress: 0.5,
+                    others: [OtherBook(bookID: "both", title: "both", progress: 0.3, coverIsSquare: true)]))
+                CurrentBookSnapshotStore.writeOtherCover(Data("old-square".utf8), bookID: "both")
+                let library = [
+                    Self.reading("current", 0.5, at: 900),
+                    Self.edition("both", at: 800, ebook: true, audiobook: true),
+                ]
+                _ = publisher.updateLibrary(library, session: Self.stubSession())
+                try await settle(publisher)
+                #expect(asked == 1)
+                #expect(CurrentBookSnapshotStore.readOtherCover(bookID: "both") == Data("new-portrait".utf8))
+                #expect(CurrentBookSnapshotStore.read()?.others.first?.coverIsSquare == false)
+
+                clock.addTimeInterval(CurrentBookPublisher.coverRetry + 1)
+                _ = publisher.updateLibrary(library, session: Self.stubSession())
+                try await settle(publisher)
+                #expect(asked == 1, "the portrait cover is not fetched again")
+            }
+        }
+
+        @Test("when there is no portrait art the stored square one stays, and the ask is not repeated")
+        func storedSquareStaysWhenThereIsNoPortrait() async throws {
+            try await inScratchDirectory {
+                let publisher = CurrentBookPublisher()
+                var clock = Date(timeIntervalSince1970: 1_800_000_000)
+                publisher.now = { clock }
+                var asked = 0
+                publisher.coverFetcher = { _, _, _ in
+                    asked += 1
+                    return (Data("only-square".utf8), true)
+                }
+                CurrentBookSnapshotStore.write(CurrentBookSnapshot(
+                    bookID: "current", title: "current", author: "", progress: 0.5,
+                    others: [OtherBook(bookID: "both", title: "both", progress: 0.3, coverIsSquare: true)]))
+                CurrentBookSnapshotStore.writeOtherCover(Data("old-square".utf8), bookID: "both")
+                let library = [
+                    Self.reading("current", 0.5, at: 900),
+                    Self.edition("both", at: 800, ebook: true, audiobook: true),
+                ]
+                _ = publisher.updateLibrary(library, session: Self.stubSession())
+                try await settle(publisher)
+                #expect(asked == 1)
+                let snapshot = CurrentBookSnapshotStore.read()
+                #expect(snapshot?.others.first?.coverIsSquare == true)
+                #expect(snapshot?.others.first?.portraitChecked == true)
+                for _ in 0 ..< 3 {
+                    clock.addTimeInterval(CurrentBookPublisher.coverRetry + 1)
+                    _ = publisher.updateLibrary(library, session: Self.stubSession())
+                    try await settle(publisher)
+                }
+                #expect(asked == 1, "the attempt is remembered in the snapshot")
+            }
+        }
+
+        @Test("the current book still takes the square cover where it has audio")
+        func currentBookStillPrefersSquare() async throws {
+            try await inScratchDirectory {
+                let publisher = CurrentBookPublisher()
+                var shapes: [LibraryService.CoverShape] = []
+                publisher.coverFetcher = { _, _, shape in
+                    shapes.append(shape)
+                    return (Data("art".utf8), shape == .square)
+                }
+                let book = Self.edition("both", at: 900, ebook: true, audiobook: true)
+                publisher.publish(
+                    book: book, session: Self.stubSession(), progress: 0.4, chapter: nil,
+                    remaining: nil, isPlaying: true, as: .listening("both"))
+                let deadline = ContinuousClock.now + .seconds(5)
+                while shapes.isEmpty, ContinuousClock.now < deadline {
+                    try await Task.sleep(for: .milliseconds(20))
+                }
+                #expect(shapes == [.square])
+            }
+        }
+
+        @Test("selection seeds portrait for a book with text, and square for audio alone")
+        func selectionSeeds() {
+            let books = [
+                Self.edition("both", at: 800, ebook: true, audiobook: true),
+                Self.edition("audio", at: 700, ebook: false, audiobook: true),
+                Self.edition("text", at: 600, ebook: true, audiobook: false),
+            ]
+            let picked = OtherBook.selection(from: books, excluding: nil)
+            #expect(picked.map(\.bookID) == ["both", "audio", "text"])
+            #expect(picked.map(\.coverIsSquare) == [false, true, false])
+        }
     }
 }
