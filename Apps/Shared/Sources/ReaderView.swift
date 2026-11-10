@@ -639,6 +639,7 @@ public struct ReaderView: View {
                     }
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(model.style.theme.text)
+                    .allowsHitTesting(chromeTakesTouches)
                 }
                 // The whole window, so the rail stands in the unsafe band
                 // itself rather than against the safe area's edge.
@@ -914,6 +915,7 @@ public struct ReaderView: View {
             // of the rail, below the sensor bar, where there is one.
             .padding(.top, railTop.map { $0 + Metrics.spacing8 } ?? deviceInsets.top + Metrics.spacing8)
             .padding(.trailing, Metrics.spacing16)
+            .allowsHitTesting(chromeTakesTouches)
             .transition(.opacity)
             .animation(.easeInOut(duration: 0.2), value: model.chromeVisible)
         }
@@ -1094,11 +1096,28 @@ public struct ReaderView: View {
         .opacity(model.chromeVisible ? 1 : 0)
         // Untappable when invisible, so a tap in the top strip turns the page
         // like anywhere else rather than hitting a control that is not there.
-        .allowsHitTesting(model.chromeVisible)
+        .allowsHitTesting(model.chromeVisible && chromeTakesTouches)
         .animation(.easeInOut(duration: 0.2), value: model.chromeVisible)
     }
 
     #endif
+
+    /// Whether the reader's own chrome — the top bar, the rail, the Ask badge
+    /// and the footer — takes touches.
+    ///
+    /// Not while the Aa sheet is up on a phone: it lets touches through to the
+    /// page behind it (`presentationBackgroundInteraction`), and the bar above
+    /// it would let them reach Contents, Find, Marks or Ask too. Each sets the
+    /// flag for a sheet of its own on this same view, SwiftUI presents one
+    /// sheet at a time, so the second waited and came up unbidden when the
+    /// Aa sheet closed. The page behind stays live; only the chrome is not.
+    private var chromeTakesTouches: Bool {
+        #if os(iOS)
+        !showsTypography
+        #else
+        true
+        #endif
+    }
 
     #if !os(tvOS)
     /// The first-run gesture guide, shown once the page is actually readable —
@@ -1356,6 +1375,7 @@ public struct ReaderView: View {
                 #endif
 
             footer
+                .allowsHitTesting(chromeTakesTouches)
         }
         // A chapter that would not open, said over the page it left in place.
         // Below the top bar's reserve, which the bar may be drawn over.

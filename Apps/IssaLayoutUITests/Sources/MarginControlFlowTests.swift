@@ -181,4 +181,33 @@ final class MarginControlFlowTests: XCTestCase {
         closeSheet(app)
         XCTAssertEqual(textFrame(app, minX: 48).minX, 48, accuracy: 1.5)
     }
+
+    /// The Aa sheet leaves the page behind it live, and the top bar with it
+    /// used to be: a tap on Contents, Find or Marks set the flag for a sheet
+    /// of its own, SwiftUI could only present one, and that one came up
+    /// unbidden when the Aa sheet closed.
+    func testTopBarTakesNoTouchesBehindTheHalfHeightSheet() throws {
+        let app = launch()
+        openReader(app)
+        openTypographySheet(app)
+        var tapped = 0
+        for id in ["reader.contents", "reader.find", "reader.marks", "reader.ask"] {
+            let button = app.descendants(matching: .any)[id].firstMatch
+            guard button.exists else { continue }   // folded into the menu on a narrow bar
+            XCTAssertFalse(button.isHittable, "\(id) is still hittable behind the Aa sheet")
+            // A real touch at the button, which hit-testing must swallow.
+            button.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+            tapped += 1
+        }
+        XCTAssertGreaterThan(tapped, 0, "none of the top bar's buttons were found")
+        closeSheet(app)
+        // Give a queued sheet the moment it would need to come up.
+        Thread.sleep(forTimeInterval: 1.5)
+        XCTAssertFalse(
+            app.buttons["Done"].firstMatch.exists,
+            "a sheet that a tap behind the Aa sheet asked for came up when it closed")
+        // And the bar works again once the sheet is gone.
+        let contents = app.descendants(matching: .any)["reader.contents"].firstMatch
+        if contents.exists { XCTAssertTrue(contents.isHittable) }
+    }
 }
