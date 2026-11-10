@@ -31,14 +31,20 @@ public struct CurrentBookSnapshot: Codable, Sendable, Hashable {
     /// away a third of a square jacket on the medium family and more than half
     /// on the large one.
     public var coverIsSquare: Bool
+    /// Other books in progress, most recently opened first, for the families
+    /// with room to show them (medium draws the first, large up to four).
+    /// Absent in a file 1.6.x wrote, which decodes to none.
+    public var others: [OtherBook]
     public var updatedAt: Date
 
     public init(
         bookID: String, title: String, author: String, chapter: String? = nil,
         progress: Double, remaining: TimeInterval? = nil, isPlaying: Bool = false,
         coverBookID: String? = nil, coverIsSquare: Bool = false,
+        others: [OtherBook] = [],
         updatedAt: Date = .now,
     ) {
+        self.others = others
         self.coverBookID = coverBookID
         self.bookID = bookID
         self.title = title
@@ -88,7 +94,7 @@ public struct CurrentBookSnapshot: Codable, Sendable, Hashable {
     // Spelled out because the decoder below names them.
     enum CodingKeys: String, CodingKey {
         case bookID, title, author, chapter, progress, remaining, isPlaying
-        case coverBookID, coverIsSquare, updatedAt
+        case coverBookID, coverIsSquare, others, updatedAt
     }
 
     /// Decoded field by field, so a snapshot written by an older build still
@@ -107,7 +113,84 @@ public struct CurrentBookSnapshot: Codable, Sendable, Hashable {
         isPlaying = try container.decodeIfPresent(Bool.self, forKey: .isPlaying) ?? false
         coverBookID = try container.decodeIfPresent(String.self, forKey: .coverBookID)
         coverIsSquare = try container.decodeIfPresent(Bool.self, forKey: .coverIsSquare) ?? false
+        // A file the previous version left has no list; a list with one
+        // unreadable entry is no list, rather than no book.
+        others = (try? container.decodeIfPresent([OtherBook].self, forKey: .others)) ?? []
         updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? .now
+    }
+}
+
+/// A book in progress other than the current one, as the widget draws it:
+/// medium's "Also reading" card and large's "Also in progress" row.
+///
+/// Its cover is not here. Each lives in its own file in the App Group named by
+/// `bookID` (`CurrentBookSnapshotStore.otherCoverURL`), so the file's name is
+/// its identity and a cover can never be drawn under another book's title —
+/// the race the single shared cover needs `coverBookID` to guard against.
+public struct OtherBook: Codable, Sendable, Hashable {
+    public var bookID: String
+    public var title: String
+    public var author: String?
+    /// 0...1 through the whole book.
+    public var progress: Double
+    public var coverIsSquare: Bool
+
+    /// The most the snapshot carries: large's row.
+    public static let limit = 4
+
+    public init(
+        bookID: String, title: String, author: String? = nil, progress: Double,
+        coverIsSquare: Bool = false,
+    ) {
+        self.bookID = bookID
+        self.title = title
+        self.author = author
+        self.progress = progress
+        self.coverIsSquare = coverIsSquare
+    }
+
+    /// Rounded the way the current book's is.
+    public var percent: Int { ReadingProgress.percent(progress) }
+
+    /// The books worth listing beside `currentID`: started, still on the
+    /// Reading shelf (a finished book, or one a status moved to To read, is
+    /// not "in progress"), never the reader's own files (the widget is
+    /// outside the app, and PRIVACY.md says those go nowhere), most recently
+    /// positioned first, at most `limit`.
+    ///
+    /// `existing` lends a book its known cover shape: the cover's real shape
+    /// is learnt when it is fetched, and a rebuilt list must not forget it.
+    public static func selection(
+        from books: [Book], excluding currentID: String?, existing: [OtherBook] = [],
+        limit: Int = OtherBook.limit,
+    ) -> [OtherBook] {
+        let known = Dictionary(existing.map { ($0.bookID, $0.coverIsSquare) }, uniquingKeysWith: { first, _ in first })
+        return LibraryDerivation(books: books).continueReading
+            .filter {
+                !$0.isLocal && $0.uuid != currentID
+                    && LibraryArrangement.stage(of: $0) == .reading
+            }
+            .prefix(limit)
+            .map {
+                OtherBook(
+                    bookID: $0.uuid, title: $0.title, author: $0.byline.isEmpty ? nil : $0.byline,
+                    progress: $0.position?.locator.totalProgression ?? 0,
+                    // The audiobook art is square, and is what is asked for first.
+                    coverIsSquare: known[$0.uuid] ?? $0.servableFormats.contains(.audiobook))
+            }
+    }
+
+    /// Whether `next` is worth a snapshot write and a widget reload over
+    /// `old`: a different list (ids, in order, or a title) or any progress
+    /// that moved by `threshold` (a fifth of a percent — under a page of a
+    /// novel), mirroring the current book's rule.
+    public static func worthWriting(
+        old: [OtherBook], next: [OtherBook], threshold: Double = 0.002,
+    ) -> Bool {
+        guard old.map(\.bookID) == next.map(\.bookID) else { return true }
+        return zip(old, next).contains {
+            $0.title != $1.title || abs($0.progress - $1.progress) >= threshold
+        }
     }
 }
 
@@ -120,8 +203,13 @@ public enum CurrentBookSnapshotStore {
     private static let filename = "current-book.json"
     private static let coverFilename = "current-cover.jpg"
 
+    /// A directory standing in for the App Group, for tests: `swift test` has
+    /// no entitlement, so the real container does not exist there.
+    nonisolated(unsafe) static var directoryOverride: URL?
+
     private static func containerURL(_ name: String) -> URL? {
-        FileManager.default
+        if let directoryOverride { return directoryOverride.appending(path: name) }
+        return FileManager.default
             .containerURL(forSecurityApplicationGroupIdentifier: appGroup)?
             .appending(path: name)
     }
@@ -161,9 +249,56 @@ public enum CurrentBookSnapshotStore {
         return try? JSONDecoder().decode(CurrentBookSnapshot.self, from: data)
     }
 
+    // MARK: Covers of the other books
+
+    private static let otherCoverPrefix = "widget-cover-"
+
+    /// Where one other book's cover lives. The book id is the file's name, so
+    /// the file *is* its identity: whatever is there belongs to that book.
+    public static func otherCoverURL(bookID: String) -> URL? {
+        // A book id is a uuid, but this names a file: nothing that could
+        // climb out of the container is let through.
+        guard !bookID.isEmpty, !bookID.contains("/"), !bookID.contains("..") else { return nil }
+        return containerURL("\(otherCoverPrefix)\(bookID).jpg")
+    }
+
+    public static func hasOtherCover(bookID: String) -> Bool {
+        guard let url = otherCoverURL(bookID: bookID) else { return false }
+        return FileManager.default.fileExists(atPath: url.path)
+    }
+
+    public static func writeOtherCover(_ data: Data, bookID: String) {
+        guard let url = otherCoverURL(bookID: bookID) else { return }
+        try? data.write(to: url, options: .atomic)
+    }
+
+    /// Off the main thread, as `writeCoverOffMain`.
+    public static func writeOtherCoverOffMain(_ data: Data, bookID: String) async {
+        await Task.detached(priority: .utility) { writeOtherCover(data, bookID: bookID) }.value
+    }
+
+    public static func readOtherCover(bookID: String) -> Data? {
+        guard let url = otherCoverURL(bookID: bookID) else { return nil }
+        return try? Data(contentsOf: url)
+    }
+
+    /// Removes every other book's cover whose id is not in `keeping`, so a book
+    /// that left the list does not leave its file in the container for good.
+    public static func pruneOtherCovers(keeping: Set<String>) {
+        guard let directory = containerURL("") else { return }
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+        for name in names where name.hasPrefix(otherCoverPrefix) && name.hasSuffix(".jpg") {
+            let id = String(name.dropFirst(otherCoverPrefix.count).dropLast(".jpg".count))
+            if !keeping.contains(id) {
+                try? FileManager.default.removeItem(at: directory.appending(path: name))
+            }
+        }
+    }
+
     public static func clear() {
         if let url { try? FileManager.default.removeItem(at: url) }
         if let coverURL { try? FileManager.default.removeItem(at: coverURL) }
+        pruneOtherCovers(keeping: [])
     }
 
     /// The URL that opens a book from a widget, a Spotlight result or Handoff.
