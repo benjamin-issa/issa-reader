@@ -22,6 +22,8 @@ import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.dp
@@ -373,6 +375,22 @@ class ReaderScreenshotTest {
     fun typographySheet() {
         show(alice(), sheet = ReaderSheetKind.TYPOGRAPHY)
         screen("reader-aa-sheet")
+    }
+
+    /** The Aa sheet at half height over the page, with the margins drawn as bands after a preset. */
+    @Test
+    fun marginBands() {
+        show(alice(), sheet = ReaderSheetKind.TYPOGRAPHY) { model -> model.go(2) }
+        compose.onNodeWithTag("typography.margins.wide").performClick()
+        screen("reader-margin-bands")
+    }
+
+    /** The same on an E Ink page: a hatch and a solid edge, nothing translucent. */
+    @Test
+    fun einkMarginBands() {
+        show(alice(), sheet = ReaderSheetKind.TYPOGRAPHY, eink = EInkNarrationMark.UNDERLINE) { model -> model.go(2) }
+        compose.onNodeWithTag("typography.margins.wide").performClick()
+        screen("reader-eink-margin-bands")
     }
 
     @Test
