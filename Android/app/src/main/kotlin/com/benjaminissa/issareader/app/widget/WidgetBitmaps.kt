@@ -49,12 +49,19 @@ internal class WidgetBitmaps(context: Context) {
     /** Bytes the memoised bitmaps hold: the figure a test checks against the remote-views cap. */
     val totalBytes: Long get() = memo.values.filterNotNull().distinct().sumOf { it.allocationByteCount.toLong() }
 
+    /**
+     * What a cover's bytes are, for a memo key: the same instance is reused across live-session
+     * recompositions, so a key of layout and size alone drew the previous book's jacket beside the
+     * new title. Size plus a content hash; a cover is some tens of kilobytes.
+     */
+    private fun source(bytes: ByteArray): String = "${bytes.size}-${bytes.contentHashCode()}"
+
     private fun memoised(key: String, make: () -> Bitmap?): Bitmap? = memo.getOrPut(key, make)
 
     /** A cover decoded to cover a [widthDp] x [heightDp] box, never larger than that needs. */
     fun cover(key: String, bytes: ByteArray?, widthDp: Float, heightDp: Float): Bitmap? {
         bytes ?: return null
-        return memoised("$key@${widthDp}x$heightDp") { decodeCovering(bytes, px(widthDp), px(heightDp)) }
+        return memoised("$key#${source(bytes)}@${widthDp}x$heightDp") { decodeCovering(bytes, px(widthDp), px(heightDp)) }
     }
 
     /** The small widget's cover in the chosen [style]; a square cover is always aspect-filled. */
@@ -62,7 +69,7 @@ internal class WidgetBitmaps(context: Context) {
         bytes ?: return null
         val side = px(sideDp)
         if (square || style == SmallCoverStyle.FILL) return cover("main", bytes, sideDp, sideDp)
-        return memoised("main-blur@$side") { decodeCovering(bytes, side, side)?.let { fitOverBlur(it, side) } }
+        return memoised("main-blur#${source(bytes)}@$side") { decodeCovering(bytes, side, side)?.let { fitOverBlur(it, side) } }
     }
 
     /** A strip one pixel-ish wide: stretched across the widget, whatever its width. */

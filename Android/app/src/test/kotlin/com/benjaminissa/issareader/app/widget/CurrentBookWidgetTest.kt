@@ -269,4 +269,28 @@ class CurrentBookWidgetTest {
         println("widget bitmaps: ${bitmaps.totalBytes} bytes of a $cap cap")
         assertTrue("${bitmaps.totalBytes} bytes", bitmaps.totalBytes < cap / 3)
     }
+
+    private fun solidPng(colour: Int): ByteArray {
+        val bitmap = Bitmap.createBitmap(200, 300, Bitmap.Config.ARGB_8888).also { it.eraseColor(colour) }
+        return ByteArrayOutputStream().also { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }.toByteArray()
+    }
+
+    /** One instance lives across a session's recompositions, so a changed book must not draw the old jacket. */
+    @Test
+    fun aChangedCoverIsNotServedFromTheMemo() {
+        val bitmaps = WidgetBitmaps(context)
+        val red = solidPng(Color.RED)
+        val blue = solidPng(Color.BLUE)
+
+        val first = bitmaps.cover("main-large", red, 100f, 150f)!!
+        val second = bitmaps.cover("main-large", blue, 100f, 150f)!!
+        assertNotEquals(first.getPixel(first.width / 2, first.height / 2), second.getPixel(second.width / 2, second.height / 2))
+        // The same bytes are still one bitmap.
+        assertTrue(bitmaps.cover("main-large", red, 100f, 150f) === first)
+
+        val firstBlur = bitmaps.smallCover(red, false, SmallCoverStyle.FIT_OVER_BLUR, 80f)!!
+        val secondBlur = bitmaps.smallCover(blue, false, SmallCoverStyle.FIT_OVER_BLUR, 80f)!!
+        assertTrue(firstBlur !== secondBlur)
+        assertNotEquals(firstBlur.getPixel(firstBlur.width / 2, firstBlur.height / 2), secondBlur.getPixel(secondBlur.width / 2, secondBlur.height / 2))
+    }
 }
