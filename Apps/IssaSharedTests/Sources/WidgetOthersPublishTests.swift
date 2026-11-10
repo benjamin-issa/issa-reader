@@ -159,4 +159,64 @@ struct WidgetOthersPublishTests {
             #expect(CurrentBookSnapshotStore.read()?.others.map(\.bookID) == ["b", "c"])
         }
     }
+
+    // MARK: - Covers, when the list changes mid-fetch
+
+    private static func stubSession() -> Session {
+        Session(
+            serverURL: URL(string: "https://covers.example")!,
+            keychain: LocalTestTokens(), session: URLSession(configuration: .ephemeral))
+    }
+
+    private func settle(_ publisher: CurrentBookPublisher) async throws {
+        let deadline = ContinuousClock.now + .seconds(10)
+        while publisher.otherFetchesInFlight > 0, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        try #require(publisher.otherFetchesInFlight == 0, "the cover fetches never finished")
+    }
+
+    @Test("a list that changes while covers are being fetched still gets every cover")
+    func listChangeDoesNotStrandCovers() async throws {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appending(path: "issa-widget-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        CurrentBookSnapshotStore.directoryOverride = directory
+        defer {
+            CurrentBookSnapshotStore.directoryOverride = nil
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let publisher = CurrentBookPublisher()
+        publisher.coverFetcher = { book, _, _ in
+            try? await Task.sleep(for: .milliseconds(150))
+            return (Data(book.uuid.utf8), false)
+        }
+        seed(publisher)
+        let session = Self.stubSession()
+
+        let first = [
+            Self.reading("current", 0.5, at: 900), Self.reading("a", 0.4, at: 800),
+            Self.reading("b", 0.3, at: 700), Self.reading("c", 0.2, at: 600),
+            Self.reading("d", 0.1, at: 500),
+        ]
+        #expect(publisher.updateLibrary(first, session: session))
+        #expect(CurrentBookSnapshotStore.read()?.others.map(\.bookID) == ["a", "b", "c", "d"])
+
+        // Straight away, while the first pass is on "a": "a" is finished and
+        // "x" has been started, so "x" leads the list and b, c, d stay.
+        let second = [
+            Self.reading("current", 0.5, at: 900),
+            SharedFixtures.book("a", uuid: "a", status: "Read", progress: 1, positionTimestamp: 810),
+            Self.reading("x", 0.4, at: 850), Self.reading("b", 0.3, at: 700),
+            Self.reading("c", 0.2, at: 600), Self.reading("d", 0.1, at: 500),
+        ]
+        #expect(publisher.updateLibrary(second, session: session))
+        #expect(CurrentBookSnapshotStore.read()?.others.map(\.bookID) == ["x", "b", "c", "d"])
+
+        try await settle(publisher)
+        for id in ["x", "b", "c", "d"] {
+            #expect(CurrentBookSnapshotStore.hasOtherCover(bookID: id), "no cover for \(id)")
+        }
+        #expect(!CurrentBookSnapshotStore.hasOtherCover(bookID: "a"))
+    }
 }

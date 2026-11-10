@@ -58,8 +58,18 @@ final class CurrentBookPublisher {
     private var library: [Book] = []
     /// The session the other books' covers are fetched through.
     private var librarySession: Session?
-    /// Rejects an other-cover fetch that a sign-out or a newer list overtook.
+    /// Rejects an other-cover fetch that a sign-out overtook. Bumped only by
+    /// `clear()`: a newer list does not cancel a fetch in flight, because the
+    /// books that fetch was working through are stamped as attempted and
+    /// nothing else would fetch them for `coverRetry`. Each task checks the
+    /// snapshot for itself whether a book it fetched is still listed.
     private var othersGeneration = 0
+    /// Other-cover fetches running, for the tests that wait for them.
+    private(set) var otherFetchesInFlight = 0
+    /// How a cover is fetched. The cache in the app; a stub in the tests.
+    var coverFetcher: (Book, Session, LibraryService.CoverShape) async -> (data: Data, isSquare: Bool)? = {
+        await CoverCache.shared.widgetCover(for: $0, session: $1, preferring: $2)
+    }
     /// When each other book's cover was last asked for, for the reason
     /// `coverAttempt` exists: a cover that cannot be fetched leaves nothing on
     /// disk to say so.
@@ -287,14 +297,15 @@ final class CurrentBookPublisher {
         }
         guard !wanted.isEmpty else { return }
         for book in wanted { otherCoverAttempts[book.uuid] = now }
-        othersGeneration += 1
         let generation = othersGeneration
+        otherFetchesInFlight += 1
+        let fetch = coverFetcher
         Task { [weak self] in
+            defer { self?.otherFetchesInFlight -= 1 }
             var landed = false
             for book in wanted {
                 let square = Self.prefersSquareCover(book)
-                let fetched = await CoverCache.shared.widgetCover(
-                    for: book, session: session, preferring: square ? .square : .portrait)
+                let fetched = await fetch(book, session, square ? .square : .portrait)
                 guard let self, generation == self.othersGeneration else { return }
                 guard let fetched else { continue }
                 await CurrentBookSnapshotStore.writeOtherCoverOffMain(fetched.data, bookID: book.uuid)
