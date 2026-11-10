@@ -40,6 +40,11 @@ extension WidgetStorage {
             Slot(family: .systemMedium, label: "medium-338", size: CGSize(width: 338, height: 158)),
             Slot(family: .systemMedium, label: "medium-364", size: CGSize(width: 364, height: 170)),
         ]
+        /// The shortest medium widgets: an SE's and a 12/13 mini's.
+        static let mediumSmallPhones = [
+            Slot(family: .systemMedium, label: "medium-321x148-se", size: CGSize(width: 321, height: 148)),
+            Slot(family: .systemMedium, label: "medium-329x155-mini", size: CGSize(width: 329, height: 155)),
+        ]
         static let large = [
             Slot(family: .systemLarge, label: "large-338", size: CGSize(width: 338, height: 354)),
             Slot(family: .systemLarge, label: "large-364", size: CGSize(width: 364, height: 382)),
@@ -144,9 +149,13 @@ extension WidgetStorage {
             }
         }
 
+        /// An "Also reading" title too long for one line of the medium card.
+        static let longOtherTitle = "The Remains of the Day and Other Evening Stories"
+
         static func entry(
             title: String = longTitle, square: Bool = false, others count: Int = 4,
             cover: Data?? = nil, remaining: TimeInterval? = 6 * 3600 + 12 * 60,
+            alsoTitle: String? = nil,
         ) -> CurrentBookEntry {
             let art: Data? = switch cover {
             case .none: square ? covers.square[0].data : covers.portrait[0].data
@@ -158,7 +167,11 @@ extension WidgetStorage {
                     bookID: "current", title: title, author: "Robert Louis Stevenson",
                     chapter: "Chapter 3 · A Caucus-Race and a Long Tale", progress: 0.42,
                     remaining: remaining, coverBookID: "current", coverIsSquare: square),
-                cover: art, others: others(count))
+                cover: art, others: others(count).enumerated().map { index, other in
+                    guard index == 0, let alsoTitle else { return other }
+                    return Self.other(
+                        other.book.bookID, alsoTitle, other.book.progress, cover: other.cover)
+                })
         }
 
         static var emptyEntry: CurrentBookEntry {
@@ -283,6 +296,74 @@ extension WidgetStorage {
                     }
                 }
             }
+        }
+
+        @Test("medium: a long \"Also reading\" title, at every size, beside a long and a short title")
+        func mediumLongOtherTitle() {
+            for slot in Self.medium + Self.mediumSmallPhones {
+                for (scheme, colour) in Self.schemes {
+                    for (name, entry) in [
+                        ("long-longother", Self.entry(others: 1, alsoTitle: Self.longOtherTitle)),
+                        ("short-longother", Self.entry(title: "Piranesi", others: 1, alsoTitle: Self.longOtherTitle)),
+                        ("long-shortother", Self.entry(others: 1)),
+                        ("square-longother", Self.entry(square: true, others: 1, alsoTitle: Self.longOtherTitle)),
+                    ] {
+                        let image = Self.render(CurrentBookView(entry: entry), slot: slot, scheme: colour)
+                        Self.check(image, slot: slot, name: "\(slot.label)-\(scheme)-\(name)")
+                    }
+                }
+            }
+        }
+
+        /// The second line for the other book's title is given only out of
+        /// room the column had to spare. Rendered both ways, with the card held
+        /// to one line and left to take two, the top of the column — the
+        /// current book's title, its lines and its size — must be the same
+        /// picture, at every size, however long either title is.
+        @Test("medium: the card's second line never costs the current title anything")
+        func mediumCardLeavesTheTitleAlone() throws {
+            for slot in Self.medium + Self.mediumSmallPhones {
+                for (name, entry) in [
+                    ("long-longother", Self.entry(others: 1, alsoTitle: Self.longOtherTitle)),
+                    ("short-longother", Self.entry(title: "Piranesi", others: 1, alsoTitle: Self.longOtherTitle)),
+                    ("square-longother", Self.entry(square: true, others: 1, alsoTitle: Self.longOtherTitle)),
+                ] {
+                    let oneLine = try #require(Self.render(
+                        MediumWidgetView(entry: entry, cardTitle: .oneLine), slot: slot, scheme: .light).cgImage)
+                    let adaptive = try #require(Self.render(
+                        MediumWidgetView(entry: entry), slot: slot, scheme: .light).cgImage)
+                    // The padding and two lines of the 17-point title.
+                    let rows = Int(60 * 3)
+                    #expect(
+                        Self.pixels(oneLine, rows: rows) == Self.pixels(adaptive, rows: rows),
+                        "\(slot.label) \(name): the current book's title changed")
+                }
+            }
+        }
+
+        /// Where there is room, the long other title does get its second line.
+        @Test("medium: the long other title takes a second line where the widget has the room")
+        func mediumCardTakesASecondLine() throws {
+            let slot = Self.medium[1]
+            let entry = Self.entry(others: 1, alsoTitle: Self.longOtherTitle)
+            let oneLine = try #require(Self.render(
+                MediumWidgetView(entry: entry, cardTitle: .oneLine), slot: slot, scheme: .light).cgImage)
+            let adaptive = try #require(Self.render(MediumWidgetView(entry: entry), slot: slot, scheme: .light).cgImage)
+            #expect(Self.pixels(oneLine, rows: oneLine.height) != Self.pixels(adaptive, rows: adaptive.height))
+        }
+
+        /// The top `rows` of a picture, as raw RGBA.
+        static func pixels(_ cg: CGImage, rows: Int) -> [UInt8] {
+            let width = cg.width, height = min(rows, cg.height)
+            var pixels = [UInt8](repeating: 0, count: width * height * 4)
+            guard let context = CGContext(
+                data: &pixels, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+            else { return [] }
+            // CoreGraphics' origin is the bottom left: draw the image so its
+            // top `height` rows land in the buffer.
+            context.draw(cg, in: CGRect(x: 0, y: height - cg.height, width: width, height: cg.height))
+            return pixels
         }
 
         @Test("large: long title, square, none/one/four others, no cover, empty")

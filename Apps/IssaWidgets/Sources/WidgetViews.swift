@@ -344,6 +344,12 @@ struct SmallWidgetView: View {
 
 struct MediumWidgetView: View {
     let entry: CurrentBookEntry
+    /// How many lines the "Also reading" title may take. Up to two where the
+    /// widget is tall enough to give them without taking anything from the
+    /// current book's title; the tests pin it to one to compare against.
+    var cardTitle: CardTitle = .upToTwoLines
+
+    enum CardTitle { case upToTwoLines, oneLine }
 
     private var snapshot: CurrentBookSnapshot { entry.snapshot }
 
@@ -366,7 +372,32 @@ struct MediumWidgetView: View {
         .accessibilityElement(children: .contain)
     }
 
+    /// The column beside the cover.
+    ///
+    /// A long "Also reading" title was cut to one line. Where the widget has
+    /// the height, the card takes a second line and the progress row rises to
+    /// make room — but only there. Both versions give the current book's title
+    /// the same lines at the same size, and `ViewThatFits` takes the two-line
+    /// card only if the whole column then fits at its ideal height; where it
+    /// would not (an SE's 148 points), the card stays as it was rather than
+    /// squeeze the title above it.
+    @ViewBuilder
     private func column(card: OtherEntry?, square: Bool) -> some View {
+        Group {
+            if let card, cardTitle == .upToTwoLines {
+                ViewThatFits(in: .vertical) {
+                    stack(card: card, square: square, cardLines: 2)
+                    stack(card: card, square: square, cardLines: 1)
+                }
+            } else {
+                stack(card: card, square: square, cardLines: 1)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func stack(card: OtherEntry?, square: Bool, cardLines: Int) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             // Two lines, or three beside a square jacket, whose column is
             // narrower.
@@ -399,12 +430,10 @@ struct MediumWidgetView: View {
             Spacer(minLength: 4)
             progressRow
             if let card {
-                BookLink(url: card.url) { AlsoReadingCard(other: card) }
-                    .padding(.top, 6)
+                BookLink(url: card.url) { AlsoReadingCard(other: card, titleLines: cardLines) }
+                    .padding(.top, cardLines > 1 ? 4 : 6)
             }
         }
-        .padding(14)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private var progressRow: some View {
@@ -423,8 +452,25 @@ struct MediumWidgetView: View {
 /// is the tap target — the caller wraps it in a `BookLink`.
 struct AlsoReadingCard: View {
     let other: OtherEntry
+    /// One line, or two where the medium widget has the room (see its column).
+    var titleLines = 1
 
     var body: some View {
+        Group {
+            if titleLines > 1 {
+                // At least the cover's height; taller only by a second line.
+                row.padding(.vertical, 3).frame(minHeight: 36)
+            } else {
+                row.frame(height: 36)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .background(Palette.surfaceRaised, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Also reading, \(other.book.title), \(other.book.percent) percent")
+    }
+
+    private var row: some View {
         HStack(spacing: 8) {
             CoverArt(data: other.cover, size: CGSize(width: 24, height: 36), fit: .fitOverBlur, glyphSize: 10)
                 .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
@@ -438,8 +484,12 @@ struct AlsoReadingCard: View {
                 Text(other.book.title)
                     .font(Typography.serif(13, weight: .semibold))
                     .foregroundStyle(Palette.ink)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
+                    .lineLimit(titleLines)
+                    // One line may shrink to fit; two wrap at full size.
+                    .minimumScaleFactor(titleLines > 1 ? 1 : 0.8)
+                    // The card is a `Link`'s label, and a label centres the
+                    // lines of a wrapped title under each other.
+                    .multilineTextAlignment(.leading)
             }
             Spacer(minLength: 4)
             Text("\(other.book.percent)%")
@@ -447,11 +497,6 @@ struct AlsoReadingCard: View {
                 .foregroundStyle(Palette.inkSecondary)
         }
         .padding(.horizontal, 6)
-        .frame(height: 36)
-        .frame(maxWidth: .infinity)
-        .background(Palette.surfaceRaised, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Also reading, \(other.book.title), \(other.book.percent) percent")
     }
 }
 
