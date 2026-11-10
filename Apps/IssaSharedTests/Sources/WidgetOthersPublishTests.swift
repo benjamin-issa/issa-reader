@@ -160,6 +160,26 @@ struct WidgetOthersPublishTests {
         }
     }
 
+    @Test("a new current book before any library keeps the stored others, less itself")
+    func currentBookChangesBeforeTheLibraryIsKnown() throws {
+        try inDirectory {
+            let publisher = CurrentBookPublisher()
+            CurrentBookSnapshotStore.write(CurrentBookSnapshot(
+                bookID: "current", title: "current", author: "", progress: 0.5,
+                others: [
+                    OtherBook(bookID: "b", title: "b", progress: 0.3),
+                    OtherBook(bookID: "c", title: "c", progress: 0.2),
+                ]))
+            // No `updateLibrary` yet: the catalogue is not known.
+            publisher.publish(
+                book: Self.reading("b", 0.31, at: 800), session: nil, progress: 0.31, chapter: nil,
+                remaining: nil, isPlaying: false, as: .reading("b"))
+            let snapshot = CurrentBookSnapshotStore.read()
+            #expect(snapshot?.bookID == "b")
+            #expect(snapshot?.others.map(\.bookID) == ["c"])
+        }
+    }
+
     // MARK: - Covers, when the list changes mid-fetch
 
     private static func stubSession() -> Session {

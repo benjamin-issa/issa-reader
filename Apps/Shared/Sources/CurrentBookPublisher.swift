@@ -150,7 +150,15 @@ final class CurrentBookPublisher {
             // A new current book changes who is "also" reading: the book it
             // replaced joins the list, the book it is leaves it.
             if existing?.bookID != book.uuid {
-                others = OtherBook.selection(from: library, excluding: book.uuid, existing: others)
+                if library.isEmpty {
+                    // The catalogue is not known yet (before the first
+                    // `updateLibrary`, or after `clear()`): recomputing from
+                    // nothing would wipe the widget's "Also reading" list.
+                    // Keep what is stored, less the book now current.
+                    others = others.filter { $0.bookID != book.uuid }
+                } else {
+                    others = OtherBook.selection(from: library, excluding: book.uuid, existing: others)
+                }
             }
             CurrentBookSnapshotStore.write(CurrentBookSnapshot(
                 bookID: book.uuid,
