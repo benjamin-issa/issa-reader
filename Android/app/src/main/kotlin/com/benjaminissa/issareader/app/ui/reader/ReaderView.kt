@@ -635,7 +635,10 @@ private fun PageContent(
                 // The margins, drawn while the Aa sheet's control is moving them.
                 MarginBandsOverlay(marginPreview, margin, reduceMotion, Modifier.matchParentSize())
                 if (model.selection != null) {
-                    SelectionMenu(model, Modifier.align(Alignment.BottomCenter).padding(bottom = Metrics.spacing24))
+                    // With the page filling the screen the footer is drawn over its bottom: lift the
+                    // menu clear of it, or the footer takes the menu's taps.
+                    val clearOfFooter = if (fillsScreen && model.chromeVisible) readerBarHeight + footerLift else 0.dp
+                    SelectionMenu(model, Modifier.align(Alignment.BottomCenter).padding(bottom = Metrics.spacing24 + clearOfFooter).testTag("reader.selectionMenu"))
                 }
             }
             if (!fillsScreen) Footer(model, environment, onSheet = onSheet, onOpenPlayer = onOpenPlayer)
@@ -649,7 +652,8 @@ private fun PageContent(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(bottom = footerLift)
-                    .background(model.style.theme.ground(0.94).color),
+                    .background(model.style.theme.ground(0.94).color)
+                    .testTag("reader.footer"),
             )
         }
         // A chapter that would not open, said over the page it left in place,

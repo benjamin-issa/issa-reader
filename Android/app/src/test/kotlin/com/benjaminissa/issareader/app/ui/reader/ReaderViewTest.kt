@@ -444,6 +444,28 @@ class ReaderViewTest {
         compose.waitUntil(5_000) { model.chromeVisible }
     }
 
+    /**
+     * With the page filling the screen the footer is drawn over its bottom,
+     * where the selection menu used to sit: the menu is lifted clear, and a
+     * tap on its button reaches it rather than the footer.
+     */
+    @Test
+    fun `with the page filling the screen the selection menu clears the footer and takes its taps`() {
+        val model = show(Fixtures.playback("readalong.epub"), narrated = true, fillsScreen = true)
+        assertTrue(model.chromeVisible)
+        compose.onRoot().performTouchInput { longClick(page(150f, 150f), durationMillis = 600) }
+        compose.waitForIdle()
+        assertNotNull("held over text, something is selected", model.selection)
+
+        val menu = compose.onNodeWithTag("reader.selectionMenu").fetchSemanticsNode().boundsInRoot
+        val footer = compose.onNodeWithTag("reader.footer").fetchSemanticsNode().boundsInRoot
+        assertTrue("the menu $menu is above the footer $footer", menu.bottom <= footer.top)
+
+        compose.onNodeWithContentDescription("Done").performClick()
+        compose.waitForIdle()
+        assertNull("the tap reached the menu's button", model.selection)
+    }
+
     private companion object {
         const val INSET_TOP = 40f
         const val INSET_BOTTOM = 24f
