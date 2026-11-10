@@ -39,6 +39,7 @@ enum TVReaderStyle {
         derived.pageMargin = 0
         // The TV has no bars of the reader's own to give the page.
         derived.fillsScreen = false
+        derived.verticalMargin = nil
         // The page is the transport here: there is no scrubber on a remote, so
         // the voice turning the page is the only thing that keeps the reader
         // with the story.

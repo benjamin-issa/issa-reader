@@ -287,6 +287,11 @@ public struct ReaderView: View {
                 drawsOwnTopBar: Self.drawsOwnTopBar,
                 railWidth: layout.railWidth,
                 fillsScreen: model.style.fillsScreen,
+                verticalMargin: model.style.effectiveVerticalMargin,
+                fillEdges: ReaderInsets.fillEdges(
+                    window: geometry.size,
+                    insets: deviceInsets,
+                    railWidth: layout.railWidth),
             )
             // A spread lays the chapter out a page at a time like any other
             // device, each page as tall as the one page would be and as wide
@@ -330,7 +335,9 @@ public struct ReaderView: View {
                     }
                     .padding(Metrics.spacing32)
                 case .ready:
-                    pageContent(size: pageSize, layout: layout, width: geometry.size.width - layout.railWidth)
+                    pageContent(
+                        size: pageSize, layout: layout, chrome: chrome,
+                        width: geometry.size.width - layout.railWidth)
                 }
             }
             // Keyed on the page size rather than the window's, because the
@@ -373,9 +380,11 @@ public struct ReaderView: View {
                 }
             }
             // The page sits inside the device's own unsafe edges, held rather
-            // than observed, so nothing the chrome does can move it.
-            .padding(.top, deviceInsets.top)
-            .padding(.bottom, deviceInsets.bottom)
+            // than observed, so nothing the chrome does can move it. Filling
+            // the screen, the share of them the text must clear is the
+            // chrome's (`hardwareTop`), which is what pagination used.
+            .padding(.top, chrome.hardwareTop)
+            .padding(.bottom, chrome.hardwareBottom)
             // And clear of the rail, which stands in the unsafe band down the
             // side where the system runs its bars (iPhone Duo).
             .padding(.leading, layout.railSide == .leading ? layout.railWidth : 0)
@@ -1162,7 +1171,9 @@ public struct ReaderView: View {
     #endif
 
     @ViewBuilder
-    private func pageContent(size: CGSize, layout: ReaderLayout, width: CGFloat) -> some View {
+    private func pageContent(
+        size: CGSize, layout: ReaderLayout, chrome: ReaderChrome, width: CGFloat,
+    ) -> some View {
         VStack(spacing: 0) {
             // The top bar's reserve, held whether or not the chrome is showing,
             // exactly as the footer holds its own — so toggling can never
@@ -1194,7 +1205,7 @@ public struct ReaderView: View {
                         leftX: spread.leftX - start, rightX: spread.rightX - start, width: width,
                         insets: EdgeInsets(
                             top: pageTopMargin(in: layout), leading: 0,
-                            bottom: model.style.pageMargin, trailing: 0),
+                            bottom: pageBottomMargin, trailing: 0),
                     )
                 } else {
                     // Each page carries its margins with it, so a turning page
@@ -1213,7 +1224,7 @@ public struct ReaderView: View {
                         // toolbar with the space spent at the bottom instead.
                         insets: EdgeInsets(
                             top: pageTopMargin(in: layout), leading: model.style.pageMargin,
-                            bottom: model.style.pageMargin, trailing: model.style.pageMargin),
+                            bottom: pageBottomMargin, trailing: model.style.pageMargin),
                     )
                 }
             }
@@ -1246,12 +1257,13 @@ public struct ReaderView: View {
                 GeometryReader { proxy in
                     let frame = proxy.frame(in: .global)
                     let top = pageTopMargin(in: layout), margin = model.style.pageMargin
+                    let bottom = pageBottomMargin
                     Color.clear.preference(
                         key: TextFrameProbeKey.self,
                         value: layout.spread != nil ? nil : CGRect(
                             x: frame.minX + margin, y: frame.minY + top,
                             width: max(frame.width - 2 * margin, 0),
-                            height: max(frame.height - top - margin, 0)))
+                            height: max(frame.height - top - bottom, 0)))
                 }
             }
             #endif
@@ -1401,7 +1413,7 @@ public struct ReaderView: View {
                         // footer shows, and with the footer's own fade.
                         selectionMenu
                             .padding(.bottom, model.style.fillsScreen && model.chromeVisible
-                                ? ReaderChrome.barHeight : 0)
+                                ? ReaderChrome.barHeight + chrome.safeAreaBottom - chrome.hardwareBottom : 0)
                             .animation(.easeInOut(duration: 0.2), value: model.chromeVisible)
                     }
                 }
@@ -1434,6 +1446,9 @@ public struct ReaderView: View {
                             .allowsHitTesting(false)
                     }
                     #endif
+                    // Where it always stood, above the whole safe area: the
+                    // page may reach below that line, the controls may not.
+                    .padding(.bottom, chrome.safeAreaBottom - chrome.hardwareBottom)
             }
         }
         // A chapter that would not open, said over the page it left in place.
@@ -1710,8 +1725,19 @@ public struct ReaderView: View {
     ///
     /// Also where the reader has given the top bar's band to the text: the bar
     /// then stands over the page, not above it, and the margin is spent.
+    ///
+    /// Filling the screen it is the vertical margin, the same one
+    /// `ReaderChrome.topReserve` spends, so what is drawn and what was
+    /// paginated cannot differ.
     private func pageTopMargin(in layout: ReaderLayout) -> CGFloat {
-        Self.drawsTopBar(in: layout) && !model.style.fillsScreen ? 0 : model.style.pageMargin
+        if model.style.fillsScreen { return model.style.effectiveVerticalMargin }
+        return Self.drawsTopBar(in: layout) ? 0 : model.style.pageMargin
+    }
+
+    /// The margin drawn below the last line, before the footer's band where
+    /// there is one: the vertical margin filling the screen, else the sides'.
+    private var pageBottomMargin: CGFloat {
+        model.style.fillsScreen ? model.style.effectiveVerticalMargin : model.style.pageMargin
     }
 
     /// A point in the padded page's coordinates, in the canvas's own, and

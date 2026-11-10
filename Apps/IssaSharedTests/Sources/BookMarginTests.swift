@@ -1,5 +1,6 @@
 import Foundation
 import IssaRender
+import SwiftUI
 import Testing
 
 @testable import IssaReader_iOS
@@ -194,5 +195,69 @@ struct BookFillScreenTests {
         style.fillsScreen = true
         #expect(!TVReaderStyle.derive(from: style, publisherFamily: nil).fillsScreen)
     }
-}
 
+    // MARK: Top and bottom
+
+    @Test("a book's own top and bottom margin is its own, and the others follow the side margin")
+    func verticalMarginPerBook() {
+        withSuite { suite in
+            let settings = PlaybackSettings(suiteName: suite)
+            var edited = settings.style(for: "book-b")
+            edited.verticalMargin = 0
+            settings.setOverride(settings.readerStyle.difference(to: edited), for: "book-b")
+            #expect(settings.override(for: "book-b") == ReaderStyleOverride(verticalMargin: 0))
+            #expect(settings.style(for: "book-b").effectiveVerticalMargin == 0)
+            #expect(settings.style(for: "book-a").effectiveVerticalMargin == 24)
+            #expect(settings.style(for: "book-a").verticalMargin == nil)
+            #expect(settings.readerStyle.verticalMargin == nil, "the default stays unset")
+        }
+    }
+
+    @Test("a book's top and bottom margin survives a relaunch, as does the default's")
+    func verticalMarginPersists() {
+        withSuite { suite in
+            let first = PlaybackSettings(suiteName: suite)
+            first.setOverride(ReaderStyleOverride(verticalMargin: 8), for: "book-a")
+            first.readerStyle.verticalMargin = 16
+            let second = PlaybackSettings(suiteName: suite)
+            #expect(second.override(for: "book-a") == ReaderStyleOverride(verticalMargin: 8))
+            #expect(second.style(for: "book-a").verticalMargin == 8)
+            #expect(second.style(for: "book-c").verticalMargin == 16)
+        }
+    }
+
+    @Test("using the defaults clears a book's top and bottom margin")
+    func verticalMarginReset() {
+        withSuite { suite in
+            let settings = PlaybackSettings(suiteName: suite)
+            settings.setOverride(ReaderStyleOverride(verticalMargin: 8), for: "book-a")
+            settings.setOverride(nil, for: "book-a")
+            #expect(settings.override(for: "book-a") == nil)
+            #expect(settings.style(for: "book-a").verticalMargin == nil)
+        }
+    }
+
+    @Test("the Apple TV never uses it")
+    func tvIgnoresVerticalMargin() {
+        var style = ReaderStyle()
+        style.fillsScreen = true
+        style.verticalMargin = 40
+        let derived = TVReaderStyle.derive(from: style, publisherFamily: nil)
+        #expect(derived.verticalMargin == nil)
+        #expect(derived.effectiveVerticalMargin == derived.pageMargin)
+    }
+
+    @Test("edges are built only for an upright phone with a housing, an indicator and no rail")
+    func fillEdgesConditions() {
+        let portrait = CGSize(width: 402, height: 874)
+        let island = EdgeInsets(top: 62, leading: 0, bottom: 34, trailing: 0)
+        #expect(ReaderInsets.fillEdges(isPhone: true, window: portrait, insets: island, railWidth: 0) != nil)
+        #expect(ReaderInsets.fillEdges(isPhone: false, window: portrait, insets: island, railWidth: 0) == nil)
+        #expect(ReaderInsets.fillEdges(isPhone: true, window: CGSize(width: 874, height: 402), insets: island, railWidth: 0) == nil)
+        #expect(ReaderInsets.fillEdges(isPhone: true, window: portrait, insets: island, railWidth: 84) == nil)
+        let homeButton = EdgeInsets(top: 20, leading: 0, bottom: 0, trailing: 0)
+        #expect(ReaderInsets.fillEdges(isPhone: true, window: portrait, insets: homeButton, railWidth: 0) == nil)
+        let notch = EdgeInsets(top: 47, leading: 0, bottom: 34, trailing: 0)
+        #expect(ReaderInsets.fillEdges(isPhone: true, window: portrait, insets: notch, railWidth: 0)?.sensorClearance == 42)
+    }
+}

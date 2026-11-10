@@ -141,6 +141,24 @@ struct TypographyControls: View {
                 .foregroundStyle(Palette.inkSecondary)
         }
         .padding(.vertical, Metrics.spacing4)
+
+        // Only where there is a top and bottom to set: without the fill, the
+        // bars' bands stand in for those margins. Follows the side margin until
+        // moved.
+        if style.fillsScreen {
+            MarginSliderRow(
+                title: "Top and bottom",
+                valueIdentifier: "typography.verticalMargin.value",
+                sliderIdentifier: "typography.verticalMargin",
+                value: Binding(
+                    get: { style.effectiveVerticalMargin },
+                    set: { style.verticalMargin = $0 },
+                ),
+                // No bands: the preview draws the sides' margins only.
+                preview: nil,
+            )
+            .padding(.vertical, Metrics.spacing4)
+        }
         #endif
     }
 

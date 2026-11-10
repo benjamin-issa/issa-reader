@@ -1,3 +1,4 @@
+import UIKit
 import XCTest
 
 /// The Margins control in a book's Aa sheet: a preset moves the page's text,
@@ -319,6 +320,29 @@ final class MarginControlFlowTests: XCTestCase {
         return last
     }
 
+    /// How far the text's top moves up, and its bottom down, when Fill the
+    /// screen goes on at the shipped 24-point margin (the vertical margin
+    /// following it), worked out from `ReaderChrome`'s rules.
+    ///
+    /// - A top bar's band is 44 and stands in for the margin, so off the top
+    ///   moves up by 44 - 24 and the bottom gains the footer's 44, where the
+    ///   safe areas stay whole: the iPad, and any phone with a rail beside
+    ///   the page (iPhone Duo: no top band, only the footer's).
+    /// - An upright iPhone with a sensor housing and a home indicator also
+    ///   gets part of each safe area back. On the iPhone 17 Pro (402 by 874,
+    ///   safe areas 62 and 34) the top keeps the island's 54 instead of 62,
+    ///   and the bottom keeps the indicator's 18 instead of 34 (the corner at
+    ///   a 24-point margin needs only about 14.5): the top then gains 8 more,
+    ///   28 in all, and the bottom 16 more, 60 in all.
+    private func expectedFillDeltas(window: CGRect, topBar: Bool) throws -> (top: CGFloat, bottom: CGFloat) {
+        guard topBar else { return (0, 44) }
+        if UIDevice.current.userInterfaceIdiom == .pad { return (20, 44) }
+        guard abs(window.width - 402) < 1, abs(window.height - 874) < 1 else {
+            throw XCTSkip("the expected deltas are worked out for the iPhone 17 Pro, not \(window.size)")
+        }
+        return (28, 60)
+    }
+
     /// With the setting on, the text runs into both bars' bands, the controls
     /// are drawn over it, and showing or hiding them moves nothing — nor does
     /// the hidden footer take the taps the last lines are owed.
@@ -338,16 +362,12 @@ final class MarginControlFlowTests: XCTestCase {
         closeSheet(app)
 
         let filled = settledTextFrame(app, differentFrom: before)
-        let bar = CGFloat(44)
-        // The margin stood in for by the top bar's band: 24 on the shipped
-        // default, so the top gains what the bar had over it. With a rail
-        // instead (iPhone Duo) there is no top band to give, and the margin
-        // was already spent there.
+        let expected = try expectedFillDeltas(window: app.windows.firstMatch.frame, topBar: topBar)
         XCTAssertEqual(
-            before.minY - filled.minY, topBar ? bar - 24 : 0, accuracy: 1.5,
+            before.minY - filled.minY, expected.top, accuracy: 1.5,
             "the text did not take the top bar's band, or moved without one: \(before) then \(filled)")
         XCTAssertEqual(
-            filled.maxY - before.maxY, bar, accuracy: 1.5,
+            filled.maxY - before.maxY, expected.bottom, accuracy: 1.5,
             "the text did not move down into the footer's band: \(before) then \(filled)")
         XCTAssertEqual(filled.minX, before.minX, accuracy: 1.5)
         XCTAssertEqual(filled.width, before.width, accuracy: 1.5)
@@ -393,6 +413,57 @@ final class MarginControlFlowTests: XCTestCase {
         XCTAssertEqual(reopened.minY, filled.minY, accuracy: 1.5, "the reopened book forgot the setting")
         XCTAssertEqual(reopened.maxY, filled.maxY, accuracy: 1.5, "the reopened book forgot the setting")
         setFill(app, false)
+        leftFilling = false
+    }
+
+    /// The Top and bottom slider, in the Aa sheet while Fill the screen is on.
+    private func verticalMarginSlider(_ app: XCUIApplication) -> XCUIElement {
+        let slider = app.descendants(matching: .any)["typography.verticalMargin"].firstMatch
+        let list = app.collectionViews.firstMatch.exists ? app.collectionViews.firstMatch : app.tables.firstMatch
+        for _ in 0 ..< 8 where !slider.exists || !slider.isHittable {
+            list.swipeUp()
+        }
+        XCTAssertTrue(slider.exists, "the Aa sheet has no Top and bottom control with Fill the screen on")
+        return slider
+    }
+
+    /// Top and bottom is its own margin: set to 0, the text's top and bottom
+    /// move out to the hardware's edges and its sides stay where they were.
+    func testTopAndBottomMovesOnlyTheTopAndBottom() throws {
+        let app = launch()
+        openReader(app)
+        openTypographySheet(app)
+        let toggle = fillToggle(app)
+        flip(toggle, false)
+        let before = settledTextFrame(app)
+        turnFillOffIfLeftOn()
+        flip(toggle, true)
+        let filled = settledTextFrame(app, differentFrom: before)
+
+        let slider = verticalMarginSlider(app)
+        XCTAssertEqual(slider.label, "Top and bottom")
+        XCTAssertEqual(slider.value as? String, "24 points", "it should follow the 24-point side margin")
+        slider.adjust(toNormalizedSliderPosition: 0)
+        let moved = settledTextFrame(app, differentFrom: filled)
+        XCTAssertEqual(slider.value as? String, "0 points")
+
+        // The 24 points of margin at each end are gone: the text's top is
+        // 24 higher and its bottom 24 lower, whatever the safe areas give.
+        XCTAssertEqual(filled.minY - moved.minY, 24, accuracy: 1.5, "the top did not move out: \(filled) then \(moved)")
+        XCTAssertEqual(moved.maxY - filled.maxY, 24, accuracy: 1.5, "the bottom did not move out: \(filled) then \(moved)")
+        XCTAssertEqual(moved.minX, filled.minX, accuracy: 1.5, "the left margin moved")
+        XCTAssertEqual(moved.maxX, filled.maxX, accuracy: 1.5, "the right margin moved")
+        XCTAssertEqual(moved.width, filled.width, accuracy: 1.5)
+        keep(app, "top-and-bottom-zero")
+
+        // Put back: the switch off, and the book's own departures cleared so
+        // the next test starts from the defaults.
+        flip(fillToggle(app), false)
+        let reset = app.buttons["Use my defaults"].firstMatch
+        let list = app.collectionViews.firstMatch.exists ? app.collectionViews.firstMatch : app.tables.firstMatch
+        for _ in 0 ..< 8 where !reset.exists || !reset.isHittable { list.swipeUp() }
+        if reset.exists, reset.isHittable { reset.tap() }
+        closeSheet(app)
         leftFilling = false
     }
 

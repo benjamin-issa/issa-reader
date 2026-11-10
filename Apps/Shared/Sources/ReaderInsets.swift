@@ -1,3 +1,4 @@
+import IssaRender
 import SwiftUI
 #if canImport(UIKit)
 import UIKit
@@ -66,6 +67,34 @@ enum ReaderInsets {
         // tvOS reads through TVReadalongView and has no window corners to
         // dodge.
         return EdgeInsets()
+        #endif
+    }
+
+    /// How far into the safe areas a full-screen page may put text, or nil
+    /// where that is not known to be safe.
+    ///
+    /// Only an upright iPhone with a home indicator and a sensor housing: the
+    /// numbers behind `FillEdges` were measured on those. Landscape, the iPad,
+    /// the Mac, a home-button phone and the iPhone Duo (whose rail takes the
+    /// side) keep their safe areas whole.
+    ///
+    /// Pure, with the idiom and the window passed in, so the shared suite can
+    /// ask it about every case from the iOS host.
+    static func fillEdges(
+        isPhone: Bool, window: CGSize, insets: EdgeInsets, railWidth: CGFloat,
+    ) -> FillEdges? {
+        guard isPhone, window.height > window.width, railWidth == 0 else { return nil }
+        return FillEdges.iPhone(safeAreaTop: insets.top, safeAreaBottom: insets.bottom)
+    }
+
+    /// `fillEdges` for the device this is running on.
+    static func fillEdges(window: CGSize, insets: EdgeInsets, railWidth: CGFloat) -> FillEdges? {
+        #if os(iOS)
+        fillEdges(
+            isPhone: UIDevice.current.userInterfaceIdiom == .phone,
+            window: window, insets: insets, railWidth: railWidth)
+        #else
+        nil
         #endif
     }
 

@@ -118,37 +118,17 @@ struct MarginControl: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Metrics.spacing12) {
-            HStack {
-                Text("Margins").foregroundStyle(Palette.ink)
-                Spacer()
-                Text("\(MarginControlModel.displayedPoints(for: style.pageMargin)) pt")
-                    .font(Typography.body.monospacedDigit())
-                    .foregroundStyle(Palette.inkSecondary)
-                    .accessibilityIdentifier("typography.margins.value")
-            }
-            // The slider carries the name and the number for VoiceOver.
-            .accessibilityHidden(true)
-
-            HStack(spacing: Metrics.spacing12) {
-                Image(systemName: "rectangle.portrait.fill")
-                    .font(Typography.footnote)
-                    .foregroundStyle(Palette.inkSecondary)
-                    .accessibilityHidden(true)
-                Slider(
-                    value: sliderBinding,
-                    in: MarginControlModel.sliderRange,
-                    step: MarginControlModel.step,
-                    onEditingChanged: { preview?.dragging($0) },
-                )
-                .tint(Palette.tangerine)
-                .accessibilityLabel("Margins")
-                .accessibilityValue("\(MarginControlModel.displayedPoints(for: style.pageMargin)) points")
-                .accessibilityIdentifier("typography.margins")
-                Image(systemName: "rectangle.portrait.center.inset.filled")
-                    .font(Typography.footnote)
-                    .foregroundStyle(Palette.inkSecondary)
-                    .accessibilityHidden(true)
-            }
+            MarginSliderRow(
+                title: "Margins",
+                valueIdentifier: "typography.margins.value",
+                sliderIdentifier: "typography.margins",
+                icons: ("rectangle.portrait.fill", "rectangle.portrait.center.inset.filled"),
+                value: Binding(
+                    get: { style.pageMargin },
+                    set: { style.pageMargin = $0 },
+                ),
+                preview: preview,
+            )
 
             HStack(spacing: Metrics.spacing8) {
                 ForEach(MarginPreset.allCases) { preset in
@@ -161,19 +141,6 @@ struct MarginControl: View {
                 .foregroundStyle(Palette.inkSecondary)
         }
         .padding(.vertical, Metrics.spacing4)
-    }
-
-    /// A stored value past the track shows at its end and stays as stored:
-    /// only a move of the thumb writes anything.
-    private var sliderBinding: Binding<Double> {
-        Binding(
-            get: { MarginControlModel.sliderValue(for: style.pageMargin) },
-            set: { moved in
-                guard moved != MarginControlModel.sliderValue(for: style.pageMargin) else { return }
-                style.pageMargin = CGFloat(moved)
-                preview?.linger()
-            },
-        )
     }
 
     private func presetButton(_ preset: MarginPreset) -> some View {
@@ -208,6 +175,70 @@ struct MarginControl: View {
         .accessibilityLabel(preset.title)
         .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityIdentifier(preset.identifier)
+    }
+}
+
+/// A margin's title and number above its slider, with the two icons at the
+/// track's ends where there are any.
+///
+/// The one slider both margin rows use, so the track, the step and the way a
+/// stored value past the track is shown cannot drift apart.
+struct MarginSliderRow: View {
+    let title: String
+    let valueIdentifier: String
+    let sliderIdentifier: String
+    var icons: (small: String, large: String)?
+    @Binding var value: CGFloat
+    var preview: MarginPreview?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Metrics.spacing12) {
+            HStack {
+                Text(title).foregroundStyle(Palette.ink)
+                Spacer()
+                Text("\(MarginControlModel.displayedPoints(for: value)) pt")
+                    .font(Typography.body.monospacedDigit())
+                    .foregroundStyle(Palette.inkSecondary)
+                    .accessibilityIdentifier(valueIdentifier)
+            }
+            // The slider carries the name and the number for VoiceOver.
+            .accessibilityHidden(true)
+
+            HStack(spacing: Metrics.spacing12) {
+                if let icons { icon(icons.small) }
+                Slider(
+                    value: sliderBinding,
+                    in: MarginControlModel.sliderRange,
+                    step: MarginControlModel.step,
+                    onEditingChanged: { preview?.dragging($0) },
+                )
+                .tint(Palette.tangerine)
+                .accessibilityLabel(title)
+                .accessibilityValue("\(MarginControlModel.displayedPoints(for: value)) points")
+                .accessibilityIdentifier(sliderIdentifier)
+                if let icons { icon(icons.large) }
+            }
+        }
+    }
+
+    private func icon(_ name: String) -> some View {
+        Image(systemName: name)
+            .font(Typography.footnote)
+            .foregroundStyle(Palette.inkSecondary)
+            .accessibilityHidden(true)
+    }
+
+    /// A stored value past the track shows at its end and stays as stored:
+    /// only a move of the thumb writes anything.
+    private var sliderBinding: Binding<Double> {
+        Binding(
+            get: { MarginControlModel.sliderValue(for: value) },
+            set: { moved in
+                guard moved != MarginControlModel.sliderValue(for: value) else { return }
+                value = CGFloat(moved)
+                preview?.linger()
+            },
+        )
     }
 }
 
