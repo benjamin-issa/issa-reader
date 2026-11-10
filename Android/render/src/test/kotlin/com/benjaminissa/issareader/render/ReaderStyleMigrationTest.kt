@@ -253,7 +253,7 @@ class ReaderStyleMigrationTest {
         val written = encodedObject(ReaderStyle())
         assertEquals(
             setOf(
-                "typeface", "fontSize", "lineSpacing", "theme", "justification", "justified", "pageMargin",
+                "typeface", "fontSize", "lineSpacing", "theme", "justification", "justified", "pageMargin", "fillsScreen",
                 "highlightGranularity", "followNarration", "turnPagesMidSentence", "tapToPlay", "progressDisplay",
             ),
             written.keys,
@@ -622,5 +622,56 @@ class DefaultFaceMigrationTest {
         val moved = ReaderStyleOverride(fontSize = 24.0).replacingLegacyDefaultFace()
         assertNull(moved.typeface)
         assertEquals(24.0, moved.fontSize!!, 0.0)
+    }
+}
+
+/** Filling the screen with text, as a global setting and as a per-book field. */
+class FillsScreenStyleTest {
+    private fun decodeOverride(json: String): ReaderStyleOverride =
+        IssaJson.decodeFromString(ReaderStyleOverride.serializer(), json)
+
+    @Test
+    fun `the setting round-trips, and a blob without it is off`() {
+        assertTrue(decodeStyle(encodeStyle(ReaderStyle(fillsScreen = true))).fillsScreen)
+        assertFalse(decodeStyle(encodeStyle(ReaderStyle())).fillsScreen)
+        assertFalse(decodeStyle("""{"fontSize": 20, "pageMargin": 32}""").fillsScreen)
+        // Forgiving: a value of the wrong type costs the field, not the blob.
+        val damaged = decodeStyle("""{"fillsScreen": "yes", "fontSize": 21}""")
+        assertFalse(damaged.fillsScreen)
+        assertEquals(21.0, damaged.fontSize, 0.0)
+    }
+
+    @Test
+    fun `an absent override key is no override, and a stored one round-trips`() {
+        assertNull(decodeOverride("""{"fontSize": 20}""").fillsScreen)
+        for (on in listOf(true, false)) {
+            val override = ReaderStyleOverride(fontSize = 20.0, fillsScreen = on)
+            val text = IssaJson.encodeToString(ReaderStyleOverride.serializer(), override)
+            assertTrue(text, text.contains("\"fillsScreen\""))
+            assertEquals(override, decodeOverride(text))
+        }
+    }
+
+    @Test
+    fun `an override carrying only the setting is not empty and counts once`() {
+        val override = ReaderStyleOverride(fillsScreen = false)
+        assertFalse(override.isEmpty)
+        assertEquals(1, override.count)
+    }
+
+    @Test
+    fun `applying sets it and leaves a book without one following the default`() {
+        val defaults = ReaderStyle(fillsScreen = false)
+        assertTrue(defaults.applying(ReaderStyleOverride(fillsScreen = true)).fillsScreen)
+        assertFalse(defaults.applying(ReaderStyleOverride(fontSize = 20.0)).fillsScreen)
+        assertTrue(defaults.copy(fillsScreen = true).applying(ReaderStyleOverride(fontSize = 20.0)).fillsScreen)
+        assertFalse(defaults.copy(fillsScreen = true).applying(ReaderStyleOverride(fillsScreen = false)).fillsScreen)
+    }
+
+    @Test
+    fun `a difference records it only when it changed`() {
+        val defaults = ReaderStyle()
+        assertNull(defaults.difference(defaults).fillsScreen)
+        assertEquals(true, defaults.difference(defaults.copy(fillsScreen = true)).fillsScreen)
     }
 }

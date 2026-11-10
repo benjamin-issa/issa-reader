@@ -38,6 +38,13 @@ class ReaderChrome(
     val drawsOwnTopBar: Boolean = true,
     /** How tall the reader's two bars are: [BAR_HEIGHT], or [EINK_BAR_HEIGHT] in E-Ink mode. */
     val barHeight: Double = BAR_HEIGHT,
+    /**
+     * Whether the page takes the bands the bars would keep: the reader's
+     * choice to see more text and have the controls cover it when they are
+     * shown. The reserve still never follows the chrome's visibility; this is
+     * a setting, so changing it re-lays the chapter out once, like a margin.
+     */
+    val fillsScreen: Boolean = false,
 ) {
     /**
      * The device's unsafe top edge — a cutout or a status bar — as it is with
@@ -63,14 +70,16 @@ class ReaderChrome(
      * Where there is no such bar, the margin has to be spent after all: a
      * margin the other three edges get is not one the top can go without; it
      * is only ever waived because something taller is already standing there.
+     * With [fillsScreen] nothing reserved stands there, so the margin is spent.
      */
-    val topReserve: Double get() = safeAreaTop + (if (drawsOwnTopBar) barHeight else margin)
+    val topReserve: Double get() = safeAreaTop + (if (drawsOwnTopBar && !fillsScreen) barHeight else margin)
 
     /**
      * Distance from the bottom of the window to the last line of text: the
-     * gesture bar, the footer, and the page's own margin above it.
+     * gesture bar, the footer (unless [fillsScreen] hands its band to the
+     * page), and the page's own margin above it.
      */
-    val bottomReserve: Double get() = safeAreaBottom + barHeight + margin
+    val bottomReserve: Double get() = safeAreaBottom + (if (fillsScreen) 0.0 else barHeight) + margin
 
     /**
      * The area the paginator lays text into.
@@ -96,9 +105,9 @@ class ReaderChrome(
 
     override fun equals(other: Any?): Boolean = other is ReaderChrome && safeAreaTop == other.safeAreaTop &&
         safeAreaBottom == other.safeAreaBottom && margin == other.margin && drawsOwnTopBar == other.drawsOwnTopBar &&
-        barHeight == other.barHeight
+        barHeight == other.barHeight && fillsScreen == other.fillsScreen
 
-    override fun hashCode(): Int = listOf(safeAreaTop, safeAreaBottom, margin, drawsOwnTopBar, barHeight).hashCode()
+    override fun hashCode(): Int = listOf(safeAreaTop, safeAreaBottom, margin, drawsOwnTopBar, barHeight, fillsScreen).hashCode()
 
     /** Where the book's title goes under the footer, if anywhere. */
     enum class BookTitlePlacement {

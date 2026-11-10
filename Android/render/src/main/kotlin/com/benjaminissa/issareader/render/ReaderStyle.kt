@@ -50,6 +50,12 @@ data class ReaderStyle(
      */
     val justification: Justification = Justification.FOLLOW_BOOK,
     val pageMargin: Double = 24.0,
+    /**
+     * Give the bands the top bar and the footer keep to the page, and draw the
+     * controls over the text when they are shown. Off keeps the bands, so the
+     * controls never cover a line.
+     */
+    val fillsScreen: Boolean = false,
     val highlightGranularity: HighlightGranularity = HighlightGranularity.SENTENCE,
     /** Keep the narrated sentence on screen while audio plays. */
     val followNarration: Boolean = true,
@@ -254,6 +260,7 @@ data class ReaderStyle(
             lineSpacing = override.lineSpacing ?: lineSpacing,
             justification = override.justification ?: justification,
             pageMargin = override.pageMargin ?: pageMargin,
+            fillsScreen = override.fillsScreen ?: fillsScreen,
         )
     }
 
@@ -268,6 +275,7 @@ data class ReaderStyle(
         lineSpacing = if (other.lineSpacing == lineSpacing) null else other.lineSpacing,
         justification = if (other.justification == justification) null else other.justification,
         pageMargin = if (other.pageMargin == pageMargin) null else other.pageMargin,
+        fillsScreen = if (other.fillsScreen == fillsScreen) null else other.fillsScreen,
     )
 
     companion object {
@@ -340,6 +348,7 @@ data class ReaderStyle(
                     // older writer can say.
                     put("justified", value.justification == Justification.ALWAYS)
                     put("pageMargin", value.pageMargin)
+                    put("fillsScreen", value.fillsScreen)
                     put("highlightGranularity", value.highlightGranularity.rawValue)
                     put("followNarration", value.followNarration)
                     put("turnPagesMidSentence", value.turnPagesMidSentence)
@@ -394,6 +403,7 @@ data class ReaderStyle(
                 theme = container.string("theme")?.let(ReaderTheme::fromRawValue) ?: fallback.theme,
                 justification = justification,
                 pageMargin = clampedLength(container.number("pageMargin"), pageMarginRange) ?: fallback.pageMargin,
+                fillsScreen = container.boolean("fillsScreen") ?: fallback.fillsScreen,
                 highlightGranularity = container.string("highlightGranularity")
                     ?.let(HighlightGranularity::fromRawValue) ?: fallback.highlightGranularity,
                 followNarration = container.boolean("followNarration") ?: fallback.followNarration,

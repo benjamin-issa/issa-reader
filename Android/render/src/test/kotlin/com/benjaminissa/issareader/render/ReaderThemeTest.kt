@@ -70,4 +70,26 @@ class ReaderThemeTest {
         assertEquals(usual.pageSize(402.0, 874.0).height - 8.0, eink.pageSize(402.0, 874.0).height, 0.0)
         assertNotEquals(usual, eink)
     }
+
+    @Test
+    fun `filling the screen gives the page both bars' bands, less the margin the top now spends`() {
+        val usual = ReaderChrome(59.0, 34.0, 24.0)
+        val fills = ReaderChrome(59.0, 34.0, 24.0, fillsScreen = true)
+        val bar = ReaderChrome.BAR_HEIGHT
+        // Two bars, less the 24 the page's top margin takes back from the top band.
+        assertEquals(usual.pageSize(402.0, 874.0).height + 2 * bar - 24.0, fills.pageSize(402.0, 874.0).height, 0.0)
+        assertEquals(59.0 + 24.0, fills.topReserve, 0.0)
+        assertEquals(34.0 + 24.0, fills.bottomReserve, 0.0)
+        assertNotEquals(usual, fills)
+        val eink = ReaderChrome(59.0, 34.0, 24.0, barHeight = ReaderChrome.EINK_BAR_HEIGHT, fillsScreen = true)
+        val einkUsual = ReaderChrome(59.0, 34.0, 24.0, barHeight = ReaderChrome.EINK_BAR_HEIGHT)
+        assertEquals(einkUsual.pageSize(402.0, 874.0).height + 96.0 - 24.0, eink.pageSize(402.0, 874.0).height, 0.0)
+    }
+
+    @Test
+    fun `where no top bar of its own stands, filling the screen gives back only the footer's band`() {
+        val usual = ReaderChrome(52.0, 14.0, 24.0, drawsOwnTopBar = false)
+        val fills = ReaderChrome(52.0, 14.0, 24.0, drawsOwnTopBar = false, fillsScreen = true)
+        assertEquals(usual.pageSize(402.0, 874.0).height + ReaderChrome.BAR_HEIGHT, fills.pageSize(402.0, 874.0).height, 0.0)
+    }
 }
