@@ -612,8 +612,10 @@ class AppModel(
         positionGuards = mutableMapOf()
         refusalsLogged.clear()
         books = emptyList()
-        catalogueApplied = false
+        // The flag falls after the rebuild, which is what tells the widget's publisher the library emptied;
+        // reset first, it would keep the departing catalogue and session until clear().
         rebuildDerived()
+        catalogueApplied = false
         statuses = emptyList()
         autoFiledBookUuids.clear()
         localWrites.removeAll()
