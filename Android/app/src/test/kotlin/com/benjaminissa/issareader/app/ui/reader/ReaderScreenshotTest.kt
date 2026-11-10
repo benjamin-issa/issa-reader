@@ -32,6 +32,7 @@ import com.benjaminissa.issareader.app.model.PlaybackSettings
 import com.benjaminissa.issareader.app.reader.ReaderModel
 import com.benjaminissa.issareader.core.model.Annotation
 import com.benjaminissa.issareader.core.InMemoryKeyValueStore
+import com.benjaminissa.issareader.render.ReaderChrome
 import com.benjaminissa.issareader.render.ReaderStyle
 import com.benjaminissa.issareader.render.android.PageDrawing
 import com.benjaminissa.issareader.render.ReaderTheme
@@ -92,6 +93,8 @@ class ReaderScreenshotTest {
         sheet: ReaderSheetKind? = null,
         eink: EInkNarrationMark? = null,
         fillsScreen: Boolean = false,
+        fill: ReaderChrome.FillEdges? = null,
+        verticalMargin: Double? = null,
         prepare: suspend (ReaderModel) -> Unit = {},
     ): Shown {
         val opening = ReaderOpening(fixture.readBytes(), narrated = narrated, title = "Alice's Adventures in Wonderland").also { openings += it }
@@ -103,7 +106,7 @@ class ReaderScreenshotTest {
             defaults.putBoolean(SEEN_NARRATION_TIP_KEY, true)
         }
         val settings = PlaybackSettings(InMemoryKeyValueStore())
-        settings.readerStyle = ReaderStyle(theme = theme, fillsScreen = fillsScreen)
+        settings.readerStyle = ReaderStyle(theme = theme, fillsScreen = fillsScreen, verticalMargin = verticalMargin)
         if (eink != null) {
             settings.einkMode = true
             settings.einkNarrationMark = eink
@@ -114,7 +117,7 @@ class ReaderScreenshotTest {
             IssaTheme(darkTheme = false, eink = eink != null) {
                 ReaderView(
                     model, environment, onClose = {},
-                    insets = ReaderInsets.Edges(40.dp, 24.dp),
+                    insets = ReaderInsets.Edges(40.dp, 24.dp, fill),
                     presentSheet = presented.value,
                 )
             }
@@ -176,6 +179,14 @@ class ReaderScreenshotTest {
     fun fillsScreenLight() {
         show(alice(), fillsScreen = true) { model -> model.go(2) }
         shot("reader-fills-screen-light")
+    }
+
+    /** The same, on a phone that lets the text reach into the status bar and the gesture band, with its own top and bottom. */
+    @Test
+    fun fillsScreenReachingIntoTheEdges() {
+        val fill = ReaderChrome.FillEdges(sensorClearance = 22.0, indicatorClearance = 10.0, cornerRadius = 40.0)
+        show(alice(), fillsScreen = true, fill = fill, verticalMargin = 12.0) { model -> model.go(2) }
+        shot("reader-fills-screen-reach-light")
     }
 
     @Test
