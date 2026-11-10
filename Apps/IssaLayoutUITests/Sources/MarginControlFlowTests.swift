@@ -109,6 +109,13 @@ final class MarginControlFlowTests: XCTestCase {
         return probe.frame
     }
 
+    private func keep(_ app: XCUIApplication, _ name: String) {
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = name
+        shot.lifetime = .keepAlways
+        add(shot)
+    }
+
     func testPresetsMoveThePageTextAndSurviveReopening() throws {
         let app = launch()
         openReader(app)
@@ -129,6 +136,9 @@ final class MarginControlFlowTests: XCTestCase {
         openTypographySheet(app)
         tapPreset(app, "wide")
         XCTAssertEqual(slider.value as? String, "48 points")
+        // What no query can see: the bands' colour and where they stand over
+        // the page, kept for a look at the contact sheet.
+        keep(app, "margins-wide-bands")
         closeSheet(app)
         let wide = textFrame(app, minX: 48)
         XCTAssertEqual(wide.minX, 48, accuracy: 1.5, "Wide did not move the text to 48 points: \(wide)")
