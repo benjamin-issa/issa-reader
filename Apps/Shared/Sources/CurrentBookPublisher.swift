@@ -75,6 +75,11 @@ final class CurrentBookPublisher {
     var otherCoverWriter: (Data, String) async -> Void = {
         await CurrentBookSnapshotStore.writeOtherCoverOffMain($0, bookID: $1)
     }
+    /// How the current book's cover reaches the disk; like `otherCoverWriter`,
+    /// a stub in the tests that hold a write open for a sign-out to overtake.
+    var coverWriter: (Data) async -> Void = {
+        await CurrentBookSnapshotStore.writeCoverOffMain($0)
+    }
     /// When each other book's cover was last asked for, for the reason
     /// `coverAttempt` exists: a cover that cannot be fetched leaves nothing on
     /// disk to say so.
@@ -250,11 +255,20 @@ final class CurrentBookPublisher {
         coverGeneration += 1
         let generation = coverGeneration
         let square = Self.prefersSquareCover(book)
+        let signOuts = othersGeneration
+        let write = coverWriter
+        let fetch = coverFetcher
         Task { [weak self] in
-            let fetched = await CoverCache.shared.widgetCover(
-                for: book, session: session, preferring: square ? .square : .portrait)
+            let fetched = await fetch(book, session, square ? .square : .portrait)
             guard let self, generation == self.coverGeneration, let fetched else { return }
-            await CurrentBookSnapshotStore.writeCoverOffMain(fetched.data)
+            await write(fetched.data)
+            // A sign-out overtook the write: `clear()` has already swept the
+            // container, and this file landed after it. Only a sign-out counts,
+            // not a newer fetch, whose file this one must not take away.
+            guard signOuts == self.othersGeneration else {
+                if let url = CurrentBookSnapshotStore.coverURL { try? FileManager.default.removeItem(at: url) }
+                return
+            }
             // Stamped onto whatever snapshot is current, and only if it is
             // still this book's — a snapshot written while the fetch was in
             // flight belongs to something else.
