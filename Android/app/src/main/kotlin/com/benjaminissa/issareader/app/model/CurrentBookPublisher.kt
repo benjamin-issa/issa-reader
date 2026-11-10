@@ -230,8 +230,10 @@ class CurrentBookPublisher(
             val shapes = mutableMapOf<String, Boolean>()
             for (other in missing) {
                 val book = byId[other.bookId] ?: continue
-                // Portrait first, as the slots are; the cache falls back to the square art and says which came.
-                val fetched = covers().widgetCover(book, session, LibraryService.CoverShape.PORTRAIT) ?: continue
+                // Portrait first, as the slots are, where the book may have any; the cache falls back to
+                // the square art and says which came. An audio-only book asks for its square directly.
+                val shape = if (WidgetOthers.mayHavePortraitCover(book)) LibraryService.CoverShape.PORTRAIT else LibraryService.CoverShape.SQUARE
+                val fetched = covers().widgetCover(book, session, shape) ?: continue
                 if (generation != othersGeneration) return@launch
                 if (other.bookId in replacing && fetched.isSquare) {
                     // No portrait art: the square already stored stays, and the question is answered.
