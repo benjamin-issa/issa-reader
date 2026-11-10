@@ -1395,7 +1395,15 @@ public struct ReaderView: View {
                     turner.dragCancelled()
                 }
                 .overlay(alignment: .bottom) {
-                    if model.selection != nil { selectionMenu }
+                    if model.selection != nil {
+                        // With the footer drawn over the page's bottom, the
+                        // menu would sit under it: lift it clear while the
+                        // footer shows, and with the footer's own fade.
+                        selectionMenu
+                            .padding(.bottom, model.style.fillsScreen && model.chromeVisible
+                                ? ReaderChrome.barHeight : 0)
+                            .animation(.easeInOut(duration: 0.2), value: model.chromeVisible)
+                    }
                 }
                 #endif
 
@@ -1417,6 +1425,15 @@ public struct ReaderView: View {
                     .background(model.style.theme.background.opacity(model.chromeVisible ? 0.94 : 0))
                     .animation(.easeInOut(duration: 0.2), value: model.chromeVisible)
                     .allowsHitTesting(model.chromeVisible && chromeTakesTouches)
+                    #if ISSA_UITEST_FIXTURE
+                    .background {
+                        Color.clear
+                            .accessibilityElement()
+                            .accessibilityIdentifier("probe.reader.footer")
+                            .accessibilityLabel("footer probe")
+                            .allowsHitTesting(false)
+                    }
+                    #endif
             }
         }
         // A chapter that would not open, said over the page it left in place.

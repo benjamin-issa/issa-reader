@@ -329,4 +329,45 @@ final class MarginControlFlowTests: XCTestCase {
         XCTAssertEqual(reopened.minY, filled.minY, accuracy: 1.5, "the reopened book forgot the setting")
         XCTAssertEqual(reopened.maxY, filled.maxY, accuracy: 1.5, "the reopened book forgot the setting")
     }
+
+    /// The selection's Copy, Highlight and Done sit above the footer, which
+    /// with the setting on is drawn over the page's bottom: the capsule was
+    /// 24 points up from the page's edge, under the 44-point footer.
+    func testFillTheScreenKeepsTheSelectionMenuClearOfTheFooter() throws {
+        let app = launch()
+        openReader(app)
+
+        openTypographySheet(app)
+        let toggle = fillToggle(app)
+        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
+        let on = NSPredicate { _, _ in (toggle.value as? String) == "1" }
+        _ = XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: on, object: nil)], timeout: 5)
+        XCTAssertEqual(toggle.value as? String, "1")
+        closeSheet(app)
+        _ = settledTextFrame(app)
+
+        // The controls are showing, which is how a book opens.
+        XCTAssertTrue(
+            app.buttons["Text options for this book"].firstMatch.waitForExistence(timeout: 5),
+            "the controls are not showing")
+        let footer = app.descendants(matching: .any)["probe.reader.footer"].firstMatch
+        XCTAssertTrue(footer.waitForExistence(timeout: 10), "no footer probe: is this the fixture build?")
+
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35)).press(forDuration: 0.9)
+        let highlight = app.buttons["Highlight"].firstMatch
+        XCTAssertTrue(
+            highlight.waitForExistence(timeout: 10), "pressing and holding on the page selected nothing")
+        // Let the lift settle: the menu eases up with the footer's own fade.
+        Thread.sleep(forTimeInterval: 0.6)
+        let done = app.buttons["Done"].firstMatch
+        XCTAssertTrue(done.exists)
+        keep(app, "fill-the-screen-selection-menu")
+        let footerFrame = footer.frame
+        for (name, frame) in [("Highlight", highlight.frame), ("Done", done.frame)] {
+            XCTAssertFalse(
+                frame.intersects(footerFrame),
+                "\(name) \(frame) is under the footer \(footerFrame)")
+            XCTAssertLessThanOrEqual(frame.maxY, footerFrame.minY, "\(name) is not above the footer")
+        }
+    }
 }
