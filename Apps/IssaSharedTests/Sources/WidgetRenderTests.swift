@@ -352,6 +352,29 @@ extension WidgetStorage {
             #expect(Self.pixels(oneLine, rows: oneLine.height) != Self.pixels(adaptive, rows: adaptive.height))
         }
 
+        /// The card's own height, left to size itself, at a medium column's width.
+        static func cardHeight(_ title: String, lines: Int) -> CGFloat {
+            IssaFonts.register()
+            let card = AlsoReadingCard(
+                other: other("a", title, 0.4, cover: nil), titleLines: lines)
+                .frame(width: 150)
+                .fixedSize(horizontal: false, vertical: true)
+                .environment(\.colorScheme, .light)
+            let renderer = ImageRenderer(content: card)
+            renderer.scale = 1
+            return renderer.uiImage?.size.height ?? 0
+        }
+
+        /// The room for a second line is the text's, not the cover's: a title
+        /// that fits on one line gives the cover's 36 points whichever the
+        /// card is allowed, and only a title that wraps makes it taller.
+        @Test("the two-line card is no taller than the one-line card until the title wraps")
+        func twoLineCardIsTallOnlyWhenTheTitleWraps() {
+            #expect(Self.cardHeight("Walden", lines: 1) == 36)
+            #expect(Self.cardHeight("Walden", lines: 2) == 36)
+            #expect(Self.cardHeight(Self.longOtherTitle, lines: 2) > 36)
+        }
+
         /// The top `rows` of a picture, as raw RGBA.
         static func pixels(_ cg: CGImage, rows: Int) -> [UInt8] {
             let width = cg.width, height = min(rows, cg.height)

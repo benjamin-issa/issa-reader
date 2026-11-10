@@ -301,6 +301,91 @@ extension WidgetStorage {
             #expect(!CurrentBookSnapshotStore.hasOtherCover(bookID: "c"))
         }
 
+        @Test("a current-book cover write that lands after sign-out does not leave its file behind")
+        func signOutDuringTheCurrentCoverWrite() async throws {
+            let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+                .appending(path: "issa-widget-\(UUID().uuidString)", directoryHint: .isDirectory)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            CurrentBookSnapshotStore.directoryOverride = directory
+            defer {
+                CurrentBookSnapshotStore.directoryOverride = nil
+                try? FileManager.default.removeItem(at: directory)
+            }
+            let publisher = CurrentBookPublisher()
+            publisher.coverFetcher = { book, _, _ in (Data(book.uuid.utf8), false) }
+            var release: CheckedContinuation<Void, Never>?
+            var landed = false
+            publisher.coverWriter = { data in
+                await withCheckedContinuation { release = $0 }
+                CurrentBookSnapshotStore.writeCover(data)
+                landed = true
+            }
+            let current = Self.library()[0]
+            publisher.publish(
+                book: current, session: Self.stubSession(), progress: 0.5, chapter: nil, remaining: nil,
+                isPlaying: false, as: .reading("current"))
+            let deadline = ContinuousClock.now + .seconds(10)
+            while release == nil, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+            try #require(release != nil, "the write never began")
+
+            publisher.clear()
+            release?.resume()
+            let finished = ContinuousClock.now + .seconds(10)
+            while !landed, ContinuousClock.now < finished { try await Task.sleep(for: .milliseconds(10)) }
+            try #require(landed, "the write never finished")
+            // The task's own clean-up follows the write on the main actor.
+            try await Task.sleep(for: .milliseconds(100))
+
+            #expect(CurrentBookSnapshotStore.readCover() == nil)
+            #expect(CurrentBookSnapshotStore.read() == nil)
+        }
+
+        // MARK: - The window between leaving an account and clearing the widget
+
+        @Test("a position saved while an account is being left lists no others and fetches no covers")
+        func positionSavedWhileLeaving() async throws {
+            let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+                .appending(path: "issa-widget-\(UUID().uuidString)", directoryHint: .isDirectory)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            CurrentBookSnapshotStore.directoryOverride = directory
+            defer {
+                CurrentBookSnapshotStore.directoryOverride = nil
+                try? FileManager.default.removeItem(at: directory)
+            }
+            let fixture = try await AccountExitTests.signedInAsA()
+            defer { fixture.tearDown() }
+            let app = fixture.app
+            let publisher = CurrentBookPublisher()
+            var fetches = 0
+            publisher.coverFetcher = { _, _, _ in
+                fetches += 1
+                return nil
+            }
+            app.currentBookPublisher = publisher
+            seed(publisher)
+            app.books = Self.library()
+            app.catalogueApplied = true
+            app.rebuildDerived()
+            try await settle(publisher)
+            try #require(CurrentBookSnapshotStore.read()?.others.map(\.bookID) == ["b", "c"])
+            fetches = 0
+
+            // What a debounced save does, in the suspension `leaveAccount`
+            // makes before it clears the widget.
+            var others: [String]?
+            app.localBooksLoaded = {
+                publisher.publish(
+                    book: Self.reading("b", 0.31, at: 950), session: nil, progress: 0.31, chapter: nil,
+                    remaining: nil, isPlaying: false, as: .reading("b"))
+                others = CurrentBookSnapshotStore.read()?.others.map(\.bookID)
+            }
+            await app.signOut()
+
+            #expect(others == [], "the departed catalogue was still listed: \(String(describing: others))")
+            try await settle(publisher)
+            #expect(fetches == 0, "covers were fetched for the departed account")
+        }
+
         // MARK: - Retrying covers on an unchanged list
 
         @Test("a cover that failed is fetched again, by an unchanged list, once the retry window has passed")
