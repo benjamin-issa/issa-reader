@@ -25,10 +25,13 @@ import com.benjaminissa.issareader.core.diagnostics.IssaLog
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.plus
+import kotlinx.coroutines.withContext
 
 /**
  * Every question in flight, and the machinery that outlives the sheets.
@@ -181,13 +184,20 @@ class AskCoordinator(
     val isSupported: Boolean get() = supportedState
 
     init {
-        // The previous check never came back: the process died inside ML Kit
-        // (a native crash no catch can stop). It would die the same way on
-        // every launch, so this launch does not repeat it.
-        val interrupted = defaults.getBoolean(CHECK_IN_FLIGHT_KEY)
+        // Two checks in a row never came back: the process died inside ML Kit
+        // (a native crash no catch can stop) and again when it was tried a
+        // second time, so it would die the same way on every launch and this
+        // launch does not repeat it. One is not enough: checks run on every
+        // return to the foreground and AICore's first bind takes seconds, so a
+        // swipe-away, a low-memory kill or an update in that window would
+        // label a supported phone unsupported. The 1.7.0 Boolean key is
+        // dropped unread for the same reason: a flag set by one such death
+        // is exactly what it could not tell from a crash loop.
+        defaults.remove(OLD_CHECK_IN_FLIGHT_KEY)
+        val interrupted = defaults.getInt(UNFINISHED_CHECKS_KEY) >= UNFINISHED_CHECK_LIMIT
         if (interrupted) {
-            defaults.putBooleanDurably(CHECK_IN_FLIGHT_KEY, false)
-            IssaLog.warning("ask check did not finish last time; turning Ask off")
+            defaults.putInt(UNFINISHED_CHECKS_KEY, 0)
+            IssaLog.warning("ask check did not finish twice running; turning Ask off")
         }
         if (settings.askEnabled && (interrupted || !supportedState)) turnBackOff(AskSettingsState.Unsupported)
     }
@@ -295,10 +305,11 @@ class AskCoordinator(
             return null
         }
         val check = scope.launch {
-            // On disk before ML Kit is touched, and cleared once it answers: a
-            // process that dies in between leaves it for the next launch.
-            defaults.putBooleanDurably(CHECK_IN_FLIGHT_KEY, true)
+            // Counted on disk before ML Kit is touched, and reset once it
+            // answers: a process that dies in between leaves the count for the
+            // next launch. Off the main thread: a commit() waits on the disk.
             val result = try {
+                withContext(Dispatchers.IO) { defaults.putIntDurably(UNFINISHED_CHECKS_KEY, defaults.getInt(UNFINISHED_CHECKS_KEY) + 1) }
                 platform.availability()
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -306,7 +317,7 @@ class AskCoordinator(
                 IssaLog.error("ask availability failed", mapOf("error" to error.javaClass.name))
                 AskAvailability.UNSUPPORTED_DEVICE
             } finally {
-                defaults.putBooleanDurably(CHECK_IN_FLIGHT_KEY, false)
+                withContext(NonCancellable + Dispatchers.IO) { defaults.putIntDurably(UNFINISHED_CHECKS_KEY, 0) }
             }
             // The reader may have turned it off while ML Kit was answering.
             if (settings.askEnabled) apply(result)
@@ -720,10 +731,15 @@ class AskCoordinator(
         const val ASKED_FOR_NOTIFICATIONS_KEY = "issa.askNotificationsAsked"
 
         /**
-         * Written (durably) before a check reaches ML Kit and cleared when it
-         * returns. Found set at launch, the last check killed the process.
+         * How many checks in a row started and never returned: raised
+         * (durably) before a check reaches ML Kit, reset to 0 when it returns.
+         * At [UNFINISHED_CHECK_LIMIT] at launch, Ask is turned off.
          */
-        const val CHECK_IN_FLIGHT_KEY = "issa.askCheckInFlight"
+        const val UNFINISHED_CHECKS_KEY = "issa.askChecksUnfinished"
+        const val UNFINISHED_CHECK_LIMIT = 2
+
+        /** 1.7.0's flag; removed at launch, unread. */
+        internal const val OLD_CHECK_IN_FLIGHT_KEY = "issa.askCheckInFlight"
 
         /** Everything the engine can throw, as something the sheet can say. */
         fun failure(error: Throwable): AskFailure =

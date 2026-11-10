@@ -41,6 +41,18 @@ interface KeyValueStore {
      */
     fun getBooleanOrNull(key: String): Boolean?
 
+    /** The stored count, or 0 when there is none. */
+    fun getInt(key: String): Int
+
+    fun putInt(key: String, value: Int)
+
+    /**
+     * Stores [value], on disk before it returns, for a counter whose whole job
+     * is to be found by the next launch after a process that died right after
+     * writing it. Blocks on the disk: call it off the main thread.
+     */
+    fun putIntDurably(key: String, value: Int)
+
     fun remove(key: String)
 }
 
@@ -59,6 +71,16 @@ class InMemoryKeyValueStore : KeyValueStore {
     @Synchronized override fun getBooleanOrNull(key: String): Boolean? = values[key] as? Boolean
 
     @Synchronized override fun putBoolean(key: String, value: Boolean) {
+        values[key] = value
+    }
+
+    @Synchronized override fun getInt(key: String): Int = values[key] as? Int ?: 0
+
+    @Synchronized override fun putInt(key: String, value: Int) {
+        values[key] = value
+    }
+
+    @Synchronized override fun putIntDurably(key: String, value: Int) {
         values[key] = value
     }
 

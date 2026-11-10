@@ -86,15 +86,15 @@ class AskCrashSafetyTest {
         }
 
     @Test
-    fun `a check that never returned is found at launch, and Ask stays off without calling Gemini Nano`() {
+    fun `two checks in a row that never returned are found at launch, and Ask stays off without calling Gemini Nano`() {
         val defaults = InMemoryKeyValueStore()
-        // What the previous process left behind when it died inside ML Kit.
-        defaults.putBoolean(AskCoordinator.CHECK_IN_FLIGHT_KEY, true)
+        // What two processes in a row left behind when they died inside ML Kit.
+        defaults.putIntDurably(AskCoordinator.UNFINISHED_CHECKS_KEY, 2)
         AskHarness(askEnabled = true, defaults = defaults).use { harness ->
             harness.run {
                 assertFalse(settings.askEnabled)
                 assertEquals(AskSettingsState.Unsupported, coordinator.settingsState)
-                assertFalse("the marker is cleared", defaults.getBoolean(AskCoordinator.CHECK_IN_FLIGHT_KEY))
+                assertEquals("the count starts again", 0, defaults.getInt(AskCoordinator.UNFINISHED_CHECKS_KEY))
                 coordinator.appDidBecomeActive()
                 assertNull(coordinator.checkAvailability())
                 assertEquals(0, platform.calls)
@@ -102,14 +102,55 @@ class AskCrashSafetyTest {
         }
     }
 
+    /** A swipe-away, a low-memory kill or an update during AICore's first bind is not a crash loop. */
     @Test
-    fun `the marker is written before Gemini Nano is called and cleared after`() {
-        val seen = CompletableDeferred<Boolean>()
+    fun `one check that never returned does not turn Ask off, and the next one is made`() {
         val defaults = InMemoryKeyValueStore()
-        // A platform that reads the marker at the moment it is called.
+        defaults.putIntDurably(AskCoordinator.UNFINISHED_CHECKS_KEY, 1)
+        AskHarness(askEnabled = true, defaults = defaults).use { harness ->
+            harness.run {
+                assertTrue("still on", settings.askEnabled)
+                assertTrue(coordinator.isOffered)
+                coordinator.checkAvailability()?.join()
+                assertEquals("Gemini Nano was asked", 1, platform.calls)
+                assertTrue(settings.askEnabled)
+                assertEquals("and it came back, so the count is cleared", 0, defaults.getInt(AskCoordinator.UNFINISHED_CHECKS_KEY))
+            }
+        }
+    }
+
+    /** One interrupted check, then another that also dies: the second launch stops the loop. */
+    @Test
+    fun `a check that dies again after an interrupted one leaves the count that stops the next launch`() {
+        val defaults = InMemoryKeyValueStore()
+        defaults.putIntDurably(AskCoordinator.UNFINISHED_CHECKS_KEY, 1)
+        val seen = CompletableDeferred<Int>()
         val platform = object : AskPlatform {
             override suspend fun availability(): AskAvailability {
-                seen.complete(defaults.getBoolean(AskCoordinator.CHECK_IN_FLIGHT_KEY))
+                seen.complete(defaults.getInt(AskCoordinator.UNFINISHED_CHECKS_KEY))
+                return AskAvailability.AVAILABLE
+            }
+            override fun download() = throw UnsupportedOperationException()
+            override fun makeModel() = throw UnsupportedOperationException()
+        }
+        AskHarness(askEnabled = true, defaults = defaults).use { harness ->
+            val coordinator = AskCoordinator(harness.settings, platform, defaults, harness.scope, centre = harness.centre)
+            harness.run {
+                coordinator.checkAvailability()?.join()
+                assertEquals("counted before ML Kit was called: the process dying here leaves 2", 2, seen.await())
+            }
+            coordinator.close()
+        }
+    }
+
+    @Test
+    fun `the count is raised before Gemini Nano is called and back to zero after`() {
+        val seen = CompletableDeferred<Int>()
+        val defaults = InMemoryKeyValueStore()
+        // A platform that reads the count at the moment it is called.
+        val platform = object : AskPlatform {
+            override suspend fun availability(): AskAvailability {
+                seen.complete(defaults.getInt(AskCoordinator.UNFINISHED_CHECKS_KEY))
                 return AskAvailability.AVAILABLE
             }
             override fun download() = throw UnsupportedOperationException()
@@ -120,10 +161,33 @@ class AskCrashSafetyTest {
             harness.run {
                 coordinator.setEnabled(true)
                 coordinator.checkAvailability()?.join()
-                assertTrue("set while ML Kit was being asked", seen.await())
-                assertFalse("cleared once it answered", defaults.getBoolean(AskCoordinator.CHECK_IN_FLIGHT_KEY))
+                assertEquals("raised while ML Kit was being asked", 1, seen.await())
+                assertEquals("reset once it answered", 0, defaults.getInt(AskCoordinator.UNFINISHED_CHECKS_KEY))
             }
             coordinator.close()
+        }
+    }
+
+    @Test
+    fun `a check that threw still resets the count`() =
+        AskHarness(askEnabled = false).use { harness ->
+            harness.run {
+                platform.availabilityThrows = RuntimeException("no AICore")
+                coordinator.setEnabled(true)
+                coordinator.checkAvailability()?.join()
+                assertEquals(0, defaults.getInt(AskCoordinator.UNFINISHED_CHECKS_KEY))
+            }
+        }
+
+    @Test
+    fun `1_7_0's flag is dropped at launch and counts for nothing`() {
+        val defaults = InMemoryKeyValueStore()
+        defaults.putBoolean(AskCoordinator.OLD_CHECK_IN_FLIGHT_KEY, true)
+        AskHarness(askEnabled = true, defaults = defaults).use { harness ->
+            harness.run {
+                assertTrue(settings.askEnabled)
+                assertFalse(defaults.getBoolean(AskCoordinator.OLD_CHECK_IN_FLIGHT_KEY))
+            }
         }
     }
 
