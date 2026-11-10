@@ -1645,6 +1645,10 @@ public final class AppModel {
     /// status to another shelf, which `recordPosition` checks for; this path
     /// runs on every debounced save while narrating.
     private func rebuildAfterPositionChange() {
+        // The widget's "also reading" list follows the catalogue and every
+        // position in it; the publisher decides whether anything it draws
+        // moved before it writes or reloads anything.
+        currentBookPublisher.updateLibrary(books, session: session)
         readingHome = ReadingHome(books: books, rails: rails)
         bookByUUID = Dictionary(books.map { ($0.uuid, $0) }, uniquingKeysWith: { first, _ in first })
         rebuildArranged()
