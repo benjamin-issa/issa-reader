@@ -650,11 +650,6 @@ public struct ReaderView: View {
         #endif
     }
 
-    /// Puts the settings, this book's own departures from them, and the face
-    /// found inside the book together into the style the page is set in.
-    ///
-    /// `publisherFamily` is carried across by hand: it is discovered while
-    /// opening and belongs to the book, so it is not in either stored value.
     #if !os(tvOS)
     /// Where the margin bands stand: at the page's two sides, or on a spread
     /// at the outer edge of each page's real text box.
@@ -670,6 +665,11 @@ public struct ReaderView: View {
     }
     #endif
 
+    /// Puts the settings, this book's own departures from them, and the face
+    /// found inside the book together into the style the page is set in.
+    ///
+    /// `publisherFamily` is carried across by hand: it is discovered while
+    /// opening and belongs to the book, so it is not in either stored value.
     private func applyStyle() {
         var resolved = settings.style(for: model.book.uuid)
         resolved.publisherFamily = model.style.publisherFamily
