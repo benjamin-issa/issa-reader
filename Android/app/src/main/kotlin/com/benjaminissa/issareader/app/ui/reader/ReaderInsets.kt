@@ -89,9 +89,11 @@ object ReaderInsets {
         val scale = if (density > 0) density else 1f
         val navBottom = insets.getInsetsIgnoringVisibility(WindowInsetsCompat.Type.navigationBars()).bottom / scale.toDouble()
         val tappableBottom = insets.getInsetsIgnoringVisibility(WindowInsetsCompat.Type.tappableElement()).bottom / scale.toDouble()
+        // The top band: whatever starts above the larger of the bars' and the cutout's top inset,
+        // so a punch hole set below the edge counts and a bottom cutout is not in the first line's way.
+        val topBand = maxOf(bars.top, cutout.top)
         val cutoutBottom = insets.displayCutout?.boundingRects
-            // Only what touches the top edge: a notch's side or a bottom cutout is not in the first line's way.
-            ?.filter { it.top <= 0 }
+            ?.filter { it.top < topBand || it.top <= 0 }
             ?.maxOfOrNull { it.bottom }
             ?.let { it / scale.toDouble() } ?: 0.0
         return Edges(
