@@ -395,16 +395,30 @@ class AskCoordinator(
             // word is worse than one that quietly retries when they do. The
             // question itself builds the index again and reports properly.
             val engine = preparer()
-            val built = if (engine == null) false else try {
-                engine.prepareIndex(source)
-                true
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (_: Throwable) {
-                false
+            var built = false
+            try {
+                built = if (engine == null) false else try {
+                    engine.prepareIndex(source)
+                    true
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Throwable) {
+                    false
+                }
+                // A prewarm that throws (the model's refreshLimits is not
+                // guarded) is only logged: it must not skip the clean-up below.
+                if (engine != null) try {
+                    engine.prewarm()
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Throwable) {
+                    IssaLog.error("ask prewarm failed", mapOf("error" to error.javaClass.name))
+                }
+            } finally {
+                // Always forgotten, or a stale entry turns every later prepare()
+                // for this book away for the rest of the session.
+                if (preparing[uuid] === warmUp) preparing.remove(uuid)
             }
-            if (engine != null) engine.prewarm()
-            if (preparing[uuid] === warmUp) preparing.remove(uuid)
             // Only a warm-up that worked is remembered: a failed one turned
             // every later opening of the sheet away for the rest of the
             // session, and each question paid for the whole build itself.
