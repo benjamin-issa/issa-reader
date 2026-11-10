@@ -239,4 +239,29 @@ struct WidgetOthersPublishTests {
         }
         #expect(!CurrentBookSnapshotStore.hasOtherCover(bookID: "a"))
     }
+
+    // MARK: - Before a catalogue is known
+
+    @Test("a model that has not loaded a catalogue leaves the stored others and their covers alone")
+    func launchBeforeTheCatalogueKeepsTheList() throws {
+        try inDirectory {
+            let app = AppModel(notificationCentre: NotificationCenter())
+            app.currentBookPublisher = CurrentBookPublisher()
+            CurrentBookSnapshotStore.write(CurrentBookSnapshot(
+                bookID: "current", title: "current", author: "", progress: 0.5,
+                others: [OtherBook(bookID: "b", title: "b", progress: 0.3)]))
+            CurrentBookSnapshotStore.writeOtherCover(Data("x".utf8), bookID: "b")
+
+            // What `init` does, and what a failed first refresh leaves.
+            app.rebuildDerived()
+            #expect(CurrentBookSnapshotStore.read()?.others.map(\.bookID) == ["b"])
+            #expect(CurrentBookSnapshotStore.hasOtherCover(bookID: "b"))
+
+            // A catalogue that loaded and is empty is an answer: the list goes.
+            app.catalogueApplied = true
+            app.rebuildDerived()
+            #expect(CurrentBookSnapshotStore.read()?.others.isEmpty == true)
+            #expect(!CurrentBookSnapshotStore.hasOtherCover(bookID: "b"))
+        }
+    }
 }
