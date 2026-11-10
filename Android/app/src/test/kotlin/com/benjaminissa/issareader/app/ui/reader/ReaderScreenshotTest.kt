@@ -91,6 +91,7 @@ class ReaderScreenshotTest {
         coach: Boolean = false,
         sheet: ReaderSheetKind? = null,
         eink: EInkNarrationMark? = null,
+        fillsScreen: Boolean = false,
         prepare: suspend (ReaderModel) -> Unit = {},
     ): Shown {
         val opening = ReaderOpening(fixture.readBytes(), narrated = narrated, title = "Alice's Adventures in Wonderland").also { openings += it }
@@ -102,7 +103,7 @@ class ReaderScreenshotTest {
             defaults.putBoolean(SEEN_NARRATION_TIP_KEY, true)
         }
         val settings = PlaybackSettings(InMemoryKeyValueStore())
-        settings.readerStyle = ReaderStyle(theme = theme)
+        settings.readerStyle = ReaderStyle(theme = theme, fillsScreen = fillsScreen)
         if (eink != null) {
             settings.einkMode = true
             settings.einkNarrationMark = eink
@@ -168,6 +169,19 @@ class ReaderScreenshotTest {
             model.toggleChrome()
         }
         shot("reader-chrome-hidden")
+    }
+
+    /** The setting on, the chrome showing: the top bar and the footer drawn over the text, which runs under them. */
+    @Test
+    fun fillsScreenLight() {
+        show(alice(), fillsScreen = true) { model -> model.go(2) }
+        shot("reader-fills-screen-light")
+    }
+
+    @Test
+    fun fillsScreenEink() {
+        show(alice(), eink = EInkNarrationMark.UNDERLINE, fillsScreen = true) { model -> model.go(2) }
+        shot("reader-fills-screen-eink")
     }
 
     @Test

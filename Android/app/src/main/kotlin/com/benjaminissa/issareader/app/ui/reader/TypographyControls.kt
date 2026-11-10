@@ -2,6 +2,8 @@ package com.benjaminissa.issareader.app.ui.reader
 
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.benjaminissa.issareader.app.model.CustomFonts
 import com.benjaminissa.issareader.app.model.FontImport
@@ -17,6 +19,7 @@ import com.benjaminissa.issareader.ui.PaperSectionScope
 import com.benjaminissa.issareader.ui.PickerRow
 import com.benjaminissa.issareader.ui.StepperRow
 import com.benjaminissa.issareader.ui.Symbols
+import com.benjaminissa.issareader.ui.ToggleRow
 import com.benjaminissa.issareader.ui.Typography
 
 /**
@@ -110,6 +113,17 @@ fun PaperSectionScope.typographyControls(
         )
     }
     row { MarginControl(style, onStyle, marginPreview) }
+    // Here beside the margins because it is the same kind of choice: how much
+    // of the screen the page gets.
+    row {
+        ToggleRow(
+            "Fill the screen with text",
+            checked = style.fillsScreen,
+            onCheckedChange = { onStyle(style.copy(fillsScreen = it)) },
+            modifier = Modifier.testTag("typography.fillsScreen"),
+        )
+    }
+    row { Caption("The controls appear over the text when you tap the page.") }
 }
 
 /** The pure rules behind the controls, kept apart so they can be tested. */

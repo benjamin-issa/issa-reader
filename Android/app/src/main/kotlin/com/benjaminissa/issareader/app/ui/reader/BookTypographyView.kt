@@ -84,7 +84,7 @@ fun BookTypographyView(
         val eink = Palette.isEInk
         PaperList(contentPadding = PaddingValues(bottom = Metrics.spacing32)) {
             // Bound to the global value, not to this sheet's style: a book's
-            // override carries typeface, size, spacing, justification and margin
+            // override carries typeface, size, spacing, justification, margin and the fill setting
             // and nothing else, so a theme written through it would appear to work
             // and then not persist.
             if (!eink) {

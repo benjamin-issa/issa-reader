@@ -29,6 +29,7 @@ import com.benjaminissa.issareader.app.reader.ReaderModel
 import com.benjaminissa.issareader.core.InMemoryKeyValueStore
 import com.benjaminissa.issareader.render.PageTurnStyle
 import com.benjaminissa.issareader.render.ReaderChrome
+import com.benjaminissa.issareader.render.ReaderStyle
 import com.benjaminissa.issareader.testing.Fixtures
 import com.benjaminissa.issareader.ui.IssaTheme
 import kotlinx.coroutines.CoroutineScope
@@ -66,6 +67,7 @@ class ReaderViewTest {
     private val openings = mutableListOf<ReaderOpening>()
     private var playerOpened = 0
     private var closed = 0
+    private var shownSettings: PlaybackSettings? = null
 
     @After
     fun tearDown() {
@@ -79,11 +81,12 @@ class ReaderViewTest {
         turn: PageTurnStyle = PageTurnStyle.SLIDE,
         coach: Boolean = false,
         showsBookTitle: Boolean = true,
+        fillsScreen: Boolean = false,
         prepare: suspend (ReaderModel) -> Unit = {},
     ): ReaderModel {
         val opening = ReaderOpening(fixture.readBytes(), narrated = narrated).also { openings += it }
         val density = compose.activity.resources.displayMetrics.density.toDouble()
-        val model = opening.model(scope, Dispatchers.Main, scale = density)
+        val model = opening.model(scope, Dispatchers.Main, style = ReaderStyle(fillsScreen = fillsScreen), scale = density)
         val defaults = InMemoryKeyValueStore().apply {
             if (!coach) {
                 putBoolean(SEEN_COACH_KEY, true)
@@ -93,7 +96,9 @@ class ReaderViewTest {
         val settings = PlaybackSettings(InMemoryKeyValueStore()).apply {
             pageTurn = turn
             this.showsBookTitle = showsBookTitle
+            readerStyle = ReaderStyle(fillsScreen = fillsScreen)
         }
+        shownSettings = settings
         compose.setContent {
             IssaTheme(darkTheme = false) {
                 ReaderView(
@@ -377,6 +382,66 @@ class ReaderViewTest {
         compose.waitForIdle()
 
         compose.onNodeWithTag("reader.menu.stop_narration").assertExists().assertIsNotEnabled()
+    }
+
+    /** The page's height in dp, as the model laid it out. */
+    private fun pageHeightDp(model: ReaderModel): Double = model.layout!!.pageHeight / density
+
+    /**
+     * The setting hands the page the bands the bars keep: the top bar's less
+     * the margin that now stands in, the footer's, and the title row's — and
+     * the chrome showing and hiding does not move it, or the page with it.
+     */
+    @Test
+    fun `filling the screen gives the page the bars' bands and a chrome toggle still leaves its size alone`() {
+        val model = show { it.go(2) }
+        val usual = pageHeightDp(model)
+        val bar = ReaderChrome.BAR_HEIGHT
+        val margin = 24.0
+        val titleRow = ReaderChrome.BOOK_TITLE_ROW
+        assertEquals(
+            "the page as it was",
+            ReaderChrome(INSET_TOP.toDouble(), INSET_BOTTOM.toDouble() + titleRow, margin).pageSize(402.0, 874.0).height,
+            usual, 1.0,
+        )
+        compose.runOnIdle { shownSettings!!.readerStyle = ReaderStyle(fillsScreen = true) }
+        compose.waitUntil(10_000) { pageHeightDp(model) > usual + 1 }
+        compose.waitForIdle()
+        val filled = pageHeightDp(model)
+        assertEquals("two bars and the title row, less the top margin", 2 * bar - margin + titleRow, filled - usual, 1.0)
+        assertEquals("the same chapter, laid out again", 2, model.chapterIndex)
+        tap(200f)
+        assertFalse(model.chromeVisible)
+        assertEquals("hiding the chrome did not re-lay the page", filled, pageHeightDp(model), 0.0)
+        tap(200f)
+        assertTrue(model.chromeVisible)
+        assertEquals(filled, pageHeightDp(model), 0.0)
+    }
+
+    /**
+     * The footer is drawn over the last lines, so while the chrome is away it
+     * must not be there to take the touch: the right edge turns, the middle
+     * brings the chrome back, and a swipe turns, all over where it stood.
+     */
+    @Test
+    fun `with the chrome hidden the last lines still take a tap and a swipe`() {
+        val model = show(fillsScreen = true) { it.go(2) }
+        val onFooter = 874f - INSET_BOTTOM - ReaderChrome.BOOK_TITLE_ROW.toFloat() - ReaderChrome.BAR_HEIGHT.toFloat() / 2
+        fun at(x: Float) = Offset(x * density, onFooter * density)
+        // Hidden first, with a tap above the footer's place.
+        tap(200f)
+        assertFalse(model.chromeVisible)
+
+        compose.onRoot().performTouchInput { click(at(390f)) }
+        compose.mainClock.advanceTimeBy(400)
+        compose.waitUntil(5_000) { model.pageIndex == 1 }
+        compose.onRoot().performTouchInput { swipe(at(60f), at(320f), durationMillis = 200) }
+        compose.waitUntil(5_000) { model.pageIndex == 0 }
+        assertFalse("none of that touched the chrome", model.chromeVisible)
+
+        compose.onRoot().performTouchInput { click(at(200f)) }
+        compose.mainClock.advanceTimeBy(400)
+        compose.waitUntil(5_000) { model.chromeVisible }
     }
 
     private companion object {

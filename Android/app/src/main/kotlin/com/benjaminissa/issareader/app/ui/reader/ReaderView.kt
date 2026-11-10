@@ -278,11 +278,16 @@ fun ReaderView(
         // up — kept whether or not the chrome shows, like the bars' reserves.
         val titlePlacement = bookTitlePlacement(settings.showsBookTitle)
         val titleRow = if (titlePlacement == ReaderChrome.BookTitlePlacement.ROW) ReaderChrome.BOOK_TITLE_ROW.dp else 0.dp
+        // With the page filling the screen the row is not the page's to give
+        // up: the caption is drawn over the text, and only while it shows.
+        val fillsScreen = model.style.fillsScreen
+        val reservedTitleRow = if (fillsScreen) 0.dp else titleRow
         val chrome = ReaderChrome(
             edges.top.value.toDouble(),
-            (edges.bottom + titleRow).value.toDouble(),
+            (edges.bottom + reservedTitleRow).value.toDouble(),
             model.style.pageMargin,
             barHeight = readerBarHeight.value.toDouble(),
+            fillsScreen = fillsScreen,
         )
         val size = chrome.pageSize(maxWidth.value.toDouble(), maxHeight.value.toDouble())
         val pageWidth = size.width.dp
@@ -313,7 +318,7 @@ fun ReaderView(
         Box(
             Modifier
                 .fillMaxSize()
-                .padding(top = edges.top, bottom = edges.bottom + titleRow)
+                .padding(top = edges.top, bottom = edges.bottom + reservedTitleRow)
                 .then(if (coachShowing) Modifier.clearAndSetSemantics {} else Modifier),
             contentAlignment = Alignment.Center,
         ) {
@@ -331,6 +336,7 @@ fun ReaderView(
                 }
                 ReaderModel.Phase.Ready -> PageContent(
                     model, environment, turner, pageWidth, pageHeight,
+                    footerLift = if (fillsScreen) titleRow else 0.dp,
                     reduceMotion = reduceMotion,
                     marginPreview = marginPreview,
                     onSheet = { sheet = it },
@@ -385,7 +391,7 @@ fun ReaderView(
             )
         }
 
-        BookTitleCaption(model, titlePlacement, band = edges.bottom, row = titleRow, Modifier.align(Alignment.BottomCenter))
+        BookTitleCaption(model, titlePlacement, band = edges.bottom, row = titleRow, overPage = fillsScreen, Modifier.align(Alignment.BottomCenter))
 
         if (coachShowing) {
             ReaderCoachOverlay(
@@ -475,6 +481,7 @@ private fun PageContent(
     turner: PageTurner,
     pageWidth: Dp,
     pageHeight: Dp,
+    footerLift: Dp,
     reduceMotion: Boolean,
     marginPreview: MarginPreview,
     onSheet: (ReaderSheetKind) -> Unit,
@@ -486,6 +493,7 @@ private fun PageContent(
     val density = LocalDensity.current
     val scope = rememberCoroutineScope()
     val margin = model.style.pageMargin.dp
+    val fillsScreen = model.style.fillsScreen
     // Each page carries its margins with it, so a turning page takes the whole
     // width of the reader across rather than being cut by a margin that stays
     // put. No top margin: the top bar's reserve stands in for it.
@@ -612,8 +620,9 @@ private fun PageContent(
         Column(Modifier.fillMaxSize()) {
             // The top bar's reserve, held whether or not the chrome is showing,
             // exactly as the footer holds its own — so toggling can never
-            // re-paginate. It stands in for the page's top margin.
-            Spacer(Modifier.height(readerBarHeight))
+            // re-paginate. It stands in for the page's top margin; with the
+            // page filling the screen nothing stands in, so the margin is spent.
+            Spacer(Modifier.height(if (fillsScreen) margin else readerBarHeight))
             Box(Modifier.pageGestures(handler)) {
                 PageTrackView(
                     model, turner, pageWidth, pageHeight, pageInsets,
@@ -629,7 +638,19 @@ private fun PageContent(
                     SelectionMenu(model, Modifier.align(Alignment.BottomCenter).padding(bottom = Metrics.spacing24))
                 }
             }
-            Footer(model, environment, onSheet = onSheet, onOpenPlayer = onOpenPlayer)
+            if (!fillsScreen) Footer(model, environment, onSheet = onSheet, onOpenPlayer = onOpenPlayer)
+        }
+        // Over the last lines, and only while the controls show: a footer
+        // that stayed composed while hidden would swallow every tap, swipe
+        // and selection that began on them.
+        if (fillsScreen && model.chromeVisible) {
+            Footer(
+                model, environment, onSheet = onSheet, onOpenPlayer = onOpenPlayer,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = footerLift)
+                    .background(model.style.theme.ground(0.94).color),
+            )
         }
         // A chapter that would not open, said over the page it left in place,
         // below the top bar's reserve.
@@ -663,6 +684,7 @@ private fun BookTitleCaption(
     placement: ReaderChrome.BookTitlePlacement,
     band: Dp,
     row: Dp,
+    overPage: Boolean,
     modifier: Modifier = Modifier,
 ) {
     if (placement == ReaderChrome.BookTitlePlacement.NONE || !model.chromeVisible) return
@@ -678,6 +700,8 @@ private fun BookTitleCaption(
             textAlign = TextAlign.Center,
             modifier = modifier
                 .padding(bottom = if (inRow) band else 0.dp)
+                // Over the text rather than in a row the page gave up.
+                .then(if (inRow && overPage) Modifier.background(model.style.theme.ground(0.94).color) else Modifier)
                 .fillMaxWidth()
                 .height(if (inRow) row else band)
                 .padding(horizontal = model.style.pageMargin.dp)
@@ -1030,6 +1054,7 @@ private fun Footer(
     environment: ReaderEnvironment,
     onSheet: (ReaderSheetKind) -> Unit,
     onOpenPlayer: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val theme = model.style.theme
     // E-Ink mode's targets take the width the gaps had, or the chapter's name goes.
@@ -1052,7 +1077,7 @@ private fun Footer(
     }
 
     Row(
-        Modifier
+        modifier
             .fillMaxWidth()
             .height(readerBarHeight)
             .pointerInput(model) {
