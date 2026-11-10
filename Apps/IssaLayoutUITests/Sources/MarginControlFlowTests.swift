@@ -337,8 +337,14 @@ final class MarginControlFlowTests: XCTestCase {
     private func expectedFillDeltas(window: CGRect, topBar: Bool) throws -> (top: CGFloat, bottom: CGFloat) {
         guard topBar else { return (0, 44) }
         if UIDevice.current.userInterfaceIdiom == .pad { return (20, 44) }
-        guard abs(window.width - 402) < 1, abs(window.height - 874) < 1 else {
-            throw XCTSkip("the expected deltas are worked out for the iPhone 17 Pro, not \(window.size)")
+        // A home-button phone (the SE, 375×667) has no sensor or indicator
+        // to come closer to: only the bars' bands come back.
+        if abs(window.width - 375) < 1, abs(window.height - 667) < 1 { return (20, 44) }
+        // The 17 Pro and Pro Max share their insets (62 and 34), so the same
+        // reclaim as above applies to both.
+        let islandPhones = [CGSize(width: 402, height: 874), CGSize(width: 440, height: 956)]
+        guard islandPhones.contains(where: { abs($0.width - window.width) < 1 && abs($0.height - window.height) < 1 }) else {
+            throw XCTSkip("the expected deltas are worked out for the SE, 17 Pro and Pro Max, not \(window.size)")
         }
         return (28, 60)
     }
