@@ -101,6 +101,21 @@ public struct ReaderScreen: View {
         #if ISSA_UITEST_FIXTURE
         // The cover hides the root's probes; see `DuoProbe`.
         .overlay(alignment: .topLeading) { DuoProbes(scope: "reader") }
+        // The page's text box, which `ReaderView` publishes; see there.
+        .overlayPreferenceValue(TextFrameProbeKey.self) { rect in
+            if let rect {
+                GeometryReader { proxy in
+                    let origin = proxy.frame(in: .global).origin
+                    Color.clear
+                        .frame(width: rect.width, height: rect.height)
+                        .accessibilityElement()
+                        .accessibilityIdentifier("probe.reader.textFrame")
+                        .accessibilityLabel("text frame probe")
+                        .allowsHitTesting(false)
+                        .offset(x: rect.minX - origin.x, y: rect.minY - origin.y)
+                }
+            }
+        }
         #endif
     }
 }
@@ -1216,17 +1231,22 @@ public struct ReaderView: View {
             // Where the text stands, for the margin tests: the page's inset
             // box, which no accessibility element of the page itself exposes
             // (its own frame includes the margins). One page only; a spread's
-            // text boxes are not one rectangle.
-            .overlay {
-                if layout.spread == nil {
-                    Color.clear
-                        .accessibilityElement()
-                        .accessibilityIdentifier("probe.reader.textFrame")
-                        .accessibilityLabel("text frame probe")
-                        .allowsHitTesting(false)
-                        .padding(EdgeInsets(
-                            top: pageTopMargin(in: layout), leading: model.style.pageMargin,
-                            bottom: model.style.pageMargin, trailing: model.style.pageMargin))
+            // text boxes are not one rectangle. Published, not drawn here: a
+            // probe laid over the page's own accessibility element changed
+            // that element's frame, and on iPhone Duo the page then reported
+            // the whole window, under the rail. `ReaderScreen` draws it at the
+            // top, beside the Duo's probes. A background with no accessibility
+            // element of its own leaves the page's alone.
+            .background {
+                GeometryReader { proxy in
+                    let frame = proxy.frame(in: .global)
+                    let top = pageTopMargin(in: layout), margin = model.style.pageMargin
+                    Color.clear.preference(
+                        key: TextFrameProbeKey.self,
+                        value: layout.spread != nil ? nil : CGRect(
+                            x: frame.minX + margin, y: frame.minY + top,
+                            width: max(frame.width - 2 * margin, 0),
+                            height: max(frame.height - top - margin, 0)))
                 }
             }
             #endif
@@ -2178,6 +2198,16 @@ extension PageSurface: Equatable {
 /// Split out because it is the whole accessible surface of the reader: a Canvas
 /// is a picture, so unless the text and every action are stated here, none of
 /// them exist for a reader using VoiceOver.
+#if ISSA_UITEST_FIXTURE
+/// The page's text box in global coordinates, for the margin tests' probe.
+struct TextFrameProbeKey: PreferenceKey {
+    static let defaultValue: CGRect? = nil
+    static func reduce(value: inout CGRect?, nextValue: () -> CGRect?) {
+        value = nextValue() ?? value
+    }
+}
+#endif
+
 struct PageAccessibility: ViewModifier {
     let model: ReaderModel
     /// Makes a turn: the page turner, so a turn from the rotor is made, carried

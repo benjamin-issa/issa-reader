@@ -94,7 +94,8 @@ final class MarginControlFlowTests: XCTestCase {
 
     private func closeSheet(_ app: XCUIApplication) {
         let done = app.buttons["Done"].firstMatch
-        XCTAssertTrue(done.waitForExistence(timeout: 10), "the Aa sheet has no Done")
+        if !done.waitForExistence(timeout: 10) { keep(app, "aa-sheet-without-done") }
+        XCTAssertTrue(done.exists, "the Aa sheet has no Done")
         done.tap()
         XCTAssertTrue(done.waitForNonExistence(timeout: 10), "the Aa sheet did not close")
     }
@@ -194,7 +195,9 @@ final class MarginControlFlowTests: XCTestCase {
         for id in ["reader.contents", "reader.find", "reader.marks", "reader.ask"] {
             let button = app.descendants(matching: .any)[id].firstMatch
             guard button.exists else { continue }   // folded into the menu on a narrow bar
-            XCTAssertFalse(button.isHittable, "\(id) is still hittable behind the Aa sheet")
+            // Not `isHittable`: XCUITest answers that from where the element
+            // is on screen, and `allowsHitTesting(false)` does not change it.
+            // What matters is what a touch does, so touch it and look.
             // A real touch at the button, which hit-testing must swallow.
             button.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
             tapped += 1
