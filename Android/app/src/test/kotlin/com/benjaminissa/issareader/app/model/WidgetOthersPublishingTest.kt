@@ -304,4 +304,156 @@ class WidgetOthersPublishingTest : AppSuite() {
             scope.close()
         }
     }
+
+    /** A server with a portrait and a square cover behind the uuid route, either of which can be missing. */
+    private fun artServer(portrait: Boolean = true, square: Boolean = true) = com.benjaminissa.issareader.app.StubServer { request ->
+        when {
+            request.path.endsWith("/cover") && request.query.contains("audio") ->
+                if (square) com.benjaminissa.issareader.app.Answer(200, "square art") else com.benjaminissa.issareader.app.Answer(404)
+            request.path.endsWith("/cover") ->
+                if (portrait) com.benjaminissa.issareader.app.Answer(200, "portrait art") else com.benjaminissa.issareader.app.Answer(404)
+            else -> com.benjaminissa.issareader.app.Answer(404)
+        }
+    }
+
+    private suspend fun sessionOn(server: com.benjaminissa.issareader.app.StubServer) =
+        com.benjaminissa.issareader.core.Session(server.url, com.benjaminissa.issareader.app.TestTokens(), server.http)
+            .also { it.adopt("a-token") }
+
+    private fun coverRequests(server: com.benjaminissa.issareader.app.StubServer) = server.requests().filter { it.path.endsWith("/cover") }
+
+    private fun storedCover(id: String): String? = CurrentBookSnapshotStore.otherCoverFile(id)?.takeIf { it.exists() }?.readText()
+
+    /** A book with both editions takes the ebook's portrait cover, since others are only drawn in portrait slots. */
+    @Test
+    fun aBookWithBothEditionsGetsItsPortraitCover() = mainTest {
+        artServer().use { server ->
+            val scope = testScope()
+            val covers = CoverCache(directory = com.benjaminissa.issareader.app.temporaryDirectory("covers"))
+            val publisher = CurrentBookPublisher(scope, covers = { covers }).also { it.resume() }
+            try {
+                val both = SharedFixtures.book("Both", uuid = "a", status = "Reading", progress = 0.3, positionTimestamp = 1.0, audiobook = true)
+                publisher.publish(
+                    book("cur"), session = null, progress = 0.5, chapter = null, remaining = 600.0, isPlaying = false,
+                    candidate = CurrentBookPublisher.Owner.Reading("cur"),
+                )
+                publisher.libraryChanged(listOf(book("cur"), both), sessionOn(server))
+                assertTrue(com.benjaminissa.issareader.app.waitUntil { CurrentBookSnapshotStore.read()?.others?.singleOrNull()?.coverTriedPortrait == true })
+                assertEquals("portrait art", storedCover("a"))
+                assertFalse(CurrentBookSnapshotStore.read()!!.others.single().coverIsSquare)
+                assertTrue("the square route was not asked", coverRequests(server).none { it.query.contains("audio") })
+            } finally {
+                scope.close()
+            }
+        }
+    }
+
+    /** An audiobook-only book has no portrait art: the square falls in, and is recorded as square. */
+    @Test
+    fun anAudiobookOnlyBookFallsBackToSquare() = mainTest {
+        artServer(portrait = false).use { server ->
+            val scope = testScope()
+            val covers = CoverCache(directory = com.benjaminissa.issareader.app.temporaryDirectory("covers"))
+            val publisher = CurrentBookPublisher(scope, covers = { covers }).also { it.resume() }
+            try {
+                val audio = SharedFixtures.book("Audio", uuid = "a", status = "Reading", progress = 0.3, positionTimestamp = 1.0, audiobook = true, ebook = false)
+                publisher.publish(
+                    book("cur"), session = null, progress = 0.5, chapter = null, remaining = 600.0, isPlaying = false,
+                    candidate = CurrentBookPublisher.Owner.Reading("cur"),
+                )
+                publisher.libraryChanged(listOf(book("cur"), audio), sessionOn(server))
+                assertTrue(com.benjaminissa.issareader.app.waitUntil { CurrentBookSnapshotStore.read()?.others?.singleOrNull()?.coverTriedPortrait == true })
+                assertEquals("square art", storedCover("a"))
+                assertTrue(CurrentBookSnapshotStore.read()!!.others.single().coverIsSquare)
+            } finally {
+                scope.close()
+            }
+        }
+    }
+
+    /** Sets up a stored square cover for the book with both editions, as an earlier version left it. */
+    private fun leaveSquareCover(scope: kotlinx.coroutines.CoroutineScope, both: Book) {
+        val seeding = CurrentBookPublisher(scope).also { it.resume() }
+        seeding.publish(
+            book("cur"), session = null, progress = 0.5, chapter = null, remaining = 600.0, isPlaying = false,
+            candidate = CurrentBookPublisher.Owner.Reading("cur"),
+        )
+        seeding.libraryChanged(listOf(book("cur"), both), null)
+        CurrentBookSnapshotStore.writeOtherCover(both.uuid, "old square".toByteArray())
+        val snapshot = CurrentBookSnapshotStore.read()!!
+        CurrentBookSnapshotStore.write(snapshot.copy(others = snapshot.others.map { it.copy(coverIsSquare = true, coverTriedPortrait = false) }))
+    }
+
+    /** A square stored before the preference changed is replaced by the portrait art once, and then left alone. */
+    @Test
+    fun aStoredSquareIsReplacedByPortraitOnce() = mainTest {
+        artServer().use { server ->
+            val scope = testScope()
+            val dir = com.benjaminissa.issareader.app.temporaryDirectory("covers")
+            try {
+                val both = SharedFixtures.book("Both", uuid = "a", status = "Reading", progress = 0.3, positionTimestamp = 1.0, audiobook = true)
+                leaveSquareCover(scope, both)
+                val publisher = CurrentBookPublisher(scope, covers = { CoverCache(directory = dir) }).also { it.resume() }
+                publisher.libraryChanged(listOf(book("cur"), both), sessionOn(server))
+                assertTrue(com.benjaminissa.issareader.app.waitUntil { storedCover("a") == "portrait art" })
+                assertTrue(com.benjaminissa.issareader.app.waitUntil { !CurrentBookSnapshotStore.read()!!.others.single().coverIsSquare })
+                val asked = coverRequests(server).size
+                // A new process: nothing remembered in memory.
+                val next = CurrentBookPublisher(scope, covers = { CoverCache(directory = dir) }).also { it.resume() }
+                next.libraryChanged(listOf(book("cur"), both), sessionOn(server))
+                kotlinx.coroutines.delay(200)
+                assertEquals(asked, coverRequests(server).size)
+            } finally {
+                scope.close()
+            }
+        }
+    }
+
+    /** A square stored for a book that has no portrait art stays, and the question is not asked again. */
+    @Test
+    fun aStoredSquareWithNoPortraitArtStaysAndIsNotAskedAgain() = mainTest {
+        artServer(portrait = false).use { server ->
+            val scope = testScope()
+            val dir = com.benjaminissa.issareader.app.temporaryDirectory("covers")
+            try {
+                val both = SharedFixtures.book("Both", uuid = "a", status = "Reading", progress = 0.3, positionTimestamp = 1.0, audiobook = true)
+                leaveSquareCover(scope, both)
+                val publisher = CurrentBookPublisher(scope, covers = { CoverCache(directory = dir) }).also { it.resume() }
+                publisher.libraryChanged(listOf(book("cur"), both), sessionOn(server))
+                assertTrue(com.benjaminissa.issareader.app.waitUntil { CurrentBookSnapshotStore.read()!!.others.single().coverTriedPortrait })
+                assertEquals("old square", storedCover("a"))
+                assertTrue(CurrentBookSnapshotStore.read()!!.others.single().coverIsSquare)
+                val asked = coverRequests(server).size
+                val next = CurrentBookPublisher(scope, covers = { CoverCache(directory = dir) }).also { it.resume() }
+                next.libraryChanged(listOf(book("cur"), both), sessionOn(server))
+                kotlinx.coroutines.delay(200)
+                assertEquals(asked, coverRequests(server).size)
+                assertEquals("old square", storedCover("a"))
+            } finally {
+                scope.close()
+            }
+        }
+    }
+
+    /** The current book still prefers its audiobook's square cover. */
+    @Test
+    fun theCurrentBookStillPrefersSquare() = mainTest {
+        artServer().use { server ->
+            val scope = testScope()
+            val covers = CoverCache(directory = com.benjaminissa.issareader.app.temporaryDirectory("covers"))
+            val publisher = CurrentBookPublisher(scope, covers = { covers }).also { it.resume() }
+            try {
+                val both = SharedFixtures.book("Both", uuid = "cur", audiobook = true)
+                publisher.publish(
+                    both, session = sessionOn(server), progress = 0.5, chapter = null, remaining = 600.0, isPlaying = false,
+                    candidate = CurrentBookPublisher.Owner.Reading("cur"),
+                )
+                assertTrue(com.benjaminissa.issareader.app.waitUntil { CurrentBookSnapshotStore.coverFile?.exists() == true })
+                assertEquals("square art", CurrentBookSnapshotStore.coverFile!!.readText())
+                assertTrue(CurrentBookSnapshotStore.read()!!.coverIsSquare)
+            } finally {
+                scope.close()
+            }
+        }
+    }
 }

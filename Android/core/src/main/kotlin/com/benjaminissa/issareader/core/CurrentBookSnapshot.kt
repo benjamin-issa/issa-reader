@@ -130,6 +130,14 @@ data class OtherBook(
     val progress: Double = 0.0,
     /** Whether the cover file is the square audiobook art. */
     val coverIsSquare: Boolean = false,
+    /**
+     * Whether the portrait cover has been asked for. Others are only drawn in
+     * portrait slots, so a square file stored before that was the audiobook's
+     * art for a book that may have its own portrait art: it is fetched again
+     * once, and this keeps the answer "there is none" from being asked every
+     * update.
+     */
+    val coverTriedPortrait: Boolean = false,
 ) {
     /** Rounded the way the current book's is. */
     val percent: Int get() = ReadingProgress.percent(progress)

@@ -48,7 +48,7 @@ class CurrentBookWidgetTest {
 
     private val longTitle = "The Strange Case of Dr Jekyll and Mr Hyde"
 
-    private fun snapshot(others: Int = 0, square: Boolean = false, title: String = longTitle, otherTitle: String? = null) = CurrentBookSnapshot(
+    private fun snapshot(others: Int = 0, square: Boolean = false, title: String = longTitle, otherTitle: String? = null, squareOthers: Boolean = false) = CurrentBookSnapshot(
         bookId = "current", title = title, author = "Robert Louis Stevenson",
         chapter = "Chapter 3 · A Caucus-Race and a Long Tale", progress = 0.42, remaining = 6 * 3600.0 + 12 * 60,
         coverBookId = "current", coverIsSquare = square,
@@ -57,7 +57,7 @@ class CurrentBookWidgetTest {
             OtherBook("book-2", "Dracula", progress = 0.55),
             OtherBook("book-3", "Emma", progress = 0.3),
             OtherBook("book-4", "Walden", progress = 0.8),
-        ).take(others).mapIndexed { i, other -> if (i == 0 && otherTitle != null) other.copy(title = otherTitle) else other },
+        ).take(others).mapIndexed { i, other -> (if (i == 0 && otherTitle != null) other.copy(title = otherTitle) else other).copy(coverIsSquare = squareOthers) },
     )
 
     private val palette = listOf(
@@ -84,7 +84,7 @@ class CurrentBookWidgetTest {
     private fun data(snapshot: CurrentBookSnapshot?, cover: Boolean = true, light: Boolean = false) = WidgetData(
         snapshot = snapshot,
         coverBytes = if (cover && snapshot != null) fakeCover(0, snapshot.title, snapshot.coverIsSquare, light) else null,
-        otherCovers = snapshot?.others.orEmpty().mapIndexed { i, o -> o.bookId to fakeCover(i + 1, o.title) }.toMap(),
+        otherCovers = snapshot?.others.orEmpty().mapIndexed { i, o -> o.bookId to fakeCover(i + 1, o.title, square = o.coverIsSquare) }.toMap(),
     )
 
     private fun configured(dark: Boolean): Context {
@@ -147,6 +147,9 @@ class CurrentBookWidgetTest {
             shot("medium-card-minimum-$mode", DpSize(250.dp, 150.dp), data(snapshot(1)), dark = dark)
             for (others in listOf(0, 1, 4)) shot("large-$others-others-$mode", large, data(snapshot(others)), dark = dark)
             shot("large-4-others-square-$mode", large, data(snapshot(4, square = true)), dark = dark)
+            // Square art in portrait slots: the whole cover over a blur, not a crop.
+            shot("medium-1-others-square-cover-$mode", medium, data(snapshot(1, squareOthers = true)), dark = dark)
+            shot("large-4-others-square-cover-$mode", large, data(snapshot(4, squareOthers = true)), dark = dark)
             shot("large-4-others-small-$mode", DpSize(250.dp, 250.dp), data(snapshot(4)), dark = dark)
             shot("empty-$mode", small, data(null), dark = dark)
         }

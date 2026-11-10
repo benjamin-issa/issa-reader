@@ -202,7 +202,7 @@ class CurrentBookPublisher(
         val chosen = WidgetOthers.select(library, currentBookId).map { other ->
             // A cover that landed says which shape it really is; the preference only guesses.
             val known = stored.firstOrNull { it.bookId == other.bookId }
-            if (known != null && CurrentBookSnapshotStore.hasOtherCover(other.bookId)) other.copy(coverIsSquare = known.coverIsSquare) else other
+            if (known != null && CurrentBookSnapshotStore.hasOtherCover(other.bookId)) other.copy(coverIsSquare = known.coverIsSquare, coverTriedPortrait = known.coverTriedPortrait) else other
         }
         val storedWithoutCurrent = stored.filter { it.bookId != currentBookId }
         return if (storedWithoutCurrent.size == stored.size && !WidgetOthers.worthRedrawing(stored, chosen)) stored else chosen
@@ -214,20 +214,30 @@ class CurrentBookPublisher(
         val session = librarySession ?: return
         val byId = library?.associateBy { it.uuid } ?: return
         val now = Instant.now()
+        // Covers stored when others were square-preferred are replaced by the portrait art once,
+        // where the book may have any; a book with none keeps its square and is not asked again.
+        fun staleSquare(other: OtherBook): Boolean =
+            other.coverIsSquare && !other.coverTriedPortrait && byId[other.bookId]?.let { WidgetOthers.mayHavePortraitCover(it) } == true
         val missing = others.filter { other ->
-            !CurrentBookSnapshotStore.hasOtherCover(other.bookId) && byId.containsKey(other.bookId) &&
+            (!CurrentBookSnapshotStore.hasOtherCover(other.bookId) || staleSquare(other)) && byId.containsKey(other.bookId) &&
                 (otherAttempts[other.bookId]?.let { Duration.between(it, now).toMillis() / 1000.0 >= COVER_RETRY } ?: true)
         }
         if (missing.isEmpty()) return
         for (other in missing) otherAttempts[other.bookId] = now
         val generation = othersGeneration
+        val replacing = missing.filter { CurrentBookSnapshotStore.hasOtherCover(it.bookId) }.map { it.bookId }.toSet()
         scope.launch {
             val shapes = mutableMapOf<String, Boolean>()
             for (other in missing) {
                 val book = byId[other.bookId] ?: continue
-                val shape = if (other.coverIsSquare) LibraryService.CoverShape.SQUARE else LibraryService.CoverShape.PORTRAIT
-                val fetched = covers().widgetCover(book, session, shape) ?: continue
+                // Portrait first, as the slots are; the cache falls back to the square art and says which came.
+                val fetched = covers().widgetCover(book, session, LibraryService.CoverShape.PORTRAIT) ?: continue
                 if (generation != othersGeneration) return@launch
+                if (other.bookId in replacing && fetched.isSquare) {
+                    // No portrait art: the square already stored stays, and the question is answered.
+                    shapes[other.bookId] = true
+                    continue
+                }
                 writeOtherCover(other.bookId, fetched.data)
                 if (generation != othersGeneration) {
                     // A sign-out overtook the write: clear() has already swept the covers and this
@@ -240,7 +250,7 @@ class CurrentBookPublisher(
             }
             if (shapes.isEmpty() || generation != othersGeneration) return@launch
             val snapshot = CurrentBookSnapshotStore.read() ?: return@launch
-            val updated = snapshot.others.map { o -> shapes[o.bookId]?.let { o.copy(coverIsSquare = it) } ?: o }
+            val updated = snapshot.others.map { o -> shapes[o.bookId]?.let { o.copy(coverIsSquare = it, coverTriedPortrait = true) } ?: o }
             // A book that left the list while its cover was in flight leaves its file behind otherwise.
             CurrentBookSnapshotStore.pruneOtherCovers(updated.map { it.bookId }.toSet())
             if (updated != snapshot.others) CurrentBookSnapshotStore.write(snapshot.copy(others = updated))

@@ -64,6 +64,19 @@ internal class WidgetBitmaps(context: Context) {
         return memoised("$key#${source(bytes)}@${widthDp}x$heightDp") { decodeCovering(bytes, px(widthDp), px(heightDp)) }
     }
 
+    /**
+     * A cover for a portrait slot of [widthDp] x [heightDp]: full-bleed when it is portrait art, and
+     * when it is square, the whole square fitted over a blurred copy of itself rather than cropped to
+     * the slot, which lost a third of it.
+     */
+    fun slotCover(key: String, bytes: ByteArray?, square: Boolean, widthDp: Float, heightDp: Float): Bitmap? {
+        bytes ?: return null
+        if (!square) return cover(key, bytes, widthDp, heightDp)
+        val w = px(widthDp)
+        val h = px(heightDp)
+        return memoised("$key-blur#${source(bytes)}@${widthDp}x$heightDp") { decodeCovering(bytes, w, h)?.let { fitOverBlur(it, w, h) } }
+    }
+
     /** The small widget's cover in the chosen [style]; a square cover is always aspect-filled. */
     fun smallCover(bytes: ByteArray?, square: Boolean, style: SmallCoverStyle, sideDp: Float): Bitmap? {
         bytes ?: return null
@@ -118,21 +131,24 @@ internal class WidgetBitmaps(context: Context) {
         }
 
         /** [cover], aspect-fit and centred, over a darkened and blurred copy of itself that fills [side] square. */
-        fun fitOverBlur(cover: Bitmap, side: Int): Bitmap {
-            val out = Bitmap.createBitmap(side, side, Bitmap.Config.ARGB_8888)
+        fun fitOverBlur(cover: Bitmap, side: Int): Bitmap = fitOverBlur(cover, side, side)
+
+        /** The same over a [width] x [height] box of any shape: a portrait slot for square art. */
+        fun fitOverBlur(cover: Bitmap, width: Int, height: Int): Bitmap {
+            val out = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
             val canvas = Canvas(out)
             val smooth = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
             // Blur without a toolkit: shrink to a handful of pixels, then grow back in two steps.
             val tiny = Bitmap.createBitmap(12, 12, Bitmap.Config.ARGB_8888)
             drawCropped(Canvas(tiny), cover, 12, smooth)
             val mid = Bitmap.createScaledBitmap(tiny, 48, 48, true)
-            canvas.drawBitmap(mid, null, RectF(0f, 0f, side.toFloat(), side.toFloat()), smooth)
+            canvas.drawBitmap(mid, null, RectF(0f, 0f, width.toFloat(), height.toFloat()), smooth)
             canvas.drawColor(Color.argb(120, 0, 0, 0))
-            val scale = min(side.toFloat() / cover.width, side.toFloat() / cover.height)
+            val scale = min(width.toFloat() / cover.width, height.toFloat() / cover.height)
             val w = cover.width * scale
             val h = cover.height * scale
-            val left = (side - w) / 2
-            val top = (side - h) / 2
+            val left = (width - w) / 2
+            val top = (height - h) / 2
             canvas.drawBitmap(cover, null, RectF(left, top, left + w, top + h), smooth)
             return out
         }

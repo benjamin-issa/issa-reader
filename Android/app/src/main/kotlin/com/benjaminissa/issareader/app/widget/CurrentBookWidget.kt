@@ -384,7 +384,7 @@ private fun AlsoReadingCard(context: Context, other: OtherBook, data: WidgetData
             .padding(horizontal = 2.dp).clickable(actionStartActivity(openBookIntent(context, other.bookId))),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        CoverFlush(bitmaps.cover("other-${other.bookId}", data.otherCovers[other.bookId], 24f, 36f), other.title, GlanceModifier.width(24.dp).height(36.dp).cornerRadius(5.dp))
+        CoverFlush(bitmaps.slotCover("other-${other.bookId}", data.otherCovers[other.bookId], other.coverIsSquare, 24f, 36f), other.title, GlanceModifier.width(24.dp).height(36.dp).cornerRadius(5.dp))
         Spacer(GlanceModifier.width(10.dp))
         Column(modifier = GlanceModifier.defaultWeight()) {
             Image(ImageProvider(caption), contentDescription = null, colorFilter = ColorFilter.tint(Colors.inkSecondary), modifier = GlanceModifier.width(bitmaps.dp(caption.width).dp).height(bitmaps.dp(caption.height).dp))
@@ -462,7 +462,7 @@ private fun Large(context: Context, snapshot: CurrentBookSnapshot, data: WidgetD
 private fun OtherCover(context: Context, other: OtherBook, data: WidgetData, bitmaps: WidgetBitmaps, width: Float, height: Float) {
     Column(modifier = GlanceModifier.width(width.dp).clickable(actionStartActivity(openBookIntent(context, other.bookId)))) {
         Box(modifier = GlanceModifier.width(width.dp).height(height.dp), contentAlignment = Alignment.BottomStart) {
-            CoverFlush(bitmaps.cover("other-${other.bookId}", data.otherCovers[other.bookId], width, height), other.title, GlanceModifier.fillMaxSize().cornerRadius(8.dp))
+            CoverFlush(bitmaps.slotCover("other-${other.bookId}", data.otherCovers[other.bookId], other.coverIsSquare, width, height), other.title, GlanceModifier.fillMaxSize().cornerRadius(8.dp))
             Bar(other.progress, Colors.whiteTrack, GlanceModifier.fillMaxWidth(), thickness = 3)
         }
         Spacer(GlanceModifier.height(4.dp))

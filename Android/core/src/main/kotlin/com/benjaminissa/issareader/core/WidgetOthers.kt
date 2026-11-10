@@ -36,10 +36,15 @@ object WidgetOthers {
                     title = it.title,
                     author = it.byline,
                     progress = it.position?.locator?.totalProgression ?: 0.0,
-                    coverIsSquare = BookFormat.AUDIOBOOK in it.servableFormats,
+                    // Others are only drawn in portrait slots: the ebook's cover fills one, and
+                    // square art is the fallback for a book that has none.
+                    coverIsSquare = false,
                 )
             }
             .toList()
+
+    /** Whether the book may have art of the portrait shape: any edition that is not the audiobook. */
+    fun mayHavePortraitCover(book: Book): Boolean = book.servableFormats.any { it != BookFormat.AUDIOBOOK }
 
     /**
      * Whether [new] differs from [old] enough to write and redraw: the ids or

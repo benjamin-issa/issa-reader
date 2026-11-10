@@ -79,8 +79,18 @@ class WidgetOthersTest {
         assertEquals("Book a", other.title)
         assertEquals(0.137, other.progress, 0.0)
         assertEquals(14, other.percent)
-        assertTrue(other.coverIsSquare)
+        // Others are only drawn in portrait slots, so the portrait art is asked for even when there is an audiobook.
+        assertFalse(other.coverIsSquare)
         assertFalse(WidgetOthers.select(listOf(book("e")), null).single().coverIsSquare)
+        assertFalse(other.coverTriedPortrait)
+    }
+
+    @Test
+    fun portraitArtIsPossibleUnlessTheBookIsAudioOnly() {
+        assertTrue(WidgetOthers.mayHavePortraitCover(book("e")))
+        assertTrue(WidgetOthers.mayHavePortraitCover(book("both", audiobook = true)))
+        val audioOnly = book("a", audiobook = true).let { it.copy(ebook = null) }
+        assertFalse(WidgetOthers.mayHavePortraitCover(audioOnly))
     }
 
     // The change rule
