@@ -407,4 +407,77 @@ struct ReaderStyleOverrideFillTests {
         #expect(!damaged.fillsScreen)
         #expect(damaged.fontSize == 22)
     }
+
+    // MARK: Top and bottom margin
+
+    @Test("a stored override without the key has no vertical margin, and a bad one is dropped")
+    func verticalMarginAbsent() throws {
+        #expect(try decode(#"{"fontSize": 20, "pageMargin": 6}"#).verticalMargin == nil)
+        let decoded = try decode(#"{"verticalMargin": "tall", "fontSize": 21}"#)
+        #expect(decoded.verticalMargin == nil)
+        #expect(decoded.fontSize == 21)
+        #expect(try decode(#"{"verticalMargin": 1e300}"#).verticalMargin == ReaderStyle.pageMarginRange.upperBound)
+    }
+
+    @Test("an override round-trips it, and counts and empties with it")
+    func verticalMarginRoundTrip() throws {
+        for value: CGFloat in [0, 12, 64] {
+            let override = ReaderStyleOverride(fontSize: 20, verticalMargin: value)
+            let data = try JSONEncoder().encode(override)
+            #expect(try JSONDecoder().decode(ReaderStyleOverride.self, from: data) == override)
+        }
+        #expect(ReaderStyleOverride().isEmpty)
+        #expect(!ReaderStyleOverride(verticalMargin: 0).isEmpty)
+        #expect(ReaderStyleOverride(verticalMargin: 0).count == 1)
+        #expect(ReaderStyleOverride(pageMargin: 4, verticalMargin: 0).count == 2)
+        let unset = try JSONEncoder().encode(ReaderStyleOverride(fontSize: 20))
+        #expect(!String(decoding: unset, as: UTF8.self).contains("verticalMargin"))
+    }
+
+    @Test("applying lays the vertical margin over the default, and only when set")
+    func verticalMarginApplying() {
+        let defaults = ReaderStyle(pageMargin: 24)
+        #expect(defaults.applying(ReaderStyleOverride(verticalMargin: 6)).verticalMargin == 6)
+        #expect(defaults.applying(ReaderStyleOverride(fontSize: 20)).verticalMargin == nil)
+        var own = defaults
+        own.verticalMargin = 10
+        #expect(own.applying(ReaderStyleOverride(fontSize: 20)).verticalMargin == 10)
+    }
+
+    @Test("the effective vertical margin follows the side margin until it is set")
+    func effectiveVerticalMargin() {
+        var style = ReaderStyle(pageMargin: 24)
+        #expect(style.effectiveVerticalMargin == 24)
+        style.pageMargin = 12
+        #expect(style.effectiveVerticalMargin == 12)
+        style.verticalMargin = 0
+        #expect(style.effectiveVerticalMargin == 0)
+    }
+
+    @Test("a difference records it only when it changed")
+    func verticalMarginDifference() {
+        let defaults = ReaderStyle()
+        var edited = defaults
+        #expect(defaults.difference(to: edited).verticalMargin == nil)
+        edited.verticalMargin = 8
+        #expect(defaults.difference(to: edited).verticalMargin == 8)
+    }
+
+    @Test("a style round-trips it, omits it when nil, and an old blob decodes unchanged")
+    func verticalMarginStyleStorage() throws {
+        var style = ReaderStyle()
+        style.verticalMargin = 0
+        let data = try JSONEncoder().encode(style)
+        #expect(try JSONDecoder().decode(ReaderStyle.self, from: data).verticalMargin == 0)
+        let plain = try JSONEncoder().encode(ReaderStyle())
+        #expect(!String(decoding: plain, as: UTF8.self).contains("verticalMargin"))
+        let old = try JSONDecoder().decode(ReaderStyle.self, from: Data(#"{"fontSize": 22, "pageMargin": 32, "fillsScreen": true}"#.utf8))
+        #expect(old.verticalMargin == nil)
+        #expect(old.pageMargin == 32)
+        #expect(old.fillsScreen)
+        #expect(old.fontSize == 22)
+        let damaged = try JSONDecoder().decode(ReaderStyle.self, from: Data(#"{"verticalMargin": "x", "fontSize": 22}"#.utf8))
+        #expect(damaged.verticalMargin == nil)
+        #expect(damaged.fontSize == 22)
+    }
 }

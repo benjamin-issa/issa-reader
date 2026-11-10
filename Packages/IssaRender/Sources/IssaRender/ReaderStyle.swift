@@ -130,6 +130,13 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
 
     public var justification: Justification
     public var pageMargin: CGFloat
+    /// The margin above the first line and below the last, in points, when it
+    /// is not the same as the sides'. Nil follows `pageMargin`.
+    ///
+    /// Only the full-screen page reads it (`ReaderChrome`): without that, the
+    /// top bar and footer's bands stand in for these margins. Shared with the
+    /// Android app's stored style under the same key.
+    public var verticalMargin: CGFloat?
     /// Give the bands the reader keeps for its top bar and footer to the page.
     ///
     /// Off, the page stops short of both and the controls stand in the space
@@ -182,6 +189,7 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
         justification: Justification = .followBook,
         pageMargin: CGFloat = 24,
         fillsScreen: Bool = false,
+        verticalMargin: CGFloat? = nil,
         highlightGranularity: HighlightGranularity = .sentence,
         followNarration: Bool = true,
         turnPagesMidSentence: Bool = false,
@@ -197,6 +205,7 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
         self.justification = justification
         self.pageMargin = pageMargin
         self.fillsScreen = fillsScreen
+        self.verticalMargin = verticalMargin
         self.highlightGranularity = highlightGranularity
         self.followNarration = followNarration
         self.turnPagesMidSentence = turnPagesMidSentence
@@ -207,7 +216,7 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
 
     // Spelled out rather than synthesised, because the decoder below names them.
     enum CodingKeys: String, CodingKey {
-        case typeface, fontFamily, fontSize, lineSpacing, theme, justified, justification, pageMargin, fillsScreen
+        case typeface, fontFamily, fontSize, lineSpacing, theme, justified, justification, pageMargin, fillsScreen, verticalMargin
         case highlightGranularity, followNarration, turnPagesMidSentence
         case tapToPlay, progressDisplay, highlighters
     }
@@ -274,6 +283,9 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
             ?? fallback.pageMargin
         fillsScreen = (try? container.decodeIfPresent(Bool.self, forKey: .fillsScreen))
             ?? fallback.fillsScreen
+        // Absent means "follow the side margin", which is what a style stored
+        // before this existed should keep doing; it takes no fallback.
+        verticalMargin = Self.decodeLength(from: container, key: .verticalMargin, in: Self.pageMarginRange)
         highlightGranularity = Self.decodeCase(
             HighlightGranularity.self, from: container, key: .highlightGranularity)
             ?? fallback.highlightGranularity
@@ -337,6 +349,7 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
         try container.encode(justification == .always, forKey: .justified)
         try container.encode(pageMargin, forKey: .pageMargin)
         try container.encode(fillsScreen, forKey: .fillsScreen)
+        try container.encodeIfPresent(verticalMargin, forKey: .verticalMargin)
         try container.encode(highlightGranularity, forKey: .highlightGranularity)
         try container.encode(followNarration, forKey: .followNarration)
         try container.encode(turnPagesMidSentence, forKey: .turnPagesMidSentence)
@@ -363,6 +376,10 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
     /// stepper's 12...32 and the television's fixed 40, so no size anyone
     /// chose is moved; narrow enough that a page always has a line on it.
     public static let fontSizeRange: ClosedRange<CGFloat> = 8 ... 96
+
+    /// The margin the top and bottom actually use: their own when set, else
+    /// the sides'.
+    public var effectiveVerticalMargin: CGFloat { verticalMargin ?? pageMargin }
 
     /// The page margins a stored setting may hold.
     public static let pageMarginRange: ClosedRange<CGFloat> = 0 ... 200

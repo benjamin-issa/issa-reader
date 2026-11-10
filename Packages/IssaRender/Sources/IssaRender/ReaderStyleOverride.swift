@@ -21,6 +21,9 @@ public struct ReaderStyleOverride: Sendable, Hashable, Codable {
     /// Whether the reader's bars give their bands to the text. Unset follows
     /// the global default.
     public var fillsScreen: Bool?
+    /// The margin above and below the text when the page fills the screen.
+    /// Unset follows the global default.
+    public var verticalMargin: CGFloat?
 
     public init(
         typeface: ReaderStyle.Typeface? = nil,
@@ -29,6 +32,7 @@ public struct ReaderStyleOverride: Sendable, Hashable, Codable {
         justification: ReaderStyle.Justification? = nil,
         pageMargin: CGFloat? = nil,
         fillsScreen: Bool? = nil,
+        verticalMargin: CGFloat? = nil,
     ) {
         self.typeface = typeface
         self.fontSize = fontSize
@@ -36,10 +40,11 @@ public struct ReaderStyleOverride: Sendable, Hashable, Codable {
         self.justification = justification
         self.pageMargin = pageMargin
         self.fillsScreen = fillsScreen
+        self.verticalMargin = verticalMargin
     }
 
     enum CodingKeys: String, CodingKey {
-        case typeface, fontSize, lineSpacing, justified, justification, pageMargin, fillsScreen
+        case typeface, fontSize, lineSpacing, justified, justification, pageMargin, fillsScreen, verticalMargin
     }
 
     /// Decoded field by field, every field forgiving.
@@ -67,6 +72,9 @@ public struct ReaderStyleOverride: Sendable, Hashable, Codable {
             try? container.decodeIfPresent(CGFloat.self, forKey: .pageMargin),
             to: ReaderStyle.pageMarginRange)
         fillsScreen = try? container.decodeIfPresent(Bool.self, forKey: .fillsScreen)
+        verticalMargin = ReaderStyle.clampedLength(
+            try? container.decodeIfPresent(CGFloat.self, forKey: .verticalMargin),
+            to: ReaderStyle.pageMarginRange)
         // `justification` replaced `justified`, and reads the old key the same
         // way `ReaderStyle` does: a book explicitly set to justified stays
         // justified, and one explicitly set ragged keeps that too — unlike the
@@ -89,6 +97,7 @@ public struct ReaderStyleOverride: Sendable, Hashable, Codable {
         try container.encodeIfPresent(justification, forKey: .justification)
         try container.encodeIfPresent(pageMargin, forKey: .pageMargin)
         try container.encodeIfPresent(fillsScreen, forKey: .fillsScreen)
+        try container.encodeIfPresent(verticalMargin, forKey: .verticalMargin)
         // The key this replaced, written as well, as `ReaderStyle` does for
         // the global setting. The build before the three-position setting
         // reads only `justified`; without it a reader who moves back a build
@@ -113,13 +122,14 @@ public struct ReaderStyleOverride: Sendable, Hashable, Codable {
     public var isEmpty: Bool {
         typeface == nil && fontSize == nil && lineSpacing == nil && justification == nil
             && pageMargin == nil && fillsScreen == nil
+            && verticalMargin == nil
     }
 
     /// Which fields the reader has taken control of, for the sheet to show.
     public var count: Int {
         [
             typeface != nil, fontSize != nil, lineSpacing != nil, justification != nil,
-            pageMargin != nil, fillsScreen != nil,
+            pageMargin != nil, fillsScreen != nil, verticalMargin != nil,
         ]
         .filter { $0 }.count
     }
@@ -136,6 +146,7 @@ public extension ReaderStyle {
         if let justification = override.justification { style.justification = justification }
         if let pageMargin = override.pageMargin { style.pageMargin = pageMargin }
         if let fillsScreen = override.fillsScreen { style.fillsScreen = fillsScreen }
+        if let verticalMargin = override.verticalMargin { style.verticalMargin = verticalMargin }
         return style
     }
 
@@ -150,6 +161,7 @@ public extension ReaderStyle {
             justification: other.justification == justification ? nil : other.justification,
             pageMargin: other.pageMargin == pageMargin ? nil : other.pageMargin,
             fillsScreen: other.fillsScreen == fillsScreen ? nil : other.fillsScreen,
+            verticalMargin: other.verticalMargin == verticalMargin ? nil : other.verticalMargin,
         )
     }
 }
