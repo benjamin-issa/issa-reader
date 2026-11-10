@@ -209,7 +209,8 @@ struct OtherCoverStoreTests {
             CurrentBookSnapshotStore.writeCover(Data("current".utf8))
             for id in ["a", "b"] { CurrentBookSnapshotStore.writeOtherCover(Data(id.utf8), bookID: id) }
             CurrentBookSnapshotStore.clear()
-            #expect((try FileManager.default.contentsOfDirectory(atPath: directory.path)).isEmpty)
+            let left = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+            #expect(left.isEmpty)
         }
     }
 
