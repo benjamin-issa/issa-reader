@@ -76,23 +76,29 @@ enum ReaderInsets {
     /// Only an upright iPhone with a home indicator and a sensor housing: the
     /// numbers behind `FillEdges` were measured on those. Landscape, the iPad,
     /// the Mac, a home-button phone and the iPhone Duo (whose rail takes the
-    /// side) keep their safe areas whole.
+    /// side) keep their safe areas whole. So does any window that reports a
+    /// fold or an occlusion: the Duo's inner display held tall has no rail,
+    /// but its geometry was never measured as an iPhone's.
     ///
     /// Pure, with the idiom and the window passed in, so the shared suite can
     /// ask it about every case from the iOS host.
     static func fillEdges(
         isPhone: Bool, window: CGSize, insets: EdgeInsets, railWidth: CGFloat,
+        hasFoldOrOcclusion: Bool = false,
     ) -> FillEdges? {
-        guard isPhone, window.height > window.width, railWidth == 0 else { return nil }
+        guard isPhone, window.height > window.width, railWidth == 0, !hasFoldOrOcclusion else { return nil }
         return FillEdges.iPhone(safeAreaTop: insets.top, safeAreaBottom: insets.bottom)
     }
 
     /// `fillEdges` for the device this is running on.
-    static func fillEdges(window: CGSize, insets: EdgeInsets, railWidth: CGFloat) -> FillEdges? {
+    static func fillEdges(
+        window: CGSize, insets: EdgeInsets, railWidth: CGFloat, hasFoldOrOcclusion: Bool,
+    ) -> FillEdges? {
         #if os(iOS)
         fillEdges(
             isPhone: UIDevice.current.userInterfaceIdiom == .phone,
-            window: window, insets: insets, railWidth: railWidth)
+            window: window, insets: insets, railWidth: railWidth,
+            hasFoldOrOcclusion: hasFoldOrOcclusion)
         #else
         nil
         #endif

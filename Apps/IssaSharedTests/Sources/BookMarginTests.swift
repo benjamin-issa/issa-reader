@@ -255,9 +255,13 @@ struct BookFillScreenTests {
         #expect(ReaderInsets.fillEdges(isPhone: false, window: portrait, insets: island, railWidth: 0) == nil)
         #expect(ReaderInsets.fillEdges(isPhone: true, window: CGSize(width: 874, height: 402), insets: island, railWidth: 0) == nil)
         #expect(ReaderInsets.fillEdges(isPhone: true, window: portrait, insets: island, railWidth: 84) == nil)
+        // No rail, but the window reports a fold or an occlusion: the Duo's
+        // inner display held tall.
+        #expect(ReaderInsets.fillEdges(
+            isPhone: true, window: portrait, insets: island, railWidth: 0, hasFoldOrOcclusion: true) == nil)
         let homeButton = EdgeInsets(top: 20, leading: 0, bottom: 0, trailing: 0)
         #expect(ReaderInsets.fillEdges(isPhone: true, window: portrait, insets: homeButton, railWidth: 0) == nil)
         let notch = EdgeInsets(top: 47, leading: 0, bottom: 34, trailing: 0)
-        #expect(ReaderInsets.fillEdges(isPhone: true, window: portrait, insets: notch, railWidth: 0)?.sensorClearance == 42)
+        #expect(ReaderInsets.fillEdges(isPhone: true, window: portrait, insets: notch, railWidth: 0)?.sensorClearance == 0.8 * 47 + 4)
     }
 }

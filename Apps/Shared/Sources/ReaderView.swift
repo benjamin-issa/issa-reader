@@ -291,7 +291,9 @@ public struct ReaderView: View {
                 fillEdges: ReaderInsets.fillEdges(
                     window: geometry.size,
                     insets: deviceInsets,
-                    railWidth: layout.railWidth),
+                    railWidth: layout.railWidth,
+                    hasFoldOrOcclusion: !adaptiveSignals.folds.isEmpty
+                        || !adaptiveSignals.occlusions.isEmpty),
             )
             // A spread lays the chapter out a page at a time like any other
             // device, each page as tall as the one page would be and as wide
@@ -1458,6 +1460,9 @@ public struct ReaderView: View {
                 .padding(.horizontal, Metrics.spacing24)
                 .padding(.top, Metrics.spacing12)
                 .padding(.top, Self.drawsTopBar(in: layout) ? ReaderChrome.barHeight : 0)
+                // The container is padded by `hardwareTop` when filling, so
+                // the banner would ride up by the safe area's difference.
+                .padding(.top, chrome.safeAreaTop - chrome.hardwareTop)
         }
         .animation(.easeInOut(duration: 0.2), value: model.chapterNotice)
         // Turning the page dismisses a selection left behind on the old one,
@@ -1973,6 +1978,13 @@ public struct ReaderView: View {
         band >= bookTitleBandMinimum
     }
 
+    /// The opacity of the backing behind the book's title: the footer's own
+    /// while the screen is filled, where the page's text can reach the band,
+    /// and none otherwise, where the band is empty.
+    static func bookTitleBackingOpacity(fillsScreen: Bool, chromeVisible: Bool) -> Double {
+        fillsScreen && chromeVisible ? 0.94 : 0
+    }
+
     /// The book's title, in the band below the footer's controls.
     ///
     /// Drawn into the home indicator's band rather than added to the footer,
@@ -2009,6 +2021,14 @@ public struct ReaderView: View {
                 // bottom edge whatever the text measures.
                 .frame(maxWidth: .infinity, alignment: .top)
                 .frame(height: deviceInsets.bottom, alignment: .top)
+                // Filling the screen lets the page's text reach into this
+                // band, so the caption gets the footer's backing over the
+                // whole band it stands in; otherwise it would print over the
+                // last line.
+                .background(model.style.theme.background.opacity(
+                    Self.bookTitleBackingOpacity(
+                        fillsScreen: model.style.fillsScreen, chromeVisible: model.chromeVisible)))
+                .animation(.easeInOut(duration: 0.2), value: model.chromeVisible)
                 .offset(y: deviceInsets.bottom)
                 .allowsHitTesting(false)
                 .accessibilityIdentifier("reader.bookTitle")
