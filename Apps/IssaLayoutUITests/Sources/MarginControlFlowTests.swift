@@ -330,10 +330,11 @@ final class MarginControlFlowTests: XCTestCase {
     ///   the page (iPhone Duo: no top band, only the footer's).
     /// - An upright iPhone with a sensor housing and a home indicator also
     ///   gets part of each safe area back. On the iPhone 17 Pro (402 by 874,
-    ///   safe areas 62 and 34) the top keeps the island's 54 instead of 62,
-    ///   and the bottom keeps the indicator's 18 instead of 34 (the corner at
-    ///   a 24-point margin needs only about 14.5): the top then gains 8 more,
-    ///   28 in all, and the bottom 16 more, 60 in all.
+    ///   safe areas 62 and 34) the top keeps 53.6 for the island (0.8 of the
+    ///   safe top, plus 4) instead of 62, and the bottom keeps the indicator's
+    ///   18 instead of 34 (the corner at a 24-point margin needs only about
+    ///   14.5): the top then gains 8.4 more, 28.4 in all, and the bottom 16
+    ///   more, 60 in all.
     private func expectedFillDeltas(window: CGRect, topBar: Bool) throws -> (top: CGFloat, bottom: CGFloat) {
         guard topBar else { return (0, 44) }
         if UIDevice.current.userInterfaceIdiom == .pad { return (20, 44) }
@@ -346,7 +347,7 @@ final class MarginControlFlowTests: XCTestCase {
         guard islandPhones.contains(where: { abs($0.width - window.width) < 1 && abs($0.height - window.height) < 1 }) else {
             throw XCTSkip("the expected deltas are worked out for the SE, 17 Pro and Pro Max, not \(window.size)")
         }
-        return (28, 60)
+        return (28.4, 60)
     }
 
     /// With the setting on, the text runs into both bars' bands, the controls
@@ -498,11 +499,25 @@ final class MarginControlFlowTests: XCTestCase {
         // after it are the fallbacks.
         let origin = app.coordinate(withNormalizedOffset: .zero)
         let highlight = app.buttons["Highlight"].firstMatch
+        let aa = app.buttons["Text options for this book"].firstMatch
+        var spot: XCUICoordinate?
         for depth: CGFloat in [100, 46, 130] where !highlight.exists {
-            origin.withOffset(CGVector(dx: text.midX, dy: text.minY + depth)).press(forDuration: 0.9)
-            _ = highlight.waitForExistence(timeout: 4)
+            let here = origin.withOffset(CGVector(dx: text.midX, dy: text.minY + depth))
+            here.press(forDuration: 0.9)
+            if highlight.waitForExistence(timeout: 4) { spot = here }
         }
         XCTAssertTrue(highlight.exists, "pressing and holding on the page selected nothing")
+        // A press that found no text ends as a tap, which hides the controls;
+        // this is about the menu while the footer shows, so bring them back
+        // and select again where the press did find text.
+        if !aa.exists, let spot {
+            app.buttons["Done"].firstMatch.tap()
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+            XCTAssertTrue(aa.waitForExistence(timeout: 5), "the controls did not come back")
+            spot.press(forDuration: 0.9)
+            XCTAssertTrue(highlight.waitForExistence(timeout: 5), "the second press selected nothing")
+        }
+        XCTAssertTrue(aa.exists, "the controls hid while selecting")
         // Let the lift settle: the menu eases up with the footer's own fade.
         Thread.sleep(forTimeInterval: 0.6)
         let done = app.buttons["Done"].firstMatch
