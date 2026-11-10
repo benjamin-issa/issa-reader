@@ -849,8 +849,12 @@ public final class AppModel {
         // next account meets would be swallowed as a repeat of a departed one.
         refusalsLogged = [:]
         books = []
-        catalogueApplied = false
+        // The empty library goes to the publisher first, while the gate is
+        // still open: shut before it, the publisher kept the departed
+        // catalogue and session until `clear()`, and a position save in that
+        // window listed others from it and fetched their covers.
         rebuildDerived()
+        catalogueApplied = false
         statuses = []
         // Book uuids as well, standing for status writes the `mutation` table
         // held — and it is cleared below.
