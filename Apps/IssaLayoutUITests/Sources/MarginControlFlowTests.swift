@@ -268,7 +268,10 @@ final class MarginControlFlowTests: XCTestCase {
         openTypographySheet(app)
         let toggle = fillToggle(app)
         XCTAssertEqual(toggle.value as? String, "0", "the setting should start off")
-        toggle.tap()
+        // The switch is at the row's trailing edge; the label is not a target.
+        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
+        let on = NSPredicate { _, _ in (toggle.value as? String) == "1" }
+        _ = XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: on, object: nil)], timeout: 5)
         XCTAssertEqual(toggle.value as? String, "1")
         closeSheet(app)
 
