@@ -241,6 +241,48 @@ fun MarginControl(style: ReaderStyle, onStyle: (ReaderStyle) -> Unit, preview: M
     }
 }
 
+/**
+ * The "Top and bottom" row, shown while the text fills the screen: the room
+ * above the first line and below the last, apart from the side margins. It
+ * reads the margin the page uses ([ReaderStyle.effectiveVerticalMargin], the
+ * side margin until this is set) and writes only its own field, so the sides
+ * stay where the Margins row put them.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun VerticalMarginControl(style: ReaderStyle, onStyle: (ReaderStyle) -> Unit) {
+    val eink = Palette.isEInk
+    val stored = style.effectiveVerticalMargin
+    PaperRowContent {
+        Row(Modifier.fillMaxWidth().clearAndSetSemantics {}) {
+            Text("Top and bottom", style = SystemText.body, color = Palette.ink, modifier = Modifier.weight(1f))
+            Text(
+                MarginControlModel.label(stored),
+                style = SystemText.body.copy(fontFeatureSettings = "tnum"),
+                color = Palette.inkSecondary,
+                modifier = Modifier.testTag("typography.verticalMargin.value"),
+            )
+        }
+        Slider(
+            value = MarginControlModel.sliderValue(stored),
+            onValueChange = { moved ->
+                MarginControlModel.moved(moved, stored)?.let { onStyle(style.copy(verticalMargin = it)) }
+            },
+            valueRange = MarginControlModel.sliderRange,
+            steps = MarginControlModel.steps,
+            colors = PlayerControls.sliderColors(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .einkSliderTrack(eink, Palette.ink)
+                .testTag("typography.verticalMargin")
+                .semantics {
+                    contentDescription = "Top and bottom margin"
+                    stateDescription = MarginControlModel.spoken(stored)
+                },
+        )
+    }
+}
+
 @Composable
 private fun PresetButton(preset: MarginPreset, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
     val eink = Palette.isEInk

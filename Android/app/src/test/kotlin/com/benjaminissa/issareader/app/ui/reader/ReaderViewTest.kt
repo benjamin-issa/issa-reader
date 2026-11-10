@@ -82,11 +82,13 @@ class ReaderViewTest {
         coach: Boolean = false,
         showsBookTitle: Boolean = true,
         fillsScreen: Boolean = false,
+        fill: ReaderChrome.FillEdges? = null,
+        verticalMargin: Double? = null,
         prepare: suspend (ReaderModel) -> Unit = {},
     ): ReaderModel {
         val opening = ReaderOpening(fixture.readBytes(), narrated = narrated).also { openings += it }
         val density = compose.activity.resources.displayMetrics.density.toDouble()
-        val model = opening.model(scope, Dispatchers.Main, style = ReaderStyle(fillsScreen = fillsScreen), scale = density)
+        val model = opening.model(scope, Dispatchers.Main, style = ReaderStyle(fillsScreen = fillsScreen, verticalMargin = verticalMargin), scale = density)
         val defaults = InMemoryKeyValueStore().apply {
             if (!coach) {
                 putBoolean(SEEN_COACH_KEY, true)
@@ -96,7 +98,7 @@ class ReaderViewTest {
         val settings = PlaybackSettings(InMemoryKeyValueStore()).apply {
             pageTurn = turn
             this.showsBookTitle = showsBookTitle
-            readerStyle = ReaderStyle(fillsScreen = fillsScreen)
+            readerStyle = ReaderStyle(fillsScreen = fillsScreen, verticalMargin = verticalMargin)
         }
         shownSettings = settings
         compose.setContent {
@@ -105,7 +107,7 @@ class ReaderViewTest {
                     model, ReaderEnvironment(settings, testFonts, defaults, appScope = scope),
                     onClose = { closed += 1 },
                     onOpenPlayer = { playerOpened += 1 },
-                    insets = ReaderInsets.Edges(INSET_TOP.dp, INSET_BOTTOM.dp),
+                    insets = ReaderInsets.Edges(INSET_TOP.dp, INSET_BOTTOM.dp, fill),
                 )
             }
         }
@@ -416,6 +418,43 @@ class ReaderViewTest {
         tap(200f)
         assertTrue(model.chromeVisible)
         assertEquals(filled, pageHeightDp(model), 0.0)
+    }
+
+    /**
+     * A page that fills the screen may reach part way into the status bar and
+     * the gesture band: it grows by what the window says it may reclaim, the
+     * footer stays where the window's bottom edge puts it, and a chrome toggle
+     * still leaves the size alone.
+     */
+    @Test
+    fun `a filled page grows by what the edges give back and the footer stays at the window's edge`() {
+        val fill = ReaderChrome.FillEdges(sensorClearance = 22.0, indicatorClearance = 10.0, cornerRadius = 0.0)
+        val model = show(fillsScreen = true, fill = fill) { it.go(2) }
+        val expected = ReaderChrome(INSET_TOP.toDouble(), INSET_BOTTOM.toDouble(), 24.0, fillsScreen = true, fillEdges = fill)
+        assertEquals(22.0, expected.clearTop, 0.0)
+        assertEquals(10.0, expected.clearBottom, 0.0)
+        assertEquals(expected.pageSize(402.0, 874.0).height, pageHeightDp(model), 1.0)
+        val footer = compose.onNodeWithTag("reader.footer").fetchSemanticsNode().boundsInRoot
+        val titleRow = ReaderChrome.BOOK_TITLE_ROW
+        assertEquals(
+            "the footer is where the window's edge puts it, not where the text reaches",
+            (874f - INSET_BOTTOM - titleRow.toFloat()) * density, footer.bottom, 1f,
+        )
+        val height = pageHeightDp(model)
+        tap(200f)
+        assertFalse(model.chromeVisible)
+        assertEquals(height, pageHeightDp(model), 0.0)
+        tap(200f)
+        assertEquals(height, pageHeightDp(model), 0.0)
+    }
+
+    /** The vertical margin moves the filled page's top and bottom, and the side margin does not. */
+    @Test
+    fun `the vertical margin sets how much room a filled page keeps above and below`() {
+        val model = show(fillsScreen = true, verticalMargin = 4.0) { it.go(2) }
+        val expected = ReaderChrome(INSET_TOP.toDouble(), INSET_BOTTOM.toDouble(), 24.0, fillsScreen = true, verticalMargin = 4.0)
+        assertEquals(expected.pageSize(402.0, 874.0).height, pageHeightDp(model), 1.0)
+        assertEquals(402.0 - 48.0, model.layout!!.pageWidth / density, 1.0)
     }
 
     /**

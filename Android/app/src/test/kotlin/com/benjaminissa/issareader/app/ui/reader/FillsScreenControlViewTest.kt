@@ -4,6 +4,9 @@ import androidx.activity.ComponentActivity
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.hasAnyDescendant
@@ -135,5 +138,71 @@ class FillsScreenControlViewTest {
         assertTrue(settings.style("a").fillsScreen)
         settings.readerStyle = settings.readerStyle.copy(fillsScreen = false)
         assertFalse(settings.style("a").fillsScreen)
+    }
+
+    @Test
+    fun `the top and bottom slider shows only while the text fills the screen, and sets its own field`() {
+        style = ReaderStyle(pageMargin = 20.0)
+        compose.setContent {
+            IssaTheme(darkTheme = false) {
+                PaperList {
+                    paperSection(key = "t") { typographyControls(style, onStyle = { style = it }) }
+                }
+            }
+        }
+        compose.onNodeWithTag("typography.verticalMargin").assertDoesNotExist()
+        compose.onNodeWithTag("typography.fillsScreen").performScrollTo().performClick()
+        compose.onNodeWithTag("typography.verticalMargin").performScrollTo().assertExists()
+        compose.onNodeWithText("Top and bottom", useUnmergedTree = true).assertExists()
+        // Follows the side margin until it is set.
+        compose.onNodeWithTag("typography.verticalMargin.value", useUnmergedTree = true).assertTextEquals("20 pt")
+        compose.onNodeWithTag("typography.verticalMargin").performSemanticsAction(SemanticsActions.SetProgress) { it(36f) }
+        assertEquals(36.0, style.verticalMargin!!, 0.0)
+        assertEquals("the sides did not move", 20.0, style.pageMargin, 0.0)
+        compose.onNodeWithTag("typography.verticalMargin.value", useUnmergedTree = true).assertTextEquals("36 pt")
+        compose.onNodeWithTag("typography.fillsScreen").performClick()
+        compose.onNodeWithTag("typography.verticalMargin").assertDoesNotExist()
+    }
+
+    @Test
+    fun `in a reader the slider gives this book its own top and bottom until it uses the defaults`() {
+        val opening = ReaderOpening(Fixtures.epub("alice.epub").readBytes(), title = "Alice's Adventures in Wonderland").also { openings += it }
+        val density = compose.activity.resources.displayMetrics.density.toDouble()
+        val model = opening.model(scope, Dispatchers.Main, scale = density)
+        val defaults = InMemoryKeyValueStore().apply {
+            putBoolean(SEEN_COACH_KEY, true)
+            putBoolean(SEEN_NARRATION_TIP_KEY, true)
+        }
+        val settings = PlaybackSettings(InMemoryKeyValueStore())
+        settings.readerStyle = settings.readerStyle.copy(fillsScreen = true)
+        val presented = mutableStateOf<ReaderSheetKind?>(null)
+        compose.setContent {
+            IssaTheme(darkTheme = false) {
+                ReaderView(
+                    model, ReaderEnvironment(settings, testFonts, defaults, appScope = scope),
+                    onClose = {},
+                    insets = ReaderInsets.Edges(40.dp, 24.dp),
+                    presentSheet = presented.value,
+                )
+            }
+        }
+        compose.waitUntil(30_000) { model.phase == ReaderModel.Phase.Ready }
+        compose.waitForIdle()
+
+        presented.value = ReaderSheetKind.TYPOGRAPHY
+        compose.waitUntil(10_000) { compose.onAllNodes(hasTestTag("typography.verticalMargin")).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("typography.verticalMargin").performScrollTo()
+            .performSemanticsAction(SemanticsActions.SetProgress) { it(8f) }
+        compose.waitUntil(5_000) { model.style.verticalMargin == 8.0 }
+
+        assertEquals(8.0, settings.style(model.book.uuid).verticalMargin!!, 0.0)
+        assertEquals(8.0, settings.override(model.book.uuid)!!.verticalMargin!!, 0.0)
+        assertNull("the default is untouched", settings.readerStyle.verticalMargin)
+        assertNull("another book follows the default", settings.style("another-book").verticalMargin)
+
+        compose.onNode(hasScrollAction() and hasAnyDescendant(hasTestTag("typography.fillsScreen"))).performScrollToNode(hasText("Use my defaults"))
+        compose.onNodeWithText("Use my defaults").performClick()
+        compose.waitUntil(5_000) { model.style.verticalMargin == null }
+        assertNull(settings.override(model.book.uuid))
     }
 }

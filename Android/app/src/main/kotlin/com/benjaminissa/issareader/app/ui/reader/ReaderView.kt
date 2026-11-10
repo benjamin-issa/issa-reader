@@ -272,7 +272,14 @@ fun ReaderView(
         val barsTop = WindowInsets.systemBarsIgnoringVisibility.getTop(density)
         val barsBottom = WindowInsets.systemBarsIgnoringVisibility.getBottom(density)
         val cutoutTop = WindowInsets.displayCutout.getTop(density)
-        val edges = insets ?: remember(maxWidth, maxHeight, barsTop, barsBottom, cutoutTop) { ReaderInsets.current(view) }
+        // Also what the page may reach into when it fills the screen: the
+        // navigation mode, the cutout and the orientation decide that.
+        val navBottom = WindowInsets.navigationBarsIgnoringVisibility.getBottom(density)
+        val tappableBottom = WindowInsets.tappableElementIgnoringVisibility.getBottom(density)
+        val orientation = LocalConfiguration.current.orientation
+        val edges = insets ?: remember(maxWidth, maxHeight, barsTop, barsBottom, cutoutTop, navBottom, tappableBottom, orientation) {
+            ReaderInsets.current(view)
+        }
         // The book's title under the footer: in the navigation band where it
         // fits, and where it does not, in a row of its own that the page gives
         // up — kept whether or not the chrome shows, like the bars' reserves.
@@ -288,7 +295,14 @@ fun ReaderView(
             model.style.pageMargin,
             barHeight = readerBarHeight.value.toDouble(),
             fillsScreen = fillsScreen,
+            verticalMargin = model.style.effectiveVerticalMargin,
+            fillEdges = edges.fill,
         )
+        // What a filled page leaves of the window's own edges. The bars,
+        // the footer and the caption stay at the real edges; only the text
+        // reaches past them, and only by what the chrome's reserve says.
+        val clearTop = chrome.clearTop.dp
+        val clearBottom = chrome.clearBottom.dp
         val size = chrome.pageSize(maxWidth.value.toDouble(), maxHeight.value.toDouble())
         val pageWidth = size.width.dp
         val pageHeight = size.height.dp
@@ -318,7 +332,7 @@ fun ReaderView(
         Box(
             Modifier
                 .fillMaxSize()
-                .padding(top = edges.top, bottom = edges.bottom + reservedTitleRow)
+                .padding(top = clearTop, bottom = clearBottom)
                 .then(if (coachShowing) Modifier.clearAndSetSemantics {} else Modifier),
             contentAlignment = Alignment.Center,
         ) {
@@ -336,7 +350,10 @@ fun ReaderView(
                 }
                 ReaderModel.Phase.Ready -> PageContent(
                     model, environment, turner, pageWidth, pageHeight,
-                    footerLift = if (fillsScreen) titleRow else 0.dp,
+                    // Down to the window's real edge, which the text may have reached past.
+                    footerLift = if (fillsScreen) titleRow + (edges.bottom - clearBottom) else 0.dp,
+                    topLift = if (fillsScreen) edges.top - clearTop else 0.dp,
+                    verticalMargin = model.style.effectiveVerticalMargin.dp,
                     reduceMotion = reduceMotion,
                     marginPreview = marginPreview,
                     onSheet = { sheet = it },
@@ -482,6 +499,8 @@ private fun PageContent(
     pageWidth: Dp,
     pageHeight: Dp,
     footerLift: Dp,
+    topLift: Dp,
+    verticalMargin: Dp,
     reduceMotion: Boolean,
     marginPreview: MarginPreview,
     onSheet: (ReaderSheetKind) -> Unit,
@@ -497,7 +516,7 @@ private fun PageContent(
     // Each page carries its margins with it, so a turning page takes the whole
     // width of the reader across rather than being cut by a margin that stays
     // put. No top margin: the top bar's reserve stands in for it.
-    val pageInsets = PageInsets(top = 0.dp, leading = margin, bottom = margin, trailing = margin)
+    val pageInsets = PageInsets(top = 0.dp, leading = margin, bottom = if (fillsScreen) verticalMargin else margin, trailing = margin)
     SideEffect { turner.width = (pageWidth + margin * 2).value.toDouble() }
 
     // Anything but the turner's own turn moving the page — narration, a
@@ -622,7 +641,7 @@ private fun PageContent(
             // exactly as the footer holds its own — so toggling can never
             // re-paginate. It stands in for the page's top margin; with the
             // page filling the screen nothing stands in, so the margin is spent.
-            Spacer(Modifier.height(if (fillsScreen) margin else readerBarHeight))
+            Spacer(Modifier.height(if (fillsScreen) verticalMargin else readerBarHeight))
             Box(Modifier.pageGestures(handler)) {
                 PageTrackView(
                     model, turner, pageWidth, pageHeight, pageInsets,
@@ -662,7 +681,7 @@ private fun PageContent(
             model,
             Modifier
                 .align(Alignment.TopCenter)
-                .padding(top = readerBarHeight + Metrics.spacing12, start = Metrics.spacing24, end = Metrics.spacing24),
+                .padding(top = topLift + readerBarHeight + Metrics.spacing12, start = Metrics.spacing24, end = Metrics.spacing24),
         )
     }
 }

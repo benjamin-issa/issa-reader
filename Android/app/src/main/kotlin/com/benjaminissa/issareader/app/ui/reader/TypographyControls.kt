@@ -124,6 +124,9 @@ fun PaperSectionScope.typographyControls(
         )
     }
     row { Caption("The controls appear over the text when you tap the page.") }
+    // Only while the text fills the screen: otherwise the bars' bands, not a
+    // margin, decide where the first and last lines sit.
+    if (style.fillsScreen) row { VerticalMarginControl(style, onStyle) }
 }
 
 /** The pure rules behind the controls, kept apart so they can be tested. */
