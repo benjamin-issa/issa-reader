@@ -43,6 +43,11 @@ struct WidgetRenderTests {
         Slot(family: .systemLarge, label: "large-338", size: CGSize(width: 338, height: 354)),
         Slot(family: .systemLarge, label: "large-364", size: CGSize(width: 364, height: 382)),
     ]
+    /// The smallest phones' large widgets: an iPhone SE's and a 12/13 mini's.
+    static let largeSmallPhones = [
+        Slot(family: .systemLarge, label: "large-321x324-se", size: CGSize(width: 321, height: 324)),
+        Slot(family: .systemLarge, label: "large-329x345-mini", size: CGSize(width: 329, height: 345)),
+    ]
     static let rectangular = [
         Slot(family: .accessoryRectangular, label: "rect-160", size: CGSize(width: 160, height: 72)),
         Slot(family: .accessoryRectangular, label: "rect-170", size: CGSize(width: 170, height: 76)),
@@ -297,6 +302,77 @@ struct WidgetRenderTests {
                 }
             }
         }
+    }
+
+    /// The row of four used to be a fixed 310 pt wide inside 14 pt of padding
+    /// and 139 pt tall under a 150 pt block, which needs a 338 x 354 widget.
+    /// On an SE and a mini the fourth cover ran past the padding and the
+    /// titles were cut at the bottom.
+    @Test("large on the smallest phones: four others stay inside the padding")
+    func largeOnSmallPhones() throws {
+        let pad = LargeMetrics.padding
+        for slot in Self.largeSmallPhones {
+            let metrics = LargeMetrics(size: slot.size)
+            let row = 4 * metrics.coverWidth + 3 * LargeMetrics.rowSpacing
+            #expect(row <= slot.size.width - 2 * pad, "\(slot.label): the row is \(row) wide")
+            let stack = metrics.topHeight + LargeMetrics.gap + LargeMetrics.labelHeight
+                + metrics.coverHeight + LargeMetrics.titleBlock
+            #expect(stack <= slot.size.height - 2 * pad, "\(slot.label): the stack is \(stack) tall")
+
+            for (scheme, colour) in Self.schemes {
+                let entry = Self.entry()
+                let image = Self.render(CurrentBookView(entry: entry), slot: slot, scheme: colour)
+                Self.check(image, slot: slot, name: "\(slot.label)-\(scheme)-long-4others")
+                if colour == .light {
+                    try Self.expectInsidePadding(
+                        CurrentBookView(entry: entry), slot: slot, padding: pad, name: slot.label)
+                }
+            }
+        }
+    }
+
+    /// Draws the view on the plain surface, with no rounded clip, and finds
+    /// the extreme columns and rows that differ from it. The logo sits in the
+    /// top corner inside the padding too, so nothing may be found beyond it.
+    static func expectInsidePadding(
+        _ content: some View, slot: Slot, padding: CGFloat, name: String,
+        sourceLocation: SourceLocation = #_sourceLocation,
+    ) throws {
+        IssaFonts.register()
+        let scale = 3
+        let tile = ZStack { Palette.surface; content }
+            .frame(width: slot.size.width, height: slot.size.height)
+            .environment(\.widgetFamilyOverride, slot.family)
+            .environment(\.colorScheme, .light)
+        let renderer = ImageRenderer(content: tile)
+        renderer.scale = CGFloat(scale)
+        let cg = try #require(renderer.uiImage?.cgImage, sourceLocation: sourceLocation)
+        let width = cg.width, height = cg.height
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        let context = try #require(CGContext(
+            data: &pixels, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
+            sourceLocation: sourceLocation)
+        context.draw(cg, in: CGRect(x: 0, y: 0, width: width, height: height))
+        func differs(_ x: Int, _ y: Int) -> Bool {
+            let i = (y * width + x) * 4, b = (2 * width) * 4
+            return abs(Int(pixels[i]) - Int(pixels[b])) > 6 || abs(Int(pixels[i + 1]) - Int(pixels[b + 1])) > 6
+                || abs(Int(pixels[i + 2]) - Int(pixels[b + 2])) > 6
+        }
+        // The background is sampled at the left edge, which is inside no content.
+        var maxX = 0, maxY = 0
+        for y in 0 ..< height {
+            for x in 0 ..< width where differs(x, y) {
+                maxX = max(maxX, x)
+                maxY = max(maxY, y)
+            }
+        }
+        let limitX = Int((slot.size.width - padding) * CGFloat(scale)) + 1
+        let limitY = Int((slot.size.height - padding) * CGFloat(scale)) + 1
+        #expect(maxX <= limitX, "\(name): content reaches x=\(maxX) of \(limitX)", sourceLocation: sourceLocation)
+        #expect(maxY <= limitY, "\(name): content reaches y=\(maxY) of \(limitY)", sourceLocation: sourceLocation)
+        // And it does draw close to the padding, so the test is not vacuous.
+        #expect(maxX > limitX - 60, "\(name): nothing drawn near the right edge", sourceLocation: sourceLocation)
     }
 
     @Test("the lock screen rectangle: a long title, a short one, empty")

@@ -457,27 +457,73 @@ struct AlsoReadingCard: View {
 
 // MARK: - Large
 
+/// Large's measurements, from the widget's own size.
+///
+/// The row used to be a fixed 4 x 70 + 3 x 10 = 310 pt inside 14 pt of
+/// padding, which needs a 338 pt widget: on an iPhone SE (321 x 324) and a
+/// 12/13 mini (329 x 345) the fourth cover ran past the padding and the
+/// titles were cut off at the bottom.
+struct LargeMetrics: Equatable {
+    static let padding: CGFloat = 14
+    static let rowSpacing: CGFloat = 10
+    /// The most a shelf cover is, and the top block's own height when there
+    /// is room.
+    static let maxCoverWidth: CGFloat = 70
+    static let maxTopHeight: CGFloat = 150
+    /// "ALSO IN PROGRESS" and the space under it.
+    static let labelHeight: CGFloat = 19
+    /// The space between the top block and the label, at the least.
+    static let gap: CGFloat = 10
+    /// A cover's gap to its two-line title, and the title's two lines.
+    static let titleBlock: CGFloat = 4 + 30
+
+    /// The width inside the padding.
+    var contentWidth: CGFloat
+    var coverWidth: CGFloat
+    var coverHeight: CGFloat { coverWidth * 1.5 }
+    var topHeight: CGFloat
+
+    init(size: CGSize) {
+        let width = size.width - 2 * Self.padding
+        contentWidth = width
+        let height = size.height - 2 * Self.padding
+        coverWidth = max(40, min(Self.maxCoverWidth, ((width - 3 * Self.rowSpacing) / 4).rounded(.down)))
+        let row = coverWidth * 1.5 + Self.titleBlock
+        topHeight = max(90, min(Self.maxTopHeight, height - row - Self.labelHeight - Self.gap))
+    }
+}
+
 struct LargeWidgetView: View {
     let entry: CurrentBookEntry
 
     private var snapshot: CurrentBookSnapshot { entry.snapshot }
 
     var body: some View {
+        GeometryReader { proxy in
+            content(LargeMetrics(size: proxy.size))
+        }
+        .overlay(alignment: .topTrailing) { WidgetLogo().padding(.top, 14).padding(.trailing, 14) }
+        .accessibilityElement(children: .contain)
+    }
+
+    private func content(_ metrics: LargeMetrics) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             let others = WidgetShelf.alsoInProgress(in: entry)
             if others.isEmpty { Spacer(minLength: 0) }
-            top
-                .frame(height: others.isEmpty ? 195 : 150, alignment: .top)
+            top(height: others.isEmpty ? 195 : metrics.topHeight, contentWidth: metrics.contentWidth)
+                .frame(height: others.isEmpty ? 195 : metrics.topHeight, alignment: .top)
             if !others.isEmpty {
-                Spacer(minLength: 10)
+                Spacer(minLength: LargeMetrics.gap)
                 Text("ALSO IN PROGRESS")
                     .font(Typography.sans(11, weight: .semibold))
                     .tracking(1.2)
                     .foregroundStyle(Palette.inkSecondary)
                     .padding(.bottom, 6)
-                HStack(alignment: .top, spacing: 10) {
+                HStack(alignment: .top, spacing: LargeMetrics.rowSpacing) {
                     ForEach(others, id: \.book.bookID) { other in
-                        BookLink(url: other.url) { ShelfBook(other: other) }
+                        BookLink(url: other.url) {
+                            ShelfBook(other: other, size: CGSize(width: metrics.coverWidth, height: metrics.coverHeight))
+                        }
                     }
                     Spacer(minLength: 0)
                 }
@@ -487,20 +533,27 @@ struct LargeWidgetView: View {
                 Spacer(minLength: 0)
             }
         }
-        .padding(14)
+        .padding(LargeMetrics.padding)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .overlay(alignment: .topTrailing) { WidgetLogo().padding(.top, 14).padding(.trailing, 14) }
-        .accessibilityElement(children: .contain)
     }
 
-    private var top: some View {
+    private func top(height: CGFloat, contentWidth: CGFloat) -> some View {
         let square = snapshot.coverIsSquare
         // With nothing else in progress the row is gone, and a 150 pt block
         // would leave two thirds of the widget empty: the book gets the room.
         let roomy = WidgetShelf.alsoInProgress(in: entry).isEmpty
         let scale: CGFloat = roomy ? 1.3 : 1
-        let coverSize = square ? CGSize(width: 120 * scale, height: 120 * scale)
-            : CGSize(width: 100 * scale, height: 150 * scale)
+        // On a small widget the block is shorter than 150, and the cover
+        // shrinks to it.
+        let fit = roomy ? 1 : min(1, height / LargeMetrics.maxTopHeight)
+        let coverSize = square ? CGSize(width: 120 * scale * fit, height: 120 * scale * fit)
+            : CGSize(width: 100 * scale * fit, height: 150 * scale * fit)
+        // The column's width is stated, not left to what its lines ask for:
+        // a title with room for the logo beside it asked for more than a
+        // 321 pt widget has, and the column, the bar and the line under it
+        // all ran out past the padding together.
+        let column = max(0, contentWidth - coverSize.width - 14)
+        let cramped = !roomy && height < LargeMetrics.maxTopHeight
         return HStack(alignment: .top, spacing: 14) {
             CoverArt(data: entry.cover, size: coverSize, fit: .fitOverBlur, glyphSize: 26)
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -508,7 +561,7 @@ struct LargeWidgetView: View {
                 Text(snapshot.title)
                     .font(Typography.bookTitle)
                     .foregroundStyle(Palette.ink)
-                    .lineLimit(roomy ? 4 : 3)
+                    .lineLimit(roomy ? 4 : (cramped ? 2 : 3))
                     .minimumScaleFactor(0.85)
                     .padding(.trailing, 22 + 24)
                 if !snapshot.author.isEmpty {
@@ -522,20 +575,27 @@ struct LargeWidgetView: View {
                     Text(chapter)
                         .font(Typography.caption)
                         .foregroundStyle(Palette.inkSecondary)
-                        .lineLimit(2)
+                        .lineLimit(cramped ? 1 : 2)
                         .padding(.top, 4)
                 }
                 Spacer(minLength: 6)
                 HStack(spacing: 8) {
                     WidgetBar(value: snapshot.progress)
+                        .frame(minWidth: 0, maxWidth: .infinity)
                     Text(snapshot.progressLine)
                         .font(Typography.caption)
                         .foregroundStyle(Palette.inkSecondary)
                         .lineLimit(1)
-                        .fixedSize()
+                        // Not `fixedSize`: on a 321 pt widget the column is
+                        // narrower than the bar and the line together, and
+                        // the line ran out past the padding.
+                        .minimumScaleFactor(0.75)
+                        .layoutPriority(1)
                 }
+                .frame(maxWidth: .infinity)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .frame(width: column, alignment: .topLeading)
+            .frame(maxHeight: .infinity, alignment: .topLeading)
         }
     }
 }
@@ -544,11 +604,11 @@ struct LargeWidgetView: View {
 /// and its title, two lines, beneath.
 struct ShelfBook: View {
     let other: OtherEntry
-    static let size = CGSize(width: 70, height: 105)
+    var size = CGSize(width: 70, height: 105)
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            CoverArt(data: other.cover, size: Self.size, fit: .fitOverBlur, glyphSize: 18)
+            CoverArt(data: other.cover, size: size, fit: .fitOverBlur, glyphSize: 18)
                 .overlay(alignment: .bottom) {
                     WidgetBar(
                         value: other.book.progress, fill: Palette.tangerine,
@@ -560,7 +620,7 @@ struct ShelfBook: View {
                 .foregroundStyle(Palette.ink)
                 .lineLimit(2)
                 .minimumScaleFactor(0.85)
-                .frame(width: Self.size.width, alignment: .leading)
+                .frame(width: size.width, alignment: .leading)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(other.book.title), \(other.book.percent) percent")
