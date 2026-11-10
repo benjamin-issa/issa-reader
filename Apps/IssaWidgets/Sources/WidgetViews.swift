@@ -458,8 +458,9 @@ struct AlsoReadingCard: View {
     var body: some View {
         Group {
             if titleLines > 1 {
-                // At least the cover's height; taller only by a second line.
-                row.padding(.vertical, 3).frame(minHeight: 36)
+                // At least the cover's height; taller only by a second line,
+                // whose room is the text's own padding, not the cover's.
+                row.frame(minHeight: 36)
             } else {
                 row.frame(height: 36)
             }
@@ -491,6 +492,7 @@ struct AlsoReadingCard: View {
                     // lines of a wrapped title under each other.
                     .multilineTextAlignment(.leading)
             }
+            .padding(.vertical, titleLines > 1 ? 3 : 0)
             Spacer(minLength: 4)
             Text("\(other.book.percent)%")
                 .font(Typography.caption)
