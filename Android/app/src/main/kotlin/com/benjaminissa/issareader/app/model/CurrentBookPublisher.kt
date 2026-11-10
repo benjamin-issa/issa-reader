@@ -44,6 +44,8 @@ class CurrentBookPublisher(
     private val covers: () -> CoverCache = { CoverCache.shared },
     /** How a fetched other-book cover reaches the disk; the tests hold it open to let a sign-out overtake it. */
     private val writeOtherCover: suspend (bookId: String, data: ByteArray) -> Unit = CurrentBookSnapshotStore::writeOtherCoverOffMain,
+    /** The same for the current book's cover. */
+    private val writeCover: suspend (data: ByteArray) -> Unit = CurrentBookSnapshotStore::writeCoverOffMain,
 ) {
     /** Which surface the snapshot currently belongs to. */
     sealed interface Owner {
@@ -251,13 +253,20 @@ class CurrentBookPublisher(
         coverGeneration += 1
         val generation = coverGeneration
         val square = prefersSquareCover(book)
+        val signOuts = othersGeneration
         scope.launch {
             val fetched = covers().widgetCover(
                 book, session,
                 if (square) LibraryService.CoverShape.SQUARE else LibraryService.CoverShape.PORTRAIT,
             )
             if (generation != coverGeneration || fetched == null) return@launch
-            CurrentBookSnapshotStore.writeCoverOffMain(fetched.data)
+            writeCover(fetched.data)
+            if (signOuts != othersGeneration) {
+                // A sign-out overtook the write: clear() has already removed the cover and this
+                // file landed after it, for the next account's widget to draw.
+                CurrentBookSnapshotStore.coverFile?.delete()
+                return@launch
+            }
             // Stamped onto whatever snapshot is current, and only if it is
             // still this book's.
             val snapshot = CurrentBookSnapshotStore.read() ?: return@launch

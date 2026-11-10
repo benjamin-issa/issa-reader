@@ -232,4 +232,76 @@ class WidgetOthersPublishingTest : AppSuite() {
             scope.close()
         }
     }
+
+    /** A current-book cover write that a sign-out overtakes leaves no file for the next account's widget. */
+    @Test
+    fun aCurrentCoverWriteOvertakenBySignOutLeavesNoFile() = mainTest {
+        val scope = testScope()
+        val dir = java.nio.file.Files.createTempDirectory("covers").toFile()
+        val covers = CoverCache(directory = dir)
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val started = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val publisher = CurrentBookPublisher(
+            scope, covers = { covers },
+            writeCover = { data ->
+                started.complete(Unit)
+                gate.await()
+                CurrentBookSnapshotStore.writeCover(data)
+            },
+        ).also { it.resume() }
+        try {
+            val cur = book("cur")
+            java.io.File(dir, CoverCache.widgetFileName(cur, com.benjaminissa.issareader.core.sync.LibraryService.CoverShape.PORTRAIT))
+                .writeBytes(byteArrayOf(1, 2, 3))
+            val session = com.benjaminissa.issareader.core.Session(
+                java.net.URI("https://covers.example"), com.benjaminissa.issareader.app.TestTokens(),
+            )
+            publisher.publish(
+                cur, session = session, progress = 0.5, chapter = null, remaining = 600.0, isPlaying = false,
+                candidate = CurrentBookPublisher.Owner.Reading("cur"),
+            )
+            started.await()
+
+            publisher.clear()
+            gate.complete(Unit)
+            kotlinx.coroutines.yield()
+            kotlinx.coroutines.delay(200)
+
+            assertFalse(CurrentBookSnapshotStore.coverFile!!.exists())
+        } finally {
+            scope.close()
+        }
+    }
+
+    /**
+     * Signing out tells the publisher the library emptied, before it is cleared: the list is
+     * reconciled against nothing, so a publish in that window lists no others.
+     */
+    @Test
+    fun signingOutEmptiesTheOthersBeforeTheClear() = mainTest {
+        val scope = testScope()
+        val seen = mutableListOf<List<String>?>()
+        val publisher = CurrentBookPublisher(scope, reload = { seen += CurrentBookSnapshotStore.read()?.others?.map { it.bookId } }).also { it.resume() }
+        val app = testApp(scope)
+        app.currentBookPublisher = publisher
+        try {
+            val library = listOf(book("cur", at = 9.0), book("a", at = 1.0), book("b", at = 2.0))
+            app.books = library
+            app.catalogueApplied = true
+            publisher.publish(
+                library[0], session = null, progress = 0.5, chapter = null, remaining = 600.0, isPlaying = false,
+                candidate = CurrentBookPublisher.Owner.Reading("cur"),
+            )
+            publisher.libraryChanged(library, null)
+            assertEquals(listOf("b", "a"), CurrentBookSnapshotStore.read()?.others?.map { it.bookId })
+            seen.clear()
+
+            app.signOut(keepDownloads = true)
+
+            assertEquals("the first redraw is of a snapshot with no others, before the clear", emptyList<String>(), seen.first())
+            assertNull(CurrentBookSnapshotStore.read())
+        } finally {
+            scope.close()
+        }
+    }
 }
