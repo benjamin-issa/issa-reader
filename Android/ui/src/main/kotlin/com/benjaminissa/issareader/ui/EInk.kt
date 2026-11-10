@@ -212,6 +212,8 @@ private val SliderTrackHeight: Dp = 16.dp
  *
  * @param dimsBehind false for a sheet whose point is the page behind it — the
  *   reader's Aa sheet, whose margins are drawn on the page while they move.
+ * @param gesturesEnabled false to keep a half-height sheet at its height: a
+ *   swipe then scrolls its rows instead of first growing it over the page.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -223,6 +225,7 @@ fun PaperSheet(
     contentColor: Color = contentColorFor(Palette.paper),
     contentWindowInsets: (@Composable () -> WindowInsets)? = null,
     dimsBehind: Boolean = true,
+    gesturesEnabled: Boolean = true,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val outline = Modifier.einkOutline(BottomSheetDefaults.ExpandedShape, EInk.dialogOutline)
@@ -233,6 +236,7 @@ fun PaperSheet(
             onDismissRequest = onDismissRequest,
             modifier = outline,
             sheetState = sheetState,
+            sheetGesturesEnabled = gesturesEnabled,
             containerColor = Palette.paper,
             contentColor = contentColor,
             tonalElevation = tonalElevation,
@@ -245,6 +249,7 @@ fun PaperSheet(
             onDismissRequest = onDismissRequest,
             modifier = outline,
             sheetState = sheetState,
+            sheetGesturesEnabled = gesturesEnabled,
             containerColor = Palette.paper,
             contentColor = contentColor,
             tonalElevation = tonalElevation,

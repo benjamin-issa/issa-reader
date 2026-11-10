@@ -440,6 +440,9 @@ fun ReaderView(
             // Undimmed: grey over the page hid the margin bands this sheet
             // draws on it, which are the reason it stops halfway.
             dimsBehind = false,
+            // And held there: the Margins row is near the bottom, and the
+            // swipe that reached it grew the sheet over the page first.
+            holdsItsHeight = true,
         ) { dismiss ->
             BookTypographyView(
                 book = model.book,

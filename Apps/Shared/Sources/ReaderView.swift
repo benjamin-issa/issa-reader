@@ -536,6 +536,11 @@ public struct ReaderView: View {
             // The page behind takes touches too, so a reader can turn it and
             // see the new margin on the next one.
             .presentationBackgroundInteraction(.enabled(upThrough: .medium))
+            // Scrolling scrolls the sheet's rows, not the sheet. The Margins
+            // row is near the bottom, and by default the swipe that reaches it
+            // grew the sheet to full height first, over the very page whose
+            // margins it was about to show. The grabber still resizes.
+            .presentationContentInteraction(.scrolls)
             #endif
             .macSheetSize()
         }
