@@ -17,6 +17,29 @@ final class MarginControlFlowTests: XCTestCase {
         continueAfterFailure = false
     }
 
+    /// Set while a test has Fill the screen on, and cleared once it has turned
+    /// it off again. The setting is saved, so a test that stopped on a failure
+    /// in between would hand it to every later test in the run.
+    private var leftFilling = false
+
+    /// Marks the setting as about to go on, and has the test's teardown turn
+    /// it off again if the test stops before it does. A teardown block, not a
+    /// `tearDown` override: that is nonisolated, and these helpers are the
+    /// main actor's.
+    private func turnFillOffIfLeftOn() {
+        leftFilling = true
+        addTeardownBlock { @MainActor [weak self] in
+            guard let self, self.leftFilling else { return }
+            self.leftFilling = false
+            // From a fresh launch: the failure may have left a sheet up or
+            // the reader closed.
+            XCUIApplication().terminate()
+            let app = self.launch()
+            self.openReader(app)
+            self.setFill(app, false)
+        }
+    }
+
     private func launch() -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["-IssaUITestFixture", "-issa.library.mode", "all"]
@@ -310,6 +333,7 @@ final class MarginControlFlowTests: XCTestCase {
         let toggle = fillToggle(app)
         flip(toggle, false)
         let before = settledTextFrame(app)
+        turnFillOffIfLeftOn()
         flip(toggle, true)
         closeSheet(app)
 
@@ -369,6 +393,7 @@ final class MarginControlFlowTests: XCTestCase {
         XCTAssertEqual(reopened.minY, filled.minY, accuracy: 1.5, "the reopened book forgot the setting")
         XCTAssertEqual(reopened.maxY, filled.maxY, accuracy: 1.5, "the reopened book forgot the setting")
         setFill(app, false)
+        leftFilling = false
     }
 
     /// The selection's Copy, Highlight and Done sit above the footer, which
@@ -377,8 +402,9 @@ final class MarginControlFlowTests: XCTestCase {
     func testFillTheScreenKeepsTheSelectionMenuClearOfTheFooter() throws {
         let app = launch()
         openReader(app)
+        turnFillOffIfLeftOn()
         setFill(app, true)
-        _ = settledTextFrame(app)
+        let text = settledTextFrame(app)
 
         // The controls are showing, which is how a book opens.
         XCTAssertTrue(
@@ -387,10 +413,19 @@ final class MarginControlFlowTests: XCTestCase {
         let footer = app.descendants(matching: .any)["probe.reader.footer"].firstMatch
         XCTAssertTrue(footer.waitForExistence(timeout: 10), "no footer probe: is this the fixture build?")
 
-        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35)).press(forDuration: 0.9)
+        // On the text itself, measured from its top. After the sweep's earlier
+        // tests the book opens on its second chapter's short first page, whose
+        // last line sat a third of the way down; with the setting on the text
+        // rose clear of a press there, on every phone. The first line under the
+        // chapter's heading is about 100 points down; the heading and the line
+        // after it are the fallbacks.
+        let origin = app.coordinate(withNormalizedOffset: .zero)
         let highlight = app.buttons["Highlight"].firstMatch
-        XCTAssertTrue(
-            highlight.waitForExistence(timeout: 10), "pressing and holding on the page selected nothing")
+        for depth: CGFloat in [100, 46, 130] where !highlight.exists {
+            origin.withOffset(CGVector(dx: text.midX, dy: text.minY + depth)).press(forDuration: 0.9)
+            _ = highlight.waitForExistence(timeout: 4)
+        }
+        XCTAssertTrue(highlight.exists, "pressing and holding on the page selected nothing")
         // Let the lift settle: the menu eases up with the footer's own fade.
         Thread.sleep(forTimeInterval: 0.6)
         let done = app.buttons["Done"].firstMatch
@@ -405,5 +440,6 @@ final class MarginControlFlowTests: XCTestCase {
         }
         done.tap()
         setFill(app, false)
+        leftFilling = false
     }
 }
