@@ -1,4 +1,5 @@
-New: margins. In a book, tap Aa and slide Margins, or pick Wide, Standard, Narrow or Edge. That book keeps its own; Settings › Reading sets the default.
-New: a redesigned widget, with a bigger cover, titles that fit, and the other books you're reading a tap away.
-Fixed: on a phone that can't run Ask, turning it on could close the app on every launch. The switch now says the phone can't run it.
+New: margins. In a book, tap Aa and slide Margins, or pick a preset. Each book can keep its own; Settings › Reading sets the default.
+New: Fill the screen with text, under Margins: the page uses the controls' space, and they show over the text when you tap.
+New: a redesigned widget, with a bigger cover and the other books you're reading a tap away.
+Fixed: on a phone that can't run Ask, turning it on could close the app on every launch.
 Fixed: tall illustrations cut off after turning the phone.
