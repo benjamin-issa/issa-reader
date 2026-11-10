@@ -531,6 +531,11 @@ public struct ReaderView: View {
             // keeps its form sheet: there the page is already beside it.
             .presentationDetents(
                 horizontalSizeClass == .compact ? [.medium, .large] : [.large])
+            // And undimmed at that height: a sheet's grey over the page hid
+            // the margin bands drawn on it, which are why it stops halfway.
+            // The page behind takes touches too, so a reader can turn it and
+            // see the new margin on the next one.
+            .presentationBackgroundInteraction(.enabled(upThrough: .medium))
             #endif
             .macSheetSize()
         }
