@@ -1157,3 +1157,115 @@ struct BlockWhitespaceTests {
         }
     }
 }
+
+/// A plate parsed for one page shape and laid out again for another — which is
+/// what a rotation does: `relayoutCurrentChapter` re-flows, it does not parse.
+@Suite("A plate keeps fitting the page after the page changes shape", .serialized)
+@MainActor
+struct PlateAfterRotationTests {
+    private func parsed(for page: CGSize) throws -> HTMLContentParser.Result {
+        let plate = PlatformImage.solid(width: 800, height: 3000)
+        let xhtml = Data("""
+            <html xmlns="http://www.w3.org/1999/xhtml"><body>
+            <p><img src="plate.jpg" alt="A plate"/></p></body></html>
+            """.utf8)
+        return try HTMLContentParser(
+            style: ReaderStyle(), maxImageWidth: page.width, maxImageHeight: page.height,
+            loadImage: { _ in plate },
+        ).parse(xhtml: xhtml, baseHref: "c.xhtml")
+    }
+
+    private func attachment(in result: HTMLContentParser.Result) throws -> ImageAttachment {
+        var found: ImageAttachment?
+        result.text.enumerateAttribute(
+            .attachment, in: NSRange(location: 0, length: result.text.length)
+        ) { value, _, _ in
+            if let plate = value as? ImageAttachment { found = plate }
+        }
+        return try #require(found)
+    }
+
+    /// What TextKit would be told for a plate in a column of this size.
+    private func bounds(of plate: ImageAttachment, container: CGSize) -> CGRect {
+        let storage = NSTextContentStorage()
+        let textContainer = NSTextContainer(size: container)
+        return plate.attachmentBounds(
+            for: [:], location: storage.documentRange.location, textContainer: textContainer,
+            proposedLineFragment: CGRect(origin: .zero, size: CGSize(width: container.width, height: 20)),
+            position: .zero)
+    }
+
+    @Test("a plate fitted to a portrait page is scaled down to a landscape one")
+    func landscapeRelayoutFitsTheHeight() throws {
+        let portrait = CGSize(width: 320, height: 600)
+        let landscape = CGSize(width: 600, height: 320)
+        let result = try parsed(for: portrait)
+        let plate = try attachment(in: result)
+        let layout = ChapterLayout(text: result.text, fragmentRanges: result.fragmentRanges)
+
+        layout.layout(pageSize: portrait)
+        #expect(plate.heightLimit == 600)
+        let tall = bounds(of: plate, container: CGSize(width: 320, height: 600))
+        #expect(tall.height <= 600.5)
+
+        layout.layout(pageSize: landscape)
+        #expect(plate.heightLimit == 320)
+        let wide = bounds(of: plate, container: CGSize(width: 600, height: 320))
+        #expect(wide.height <= 320.5, "the plate's height \(wide.height) is past the page's 320")
+        #expect(wide.width <= 600.5)
+        #expect(abs(wide.width / wide.height - 800.0 / 3000.0) < 0.001, "aspect kept")
+    }
+
+    @Test("a plate already smaller than the page is never scaled up")
+    func neverUpscaled() {
+        let size = ImageAttachment.fittedSize(CGSize(width: 60, height: 80), width: 600, height: 320)
+        #expect(size == CGSize(width: 60, height: 80))
+    }
+
+    @Test("an unbounded or unmeasured container leaves the plate as it was")
+    func unboundedContainerChangesNothing() throws {
+        let plate = ImageAttachment(displaySize: CGSize(width: 160, height: 600), artwork: nil)
+        let unbounded = bounds(of: plate, container: CGSize(width: 320, height: CGFloat.greatestFiniteMagnitude))
+        #expect(unbounded.size == CGSize(width: 160, height: 600))
+        let zero = bounds(of: plate, container: CGSize(width: 320, height: 0))
+        #expect(zero.size == CGSize(width: 160, height: 600), "a zero height must not collapse the plate")
+        #expect(ImageAttachment.fittedSize(CGSize(width: 160, height: 600), width: nil, height: nil)
+            == CGSize(width: 160, height: 600))
+        // Width still governs, as before.
+        let narrow = bounds(of: plate, container: CGSize(width: 80, height: CGFloat.greatestFiniteMagnitude))
+        #expect(abs(narrow.width - 80) < 0.001 && abs(narrow.height - 300) < 0.001)
+    }
+
+    /// The pagination-level claim: after the landscape re-layout the whole plate
+    /// is on the first page, painted at its fitted size, not cut off by it.
+    @Test("the whole plate is painted on its page after a landscape re-layout")
+    func plateFullyVisibleAfterRotation() throws {
+        let result = try parsed(for: CGSize(width: 320, height: 600))
+        let layout = ChapterLayout(text: result.text, fragmentRanges: result.fragmentRanges)
+        layout.layout(pageSize: CGSize(width: 320, height: 600))
+        layout.layout(pageSize: CGSize(width: 600, height: 320))
+        let page = try #require(layout.pages.first)
+
+        let width = 600, height = 320
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        let context = try #require(CGContext(
+            data: &pixels, width: width, height: height, bitsPerComponent: 8,
+            bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        context.translateBy(x: 0, y: CGFloat(height))
+        context.scaleBy(x: 1, y: -1)
+        layout.draw(page: page, in: context)
+
+        // Scaled to fit, the plate's whole area is inked; unscaled, the canvas
+        // clips it to a wider sliver.
+        var inked = 0
+        for index in stride(from: 0, to: pixels.count, by: 4) where pixels[index] < 200 {
+            inked += 1
+        }
+        let fitted = (800.0 / 3000.0) * 320.0 * 320.0   // fitted width x height
+        #expect(Double(inked) > fitted * 0.9 && Double(inked) < fitted * 1.1,
+                "\(inked) inked pixels, expected about \(Int(fitted)): the plate is cut off or missing")
+    }
+}
