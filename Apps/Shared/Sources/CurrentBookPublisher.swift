@@ -70,6 +70,11 @@ final class CurrentBookPublisher {
     var coverFetcher: (Book, Session, LibraryService.CoverShape) async -> (data: Data, isSquare: Bool)? = {
         await CoverCache.shared.widgetCover(for: $0, session: $1, preferring: $2)
     }
+    /// How a fetched cover reaches the disk. The store in the app; a stub in
+    /// the tests, which hold a write open to let a sign-out overtake it.
+    var otherCoverWriter: (Data, String) async -> Void = {
+        await CurrentBookSnapshotStore.writeOtherCoverOffMain($0, bookID: $1)
+    }
     /// When each other book's cover was last asked for, for the reason
     /// `coverAttempt` exists: a cover that cannot be fetched leaves nothing on
     /// disk to say so.
@@ -308,6 +313,7 @@ final class CurrentBookPublisher {
         let generation = othersGeneration
         otherFetchesInFlight += 1
         let fetch = coverFetcher
+        let write = otherCoverWriter
         Task { [weak self] in
             defer { self?.otherFetchesInFlight -= 1 }
             var landed = false
@@ -316,8 +322,16 @@ final class CurrentBookPublisher {
                 let fetched = await fetch(book, session, square ? .square : .portrait)
                 guard let self, generation == self.othersGeneration else { return }
                 guard let fetched else { continue }
-                await CurrentBookSnapshotStore.writeOtherCoverOffMain(fetched.data, bookID: book.uuid)
-                guard generation == self.othersGeneration else { return }
+                await write(fetched.data, book.uuid)
+                guard generation == self.othersGeneration else {
+                    // A sign-out overtook the write: `clear()` has already
+                    // swept the container, and this file landed after it.
+                    // Without this the departed account's cover sits there
+                    // for `hasOtherCover` to accept later.
+                    CurrentBookSnapshotStore.pruneOtherCovers(
+                        keeping: Set(CurrentBookSnapshotStore.read()?.others.map(\.bookID) ?? []))
+                    return
+                }
                 // The real shape, onto the snapshot as it now stands — and only
                 // if this book is still listed: a list written while the fetch
                 // was in flight may have dropped it, and its file with it.

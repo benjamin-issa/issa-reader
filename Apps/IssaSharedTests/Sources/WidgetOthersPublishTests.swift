@@ -264,4 +264,39 @@ struct WidgetOthersPublishTests {
             #expect(!CurrentBookSnapshotStore.hasOtherCover(bookID: "b"))
         }
     }
+
+    // MARK: - A sign-out that overtakes a cover write
+
+    @Test("a cover write that lands after sign-out does not leave its file behind")
+    func signOutDuringACoverWrite() async throws {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appending(path: "issa-widget-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        CurrentBookSnapshotStore.directoryOverride = directory
+        defer {
+            CurrentBookSnapshotStore.directoryOverride = nil
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let publisher = CurrentBookPublisher()
+        publisher.coverFetcher = { book, _, _ in (Data(book.uuid.utf8), false) }
+        var release: CheckedContinuation<Void, Never>?
+        var writeStarted = false
+        publisher.otherCoverWriter = { data, id in
+            writeStarted = true
+            await withCheckedContinuation { release = $0 }
+            CurrentBookSnapshotStore.writeOtherCover(data, bookID: id)
+        }
+        seed(publisher)
+        #expect(publisher.updateLibrary(Self.library(), session: Self.stubSession()))
+        let deadline = ContinuousClock.now + .seconds(10)
+        while release == nil, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        try #require(writeStarted && release != nil, "the write never began")
+
+        publisher.clear()
+        release?.resume()
+        try await settle(publisher)
+
+        #expect(!CurrentBookSnapshotStore.hasOtherCover(bookID: "b"))
+        #expect(!CurrentBookSnapshotStore.hasOtherCover(bookID: "c"))
+    }
 }
