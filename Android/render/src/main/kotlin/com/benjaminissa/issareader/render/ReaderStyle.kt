@@ -56,6 +56,12 @@ data class ReaderStyle(
      * controls never cover a line.
      */
     val fillsScreen: Boolean = false,
+    /**
+     * The margin above and below the text while [fillsScreen] is on. Null
+     * follows [pageMargin]; set, the two edges the controls cover can be
+     * given their own room without moving the sides.
+     */
+    val verticalMargin: Double? = null,
     val highlightGranularity: HighlightGranularity = HighlightGranularity.SENTENCE,
     /** Keep the narrated sentence on screen while audio plays. */
     val followNarration: Boolean = true,
@@ -94,6 +100,9 @@ data class ReaderStyle(
      */
     val publisherFamily: String? = null,
 ) {
+    /** The margin the text keeps from the top and bottom when it fills the screen. */
+    val effectiveVerticalMargin: Double get() = verticalMargin ?: pageMargin
+
     enum class LineSpacing(val rawValue: String) {
         TIGHT("tight"),
         NORMAL("normal"),
@@ -261,6 +270,7 @@ data class ReaderStyle(
             justification = override.justification ?: justification,
             pageMargin = override.pageMargin ?: pageMargin,
             fillsScreen = override.fillsScreen ?: fillsScreen,
+            verticalMargin = override.verticalMargin ?: verticalMargin,
         )
     }
 
@@ -276,6 +286,7 @@ data class ReaderStyle(
         justification = if (other.justification == justification) null else other.justification,
         pageMargin = if (other.pageMargin == pageMargin) null else other.pageMargin,
         fillsScreen = if (other.fillsScreen == fillsScreen) null else other.fillsScreen,
+        verticalMargin = if (other.verticalMargin == verticalMargin) null else other.verticalMargin,
     )
 
     companion object {
@@ -349,6 +360,7 @@ data class ReaderStyle(
                     put("justified", value.justification == Justification.ALWAYS)
                     put("pageMargin", value.pageMargin)
                     put("fillsScreen", value.fillsScreen)
+                    value.verticalMargin?.let { put("verticalMargin", it) }
                     put("highlightGranularity", value.highlightGranularity.rawValue)
                     put("followNarration", value.followNarration)
                     put("turnPagesMidSentence", value.turnPagesMidSentence)
@@ -404,6 +416,8 @@ data class ReaderStyle(
                 justification = justification,
                 pageMargin = clampedLength(container.number("pageMargin"), pageMarginRange) ?: fallback.pageMargin,
                 fillsScreen = container.boolean("fillsScreen") ?: fallback.fillsScreen,
+                // Absent or damaged is "follow the side margin", not the fallback's own choice.
+                verticalMargin = clampedLength(container.number("verticalMargin"), pageMarginRange),
                 highlightGranularity = container.string("highlightGranularity")
                     ?.let(HighlightGranularity::fromRawValue) ?: fallback.highlightGranularity,
                 followNarration = container.boolean("followNarration") ?: fallback.followNarration,

@@ -1,5 +1,6 @@
 package com.benjaminissa.issareader.render
 
+import kotlin.math.sqrt
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -91,5 +92,85 @@ class ReaderThemeTest {
         val usual = ReaderChrome(52.0, 14.0, 24.0, drawsOwnTopBar = false)
         val fills = ReaderChrome(52.0, 14.0, 24.0, drawsOwnTopBar = false, fillsScreen = true)
         assertEquals(usual.pageSize(402.0, 874.0).height + ReaderChrome.BAR_HEIGHT, fills.pageSize(402.0, 874.0).height, 0.0)
+    }
+
+    private val punchHole = ReaderChrome.FillEdges(sensorClearance = 44.0, indicatorClearance = 18.0, cornerRadius = 48.0)
+
+    @Test
+    fun `a vertical margin sets the filled page's top and bottom and leaves the sides alone`() {
+        val none = ReaderChrome(52.0, 24.0, 16.0, fillsScreen = true, verticalMargin = 0.0)
+        val wide = ReaderChrome(52.0, 24.0, 16.0, fillsScreen = true, verticalMargin = 64.0)
+        assertEquals(52.0, none.topReserve, 0.0)
+        assertEquals(24.0, none.bottomReserve, 0.0)
+        assertEquals(52.0 + 64.0, wide.topReserve, 0.0)
+        assertEquals(24.0 + 64.0, wide.bottomReserve, 0.0)
+        assertEquals(402.0 - 32.0, wide.pageSize(402.0, 874.0).width, 0.0)
+        assertEquals(16.0, ReaderChrome(52.0, 24.0, 16.0, fillsScreen = true).verticalMargin, 0.0)
+        assertNotEquals(none, wide)
+    }
+
+    @Test
+    fun `without filling the vertical margin and the edges are not read`() {
+        val usual = ReaderChrome(52.0, 24.0, 16.0)
+        val same = ReaderChrome(52.0, 24.0, 16.0, verticalMargin = 60.0, fillEdges = punchHole)
+        assertEquals(usual.topReserve, same.topReserve, 0.0)
+        assertEquals(usual.bottomReserve, same.bottomReserve, 0.0)
+    }
+
+    @Test
+    fun `a gesture phone with a punch hole lets the text reach part way into both edges`() {
+        val whole = ReaderChrome(52.0, 24.0, 16.0, fillsScreen = true)
+        val part = ReaderChrome(52.0, 24.0, 16.0, fillsScreen = true, fillEdges = punchHole)
+        // 48 - sqrt(48^2 - 32^2): the depth at which the corner cuts in no more than the 16 side margin.
+        val depth = 48.0 - sqrt(48.0 * 48.0 - 32.0 * 32.0)
+        assertEquals(12.2, depth, 0.05)
+        assertEquals(44.0, part.clearTop, 0.0)
+        assertEquals(44.0 + 16.0, part.topReserve, 0.0)
+        assertEquals(18.0, part.clearBottom, 0.0)
+        assertEquals(18.0 + 16.0, part.bottomReserve, 0.0)
+        assertEquals(whole.pageSize(402.0, 874.0).height + 8.0 + 6.0, part.pageSize(402.0, 874.0).height, 0.0)
+    }
+
+    @Test
+    fun `three-button navigation keeps its whole band`() {
+        val edges = ReaderChrome.FillEdges(sensorClearance = 0.0, indicatorClearance = 48.0, cornerRadius = 0.0)
+        val chrome = ReaderChrome(24.0, 48.0, 16.0, fillsScreen = true, fillEdges = edges)
+        assertEquals(48.0 + 16.0, chrome.bottomReserve, 0.0)
+    }
+
+    @Test
+    fun `no navigation bar and no cutout, as on a Boox phone, reclaims all there was and no more`() {
+        val edges = ReaderChrome.FillEdges(sensorClearance = 0.0, indicatorClearance = 0.0, cornerRadius = 0.0)
+        val chrome = ReaderChrome(24.0, 0.0, 16.0, fillsScreen = true, fillEdges = edges)
+        assertEquals(0.0 + 16.0, chrome.topReserve, 0.0)
+        assertEquals(16.0, chrome.bottomReserve, 0.0)
+    }
+
+    @Test
+    fun `a round corner keeps the text down until it clears the side margin`() {
+        val edges = ReaderChrome.FillEdges(sensorClearance = 0.0, indicatorClearance = 0.0, cornerRadius = 48.0)
+        val chrome = ReaderChrome(52.0, 34.0, 16.0, fillsScreen = true, fillEdges = edges)
+        assertEquals(edges.cornerDepth(16.0), chrome.clearTop, 0.0)
+        assertEquals(0.0, edges.cornerDepth(48.0), 0.0)
+        assertEquals(0.0, edges.cornerDepth(60.0), 0.0)
+        assertEquals(48.0, edges.cornerDepth(0.0), 1e-9)
+    }
+
+    @Test
+    fun `the edges never take more than the edge there is`() {
+        val edges = ReaderChrome.FillEdges(sensorClearance = 80.0, indicatorClearance = 60.0, cornerRadius = 48.0)
+        val chrome = ReaderChrome(30.0, 20.0, 16.0, fillsScreen = true, fillEdges = edges)
+        assertEquals(30.0, chrome.clearTop, 0.0)
+        assertEquals(20.0, chrome.clearBottom, 0.0)
+    }
+
+    @Test
+    fun `the filled reserves are values of the window, not of whether the chrome shows`() {
+        // The chrome has no visibility input at all: equal windows give equal reserves.
+        val a = ReaderChrome(52.0, 24.0, 16.0, fillsScreen = true, verticalMargin = 20.0, fillEdges = punchHole)
+        val b = ReaderChrome(52.0, 24.0, 16.0, fillsScreen = true, verticalMargin = 20.0, fillEdges = punchHole)
+        assertEquals(a, b)
+        assertEquals(a.hashCode(), b.hashCode())
+        assertNotEquals(a, ReaderChrome(52.0, 24.0, 16.0, fillsScreen = true, verticalMargin = 20.0))
     }
 }

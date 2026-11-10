@@ -675,3 +675,51 @@ class FillsScreenStyleTest {
         assertEquals(true, defaults.difference(defaults.copy(fillsScreen = true)).fillsScreen)
     }
 }
+
+/** The top and bottom margin a filled page keeps, as a style field and as a per-book one. */
+class ReaderStyleVerticalMarginTest {
+    private fun decodeStyle(json: String): ReaderStyle = IssaJson.decodeFromString(ReaderStyle.serializer(), json)
+    private fun decodeOverride(json: String): ReaderStyleOverride = IssaJson.decodeFromString(ReaderStyleOverride.serializer(), json)
+
+    @Test
+    fun `absent or damaged is null, which follows the side margin`() {
+        assertNull(decodeStyle("""{"pageMargin":30}""").verticalMargin)
+        assertNull(decodeStyle("""{"pageMargin":30,"verticalMargin":"wide"}""").verticalMargin)
+        assertEquals(30.0, decodeStyle("""{"pageMargin":30}""").effectiveVerticalMargin, 0.0)
+        assertNull(decodeOverride("""{"fontSize":20}""").verticalMargin)
+        assertNull(decodeOverride("""{"verticalMargin":true}""").verticalMargin)
+    }
+
+    @Test
+    fun `a stored value is bounded like the page margin`() {
+        assertEquals(ReaderStyle.pageMarginRange.endInclusive, decodeStyle("""{"verticalMargin":1e300}""").verticalMargin!!, 0.0)
+        assertEquals(0.0, decodeStyle("""{"verticalMargin":-5}""").verticalMargin!!, 0.0)
+    }
+
+    @Test
+    fun `it round trips, and is written only once it is set, under the Swift client's key`() {
+        val plain = IssaJson.parseToJsonElement(encodeStyle(ReaderStyle())).jsonObject
+        assertFalse("verticalMargin" in plain.keys)
+        val set = ReaderStyle(pageMargin = 16.0, verticalMargin = 40.0)
+        val written = IssaJson.parseToJsonElement(encodeStyle(set)).jsonObject
+        assertEquals(plain.keys + "verticalMargin", written.keys)
+        assertEquals(40.0, written["verticalMargin"]!!.jsonPrimitive.content.toDouble(), 0.0)
+        assertEquals(set, decodeStyle(encodeStyle(set)))
+        val override = ReaderStyleOverride(verticalMargin = 12.0)
+        val text = IssaJson.encodeToString(ReaderStyleOverride.serializer(), override)
+        assertEquals(override, decodeOverride(text))
+        assertEquals(setOf("verticalMargin"), IssaJson.parseToJsonElement(text).jsonObject.keys)
+    }
+
+    @Test
+    fun `a book's override applies, differs, and counts`() {
+        val defaults = ReaderStyle()
+        assertEquals(10.0, defaults.applying(ReaderStyleOverride(verticalMargin = 10.0)).verticalMargin!!, 0.0)
+        assertNull(defaults.applying(ReaderStyleOverride(fontSize = 20.0)).verticalMargin)
+        assertEquals(8.0, defaults.difference(defaults.copy(verticalMargin = 8.0)).verticalMargin!!, 0.0)
+        assertNull(defaults.difference(defaults).verticalMargin)
+        assertFalse(ReaderStyleOverride(verticalMargin = 8.0).isEmpty)
+        assertEquals(1, ReaderStyleOverride(verticalMargin = 8.0).count)
+        assertTrue(ReaderStyleOverride().isEmpty)
+    }
+}
