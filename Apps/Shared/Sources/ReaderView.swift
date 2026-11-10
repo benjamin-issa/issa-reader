@@ -119,6 +119,12 @@ public struct ReaderView: View {
     @State private var showsSearch = false
     @State private var showsAnnotations = false
     @State private var showsTypography = false
+    /// Whether the Aa sheet's margin control is being adjusted; the reader
+    /// draws the margins as bands while it is.
+    @State private var marginPreview = MarginPreview()
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    #endif
     #if !os(tvOS)
     /// The Ask sheet on the phone, the Ask popover on the Mac.
     @State private var showsAsk = false
@@ -511,13 +517,21 @@ public struct ReaderView: View {
         // the always-present chrome — tapped during a download, the flag was
         // set with no sheet modifier in the hierarchy, so nothing happened
         // until the book opened and the sheet then popped up unbidden.
-        .sheet(isPresented: $showsTypography) {
+        .sheet(isPresented: $showsTypography, onDismiss: { marginPreview.reset() }) {
             BookTypographyView(
                 book: model.book,
                 publisherFamily: model.style.publisherFamily,
                 publisherNote: model.publisherFontDescription,
                 onChange: applyStyle,
+                marginPreview: marginPreview,
             )
+            #if os(iOS)
+            // Half height on the phone, so the page the margins are being
+            // set on stays in view above the sheet. A regular-width iPad
+            // keeps its form sheet: there the page is already beside it.
+            .presentationDetents(
+                horizontalSizeClass == .compact ? [.medium, .large] : [.large])
+            #endif
             .macSheetSize()
         }
         #if !os(macOS)
@@ -641,6 +655,21 @@ public struct ReaderView: View {
     ///
     /// `publisherFamily` is carried across by hand: it is discovered while
     /// opening and belongs to the book, so it is not in either stored value.
+    #if !os(tvOS)
+    /// Where the margin bands stand: at the page's two sides, or on a spread
+    /// at the outer edge of each page's real text box.
+    private func marginBands(layout: ReaderLayout, width: CGFloat) -> [ClosedRange<CGFloat>] {
+        let margin = model.style.pageMargin
+        guard let spread = layout.spread else {
+            return MarginBands.page(width: width, margin: margin)
+        }
+        let start = layout.railSide == .leading ? layout.railWidth : 0
+        return MarginBands.spread(
+            leftX: spread.leftX - start, rightX: spread.rightX - start,
+            pageWidth: spread.pageWidth, margin: margin)
+    }
+    #endif
+
     private func applyStyle() {
         var resolved = settings.style(for: model.book.uuid)
         resolved.publisherFamily = model.style.publisherFamily
@@ -1144,6 +1173,16 @@ public struct ReaderView: View {
                     PageAccessibility.announcePage(model)
                 }
             })
+            #if !os(tvOS)
+            // The margins, drawn while the Aa sheet's control is moving them.
+            .overlay {
+                if marginPreview.isShowing {
+                    MarginBands(bands: marginBands(layout: layout, width: width))
+                        .transition(.opacity)
+                }
+            }
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: marginPreview.isShowing)
+            #endif
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { turner.width = $0 }
             .contentShape(Rectangle())
                 #if !os(tvOS)

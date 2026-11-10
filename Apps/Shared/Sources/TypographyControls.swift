@@ -21,6 +21,9 @@ struct TypographyControls: View {
     /// Imported faces, refreshed when one is added.
     var customFamilies: [String]
     var onImport: (() -> Void)?
+    /// Told while the margin is being adjusted, so the reader can draw it.
+    /// Nil in Settings, where there is no page to draw it on.
+    var marginPreview: MarginPreview?
 
     var body: some View {
         // Grouped, because "which face is easiest for me to read" and "which
@@ -121,6 +124,12 @@ struct TypographyControls: View {
                 Text(justification.title).tag(justification)
             }
         }
+
+        #if !os(tvOS)
+        // The Apple TV draws its page edge to edge (`TVReaderStyle`), so there
+        // is no margin there to set.
+        MarginControl(style: $style, preview: marginPreview)
+        #endif
     }
 
     /// The imported faces worth listing under "Your fonts".

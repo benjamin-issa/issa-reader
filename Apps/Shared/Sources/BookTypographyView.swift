@@ -16,6 +16,8 @@ struct BookTypographyView: View {
     let publisherNote: String
     /// Applies the resolved style to the open reader.
     let onChange: () -> Void
+    /// Shown to the reader while the margin is adjusted. Nil outside a reader.
+    var marginPreview: MarginPreview?
 
     @Environment(PlaybackSettings.self) private var settings
     @Environment(\.dismiss) private var dismiss
@@ -33,8 +35,8 @@ struct BookTypographyView: View {
         return NavigationStack {
             List {
                 // Bound to the global value, not to this sheet's `style`.
-                // `ReaderStyleOverride` carries typeface, size, spacing and
-                // justification and nothing else, so a theme written through
+                // `ReaderStyleOverride` carries typeface, size, spacing,
+                // justification and margin and nothing else, so a theme written through
                 // `style` would be dropped on the floor by `difference(to:)` —
                 // it would appear to work and then not persist.
                 SettingsSection(note: "Applies to every book, unlike the settings below.") {
@@ -51,6 +53,7 @@ struct BookTypographyView: View {
                         publisherNote: publisherNote,
                         customFamilies: customFamilies,
                         onImport: { importing = true },
+                        marginPreview: marginPreview,
                     )
                 } header: {
                     Text("This book")
