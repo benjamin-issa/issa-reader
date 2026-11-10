@@ -140,14 +140,14 @@ struct BookRoutingTests {
     /// Try again, refused for the same reason, put in an alert.
     @Test("a resumed download the Wi-Fi rule refuses is said, as a save is")
     func resumeRefusalIsSaid() async throws {
-        let fixture = DownloadRefusalTests.fixture()
+        let fixture = WidgetStorage.DownloadRefusalTests.fixture()
         defer { fixture.tearDown() }
         let book = try #require(fixture.app.books.first)
 
         let resumed = await BookActions.startDownload(.resume, of: book, format: .readaloud, in: fixture.app)
-        #expect(resumed?.message == DownloadRefusalTests.expectedReason, "the refusal went unsaid")
+        #expect(resumed?.message == WidgetStorage.DownloadRefusalTests.expectedReason, "the refusal went unsaid")
 
         let saved = await BookActions.startDownload(.save, of: book, format: .readaloud, in: fixture.app)
-        #expect(saved?.message == DownloadRefusalTests.expectedReason)
+        #expect(saved?.message == WidgetStorage.DownloadRefusalTests.expectedReason)
     }
 }
