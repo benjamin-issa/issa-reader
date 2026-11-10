@@ -125,9 +125,10 @@ class LineHeightMultipleSpan(val multiple: Double) : LineHeightSpan {
 /**
  * An illustration's place in a line: the Swift client's `ImageAttachment`.
  *
- * Sized to its display size, never wider than the column it lands in
- * ([ImageAttachment.bounds]) — a plate that overflows the measure would be
- * clipped rather than scaled. Sitting on the baseline, as an attachment does,
+ * Sized to its display size, never wider than the column it lands in nor
+ * taller than the page ([ImageAttachment.bounds]) — a plate that overflows the
+ * measure would be clipped rather than scaled, and one taller than the page
+ * cannot be paged through. Sitting on the baseline, as an attachment does,
  * and nothing below it.
  *
  * The pixels are decoded only when the plate is drawn ([PlateBitmaps]): laying
@@ -138,6 +139,9 @@ class PlateSpan(val plate: ChapterPlate, private val scale: Double) : Replacemen
     /** The column this plate lands in, in pixels; set by the layout before each pass. */
     var availableWidthPx: Double = Double.MAX_VALUE
 
+    /** The page this plate lands on, in pixels; set by the layout before each pass. */
+    var availableHeightPx: Double = Double.MAX_VALUE
+
     /** Left out of a pass that redraws only the words, in another ink. */
     var isHidden: Boolean = false
 
@@ -146,7 +150,7 @@ class PlateSpan(val plate: ChapterPlate, private val scale: Double) : Replacemen
     /** The size it is drawn at, in pixels. */
     val sizePx: ImageAttachment.Size
         get() {
-            val bounds = ImageAttachment.bounds(plate.displayWidth, plate.displayHeight, availableWidthPx / scale)
+            val bounds = ImageAttachment.bounds(plate.displayWidth, plate.displayHeight, availableWidthPx / scale, availableHeightPx / scale)
             return ImageAttachment.Size(bounds.width * scale, bounds.height * scale)
         }
 

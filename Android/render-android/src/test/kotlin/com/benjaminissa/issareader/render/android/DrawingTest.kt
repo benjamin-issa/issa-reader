@@ -278,3 +278,34 @@ class PlateDecodingTest {
         assertEquals(plate.layoutHeight.toInt(), bitmap.height)
     }
 }
+
+/**
+ * A rotation re-lays the chapter out without parsing it again, so a plate
+ * parsed for a tall page has to be fitted to the wide one by the layout.
+ */
+@RunWith(RobolectricTestRunner::class)
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
+@Config(sdk = [36])
+class PlateRotationTest {
+    private fun tallPlateChapter() = parse(
+        "<html xmlns=\"http://www.w3.org/1999/xhtml\"><body><p>Before.</p><img src=\"plate.png\" alt=\"A plate\"/><p>After.</p></body></html>",
+        maxImageWidth = 320.0, columnWidth = 320.0, maxImageHeight = 600.0,
+        loadImage = { BitmapArtwork(Bitmap.createBitmap(800, 3000, Bitmap.Config.ALPHA_8)) },
+    )
+
+    /** The paragraph spacing around a plate, which the page bound does not count. */
+    private val spacing = 20.0
+
+    /** The most any page's content reaches beyond the page's height. */
+    private fun overflow(layout: ChapterLayout, height: Double): Double =
+        layout.pages.dropLast(1).maxOf { (it.contentBottom - it.yOffset) - height }
+
+    @Test
+    fun `a tall plate parsed for a portrait page fits the landscape page after a rotation`() {
+        val layout = laidOut(tallPlateChapter(), 320.0, 600.0)
+        assertTrue("portrait: ${overflow(layout, 600.0)}", overflow(layout, 600.0) <= spacing)
+
+        layout.layout(600.0, 320.0)
+        assertTrue("landscape pages reach ${overflow(layout, 320.0)} past the page", overflow(layout, 320.0) <= spacing)
+    }
+}

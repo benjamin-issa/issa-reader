@@ -137,7 +137,10 @@ class ChapterLayout(
         pageWidth = width
         pageHeight = height
         reindent(width / scale)
-        for (plate in plateSpans) plate.availableWidthPx = width
+        for (plate in plateSpans) {
+            plate.availableWidthPx = width
+            plate.availableHeightPx = height
+        }
         val widthPx = max(1, width.toInt())
         var y = 0.0
         for (paragraph in paragraphs) {

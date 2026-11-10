@@ -33,13 +33,21 @@ object ImageAttachment {
     }
 
     /**
-     * Never wider than the column it lands in. A column narrower than the one
-     * the chapter was parsed for — a rotation, a split screen — would
-     * otherwise leave the plate overhanging its right edge.
+     * Never wider than the column it lands in, and never taller than the page.
+     *
+     * The column: one narrower than the one the chapter was parsed for — a
+     * rotation, a split screen — would otherwise leave the plate overhanging
+     * its right edge. The page: [displaySize] bounded the height for the page
+     * the chapter was parsed for, but a rotation re-lays the chapter out
+     * without parsing it again, and a plate fitted to a tall page, turned
+     * onto a wide one, was left taller than the page, its lower part
+     * unreachable by turning pages. So both bounds are applied here as well,
+     * scaling by whichever is tighter and keeping the aspect ratio. Never up.
      */
-    fun bounds(displayWidth: Double, displayHeight: Double, availableWidth: Double): Size {
-        if (!(availableWidth > 0) || displayWidth <= availableWidth) return Size(displayWidth, displayHeight)
-        val scale = availableWidth / displayWidth
-        return Size(availableWidth, displayHeight * scale)
+    fun bounds(displayWidth: Double, displayHeight: Double, availableWidth: Double, availableHeight: Double): Size {
+        var scale = 1.0
+        if (availableWidth > 0 && displayWidth > availableWidth) scale = availableWidth / displayWidth
+        if (availableHeight > 0 && displayHeight * scale > availableHeight) scale = availableHeight / displayHeight
+        return if (scale == 1.0) Size(displayWidth, displayHeight) else Size(displayWidth * scale, displayHeight * scale)
     }
 }

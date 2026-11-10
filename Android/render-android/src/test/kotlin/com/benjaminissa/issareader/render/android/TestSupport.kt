@@ -36,8 +36,9 @@ internal fun parse(
     maxImageWidth: Double = 320.0,
     columnWidth: Double = 320.0,
     loadImage: ((String) -> ChapterArtwork?)? = null,
+    maxImageHeight: Double = Double.MAX_VALUE,
 ): StyledChapter = ChapterParser(
-    style = style, maxImageWidth = maxImageWidth, columnWidth = columnWidth, loadImage = loadImage,
+    style = style, maxImageWidth = maxImageWidth, maxImageHeight = maxImageHeight, columnWidth = columnWidth, loadImage = loadImage,
 ).parse(html.toByteArray(Charsets.UTF_8), baseHref)
 
 /** A chapter laid out at a page size, in points (the tests lay out at one pixel per point). */
