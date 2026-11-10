@@ -723,8 +723,9 @@ private fun BookTitleCaption(
             textAlign = TextAlign.Center,
             modifier = modifier
                 .padding(bottom = if (inRow) band else 0.dp)
-                // Over the text rather than in a row the page gave up.
-                .then(if (inRow && overPage) Modifier.background(model.style.theme.ground(0.94).color) else Modifier)
+                // Over the text rather than in a row the page gave up: the row, or the band the
+                // filled page may now reach into. ground() is opaque in E-Ink mode.
+                .then(if (overPage) Modifier.background(model.style.theme.ground(0.94).color) else Modifier)
                 .fillMaxWidth()
                 .height(if (inRow) row else band)
                 .padding(horizontal = model.style.pageMargin.dp)
