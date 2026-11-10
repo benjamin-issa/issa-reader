@@ -1,1 +1,4 @@
-New: E-Ink mode, for E Ink screens such as the Boox Palma. Turn it on in Settings › Display for black and white with no animation, and outlines and underlines in place of colour. You choose how the sentence being read aloud is marked: underlined, outlined or inverted.
+New: margins. In a book, tap Aa and slide Margins, or pick Wide, Standard, Narrow or Edge. That book keeps its own; Settings › Reading sets the default.
+New: a redesigned widget, with a bigger cover, titles that fit, and the other books you're reading a tap away.
+Fixed: on a phone that can't run Ask, turning it on could close the app on every launch. The switch now says the phone can't run it.
+Fixed: tall illustrations cut off after turning the phone.
