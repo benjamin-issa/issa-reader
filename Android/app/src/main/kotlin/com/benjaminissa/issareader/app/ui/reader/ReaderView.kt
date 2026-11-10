@@ -437,6 +437,9 @@ fun ReaderView(
                 LocalConfiguration.current.screenWidthDp,
                 LocalConfiguration.current.screenHeightDp,
             ),
+            // Undimmed: grey over the page hid the margin bands this sheet
+            // draws on it, which are the reason it stops halfway.
+            dimsBehind = false,
         ) { dismiss ->
             BookTypographyView(
                 book = model.book,

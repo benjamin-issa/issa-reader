@@ -209,6 +209,9 @@ private val SliderTrackHeight: Dp = 16.dp
 /**
  * Material's bottom sheet on paper. In E-Ink mode nothing dims the app behind
  * it, which would be a screenful of grey, and an outline stands in for that.
+ *
+ * @param dimsBehind false for a sheet whose point is the page behind it — the
+ *   reader's Aa sheet, whose margins are drawn on the page while they move.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -219,10 +222,11 @@ fun PaperSheet(
     tonalElevation: Dp = BottomSheetDefaults.Elevation,
     contentColor: Color = contentColorFor(Palette.paper),
     contentWindowInsets: (@Composable () -> WindowInsets)? = null,
+    dimsBehind: Boolean = true,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val outline = Modifier.einkOutline(BottomSheetDefaults.ExpandedShape, EInk.dialogOutline)
-    val scrim = if (Palette.isEInk) Color.Transparent else BottomSheetDefaults.ScrimColor
+    val scrim = if (Palette.isEInk || !dimsBehind) Color.Transparent else BottomSheetDefaults.ScrimColor
     // Two calls, because Material's default for the insets is its own to name.
     if (contentWindowInsets == null) {
         ModalBottomSheet(

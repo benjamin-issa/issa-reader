@@ -49,12 +49,15 @@ import com.benjaminissa.issareader.ui.SystemText
  *
  * @param halfHeight opens at half the screen, as the iPhone's medium detent,
  *   and grows when pulled up; otherwise opens at full height.
+ * @param dimsBehind false to leave the page behind the sheet undimmed, for a
+ *   sheet that changes how that page looks.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ReaderSheet(
     onDismiss: () -> Unit,
     halfHeight: Boolean = false,
+    dimsBehind: Boolean = true,
     content: @Composable ColumnScope.(dismiss: () -> Unit) -> Unit,
 ) {
     val state = rememberModalBottomSheetState(skipPartiallyExpanded = !halfHeight)
@@ -70,6 +73,7 @@ fun ReaderSheet(
         tonalElevation = 0.dp,
         dragHandle = { BottomSheetDefaults.DragHandle(color = Palette.borderStrong) },
         contentWindowInsets = { WindowInsets.navigationBars },
+        dimsBehind = dimsBehind,
     ) {
         // The iPhone's large detent is the whole height, however little is in it.
         Column(if (halfHeight) Modifier.fillMaxWidth() else Modifier.fillMaxSize()) { content(dismiss) }
