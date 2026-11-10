@@ -32,6 +32,8 @@ import com.benjaminissa.issareader.ui.Typography
  * @param customFamilies imported faces, refreshed when one is added.
  * @param importNotice what the last import could not do, said under "Add a font…".
  * @param onImport opens the document picker; null where importing is not offered.
+ * @param marginPreview told while the margin is adjusted, so the reader can draw
+ *   it; null in Settings, where there is no page to draw it on.
  */
 fun PaperSectionScope.typographyControls(
     style: ReaderStyle,
@@ -41,6 +43,7 @@ fun PaperSectionScope.typographyControls(
     customFamilies: List<String> = emptyList(),
     importNotice: FontImport.Notice? = null,
     onImport: (() -> Unit)? = null,
+    marginPreview: MarginPreview? = null,
 ) {
     val listed = FontImport.listedCustomFamilies(customFamilies)
     // Grouped, because "which face is easiest for me to read" and "which face
@@ -106,6 +109,7 @@ fun PaperSectionScope.typographyControls(
             onSelect = { onStyle(style.copy(justification = it)) },
         )
     }
+    row { MarginControl(style, onStyle, marginPreview) }
 }
 
 /** The pure rules behind the controls, kept apart so they can be tested. */

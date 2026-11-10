@@ -39,6 +39,7 @@ import com.benjaminissa.issareader.ui.paperSection
  * @param fontImport "Add a font…": the app's one, which Settings shares.
  * @param publisherFamily the face this book embeds, when it has a usable one.
  * @param onChange applies the resolved style to the open reader.
+ * @param marginPreview shown to the reader while the margin is adjusted; null outside a reader.
  */
 @Composable
 fun BookTypographyView(
@@ -49,6 +50,7 @@ fun BookTypographyView(
     publisherNote: String,
     onChange: () -> Unit,
     onDone: () -> Unit,
+    marginPreview: MarginPreview? = null,
 ) {
     var style by remember(book.uuid) { mutableStateOf(settings.style(book.uuid)) }
     var customFamilies by remember(fontImport) { mutableStateOf(fontImport.customFonts.families()) }
@@ -82,8 +84,8 @@ fun BookTypographyView(
         val eink = Palette.isEInk
         PaperList(contentPadding = PaddingValues(bottom = Metrics.spacing32)) {
             // Bound to the global value, not to this sheet's style: a book's
-            // override carries typeface, size, spacing and justification and
-            // nothing else, so a theme written through it would appear to work
+            // override carries typeface, size, spacing, justification and margin
+            // and nothing else, so a theme written through it would appear to work
             // and then not persist.
             if (!eink) {
                 paperSection(key = "theme", header = "Page colour", footer = "Applies to every book, unlike the settings below.") {
@@ -106,6 +108,7 @@ fun BookTypographyView(
                     customFamilies = customFamilies,
                     importNotice = fontImport.notice,
                     onImport = { importer.launch(FontImport.contentTypes) },
+                    marginPreview = marginPreview,
                 )
             }
             if (override != null && !override.isEmpty) {

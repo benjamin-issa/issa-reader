@@ -76,6 +76,20 @@ fun ReaderSheet(
     }
 }
 
+/** Which window the Aa sheet stops partway up in. */
+object TypographySheet {
+    /** Material's compact width class ends here. */
+    const val COMPACT_WIDTH_DP = 600
+
+    /**
+     * A phone held upright: compact width and taller than wide. Half the
+     * screen leaves the page visible above the sheet. Turned on its side half
+     * of a short screen is too little to work in, and a tablet has the room
+     * for the full sheet, so both keep it.
+     */
+    fun opensHalfHeight(widthDp: Int, heightDp: Int): Boolean = widthDp < COMPACT_WIDTH_DP && heightDp >= widthDp
+}
+
 /** A sheet's large title, as a navigation stack's in a sheet. */
 @Composable
 fun SheetLargeTitle(title: String, modifier: Modifier = Modifier) {

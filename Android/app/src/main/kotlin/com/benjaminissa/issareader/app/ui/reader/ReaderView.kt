@@ -213,6 +213,9 @@ fun ReaderView(
     val reduceMotion = rememberReduceMotion()
     val theme = model.style.theme
     val uuid = model.book.uuid
+    // Whether the Aa sheet's margin control is being adjusted; the page draws
+    // its margins as bands while it is.
+    val marginPreview = remember(model) { MarginPreview(scope) }
     // A tapped answer opens its book's reader with the answer's sheet up.
     environment.ask?.let { ask ->
         LaunchedEffect(ask.reopenRequest, uuid) { if (ask.takeReopenRequest(uuid)) sheet = ReaderSheetKind.ASK }
@@ -329,6 +332,7 @@ fun ReaderView(
                 ReaderModel.Phase.Ready -> PageContent(
                     model, environment, turner, pageWidth, pageHeight,
                     reduceMotion = reduceMotion,
+                    marginPreview = marginPreview,
                     onSheet = { sheet = it },
                     onOpenPlayer = onOpenPlayer,
                 )
@@ -421,7 +425,19 @@ fun ReaderView(
         ReaderSheetKind.MARKS -> ReaderSheet(onDismiss = { sheet = null }, halfHeight = true) { dismiss ->
             AnnotationsView(model, onOpen = { annotation -> scope.launch { model.go(annotation) } }, onDismiss = dismiss)
         }
-        ReaderSheetKind.TYPOGRAPHY -> ReaderSheet(onDismiss = { sheet = null }) { dismiss ->
+        ReaderSheetKind.TYPOGRAPHY -> ReaderSheet(
+            onDismiss = {
+                sheet = null
+                marginPreview.reset()
+            },
+            // Half height on a phone held upright, so the page the margins are
+            // being set on stays in view above the sheet. A wide window keeps
+            // the full sheet it had: there the page is beside it or out of reach.
+            halfHeight = TypographySheet.opensHalfHeight(
+                LocalConfiguration.current.screenWidthDp,
+                LocalConfiguration.current.screenHeightDp,
+            ),
+        ) { dismiss ->
             BookTypographyView(
                 book = model.book,
                 settings = settings,
@@ -430,6 +446,7 @@ fun ReaderView(
                 publisherNote = model.publisherFontDescription,
                 onChange = ::applyStyle,
                 onDone = dismiss,
+                marginPreview = marginPreview,
             )
         }
         ReaderSheetKind.ASK -> {
@@ -453,6 +470,7 @@ private fun PageContent(
     pageWidth: Dp,
     pageHeight: Dp,
     reduceMotion: Boolean,
+    marginPreview: MarginPreview,
     onSheet: (ReaderSheetKind) -> Unit,
     onOpenPlayer: () -> Unit,
 ) {
@@ -599,6 +617,8 @@ private fun PageContent(
                         playPage = { scope.launch { model.playFirstSentenceOnPage() } },
                     ),
                 )
+                // The margins, drawn while the Aa sheet's control is moving them.
+                MarginBandsOverlay(marginPreview, margin, reduceMotion, Modifier.matchParentSize())
                 if (model.selection != null) {
                     SelectionMenu(model, Modifier.align(Alignment.BottomCenter).padding(bottom = Metrics.spacing24))
                 }
