@@ -36,7 +36,8 @@ struct BookTypographyView: View {
             List {
                 // Bound to the global value, not to this sheet's `style`.
                 // `ReaderStyleOverride` carries typeface, size, spacing,
-                // justification and margin and nothing else, so a theme written through
+                // justification, margin and the fills-the-screen choice and
+                // nothing else, so a theme written through
                 // `style` would be dropped on the floor by `difference(to:)` —
                 // it would appear to work and then not persist.
                 SettingsSection(note: "Applies to every book, unlike the settings below.") {
