@@ -4,6 +4,7 @@ import com.benjaminissa.issareader.app.AppSuite
 import com.benjaminissa.issareader.app.SharedFixtures
 import com.benjaminissa.issareader.app.close
 import com.benjaminissa.issareader.app.mainTest
+import com.benjaminissa.issareader.app.testApp
 import com.benjaminissa.issareader.app.testScope
 import com.benjaminissa.issareader.core.CurrentBookSnapshotStore
 import com.benjaminissa.issareader.core.model.Book
@@ -160,6 +161,31 @@ class WidgetOthersPublishingTest : AppSuite() {
             f.publisher.libraryChanged(listOf(book("a", at = 1.0)), null)
             assertNull(CurrentBookSnapshotStore.read())
             assertFalse(f.reloads > 0)
+        } finally {
+            f.scope.close()
+        }
+    }
+
+    /** A model that has not loaded a catalogue leaves the stored others and their covers alone; a loaded empty one clears them. */
+    @Test
+    fun launchBeforeTheCatalogueKeepsTheList() = mainTest {
+        val f = Fixture()
+        val app = testApp(f.scope)
+        try {
+            app.currentBookPublisher = f.publisher
+            f.publishCurrent(book("cur"))
+            f.publisher.libraryChanged(listOf(book("cur"), book("a", at = 1.0)), null)
+            CurrentBookSnapshotStore.writeOtherCover("a", byteArrayOf(1))
+
+            // What init does, and what a failed first refresh leaves.
+            app.rebuildDerived()
+            assertEquals(listOf("a"), f.others.map { it.bookId })
+            assertEquals(setOf("a"), CurrentBookSnapshotStore.otherCoverIds())
+
+            app.catalogueApplied = true
+            app.rebuildDerived()
+            assertTrue(f.others.isEmpty())
+            assertTrue(CurrentBookSnapshotStore.otherCoverIds().isEmpty())
         } finally {
             f.scope.close()
         }
