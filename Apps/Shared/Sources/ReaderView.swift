@@ -286,6 +286,7 @@ public struct ReaderView: View {
                 margin: model.style.pageMargin,
                 drawsOwnTopBar: Self.drawsOwnTopBar,
                 railWidth: layout.railWidth,
+                fillsScreen: model.style.fillsScreen,
             )
             // A spread lays the chapter out a page at a time like any other
             // device, each page as tall as the one page would be and as wide
@@ -1174,7 +1175,11 @@ public struct ReaderView: View {
             // own toolbar is the top chrome, and `deviceInsets.top` is what
             // holds the page clear of it. Reserving 44 here as well put the
             // page's first line 8 points under a 52-point toolbar.
-            if Self.drawsTopBar(in: layout) {
+            //
+            // Nor when the reader has given the band to the text: the bar is
+            // then drawn over the page's first lines when it is summoned, and
+            // the page starts at the margin like the Mac's.
+            if Self.drawsTopBar(in: layout), !model.style.fillsScreen {
                 Color.clear.frame(height: ReaderChrome.barHeight)
             }
 
@@ -1394,8 +1399,25 @@ public struct ReaderView: View {
                 }
                 #endif
 
-            footer
-                .allowsHitTesting(chromeTakesTouches)
+            // Filling the screen takes the footer out of the stack, so the page
+            // runs to the bottom and the footer is drawn over it below.
+            if !model.style.fillsScreen {
+                footer
+                    .allowsHitTesting(chromeTakesTouches)
+            }
+        }
+        // The footer over the page, at the position the stack would have given
+        // it, with the top bar's backing while it shows. Out of the way of
+        // every touch while it is hidden: its content shape and its swipe
+        // would otherwise take the taps, turns and selections the last lines
+        // of the page are owed.
+        .overlay(alignment: .bottom) {
+            if model.style.fillsScreen {
+                footer
+                    .background(model.style.theme.background.opacity(model.chromeVisible ? 0.94 : 0))
+                    .animation(.easeInOut(duration: 0.2), value: model.chromeVisible)
+                    .allowsHitTesting(model.chromeVisible && chromeTakesTouches)
+            }
         }
         // A chapter that would not open, said over the page it left in place.
         // Below the top bar's reserve, which the bar may be drawn over.
@@ -1668,8 +1690,11 @@ public struct ReaderView: View {
     ///
     /// One value because two things must agree about it: the padding that puts
     /// it on screen, and `pagePoint`, which has to take it back off again.
+    ///
+    /// Also where the reader has given the top bar's band to the text: the bar
+    /// then stands over the page, not above it, and the margin is spent.
     private func pageTopMargin(in layout: ReaderLayout) -> CGFloat {
-        Self.drawsTopBar(in: layout) ? 0 : model.style.pageMargin
+        Self.drawsTopBar(in: layout) && !model.style.fillsScreen ? 0 : model.style.pageMargin
     }
 
     /// A point in the padded page's coordinates, in the canvas's own, and
@@ -1751,7 +1776,8 @@ public struct ReaderView: View {
     /// Its `ReaderChrome.barHeight` is reserved whether or not the controls are
     /// showing, so toggling the chrome never changes the page size and never
     /// re-paginates the chapter. What the strip *contains* is conditional; its
-    /// height never is.
+    /// height never is. (When the reader fills the screen with text the band is
+    /// not reserved at all; the strip is then drawn over the page instead.)
     private var footer: some View {
         HStack(spacing: Metrics.spacing12) {
             if model.chromeVisible {

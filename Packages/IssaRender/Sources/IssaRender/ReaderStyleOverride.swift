@@ -18,6 +18,9 @@ public struct ReaderStyleOverride: Sendable, Hashable, Codable {
     /// The page's margin on each side, in points. Unset follows the global
     /// default; set, this book keeps its own however that is later changed.
     public var pageMargin: CGFloat?
+    /// Whether the reader's bars give their bands to the text. Unset follows
+    /// the global default.
+    public var fillsScreen: Bool?
 
     public init(
         typeface: ReaderStyle.Typeface? = nil,
@@ -25,16 +28,18 @@ public struct ReaderStyleOverride: Sendable, Hashable, Codable {
         lineSpacing: ReaderStyle.LineSpacing? = nil,
         justification: ReaderStyle.Justification? = nil,
         pageMargin: CGFloat? = nil,
+        fillsScreen: Bool? = nil,
     ) {
         self.typeface = typeface
         self.fontSize = fontSize
         self.lineSpacing = lineSpacing
         self.justification = justification
         self.pageMargin = pageMargin
+        self.fillsScreen = fillsScreen
     }
 
     enum CodingKeys: String, CodingKey {
-        case typeface, fontSize, lineSpacing, justified, justification, pageMargin
+        case typeface, fontSize, lineSpacing, justified, justification, pageMargin, fillsScreen
     }
 
     /// Decoded field by field, every field forgiving.
@@ -61,6 +66,7 @@ public struct ReaderStyleOverride: Sendable, Hashable, Codable {
         pageMargin = ReaderStyle.clampedLength(
             try? container.decodeIfPresent(CGFloat.self, forKey: .pageMargin),
             to: ReaderStyle.pageMarginRange)
+        fillsScreen = try? container.decodeIfPresent(Bool.self, forKey: .fillsScreen)
         // `justification` replaced `justified`, and reads the old key the same
         // way `ReaderStyle` does: a book explicitly set to justified stays
         // justified, and one explicitly set ragged keeps that too — unlike the
@@ -82,6 +88,7 @@ public struct ReaderStyleOverride: Sendable, Hashable, Codable {
         try container.encodeIfPresent(lineSpacing, forKey: .lineSpacing)
         try container.encodeIfPresent(justification, forKey: .justification)
         try container.encodeIfPresent(pageMargin, forKey: .pageMargin)
+        try container.encodeIfPresent(fillsScreen, forKey: .fillsScreen)
         // The key this replaced, written as well, as `ReaderStyle` does for
         // the global setting. The build before the three-position setting
         // reads only `justified`; without it a reader who moves back a build
@@ -105,13 +112,16 @@ public struct ReaderStyleOverride: Sendable, Hashable, Codable {
     /// "use my defaults" leaves no trace to go stale.
     public var isEmpty: Bool {
         typeface == nil && fontSize == nil && lineSpacing == nil && justification == nil
-            && pageMargin == nil
+            && pageMargin == nil && fillsScreen == nil
     }
 
     /// Which fields the reader has taken control of, for the sheet to show.
     public var count: Int {
-        [typeface != nil, fontSize != nil, lineSpacing != nil, justification != nil, pageMargin != nil]
-            .filter { $0 }.count
+        [
+            typeface != nil, fontSize != nil, lineSpacing != nil, justification != nil,
+            pageMargin != nil, fillsScreen != nil,
+        ]
+        .filter { $0 }.count
     }
 }
 
@@ -125,6 +135,7 @@ public extension ReaderStyle {
         if let lineSpacing = override.lineSpacing { style.lineSpacing = lineSpacing }
         if let justification = override.justification { style.justification = justification }
         if let pageMargin = override.pageMargin { style.pageMargin = pageMargin }
+        if let fillsScreen = override.fillsScreen { style.fillsScreen = fillsScreen }
         return style
     }
 
@@ -138,6 +149,7 @@ public extension ReaderStyle {
             lineSpacing: other.lineSpacing == lineSpacing ? nil : other.lineSpacing,
             justification: other.justification == justification ? nil : other.justification,
             pageMargin: other.pageMargin == pageMargin ? nil : other.pageMargin,
+            fillsScreen: other.fillsScreen == fillsScreen ? nil : other.fillsScreen,
         )
     }
 }

@@ -133,3 +133,66 @@ struct BookMarginTests {
         #expect(!preview.isShowing)
     }
 }
+
+/// "Fill the screen with text" as a global default a book can override.
+@Suite("The fill-the-screen setting")
+@MainActor
+struct BookFillScreenTests {
+    private func withSuite(_ body: (String) -> Void) {
+        let suite = "test.\(UUID().uuidString)"
+        defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        body(suite)
+    }
+
+    @Test("one book overriding it on leaves the default and the others off, until reset")
+    func perBook() {
+        withSuite { suite in
+            let settings = PlaybackSettings(suiteName: suite)
+            var edited = settings.style(for: "book-b")
+            edited.fillsScreen = true
+            settings.setOverride(settings.readerStyle.difference(to: edited), for: "book-b")
+            #expect(settings.override(for: "book-b") == ReaderStyleOverride(fillsScreen: true))
+            #expect(settings.style(for: "book-b").fillsScreen)
+            #expect(!settings.style(for: "book-a").fillsScreen)
+            #expect(!settings.style(for: "book-c").fillsScreen)
+            #expect(!settings.readerStyle.fillsScreen, "the global default stays off")
+
+            settings.setOverride(nil, for: "book-b")
+            #expect(settings.override(for: "book-b") == nil)
+            #expect(!settings.style(for: "book-b").fillsScreen)
+        }
+    }
+
+    @Test("a book follows the default when it has no opinion, and keeps its own when it has")
+    func followsTheDefault() {
+        withSuite { suite in
+            let settings = PlaybackSettings(suiteName: suite)
+            settings.setOverride(ReaderStyleOverride(fontSize: 22), for: "book-a")
+            settings.setOverride(ReaderStyleOverride(fillsScreen: false), for: "book-b")
+            settings.readerStyle.fillsScreen = true
+            #expect(settings.style(for: "book-a").fillsScreen)
+            #expect(!settings.style(for: "book-b").fillsScreen, "its own stays")
+            #expect(settings.style(for: "book-c").fillsScreen)
+        }
+    }
+
+    @Test("the setting survives a relaunch, per book and as the default")
+    func persists() {
+        withSuite { suite in
+            let first = PlaybackSettings(suiteName: suite)
+            first.setOverride(ReaderStyleOverride(fillsScreen: true), for: "book-a")
+            first.readerStyle.fillsScreen = true
+            let second = PlaybackSettings(suiteName: suite)
+            #expect(second.override(for: "book-a") == ReaderStyleOverride(fillsScreen: true))
+            #expect(second.readerStyle.fillsScreen)
+        }
+    }
+
+    @Test("the Apple TV never fills the screen")
+    func tvIgnoresIt() {
+        var style = ReaderStyle()
+        style.fillsScreen = true
+        #expect(!TVReaderStyle.derive(from: style, publisherFamily: nil).fillsScreen)
+    }
+}
+

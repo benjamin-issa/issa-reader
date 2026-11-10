@@ -129,6 +129,18 @@ struct TypographyControls: View {
         // The Apple TV draws its page edge to edge (`TVReaderStyle`), so there
         // is no margin there to set.
         MarginControl(style: $style, preview: marginPreview)
+
+        // Under the margins because it is the other half of how much of the
+        // screen is text. The footnote says the price: the controls are then
+        // drawn over the page rather than beside it.
+        VStack(alignment: .leading, spacing: Metrics.spacing4) {
+            Toggle("Fill the screen with text", isOn: $style.fillsScreen)
+                .accessibilityIdentifier("typography.fillsScreen")
+            Text("The controls appear over the text when you tap the page.")
+                .font(Typography.caption)
+                .foregroundStyle(Palette.inkSecondary)
+        }
+        .padding(.vertical, Metrics.spacing4)
         #endif
     }
 

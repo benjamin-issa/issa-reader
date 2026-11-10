@@ -130,6 +130,13 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
 
     public var justification: Justification
     public var pageMargin: CGFloat
+    /// Give the bands the reader keeps for its top bar and footer to the page.
+    ///
+    /// Off, the page stops short of both and the controls stand in the space
+    /// they leave. On, the text runs to the hardware's edges and the controls
+    /// are drawn over it when summoned; the page is the same size either way
+    /// while they come and go.
+    public var fillsScreen: Bool
     public var highlightGranularity: HighlightGranularity
     /// Keep the narrated sentence on screen while audio plays.
     public var followNarration: Bool
@@ -174,6 +181,7 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
         theme: ReaderTheme = .paper,
         justification: Justification = .followBook,
         pageMargin: CGFloat = 24,
+        fillsScreen: Bool = false,
         highlightGranularity: HighlightGranularity = .sentence,
         followNarration: Bool = true,
         turnPagesMidSentence: Bool = false,
@@ -188,6 +196,7 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
         self.theme = theme
         self.justification = justification
         self.pageMargin = pageMargin
+        self.fillsScreen = fillsScreen
         self.highlightGranularity = highlightGranularity
         self.followNarration = followNarration
         self.turnPagesMidSentence = turnPagesMidSentence
@@ -198,7 +207,7 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
 
     // Spelled out rather than synthesised, because the decoder below names them.
     enum CodingKeys: String, CodingKey {
-        case typeface, fontFamily, fontSize, lineSpacing, theme, justified, justification, pageMargin
+        case typeface, fontFamily, fontSize, lineSpacing, theme, justified, justification, pageMargin, fillsScreen
         case highlightGranularity, followNarration, turnPagesMidSentence
         case tapToPlay, progressDisplay, highlighters
     }
@@ -263,6 +272,8 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
         }
         pageMargin = Self.decodeLength(from: container, key: .pageMargin, in: Self.pageMarginRange)
             ?? fallback.pageMargin
+        fillsScreen = (try? container.decodeIfPresent(Bool.self, forKey: .fillsScreen))
+            ?? fallback.fillsScreen
         highlightGranularity = Self.decodeCase(
             HighlightGranularity.self, from: container, key: .highlightGranularity)
             ?? fallback.highlightGranularity
@@ -325,6 +336,7 @@ public struct ReaderStyle: Sendable, Hashable, Codable {
         // is the most an older writer can say.
         try container.encode(justification == .always, forKey: .justified)
         try container.encode(pageMargin, forKey: .pageMargin)
+        try container.encode(fillsScreen, forKey: .fillsScreen)
         try container.encode(highlightGranularity, forKey: .highlightGranularity)
         try container.encode(followNarration, forKey: .followNarration)
         try container.encode(turnPagesMidSentence, forKey: .turnPagesMidSentence)

@@ -49,6 +49,15 @@ public struct ReaderChrome: Sendable, Equatable {
     /// With a rail there is no top bar, so `drawsOwnTopBar` is false and the
     /// page's own margin is spent at the top, as on the Mac.
     public let railWidth: CGFloat
+    /// Whether the reader has given its bars' bands to the page
+    /// (`ReaderStyle.fillsScreen`).
+    ///
+    /// The controls are then drawn over the text when summoned, so the page
+    /// reserves nothing for them: not the footer's band, and not the top bar's
+    /// either. What the hardware takes stays taken — the Dynamic Island, the
+    /// home indicator, the Duo's rail — because text under those is simply
+    /// lost, not covered for a moment.
+    public let fillsScreen: Bool
 
     public init(
         safeAreaTop: CGFloat,
@@ -56,11 +65,13 @@ public struct ReaderChrome: Sendable, Equatable {
         margin: CGFloat,
         drawsOwnTopBar: Bool = true,
         railWidth: CGFloat = 0,
+        fillsScreen: Bool = false,
     ) {
         self.safeAreaTop = max(0, safeAreaTop)
         self.safeAreaBottom = max(0, safeAreaBottom)
         self.margin = max(0, margin)
         self.railWidth = max(0, railWidth)
+        self.fillsScreen = fillsScreen
         self.drawsOwnTopBar = drawsOwnTopBar && self.railWidth == 0
     }
 
@@ -77,13 +88,21 @@ public struct ReaderChrome: Sendable, Equatable {
     /// ascenders shaved by the canvas's clip. A margin the other three edges
     /// get is not one the top can go without; it is only ever waived because
     /// something taller is already standing there.
+    ///
+    /// With the page filling the screen the bar is not there to stand in for
+    /// the margin either, so the margin is spent, as it is where there is no
+    /// bar at all.
     public var topReserve: CGFloat {
-        safeAreaTop + (drawsOwnTopBar ? Self.barHeight : margin)
+        safeAreaTop + ((drawsOwnTopBar && !fillsScreen) ? Self.barHeight : margin)
     }
 
     /// Distance from the bottom of the window to the last line of text: the home
-    /// indicator, the footer, and the page's own margin above it.
-    public var bottomReserve: CGFloat { safeAreaBottom + Self.barHeight + margin }
+    /// indicator, the footer, and the page's own margin above it. The footer's
+    /// band is left out when the page fills the screen, since the footer is
+    /// then drawn over the text.
+    public var bottomReserve: CGFloat {
+        safeAreaBottom + (fillsScreen ? 0 : Self.barHeight) + margin
+    }
 
     /// The area the paginator lays text into.
     ///

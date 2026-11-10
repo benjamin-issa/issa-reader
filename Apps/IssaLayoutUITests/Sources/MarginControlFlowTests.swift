@@ -226,4 +226,104 @@ final class MarginControlFlowTests: XCTestCase {
         let contents = app.descendants(matching: .any)["reader.contents"].firstMatch
         if contents.exists { XCTAssertTrue(contents.isHittable) }
     }
+
+    // MARK: Fill the screen with text
+
+    private func fillToggle(_ app: XCUIApplication) -> XCUIElement {
+        let toggle = app.descendants(matching: .any)["typography.fillsScreen"].firstMatch
+        let list = app.collectionViews.firstMatch.exists ? app.collectionViews.firstMatch : app.tables.firstMatch
+        for _ in 0 ..< 8 where !toggle.exists || !toggle.isHittable {
+            list.swipeUp()
+        }
+        XCTAssertTrue(toggle.exists, "the Aa sheet has no Fill the screen with text")
+        return toggle
+    }
+
+    /// The text frame once it has stopped moving: the page re-flows a moment
+    /// after the sheet's change, and a frame read before then is the old one.
+    private func settledTextFrame(_ app: XCUIApplication, differentFrom old: CGRect? = nil) -> CGRect {
+        let probe = app.descendants(matching: .any)["probe.reader.textFrame"].firstMatch
+        XCTAssertTrue(probe.waitForExistence(timeout: 15), "no text frame probe: is this the fixture build?")
+        var last = probe.frame
+        var steady = 0
+        let deadline = Date().addingTimeInterval(15)
+        while Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.4)
+            let now = probe.frame
+            steady = now == last ? steady + 1 : 0
+            last = now
+            if steady >= 3, old == nil || now != old { break }
+        }
+        return last
+    }
+
+    /// With the setting on, the text runs into both bars' bands, the controls
+    /// are drawn over it, and showing or hiding them moves nothing — nor does
+    /// the hidden footer take the taps the last lines are owed.
+    func testFillTheScreenGivesBothBandsToTheTextAndKeepsThePageStill() throws {
+        let app = launch()
+        openReader(app)
+        let before = settledTextFrame(app)
+
+        openTypographySheet(app)
+        let toggle = fillToggle(app)
+        XCTAssertEqual(toggle.value as? String, "0", "the setting should start off")
+        toggle.tap()
+        XCTAssertEqual(toggle.value as? String, "1")
+        closeSheet(app)
+
+        let filled = settledTextFrame(app, differentFrom: before)
+        let bar = CGFloat(44)
+        // The margin stood in for by the top bar's band: 24 on the shipped
+        // default, so the top gains what the bar had over it.
+        XCTAssertEqual(
+            before.minY - filled.minY, bar - 24, accuracy: 1.5,
+            "the text did not move up into the top bar's band: \(before) then \(filled)")
+        XCTAssertEqual(
+            filled.maxY - before.maxY, bar, accuracy: 1.5,
+            "the text did not move down into the footer's band: \(before) then \(filled)")
+        XCTAssertEqual(filled.minX, before.minX, accuracy: 1.5)
+        XCTAssertEqual(filled.width, before.width, accuracy: 1.5)
+
+        // The controls over the text, kept for the contact sheet.
+        XCTAssertTrue(
+            app.buttons["Text options for this book"].firstMatch.waitForExistence(timeout: 5),
+            "the controls are not showing")
+        keep(app, "fill-the-screen-chrome-over-text")
+
+        // Hiding and showing them leaves the page where it is.
+        let window = app.windows.firstMatch
+        let middle = window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        middle.tap()
+        Thread.sleep(forTimeInterval: 0.6)
+        XCTAssertEqual(
+            app.windows.firstMatch.frame, window.frame)
+        let hidden = settledTextFrame(app)
+        XCTAssertEqual(hidden, filled, "hiding the controls moved the text")
+        keep(app, "fill-the-screen-chrome-hidden")
+
+        // With them hidden, the footer's band is the page's: a tap on its
+        // middle is the page's middle tap, and brings the controls back.
+        let overFooter = window.coordinate(
+            withNormalizedOffset: CGVector(dx: 0.5, dy: (window.frame.height - 60) / window.frame.height))
+        overFooter.tap()
+        XCTAssertTrue(
+            app.buttons["Text options for this book"].firstMatch.waitForExistence(timeout: 5),
+            "a tap over the hidden footer's band did not reach the page")
+        XCTAssertEqual(settledTextFrame(app), filled, "showing the controls moved the text")
+
+        // And the setting survives closing the book and opening it again.
+        let back = app.buttons["Back to the book"].firstMatch
+        XCTAssertTrue(back.waitForExistence(timeout: 5))
+        back.tap()
+        let read = app.descendants(matching: .any)["action.read"].firstMatch
+        XCTAssertTrue(read.waitForExistence(timeout: 15), "no Read action after closing the book")
+        read.tap()
+        let page = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "value BEGINSWITH %@", "Page ")).firstMatch
+        XCTAssertTrue(page.waitForExistence(timeout: 60), "the reader never drew a page again")
+        let reopened = settledTextFrame(app)
+        XCTAssertEqual(reopened.minY, filled.minY, accuracy: 1.5, "the reopened book forgot the setting")
+        XCTAssertEqual(reopened.maxY, filled.maxY, accuracy: 1.5, "the reopened book forgot the setting")
+    }
 }

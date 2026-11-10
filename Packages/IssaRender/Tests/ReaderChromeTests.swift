@@ -176,4 +176,61 @@ struct ReaderChromeTests {
         #expect(rail.topReserve + size.height + rail.bottomReserve == window.height)
         #expect(rail.fits(window))
     }
+
+    // MARK: Filling the screen
+
+    @Test("filling the screen gives both bars' bands to the page")
+    func fillGivesBothBands() {
+        let fill = ReaderChrome(safeAreaTop: 59, safeAreaBottom: 34, margin: 24, fillsScreen: true)
+        #expect(fill.topReserve == CGFloat(59 + 24))
+        #expect(fill.bottomReserve == CGFloat(34 + 24))
+        // The bottom band comes back whole; the top bar's stood in for the
+        // margin, so only what exceeded the margin does.
+        #expect(
+            fill.pageSize(in: Self.window).height - Self.phone.pageSize(in: Self.window).height
+                == (ReaderChrome.barHeight - 24) + ReaderChrome.barHeight)
+        #expect(fill.pageSize(in: Self.window).width == Self.phone.pageSize(in: Self.window).width)
+        #expect(fill.topReserve + fill.pageSize(in: Self.window).height + fill.bottomReserve == Self.window.height)
+    }
+
+    @Test("where the bar is not the page's, only the footer's band is given back")
+    func fillOnTheMacAndTheRail() {
+        let mac = ReaderChrome(safeAreaTop: 52, safeAreaBottom: 14, margin: 24, drawsOwnTopBar: false)
+        let macFill = ReaderChrome(
+            safeAreaTop: 52, safeAreaBottom: 14, margin: 24, drawsOwnTopBar: false, fillsScreen: true)
+        #expect(macFill.topReserve == mac.topReserve)
+        #expect(
+            macFill.pageSize(in: Self.window).height
+                == mac.pageSize(in: Self.window).height + ReaderChrome.barHeight)
+
+        let rail = ReaderChrome(safeAreaTop: 20, safeAreaBottom: 0, margin: 24, railWidth: 84)
+        let railFill = ReaderChrome(
+            safeAreaTop: 20, safeAreaBottom: 0, margin: 24, railWidth: 84, fillsScreen: true)
+        #expect(railFill.topReserve == rail.topReserve)
+        #expect(
+            railFill.pageSize(in: Self.window).height
+                == rail.pageSize(in: Self.window).height + ReaderChrome.barHeight)
+        #expect(railFill.pageSize(in: Self.window).width == rail.pageSize(in: Self.window).width)
+    }
+
+    @Test("the hardware's edges stay kept when the page fills the screen")
+    func fillKeepsTheSafeAreas() {
+        let fill = ReaderChrome(safeAreaTop: 59, safeAreaBottom: 34, margin: 0, fillsScreen: true)
+        #expect(fill.topReserve == 59)
+        #expect(fill.bottomReserve == 34)
+    }
+
+    @Test("filling the screen is off by default")
+    func fillIsOffByDefault() {
+        #expect(!Self.phone.fillsScreen)
+    }
+
+    @Test("a window too short for the chrome fits once the chrome is not reserved")
+    func fillFits() {
+        let short = CGSize(width: 402, height: 59 + 34 + 2 * ReaderChrome.barHeight + 24 * 2 + 10)
+        #expect(!Self.phone.fits(CGSize(width: 402, height: 59 + 34 + 2 * ReaderChrome.barHeight + 24)))
+        let fill = ReaderChrome(safeAreaTop: 59, safeAreaBottom: 34, margin: 24, fillsScreen: true)
+        #expect(fill.fits(short))
+        #expect(fill.fits(CGSize(width: 402, height: 59 + 34 + 24 * 2 + 1)))
+    }
 }
