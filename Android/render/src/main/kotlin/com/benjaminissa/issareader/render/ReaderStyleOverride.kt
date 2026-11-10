@@ -32,6 +32,11 @@ data class ReaderStyleOverride(
      * three directions the global setting also offers.
      */
     val justification: ReaderStyle.Justification? = null,
+    /**
+     * The page's margin on each side, in points. Unset follows the global
+     * default; set, this book keeps its own however that is later changed.
+     */
+    val pageMargin: Double? = null,
 ) {
     /**
      * Whether this book has anything of its own left.
@@ -39,11 +44,11 @@ data class ReaderStyleOverride(
      * An override that overrides nothing is deleted rather than stored, so
      * "use my defaults" leaves no trace to go stale.
      */
-    val isEmpty: Boolean get() = typeface == null && fontSize == null && lineSpacing == null && justification == null
+    val isEmpty: Boolean get() = typeface == null && fontSize == null && lineSpacing == null && justification == null && pageMargin == null
 
     /** Which fields the reader has taken control of, for the sheet to show. */
     val count: Int
-        get() = listOf(typeface != null, fontSize != null, lineSpacing != null, justification != null).count { it }
+        get() = listOf(typeface != null, fontSize != null, lineSpacing != null, justification != null, pageMargin != null).count { it }
 
     /** The same move as [ReaderStyle.replacingLegacyDefaultFace], for a book that took the old default as its own. */
     fun replacingLegacyDefaultFace(): ReaderStyleOverride {
@@ -72,6 +77,7 @@ data class ReaderStyleOverride(
                     value.fontSize?.let { put("fontSize", it) }
                     value.lineSpacing?.let { put("lineSpacing", it.rawValue) }
                     value.justification?.let { put("justification", it.rawValue) }
+                    value.pageMargin?.let { put("pageMargin", it) }
                     // The key this replaced, written as well, as `ReaderStyle`
                     // does for the global setting. The build before the
                     // three-position setting reads only `justified`; without it
@@ -114,6 +120,9 @@ data class ReaderStyleOverride(
                 fontSize = ReaderStyle.clampedLength(container.number("fontSize"), ReaderStyle.fontSizeRange),
                 lineSpacing = container.string("lineSpacing")?.let(ReaderStyle.LineSpacing::fromRawValue),
                 justification = justification,
+                // Bounded like the global margin, and forgiving like every
+                // other field: a map written before this existed has no key.
+                pageMargin = ReaderStyle.clampedLength(container.number("pageMargin"), ReaderStyle.pageMarginRange),
             )
         }
     }

@@ -253,6 +253,7 @@ data class ReaderStyle(
             fontSize = override.fontSize ?: fontSize,
             lineSpacing = override.lineSpacing ?: lineSpacing,
             justification = override.justification ?: justification,
+            pageMargin = override.pageMargin ?: pageMargin,
         )
     }
 
@@ -266,6 +267,7 @@ data class ReaderStyle(
         fontSize = if (other.fontSize == fontSize) null else other.fontSize,
         lineSpacing = if (other.lineSpacing == lineSpacing) null else other.lineSpacing,
         justification = if (other.justification == justification) null else other.justification,
+        pageMargin = if (other.pageMargin == pageMargin) null else other.pageMargin,
     )
 
     companion object {

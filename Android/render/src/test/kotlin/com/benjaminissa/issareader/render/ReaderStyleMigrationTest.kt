@@ -414,6 +414,83 @@ class ReaderStyleOverrideTest {
     }
 }
 
+/** The page margin as a per-book field. Ported from `ReaderStyleOverrideMarginTests`. */
+class ReaderStyleOverrideMarginTest {
+    private fun decode(json: String): ReaderStyleOverride = IssaJson.decodeFromString(ReaderStyleOverride.serializer(), json)
+
+    @Test
+    fun `an absent margin key decodes as no override`() {
+        assertNull(decode("""{"fontSize": 20}""").pageMargin)
+    }
+
+    @Test
+    fun `a margin of the wrong type is dropped without losing the other fields`() {
+        val decoded = decode("""{"pageMargin": "wide", "fontSize": 21, "lineSpacing": "roomy"}""")
+        assertNull(decoded.pageMargin)
+        assertEquals(21.0, decoded.fontSize!!, 0.0)
+        assertEquals(ReaderStyle.LineSpacing.ROOMY, decoded.lineSpacing)
+    }
+
+    @Test
+    fun `a huge or negative stored margin is bounded`() {
+        assertEquals(ReaderStyle.pageMarginRange.endInclusive, decode("""{"pageMargin": 1e300}""").pageMargin!!, 0.0)
+        assertEquals(ReaderStyle.pageMarginRange.start, decode("""{"pageMargin": -40}""").pageMargin!!, 0.0)
+    }
+
+    @Test
+    fun `a round trip keeps the margin including a margin of zero`() {
+        for (margin in listOf(0.0, 12.0, 48.0)) {
+            val override = ReaderStyleOverride(fontSize = 20.0, pageMargin = margin)
+            val text = IssaJson.encodeToString(ReaderStyleOverride.serializer(), override)
+            assertTrue(text, text.contains("\"pageMargin\""))
+            assertEquals(override, decode(text))
+        }
+    }
+
+    @Test
+    fun `an override carrying only a margin is not empty and counts once`() {
+        val override = ReaderStyleOverride(pageMargin = 4.0)
+        assertFalse(override.isEmpty)
+        assertEquals(1, override.count)
+    }
+
+    @Test
+    fun `applying an override sets the margin and leaves a book without one alone`() {
+        val defaults = ReaderStyle(pageMargin = 24.0)
+        assertEquals(4.0, defaults.applying(ReaderStyleOverride(pageMargin = 4.0)).pageMargin, 0.0)
+        assertEquals(24.0, defaults.applying(ReaderStyleOverride(fontSize = 20.0)).pageMargin, 0.0)
+    }
+
+    @Test
+    fun `a difference records the margin only when it changed`() {
+        val defaults = ReaderStyle(pageMargin = 24.0)
+        assertNull(defaults.difference(defaults).pageMargin)
+        assertEquals(48.0, defaults.difference(defaults.copy(pageMargin = 48.0)).pageMargin!!, 0.0)
+    }
+
+    @Test
+    fun `a book without a margin override follows a later global change`() {
+        val override = ReaderStyleOverride(fontSize = 22.0)
+        val defaults = ReaderStyle(pageMargin = 24.0)
+        assertEquals(24.0, defaults.applying(override).pageMargin, 0.0)
+        assertEquals(12.0, defaults.copy(pageMargin = 12.0).applying(override).pageMargin, 0.0)
+    }
+
+    @Test
+    fun `an override map from the previous build still decodes every book`() {
+        val json = """
+            {"a": {"fontSize": 20, "typeface": "bundled:Newsreader"},
+             "b": {"justified": true},
+             "c": {"lineSpacing": "roomy", "pageMargin": 6}}
+        """
+        val map = IssaJson.decodeFromString(MapSerializer(String.serializer(), ReaderStyleOverride.serializer()), json)
+        assertEquals(3, map.size)
+        assertNull(map["a"]!!.pageMargin)
+        assertEquals(ReaderStyle.Justification.ALWAYS, map["b"]!!.justification)
+        assertEquals(6.0, map["c"]!!.pageMargin!!, 0.0)
+    }
+}
+
 /**
  * Choosing a typeface. Ported from `ReaderStyleOverrideTests.swift`'s
  * `TypefaceTests`; the bundled face's resolution is `:render-android`'s
