@@ -42,6 +42,8 @@ class CurrentBookPublisher(
     private val scope: CoroutineScope,
     private val reload: () -> Unit = {},
     private val covers: () -> CoverCache = { CoverCache.shared },
+    /** How a fetched other-book cover reaches the disk; the tests hold it open to let a sign-out overtake it. */
+    private val writeOtherCover: suspend (bookId: String, data: ByteArray) -> Unit = CurrentBookSnapshotStore::writeOtherCoverOffMain,
 ) {
     /** Which surface the snapshot currently belongs to. */
     sealed interface Owner {
@@ -224,7 +226,14 @@ class CurrentBookPublisher(
                 val shape = if (other.coverIsSquare) LibraryService.CoverShape.SQUARE else LibraryService.CoverShape.PORTRAIT
                 val fetched = covers().widgetCover(book, session, shape) ?: continue
                 if (generation != othersGeneration) return@launch
-                CurrentBookSnapshotStore.writeOtherCoverOffMain(other.bookId, fetched.data)
+                writeOtherCover(other.bookId, fetched.data)
+                if (generation != othersGeneration) {
+                    // A sign-out overtook the write: clear() has already swept the covers and this
+                    // file landed after it, for hasOtherCover to accept later.
+                    val listed = CurrentBookSnapshotStore.read()?.others.orEmpty().map { it.bookId }.toSet()
+                    CurrentBookSnapshotStore.pruneOtherCovers(listed)
+                    return@launch
+                }
                 shapes[other.bookId] = fetched.isSquare
             }
             if (shapes.isEmpty() || generation != othersGeneration) return@launch

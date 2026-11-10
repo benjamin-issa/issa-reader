@@ -190,4 +190,46 @@ class WidgetOthersPublishingTest : AppSuite() {
             f.scope.close()
         }
     }
+
+    /** A cover write that lands after a sign-out does not leave the departed account's file behind. */
+    @Test
+    fun aCoverWriteOvertakenBySignOutLeavesNoFile() = mainTest {
+        val scope = testScope()
+        val dir = java.nio.file.Files.createTempDirectory("covers").toFile()
+        val covers = CoverCache(directory = dir)
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val started = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val publisher = CurrentBookPublisher(
+            scope, covers = { covers },
+            writeOtherCover = { id, data ->
+                started.complete(Unit)
+                gate.await()
+                CurrentBookSnapshotStore.writeOtherCover(id, data)
+            },
+        ).also { it.resume() }
+        try {
+            val a = book("a", at = 1.0)
+            // The art is already in the cache's directory, so the fetch needs no network.
+            java.io.File(dir, CoverCache.widgetFileName(a, com.benjaminissa.issareader.core.sync.LibraryService.CoverShape.PORTRAIT))
+                .writeBytes(byteArrayOf(1, 2, 3))
+            publisher.publish(
+                book("cur"), session = null, progress = 0.5, chapter = null, remaining = 600.0, isPlaying = false,
+                candidate = CurrentBookPublisher.Owner.Reading("cur"),
+            )
+            val session = com.benjaminissa.issareader.core.Session(
+                java.net.URI("https://covers.example"), com.benjaminissa.issareader.app.TestTokens(),
+            )
+            publisher.libraryChanged(listOf(book("cur"), a), session)
+            started.await()
+
+            publisher.clear()
+            gate.complete(Unit)
+            kotlinx.coroutines.yield()
+            kotlinx.coroutines.delay(200)
+
+            assertTrue(CurrentBookSnapshotStore.otherCoverIds().isEmpty())
+        } finally {
+            scope.close()
+        }
+    }
 }
