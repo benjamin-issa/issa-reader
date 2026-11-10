@@ -239,6 +239,45 @@ final class MarginControlFlowTests: XCTestCase {
         return toggle
     }
 
+    /// Sets the switch, tapping only if it is the other way. The setting is
+    /// the book's, and a run's tests share the app's saved state, so a test
+    /// cannot assume the one before it left the switch off.
+    private func setFill(_ app: XCUIApplication, _ on: Bool) {
+        openTypographySheet(app)
+        flip(fillToggle(app), on)
+        closeSheet(app)
+    }
+
+    /// Turns the open sheet's switch on or off, if it is not already.
+    private func flip(_ toggle: XCUIElement, _ on: Bool) {
+        let want = on ? "1" : "0"
+        // A tap while the list is still gliding from the swipe that brought
+        // the row up only stops the glide, so let it come to rest, and try
+        // again if the switch did not move.
+        let set = NSPredicate { _, _ in (toggle.value as? String) == want }
+        for _ in 0 ..< 3 where (toggle.value as? String) != want {
+            Thread.sleep(forTimeInterval: 0.8)
+            // The switch is at the row's trailing edge; the label is not a target.
+            toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
+            _ = XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: set, object: nil)], timeout: 3)
+        }
+        XCTAssertEqual(toggle.value as? String, want, "the switch did not turn \(on ? "on" : "off")")
+    }
+
+    /// Whether the reader's tools stand in a bar across the top, rather than
+    /// down a rail beside the page (iPhone Duo): the bar's Back and Aa share
+    /// a row, the rail's are stacked. Only a top bar has a band to give.
+    private func toolsInATopBar(_ app: XCUIApplication) -> Bool {
+        let aa = app.buttons["Text options for this book"].firstMatch
+        if !aa.waitForExistence(timeout: 3) {
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+            XCTAssertTrue(aa.waitForExistence(timeout: 10), "the reader's tools never showed")
+        }
+        let back = app.buttons["Back to the book"].firstMatch
+        XCTAssertTrue(back.waitForExistence(timeout: 5), "no Back button with the tools")
+        return abs(back.frame.midY - aa.frame.midY) < 10
+    }
+
     /// The text frame once it has stopped moving: the page re-flows a moment
     /// after the sheet's change, and a frame read before then is the old one.
     private func settledTextFrame(_ app: XCUIApplication, differentFrom old: CGRect? = nil) -> CGRect {
@@ -263,25 +302,26 @@ final class MarginControlFlowTests: XCTestCase {
     func testFillTheScreenGivesBothBandsToTheTextAndKeepsThePageStill() throws {
         let app = launch()
         openReader(app)
-        let before = settledTextFrame(app)
-
+        let topBar = toolsInATopBar(app)
+        // One visit to the sheet: the page stays live behind it, so the frame
+        // before is read with the sheet up, after making sure an earlier test
+        // did not leave the setting on.
         openTypographySheet(app)
         let toggle = fillToggle(app)
-        XCTAssertEqual(toggle.value as? String, "0", "the setting should start off")
-        // The switch is at the row's trailing edge; the label is not a target.
-        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
-        let on = NSPredicate { _, _ in (toggle.value as? String) == "1" }
-        _ = XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: on, object: nil)], timeout: 5)
-        XCTAssertEqual(toggle.value as? String, "1")
+        flip(toggle, false)
+        let before = settledTextFrame(app)
+        flip(toggle, true)
         closeSheet(app)
 
         let filled = settledTextFrame(app, differentFrom: before)
         let bar = CGFloat(44)
         // The margin stood in for by the top bar's band: 24 on the shipped
-        // default, so the top gains what the bar had over it.
+        // default, so the top gains what the bar had over it. With a rail
+        // instead (iPhone Duo) there is no top band to give, and the margin
+        // was already spent there.
         XCTAssertEqual(
-            before.minY - filled.minY, bar - 24, accuracy: 1.5,
-            "the text did not move up into the top bar's band: \(before) then \(filled)")
+            before.minY - filled.minY, topBar ? bar - 24 : 0, accuracy: 1.5,
+            "the text did not take the top bar's band, or moved without one: \(before) then \(filled)")
         XCTAssertEqual(
             filled.maxY - before.maxY, bar, accuracy: 1.5,
             "the text did not move down into the footer's band: \(before) then \(filled)")
@@ -328,6 +368,7 @@ final class MarginControlFlowTests: XCTestCase {
         let reopened = settledTextFrame(app)
         XCTAssertEqual(reopened.minY, filled.minY, accuracy: 1.5, "the reopened book forgot the setting")
         XCTAssertEqual(reopened.maxY, filled.maxY, accuracy: 1.5, "the reopened book forgot the setting")
+        setFill(app, false)
     }
 
     /// The selection's Copy, Highlight and Done sit above the footer, which
@@ -336,14 +377,7 @@ final class MarginControlFlowTests: XCTestCase {
     func testFillTheScreenKeepsTheSelectionMenuClearOfTheFooter() throws {
         let app = launch()
         openReader(app)
-
-        openTypographySheet(app)
-        let toggle = fillToggle(app)
-        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
-        let on = NSPredicate { _, _ in (toggle.value as? String) == "1" }
-        _ = XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: on, object: nil)], timeout: 5)
-        XCTAssertEqual(toggle.value as? String, "1")
-        closeSheet(app)
+        setFill(app, true)
         _ = settledTextFrame(app)
 
         // The controls are showing, which is how a book opens.
@@ -369,5 +403,7 @@ final class MarginControlFlowTests: XCTestCase {
                 "\(name) \(frame) is under the footer \(footerFrame)")
             XCTAssertLessThanOrEqual(frame.maxY, footerFrame.minY, "\(name) is not above the footer")
         }
+        done.tap()
+        setFill(app, false)
     }
 }
