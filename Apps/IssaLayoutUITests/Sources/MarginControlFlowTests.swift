@@ -94,8 +94,15 @@ final class MarginControlFlowTests: XCTestCase {
 
     private func closeSheet(_ app: XCUIApplication) {
         let done = app.buttons["Done"].firstMatch
+        // On iOS 27.1 the half-height sheet's bar goes away while its rows are
+        // scrolled down, title and Done with it, and comes back at the top —
+        // so, as a reader would, scroll back up before looking for it.
+        if !done.waitForExistence(timeout: 3) {
+            let list = app.collectionViews.firstMatch.exists ? app.collectionViews.firstMatch : app.tables.firstMatch
+            for _ in 0 ..< 6 where !done.exists { list.swipeDown() }
+        }
         if !done.waitForExistence(timeout: 10) { keep(app, "aa-sheet-without-done") }
-        XCTAssertTrue(done.exists, "the Aa sheet has no Done")
+        XCTAssertTrue(done.exists, "the Aa sheet has no Done, even scrolled back to its top")
         done.tap()
         XCTAssertTrue(done.waitForNonExistence(timeout: 10), "the Aa sheet did not close")
     }
@@ -150,7 +157,11 @@ final class MarginControlFlowTests: XCTestCase {
         closeSheet(app)
         let edge = textFrame(app, minX: 4)
         XCTAssertEqual(edge.minX, 4, accuracy: 1.5, "Edge did not move the text to 4 points: \(edge)")
-        XCTAssertEqual(window.maxX - edge.maxX, 4, accuracy: 1.5, "Edge is not the same on the right: \(edge)")
+        // From the page's own right edge, not the window's: on iPhone Duo's
+        // outer display the page stops at the rail.
+        let page = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "value BEGINSWITH %@", "Page ")).firstMatch.frame
+        XCTAssertEqual(page.maxX - edge.maxX, 4, accuracy: 1.5, "Edge is not the same on the right: \(edge) in \(page)")
 
         // Wide: 48, and the column narrower by the difference.
         openTypographySheet(app)
@@ -164,7 +175,9 @@ final class MarginControlFlowTests: XCTestCase {
         keep(app, "margins-wide-bands")
         let y = window.minY + window.height * 0.3
         XCTAssertTrue(isTinted(shot, x: window.minX + 24, y: y), "no band in the left margin")
-        XCTAssertTrue(isTinted(shot, x: window.maxX - 24, y: y), "no band in the right margin")
+        let pageRight = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "value BEGINSWITH %@", "Page ")).firstMatch.frame.maxX
+        XCTAssertTrue(isTinted(shot, x: pageRight - 24, y: y), "no band in the right margin")
         XCTAssertEqual(slider.value as? String, "48 points")
         closeSheet(app)
         let wide = textFrame(app, minX: 48)
