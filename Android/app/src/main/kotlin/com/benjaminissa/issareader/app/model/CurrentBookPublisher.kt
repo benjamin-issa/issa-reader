@@ -2,6 +2,8 @@ package com.benjaminissa.issareader.app.model
 
 import com.benjaminissa.issareader.core.CurrentBookSnapshot
 import com.benjaminissa.issareader.core.CurrentBookSnapshotStore
+import com.benjaminissa.issareader.core.OtherBook
+import com.benjaminissa.issareader.core.WidgetOthers
 import com.benjaminissa.issareader.core.Session
 import com.benjaminissa.issareader.core.model.Book
 import com.benjaminissa.issareader.core.model.BookFormat
@@ -79,6 +81,19 @@ class CurrentBookPublisher(
 
     data class CoverAttempt(val bookId: String, val at: Instant)
 
+    /**
+     * The library as last handed over by [libraryChanged], from which the
+     * other books are chosen. Null until the first catalogue lands.
+     */
+    private var library: List<Book>? = null
+    private var librarySession: Session? = null
+
+    /** Rejects an other-books cover fetch that [clear] overtook. */
+    private var othersGeneration = 0
+
+    /** When each other book's cover was last asked for, so a failing fetch is not repeated on every position write. */
+    private val otherAttempts = mutableMapOf<String, Instant>()
+
     /** What one publish should do. */
     data class Plan(
         /** Write the snapshot and reload the widget. */
@@ -124,6 +139,7 @@ class CurrentBookPublisher(
         val usableChapter = usableChapter(chapter, book.title)
         val plan = plan(existing, book.uuid, usableChapter, progress, isPlaying, coverAttempt, Instant.now())
 
+        val others = if (plan.write) nextOthers(existing?.others.orEmpty(), book.uuid) else emptyList()
         if (plan.write) {
             CurrentBookSnapshotStore.write(
                 CurrentBookSnapshot(
@@ -136,9 +152,11 @@ class CurrentBookPublisher(
                     isPlaying = isPlaying,
                     coverBookId = if (coverMatches) book.uuid else null,
                     coverIsSquare = if (coverMatches) existing?.coverIsSquare ?: false else false,
+                    others = others,
                 ),
             )
             reload()
+            syncOtherCovers(others)
         }
 
         if (plan.fetchCover) {
@@ -147,6 +165,75 @@ class CurrentBookPublisher(
             // nothing to ask — counts as tried, for the same reason.
             coverAttempt = CoverAttempt(book.uuid, Instant.now())
             fetchCover(book, session)
+        }
+    }
+
+    /**
+     * The library's books changed, or one's position did: re-choose the other
+     * books and, only when their ids, order or a progress that moved enough
+     * differ from what the widget last drew, write them and ask it to redraw.
+     * Their covers are fetched for any that has none and removed for any that
+     * has left the list.
+     */
+    fun libraryChanged(books: List<Book>, session: Session?) {
+        if (suspended) return
+        library = books
+        librarySession = session
+        val existing = CurrentBookSnapshotStore.read() ?: return
+        val others = nextOthers(existing.others, existing.bookId)
+        if (others != existing.others) {
+            CurrentBookSnapshotStore.write(existing.copy(others = others))
+            reload()
+        }
+        syncOtherCovers(others)
+    }
+
+    /**
+     * What the others should be now: the library's choice, unless it differs
+     * from [stored] by less than a redraw is worth, in which case [stored] —
+     * so a slow drift adds up against what was drawn rather than being absorbed.
+     */
+    private fun nextOthers(stored: List<OtherBook>, currentBookId: String): List<OtherBook> {
+        val library = library ?: return stored.filter { it.bookId != currentBookId }
+        val chosen = WidgetOthers.select(library, currentBookId).map { other ->
+            // A cover that landed says which shape it really is; the preference only guesses.
+            val known = stored.firstOrNull { it.bookId == other.bookId }
+            if (known != null && CurrentBookSnapshotStore.hasOtherCover(other.bookId)) other.copy(coverIsSquare = known.coverIsSquare) else other
+        }
+        val storedWithoutCurrent = stored.filter { it.bookId != currentBookId }
+        return if (storedWithoutCurrent.size == stored.size && !WidgetOthers.worthRedrawing(stored, chosen)) stored else chosen
+    }
+
+    /** Prunes the covers of books that left the list and fetches those of books that have none. */
+    private fun syncOtherCovers(others: List<OtherBook>) {
+        CurrentBookSnapshotStore.pruneOtherCovers(others.map { it.bookId }.toSet())
+        val session = librarySession ?: return
+        val byId = library?.associateBy { it.uuid } ?: return
+        val now = Instant.now()
+        val missing = others.filter { other ->
+            !CurrentBookSnapshotStore.hasOtherCover(other.bookId) && byId.containsKey(other.bookId) &&
+                (otherAttempts[other.bookId]?.let { Duration.between(it, now).toMillis() / 1000.0 >= COVER_RETRY } ?: true)
+        }
+        if (missing.isEmpty()) return
+        for (other in missing) otherAttempts[other.bookId] = now
+        val generation = othersGeneration
+        scope.launch {
+            val shapes = mutableMapOf<String, Boolean>()
+            for (other in missing) {
+                val book = byId[other.bookId] ?: continue
+                val shape = if (other.coverIsSquare) LibraryService.CoverShape.SQUARE else LibraryService.CoverShape.PORTRAIT
+                val fetched = covers().widgetCover(book, session, shape) ?: continue
+                if (generation != othersGeneration) return@launch
+                CurrentBookSnapshotStore.writeOtherCoverOffMain(other.bookId, fetched.data)
+                shapes[other.bookId] = fetched.isSquare
+            }
+            if (shapes.isEmpty() || generation != othersGeneration) return@launch
+            val snapshot = CurrentBookSnapshotStore.read() ?: return@launch
+            val updated = snapshot.others.map { o -> shapes[o.bookId]?.let { o.copy(coverIsSquare = it) } ?: o }
+            // A book that left the list while its cover was in flight leaves its file behind otherwise.
+            CurrentBookSnapshotStore.pruneOtherCovers(updated.map { it.bookId }.toSet())
+            if (updated != snapshot.others) CurrentBookSnapshotStore.write(snapshot.copy(others = updated))
+            reload()
         }
     }
 
@@ -178,6 +265,10 @@ class CurrentBookPublisher(
         playingSince = null
         coverGeneration += 1
         coverAttempt = null
+        othersGeneration += 1
+        otherAttempts.clear()
+        library = null
+        librarySession = null
         suspended = true
         CurrentBookSnapshotStore.clear()
         reload()

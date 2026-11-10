@@ -1114,6 +1114,8 @@ class AppModel(
     /** The part of the above a position can move: the Continue card, the Reading tab's order, the arrangement. */
     private fun rebuildAfterPositionChange() {
         readingHome = ReadingHome(books, rails)
+        // The widget's other books come from the same pass over the library.
+        currentBookPublisher.libraryChanged(books, session)
         val byUuid = LinkedHashMap<String, Book>()
         for (book in books) byUuid.putIfAbsent(book.uuid, book)
         bookByUuid = byUuid
