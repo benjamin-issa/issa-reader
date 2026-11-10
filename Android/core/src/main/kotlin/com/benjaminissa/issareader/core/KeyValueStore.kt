@@ -25,6 +25,14 @@ interface KeyValueStore {
     fun putBoolean(key: String, value: Boolean)
 
     /**
+     * [putBoolean], but on disk before it returns, for a flag whose whole job is
+     * to be found by the next launch after a process that died right after
+     * writing it. Stores that persist behind the write override this; one that
+     * keeps nothing (or already writes through) needs no more than [putBoolean].
+     */
+    fun putBooleanDurably(key: String, value: Boolean) = putBoolean(key, value)
+
+    /**
      * The stored flag, or null when the reader never chose — `object(forKey:) as? Bool`.
      *
      * [getBoolean] reads an absent key as off, which is right for a switch that

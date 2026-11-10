@@ -18,6 +18,15 @@
     -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!--
+        Whether the system's AI service (AICore, which Gemini Nano runs in) is
+        installed, read from the package manager without touching ML Kit. From
+        Android 11 an app sees only the packages it names here.
+    -->
+    <queries>
+        <package android:name="com.google.android.aicore" />
+    </queries>
+
     <application
         android:name=".app.IssaApplication"
         android:icon="@mipmap/ic_launcher"

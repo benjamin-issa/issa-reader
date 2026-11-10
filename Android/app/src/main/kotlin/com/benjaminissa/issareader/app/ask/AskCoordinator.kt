@@ -23,10 +23,12 @@ import com.benjaminissa.issareader.ask.android.ModelDownload
 import com.benjaminissa.issareader.core.KeyValueStore
 import com.benjaminissa.issareader.core.diagnostics.IssaLog
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.plus
 
 /**
  * Every question in flight, and the machinery that outlives the sheets.
@@ -65,11 +67,20 @@ class AskCoordinator(
     private val settings: PlaybackSettings,
     private val platform: AskPlatform,
     private val defaults: KeyValueStore,
-    private val scope: CoroutineScope,
+    scope: CoroutineScope,
     val store: AskIndexStore = AskIndexStore(),
     private val notifier: AskNotifying? = null,
     centre: SignOutCentre = SignOutCentre.default,
 ) : BookIndexes {
+    /**
+     * The caller's scope with a last line of defence: nothing thrown inside Ask
+     * work may take the process down. Ask is an optional feature, and an
+     * uncaught throw from ML Kit once crashed the app on every launch.
+     */
+    private val scope: CoroutineScope = scope + CoroutineExceptionHandler { _, error ->
+        IssaLog.error("ask work failed", mapOf("error" to error.javaClass.name))
+    }
+
     /**
      * One job per book. A second question about the same book replaces the
      * first, which is what "Ask another" means; a question about a different
@@ -88,7 +99,24 @@ class AskCoordinator(
      * The model, made the first time a question or a warm-up needs it — never
      * before the switch is on, because making it is a call into ML Kit.
      */
-    private val answerModel: AnswerModel by lazy { platform.makeModel() }
+    private var answerModelOrNull: AnswerModel? = null
+
+    /**
+     * The model, or null when making it threw: Ask is then turned back off as
+     * unsupported, and what needed it degrades rather than crashing. Not
+     * remembered on failure, so turning Ask on again tries again.
+     */
+    private fun answerModel(): AnswerModel? {
+        answerModelOrNull?.let { return it }
+        return try {
+            platform.makeModel().also { answerModelOrNull = it }
+        } catch (error: Throwable) {
+            if (error is CancellationException) throw error
+            IssaLog.error("ask model could not be made", mapOf("error" to error.javaClass.name))
+            turnBackOff(AskSettingsState.Unsupported)
+            null
+        }
+    }
 
     /**
      * One turn at the on-device model, for the whole app. Held here because
@@ -98,7 +126,13 @@ class AskCoordinator(
     private val turnstile = AskTurnstile()
 
     /** For index building, prewarming and chips — everything that has no boundary of its own. */
-    private val preparer: AskEngine by lazy { AskEngine(model = answerModel, store = store, turnstile = turnstile) }
+    private var preparerOrNull: AskEngine? = null
+
+    private fun preparer(): AskEngine? {
+        preparerOrNull?.let { return it }
+        val model = answerModel() ?: return null
+        return AskEngine(model = model, store = store, turnstile = turnstile).also { preparerOrNull = it }
+    }
 
     /** Books whose index has been built and whose model has been warmed this session. */
     private val prepared = mutableSetOf<String>()
@@ -136,6 +170,28 @@ class AskCoordinator(
     private var checking: Job? = null
     private var downloading: Job? = null
 
+    private var supportedState by mutableStateOf(platform.hasSystemService)
+
+    /**
+     * Whether this phone has the system service Gemini Nano runs in. Read from
+     * the package manager, never from ML Kit, so it is known with Ask off; when
+     * it is false the Settings switch is drawn disabled, with the unsupported
+     * sentence.
+     */
+    val isSupported: Boolean get() = supportedState
+
+    init {
+        // The previous check never came back: the process died inside ML Kit
+        // (a native crash no catch can stop). It would die the same way on
+        // every launch, so this launch does not repeat it.
+        val interrupted = defaults.getBoolean(CHECK_IN_FLIGHT_KEY)
+        if (interrupted) {
+            defaults.putBooleanDurably(CHECK_IN_FLIGHT_KEY, false)
+            IssaLog.warning("ask check did not finish last time; turning Ask off")
+        }
+        if (settings.askEnabled && (interrupted || !supportedState)) turnBackOff(AskSettingsState.Unsupported)
+    }
+
     /** Whether the reader has Ask on. */
     val isEnabled: Boolean get() = settings.askEnabled
 
@@ -163,6 +219,7 @@ class AskCoordinator(
     /** The Settings section's switch and sentence. */
     val settingsState: AskSettingsState
         get() {
+            if (!supportedState) return AskSettingsState.Unsupported
             if (!settings.askEnabled) return turnedOff ?: AskSettingsState.Off
             download?.let { return AskSettingsState.Downloading(it.fraction) }
             return when (availability) {
@@ -179,6 +236,7 @@ class AskCoordinator(
      */
     val sheetNotice: String?
         get() {
+            if (!supportedState) return AskCopy.unsupported()
             if (!settings.askEnabled) return turnedOff?.footer() ?: AskCopy.TURNED_OFF
             return when (availability) {
                 null, AskAvailability.AVAILABLE -> null
@@ -202,6 +260,11 @@ class AskCoordinator(
      */
     fun setEnabled(on: Boolean) {
         turnedOff = null
+        if (on && !supportedState) {
+            // Not even asked of ML Kit: the phone has no service to ask.
+            turnBackOff(AskSettingsState.Unsupported)
+            return
+        }
         if (!on) {
             settings.askEnabled = false
             checking?.cancel()
@@ -227,8 +290,24 @@ class AskCoordinator(
     fun checkAvailability(): Job? {
         if (!settings.askEnabled) return null
         checking?.takeIf { it.isActive }?.let { return it }
+        if (!supportedState) {
+            turnBackOff(AskSettingsState.Unsupported)
+            return null
+        }
         val check = scope.launch {
-            val result = platform.availability()
+            // On disk before ML Kit is touched, and cleared once it answers: a
+            // process that dies in between leaves it for the next launch.
+            defaults.putBooleanDurably(CHECK_IN_FLIGHT_KEY, true)
+            val result = try {
+                platform.availability()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                IssaLog.error("ask availability failed", mapOf("error" to error.javaClass.name))
+                AskAvailability.UNSUPPORTED_DEVICE
+            } finally {
+                defaults.putBooleanDurably(CHECK_IN_FLIGHT_KEY, false)
+            }
             // The reader may have turned it off while ML Kit was answering.
             if (settings.askEnabled) apply(result)
         }
@@ -304,15 +383,16 @@ class AskCoordinator(
             // sheet that opens onto an error before the reader has typed a
             // word is worse than one that quietly retries when they do. The
             // question itself builds the index again and reports properly.
-            val built = try {
-                preparer.prepareIndex(source)
+            val engine = preparer()
+            val built = if (engine == null) false else try {
+                engine.prepareIndex(source)
                 true
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Throwable) {
                 false
             }
-            preparer.prewarm()
+            if (engine != null) engine.prewarm()
             if (preparing[uuid] === warmUp) preparing.remove(uuid)
             // Only a warm-up that worked is remembered: a failed one turned
             // every later opening of the sheet away for the rest of the
@@ -358,7 +438,7 @@ class AskCoordinator(
         val boundary = model.askBoundary()
         if (!settings.askEnabled || source == null || boundary == null) return AskSuggestions.chips(emptyList())
         preparing[source.bookUuid]?.join()
-        return preparer.suggestions(source, boundary)
+        return preparer()?.suggestions(source, boundary) ?: AskSuggestions.chips(emptyList())
     }
 
     // Asking
@@ -417,7 +497,13 @@ class AskCoordinator(
 
         // Per question: the one factory the regression run asks the real
         // model through too.
-        val engine = AskEngine.forQuestion(answerModel, store, uuid, boundary, turnstile)
+        val model = answerModel()
+        if (model == null) {
+            // Making the model threw: Ask is off again, and this question says why.
+            job.state = AskJob.State.Failed(AskFailure.Other(AskCopy.unsupported()))
+            return job
+        }
+        val engine = AskEngine.forQuestion(model, store, uuid, boundary, turnstile)
 
         job.task = scope.launch {
             preparation?.join()
@@ -581,8 +667,17 @@ class AskCoordinator(
      */
     fun appDidBecomeActive() {
         isForeground = true
+        refreshSupport()
         for (job in jobsState.values.filter { it.isHeld }) resume(job)
         checkAvailability()
+    }
+
+    /** The system service may have been installed, or removed, since this was last read. */
+    private fun refreshSupport() {
+        val now = platform.hasSystemService
+        if (now == supportedState) return
+        supportedState = now
+        if (!now && settings.askEnabled) turnBackOff(AskSettingsState.Unsupported)
     }
 
     // Deletion
@@ -623,6 +718,12 @@ class AskCoordinator(
     companion object {
         /** Remembers that the reader has been asked about notifications once, so they are never asked twice. */
         const val ASKED_FOR_NOTIFICATIONS_KEY = "issa.askNotificationsAsked"
+
+        /**
+         * Written (durably) before a check reaches ML Kit and cleared when it
+         * returns. Found set at launch, the last check killed the process.
+         */
+        const val CHECK_IN_FLIGHT_KEY = "issa.askCheckInFlight"
 
         /** Everything the engine can throw, as something the sheet can say. */
         fun failure(error: Throwable): AskFailure =

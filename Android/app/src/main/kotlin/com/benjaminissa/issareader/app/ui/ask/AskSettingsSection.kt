@@ -26,18 +26,22 @@ fun LazyListScope.askSettingsSection(coordinator: AskCoordinator, key: Any = "se
 /** The section for a Settings screen that is not a lazy list. */
 @Composable
 fun AskSettingsSection(coordinator: AskCoordinator, modifier: Modifier = Modifier) {
-    AskSettingsSection(coordinator.settingsState, onToggle = coordinator::setEnabled, modifier = modifier)
+    AskSettingsSection(coordinator.settingsState, onToggle = coordinator::setEnabled, modifier = modifier, enabled = coordinator.isSupported)
 }
 
 /**
  * The switch, and the one honest sentence under it.
+ *
+ * [enabled] is false on a phone without the system's AI service: the switch is
+ * drawn off and disabled (dashed in E-Ink mode, which ToggleRow handles) with
+ * the unsupported sentence under it.
  *
  * Always the switch, unlike the iPhone's — see [AskSettingsState] — with the
  * header the iPhone's, "Ask AI about this book" and its Beta capsule: read when
  * deciding whether to turn it on, which is when the hedge matters.
  */
 @Composable
-fun AskSettingsSection(state: AskSettingsState, onToggle: (Boolean) -> Unit, modifier: Modifier = Modifier) {
+fun AskSettingsSection(state: AskSettingsState, onToggle: (Boolean) -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true) {
     PaperSection(
         header = "Ask AI about this book",
         footer = state.footer(),
@@ -49,6 +53,7 @@ fun AskSettingsSection(state: AskSettingsState, onToggle: (Boolean) -> Unit, mod
                 title = AskCopy.SWITCH_TITLE,
                 checked = state.isOn,
                 onCheckedChange = onToggle,
+                enabled = enabled,
                 modifier = Modifier.testTag("settings.ask.toggle"),
             )
         }

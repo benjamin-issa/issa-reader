@@ -1,6 +1,8 @@
 package com.benjaminissa.issareader.app.ui.ask
 
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.isToggleable
@@ -102,5 +104,40 @@ class AskSettingsSectionTest {
         compose.onNode(isToggleable()).assertIsOff()
         compose.onNodeWithText(AskCopy.unsupported()).assertExists()
         assertFalse(settings.askEnabled)
+    }
+
+    @Test
+    fun `without the system AI service the switch is disabled with the unsupported sentence, and nothing is asked`() {
+        val platform = CountingPlatform().also { it.hasSystemService = false }
+        val coordinator = coordinator(platform)
+        compose.setContent { IssaTheme(darkTheme = false) { LazyColumn { askSettingsSection(coordinator) } } }
+        compose.waitForIdle()
+
+        compose.onNode(isToggleable()).assertIsOff().assertIsNotEnabled()
+        compose.onNodeWithText(AskCopy.unsupported()).assertExists()
+        compose.onNodeWithTag("settings.ask.toggle").performClick()
+        compose.waitForIdle()
+        assertFalse(settings.askEnabled)
+        assertEquals(0, platform.calls)
+        assertFalse(MlKitStartup.isStarted)
+    }
+
+    @Test
+    fun `with the system AI service the switch is enabled`() {
+        val coordinator = coordinator(CountingPlatform())
+        compose.setContent { IssaTheme(darkTheme = false) { LazyColumn { askSettingsSection(coordinator) } } }
+        compose.waitForIdle()
+
+        compose.onNode(isToggleable()).assertIsEnabled()
+    }
+
+    @Test
+    fun `the disabled switch still reads in E-Ink mode`() {
+        val coordinator = coordinator(CountingPlatform().also { it.hasSystemService = false })
+        compose.setContent { IssaTheme(darkTheme = false, eink = true) { LazyColumn { askSettingsSection(coordinator) } } }
+        compose.waitForIdle()
+
+        compose.onNode(isToggleable()).assertIsNotEnabled()
+        compose.onNodeWithText(AskCopy.unsupported()).assertExists()
     }
 }
