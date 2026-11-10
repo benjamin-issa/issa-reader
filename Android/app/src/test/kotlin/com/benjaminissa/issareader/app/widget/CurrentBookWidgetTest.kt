@@ -211,6 +211,48 @@ class CurrentBookWidgetTest {
         assertEquals(listOf("issareader://book/current"), clickedData(inflate(small, data(snapshot(others = 4)))))
     }
 
+    // Fresh data on every composition
+
+    /**
+     * Glance does not run `provideGlance` again for an update that arrives while
+     * its session is alive; it recomposes. So the files are read in the
+     * composition ([LiveCurrentBookWidgetContent]), and a composition after the
+     * files change draws the new ones. The publisher writes the others list and
+     * reloads, then the covers land and it reloads again: the second must not
+     * show the first's placeholders. (Glance has no public handle on a live
+     * session, so this drives the composition each update triggers, over the
+     * real store, twice.)
+     */
+    @Test
+    fun aRecompositionReadsTheFilesAsTheyAreNow() {
+        val dir = java.nio.file.Files.createTempDirectory("widget-files").toFile()
+        com.benjaminissa.issareader.core.CurrentBookSnapshotStore.configure(dir)
+        try {
+            val store = com.benjaminissa.issareader.core.CurrentBookSnapshotStore
+            fun draw(): List<String?> {
+                val views = runBlocking {
+                    GlanceRemoteViews().compose(context, large, null, Bundle()) {
+                        LiveCurrentBookWidgetContent(context, SmallCoverStyle.FILL, WidgetBitmaps(context))
+                    }.remoteViews
+                }
+                val host = context
+                val parent = FrameLayout(host)
+                parent.addView(views.apply(host, parent))
+                return clickedData(parent)
+            }
+            store.write(snapshot(others = 1, title = "First"))
+            assertEquals(listOf("issareader://book/current", "issareader://book/book-1"), draw())
+            // The others list lands, then (later) the next composition sees it.
+            store.write(snapshot(others = 3, title = "Second"))
+            assertEquals(4, draw().size)
+            store.clear()
+            assertEquals("no snapshot: the widget opens the continue route", listOf("issareader://continue"), draw())
+        } finally {
+            com.benjaminissa.issareader.core.CurrentBookSnapshotStore.configure(null)
+            dir.deleteRecursively()
+        }
+    }
+
     // Memory
 
     /**

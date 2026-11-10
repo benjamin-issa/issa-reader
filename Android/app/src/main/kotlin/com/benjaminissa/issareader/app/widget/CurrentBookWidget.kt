@@ -25,6 +25,7 @@ import androidx.glance.appwidget.appWidgetBackground
 import androidx.glance.appwidget.cornerRadius
 import androidx.glance.appwidget.provideContent
 import androidx.glance.appwidget.updateAll
+import androidx.glance.currentState
 import androidx.glance.background
 import androidx.glance.color.ColorProvider
 import androidx.glance.layout.Alignment
@@ -53,8 +54,6 @@ import com.benjaminissa.issareader.core.WidgetOthers
 import com.benjaminissa.issareader.core.model.asProgression
 import com.benjaminissa.issareader.ui.IssaColors
 import com.benjaminissa.issareader.ui.Symbols
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 
 /**
  * "Currently Reading": the book in progress, how far through, and the others
@@ -83,9 +82,13 @@ class CurrentBookWidget : GlanceAppWidget() {
     override val sizeMode: SizeMode = SizeMode.Responsive(SIZES)
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
-        val data = withContext(Dispatchers.IO) { WidgetData.load() }
         val bitmaps = WidgetBitmaps(context)
-        provideContent { CurrentBookWidgetContent(context, data, widgetSmallCoverStyle, bitmaps) }
+        // The files are read inside the composition, not here: while a session
+        // is alive (about 45 s, extended by each update) `update()` does not
+        // run provideGlance again, it only recomposes. Data read once out here
+        // would leave the second reload (the covers, landing after the others
+        // list) drawing the first one's placeholders.
+        provideContent { LiveCurrentBookWidgetContent(context, widgetSmallCoverStyle, bitmaps) }
     }
 
     companion object {
@@ -101,6 +104,24 @@ class CurrentBookWidget : GlanceAppWidget() {
             CurrentBookWidget().updateAll(context)
         }
     }
+}
+
+/**
+ * The widget's content with its data read fresh on every composition. Every
+ * `update()` hands the session a new Glance state (its state is never equal to
+ * the last), and reading it here is what makes the update recompose this, so
+ * the files are read again. Glance composes off the main thread, so the small
+ * read is acceptable; bitmaps are still decoded at drawn size by [bitmaps].
+ */
+@Composable
+internal fun LiveCurrentBookWidgetContent(
+    context: Context,
+    smallStyle: SmallCoverStyle,
+    bitmaps: WidgetBitmaps,
+    load: () -> WidgetData = WidgetData::load,
+) {
+    currentState<Any?>()
+    CurrentBookWidgetContent(context, load(), smallStyle, bitmaps)
 }
 
 /**
