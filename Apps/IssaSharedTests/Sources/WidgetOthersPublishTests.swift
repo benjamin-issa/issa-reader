@@ -299,4 +299,49 @@ struct WidgetOthersPublishTests {
         #expect(!CurrentBookSnapshotStore.hasOtherCover(bookID: "b"))
         #expect(!CurrentBookSnapshotStore.hasOtherCover(bookID: "c"))
     }
+
+    // MARK: - Retrying covers on an unchanged list
+
+    @Test("a cover that failed is fetched again, by an unchanged list, once the retry window has passed")
+    func unchangedListRetriesMissingCovers() async throws {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appending(path: "issa-widget-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        CurrentBookSnapshotStore.directoryOverride = directory
+        defer {
+            CurrentBookSnapshotStore.directoryOverride = nil
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let publisher = CurrentBookPublisher()
+        var clock = Date(timeIntervalSince1970: 1_800_000_000)
+        publisher.now = { clock }
+        var offline = true
+        var asked = 0
+        publisher.coverFetcher = { book, _, _ in
+            asked += 1
+            return offline ? nil : (Data(book.uuid.utf8), false)
+        }
+        seed(publisher)
+        let session = Self.stubSession()
+
+        #expect(publisher.updateLibrary(Self.library(), session: session))
+        try await settle(publisher)
+        let first = asked
+        #expect(first == 2)
+        #expect(!CurrentBookSnapshotStore.hasOtherCover(bookID: "b"))
+
+        // Inside the window: the same list asks for nothing.
+        clock.addTimeInterval(CurrentBookPublisher.coverRetry - 1)
+        #expect(!publisher.updateLibrary(Self.library(), session: session))
+        try await settle(publisher)
+        #expect(asked == first)
+
+        // Past it, and back online: the same list brings the covers.
+        offline = false
+        clock.addTimeInterval(2)
+        #expect(!publisher.updateLibrary(Self.library(), session: session))
+        try await settle(publisher)
+        #expect(CurrentBookSnapshotStore.hasOtherCover(bookID: "b"))
+        #expect(CurrentBookSnapshotStore.hasOtherCover(bookID: "c"))
+    }
 }

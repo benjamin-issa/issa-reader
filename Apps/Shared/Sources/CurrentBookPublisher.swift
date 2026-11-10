@@ -79,6 +79,8 @@ final class CurrentBookPublisher {
     /// `coverAttempt` exists: a cover that cannot be fetched leaves nothing on
     /// disk to say so.
     private var otherCoverAttempts: [String: Date] = [:]
+    /// The clock the retry window is read from; the tests move it.
+    var now: () -> Date = { .now }
 
     struct CoverAttempt: Equatable {
         let bookID: String
@@ -285,7 +287,13 @@ final class CurrentBookPublisher {
         guard var snapshot = CurrentBookSnapshotStore.read() else { return false }
         let next = OtherBook.selection(
             from: books, excluding: snapshot.bookID, existing: snapshot.others)
-        guard OtherBook.worthWriting(old: snapshot.others, next: next) else { return false }
+        guard OtherBook.worthWriting(old: snapshot.others, next: next) else {
+            // Nothing to write, but a cover an earlier fetch could not get
+            // (offline) is still missing: look again. This skips books tried
+            // within `coverRetry`, and writes and reloads only if one lands.
+            fetchOtherCovers(snapshot.others)
+            return false
+        }
         snapshot.others = next
         CurrentBookSnapshotStore.write(snapshot)
         reload()
@@ -300,7 +308,7 @@ final class CurrentBookPublisher {
         CurrentBookSnapshotStore.pruneOtherCovers(keeping: Set(others.map(\.bookID)))
         otherCoverAttempts = otherCoverAttempts.filter { id, _ in others.contains { $0.bookID == id } }
         guard let session = librarySession else { return }
-        let now = Date.now
+        let now = self.now()
         let wanted = others.compactMap { other -> Book? in
             guard !CurrentBookSnapshotStore.hasOtherCover(bookID: other.bookID),
                   otherCoverAttempts[other.bookID].map({ now.timeIntervalSince($0) >= Self.coverRetry }) ?? true,
