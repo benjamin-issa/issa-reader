@@ -117,7 +117,12 @@ bring them up is in the README, under "A local server to talk to".
 4. **The layout sweep** (`scripts/layout-sweep.sh`), which uses the built-in
    fixture rather than a server. Its quick pass includes iPhone Duo's outer
    display (`iphone-duo-outer`, iOS 27.1), where `DuoLayoutTests` measures
-   the reader's rail and the shelf.
+   the reader's rail and the shelf. The layout classes (the invariants, the
+   screenshots behind the contact sheets, the Duo's rail) run on all four
+   devices; the flow tests, which do not depend on the width, run once, on
+   the 17 Pro. The changed contact sheets are read by eye. A flow test that
+   fails and then passes when rerun alone is recorded as a flaky failure to
+   fix, not a reason to hold the release.
 
 If either server cannot be brought up, the release waits. It does not ship on
 the strength of one generation.

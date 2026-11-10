@@ -10,6 +10,15 @@
 #   scripts/layout-sweep.sh --purge             # clean up after a hard kill
 #   scripts/layout-sweep.sh --only DuoLayoutTests,LayoutSweepTests iphone-duo-outer
 #                                               # some classes, sheets untouched
+#   scripts/layout-sweep.sh --flows-everywhere  # the flow tests on every device too
+#
+# The layout classes (LAYOUT_CLASSES below: the invariants, the screenshots the
+# contact sheets are made from, and the Duo's rail) run on every device. The
+# rest of the UI suite -- the flow tests: menus, margins, downloads, sign-in,
+# local books -- does not depend on the width, and runs once, on the 17 Pro
+# (or the first device selected, when that is not among them). Run on all four
+# quick-pass devices they took about 75 of a sweep's 100 test-minutes, and in
+# 1.7.0's second candidate found no bug while multiplying the flaky failures.
 #
 # Four of this app's recent bugs were one bug: a subview with a rigid minimum
 # width larger than its container, or a margin that drifted from the token.
@@ -28,7 +37,7 @@ SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 ROOT="$PWD"
 
-usage() { sed -n '6,12p' "$SELF" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '6,13p' "$SELF" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 RUNTIME="com.apple.CoreSimulator.SimRuntime.iOS-27-0"
 SCHEME="IssaReader-iOS"
@@ -89,6 +98,11 @@ QUICK_SLUGS="iphone-se3 iphone-17-pro iphone-17-pro-max iphone-duo-outer"
 
 MODE=quick
 KEEP_DEVICES=0
+FLOWS_EVERYWHERE=0
+# The classes that measure or draw the layout, and so run at every width. A new
+# layout class goes here; anything else in the target is a flow test.
+LAYOUT_CLASSES=(LayoutInvariantsTests LayoutSweepTests DuoLayoutTests)
+FLOW_DEVICE=iphone-17-pro
 WANTED=""
 # One test class (or class/method) instead of the whole UI suite. Its
 # screenshots stay in $WORK and the tracked contact sheets are not touched:
@@ -101,6 +115,7 @@ for arg in "$@"; do
     --only) EXPECT_ONLY=1 ;;
     --all) MODE=all ;;
     --keep-devices) KEEP_DEVICES=1 ;;
+    --flows-everywhere) FLOWS_EVERYWHERE=1 ;;
     --devices) MODE=named ;;
     --purge)
       xcrun simctl list devices | grep -o 'issa-sweep-[^ ]*([0-9A-F-]*)' >/dev/null 2>&1 || true
@@ -137,6 +152,17 @@ for row in "${ALL_DEVICES[@]}"; do
   esac
 done
 [ ${#SELECTED[@]} -gt 0 ] || { echo "no devices selected" >&2; exit 1; }
+
+# The device the flow tests run on: the 17 Pro when it is selected, otherwise
+# the first device, so that a run naming other widths still runs them once.
+FLOW_SLUG=""
+for row in "${SELECTED[@]}"; do
+  IFS='|' read -r _ slug _ _ _ <<< "$row"
+  [ "$slug" = "$FLOW_DEVICE" ] && FLOW_SLUG="$slug"
+done
+[ -n "$FLOW_SLUG" ] || { IFS='|' read -r _ FLOW_SLUG _ _ _ <<< "${SELECTED[0]}"; }
+LAYOUT_ARGS=()
+for name in "${LAYOUT_CLASSES[@]}"; do LAYOUT_ARGS+=("-only-testing:IssaLayoutUITests/$name"); done
 
 CURRENT_UDID=""
 cleanup() {
@@ -240,6 +266,16 @@ for row in "${SELECTED[@]}"; do
   RUN_FILE="$(dirname "$XCTESTRUN")/sweep-$slug.xctestrun"
   cp "$XCTESTRUN" "$RUN_FILE"
   plutil -replace IssaLayoutUITests.EnvironmentVariables.ISSA_SWEEP_DEVICE -string "$slug" "$RUN_FILE"
+  # The whole suite on the flow device (or everywhere, when asked, or what
+  # --only named); the layout classes alone on the others.
+  RUN_ARGS=("${ONLY_ARGS[@]}")
+  SCOPE="layout and flows"
+  if [ -z "$ONLY_TESTS" ] && [ "$FLOWS_EVERYWHERE" = 0 ] && [ "$slug" != "$FLOW_SLUG" ]; then
+    RUN_ARGS=("${LAYOUT_ARGS[@]}")
+    SCOPE="layout"
+  fi
+  [ -n "$ONLY_TESTS" ] && SCOPE="--only"
+  echo "  $SCOPE"
   set +e
   # The UI suite alone. IssaSharedTests joined the scheme's Test action on
   # this branch, and with ~60 unit tests in the same xctestrun the "zero tests
@@ -254,7 +290,7 @@ for row in "${SELECTED[@]}"; do
   # whose tests had all finished would never reach the next device.
   xcodebuild test-without-building \
       -xctestrun "$RUN_FILE" \
-      "${ONLY_ARGS[@]}" \
+      "${RUN_ARGS[@]}" \
       -destination "platform=iOS Simulator,id=$CURRENT_UDID" \
       -resultBundlePath "$RESULT" \
       -parallel-testing-enabled NO \
@@ -289,9 +325,9 @@ for row in "${SELECTED[@]}"; do
     RESULTS+=("$slug: NO TESTS RAN")
   elif [ "$status" -ne 0 ]; then
     FAILED=1
-    RESULTS+=("$slug (${width}pt): FAILED — $WORK/$slug.log")
+    RESULTS+=("$slug (${width}pt, $SCOPE): FAILED — $WORK/$slug.log")
   else
-    RESULTS+=("$slug (${width}pt): ok")
+    RESULTS+=("$slug (${width}pt, $SCOPE): ok")
   fi
 
   xcrun simctl shutdown "$CURRENT_UDID" >/dev/null 2>&1 || true
