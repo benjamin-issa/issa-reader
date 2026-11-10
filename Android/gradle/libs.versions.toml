@@ -1,5 +1,5 @@
 [versions]
-agp = "9.4.1"
+agp = "9.5.1"
 kotlin = "2.4.21"
 coroutines = "1.11.0"
 serialization = "1.12.0"
@@ -22,11 +22,11 @@ junit = "4.13.2"
 robolectric = "4.17"
 # The Android runtime Robolectric 4.17 runs for sdk=36 (see robolectric.properties).
 robolectricAndroidAll = "16-robolectric-13921718-i7"
-roborazzi = "1.77.0"
+roborazzi = "1.78.0"
 turbine = "1.2.1"
 androidxTestRunner = "1.7.0"
 androidxTestJunit = "1.3.0"
-uiautomator = "2.4.0"
+uiautomator = "2.4.1"
 icu4j = "79.1"
 
 [libraries]
