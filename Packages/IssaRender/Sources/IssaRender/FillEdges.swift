@@ -39,10 +39,14 @@ public struct FillEdges: Sendable, Equatable {
     // bottom edge. Each clearance is that, plus a little air.
     // `Tools/scripts/measure-iphone-screen-geometry.py` repeats the measurement.
 
-    /// A Dynamic Island phone: a safe top of 59 points or more.
-    public static let islandSensorClearance: CGFloat = 54
-    /// A notch phone: a safe top from 44 up to the island's.
-    public static let notchSensorClearance: CGFloat = 42
+    /// The housing's share of the safe top. Across every measured phone the
+    /// sensor housing is at most 0.797 of it (island 47 of 59 and of 62; notch
+    /// 38 of 50, 34 of 47, 33 of 48, 30 of 44), so 0.8 covers it. One rule on
+    /// the safe top, not a split at 59, because Display Zoom shrinks the safe
+    /// top and the island with it, in proportion.
+    public static let sensorShareOfSafeTop: CGFloat = 0.8
+    /// The air under the housing, in points.
+    public static let sensorAir: CGFloat = 4
     /// The home indicator, on every phone that has one.
     public static let homeIndicatorClearance: CGFloat = 18
 
@@ -52,7 +56,7 @@ public struct FillEdges: Sendable, Equatable {
     public static func iPhone(safeAreaTop: CGFloat, safeAreaBottom: CGFloat) -> FillEdges? {
         guard safeAreaBottom > 0, safeAreaTop >= 44 else { return nil }
         return FillEdges(
-            sensorClearance: safeAreaTop >= 59 ? islandSensorClearance : notchSensorClearance,
+            sensorClearance: sensorShareOfSafeTop * safeAreaTop + sensorAir,
             indicatorClearance: homeIndicatorClearance)
     }
 }

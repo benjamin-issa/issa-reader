@@ -267,7 +267,7 @@ struct ReaderChromeTests {
         let fill = ReaderChrome(
             safeAreaTop: 62, safeAreaBottom: 34, margin: 16, fillsScreen: true,
             verticalMargin: 0, fillEdges: edges)
-        #expect(fill.topReserve == 54)
+        #expect(abs(fill.topReserve - 53.6) < 0.01)
         // The 16-point corner governs the bottom: deeper than the 18-point
         // indicator clearance.
         #expect(abs(fill.bottomReserve - 22.3) < 0.1)
@@ -281,7 +281,7 @@ struct ReaderChromeTests {
             safeAreaTop: 62, safeAreaBottom: 34, margin: 24, fillsScreen: true,
             verticalMargin: 0, fillEdges: edges)
         #expect(fill.bottomReserve == 18)
-        #expect(fill.topReserve == 54)
+        #expect(abs(fill.topReserve - 53.6) < 0.01)
     }
 
     @Test("a notch phone keeps clear of its shorter housing")
@@ -290,7 +290,7 @@ struct ReaderChromeTests {
         let fill = ReaderChrome(
             safeAreaTop: 47, safeAreaBottom: 34, margin: 24, fillsScreen: true,
             verticalMargin: 0, fillEdges: edges)
-        #expect(fill.topReserve == 42)
+        #expect(abs(fill.topReserve - 41.6) < 0.01)
     }
 
     @Test("an Edge margin keeps the whole bottom safe area, the corner being that deep")
@@ -300,7 +300,7 @@ struct ReaderChromeTests {
             safeAreaTop: 62, safeAreaBottom: 34, margin: 4, fillsScreen: true,
             verticalMargin: 0, fillEdges: edges)
         #expect(fill.hardwareBottom == 34)
-        #expect(fill.hardwareTop == 54, "the corner at 44.4 is shallower than the sensor's reach")
+        #expect(abs(fill.hardwareTop - 53.6) < 0.01, "the corner at 44.4 is shallower than the sensor's reach")
     }
 
     @Test("the safe area is a ceiling: nothing is ever added")
@@ -324,12 +324,19 @@ struct ReaderChromeTests {
     }
 
     @Test("edges are only built for a phone with a housing and an indicator")
-    func edgesAreConditional() {
+    func edgesAreConditional() throws {
         #expect(FillEdges.iPhone(safeAreaTop: 20, safeAreaBottom: 0) == nil)
         #expect(FillEdges.iPhone(safeAreaTop: 24, safeAreaBottom: 34) == nil)
         #expect(FillEdges.iPhone(safeAreaTop: 47, safeAreaBottom: 0) == nil)
-        #expect(FillEdges.iPhone(safeAreaTop: 47, safeAreaBottom: 34)?.sensorClearance == 42)
-        #expect(FillEdges.iPhone(safeAreaTop: 59, safeAreaBottom: 34)?.sensorClearance == 54)
+        func clearance(_ top: CGFloat) -> CGFloat? {
+            FillEdges.iPhone(safeAreaTop: top, safeAreaBottom: 34)?.sensorClearance
+        }
+        #expect(abs(try #require(clearance(62)) - 53.6) < 0.01)
+        #expect(abs(try #require(clearance(59)) - 51.2) < 0.01)
+        #expect(abs(try #require(clearance(50)) - 44) < 0.01)
+        #expect(abs(try #require(clearance(47)) - 41.6) < 0.01)
+        // A zoomed 17 Pro: a smaller safe top, a proportionally smaller island.
+        #expect(abs(try #require(clearance(57.8)) - 50.24) < 0.01)
     }
 
     @Test("showing or hiding the chrome has no input into any reserve")
