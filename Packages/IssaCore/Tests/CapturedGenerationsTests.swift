@@ -22,9 +22,13 @@ enum CapturedServer: String, CaseIterable, CustomTestStringConvertible, Sendable
     case v3_beta46 = "web-v3.0.0-beta.46"
     /// `Fixtures/v3/beta49/` — the library once more, a pin later.
     case v3_beta49 = "web-v3.0.0-beta.49"
-    /// `Fixtures/v3/beta56/` — and on the current pin, which added
-    /// `progress-sync/v3` to the capabilities and nothing the client reads.
+    /// `Fixtures/v3/beta56/` — a pin later, which added `progress-sync/v3`
+    /// to the capabilities and nothing the client reads.
     case v3_beta56 = "web-v3.0.0-beta.56"
+    /// `Fixtures/v3/beta59/` — and on the current pin, whose migrations
+    /// (OPDS formats, a progression history, a book-access table) changed no
+    /// response the client reads.
+    case v3_beta59 = "web-v3.0.0-beta.59"
 
     var testDescription: String { rawValue }
 
@@ -37,10 +41,12 @@ enum CapturedServer: String, CaseIterable, CustomTestStringConvertible, Sendable
         case .v3_beta46: "v3/beta46/\(name)"
         case .v3_beta49: "v3/beta49/\(name)"
         case .v3_beta56: "v3/beta56/\(name)"
+        case .v3_beta59: "v3/beta59/\(name)"
         }
     }
 
-    var isV3: Bool { self == .v3_beta40 || self == .v3_beta46 || self == .v3_beta49 || self == .v3_beta56 }
+    var isV3: Bool { self == .v3_beta40 || self == .v3_beta46 || self == .v3_beta49 || self == .v3_beta56
+        || self == .v3_beta59 }
 
     func books() throws -> [Book] {
         try JSONDecoder().decode([Book].self, from: BookDecodingTests.fixture(fixture("books")))
@@ -102,7 +108,7 @@ struct CapturedGenerationsTests {
 
     /// Only 3.x lets a book have no status, or an admin relabel one.
     @Test("3.x shapes decode on every beta: no status, a relabelled status, a custom one",
-          arguments: [CapturedServer.v3_beta40, .v3_beta46, .v3_beta49, .v3_beta56])
+          arguments: [CapturedServer.v3_beta40, .v3_beta46, .v3_beta49, .v3_beta56, .v3_beta59])
     func v3Shapes(_ server: CapturedServer) throws {
         let books = try server.books()
         func book(_ title: String) throws -> Book {
@@ -176,6 +182,23 @@ struct CapturedGenerationsTests {
         }
     }
 
+    /// And from beta.56 to beta.59, whose migrations only added tables and
+    /// dropped an OPDS setting.
+    @Test("beta.59 shows every book it shares with beta.56 the same way")
+    func beta59MatchesBeta56() throws {
+        let older = try CapturedServer.v3_beta56.books()
+        let newer = Dictionary(uniqueKeysWithValues: try CapturedServer.v3_beta59.books().map { ($0.uuid, $0) })
+        #expect(older.count == 27)
+        for book in older {
+            let moved = try #require(newer[book.uuid], "\(book.title) is missing from the beta.59 capture")
+            #expect(moved.title == book.title)
+            #expect(moved.status?.displayName == book.status?.displayName, "\(book.title)'s status")
+            #expect(moved.ebook?.cover == book.ebook?.cover, "\(book.title)'s ebook cover")
+            #expect(moved.audiobook?.cover == book.audiobook?.cover, "\(book.title)'s audiobook cover")
+            #expect(moved.readaloud?.cover == book.readaloud?.cover, "\(book.title)'s read-along cover")
+        }
+    }
+
     /// 2.x has no relabelling and no empty status: every captured book has
     /// one of the three built-in names.
     @Test("2.x books always carry a built-in status", arguments: [CapturedServer.v2_14_21, .v2_14_23])
@@ -190,11 +213,11 @@ struct CapturedGenerationsTests {
     /// What the stub below answers for, by the host the client is pointed at.
     static let hosts: [CapturedServer: String] = [
         .v3_beta46: "beta46.storyteller.test", .v3_beta49: "beta49.storyteller.test",
-        .v3_beta56: "beta56.storyteller.test",
+        .v3_beta56: "beta56.storyteller.test", .v3_beta59: "beta59.storyteller.test",
     ]
 
     @Test("a 3.x beta's identity says 3.x, and its details report that beta",
-          arguments: [CapturedServer.v3_beta46, .v3_beta49, .v3_beta56])
+          arguments: [CapturedServer.v3_beta46, .v3_beta49, .v3_beta56, .v3_beta59])
     func betaIdentity(_ server: CapturedServer) async throws {
         let identity = try BookDecodingTests.fixture(server.fixture("server-public"))
         #expect(Session.generation(fromPublicProbe: (200, identity)) == .v3)
