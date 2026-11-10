@@ -107,7 +107,7 @@ class CurrentBookWidget : GlanceAppWidget() {
  * How the small widget frames a cover in its square. The one switch: [SmallCoverStyle.FILL]
  * crops a 2:3 cover by a third; [SmallCoverStyle.FIT_OVER_BLUR] keeps all of it over a blurred backdrop.
  */
-internal var widgetSmallCoverStyle: SmallCoverStyle = SmallCoverStyle.FILL
+internal var widgetSmallCoverStyle: SmallCoverStyle = SmallCoverStyle.FIT_OVER_BLUR
 
 /** What one draw needs from disk: the snapshot and the raw bytes of the covers it names. */
 internal class WidgetData(
@@ -331,12 +331,17 @@ private fun Large(context: Context, snapshot: CurrentBookSnapshot, data: WidgetD
     val tight = topH < 130f
 
     Box(modifier = GlanceModifier.fillMaxSize()) {
-        Column(modifier = GlanceModifier.fillMaxSize().padding(14.dp)) {
+        // With no other books the block stands in the middle, not at the top
+        // over an empty half: the redesign's point was no wasted space.
+        Column(
+            modifier = GlanceModifier.fillMaxSize().padding(14.dp),
+            verticalAlignment = if (others.isEmpty()) Alignment.CenterVertically else Alignment.Top,
+        ) {
             Row(modifier = GlanceModifier.fillMaxWidth().height(topH.dp)) {
                 CoverFlush(bitmaps.cover("main-large", bytes, topCoverW + 10, topCoverH + 10), snapshot.title, GlanceModifier.width(topCoverW.dp).height(topCoverH.dp).cornerRadius(8.dp))
                 Spacer(GlanceModifier.width(12.dp))
                 Column(modifier = GlanceModifier.defaultWeight().fillMaxHeight()) {
-                    Text(snapshot.title, maxLines = if (tight) 2 else 3, modifier = GlanceModifier.padding(end = 34.dp), style = TextStyle(color = Colors.ink, fontSize = 17.sp, fontWeight = FontWeight.Medium, fontFamily = FontFamily.Serif))
+                    Text(snapshot.title, maxLines = if (tight) 2 else if (others.isEmpty()) 4 else 3, modifier = GlanceModifier.padding(end = 34.dp), style = TextStyle(color = Colors.ink, fontSize = 17.sp, fontWeight = FontWeight.Medium, fontFamily = FontFamily.Serif))
                     if (snapshot.author.isNotEmpty()) {
                         Text(snapshot.author, maxLines = 1, style = TextStyle(color = Colors.inkSecondary, fontSize = 13.sp))
                     }
