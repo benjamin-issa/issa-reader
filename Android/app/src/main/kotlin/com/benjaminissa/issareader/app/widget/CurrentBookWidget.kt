@@ -76,7 +76,8 @@ import com.benjaminissa.issareader.ui.Symbols
  * A resizable widget is composed once per size in [SizeMode.Responsive] and
  * the launcher picks the largest that fits: narrower than 250 dp is small;
  * 250 dp wide and under 250 tall is medium (from 150 tall with room for the
- * card); 250 tall and over is large.
+ * card, and from 190 tall with room for the card's title to take two lines);
+ * 250 tall and over is large.
  */
 class CurrentBookWidget : GlanceAppWidget() {
     override val sizeMode: SizeMode = SizeMode.Responsive(SIZES)
@@ -96,8 +97,10 @@ class CurrentBookWidget : GlanceAppWidget() {
         private val SMALL_WIDE = DpSize(150.dp, 110.dp)
         internal val MEDIUM = DpSize(250.dp, 110.dp)
         internal val MEDIUM_CARD = DpSize(250.dp, 150.dp)
+        /** Tall enough for the card's title to take two lines under a main title of three, with the progress row stacked. */
+        internal val MEDIUM_TALL = DpSize(320.dp, 190.dp)
         internal val LARGE = DpSize(250.dp, 250.dp)
-        internal val SIZES = setOf(SMALL, SMALL_WIDE, MEDIUM, MEDIUM_CARD, LARGE)
+        internal val SIZES = setOf(SMALL, SMALL_WIDE, MEDIUM, MEDIUM_CARD, MEDIUM_TALL, LARGE)
 
         /** Asks every placed widget to redraw from the current snapshot. */
         suspend fun reload(context: Context) {

@@ -180,6 +180,7 @@ class CurrentBookWidgetTest {
             // size to (lines, sp, card title lines); compact has no card at all.
             CurrentBookWidget.MEDIUM to Triple(2, 15, null),
             CurrentBookWidget.MEDIUM_CARD to Triple(3, 15, 1),
+            CurrentBookWidget.MEDIUM_TALL to Triple(3, 15, 2),
         )
         for (size in CurrentBookWidget.SIZES) {
             if (size.width < CurrentBookWidget.MEDIUM.width || size.height >= CurrentBookWidget.LARGE.height) continue
@@ -235,10 +236,10 @@ class CurrentBookWidgetTest {
             "long-short" to (longTitle to "Emma"),
             "short-long" to ("Dracula" to longOther),
         )
-        val roomy = DpSize(338.dp, 200.dp)
+        val roomy = CurrentBookWidget.MEDIUM_TALL
         for ((name, titles) in cases) {
             val (main, other) = titles
-            val tight = inflate(medium, data(snapshot(1, title = main, otherTitle = other)))
+            val tight = inflate(CurrentBookWidget.MEDIUM_CARD, data(snapshot(1, title = main, otherTitle = other)))
             assertEquals("$name tight: the card as it was", 1, textOf(tight, other).maxLines)
             assertEquals("$name tight: the main title", 3, textOf(tight, main).maxLines)
             val room = inflate(roomy, data(snapshot(1, title = main, otherTitle = other)))
@@ -246,7 +247,7 @@ class CurrentBookWidgetTest {
             assertEquals("$name roomy: the main title is untouched", 3, textOf(room, main).maxLines)
             for (dark in listOf(false, true)) {
                 val mode = if (dark) "dark" else "light"
-                shot("medium-card-$name-tight-$mode", medium, data(snapshot(1, title = main, otherTitle = other)), dark = dark)
+                shot("medium-card-$name-tight-$mode", CurrentBookWidget.MEDIUM_CARD, data(snapshot(1, title = main, otherTitle = other)), dark = dark)
                 shot("medium-card-$name-roomy-$mode", roomy, data(snapshot(1, title = main, otherTitle = other)), dark = dark)
             }
         }
