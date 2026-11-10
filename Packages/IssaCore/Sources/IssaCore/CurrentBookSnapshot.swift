@@ -165,11 +165,15 @@ public struct OtherBook: Codable, Sendable, Hashable {
         limit: Int = OtherBook.limit,
     ) -> [OtherBook] {
         let known = Dictionary(existing.map { ($0.bookID, $0.coverIsSquare) }, uniquingKeysWith: { first, _ in first })
+        // The first of a repeated uuid wins, in order: the widget's rows are
+        // identified by book id, and a repeat would be a duplicate id.
+        var seen = Set<String>()
         return LibraryDerivation(books: books).continueReading
             .filter {
                 !$0.isLocal && $0.uuid != currentID
                     && LibraryArrangement.stage(of: $0) == .reading
             }
+            .filter { seen.insert($0.uuid).inserted }
             .prefix(limit)
             .map {
                 OtherBook(

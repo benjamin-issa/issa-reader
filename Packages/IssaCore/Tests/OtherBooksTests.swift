@@ -44,6 +44,18 @@ struct OtherBooksTests {
         #expect(ids(OtherBook.selection(from: books, excluding: nil)) == ["current", "new", "old"])
     }
 
+    @Test("a uuid listed twice is one book, the first occurrence, order kept")
+    func duplicateUUIDs() {
+        let books = [
+            book("Dup", status: "Reading", progress: 0.3, timestamp: 800),
+            book("Other", status: "Reading", progress: 0.2, timestamp: 700),
+            book("Dup", status: "Reading", progress: 0.1, timestamp: 100),
+        ]
+        let list = OtherBook.selection(from: books, excluding: nil)
+        #expect(ids(list) == ["dup", "other"])
+        #expect(list.first?.progress == 0.3)
+    }
+
     @Test("a finished, to-read or never-started book is not in progress")
     func stages() {
         let books = [
