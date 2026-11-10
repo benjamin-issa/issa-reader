@@ -257,6 +257,94 @@ class CurrentBookWidgetTest {
         assertEquals(3, textOf(card, longTitle).maxLines)
     }
 
+    /** The font scale's share of the card's budget: a size that grants the second line at 1.0 must not at a larger scale. */
+    @Test
+    fun theCardBudgetFollowsTheSystemFontScale() {
+        val size = CurrentBookWidget.MEDIUM_TALL
+        fun lines(scale: Float, stacked: Boolean) =
+            MediumColumn.alsoReadingTitleLines(size.height.value, 3, 15, MediumColumn.AUTHOR_SP, stacked, scale)
+        for (stacked in listOf(true, false)) {
+            assertEquals("1.0 stacked=$stacked", 2, lines(1.0f, stacked))
+            assertEquals("1.15 stacked=$stacked", 1, lines(1.15f, stacked))
+            assertEquals("1.3 stacked=$stacked", 1, lines(1.3f, stacked))
+        }
+    }
+
+    /** The composition hands the context's font scale to the budget: drawn at 1.3 the card keeps one line where 1.0 gives it two. */
+    @Test
+    fun theDrawnCardReadsTheFontScale() {
+        val size = CurrentBookWidget.MEDIUM_TALL
+        val d = data(snapshot(1, otherTitle = longOther))
+        assertEquals(2, textOf(inflate(size, d), longOther).maxLines)
+        val configuration = Configuration(context.resources.configuration).apply { fontScale = 1.3f }
+        val scaled = context.createConfigurationContext(configuration)
+        val views = runBlocking {
+            GlanceRemoteViews().compose(scaled, size, null, Bundle()) {
+                CurrentBookWidgetContent(scaled, d, SmallCoverStyle.FILL, WidgetBitmaps(scaled))
+            }.remoteViews
+        }
+        val parent = FrameLayout(context)
+        parent.addView(views.apply(context, parent))
+        assertEquals(1, textOf(parent, longOther).maxLines)
+        assertEquals(3, textOf(parent, longTitle).maxLines)
+    }
+
+    // Which size the launcher picks
+
+    /**
+     * Glance's rule (its internal `findBestSize`, read from the 1.2.0 jar): of
+     * the sizes that fit the widget (a size fits when `ceil(widget) + 1`
+     * exceeds it on both axes), the one nearest by squared distance.
+     */
+    private fun picked(widget: DpSize): DpSize {
+        fun fits(size: DpSize) = kotlin.math.ceil(widget.width.value) + 1 > size.width.value &&
+            kotlin.math.ceil(widget.height.value) + 1 > size.height.value
+        fun distance(size: DpSize) = (widget.width.value - size.width.value).let { it * it } +
+            (widget.height.value - size.height.value).let { it * it }
+        return CurrentBookWidget.SIZES.filter(::fits).minBy(::distance)
+    }
+
+    @Test
+    fun everyWidgetAtLeast250TallGetsLargeAndTheRestTheirMediumBucket() {
+        val large = setOf(CurrentBookWidget.LARGE, CurrentBookWidget.LARGE_WIDE)
+        for ((w, h) in listOf(360 to 280, 400 to 340, 300 to 260, 250 to 250, 320 to 250, 600 to 250, 280 to 700, 700 to 500)) {
+            val pick = picked(DpSize(w.dp, h.dp))
+            assertTrue("${w}x$h picked $pick", pick in large)
+        }
+        val medium = mapOf(
+            (330 to 200) to CurrentBookWidget.MEDIUM_TALL,
+            (320 to 190) to CurrentBookWidget.MEDIUM_TALL,
+            (260 to 160) to CurrentBookWidget.MEDIUM_CARD,
+            (400 to 120) to CurrentBookWidget.MEDIUM,
+        )
+        for ((wh, expected) in medium) assertEquals("${wh.first}x${wh.second}", expected, picked(DpSize(wh.first.dp, wh.second.dp)))
+        // Every size the sweep over widths 250..700 and heights 250..700 can land on is a Large layout.
+        for (w in 250..700 step 10) for (h in 250..700 step 10) {
+            assertTrue("${w}x$h", picked(DpSize(w.dp, h.dp)).height >= CurrentBookWidget.LARGE.height)
+        }
+    }
+
+    /** The Large layout at its new wide size, drawn for looking at, with its others row whole. */
+    @Test
+    fun largeAtItsWideSizeHoldsTheRowOfOthers() {
+        for (dark in listOf(false, true)) {
+            val mode = if (dark) "dark" else "light"
+            shot("large-wide-4-others-$mode", CurrentBookWidget.LARGE_WIDE, data(snapshot(4)), dark = dark)
+        }
+        // The titles under the covers are the last thing in the column: they must end inside the widget.
+        for (size in listOf(CurrentBookWidget.LARGE_WIDE, CurrentBookWidget.LARGE)) {
+            val view = inflate(size, data(snapshot(4)))
+            val density = view.resources.displayMetrics.density
+            for (title in listOf("Moby-Dick", "Dracula", "Emma", "Walden")) {
+                val text = textOf(view, title)
+                var bottom = text.height
+                var node: View = text
+                while (node !== view) { bottom += node.top; node = node.parent as View }
+                assertTrue("$size $title ends at $bottom of ${view.height}", bottom <= view.height - 12 * density)
+            }
+        }
+    }
+
     // Click targets
 
     /** Every view the drawn widget would fire an intent from, in layout order: the whole widget first. */

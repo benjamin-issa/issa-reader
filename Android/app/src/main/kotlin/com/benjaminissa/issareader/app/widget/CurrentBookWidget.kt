@@ -74,10 +74,12 @@ import com.benjaminissa.issareader.ui.Symbols
  *
  * ### Sizes
  * A resizable widget is composed once per size in [SizeMode.Responsive] and
- * the launcher picks the largest that fits: narrower than 250 dp is small;
+ * the launcher picks, among the sizes that fit, the one nearest the widget's
+ * (smallest squared distance, not the largest): narrower than 250 dp is small;
  * 250 dp wide and under 250 tall is medium (from 150 tall with room for the
  * card, and from 190 tall with room for the card's title to take two lines);
- * 250 tall and over is large.
+ * 250 tall and over is large. [LARGE_WIDE] is there so a wide, tall widget is
+ * nearer a large size than to the tall medium one.
  */
 class CurrentBookWidget : GlanceAppWidget() {
     override val sizeMode: SizeMode = SizeMode.Responsive(SIZES)
@@ -100,7 +102,9 @@ class CurrentBookWidget : GlanceAppWidget() {
         /** Tall enough for the card's title to take two lines under a main title of three, with the progress row stacked. */
         internal val MEDIUM_TALL = DpSize(320.dp, 190.dp)
         internal val LARGE = DpSize(250.dp, 250.dp)
-        internal val SIZES = setOf(SMALL, SMALL_WIDE, MEDIUM, MEDIUM_CARD, MEDIUM_TALL, LARGE)
+        /** Beside [MEDIUM_TALL] in width, so a widget 250 tall or more is never nearer the medium. */
+        internal val LARGE_WIDE = DpSize(320.dp, 250.dp)
+        internal val SIZES = setOf(SMALL, SMALL_WIDE, MEDIUM, MEDIUM_CARD, MEDIUM_TALL, LARGE, LARGE_WIDE)
 
         /** Asks every placed widget to redraw from the current snapshot. */
         suspend fun reload(context: Context) {
@@ -293,6 +297,7 @@ private fun Medium(context: Context, snapshot: CurrentBookSnapshot, data: Widget
                     // Only ever from room the main title has left over, never from the title's own lines.
                     val cardTitleLines = MediumColumn.alsoReadingTitleLines(
                         size.height.value, titleLines, titleSp, authorSp.takeIf { snapshot.author.isNotEmpty() }, stacked,
+                        context.resources.configuration.fontScale,
                     )
                     AlsoReadingCard(context, other, data, bitmaps, cardTitleLines)
                 }
@@ -329,7 +334,7 @@ internal object MediumColumn {
      * line is taller than the 1.2 a sans-serif face sets, and the budget is
      * wrong the safe way when it is high: the card stays as it was.
      */
-    const val LINE_HEIGHT = 1.3f
+    const val LINE_HEIGHT = 1.4f
 
     /** The main title's lines: what the card's room is measured against, never taken from. */
     fun titleLines(compact: Boolean): Int = if (compact) 2 else 3
@@ -338,10 +343,14 @@ internal object MediumColumn {
 
     fun cardHeight(titleLines: Int): Int = if (titleLines >= 2) CARD_TWO_LINES else CARD
 
-    /** Lines the card's title may take: 2 where [heightDp] holds the whole column with the taller card, else 1. */
-    fun alsoReadingTitleLines(heightDp: Float, titleLines: Int, titleSp: Int, authorSp: Int?, stacked: Boolean): Int {
-        val progress = if (stacked) BAR + STACK_GAP + PROGRESS_SP * LINE_HEIGHT else PROGRESS_SP * LINE_HEIGHT
-        val needed = titleLines * titleSp * LINE_HEIGHT + (authorSp?.let { it * LINE_HEIGHT } ?: 0f) +
+    /**
+     * Lines the card's title may take: 2 where [heightDp] holds the whole column with the taller card, else 1.
+     * Text in sp grows with the user's [fontScale]; the widget's dp do not, so every sp height is scaled.
+     */
+    fun alsoReadingTitleLines(heightDp: Float, titleLines: Int, titleSp: Int, authorSp: Int?, stacked: Boolean, fontScale: Float = 1f): Int {
+        val line = LINE_HEIGHT * maxOf(fontScale, 1f)
+        val progress = if (stacked) BAR + STACK_GAP + PROGRESS_SP * line else PROGRESS_SP * line
+        val needed = titleLines * titleSp * line + (authorSp?.let { it * line } ?: 0f) +
             progress + CARD_GAP + CARD_TWO_LINES
         return if (heightDp - 2 * PAD >= needed) 2 else 1
     }
@@ -394,8 +403,9 @@ private fun Large(context: Context, snapshot: CurrentBookSnapshot, data: WidgetD
     val bytes = data.coverBytes
     val square = snapshot.coverIsSquare && bytes != null
 
-    // The row of others: up to four covers across, each 2:3, no wider than 70.
-    val coverW = minOf(70f, (size.width.value - 28 - 3 * 8) / 4)
+    // The row of others: up to four covers across, each 2:3, no wider than 70,
+    // and no taller than leaves the top block its 90 dp at a 250 dp height.
+    val coverW = minOf(70f, (size.width.value - 28 - 3 * 8) / 4, (size.height.value - 180) / 1.5f)
     val coverH = coverW * 1.5f
     val othersBlock = if (others.isEmpty()) 0f else 18f + coverH + 4f + 30f + 10f
     val room = size.height.value - 28 - othersBlock
