@@ -109,6 +109,25 @@ final class MarginControlFlowTests: XCTestCase {
         return probe.frame
     }
 
+    /// Whether a point of the screen (in points) carries the bands' tangerine
+    /// tint over the paper page: paper is near white with red and blue within
+    /// a few levels of each other, black text has them equal, and tangerine at
+    /// 14% over paper leaves red some 30 levels above blue.
+    private func isTinted(_ shot: XCUIScreenshot, x: CGFloat, y: CGFloat) -> Bool {
+        guard let image = shot.image.cgImage else { return false }
+        let scale = CGFloat(image.width) / shot.image.size.width
+        var pixel = [UInt8](repeating: 0, count: 4)
+        guard let context = CGContext(
+            data: &pixel, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return false }
+        context.translateBy(x: -x * scale, y: -(CGFloat(image.height) - y * scale))
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        let red = Int(pixel[0]), blue = Int(pixel[2])
+        return red > 200 && red - blue > 15
+    }
+
     private func keep(_ app: XCUIApplication, _ name: String) {
         let shot = XCTAttachment(screenshot: app.screenshot())
         shot.name = name
@@ -135,10 +154,17 @@ final class MarginControlFlowTests: XCTestCase {
         // Wide: 48, and the column narrower by the difference.
         openTypographySheet(app)
         tapPreset(app, "wide")
-        XCTAssertEqual(slider.value as? String, "48 points")
-        // What no query can see: the bands' colour and where they stand over
-        // the page, kept for a look at the contact sheet.
+        // What no query can see: the bands' colour and where they stand. Taken
+        // at once, while they linger after the tap, and kept for the contact
+        // sheet. Each margin is tinted halfway across it, above the half-height
+        // sheet: in 1.7.0's first build the bands stood in the middle of the
+        // text, and the geometry's unit test could not tell.
+        let shot = app.screenshot()
         keep(app, "margins-wide-bands")
+        let y = window.minY + window.height * 0.3
+        XCTAssertTrue(isTinted(shot, x: window.minX + 24, y: y), "no band in the left margin")
+        XCTAssertTrue(isTinted(shot, x: window.maxX - 24, y: y), "no band in the right margin")
+        XCTAssertEqual(slider.value as? String, "48 points")
         closeSheet(app)
         let wide = textFrame(app, minX: 48)
         XCTAssertEqual(wide.minX, 48, accuracy: 1.5, "Wide did not move the text to 48 points: \(wide)")

@@ -240,6 +240,11 @@ struct MarginBands: View {
                     .offset(x: band.lowerBound)
             }
         }
+        // The full page, measured from its leading edge. Left to size itself,
+        // the stack was one band wide, the overlay centred it, and every
+        // offset counted from the middle of the page: the bands stood in the
+        // text instead of in its margins.
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
     }
