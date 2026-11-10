@@ -263,14 +263,15 @@ private fun Medium(context: Context, snapshot: CurrentBookSnapshot, data: Widget
     val height = size.height.value
     val coverWidth = if (square) height else height * 2 / 3
     val compact = size.height < CurrentBookWidget.MEDIUM_CARD.height
-    val pad = 12
+    val pad = MediumColumn.PAD
     val columnWidth = size.width.value - coverWidth - 2 * 14
     // A square cover leaves a column too narrow for three lines of title, a stacked progress and a card.
     val other = snapshot.others.firstOrNull().takeIf { !compact && !(square && columnWidth < 170) }
     val stacked = columnWidth < 170
     // Up to three lines, so a long title is whole; the card's company takes the smaller size.
-    val titleLines = if (compact) 2 else 3
-    val smallTitle = compact || other != null
+    val titleLines = MediumColumn.titleLines(compact)
+    val titleSp = MediumColumn.titleSp(compact, hasCard = other != null)
+    val authorSp = if (compact) MediumColumn.AUTHOR_SP_COMPACT else MediumColumn.AUTHOR_SP
     // A column under 150 dp has no room for the title to clear the logo: the title wins and the logo is left off.
     val showLogo = columnWidth >= 150
 
@@ -278,19 +279,68 @@ private fun Medium(context: Context, snapshot: CurrentBookSnapshot, data: Widget
         Row(modifier = GlanceModifier.fillMaxSize()) {
             CoverFlush(bitmaps.cover("main-flush", bytes, coverWidth + 40, height + 40), snapshot.title, GlanceModifier.width(coverWidth.dp).fillMaxHeight())
             Column(modifier = GlanceModifier.defaultWeight().fillMaxHeight().padding(start = 14.dp, end = 14.dp, top = pad.dp, bottom = pad.dp)) {
-                Text(snapshot.title, maxLines = titleLines, modifier = GlanceModifier.padding(end = if (showLogo) 44.dp else 0.dp), style = TextStyle(color = Colors.ink, fontSize = if (smallTitle) 15.sp else 17.sp, fontWeight = FontWeight.Medium, fontFamily = FontFamily.Serif))
+                Text(snapshot.title, maxLines = titleLines, modifier = GlanceModifier.padding(end = if (showLogo) 44.dp else 0.dp), style = TextStyle(color = Colors.ink, fontSize = titleSp.sp, fontWeight = FontWeight.Medium, fontFamily = FontFamily.Serif))
                 if (snapshot.author.isNotEmpty()) {
-                    Text(snapshot.author, maxLines = 1, style = TextStyle(color = Colors.inkSecondary, fontSize = if (compact) 12.sp else 13.sp))
+                    Text(snapshot.author, maxLines = 1, style = TextStyle(color = Colors.inkSecondary, fontSize = authorSp.sp))
                 }
                 Spacer(GlanceModifier.defaultWeight())
                 ProgressRow(snapshot, stacked)
                 if (other != null) {
-                    Spacer(GlanceModifier.height(8.dp))
-                    AlsoReadingCard(context, other, data, bitmaps)
+                    Spacer(GlanceModifier.height(MediumColumn.CARD_GAP.dp))
+                    // Only ever from room the main title has left over, never from the title's own lines.
+                    val cardTitleLines = MediumColumn.alsoReadingTitleLines(
+                        size.height.value, titleLines, titleSp, authorSp.takeIf { snapshot.author.isNotEmpty() }, stacked,
+                    )
+                    AlsoReadingCard(context, other, data, bitmaps, cardTitleLines)
                 }
             }
         }
         if (showLogo) Logo(bitmaps, inset = 12)
+    }
+}
+
+/**
+ * The Medium column's measurements, in dp and sp, shared by the layout and by
+ * the one decision that depends on them: whether the "Also reading" card can
+ * have a second line for its title.
+ *
+ * The main title comes first. The card grows only into height the column
+ * would otherwise leave empty after the main title at its full line count, the
+ * author and the progress row; a size without that room keeps the card it has.
+ */
+internal object MediumColumn {
+    const val PAD = 12
+    const val TITLE_SP = 17
+    const val TITLE_SP_SMALL = 15
+    const val AUTHOR_SP = 13
+    const val AUTHOR_SP_COMPACT = 12
+    const val PROGRESS_SP = 11
+    const val BAR = 4
+    const val STACK_GAP = 3
+    const val CARD_GAP = 8
+    const val CARD = 40
+    const val CARD_TWO_LINES = 52
+
+    /**
+     * What a line of text takes, as a multiple of its size. A serif face's
+     * line is taller than the 1.2 a sans-serif face sets, and the budget is
+     * wrong the safe way when it is high: the card stays as it was.
+     */
+    const val LINE_HEIGHT = 1.3f
+
+    /** The main title's lines: what the card's room is measured against, never taken from. */
+    fun titleLines(compact: Boolean): Int = if (compact) 2 else 3
+
+    fun titleSp(compact: Boolean, hasCard: Boolean): Int = if (compact || hasCard) TITLE_SP_SMALL else TITLE_SP
+
+    fun cardHeight(titleLines: Int): Int = if (titleLines >= 2) CARD_TWO_LINES else CARD
+
+    /** Lines the card's title may take: 2 where [heightDp] holds the whole column with the taller card, else 1. */
+    fun alsoReadingTitleLines(heightDp: Float, titleLines: Int, titleSp: Int, authorSp: Int?, stacked: Boolean): Int {
+        val progress = if (stacked) BAR + STACK_GAP + PROGRESS_SP * LINE_HEIGHT else PROGRESS_SP * LINE_HEIGHT
+        val needed = titleLines * titleSp * LINE_HEIGHT + (authorSp?.let { it * LINE_HEIGHT } ?: 0f) +
+            progress + CARD_GAP + CARD_TWO_LINES
+        return if (heightDp - 2 * PAD >= needed) 2 else 1
     }
 }
 
@@ -315,10 +365,10 @@ private fun ProgressRow(snapshot: CurrentBookSnapshot, stacked: Boolean) {
 
 /** A raised card for the first other book: mini cover, caption, title, percent. The whole card opens that book. */
 @Composable
-private fun AlsoReadingCard(context: Context, other: OtherBook, data: WidgetData, bitmaps: WidgetBitmaps) {
+private fun AlsoReadingCard(context: Context, other: OtherBook, data: WidgetData, bitmaps: WidgetBitmaps, titleLines: Int) {
     val caption = bitmaps.caption("ALSO READING", 10f)
     Row(
-        modifier = GlanceModifier.fillMaxWidth().height(40.dp).cornerRadius(10.dp).background(Colors.surfaceRaised)
+        modifier = GlanceModifier.fillMaxWidth().height(MediumColumn.cardHeight(titleLines).dp).cornerRadius(10.dp).background(Colors.surfaceRaised)
             .padding(horizontal = 2.dp).clickable(actionStartActivity(openBookIntent(context, other.bookId))),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -326,7 +376,7 @@ private fun AlsoReadingCard(context: Context, other: OtherBook, data: WidgetData
         Spacer(GlanceModifier.width(10.dp))
         Column(modifier = GlanceModifier.defaultWeight()) {
             Image(ImageProvider(caption), contentDescription = null, colorFilter = ColorFilter.tint(Colors.inkSecondary), modifier = GlanceModifier.width(bitmaps.dp(caption.width).dp).height(bitmaps.dp(caption.height).dp))
-            Text(other.title, maxLines = 1, style = TextStyle(color = Colors.ink, fontSize = 13.sp, fontWeight = FontWeight.Medium, fontFamily = FontFamily.Serif))
+            Text(other.title, maxLines = titleLines, style = TextStyle(color = Colors.ink, fontSize = 13.sp, fontWeight = FontWeight.Medium, fontFamily = FontFamily.Serif))
         }
         Spacer(GlanceModifier.width(6.dp))
         Text("${other.percent}%", maxLines = 1, style = TextStyle(color = Colors.inkSecondary, fontSize = 12.sp))

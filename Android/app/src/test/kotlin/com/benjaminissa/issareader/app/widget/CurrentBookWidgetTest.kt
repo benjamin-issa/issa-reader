@@ -48,7 +48,7 @@ class CurrentBookWidgetTest {
 
     private val longTitle = "The Strange Case of Dr Jekyll and Mr Hyde"
 
-    private fun snapshot(others: Int = 0, square: Boolean = false, title: String = longTitle) = CurrentBookSnapshot(
+    private fun snapshot(others: Int = 0, square: Boolean = false, title: String = longTitle, otherTitle: String? = null) = CurrentBookSnapshot(
         bookId = "current", title = title, author = "Robert Louis Stevenson",
         chapter = "Chapter 3 · A Caucus-Race and a Long Tale", progress = 0.42, remaining = 6 * 3600.0 + 12 * 60,
         coverBookId = "current", coverIsSquare = square,
@@ -57,7 +57,7 @@ class CurrentBookWidgetTest {
             OtherBook("book-2", "Dracula", progress = 0.55),
             OtherBook("book-3", "Emma", progress = 0.3),
             OtherBook("book-4", "Walden", progress = 0.8),
-        ).take(others),
+        ).take(others).mapIndexed { i, other -> if (i == 0 && otherTitle != null) other.copy(title = otherTitle) else other },
     )
 
     private val palette = listOf(
@@ -150,6 +150,110 @@ class CurrentBookWidgetTest {
             shot("large-4-others-small-$mode", DpSize(250.dp, 250.dp), data(snapshot(4)), dark = dark)
             shot("empty-$mode", small, data(null), dark = dark)
         }
+    }
+
+    // The "Also reading" card's title
+
+    private val longOther = "The Adventures of Sherlock Holmes: A Scandal in Bohemia and Other Stories"
+
+    /** The card's TextView for the other book's title, and the main title's, from a drawn widget. */
+    private fun texts(root: View): List<android.widget.TextView> {
+        val found = mutableListOf<android.widget.TextView>()
+        fun walk(view: View) {
+            if (view is android.widget.TextView) found += view
+            if (view is ViewGroup) for (i in 0 until view.childCount) walk(view.getChildAt(i))
+        }
+        walk(root)
+        return found
+    }
+
+    private fun textOf(root: View, text: String) = texts(root).first { it.text.toString() == text }
+
+    /**
+     * The main title keeps what it has in every size the launcher can pick:
+     * the lines and the size the card's company already gave it. The card's
+     * second line is paid for from leftover height or not at all.
+     */
+    @Test
+    fun theMainTitleIsTheSameInEverySizeAndTheCardOnlyGrowsIntoRoomToSpare() {
+        val expected = mapOf(
+            // size to (lines, sp, card title lines); compact has no card at all.
+            CurrentBookWidget.MEDIUM to Triple(2, 15, null),
+            CurrentBookWidget.MEDIUM_CARD to Triple(3, 15, 1),
+        )
+        for (size in CurrentBookWidget.SIZES) {
+            if (size.width < CurrentBookWidget.MEDIUM.width || size.height >= CurrentBookWidget.LARGE.height) continue
+            val (lines, sp, cardLines) = expected.getValue(size)
+            val compact = size.height < CurrentBookWidget.MEDIUM_CARD.height
+            assertEquals("$size lines", lines, MediumColumn.titleLines(compact))
+            assertEquals("$size sp", sp, MediumColumn.titleSp(compact, hasCard = !compact))
+            if (!compact) {
+                // The widest the column can be at this size (a stacked progress row is the tighter case).
+                for (stacked in listOf(true, false)) {
+                    assertEquals(
+                        "$size stacked=$stacked",
+                        cardLines,
+                        MediumColumn.alsoReadingTitleLines(size.height.value, lines, sp, MediumColumn.AUTHOR_SP, stacked),
+                    )
+                }
+            }
+        }
+    }
+
+    /** The edge of the budget, on both sides: the same column, one dp apart. */
+    @Test
+    fun theCardGetsASecondLineExactlyWhenTheColumnHasRoomForIt() {
+        for (stacked in listOf(false, true)) {
+            val needed = 2 * MediumColumn.PAD +
+                3 * MediumColumn.TITLE_SP_SMALL * MediumColumn.LINE_HEIGHT +
+                MediumColumn.AUTHOR_SP * MediumColumn.LINE_HEIGHT +
+                (if (stacked) MediumColumn.BAR + MediumColumn.STACK_GAP else 0) + MediumColumn.PROGRESS_SP * MediumColumn.LINE_HEIGHT +
+                MediumColumn.CARD_GAP + MediumColumn.CARD_TWO_LINES
+            fun lines(height: Float) = MediumColumn.alsoReadingTitleLines(height, 3, MediumColumn.TITLE_SP_SMALL, MediumColumn.AUTHOR_SP, stacked)
+            assertEquals(2, lines(needed))
+            assertEquals(1, lines(needed - 0.5f))
+            assertEquals(1, lines(150f))
+            // A book with no author needs a line less.
+            assertEquals(
+                2,
+                MediumColumn.alsoReadingTitleLines(needed - MediumColumn.AUTHOR_SP * MediumColumn.LINE_HEIGHT, 3, MediumColumn.TITLE_SP_SMALL, null, stacked),
+            )
+        }
+        assertEquals(40, MediumColumn.cardHeight(1))
+        assertEquals(52, MediumColumn.cardHeight(2))
+    }
+
+    /**
+     * Drawn: where the column has room the other title may take two lines, where
+     * it has none the card is as it was, and the main title is three lines
+     * either way. Long and long, long and short, short and long.
+     */
+    @Test
+    fun theCardsTitleTakesTwoLinesWhereThereIsRoom() {
+        val cases = listOf(
+            "long-long" to (longTitle to longOther),
+            "long-short" to (longTitle to "Emma"),
+            "short-long" to ("Dracula" to longOther),
+        )
+        val roomy = DpSize(338.dp, 200.dp)
+        for ((name, titles) in cases) {
+            val (main, other) = titles
+            val tight = inflate(medium, data(snapshot(1, title = main, otherTitle = other)))
+            assertEquals("$name tight: the card as it was", 1, textOf(tight, other).maxLines)
+            assertEquals("$name tight: the main title", 3, textOf(tight, main).maxLines)
+            val room = inflate(roomy, data(snapshot(1, title = main, otherTitle = other)))
+            assertEquals("$name roomy: the card's title", 2, textOf(room, other).maxLines)
+            assertEquals("$name roomy: the main title is untouched", 3, textOf(room, main).maxLines)
+            for (dark in listOf(false, true)) {
+                val mode = if (dark) "dark" else "light"
+                shot("medium-card-$name-tight-$mode", medium, data(snapshot(1, title = main, otherTitle = other)), dark = dark)
+                shot("medium-card-$name-roomy-$mode", roomy, data(snapshot(1, title = main, otherTitle = other)), dark = dark)
+            }
+        }
+        // The size the launcher hands a card today.
+        val card = inflate(CurrentBookWidget.MEDIUM_CARD, data(snapshot(1, otherTitle = longOther)))
+        assertEquals(1, textOf(card, longOther).maxLines)
+        assertEquals(3, textOf(card, longTitle).maxLines)
     }
 
     // Click targets
