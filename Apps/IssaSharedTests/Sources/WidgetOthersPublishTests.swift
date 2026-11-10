@@ -483,9 +483,11 @@ extension WidgetStorage {
                 var clock = Date(timeIntervalSince1970: 1_800_000_000)
                 publisher.now = { clock }
                 var asked = 0
-                publisher.coverFetcher = { book, _, _ in
+                var shapes: [LibraryService.CoverShape] = []
+                publisher.coverFetcher = { book, _, shape in
                     asked += 1
-                    // The cache tries portrait, finds none, and hands back square.
+                    shapes.append(shape)
+                    // Audio alone has no portrait art, so square is asked for.
                     return (Data("\(book.uuid)-square".utf8), true)
                 }
                 seed(publisher)
@@ -495,6 +497,7 @@ extension WidgetStorage {
                 ]
                 #expect(publisher.updateLibrary(library, session: Self.stubSession()))
                 try await settle(publisher)
+                #expect(shapes == [.square], "an audio-only book is asked for square first, not portrait")
                 #expect(CurrentBookSnapshotStore.readOtherCover(bookID: "audio") == Data("audio-square".utf8))
                 #expect(CurrentBookSnapshotStore.read()?.others.first?.coverIsSquare == true)
                 let first = asked
@@ -570,6 +573,51 @@ extension WidgetStorage {
                     try await settle(publisher)
                 }
                 #expect(asked == 1, "the attempt is remembered in the snapshot")
+            }
+        }
+
+        @Test("with several others, only the stale ones past the first are refetched, by identity")
+        func onlyTheStaleOthersAreRefetched() async throws {
+            try await inScratchDirectory {
+                let publisher = CurrentBookPublisher()
+                var shapes: [String: [LibraryService.CoverShape]] = [:]
+                publisher.coverFetcher = { book, _, shape in
+                    shapes[book.uuid, default: []].append(shape)
+                    return (Data("new-\(book.uuid)".utf8), false)
+                }
+                // The first is already portrait; the second and third are
+                // squares from an earlier build, with portrait art to find.
+                CurrentBookSnapshotStore.write(CurrentBookSnapshot(
+                    bookID: "current", title: "current", author: "", progress: 0.5,
+                    others: [
+                        OtherBook(bookID: "first", title: "first", progress: 0.3, coverIsSquare: false),
+                        OtherBook(bookID: "second", title: "second", progress: 0.3, coverIsSquare: true),
+                        OtherBook(bookID: "third", title: "third", progress: 0.3, coverIsSquare: true),
+                    ]))
+                for id in ["first", "second", "third"] {
+                    CurrentBookSnapshotStore.writeOtherCover(Data("old-\(id)".utf8), bookID: id)
+                }
+                let library = [
+                    Self.reading("current", 0.5, at: 900),
+                    Self.edition("first", at: 800, ebook: true, audiobook: true),
+                    Self.edition("second", at: 700, ebook: true, audiobook: true),
+                    Self.edition("third", at: 600, ebook: true, audiobook: true),
+                ]
+                _ = publisher.updateLibrary(library, session: Self.stubSession())
+                try await settle(publisher)
+                #expect(shapes["first"] == nil, "a portrait cover is left alone")
+                #expect(shapes["second"] == [.portrait])
+                #expect(shapes["third"] == [.portrait])
+                #expect(CurrentBookSnapshotStore.readOtherCover(bookID: "first") == Data("old-first".utf8))
+                #expect(CurrentBookSnapshotStore.readOtherCover(bookID: "second") == Data("new-second".utf8))
+                #expect(CurrentBookSnapshotStore.readOtherCover(bookID: "third") == Data("new-third".utf8))
+                let others = Dictionary(
+                    uniqueKeysWithValues: (CurrentBookSnapshotStore.read()?.others ?? []).map { ($0.bookID, $0) })
+                #expect(others["first"]?.coverIsSquare == false)
+                #expect(others["second"]?.coverIsSquare == false)
+                #expect(others["second"]?.portraitChecked == true)
+                #expect(others["third"]?.coverIsSquare == false)
+                #expect(others["third"]?.portraitChecked == true)
             }
         }
 

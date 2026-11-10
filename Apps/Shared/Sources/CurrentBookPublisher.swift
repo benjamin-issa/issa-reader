@@ -346,10 +346,12 @@ final class CurrentBookPublisher {
             defer { self?.otherFetchesInFlight -= 1 }
             var landed = false
             for book in wanted {
-                // Always portrait first: these books are drawn only in portrait
-                // slots. A book with no portrait art comes back square, which
-                // the cache falls back to, and is drawn over a blurred copy.
-                let fetched = await fetch(book, session, .portrait)
+                // Portrait first: these books are drawn only in portrait slots.
+                // A book with text but no portrait art comes back square,
+                // which the cache falls back to, and is drawn over a blurred
+                // copy. An audio-only book has no portrait art to ask for, so
+                // it is asked for the square one, which may already be cached.
+                let fetched = await fetch(book, session, book.mayHavePortraitCover ? .portrait : .square)
                 guard let self, generation == self.othersGeneration else { return }
                 guard let fetched else { continue }
                 await write(fetched.data, book.uuid)
