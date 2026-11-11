@@ -157,7 +157,10 @@ final class MarginControlFlowTests: XCTestCase {
         context.translateBy(x: -x * scale, y: -(CGFloat(image.height) - y * scale))
         context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
         let red = Int(pixel[0]), blue = Int(pixel[2])
-        return red > 200 && red - blue > 15
+        // Red above 150, not 200: the iPad's Aa sheet is a form sheet that
+        // dims the page behind it by about a fifth, which leaves a band at
+        // (199, 187, 175) and plain paper at (202, 200, 196).
+        return red > 150 && red - blue > 15
     }
 
     private func keep(_ app: XCUIApplication, _ name: String) {
@@ -228,6 +231,24 @@ final class MarginControlFlowTests: XCTestCase {
         let app = launch()
         openReader(app)
         openTypographySheet(app)
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            // The iPad's Aa sheet is a form sheet over a dimmed reader, not a
+            // half-height one over a live page: a tap outside it closes it, as
+            // any iPad sheet does, and goes no further. So one tap on the bar,
+            // and then nothing else may come up — the queued sheet this test
+            // is for would.
+            let find = app.descendants(matching: .any)["reader.find"].firstMatch
+            XCTAssertTrue(find.exists, "no Find on the iPad's top bar")
+            find.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+            XCTAssertTrue(
+                app.descendants(matching: .any)["typography.margins"].firstMatch.waitForNonExistence(timeout: 10),
+                "a tap outside the iPad's Aa sheet did not close it")
+            Thread.sleep(forTimeInterval: 1.5)
+            XCTAssertFalse(
+                app.buttons["Done"].firstMatch.exists,
+                "a sheet came up after the iPad's Aa sheet closed")
+            return
+        }
         var tapped = 0
         for id in ["reader.contents", "reader.find", "reader.marks", "reader.ask"] {
             let button = app.descendants(matching: .any)[id].firstMatch
@@ -255,12 +276,30 @@ final class MarginControlFlowTests: XCTestCase {
 
     private func fillToggle(_ app: XCUIApplication) -> XCUIElement {
         let toggle = app.descendants(matching: .any)["typography.fillsScreen"].firstMatch
-        let list = app.collectionViews.firstMatch.exists ? app.collectionViews.firstMatch : app.tables.firstMatch
-        for _ in 0 ..< 8 where !toggle.exists || !toggle.isHittable {
-            list.swipeUp()
-        }
+        reveal(toggle, app)
         XCTAssertTrue(toggle.exists, "the Aa sheet has no Fill the screen with text")
         return toggle
+    }
+
+    /// Scrolls the Aa sheet's list until a row is where a finger can reach
+    /// it, back down as well as up: at the largest accessibility sizes a
+    /// swipe moves the list past a row, and with Fill the screen on the rows
+    /// below the switch leave room to, so a swipe-up-only loop ended with
+    /// the switch under the sheet's bar and a tap there turning nothing.
+    private func reveal(_ element: XCUIElement, _ app: XCUIApplication) {
+        let list = app.collectionViews.firstMatch.exists ? app.collectionViews.firstMatch : app.tables.firstMatch
+        for _ in 0 ..< 12 where !element.exists || !element.isHittable {
+            if element.exists, element.frame.midY < list.frame.midY {
+                // Above the middle and not reachable: scrolled past, so bring
+                // it back down a short, slow drag at a time.
+                list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4))
+                    .press(forDuration: 0.1,
+                           thenDragTo: list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7)),
+                           withVelocity: .slow, thenHoldForDuration: 0.3)
+            } else {
+                list.swipeUp()
+            }
+        }
     }
 
     /// Sets the switch, tapping only if it is the other way. The setting is
@@ -426,12 +465,23 @@ final class MarginControlFlowTests: XCTestCase {
     /// The Top and bottom slider, in the Aa sheet while Fill the screen is on.
     private func verticalMarginSlider(_ app: XCUIApplication) -> XCUIElement {
         let slider = app.descendants(matching: .any)["typography.verticalMargin"].firstMatch
-        let list = app.collectionViews.firstMatch.exists ? app.collectionViews.firstMatch : app.tables.firstMatch
-        for _ in 0 ..< 8 where !slider.exists || !slider.isHittable {
-            list.swipeUp()
-        }
+        reveal(slider, app)
         XCTAssertTrue(slider.exists, "the Aa sheet has no Top and bottom control with Fill the screen on")
         return slider
+    }
+
+    /// Moves a margin slider to its start. `adjust(toNormalizedSliderPosition:)`
+    /// is approximate: asked for 0, it stopped a step short, at "2 points", on
+    /// the SE and the iPad. One drag from the thumb to past the track's start
+    /// finishes the job where it can, since the slider clamps the drag.
+    private func slideToStart(_ slider: XCUIElement) {
+        slider.adjust(toNormalizedSliderPosition: 0)
+        guard slider.value as? String != "0 points" else { return }
+        let width = slider.frame.width
+        let thumb = slider.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0.5))
+            .withOffset(CGVector(dx: 14 + slider.normalizedSliderPosition * (width - 28), dy: 0))
+        thumb.press(forDuration: 0.2,
+                    thenDragTo: slider.coordinate(withNormalizedOffset: CGVector(dx: -0.2, dy: 0.5)))
     }
 
     /// Top and bottom is its own margin: set to 0, the text's top and bottom
@@ -440,6 +490,14 @@ final class MarginControlFlowTests: XCTestCase {
         let app = launch()
         openReader(app)
         openTypographySheet(app)
+        // The book's side margin as this test finds it, read rather than
+        // assumed: the presets test before it leaves the book on Wide (48),
+        // and Top and bottom, unset, follows whatever the sides are.
+        let sides = app.descendants(matching: .any)["typography.margins"].firstMatch
+        XCTAssertTrue(sides.waitForExistence(timeout: 10), "the Aa sheet has no Margins slider")
+        let sideValue = try XCTUnwrap(sides.value as? String)
+        let side = try XCTUnwrap(Double(sideValue.split(separator: " ").first ?? ""), "Margins reads \(sideValue)")
+        XCTAssertGreaterThan(side, 0, "this test needs a side margin to take away")
         let toggle = fillToggle(app)
         flip(toggle, false)
         let before = settledTextFrame(app)
@@ -449,15 +507,21 @@ final class MarginControlFlowTests: XCTestCase {
 
         let slider = verticalMarginSlider(app)
         XCTAssertEqual(slider.label, "Top and bottom")
-        XCTAssertEqual(slider.value as? String, "24 points", "it should follow the 24-point side margin")
-        slider.adjust(toNormalizedSliderPosition: 0)
+        XCTAssertEqual(slider.value as? String, sideValue, "it should follow the \(sideValue) side margin")
+        slideToStart(slider)
         let moved = settledTextFrame(app, differentFrom: filled)
-        XCTAssertEqual(slider.value as? String, "0 points")
+        // Where the slider came to rest, read rather than assumed: XCUITest's
+        // slider moves are approximate (see slideToStart).
+        let landedValue = try XCTUnwrap(slider.value as? String)
+        let landed = try XCTUnwrap(Double(landedValue.split(separator: " ").first ?? ""), "Top and bottom reads \(landedValue)")
+        XCTAssertLessThan(landed, side, "Top and bottom did not move from \(sideValue)")
+        let gone = side - landed
 
-        // The 24 points of margin at each end are gone: the text's top is
-        // 24 higher and its bottom 24 lower, whatever the safe areas give.
-        XCTAssertEqual(filled.minY - moved.minY, 24, accuracy: 1.5, "the top did not move out: \(filled) then \(moved)")
-        XCTAssertEqual(moved.maxY - filled.maxY, 24, accuracy: 1.5, "the bottom did not move out: \(filled) then \(moved)")
+        // What Top and bottom gave up is gone at each end: the text's top is
+        // that much higher and its bottom that much lower, whatever the safe
+        // areas give.
+        XCTAssertEqual(filled.minY - moved.minY, gone, accuracy: 1.5, "the top did not move out: \(filled) then \(moved) at \(landedValue)")
+        XCTAssertEqual(moved.maxY - filled.maxY, gone, accuracy: 1.5, "the bottom did not move out: \(filled) then \(moved) at \(landedValue)")
         XCTAssertEqual(moved.minX, filled.minX, accuracy: 1.5, "the left margin moved")
         XCTAssertEqual(moved.maxX, filled.maxX, accuracy: 1.5, "the right margin moved")
         XCTAssertEqual(moved.width, filled.width, accuracy: 1.5)
