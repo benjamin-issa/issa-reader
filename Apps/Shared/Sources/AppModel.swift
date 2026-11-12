@@ -263,9 +263,9 @@ public final class AppModel {
         for candidate in candidates {
             if await probe(candidate, timeout: timeout) { return candidate }
         }
-        // Everything failed: fall back to what the reader typed, so the error
-        // they get is the real one from a full attempt rather than ours.
-        return candidates.first
+        // Nothing answered, so no candidate is known to be the server: none is
+        // handed back to be stored as though it were.
+        return nil
     }
 
     private static func probe(_ url: URL, timeout: TimeInterval) async -> Bool {
@@ -362,7 +362,26 @@ public final class AppModel {
             if phase == .launching { phase = .chooseServer }
             return
         }
-        guard let url = await Self.firstReachable(of: candidates) else {
+        let answered = await Self.firstReachable(of: candidates)
+        // With no answer, the server the stored sign-in belongs to is still the
+        // one to show the shelf of: a launch away from the network, or with the
+        // server off, opens the library kept for it. Which candidate that is,
+        // the keychain knows — its token is filed under the address it was
+        // connected at, which for a bare host that answered only over HTTP is
+        // not the first candidate. Only for the stored address: one typed
+        // afresh that cannot be reached has nothing to show.
+        let sameAsStored = address.trimmingCharacters(in: .whitespacesAndNewlines)
+            == serverAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        let url: URL
+        if let answered {
+            url = answered
+        } else if sameAsStored,
+                  let kept = candidates.first(where: { keychain.read(account: $0.absoluteString) != nil }) {
+            url = kept
+            IssaLog.warning("server did not answer; opening the stored sign-in offline", [
+                "server": kept.absoluteString,
+            ])
+        } else {
             loadError = "Couldn't reach a Storyteller server at that address."
             if phase == .launching { phase = .chooseServer }
             return
@@ -382,13 +401,19 @@ public final class AppModel {
         // case — where re-deriving lands on the same URL anyway — so the next
         // launch tries HTTPS first, and logs the fallback rather than baking
         // it in silently.
-        let resolved = ServerAddress.addressToStore(for: address, connectedTo: url)
-        UserDefaults.standard.set(resolved, forKey: Self.lastServerKey)
-        // Also in memory. Only UserDefaults was written, so `serverAddress`
-        // stayed empty for the whole first launch — which silently broke
-        // audiobook playback (startListening guards on it) and left the expired
-        // notice showing a blank server name.
-        serverAddress = resolved
+        //
+        // Only for an address that answered. One that did not is left as it
+        // was: storing the candidate tried first pinned a bare HTTP host to
+        // HTTPS from the next launch on.
+        if answered != nil {
+            let resolved = ServerAddress.addressToStore(for: address, connectedTo: url)
+            UserDefaults.standard.set(resolved, forKey: Self.lastServerKey)
+            // Also in memory. Only UserDefaults was written, so `serverAddress`
+            // stayed empty for the whole first launch — which silently broke
+            // audiobook playback (startListening guards on it) and left the
+            // expired notice showing a blank server name.
+            serverAddress = resolved
+        }
         let session = Session(serverURL: url, keychain: keychain)
         self.session = session
         departingSession = nil
