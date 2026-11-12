@@ -203,6 +203,9 @@ class ExoMediaBackend(
         applyRate()
     }
 
+    /** False after a refused request: the engine is held silent until focus is granted. */
+    override val holdsSession: Boolean get() = focusHeld
+
     override fun deactivateSession() {
         transientLoss = false
         abandonFocus()

@@ -175,4 +175,57 @@ class AudioPlayerSessionTest {
         player.play()
         assertFalse("play over a dead item claims nothing", player.isPlaying)
     }
+
+    /**
+     * A request for the audio route the system refuses leaves the player
+     * paused. It used to draw Pause over silence, because the flag was set
+     * after the request without asking how it went.
+     */
+    @Test
+    fun aRefusedRouteLeavesThePlayerPaused() = runTest {
+        val backend = ScriptedBackend()
+        val player = scriptedPlayer(backend)
+        player.load(AudioLocation.LocalFile(Silence.file), "silence.wav")
+        backend.refusesSession = true
+
+        player.play()
+
+        assertFalse("the player said it was playing with no audio route", player.isPlaying)
+
+        // The route comes back, and the next press plays.
+        backend.refusesSession = false
+        player.play()
+        assertTrue(player.isPlaying)
+    }
+
+    /**
+     * Android sends a second loss when a ducking request is followed by a
+     * transient one. The second began with the player already paused by the
+     * first, and recomputed the was-playing latch as false, so the one gain at
+     * the end resumed nothing.
+     */
+    @Test
+    fun aSecondInterruptionKeepsTheResume() = runTest {
+        val (player, backend) = playing()
+
+        backend.interruptionBegan()
+        backend.interruptionBegan()
+        assertFalse(player.isPlaying)
+        backend.interruptionEnded(shouldResume = true)
+
+        assertTrue("the second loss dropped the resume", player.isPlaying)
+    }
+
+    /** The latch still yields to an explicit pause made between two interruptions. */
+    @Test
+    fun aPauseBetweenTwoInterruptionsIsKept() = runTest {
+        val (player, backend) = playing()
+
+        backend.interruptionBegan()
+        player.pause()
+        backend.interruptionBegan()
+        backend.interruptionEnded(shouldResume = true)
+
+        assertFalse(player.isPlaying)
+    }
 }

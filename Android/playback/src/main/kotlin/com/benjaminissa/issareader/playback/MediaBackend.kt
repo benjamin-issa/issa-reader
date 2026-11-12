@@ -98,6 +98,13 @@ interface MediaBackend {
     /** Takes the audio route: on Android, requests audio focus. */
     fun activateSession()
 
+    /**
+     * Whether the route is this app's after [activateSession]. False when the
+     * system refused the request, in which case nothing can be heard however
+     * the engine is set. A backend that cannot be refused keeps the default.
+     */
+    val holdsSession: Boolean get() = true
+
     /** Gives the route back so whatever this interrupted can carry on: abandons audio focus. */
     fun deactivateSession()
 

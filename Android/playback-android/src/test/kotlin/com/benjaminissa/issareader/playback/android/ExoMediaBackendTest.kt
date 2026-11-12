@@ -250,6 +250,29 @@ class ExoMediaBackendTest {
         assertFalse(player.isPlaying)
     }
 
+    /**
+     * A refused focus request leaves the player paused: the engine is held
+     * silent, and the transport must not say it is playing over that.
+     */
+    @Test
+    fun aRefusedFocusRequestLeavesThePlayerPaused() {
+        val backend = backend()
+        val player = player(backend)
+        val shadow = shadowOf(context.getSystemService(AudioManager::class.java))
+        onMain(clock) { player.load(silence(30.0), "silence.wav") }
+
+        shadow.setNextFocusRequestResponse(AudioManager.AUDIOFOCUS_REQUEST_FAILED)
+        onMain(clock) { player.play() }
+        assertFalse(player.isPlaying)
+        assertFalse(backend.exoPlayer.playWhenReady)
+
+        // Asked again, and granted.
+        shadow.setNextFocusRequestResponse(AudioManager.AUDIOFOCUS_REQUEST_GRANTED)
+        onMain(clock) { player.play() }
+        assertTrue(player.isPlaying)
+        assertTrue(backend.exoPlayer.playWhenReady)
+    }
+
     /** Headphones out: the engine pauses, and the player hears of a lost route. */
     @Test
     fun becomingNoisyPauses() {

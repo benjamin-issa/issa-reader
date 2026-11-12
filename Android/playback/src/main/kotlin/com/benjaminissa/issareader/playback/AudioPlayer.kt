@@ -251,7 +251,9 @@ class AudioPlayer(private val backend: MediaBackend) : Observed() {
                 // because an explicit pause during an interruption must not be
                 // undone when the interruption ends. Setting it first would have
                 // this pause wipe the very flag it is recording.
-                val wasPlaying = isPlaying
+                // A second loss arrives with the player already paused by the
+                // first, so it carries the latch over rather than recomputing it.
+                val wasPlaying = isPlaying || wasPlayingBeforeInterruption
                 pause()
                 wasPlayingBeforeInterruption = wasPlaying
                 onInterruption?.invoke(false)
@@ -596,6 +598,13 @@ class AudioPlayer(private val backend: MediaBackend) : Observed() {
         // the listener asks for narration and wrong when they only opened the
         // book.
         backend.activateSession()
+        // The route was refused — a call, another app that will not yield —
+        // so nothing would be heard. Saying "playing" here drew Pause over
+        // silence; staying paused lets the next press ask again.
+        if (!backend.holdsSession) {
+            IssaLog.info("play refused: the audio route was not granted")
+            return
+        }
         isPlaying = true
         // Intent only, while a load is still placing its item: see
         // `placementPending`.
