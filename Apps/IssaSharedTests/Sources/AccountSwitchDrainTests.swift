@@ -150,6 +150,46 @@ extension WidgetStorage {
             #expect(try await fixture.queued().isEmpty, "A's row outlived the switch, for B's drain to send")
         }
 
+        /// Signing out used to empty the queue at once, and a status, a rating
+        /// or the last page turned that had not gone out went with it.
+        @Test("signing out first sends what is queued")
+        func signingOutFirstSendsWhatIsQueued() async throws {
+            let fixture = try await Self.fixture()
+            defer { Self.tearDown(fixture) }
+            let queue = try MutationQueue(store: fixture.store)
+            try await queue.enqueue(
+                .position, bookUUID: Self.first,
+                payload: JSONEncoder().encode(Self.position(0.4)), supersedes: 10)
+
+            await fixture.app.signOut(keepDownloads: true)
+
+            let posts = BearerServer.sent(.post, Endpoint.positions(Self.first))
+            #expect(posts.count == 1, "the queued position never left the device")
+            #expect(posts.first?.bearer == "token-A")
+            #expect(fixture.app.phase == .chooseServer)
+        }
+
+        /// Offline, or against a server that never answers, the wait is all it
+        /// costs: the sign-out goes on past it.
+        @Test("signing out against a server that does not answer is not held past the wait")
+        func signingOutAgainstASilentServerIsNotHeld() async throws {
+            let fixture = try await Self.fixture()
+            defer { Self.tearDown(fixture) }
+            fixture.app.signOutDrainWait = .milliseconds(300)
+            BearerServer.hold(.firstPosition)
+            let queue = try MutationQueue(store: fixture.store)
+            try await queue.enqueue(
+                .position, bookUUID: Self.first,
+                payload: JSONEncoder().encode(Self.position(0.4)), supersedes: 10)
+
+            let started = ContinuousClock.now
+            await fixture.app.signOut(keepDownloads: true)
+
+            #expect(ContinuousClock.now - started < .seconds(5), "the sign-out waited on the server")
+            #expect(BearerServer.held(.firstPosition) == 1, "the send has to have been tried")
+            #expect(fixture.app.phase == .chooseServer)
+        }
+
         /// Finding #4. Reader A's position write files the book it was read in,
         /// and is caught between setting the status and queueing it while reader
         /// B signs in and B's catalogue — the same uuids, unfiled — arrives.

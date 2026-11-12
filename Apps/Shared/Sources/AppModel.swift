@@ -689,6 +689,10 @@ public final class AppModel {
         if unidentifiedSession === session { unidentifiedSession = nil }
     }
 
+    /// How long a sign-out tries to send what is queued before it goes on
+    /// without it. A seam for tests, and internal for that reason alone.
+    @ObservationIgnored var signOutDrainWait: Duration = .seconds(5)
+
     /// Signs out and leaves nothing behind.
     ///
     /// - Parameter keepDownloads: books already on the device are expensive to
@@ -699,6 +703,13 @@ public final class AppModel {
         // already made; leaving it to a timer that fires after the account has
         // gone would delete a file belonging to whoever signs in next.
         commitPendingRemoval()
+        // Whatever has not reached the server goes first, for a few seconds: the
+        // account's queue is emptied below, and a status, a rating or the page
+        // last turned that is still in it would go with it. Bounded, and the
+        // sign-out goes on either way — offline, or against a server that does
+        // not answer, it only costs the wait; the send is not cancelled.
+        let drain = signOutDrainWait
+        await BoundedWait.run(for: drain) { [self] in await flushOpenReaders() }
         await session?.signOut()
         await leaveAccount(.signOut, nowPlaying: nowPlaying)
 

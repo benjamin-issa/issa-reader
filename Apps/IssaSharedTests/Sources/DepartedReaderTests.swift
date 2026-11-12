@@ -127,7 +127,13 @@ extension WidgetStorage {
             await app.signOut(keepDownloads: true)
             let decision = await handOff.value
 
-            #expect(decision == .skip(.slotChangedHands), "the hand-off finished for an account that had left")
+            // Either order is a clean one: the exit now spends a moment sending
+            // what is queued before the account goes, and the hand-off may
+            // finish in it, for an account that had not yet left. What must
+            // hold is the state it leaves.
+            if case .handOff = decision {} else {
+                #expect(decision == .skip(.slotChangedHands), "the hand-off finished for an account that had left")
+            }
             #expect(!app.isHandingOffToReader(book.uuid))
             #expect(model.readalong?.player.isPlaying == false,
                     "the departed account's read-along was left playing")
