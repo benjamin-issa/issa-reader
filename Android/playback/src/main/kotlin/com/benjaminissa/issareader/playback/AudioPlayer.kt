@@ -607,6 +607,14 @@ class AudioPlayer(private val backend: MediaBackend) : Observed() {
     }
 
     /**
+     * How many times the player has been paused. A start that awaits a file
+     * reads this before and after: a pause that landed in between is the
+     * listener's last word, and the start must not play over it.
+     */
+    var pauses: Int = 0
+        private set
+
+    /**
      * Stops, and forgets that we were playing before an interruption.
      *
      * The latch is set when an interruption begins and read when it ends, and
@@ -615,6 +623,7 @@ class AudioPlayer(private val backend: MediaBackend) : Observed() {
      * when the call ended, against an explicit instruction.
      */
     fun pause() {
+        pauses += 1
         wasPlayingBeforeInterruption = false
         isPlaying = false
         backend.rate = 0f
