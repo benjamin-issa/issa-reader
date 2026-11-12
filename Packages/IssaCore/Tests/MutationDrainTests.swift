@@ -295,7 +295,9 @@ struct MutationDrainTests {
     /// drains far more than eight times: since the queue orders by `updatedAt`
     /// a status or rating is the head of every one of those drains, and it was
     /// deleted on the eighth, for the next refresh to revert on screen.
-    @Test("a proxy's 502, 503 or 504 never counts toward abandoning a write", arguments: [502, 503, 504])
+    @Test(
+        "a proxy's 502, 503 or 504, or a Cloudflare 52x, never counts toward abandoning a write",
+        arguments: [502, 503, 504, 520, 521, 522, 523, 524, 530])
     func gatewayFailuresNeverAbandon(status: Int) async throws {
         let (drain, queue, directory) = try await makeDrain()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -311,6 +313,36 @@ struct MutationDrainTests {
         let pending = try await queue.pending()
         #expect(pending.count == 1, "an outage behind a proxy must never cost a queued write")
         #expect(pending.first?.attempts == 0, "a gateway's answer is no evidence against the write")
+    }
+
+    /// A 408 or a 425 is the server asking for the same request again later. It
+    /// was taken for a refusal of the payload: the write was deleted on the
+    /// first answer and the drain went on to the next.
+    @Test("a 408 or a 425 keeps the write queued, uncounted", arguments: [408, 425])
+    func transientRequestStatusesKeepTheWrite(status: Int) async throws {
+        let (drain, queue, directory) = try await makeDrain()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        try await queue.enqueue(.status, bookUUID: "kept", payload: Data(#"{"status":"read"}"#.utf8))
+
+        for _ in 1 ... 12 {
+            StatusQueueProtocol.prime([status])
+            #expect(await drain.drain() == 0)
+        }
+
+        let pending = try await queue.pending()
+        #expect(pending.count == 1, "a request the server asked to be repeated was thrown away")
+        #expect(pending.first?.attempts == 0)
+    }
+
+    @Test("the statuses that say to ask again are retryable, the refusals are not")
+    func retryableStatuses() {
+        for status in [408, 425, 429, 500, 502, 520, 522, 530] {
+            #expect(StorytellerError.server(status: status, message: nil).isRetryable, "\(status)")
+        }
+        for status in [400, 405, 410, 413, 422] {
+            #expect(!StorytellerError.server(status: status, message: nil).isRetryable, "\(status)")
+        }
     }
 
     /// The complement: abandonment still exists for writes the server itself

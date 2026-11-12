@@ -609,13 +609,15 @@ public struct MutationDrain: Sendable {
     /// of a durable one. A 429 is the server explicitly asking to be tried
     /// later; obeying must not cost the write.
     ///
-    /// Nor does a 502, 503 or 504. Those are what a reverse proxy says when the
+    /// Nor does a 502, 503, 504 or one of Cloudflare's 52x. Those are what a reverse proxy says when the
     /// Storyteller behind it is down — a container restarting — and they say
     /// nothing about the payload. They are no rarer than eight drains, either:
     /// every debounced save triggers one, and since the queue orders by
     /// `updatedAt` a status or rating is the head of each of them, so a
     /// couple of minutes of restart while reading used to delete it, for the
     /// next refresh to put the old value back on screen.
+    ///
+    /// Nor a 408 or a 425, which ask for the same request to be made again.
     ///
     /// Any other 5xx *does* count — a judgement call: the server received
     /// exactly this payload and choked, and a payload that reliably breaks a
@@ -629,12 +631,15 @@ public struct MutationDrain: Sendable {
             return false
         case let .server(status, _) where Self.gatewayStatuses.contains(status):
             return false
+        case let .server(status, _) where status == 408 || status == 425:
+            return false
         default:
             return true
         }
     }
 
-    /// Bad Gateway, Service Unavailable, Gateway Timeout: the answers of a
-    /// front door with nothing behind it. See `countsTowardAbandonment(_:)`.
-    static let gatewayStatuses: Set<Int> = [502, 503, 504]
+    /// Bad Gateway, Service Unavailable, Gateway Timeout, and Cloudflare's
+    /// 520 to 524 and 530: the answers of a front door with nothing behind it.
+    /// See `countsTowardAbandonment(_:)`.
+    static let gatewayStatuses: Set<Int> = [502, 503, 504, 520, 521, 522, 523, 524, 530]
 }
