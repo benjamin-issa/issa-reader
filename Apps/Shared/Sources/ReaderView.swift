@@ -86,10 +86,14 @@ public struct ReaderScreen: View {
         .onAppear {
             guard model == nil else { return }
             if let session {
-                model = app.reader(for: book, session: session)
+                model = app.reader(
+                    for: book, session: session, style: settings.style(for: book.uuid))
             } else {
                 #if !os(tvOS)
-                if let local { model = app.reader(for: book, persistence: local) }
+                if let local {
+                    model = app.reader(
+                        for: book, persistence: local, style: settings.style(for: book.uuid))
+                }
                 #endif
             }
         }

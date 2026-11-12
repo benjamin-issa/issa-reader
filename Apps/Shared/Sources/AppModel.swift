@@ -4,6 +4,8 @@ import IssaCore
 // type has to be spelled out here rather than inferred from a reader's.
 import IssaEPUB
 import IssaPlayback
+// For `ReaderStyle`: a reader's stored type goes into its model at birth.
+import IssaRender
 // For `CustomFonts`: a removal has to take the publisher face the reader model
 // extracted with it, and that directory is IssaUI's to name.
 import IssaUI
@@ -2883,10 +2885,18 @@ public final class AppModel {
     /// in the view's `onAppear`, which had a matching `onDisappear` that broke
     /// them and left `saveProgress` writing straight to the network with no
     /// queue and no guard.
-    public func reader(for book: Book, session: Session) -> ReaderModel {
+    ///
+    /// The `style` is the reader's stored one for this book, and it goes into
+    /// the model at birth: `open` restores the saved place on whatever layout
+    /// the model holds, so a style that arrived afterwards found the place
+    /// already set in the default type and reflowed from the start of the page
+    /// that merely contained it.
+    public func reader(
+        for book: Book, session: Session, style: ReaderStyle = ReaderStyle()
+    ) -> ReaderModel {
         if let existing = readers[book.uuid] { return existing }
 
-        let model = ReaderModel(book: book, session: session)
+        let model = ReaderModel(book: book, session: session, style: style)
         model.downloadHost = self
         // The uuid by value, never `model` itself: reaching back through a
         // closure the model stores would retain it for the life of the process,
@@ -2955,10 +2965,14 @@ public final class AppModel {
     /// download host, because there is nothing to download.
     ///
     /// The hooks capture `persistence` weakly, as the server's capture `self`.
-    public func reader(for book: Book, persistence: any ReaderPersistence) -> ReaderModel {
+    /// The `style` goes in at birth, for the reason the server's twin says.
+    public func reader(
+        for book: Book, persistence: any ReaderPersistence, style: ReaderStyle = ReaderStyle()
+    ) -> ReaderModel {
         if let existing = readers[book.uuid] { return existing }
 
-        let model = ReaderModel(book: book, source: .local(persistence.files(for: book.uuid)))
+        let model = ReaderModel(
+            book: book, source: .local(persistence.files(for: book.uuid)), style: style)
         let bookUUID = book.uuid
         model.enqueuePosition = { [weak persistence] locator, timestamp, origin in
             await persistence?.writePosition(
