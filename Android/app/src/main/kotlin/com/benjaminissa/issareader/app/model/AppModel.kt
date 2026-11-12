@@ -356,7 +356,12 @@ class AppModel(
                 if (phase == Phase.LAUNCHING) phase = Phase.CHOOSE_SERVER
                 return
             }
-            val url = firstReachable(candidates) ?: run {
+            val answered = firstReachable(candidates)
+            // No candidate answered. The server this device already holds a
+            // sign-in for may simply be out of reach, so its shelf is shown
+            // from the store and nothing about it is rewritten; with no such
+            // server, there is nothing to connect to.
+            val url = answered ?: candidates.firstOrNull { makeSession(it).hasStoredCredential() } ?: run {
                 loadError = "Couldn't reach a Storyteller server at that address."
                 if (phase == Phase.LAUNCHING) phase = Phase.CHOOSE_SERVER
                 return
@@ -367,9 +372,14 @@ class AppModel(
             // The resolved address, not the raw text — except a bare host that
             // only answered over cleartext, which keeps the typed text so the
             // next launch tries HTTPS first.
-            val resolved = ServerAddress.addressToStore(address, url)
-            defaults.putString(LAST_SERVER_KEY, resolved)
-            serverAddress = resolved
+            // Only an address that answered is worth remembering: a candidate
+            // that did not would replace the one this device's sign-in is
+            // filed under.
+            if (answered != null) {
+                val resolved = ServerAddress.addressToStore(address, url)
+                defaults.putString(LAST_SERVER_KEY, resolved)
+                serverAddress = resolved
+            }
             val session = makeSession(url)
             this.session = session
             departingSession = null
@@ -3159,13 +3169,14 @@ class AppModel(
         /**
          * Which candidate actually has a Storyteller behind it: a short,
          * unauthenticated probe of `server/public`, with a timeout, because a
-         * port with nothing listening hangs rather than failing.
+         * port with nothing listening hangs rather than failing. Null when
+         * several were tried and none answered; a lone candidate is taken at
+         * its word without a probe.
          */
         suspend fun firstReachable(candidates: List<URI>, timeoutSeconds: Long = 6): URI? {
             if (candidates.size <= 1) return candidates.firstOrNull()
             for (candidate in candidates) if (probe(candidate, timeoutSeconds)) return candidate
-            // Everything failed: the error the reader gets is the real one from a full attempt.
-            return candidates.first()
+            return null
         }
 
         private suspend fun probe(url: URI, timeoutSeconds: Long): Boolean = withContext(Dispatchers.IO) {
