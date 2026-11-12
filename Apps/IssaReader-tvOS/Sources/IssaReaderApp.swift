@@ -174,13 +174,25 @@ struct TVSignInView: View {
     @State private var address = ""
     @State private var flow: DeviceSignInModel?
 
+    /// Set while a connect is under way, so a second press of Continue cannot
+    /// start a second pairing flow whose poll nobody would see.
+    @State private var connecting = false
+
     /// Begins the device flow, reusing whatever server is already known.
     private func beginFlow(for text: String) async {
+        guard !connecting else { return }
+        connecting = true
+        defer { connecting = false }
         await app.connect(to: text)
         // The resolved address, for the reason SignInView records.
         guard app.phase != .ready,
               let url = AppModel.normalizeServerURL(app.serverAddress)
         else { return }
+        // Only when the connect succeeded. Its early returns leave the
+        // previous server in `serverAddress`, and a typed address that could
+        // not be used started a pairing code for that server instead. The
+        // form shows the reason.
+        guard app.loadError == nil else { return }
         let model = DeviceSignInModel(serverURL: url)
         flow = model
         await model.begin()
@@ -222,6 +234,12 @@ struct TVSignInView: View {
                         .foregroundStyle(Palette.inkTertiary))
                         .font(Typography.sans(30))
                         .frame(maxWidth: 900)
+                    if let error = app.loadError {
+                        Text(error)
+                            .font(Typography.sans(26))
+                            .foregroundStyle(Palette.alert)
+                            .frame(maxWidth: 900, alignment: .leading)
+                    }
                     Button {
                         Task { await beginFlow(for: address) }
                     } label: {
@@ -234,7 +252,7 @@ struct TVSignInView: View {
                             .padding(.horizontal, 24)
                             .padding(.vertical, 6)
                     }
-                    .disabled(address.isEmpty)
+                    .disabled(address.isEmpty || connecting)
                 }
                 .frame(maxWidth: 1400, alignment: .leading)
             }
