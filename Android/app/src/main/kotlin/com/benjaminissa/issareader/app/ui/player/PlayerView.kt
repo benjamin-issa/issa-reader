@@ -1,6 +1,9 @@
 package com.benjaminissa.issareader.app.ui.player
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.interaction.DragInteraction
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -23,11 +26,13 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableDoubleStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -172,6 +177,20 @@ internal fun PlayerView(
         if (pending != null && fromPage != null) fromPage.cue(target) else coordinator?.seekToBookProgress(target)
     }
     val progress = if (scrubbing) scrubValue else readout.fraction
+    // A touch that never reports a new value — the thumb pressed where it
+    // already is — still ends in `onValueChangeFinished`, which seeks to
+    // `scrubValue`. Seeded when the gesture begins, from where the bar is, so
+    // that seek lands where the bar already was and not where the last drag
+    // ended.
+    val barFraction by rememberUpdatedState(readout.fraction)
+    val scrubTouches = remember { MutableInteractionSource() }
+    LaunchedEffect(scrubTouches) {
+        scrubTouches.interactions.collect { interaction ->
+            if ((interaction is PressInteraction.Press || interaction is DragInteraction.Start) && !scrubbing) {
+                scrubValue = barFraction
+            }
+        }
+    }
     val total = readout.spanDuration
     // The book numbers follow a drag in progress, through the bar's own
     // inverse, so three readouts of one position never disagree.
@@ -241,6 +260,7 @@ internal fun PlayerView(
                     scope.launch { move(target) }
                 },
                 enabled = coordinator != null,
+                interactionSource = scrubTouches,
                 colors = PlayerControls.sliderColors(),
                 modifier = Modifier.fillMaxWidth().einkSliderTrack(Palette.isEInk, Palette.ink).testTag("player.scrubber"),
             )
