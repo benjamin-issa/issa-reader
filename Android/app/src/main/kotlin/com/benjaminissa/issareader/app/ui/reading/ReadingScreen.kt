@@ -64,7 +64,7 @@ fun ReadingScreen() {
     val downloads = rememberDownloadsSectionState(DownloadsPlacement.READING)
     BookRoutes(place = BookMenu.Place.Shelf) {
         LargeTitleScreen("Reading", Modifier.testTag("screen.reading")) { padding ->
-            Refreshable(onRefresh = { app.refreshLibrary() }, modifier = Modifier.padding(padding).fillMaxSize()) {
+            Refreshable(onRefresh = { app.refreshLibrary() }, scope = app.scope, modifier = Modifier.padding(padding).fillMaxSize()) {
                 // The screen's margin is the list's; a rail bleeds back out to
                 // the edges, and each block keeps its own gap above it, so the
                 // Downloaded section's rows can sit closer together.

@@ -79,7 +79,7 @@ fun LibraryScreen() {
         LargeTitleScreen("Library", Modifier.testTag("screen.library")) { padding ->
             Column(Modifier.padding(padding).fillMaxSize().testTag("content.library")) {
                 LibraryHeader(search = search, onSearchChange = { search = it }, displayedCount = books.size, isSearching = search.isNotEmpty())
-                Refreshable(onRefresh = { app.refreshLibrary() }, modifier = Modifier.weight(1f)) {
+                Refreshable(onRefresh = { app.refreshLibrary() }, scope = app.scope, modifier = Modifier.weight(1f)) {
                     if (app.libraryMode == AppModel.LibraryMode.BROWSE && search.isEmpty()) {
                         BrowseList()
                     } else {

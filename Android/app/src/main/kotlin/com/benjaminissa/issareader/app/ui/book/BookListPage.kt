@@ -134,7 +134,7 @@ fun BookListPage(subject: BookListSubject, books: List<Book>) {
             Modifier.testTag("screen.${subject.kind}"),
             topBar = { InlineTitleBar(subject.name, onBack = { navigator.back() }, titleAlpha = titleAlpha) },
         ) { padding ->
-            Refreshable(onRefresh = { app.refreshLibrary() }, modifier = Modifier.padding(padding).fillMaxSize()) {
+            Refreshable(onRefresh = { app.refreshLibrary() }, scope = app.scope, modifier = Modifier.padding(padding).fillMaxSize()) {
                 if (staged.isEmpty) {
                     Box(Modifier.fillMaxSize().padding(bottom = LocalPlayerBand.current), contentAlignment = Alignment.Center) { EmptyState(subject) }
                     return@Refreshable

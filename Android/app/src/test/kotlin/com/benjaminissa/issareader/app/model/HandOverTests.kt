@@ -22,6 +22,7 @@ import com.benjaminissa.issareader.core.sync.MutationDrain
 import com.benjaminissa.issareader.core.sync.MutationQueue
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -550,6 +551,44 @@ class IdentityGateTest : AppSuite() {
         } finally {
             other.close()
             otherDirectory.deleteRecursively()
+            fixture.tearDown()
+        }
+    }
+}
+
+/**
+ * A refresh cancelled while it waits for the identity call, as leaving the
+ * screen it was pulled on cancels it. Ported in spirit from the Swift side,
+ * whose awaiting task cannot be interrupted.
+ */
+class ReidentifyCancellationTest : AppSuite() {
+    /** The question left in the slot is not a finished one: the next refresh asks again. */
+    @Test
+    fun aRefreshCancelledMidQuestionDoesNotStopTheNextOneAsking() = mainTest {
+        val fixture = HandOverFixture.failedLaunch("token-A")
+        try {
+            val app = fixture.app
+            fixture.server.answerIdentity(listOf(404))
+            fixture.server.hold(Endpoint.user)
+
+            val refreshing = fixture.scope.async { app.refreshLibrary() }
+            assertTrue("the identity call has to be in flight", waitUntil { fixture.server.held(Endpoint.user) == 1 })
+            refreshing.cancelAndJoin()
+            fixture.server.release(Endpoint.user)
+            assertTrue(
+                "the question has to have run to its end",
+                waitUntil { fixture.server.requests().count { it.path == Endpoint.user } >= 2 && app.session?.state?.value is Session.State.Failed },
+            )
+            val asked = fixture.server.requests().count { it.path == Endpoint.user }
+            fixture.server.answerIdentity(listOf(404))
+
+            app.refreshLibrary()
+
+            assertTrue(
+                "a finished question's stale answer was taken instead of asking again",
+                fixture.server.requests().count { it.path == Endpoint.user } > asked,
+            )
+        } finally {
             fixture.tearDown()
         }
     }

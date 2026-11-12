@@ -941,9 +941,13 @@ class AppModel(
         } else if (session.state.value is Session.State.Failed) {
             val asking = scope.async { reidentify(session) }
             reidentifying = session to asking
+            // Released when the asking ends, not when this caller gets its
+            // answer: a refresh cancelled while waiting would otherwise leave a
+            // finished question in the slot, and every later refresh would take
+            // its stale answer instead of asking again. Only its own: another
+            // session's may have taken the slot since.
+            asking.invokeOnCompletion { if (reidentifying?.second === asking) reidentifying = null }
             asking.await()
-            // Only its own: another session's may have taken the slot since.
-            if (reidentifying?.second === asking) reidentifying = null
         } else {
             return true
         }
@@ -2354,54 +2358,62 @@ class AppModel(
         // Play and pause both have to reach the widget.
         coordinator.player.setRateObserver(this) { rate -> publishListeningSnapshot(book, coordinator, rate > 0) }
         nowPlaying.attach(coordinator, book, session, chapterTitle = { coordinator.chapterTitle })
-        val resume = resolveListeningStart(book, coordinator, timeline, manifestKind)
-        // The slot, after every suspension: identity, because starting the same
-        // book twice is exactly the case that has to lose.
-        if (listening !== coordinator) return slotChangedHands(book, coordinator, "resolvedStart")
-        IssaLog.info(
-            "listening started",
-            mapOf(
-                "book" to book.title,
-                "from" to resume.reason.rawValue,
-                "atBookTime" to format1(resume.bookTime ?: -1.0),
-                "storedProgress" to format4(book.progress ?: -1.0),
-                "manifestKind" to manifestKind.rawValue,
-                "trackCount" to coordinator.tracks.size.toString(),
-                "source" to if (manifestKind == ListeningResume.ManifestKind.SYNTHESISED) "chunks" else "original",
-            ),
-        )
-        // Before a note plays: an unresolved start plays from zero, and the
-        // writer must not persist that zero over a place this app could not find.
-        prepareListeningGuard(book, resume.isTrusted)
-        val time = resume.bookTime
-        if (time != null) {
-            val outcome = coordinator.seekToBookTime(time)
-            if (listening !== coordinator) return slotChangedHands(book, coordinator, "seeked")
-            when (outcome) {
-                AudiobookCoordinator.MoveOutcome.LANDED -> coordinator.player.play()
-                AudiobookCoordinator.MoveOutcome.UNPLAYABLE -> return declined(book, "seekDeclined")
-                // A newer load inside this same coordinator overtook the
-                // resume: nothing to say, and the publish and the writer are
-                // still owed.
-                AudiobookCoordinator.MoveOutcome.SUPERSEDED ->
-                    IssaLog.info("listening resume was overtaken by a newer load", mapOf("book" to book.title))
+        // Cancelled part-way — the screen that pressed Listen left, or the car's
+        // service went — the claim made above is let go of: left in place it
+        // shows "Now playing" for a player nothing writes the position of.
+        try {
+            val resume = resolveListeningStart(book, coordinator, timeline, manifestKind)
+            // The slot, after every suspension: identity, because starting the same
+            // book twice is exactly the case that has to lose.
+            if (listening !== coordinator) return slotChangedHands(book, coordinator, "resolvedStart")
+            IssaLog.info(
+                "listening started",
+                mapOf(
+                    "book" to book.title,
+                    "from" to resume.reason.rawValue,
+                    "atBookTime" to format1(resume.bookTime ?: -1.0),
+                    "storedProgress" to format4(book.progress ?: -1.0),
+                    "manifestKind" to manifestKind.rawValue,
+                    "trackCount" to coordinator.tracks.size.toString(),
+                    "source" to if (manifestKind == ListeningResume.ManifestKind.SYNTHESISED) "chunks" else "original",
+                ),
+            )
+            // Before a note plays: an unresolved start plays from zero, and the
+            // writer must not persist that zero over a place this app could not find.
+            prepareListeningGuard(book, resume.isTrusted)
+            val time = resume.bookTime
+            if (time != null) {
+                val outcome = coordinator.seekToBookTime(time)
+                if (listening !== coordinator) return slotChangedHands(book, coordinator, "seeked")
+                when (outcome) {
+                    AudiobookCoordinator.MoveOutcome.LANDED -> coordinator.player.play()
+                    AudiobookCoordinator.MoveOutcome.UNPLAYABLE -> return declined(book, "seekDeclined")
+                    // A newer load inside this same coordinator overtook the
+                    // resume: nothing to say, and the publish and the writer are
+                    // still owed.
+                    AudiobookCoordinator.MoveOutcome.SUPERSEDED ->
+                        IssaLog.info("listening resume was overtaken by a newer load", mapOf("book" to book.title))
+                }
+            } else {
+                val outcome = coordinator.start(0.0)
+                if (listening !== coordinator) return slotChangedHands(book, coordinator, "started")
+                when (outcome) {
+                    AudiobookCoordinator.MoveOutcome.LANDED -> Unit
+                    AudiobookCoordinator.MoveOutcome.UNPLAYABLE -> return declined(book, "nothingLoaded")
+                    AudiobookCoordinator.MoveOutcome.SUPERSEDED ->
+                        IssaLog.info("listening start was overtaken by a newer load", mapOf("book" to book.title))
+                }
             }
-        } else {
-            val outcome = coordinator.start(0.0)
-            if (listening !== coordinator) return slotChangedHands(book, coordinator, "started")
-            when (outcome) {
-                AudiobookCoordinator.MoveOutcome.LANDED -> Unit
-                AudiobookCoordinator.MoveOutcome.UNPLAYABLE -> return declined(book, "nothingLoaded")
-                AudiobookCoordinator.MoveOutcome.SUPERSEDED ->
-                    IssaLog.info("listening start was overtaken by a newer load", mapOf("book" to book.title))
-            }
+            // After the seek, never before: a coordinator one line old reads 0.
+            publishListeningSnapshot(book, coordinator)
+            watchListeningProgress(book, coordinator)
+            // A start finishing over a reader already open on this book.
+            considerListeningHandoff(ListeningHandoff.Trigger.LISTENING_STARTED, duringStart = true)
+            return ListeningAttachment.STARTED
+        } catch (e: CancellationException) {
+            if (listening === coordinator) stopListening(nowPlaying)
+            throw e
         }
-        // After the seek, never before: a coordinator one line old reads 0.
-        publishListeningSnapshot(book, coordinator)
-        watchListeningProgress(book, coordinator)
-        // A start finishing over a reader already open on this book.
-        considerListeningHandoff(ListeningHandoff.Trigger.LISTENING_STARTED, duringStart = true)
-        return ListeningAttachment.STARTED
     }
 
     /** Says out loud that a start produced no audio, and stops before it can look like one that did. */

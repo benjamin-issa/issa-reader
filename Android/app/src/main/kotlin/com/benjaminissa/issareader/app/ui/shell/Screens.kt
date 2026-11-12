@@ -19,7 +19,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -34,6 +33,7 @@ import com.benjaminissa.issareader.ui.Metrics
 import com.benjaminissa.issareader.ui.Palette
 import com.benjaminissa.issareader.ui.WaitingIndicator
 import com.benjaminissa.issareader.ui.einkOutline
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
 /**
@@ -88,9 +88,13 @@ fun PushedScreen(
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun Refreshable(onRefresh: suspend () -> Unit, modifier: Modifier = Modifier, content: @Composable BoxScope.() -> Unit) {
+fun Refreshable(
+    onRefresh: suspend () -> Unit,
+    scope: CoroutineScope,
+    modifier: Modifier = Modifier,
+    content: @Composable BoxScope.() -> Unit,
+) {
     var refreshing by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
     val state = rememberPullToRefreshState()
     PullToRefreshBox(
         isRefreshing = refreshing,

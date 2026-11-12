@@ -21,6 +21,7 @@ import com.benjaminissa.issareader.core.download.BookContentService
 import com.benjaminissa.issareader.core.model.AudiobookManifest
 import com.benjaminissa.issareader.core.model.Book
 import com.benjaminissa.issareader.core.model.ReadiumLocator
+import com.benjaminissa.issareader.core.store.LibraryStore
 import com.benjaminissa.issareader.core.sync.PositionOrigin
 import com.benjaminissa.issareader.epub.EpubPackage
 import com.benjaminissa.issareader.epub.SmilEntry
@@ -39,6 +40,7 @@ import com.benjaminissa.issareader.playback.MediaBackend
 import com.benjaminissa.issareader.testing.Fixtures
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -481,6 +483,41 @@ class ListeningHandoffReaderTest : AppSuite() {
         assertSame("the reader owns the book it is showing", model, app.reader)
         assertNotNull("and the page is following the voice", model.readalong?.activeEntry)
         model.readalong?.player?.pause()
+    }
+
+    /**
+     * A start cancelled while it is still resolving where to play from — the
+     * screen that pressed Listen left — gives the slot back: nothing plays,
+     * and nothing is left claiming to.
+     */
+    @Test
+    fun aStartCancelledMidAttachLeavesNothingClaimed() = run { harness ->
+        val app = harness.app
+        val book = SharedFixtures.book("Fixture", uuid = uuid, readaloud = true)
+        app.books = listOf(book)
+        val model = app.reader(book, harness.session)
+        val opened = HandoffFixture.opened(model)
+        harness.directories.add(opened.directory)
+        val built = HandoffFixture.chunked(model, opened.files)
+        val storeDirectory = temporaryDirectory("issa-cancelled-attach")
+        harness.directories.add(storeDirectory)
+        val store = LibraryStore("https://cancelled-attach.storyteller.test", storeDirectory)
+        // A store, so resolving the start has a real suspension to be cancelled in.
+        app.useStore(store)
+
+        val attaching = harness.scope.async {
+            app.attachListening(
+                built.manifest, AudiobookCoordinator.Source.Files(built.files),
+                built.chapters, built.timeline, ListeningResume.ManifestKind.SYNTHESISED, book,
+                NowPlayingController(harness.scope), HandoffFixture.settings(),
+            )
+        }
+        yield()
+        assertNotNull("the claim is made before the first suspension", app.listening)
+        attaching.cancelAndJoin()
+
+        assertNull("a cancelled start left a player claimed that nothing writes the position of", app.listening)
+        assertNull(app.listeningBook)
     }
 
     /** The listener steering releases the hold, and the book moves: there is no other trigger left to fire. */

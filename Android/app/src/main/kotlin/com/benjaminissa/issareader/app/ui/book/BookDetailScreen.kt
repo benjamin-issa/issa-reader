@@ -274,7 +274,8 @@ private fun SeriesLines(book: Book) {
 @Composable
 private fun StatusControl(book: Book) {
     val app = LocalAppEnvironment.current.app
-    val scope = rememberCoroutineScope()
+    // The app's, as the long-press menu's is: a status chosen is written even if the page is left at once.
+    val scope = app.scope
     var open by remember { mutableStateOf(false) }
     val enabled = app.statuses.isNotEmpty()
     Box {
@@ -400,7 +401,9 @@ private fun Average(book: Book, mine: Double?) {
 
 @Composable
 private fun Stars(app: AppModel, book: Book, mine: Double?) {
-    val scope = rememberCoroutineScope()
+    // The app's: the first rating changes the row's layout, which disposes this
+    // composable's own scope while the write is still being made.
+    val scope = app.scope
     Row(horizontalArrangement = Arrangement.spacedBy(Metrics.spacing4)) {
         for (star in 1..5) {
             val filled = star.toDouble() <= (mine ?: 0.0)
@@ -444,7 +447,9 @@ private fun ActionRow(book: Book) {
     val environment = LocalAppEnvironment.current
     val app = environment.app
     val shell = LocalShellActions.current
-    val scope = rememberCoroutineScope()
+    // The app's, as the long-press menu's is: a start cancelled half way by
+    // leaving the page strands the player.
+    val scope = app.scope
     // This screen's own Listen outcome, not the app-wide one, which would
     // resurface one book's failure under every other book's button.
     var listenError by remember(book.uuid) { mutableStateOf<String?>(null) }
