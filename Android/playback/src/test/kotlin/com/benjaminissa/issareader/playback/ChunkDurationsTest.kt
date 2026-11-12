@@ -152,4 +152,43 @@ class ChunkDurationsTest {
             file.delete()
         }
     }
+
+    /**
+     * An MP4 chunk is not MPEG audio, but two of its payload bytes can pass for
+     * adjacent frame headers by chance. That used to be measured as a fraction
+     * of a second; it is no length, and the platform's extractor is asked.
+     */
+    @Test
+    fun aChanceHeaderPairInsideAnMp4IsNoLength() {
+        val file = File.createTempFile("issa-length", ".mp4")
+        try {
+            val bytes = ByteArray(8_192)
+            // An ISO base media file opens with a box: size, then "ftyp".
+            byteArrayOf(0, 0, 0, 0x18, 'f'.code.toByte(), 't'.code.toByte(), 'y'.code.toByte(), 'p'.code.toByte(),
+                'i'.code.toByte(), 's'.code.toByte(), 'o'.code.toByte(), 'm'.code.toByte())
+                .copyInto(bytes)
+            // MPEG-1 Layer III, 128 kbit/s, 44.1 kHz: a 417-byte frame. Two of
+            // them in a row, deep in the payload.
+            val header = byteArrayOf(0xFF.toByte(), 0xFB.toByte(), 0x90.toByte(), 0x00)
+            header.copyInto(bytes, 2_000)
+            header.copyInto(bytes, 2_000 + 417)
+            file.writeBytes(bytes)
+            assertNull(AudioFileLength.duration(file))
+        } finally {
+            file.delete()
+        }
+    }
+
+    /** A length too short to be a narration chunk is re-measured, not trusted. */
+    @Test
+    fun aCachedLengthBelowTheFloorIsMeasuredAgain() = runTest {
+        val directory = root()
+        try {
+            directory.mkdirs()
+            File(directory, ChunkDurations.FILENAME).writeText("""{"a.mp4":0.0621,"b.mp3":312.5}""")
+            assertEquals(mapOf("b.mp3" to 312.5), ChunkDurations.loadFromDirectory(directory))
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
 }

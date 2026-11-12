@@ -38,7 +38,8 @@ fun interface DurationMeasurer {
  * construction.
  *
  * A metadata frame (Xing, Info or VBRI) carries no audio and is not counted.
- * Anything this cannot read is null, and the caller asks the platform instead.
+ * Anything this cannot read is null, and the caller asks the platform instead:
+ * a file that does not open as MPEG audio or WAVE is not walked at all.
  */
 object AudioFileLength : DurationMeasurer {
     override fun duration(file: File): Double? = try {
@@ -101,6 +102,12 @@ object AudioFileLength : DurationMeasurer {
     private fun mpeg(input: Window): Double? {
         val length = input.length
         var position = id3v2Length(input)
+        // MPEG audio opens with an ID3 tag or with a frame. Anything else — an
+        // MP4's `ftyp`, an Ogg's `OggS` — is another container, and scanning
+        // its payload for frame headers finds two adjacent ones by chance about
+        // once in every few megabytes, and measures a chunk of narration as a
+        // fraction of a second. Null here sends it to the platform's extractor.
+        if (position == 0L && frame(input.int(0)) == null) return null
         var seconds = 0.0
         var counted = 0
         // Whether the walk is in step: at the start of the audio, or straight

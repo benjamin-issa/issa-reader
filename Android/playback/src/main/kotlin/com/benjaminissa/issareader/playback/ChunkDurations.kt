@@ -50,6 +50,17 @@ object ChunkDurations {
      */
     internal const val PARALLELISM = 6
 
+    /**
+     * The shortest length worth believing for a chunk of narration.
+     *
+     * An earlier measurer read a chance pair of header-shaped bytes inside an
+     * MP4 as a frame walk, and wrote a few hundredths of a second into the
+     * cache as that chunk's length. Anything under this is read back as not yet
+     * measured, so the file is measured again rather than trusted for as long as
+     * the narration stays on the device.
+     */
+    internal const val MINIMUM_LENGTH = 1.0
+
     private val serializer = MapSerializer(String.serializer(), Double.serializer())
 
     fun cacheFile(bookId: String, root: File? = null): File =
@@ -73,7 +84,7 @@ object ChunkDurations {
     fun loadFromDirectory(directory: File): Map<String, Double> = decode(File(directory, FILENAME))
 
     private fun decode(file: File): Map<String, Double> = try {
-        IssaJson.decodeFromString(serializer, file.readText())
+        IssaJson.decodeFromString(serializer, file.readText()).filterValues { it >= MINIMUM_LENGTH }
     } catch (_: Exception) {
         emptyMap()
     }
