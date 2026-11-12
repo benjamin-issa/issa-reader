@@ -1,7 +1,9 @@
 package com.benjaminissa.issareader.core.download
 
+import com.benjaminissa.issareader.core.IssaJson
 import com.benjaminissa.issareader.core.StorageRoot
 import com.benjaminissa.issareader.core.diagnostics.IssaLog
+import com.benjaminissa.issareader.core.model.AudiobookManifest
 import com.benjaminissa.issareader.core.model.Book
 import com.benjaminissa.issareader.core.model.isBareUuid
 import com.benjaminissa.issareader.core.model.safePathComponent
@@ -331,7 +333,44 @@ class BookContentService(private val client: ApiClient, cacheDirectory: File? = 
          * whose book has left the catalogue can be deleted at all.
          */
         fun removeDownload(bookUuid: String, format: Format, directory: File? = null) {
-            localUrl(directory ?: defaultDirectory(), bookUuid, format).delete()
+            val base = directory ?: defaultDirectory()
+            localUrl(base, bookUuid, format).delete()
+            if (format == Format.AUDIOBOOK) manifestFile(base, bookUuid).delete()
         }
+
+        /**
+         * Where an audiobook's manifest is kept, beside its file. Not named
+         * like an edition's file, so the downloads inventory never reads it as
+         * one; [removeDownload] takes it with the file.
+         */
+        fun manifestFile(directory: File, bookUuid: String): File =
+            File(directory, "${bookUuid.safePathComponent}-${Format.AUDIOBOOK.rawValue}.manifest.json")
+
+        /**
+         * Keeps the manifest the server gave for a downloaded audiobook, so the
+         * book can play with no server to ask. Only beside a file that is
+         * there: a manifest alone would outlive the removal it should not.
+         */
+        fun saveManifest(manifest: AudiobookManifest, bookUuid: String, directory: File? = null) {
+            val base = directory ?: defaultDirectory()
+            if (!localUrl(base, bookUuid, Format.AUDIOBOOK).exists()) return
+            val destination = manifestFile(base, bookUuid)
+            val partial = File(base, destination.name + ".partial")
+            try {
+                partial.writeText(IssaJson.encodeToString(AudiobookManifest.serializer(), manifest))
+                Files.move(partial.toPath(), destination.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+            } catch (e: IOException) {
+                partial.delete()
+                IssaLog.failure("save audiobook manifest", e, emptyMap())
+            }
+        }
+
+        /** The manifest saved beside a download, or null: none was saved (a download from before they were), or it will not read. */
+        fun savedManifest(bookUuid: String, directory: File? = null): AudiobookManifest? = runCatching {
+            IssaJson.decodeFromString(
+                AudiobookManifest.serializer(),
+                manifestFile(directory ?: defaultDirectory(), bookUuid).readText(),
+            )
+        }.getOrNull()
     }
 }

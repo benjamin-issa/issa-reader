@@ -419,7 +419,12 @@ class AppModel(
             } else {
                 this.downloads = makeDownloads?.invoke(url, session.tokenProvider)
             }
-            this.downloads?.onFinished = { scope.launch { refreshDownloadedSet() } }
+            this.downloads?.onFinished = { job ->
+                scope.launch {
+                    refreshDownloadedSet()
+                    keepAudiobookManifest(job)
+                }
+            }
             refreshDownloadedSet()
             scope.launch { this@AppModel.downloads?.reattach() }
 
@@ -2205,7 +2210,7 @@ class AppModel(
             }
             val service = AudiobookService(session.client, url, session.tokenProvider)
             try {
-                val manifest = service.manifest(book.uuid)
+                val manifest = audiobookManifest(book, service, content)
                 if (!startStillClaimed(book, generation)) return
                 if (manifest.playableTracks.isEmpty()) {
                     listeningError = "This audiobook has no playable tracks on the server."
@@ -2243,6 +2248,53 @@ class AppModel(
         } finally {
             isStartingListening = false
             startingListening = null
+        }
+    }
+
+    /** Keeps a finished audiobook's manifest beside it, while the server is there to give it. Best effort. */
+    private suspend fun keepAudiobookManifest(job: DownloadManager.Job) {
+        if (job.format != BookContentService.Format.AUDIOBOOK) return
+        val session = session ?: return
+        val url = ServerAddress.normalize(serverAddress) ?: return
+        val manifest = try {
+            AudiobookService(session.client, url, session.tokenProvider).manifest(job.bookUuid)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            return
+        }
+        BookContentService.saveManifest(manifest, job.bookUuid)
+    }
+
+    /**
+     * The manifest an audiobook plays by. A downloaded single-file audiobook
+     * plays with no server: from the manifest kept beside the file, and failing
+     * that — a download from before they were kept — from the file itself,
+     * measured, when the server cannot be asked. Whenever the server does
+     * answer for a downloaded book, its manifest is kept.
+     */
+    private suspend fun audiobookManifest(book: Book, service: AudiobookService, content: BookContentService): AudiobookManifest {
+        val downloaded = isDownloaded(book, BookContentService.Format.AUDIOBOOK)
+        if (downloaded) {
+            BookContentService.savedManifest(book.uuid)?.takeIf { it.playableTracks.size == 1 }?.let { return it }
+        }
+        try {
+            return service.manifest(book.uuid).also {
+                if (downloaded) BookContentService.saveManifest(it, book.uuid)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            if (!downloaded) throw e
+            val file = content.localUrl(book, BookContentService.Format.AUDIOBOOK)
+            val seconds = withContext(Dispatchers.IO) {
+                (readerServices?.measurer ?: com.benjaminissa.issareader.playback.AudioFileLength).duration(file)
+            } ?: throw e
+            IssaLog.info("audiobook manifest unavailable; playing the download", mapOf("book" to book.title))
+            return AudiobookManifest(
+                AudiobookManifest.Metadata(title = mapOf("und" to book.title), duration = seconds),
+                listOf(AudiobookManifest.Track(href = file.name, title = book.title, duration = seconds)),
+            )
         }
     }
 
