@@ -149,6 +149,21 @@ public final class ReaderModel {
     /// rather than being freshly — and wrongly — labelled at the moment it runs.
     private var positionOrigin: PositionOrigin = .chosen
 
+    /// The page a save last wrote, or the one `open` restored from the stored
+    /// position: where the server, as far as this model knows, already has the
+    /// reader.
+    ///
+    /// A save of that same page is skipped. Every save stamps the position with
+    /// the time it is made, so a reader left open and untouched while another
+    /// device read on re-stamped its old page as the newest on the way to the
+    /// background, on quitting, or on being closed, and took the place back.
+    private var settledPlace: SettledPlace?
+
+    private struct SettledPlace: Equatable {
+        var chapter: Int
+        var offset: Int
+    }
+
     /// The narrated sentence the server said we were on.
     ///
     /// `loadChapter(_:restoring:)` uses the locator to work out a character
@@ -834,6 +849,11 @@ public final class ReaderModel {
                 return
             }
             try checkStillOpening(generation)
+            // The place the reader came back to is the one the server holds;
+            // a book with nothing stored has none, and is saved where it opens.
+            settledPlace = restoring == nil ? nil : currentPage.map {
+                SettledPlace(chapter: chapterIndex, offset: $0.characterRange.location)
+            }
             if self.timeline == nil, !timeline.isEmpty {
                 // A local book whose import found narration this device cannot
                 // play, and added it as text.
@@ -3428,6 +3448,15 @@ public final class ReaderModel {
         // the anchor has to be judged against the place this save is about.
         let narrationBelongsToSave = isPlaying
             || narrationIsOn(page: page, of: layout, inDocument: href)
+        // The page that was last written or restored, with nothing narrating on
+        // it, is not news: writing it again would only give it a newer stamp
+        // than whatever another device has read since. A narrating page still
+        // goes through, for the anchor that moves within it.
+        let place = SettledPlace(chapter: chapterIndex, offset: offset)
+        if place == settledPlace, !narrationBelongsToSave {
+            IssaLog.info("position not saved", ["book": book.title, "reason": "unmoved"])
+            return
+        }
         // Recorded locally first: a chapter read with no signal must not be
         // lost, and the drain collapses a run of page turns to one write.
         let timestamp = ProgressService.now()
@@ -3447,7 +3476,10 @@ public final class ReaderModel {
         // the flush on closing the screen finds after a sign-out — used to be
         // published regardless, so the Home Screen showed a place the book
         // was never at, or the book of an account that had left.
-        if accepted { publishSnapshot(progress: overall) }
+        if accepted {
+            settledPlace = place
+            publishSnapshot(progress: overall)
+        }
 
         // The anchor, while the narration is part of where the reader is. The
         // locator above is a fraction of the *text*; this is a file and an
