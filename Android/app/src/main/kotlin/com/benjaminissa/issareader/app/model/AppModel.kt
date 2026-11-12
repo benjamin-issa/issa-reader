@@ -1760,7 +1760,7 @@ class AppModel(
         if (isHandingOffToReader(model.book.uuid)) return
         val playing = listening
         if (playing != null && listeningBook?.uuid == model.book.uuid) {
-            if (playing.player.isPlaying) playing.player.pause() else playing.player.play()
+            if (playing.player.isPlaying) playing.player.pause() else playing.resume()
             return
         }
         model.togglePlayback()
@@ -2173,7 +2173,8 @@ class AppModel(
             stopNarration()
             val current = listening
             if (listeningBook?.uuid == book.uuid && current != null) {
-                current.player.play()
+                // Through `resume`, which reopens a file that would not play.
+                current.resume()
                 // Nothing else republishes on a resume.
                 publishListeningSnapshot(book, current)
                 return

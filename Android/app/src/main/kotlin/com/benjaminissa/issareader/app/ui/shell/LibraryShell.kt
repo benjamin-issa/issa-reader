@@ -298,9 +298,13 @@ private fun MiniPlayer(book: Book, coordinator: PlaybackDriving, modifier: Modif
         chapter = environment.app.playbackChapterTitle,
         isPlaying = coordinator.player.isPlaying,
         progress = progress,
+        // Through the coordinator, as the full player's button is: a file that
+        // would not play is reopened by a press, not played over.
         onPlayPause = {
-            coordinator.player.togglePlayPause()
-            environment.nowPlaying.publish()
+            scope.launch {
+                coordinator.perform(PlaybackAction.PLAY_PAUSE, environment.settings.commandMap)
+                environment.nowPlaying.publish()
+            }
         },
         onSkipBack = {
             scope.launch {

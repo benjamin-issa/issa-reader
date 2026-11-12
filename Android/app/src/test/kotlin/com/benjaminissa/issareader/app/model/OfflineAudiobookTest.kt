@@ -3,6 +3,7 @@ package com.benjaminissa.issareader.app.model
 import com.benjaminissa.issareader.app.Answer
 import com.benjaminissa.issareader.app.AppSuite
 import com.benjaminissa.issareader.app.PlaybackSettingsForTests
+import com.benjaminissa.issareader.app.ScriptedBackend
 import com.benjaminissa.issareader.app.SharedFixtures
 import com.benjaminissa.issareader.app.StubServer
 import com.benjaminissa.issareader.app.close
@@ -11,6 +12,8 @@ import com.benjaminissa.issareader.app.testApp
 import com.benjaminissa.issareader.app.testScope
 import com.benjaminissa.issareader.core.download.BookContentService
 import com.benjaminissa.issareader.core.model.AudiobookManifest
+import com.benjaminissa.issareader.playback.AudioPlayer
+import com.benjaminissa.issareader.playback.AudiobookCoordinator
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -134,6 +137,44 @@ class OfflineAudiobookTest : AppSuite() {
             assertFalse(fixture.uuid in BookContentService.downloadedBookUuids())
         } finally {
             fixture.clean()
+        }
+    }
+
+    /**
+     * Listen on the book already playing is a press of Play, and a press reopens
+     * a file that would not play. It called the player directly, which refuses a
+     * dead item and played nothing.
+     */
+    @Test
+    fun listenOverADeadItemReopensTheFile() = mainTest {
+        val scope = testScope()
+        val fixture = Fixture()
+        try {
+            val app = testApp(scope)
+            app.session = fixture.server.session()
+            app.serverAddress = fixture.server.url.toString()
+            val book = SharedFixtures.book("Dead", uuid = fixture.uuid, audiobook = true)
+            val coordinator = AudiobookCoordinator(
+                manifest = AudiobookManifest(
+                    AudiobookManifest.Metadata(title = mapOf("und" to "Dead")),
+                    listOf(AudiobookManifest.Track(href = "one.wav", duration = 2.0)),
+                ),
+                source = AudiobookCoordinator.Source.Local(fixture.file),
+                player = AudioPlayer(ScriptedBackend()),
+                scope = scope,
+            )
+            app.installListening(coordinator, book, BookContentService.Format.AUDIOBOOK)
+            coordinator.start(0.0)
+            assertTrue("the file was not there, so the item is dead", coordinator.player.itemHasFailed)
+
+            fixture.file.writeBytes(wave())
+            app.startListening(book, NowPlayingController(scope), PlaybackSettingsForTests.make())
+
+            assertFalse("Listen played over the dead item", coordinator.player.itemHasFailed)
+            assertTrue(coordinator.player.isPlaying)
+        } finally {
+            fixture.clean()
+            scope.close()
         }
     }
 }
