@@ -3128,14 +3128,17 @@ public final class AppModel {
         // exactly the quit that needs it most the flush at the end never ran.
         // Flushed again at the end, for what the saves and the drain logged.
         await logFlush()
-        for model in readers.values {
-            await model.saveProgress()
-        }
+        // Together rather than one after another. Each save records its place
+        // and then waits on a drain, so with a server that does not answer the
+        // first reader's wait held back every later reader's record, and the
+        // audiobook's, until the platform's time was gone.
+        var saves = readers.values.map { model in Task { await model.saveProgress() } }
         // And the audiobook, which has no reader model. Its position was
         // written only by the fifteen-second writer, and ⌘Q ends the process
         // with that task in it — so quitting while listening lost everything
         // since the last accepted tick, up to most of a minute on a long book.
-        await writeListeningPositionNow()
+        saves.append(Task { await writeListeningPositionNow() })
+        for save in saves { await save.value }
         await drainPendingWrites(waitingForInFlight: true)
         // The log too, and here rather than in each scene-phase handler,
         // because all three platforms already route their exit through this
