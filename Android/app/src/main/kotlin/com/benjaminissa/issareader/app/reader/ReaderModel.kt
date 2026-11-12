@@ -687,6 +687,10 @@ class ReaderModel(
             } else {
                 prepareNarration(epubPackage, generation)
             }
+            // Where the reader landed is the place already held; only a move
+            // from here is worth writing.
+            lastWrittenLocator = locatorForCurrentPage()
+            lastWrittenAnchor = null
             phase = Phase.Ready
             IssaLog.info(
                 "book opened",
@@ -2340,38 +2344,56 @@ class ReaderModel(
         firstUnsavedChangeAt = null
     }
 
-    suspend fun saveProgress() {
-        val epubPackage = epubPackage
-        val layout = layout
-        val page = currentPage
-        if (epubPackage == null || layout == null || page == null || chapterIndex !in epubPackage.spine.indices) {
-            IssaLog.info("position not saved", mapOf("book" to book.title, "reason" to "noPage"))
-            return
-        }
-        val href = epubPackage.spine[chapterIndex].href
-        // Anchor on the first fragment that begins on this page: it survives a
-        // font or margin change, which a page number does not.
-        val fragment = layout.firstFragment(page)
+    /** The place last written, or the one the reader opened on: [saveProgress] skips a save that would repeat it. */
+    private var lastWrittenLocator: ReadiumLocator? = null
+    private var lastWrittenAnchor: AudioAnchor? = null
+
+    /** The locator for the page on screen, or null when there is none. */
+    private fun locatorForCurrentPage(): ReadiumLocator? {
+        val epubPackage = epubPackage ?: return null
+        val layout = layout ?: return null
+        val page = currentPage ?: return null
+        if (chapterIndex !in epubPackage.spine.indices) return null
         val chapterProgress = layout.progression(page)
-        val overall = epubPackage.bookProgress(chapterIndex, chapterProgress)
-        // Two anchors beyond the fragment: the character offset, and the words
-        // that were on screen.
+        // Anchored on the first fragment that begins on this page, which
+        // survives a font or margin change as a page number does not, with
+        // two anchors beyond it: the character offset and the words that were
+        // on screen.
         val offset = page.characterRange.location
-        val locator = ReadiumLocator(
-            href = href,
+        return ReadiumLocator(
+            href = epubPackage.spine[chapterIndex].href,
             type = XHTML,
             title = chapterTitle,
             locations = ReadiumLocator.Locations(
-                fragments = fragment?.let { listOf(it) },
+                fragments = layout.firstFragment(page)?.let { listOf(it) },
                 progression = chapterProgress,
-                totalProgression = overall,
+                totalProgression = epubPackage.bookProgress(chapterIndex, chapterProgress),
                 charOffset = offset,
             ),
             text = LocatorAnchoring.quote(layout.text, offset),
         )
+    }
+
+    suspend fun saveProgress() {
+        val page = currentPage
+        val locator = locatorForCurrentPage()
+        val overall = locator?.locations?.totalProgression
+        val layout = layout
+        if (locator == null || page == null || layout == null || overall == null) {
+            IssaLog.info("position not saved", mapOf("book" to book.title, "reason" to "noPage"))
+            return
+        }
+        val href = locator.href
         // Decided now, against the page being saved: the reader can turn the
         // page while the write is in flight.
         val narrationBelongsToSave = isPlaying || narrationIsOn(page, layout, href)
+        // A reader that has not moved since it was opened on the stored place,
+        // or since its last write, has nothing new to say. Written anyway, the
+        // position would carry a fresh timestamp and beat one read on another
+        // device in the meantime. The narration's anchor counts as movement:
+        // it can advance within a page.
+        val anchorNow = readalong?.currentAnchor
+        if (locator == lastWrittenLocator && (!narrationBelongsToSave || anchorNow == lastWrittenAnchor)) return
         val timestamp = ProgressService.now()
         val enqueue = enqueuePosition
         val session = readerSession
@@ -2386,6 +2408,10 @@ class ReaderModel(
             }
             // A local book with nowhere to keep its place: refused.
             else -> false
+        }
+        if (accepted) {
+            lastWrittenLocator = locator
+            lastWrittenAnchor = anchorNow
         }
         // Only a position that was actually taken reaches the widget.
         if (accepted) publishSnapshot(overall)

@@ -1027,14 +1027,13 @@ class NarrationStopTest : AppSuite() {
             delay(2400.milliseconds)
             assertEquals("a save was scheduled", 1, saves.positions)
 
+            // The reader has not moved, so there is nothing to write: the stop
+            // changed neither the place nor the anchor.
             model.saveProgress()
-            assertEquals(2, saves.positions)
+            assertEquals("a stop that did not move the reader wrote a place", 1, saves.positions)
             assertEquals("and the voice is no longer anywhere to anchor", 1, saves.anchors)
             assertEquals("the position's classification was disturbed", origin, saves.lastOrigin)
-            val after = checkNotNull(saves.lastLocator)
-            assertEquals(before.href, after.href)
-            assertEquals(before.locations?.charOffset, after.locations?.charOffset)
-            assertEquals(before.locations?.totalProgression, after.locations?.totalProgression)
+            assertEquals(before, saves.lastLocator)
         } finally {
             fixture.tearDown()
         }
