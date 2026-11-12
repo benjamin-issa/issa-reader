@@ -8,6 +8,7 @@ import com.benjaminissa.issareader.app.reader.ReaderModel
 import com.benjaminissa.issareader.app.reader.ReaderPersistence
 import com.benjaminissa.issareader.app.reader.ReaderServices
 import com.benjaminissa.issareader.app.reader.publish
+import com.benjaminissa.issareader.core.BoundedWait
 import com.benjaminissa.issareader.core.IssaJson
 import com.benjaminissa.issareader.core.KeyValueStore
 import com.benjaminissa.issareader.core.Session
@@ -82,6 +83,8 @@ import java.util.Locale
 import java.util.concurrent.TimeUnit
 import kotlin.math.abs
 import kotlin.math.min
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * Something that keeps a per-book index the account's books must take with
@@ -542,6 +545,11 @@ class AppModel(
         // already made, and a timer firing after the account has gone would
         // delete a file belonging to whoever signs in next.
         commitPendingRemoval()
+        // What is still queued is sent now, while the token can still carry it:
+        // leaving the account empties the queue, and a status, rating or place
+        // not yet sent would be lost with it. Bounded, so a server that does not
+        // answer, or no signal, delays signing out by seconds and no more.
+        BoundedWait.run(signOutSendLimit) { drainPendingWrites(waitingForInFlight = true) }
         session?.signOut()
         leaveAccount(AccountExit.SIGN_OUT, nowPlaying)
 
@@ -560,6 +568,9 @@ class AppModel(
         }
         phase = Phase.CHOOSE_SERVER
     }
+
+    /** How long [signOut] waits for the queue to be sent. A test seam. */
+    internal var signOutSendLimit: Duration = 5.seconds
 
     /** Why an account's state is being let go of, for [leaveAccount]. */
     private enum class AccountExit {

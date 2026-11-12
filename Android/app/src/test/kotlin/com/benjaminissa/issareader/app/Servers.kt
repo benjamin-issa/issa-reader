@@ -244,6 +244,11 @@ class ScriptedServer : StubServer({ request -> scriptedAnswer(this, request) }) 
         refusesWrites = true
     }
 
+    /** Takes writes again, after [refuseWrites]. */
+    fun acceptWrites() {
+        refusesWrites = false
+    }
+
     internal fun scripted(path: String): Answer? = synchronized(answers) { answers[path] }
 
     companion object {

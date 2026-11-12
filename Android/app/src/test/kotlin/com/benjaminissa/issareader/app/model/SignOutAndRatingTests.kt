@@ -28,6 +28,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
 import java.util.UUID
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * What must not survive a sign-out. Ported from `SignOutStateTests.swift`.
@@ -230,6 +231,76 @@ class RatingRaceTest : AppSuite() {
 
             assertEquals("an answer older than the reader's rating took it off the screen", 5.0, app.ratings[uuid])
         } finally {
+            fixture.tearDown()
+        }
+    }
+}
+
+/** What is still queued when the reader signs out. */
+class SignOutSendsUnsentTest : AppSuite() {
+    private val uuid = "77777777-7777-4777-8777-777777777777"
+
+    private class Fixture(val app: AppModel, val server: ScriptedServer, val directory: File, val scope: CoroutineScope) {
+        fun tearDown() {
+            server.close()
+            directory.deleteRecursively()
+            scope.close()
+        }
+    }
+
+    /** A signed-in reader with a rating the server has not taken: the write was refused, so it is queued. */
+    private suspend fun fixtureWithAnUnsentRating(): Fixture {
+        val scope = testScope()
+        val server = ScriptedServer()
+        server.answer(Endpoint.books, json = listOf(ScriptedServer.book(uuid, "Dracula")))
+        server.answer(Endpoint.userRatings, json = emptyList<Any>())
+        val directory = temporaryDirectory("sign-out-unsent")
+        val tokens = TestTokens()
+        val app = testApp(scope, keychain = tokens)
+        app.useStore(LibraryStore(server.url.toString(), directory))
+        app.session = server.session(storing = "token-A", keychain = tokens)
+        app.books = listOf(SharedFixtures.book("Dracula", uuid = uuid))
+        app.rebuildDerived()
+        server.refuseWrites()
+        app.setRating(5.0, checkNotNull(app.bookByUuid[uuid]))
+        assertEquals("the rating has to be waiting in the queue", 1, app.pendingWrites)
+        server.acceptWrites()
+        return Fixture(app, server, directory, scope)
+    }
+
+    private fun ratingWrites(server: ScriptedServer) =
+        server.requests().filter { it.method == "PUT" && it.path == Endpoint.rating(uuid) && it.bearer == "token-A" }
+
+    /** A change the reader made while offline reaches the server before the token is revoked. */
+    @Test
+    fun anUnsentChangeIsSentBeforeSigningOut() = mainTest {
+        val fixture = fixtureWithAnUnsentRating()
+        try {
+            val before = ratingWrites(fixture.server).size
+
+            fixture.app.signOut(keepDownloads = true)
+
+            assertEquals("the queued rating was thrown away with the account", before + 1, ratingWrites(fixture.server).size)
+            assertEquals(AppModel.Phase.CHOOSE_SERVER, fixture.app.phase)
+        } finally {
+            fixture.tearDown()
+        }
+    }
+
+    /** A server that does not answer holds the sign-out for the bound and no longer. */
+    @Test
+    fun aServerThatDoesNotAnswerDoesNotHoldSigningOutBeyondTheBound() = mainTest {
+        val fixture = fixtureWithAnUnsentRating()
+        try {
+            fixture.app.signOutSendLimit = 300.milliseconds
+            fixture.server.hold(Endpoint.rating(uuid))
+
+            fixture.app.signOut(keepDownloads = true)
+
+            assertEquals("the send was waiting on the server", 1, fixture.server.held(Endpoint.rating(uuid)))
+            assertEquals("signing out waited for a server that was not answering", AppModel.Phase.CHOOSE_SERVER, fixture.app.phase)
+        } finally {
+            fixture.server.release(Endpoint.rating(uuid))
             fixture.tearDown()
         }
     }
