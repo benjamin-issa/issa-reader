@@ -108,7 +108,7 @@ sealed class StorytellerError(message: String) : Exception(message) {
     val isRetryable: Boolean
         get() = when (this) {
             is Transport -> true
-            is Server -> status >= 500 || status == 429
+            is Server -> status >= 500 || status == 429 || status == 408 || status == 425
             else -> false
         }
 }

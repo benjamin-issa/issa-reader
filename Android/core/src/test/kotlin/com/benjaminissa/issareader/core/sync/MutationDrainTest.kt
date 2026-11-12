@@ -281,6 +281,29 @@ class MutationDrainTest {
         }
     }
 
+    /**
+     * The other statuses a front door answers with while Storyteller is down
+     * (520-524, 530), and the two 4xx that mean "try again" (408, 425), keep
+     * the write too: none says anything about the payload.
+     */
+    @Test
+    fun otherTransientStatusesNeverAbandonOrDiscard() {
+        for (status in listOf(408, 425, 520, 521, 522, 523, 524, 530)) {
+            withDrain { drain, queue ->
+                queue.enqueue(MutationQueue.Kind.STATUS, bookUuid = "kept", payload = """{"status":"read"}""".encodeToByteArray())
+
+                repeat(12) {
+                    StatusQueue.prime(listOf(status))
+                    assertEquals("$status", 0, drain.drain())
+                }
+
+                val pending = queue.pending()
+                assertEquals("a transient answer must never cost a queued write ($status)", 1, pending.size)
+                assertEquals("a transient answer is no evidence against the write ($status)", 0, pending.first().attempts)
+            }
+        }
+    }
+
     /** A write the server keeps choking on is abandoned at the limit, and logged. */
     @Test
     fun poisonedWriteIsAbandonedAndLogged() = withDrain { drain, queue ->
