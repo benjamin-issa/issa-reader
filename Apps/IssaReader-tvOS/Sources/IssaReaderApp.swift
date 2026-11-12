@@ -143,13 +143,18 @@ extension View {
     /// The read-along screen, not `BookDetailView`: a television is the
     /// read-along device, and that screen now carries the cover, the progress
     /// and the transport, so it is the TV's book screen rather than a detour on
-    /// the way to one. Declared here because the shared cells push a `Book`
-    /// value and only this target knows `TVReadalongView` exists.
+    /// the way to one. A title with an audiobook and no read-along opens the
+    /// audiobook player instead (`TVBookScreen`). Declared here because the
+    /// shared cells push a `Book` value and only this target knows these
+    /// screens exist.
     @ViewBuilder
     func tvBookDestination(session: Session?) -> some View {
         navigationDestination(for: Book.self) { book in
             if let session {
-                TVReadalongView(book: book, session: session)
+                switch TVBookScreen.screen(for: book) {
+                case .audiobook: TVAudiobookView(book: book, session: session)
+                case .readalong: TVReadalongView(book: book, session: session)
+                }
             }
         }
     }
