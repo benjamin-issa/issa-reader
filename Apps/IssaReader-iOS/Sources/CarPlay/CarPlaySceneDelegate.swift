@@ -279,7 +279,11 @@ extension CarPlaySceneDelegate: @preconcurrency CPNowPlayingTemplateObserver {
             return
         }
         let current = CarPlayBridge.shared.currentChapter?()
-        let items = titles.prefix(itemLimit).enumerated().map { index, title -> CPListItem in
+        // The rows keep their own indices; only which of them are drawn
+        // moves, so the chapter being read is always one of them.
+        let shown = CarPlayChapters.window(count: titles.count, current: current, limit: itemLimit)
+        let items = shown.map { index -> CPListItem in
+            let title = titles[index]
             let item = CPListItem(text: title, detailText: nil)
             item.isPlaying = index == current
             item.handler = { [weak self] _, completion in
