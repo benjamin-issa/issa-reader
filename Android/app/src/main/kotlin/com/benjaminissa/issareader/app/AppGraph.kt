@@ -201,6 +201,7 @@ class AppGraph(
         store = AskIndexStore(),
         notifier = askNotifier,
         installState = SharedPreferencesKeyValueStore(context.getSharedPreferences(INSTALL_PREFERENCES, Context.MODE_PRIVATE)),
+        isInPlaceUpgrade = { isInPlaceUpgrade(context) },
     )
 
     /** What a tapped Ask notification opens: the book, and its answer's sheet. */
@@ -381,6 +382,18 @@ class AppGraph(
 
     companion object {
         const val PREFERENCES = "issa"
+
+        /**
+         * Whether this app was updated in place, not installed afresh. The package
+         * manager stamps the time the package was first installed on this device
+         * and the time it was last updated; they are equal until an update lands.
+         * A restore from backup is a fresh install — the same stamps — however old
+         * the preferences it brings back, which is what tells it from an upgrade.
+         */
+        internal fun isInPlaceUpgrade(context: Context): Boolean = runCatching {
+            val info = context.packageManager.getPackageInfo(context.packageName, 0)
+            info.lastUpdateTime > info.firstInstallTime
+        }.getOrDefault(false)
 
         /** Preferences about this install, which the backup rules exclude. */
         const val INSTALL_PREFERENCES = "issa.install"

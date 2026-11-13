@@ -341,13 +341,32 @@ class AskCoordinatorTest {
         val old = InMemoryKeyValueStore().also { it.putBoolean(AskCoordinator.ASKED_FOR_NOTIFICATIONS_KEY, true) }
         val install = InMemoryKeyValueStore()
         val notifier = CountingNotifier()
-        AskHarness(notifier = notifier, defaults = old, installState = install).use { harness ->
+        AskHarness(notifier = notifier, defaults = old, installState = install, inPlaceUpgrade = true).use { harness ->
             harness.run {
                 val job = assertNotNull(coordinator.ask("What did Alice follow?", source(), boundary()))
                 settle(job)
                 assertEquals("asked again", 0, notifier.authorizationRequests)
                 assertTrue(install.getBoolean(AskCoordinator.ASKED_FOR_NOTIFICATIONS_KEY))
                 assertNull("left behind in the backed-up store", old.getBooleanOrNull(AskCoordinator.ASKED_FOR_NOTIFICATIONS_KEY))
+            }
+        }
+    }
+
+    /**
+     * A fresh install that restored backed-up preferences carries the old phone's
+     * flag in the backed-up store, and has asked nothing: it is asked, once.
+     */
+    @Test
+    fun `a fresh install with a restored flag is asked once`() {
+        val restored = InMemoryKeyValueStore().also { it.putBoolean(AskCoordinator.ASKED_FOR_NOTIFICATIONS_KEY, true) }
+        val install = InMemoryKeyValueStore()
+        val notifier = CountingNotifier()
+        AskHarness(notifier = notifier, defaults = restored, installState = install, inPlaceUpgrade = false).use { harness ->
+            harness.run {
+                settle(assertNotNull(coordinator.ask("What did Alice follow?", source(), boundary())))
+                assertEquals("never asked on this install", 1, notifier.authorizationRequests)
+                settle(assertNotNull(coordinator.ask("And then?", source(), boundary())))
+                assertEquals("asked twice", 1, notifier.authorizationRequests)
             }
         }
     }

@@ -140,6 +140,8 @@ class AskHarness(
     val defaults: InMemoryKeyValueStore = InMemoryKeyValueStore(),
     /** The install's own store, when a test keeps one apart from [defaults] as the app does. */
     val installState: InMemoryKeyValueStore? = null,
+    /** Whether the app was updated in place (true) or installed afresh. */
+    val inPlaceUpgrade: Boolean = false,
 ) : AutoCloseable {
     val dispatcher: ExecutorCoroutineDispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
     val scope = CoroutineScope(SupervisorJob() + dispatcher)
@@ -154,6 +156,7 @@ class AskHarness(
         notifier = notifier,
         centre = centre,
         installState = installState ?: defaults,
+        isInPlaceUpgrade = { inPlaceUpgrade },
     )
 
     /** Runs [block] on the coordinator's own thread, as the app runs everything on the main one. */

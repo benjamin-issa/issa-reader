@@ -80,6 +80,13 @@ class AskCoordinator(
      * the old one was.
      */
     private val installState: KeyValueStore = defaults,
+    /**
+     * Whether this process is an app updated in place, not one installed afresh.
+     * Only an in-place update inherits the old store's answer: a fresh install
+     * has restored the backed-up preferences, whose answer belongs to the old
+     * phone.
+     */
+    private val isInPlaceUpgrade: () -> Boolean = { false },
 ) : BookIndexes {
     /**
      * The caller's scope with a last line of defence: nothing thrown inside Ask
@@ -659,10 +666,13 @@ class AskCoordinator(
     }
 
     /**
-     * Whether the reader has been asked, here or on the release that kept the
-     * flag with the other preferences. An upgrading install has it there and
-     * not in [installState]; taken from the old store, and removed from it, so
-     * a reader who declined is not asked again with Android's last allowed ask.
+     * Whether the reader has been asked on this install. An app updated in place
+     * from the release that kept the flag with the other preferences has it there
+     * and not in [installState]; taken from the old store, and removed from it,
+     * so a reader who declined is not asked again with Android's last allowed
+     * ask. A fresh install is not that: the backup restored the old phone's
+     * preferences, flag included, and this install has not asked, so the old
+     * answer is not carried over.
      *
      * The flag, not the permission's state, because an app cannot tell a
      * permission it never asked for from one the reader denied once without an
@@ -670,7 +680,7 @@ class AskCoordinator(
      */
     private fun notificationsAlreadyAsked(): Boolean {
         installState.getBooleanOrNull(ASKED_FOR_NOTIFICATIONS_KEY)?.let { return it }
-        if (installState === defaults) return false
+        if (installState === defaults || !isInPlaceUpgrade()) return false
         val before = defaults.getBooleanOrNull(ASKED_FOR_NOTIFICATIONS_KEY) ?: return false
         installState.putBoolean(ASKED_FOR_NOTIFICATIONS_KEY, before)
         defaults.remove(ASKED_FOR_NOTIFICATIONS_KEY)
