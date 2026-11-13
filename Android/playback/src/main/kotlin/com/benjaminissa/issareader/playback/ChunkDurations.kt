@@ -10,8 +10,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
-import kotlinx.serialization.builtins.MapSerializer
-import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.Serializable
 import java.io.File
 import java.io.FileNotFoundException
 import java.nio.file.Files
@@ -51,17 +50,20 @@ object ChunkDurations {
     internal const val PARALLELISM = 6
 
     /**
-     * The shortest length worth believing for a chunk of narration.
+     * Which measurer wrote a cache file.
      *
-     * An earlier measurer read a chance pair of header-shaped bytes inside an
-     * MP4 as a frame walk, and wrote a few hundredths of a second into the
-     * cache as that chunk's length. Anything under this is read back as not yet
-     * measured, so the file is measured again rather than trusted for as long as
-     * the narration stays on the device.
+     * An earlier measurer read chance pairs of header-shaped bytes inside an
+     * MP4 or Ogg file as a frame walk, and cached the result as that chunk's
+     * length: a few hundredths of a second, or, for a large chunk, a figure
+     * well over a second that is still wrong. No length can tell those from
+     * a true one (a chunk can really be short), so the files that measurer
+     * wrote, which carry no version, are read back as not yet measured, once;
+     * the next save writes this version and the lengths in it are trusted.
      */
-    internal const val MINIMUM_LENGTH = 1.0
+    internal const val CACHE_VERSION = 2
 
-    private val serializer = MapSerializer(String.serializer(), Double.serializer())
+    @Serializable
+    private class Cache(val version: Int, val durations: Map<String, Double>)
 
     fun cacheFile(bookId: String, root: File? = null): File =
         File(AudioExtraction.defaultDirectory(bookId, root), FILENAME)
@@ -84,7 +86,7 @@ object ChunkDurations {
     fun loadFromDirectory(directory: File): Map<String, Double> = decode(File(directory, FILENAME))
 
     private fun decode(file: File): Map<String, Double> = try {
-        IssaJson.decodeFromString(serializer, file.readText()).filterValues { it >= MINIMUM_LENGTH }
+        IssaJson.decodeFromString(Cache.serializer(), file.readText()).takeIf { it.version == CACHE_VERSION }?.durations ?: emptyMap()
     } catch (_: Exception) {
         emptyMap()
     }
@@ -111,7 +113,7 @@ object ChunkDurations {
      */
     suspend fun saveToDirectory(durations: Map<String, Double>, directory: File) {
         currentCoroutineContext().ensureActive()
-        val data = IssaJson.encodeToString(serializer, durations)
+        val data = IssaJson.encodeToString(Cache.serializer(), Cache(CACHE_VERSION, durations))
         AudioExtraction.locks.lock(directory).withLock {
             if (!directory.isDirectory) throw FileNotFoundException(directory.path)
             // Atomically, because this is read on the next launch by a path

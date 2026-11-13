@@ -95,13 +95,12 @@ class ReaderNarrationFixesTest : AppSuite() {
 
             // And read back rather than measured again: a cache saying
             // otherwise is believed on the next open.
-            File(files.narration, "durations.json").writeText(
-                jsonText(
-                    mapOf(
-                        OpenClipBook.audioHref(openClipChapters[0]) to 30.0,
-                        OpenClipBook.audioHref(openClipChapters[1]) to 50.0,
-                    ),
+            ChunkDurations.saveToDirectory(
+                mapOf(
+                    OpenClipBook.audioHref(openClipChapters[0]) to 30.0,
+                    OpenClipBook.audioHref(openClipChapters[1]) to 50.0,
                 ),
+                files.narration,
             )
             val nextApp = testApp(scope)
             val reopened = nextApp.reader(book, local.library)

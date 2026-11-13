@@ -179,14 +179,111 @@ class ChunkDurationsTest {
         }
     }
 
-    /** A length too short to be a narration chunk is re-measured, not trusted. */
+    // The sniff of what opens a file.
+
+    /** MPEG-1 Layer III, 128 kbit/s, 44.1 kHz: 417-byte frames, 1152 samples each. */
+    private fun mp3Frames(count: Int, header: ByteArray = byteArrayOf(0xFF.toByte(), 0xFB.toByte(), 0x90.toByte(), 0x00)): ByteArray {
+        val frame = ByteArray(417)
+        header.copyInto(frame)
+        return ByteArray(count * 417) { frame[it % 417] }
+    }
+
+    /** An ID3v2 tag with [payload] zero bytes in it. */
+    private fun id3(payload: Int): ByteArray {
+        val tag = ByteArray(10 + payload)
+        "ID3".toByteArray().copyInto(tag)
+        tag[3] = 3
+        tag[8] = ((payload shr 7) and 0x7F).toByte()
+        tag[9] = (payload and 0x7F).toByte()
+        return tag
+    }
+
+    private fun measured(bytes: ByteArray): Double? {
+        val file = File.createTempFile("issa-length", ".bin")
+        try {
+            file.writeBytes(bytes)
+            return AudioFileLength.duration(file)
+        } finally {
+            file.delete()
+        }
+    }
+
+    /** [opening], then zeros with two adjacent frame-shaped headers deep inside. */
+    private fun withChancePair(opening: ByteArray): ByteArray {
+        val bytes = ByteArray(16_384)
+        opening.copyInto(bytes)
+        mp3Frames(2).copyInto(bytes, 9_000)
+        return bytes
+    }
+
+    /** An ADTS stream with an ID3 tag in front is not scanned for a chance pair either. */
     @Test
-    fun aCachedLengthBelowTheFloorIsMeasuredAgain() = runTest {
+    fun anAdtsStreamAfterAnId3TagIsNoLength() {
+        // 0xFFF1: ADTS, MPEG-4, no CRC, AAC-LC; then a rate, a channel count and a frame length.
+        val adts = byteArrayOf(0xFF.toByte(), 0xF1.toByte(), 0x50, 0x80.toByte(), 0x02, 0x1F, 0xFC.toByte())
+        assertNull(measured(withChancePair(id3(64) + adts)))
+    }
+
+    /** And a FLAC stream with one. */
+    @Test
+    fun aFlacStreamAfterAnId3TagIsNoLength() {
+        assertNull(measured(withChancePair(id3(64) + "fLaC".toByteArray())))
+    }
+
+    /** An Ogg stream, without a tag. */
+    @Test
+    fun anOggStreamWithAChancePairIsNoLength() {
+        assertNull(measured(withChancePair("OggS".toByteArray())))
+    }
+
+    /** A lone header found past padding is not a stream: a chance pair later does not make it one. */
+    @Test
+    fun aSingleLeadingHeaderIsNotEnough() {
+        assertNull(measured(withChancePair(ByteArray(7) + mp3Frames(1))))
+    }
+
+    /** Frames that disagree about their sample rate are not a run. */
+    @Test
+    fun framesThatDisagreeAboutTheirRateAreNotARun() {
+        val at48 = mp3Frames(1, byteArrayOf(0xFF.toByte(), 0xFB.toByte(), 0x94.toByte(), 0x00)).copyOf(384)
+        assertNull(measured(ByteArray(7) + mp3Frames(1) + at48 + at48 + at48))
+    }
+
+    /** A real MP3 is exact, with a tag, with a few bytes of padding before its first frame, and with both. */
+    @Test
+    fun anMp3IsMeasuredWhateverOpensIt() {
+        val frames = mp3Frames(40)
+        val expected = 40 * 1152.0 / 44_100.0
+        assertEquals(expected, checkNotNull(measured(frames)), 1e-9)
+        assertEquals(expected, checkNotNull(measured(ByteArray(7) + frames)), 1e-9)
+        assertEquals(expected, checkNotNull(measured(id3(300) + frames)), 1e-9)
+        assertEquals(expected, checkNotNull(measured(id3(300) + ByteArray(33) + frames)), 1e-9)
+    }
+
+    /**
+     * What the earlier measurer wrote has no version: all of it is measured
+     * again, whatever lengths it holds, large mis-measured ones included.
+     */
+    @Test
+    fun aCacheFromTheEarlierMeasurerIsDiscardedWhole() = runTest {
         val directory = root()
         try {
             directory.mkdirs()
-            File(directory, ChunkDurations.FILENAME).writeText("""{"a.mp4":0.0621,"b.mp3":312.5}""")
-            assertEquals(mapOf("b.mp3" to 312.5), ChunkDurations.loadFromDirectory(directory))
+            File(directory, ChunkDurations.FILENAME).writeText("""{"a.mp4":0.0621,"b.mp3":312.5,"c.mp4":3600.0}""")
+            assertEquals(emptyMap<String, Double>(), ChunkDurations.loadFromDirectory(directory))
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    /** A chunk that really is under a second is kept once measured, not measured on every load. */
+    @Test
+    fun aShortLengthInAVersionedCacheIsTrusted() = runTest {
+        val directory = root()
+        try {
+            directory.mkdirs()
+            ChunkDurations.saveToDirectory(mapOf("a.mp3" to 0.4, "b.mp3" to 312.5), directory)
+            assertEquals(mapOf("a.mp3" to 0.4, "b.mp3" to 312.5), ChunkDurations.loadFromDirectory(directory))
         } finally {
             directory.deleteRecursively()
         }

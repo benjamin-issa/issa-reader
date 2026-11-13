@@ -99,15 +99,43 @@ object AudioFileLength : DurationMeasurer {
         return Frame(length, samples, sampleRate, sideInfo)
     }
 
+    /**
+     * How many frames in a row, each where the one before says it ends and
+     * each of the same version, layer and sample rate, the stream must open
+     * with to be believed.
+     *
+     * Bytes that are not audio pass for a frame header about once in five
+     * thousand positions (eleven sync bits, and valid version, layer, bitrate
+     * and rate fields). The next frame must then start exactly where the first
+     * says it ends, with the same version, layer and rate: about one more
+     * chance in a hundred and fifty thousand. Four frames in a row is about
+     * 5 x 10^-20 per position, so about 10^-10 across every position of a
+     * gigabyte file. Three would be about 10^-5 over the same file, and two,
+     * which is what was accepted, about one in a few hundred for a file of
+     * five megabytes. Only for a stream found by scanning: a frame at the very
+     * start of the file, or straight after its tag, is where the format says
+     * audio begins, and a short chunk (one frame is enough) is read from it.
+     */
+    private const val FRAMES_TO_TRUST = 4
+
+    /** How far past the tag the first frame may be: padding some encoders leave. */
+    private const val LEADING_WINDOW = 4_096
+
+    /** Version, layer and sample rate: what must not change from one frame to the next. */
+    private const val STREAM_BITS = 0x001E0C00
+
     private fun mpeg(input: Window): Double? {
         val length = input.length
-        var position = id3v2Length(input)
-        // MPEG audio opens with an ID3 tag or with a frame. Anything else — an
-        // MP4's `ftyp`, an Ogg's `OggS` — is another container, and scanning
-        // its payload for frame headers finds two adjacent ones by chance about
-        // once in every few megabytes, and measures a chunk of narration as a
-        // fraction of a second. Null here sends it to the platform's extractor.
-        if (position == 0L && frame(input.int(0)) == null) return null
+        val tag = id3v2Length(input)
+        if (tag + 4 > length) return null
+        // MPEG audio opens with an ID3 tag, or with a frame, or with padding.
+        // Anything else is another container, and scanning its payload for
+        // frame headers finds adjacent ones by chance about once in every few
+        // megabytes, and measures a chunk of narration as a fraction of a
+        // second. Null here sends it to the platform's extractor. The same
+        // after a tag: an ADTS or FLAC file can carry one too.
+        if (isAnotherContainer(input, tag)) return null
+        var position = firstFrame(input, tag) ?: return null
         var seconds = 0.0
         var counted = 0
         // Whether the walk is in step: at the start of the audio, or straight
@@ -133,6 +161,43 @@ object AudioFileLength : DurationMeasurer {
             inStep = true
         }
         return if (seconds > 0) seconds else null
+    }
+
+    /** Where the stream's first frame is: at [from], or within a small window past it where a run of frames starts. Null when neither. */
+    private fun firstFrame(input: Window, from: Long): Long? {
+        val last = minOf(from + LEADING_WINDOW, input.length - 4)
+        val opening = frame(input.int(from))
+        if (opening != null && opening.length >= 4 && from + opening.length <= input.length) return from
+        var position = from + 1
+        while (position <= last) {
+            if (opensARun(input, position)) return position
+            position += 1
+        }
+        return null
+    }
+
+    /** Whether [FRAMES_TO_TRUST] consistent frames follow one another from [start]. */
+    private fun opensARun(input: Window, start: Long): Boolean {
+        val header = input.int(start)
+        if (frame(header) == null) return false
+        var position = start
+        repeat(FRAMES_TO_TRUST) {
+            if (position + 4 > input.length) return false
+            val next = input.int(position)
+            val found = frame(next) ?: return false
+            if (found.length < 4 || position + found.length > input.length) return false
+            if (next and STREAM_BITS != header and STREAM_BITS) return false
+            position += found.length
+        }
+        return true
+    }
+
+    /** Whether what opens at [position] is an MP4, Ogg, FLAC or ADTS stream. */
+    private fun isAnotherContainer(input: Window, position: Long): Boolean {
+        if (input.ascii(position, 4) == "OggS" || input.ascii(position, 4) == "fLaC") return true
+        if (input.ascii(position + 4, 4) == "ftyp") return true
+        // ADTS: the same twelve sync bits as MPEG audio, with the layer field zero.
+        return position + 2 <= input.length && input.byte(position) == 0xFF && input.byte(position + 1) and 0xF6 == 0xF0
     }
 
     /** Whether a frame header starts at [position], or the file ends exactly there. */
