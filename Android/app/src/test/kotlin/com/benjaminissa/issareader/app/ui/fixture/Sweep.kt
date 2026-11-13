@@ -78,6 +78,7 @@ object Sweep {
         signedIn: Boolean,
         local: LocalLibrary? = null,
         localRoute: LocalBooksRoute? = null,
+        localBook: (String) -> com.benjaminissa.issareader.app.ui.reader.LocalReaderBook? = { null },
     ): AppEnvironment {
         useStorage()
         val defaults = InMemoryKeyValueStore()
@@ -110,6 +111,7 @@ object Sweep {
             covers = { covers },
             readerEnvironment = { ReaderEnvironment(settings, fonts, defaults, scope, app, nowPlaying, fontImport = fontImport) },
             fontImport = fontImport,
+            localBook = localBook,
             local = local,
             localRoute = localRoute,
             versionText = "1.5.1 (52)",

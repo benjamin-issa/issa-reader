@@ -25,6 +25,9 @@ import com.benjaminissa.issareader.app.ui.fixture.FixtureLibrary
 import com.benjaminissa.issareader.app.ui.fixture.FixtureServer
 import com.benjaminissa.issareader.core.download.BookContentService
 import com.benjaminissa.issareader.core.sync.LibraryArrangement
+import com.benjaminissa.issareader.app.RecordingPersistence
+import com.benjaminissa.issareader.app.ui.reader.LocalReaderBook
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -214,15 +217,35 @@ class ShellNavigationTest {
             mediaSupport = TestMedia,
             contentResolver = null,
         )
-        local.setBooksForTesting(SettingsFixture.localBooks)
+        local.setBooksForTesting(persistences.map { it.book })
         val route = LocalBooksRoute(InMemoryKeyValueStore())
-        return driver.launch(signedIn = true, local = local, localRoute = route).app to route
+        // Each book opens in the real reader, over its own persistence, so
+        // which book's reader is on screen can be told by the book it shows.
+        val byUuid = persistences.associateBy { it.book.uuid }
+        val opened = driver.launch(
+            signedIn = true,
+            local = local,
+            localRoute = route,
+            localBook = { uuid -> byUuid[uuid]?.let { LocalReaderBook(it.book, it) } },
+        )
+        return opened.app to route
+    }
+
+    /** Three books that open, so a middle one and the last can be asked for, not only the first. */
+    private val persistences by lazy { List(3) { RecordingPersistence(accepts = true) } }
+    private val first get() = persistences[0].book.uuid
+    private val middle get() = persistences[1].book.uuid
+    private val last get() = persistences[2].book.uuid
+
+    @After
+    fun tearDownBooks() {
+        if (persistences.isNotEmpty()) persistences.forEach { it.tearDown() }
     }
 
     @Test
     fun `a link that pops a local reader leaves its book free to be opened again`() {
         val (app, route) = launchWithLocalBooks()
-        val book = SettingsFixture.localBooks[1].uuid
+        val book = middle
         route.open(book)
         driver.waitForNode(hasTestTag("screen.reader"))
         driver.settle()
@@ -237,14 +260,20 @@ class ShellNavigationTest {
         driver.waitForNode(hasTestTag("screen.reader"))
     }
 
+    /** Which book's reader is on screen, by the book it says it shows, not just that one is. */
+    private fun shownBook(app: AppModel): String? = app.visibleReaderUuid
+
     @Test
     fun `a local book asked for while a server reader is open replaces it`() {
         val (app, route) = launchWithLocalBooks()
         openReaderOnPeterAndWendy(app)
+        assertEquals(FixtureLibrary.READALONG_UUID, shownBook(app))
 
-        route.open(SettingsFixture.localBooks[0].uuid)
+        val asked = last
+        route.open(asked)
+        driver.waitFor { shownBook(app) == asked }
         driver.settle()
-        assertTrue(showing("screen.reader"))
+        assertEquals("the local book is the one on screen", asked, shownBook(app))
 
         compose.runOnUiThread { compose.activity.onBackPressedDispatcher.onBackPressed() }
         driver.waitFor { !showing("screen.reader") }
@@ -252,20 +281,32 @@ class ShellNavigationTest {
         assertFalse("the server reader was left under the local one", showing("screen.reader"))
     }
 
-    @Test
-    fun `a second local book asked for replaces the first, and the same one is left alone`() {
-        val (_, route) = launchWithLocalBooks()
-        route.open(SettingsFixture.localBooks[0].uuid)
-        driver.waitForNode(hasTestTag("screen.reader"))
+    private fun aLocalBookReplacesAnotherLocalBook(first: String, second: String) {
+        val (app, route) = launchWithLocalBooks()
+        route.open(first)
+        driver.waitFor { shownBook(app) == first }
         driver.settle()
-        route.open(SettingsFixture.localBooks[1].uuid)
+        route.open(second)
+        driver.waitFor { shownBook(app) == second }
         driver.settle()
+        assertEquals("the second book is the one on screen", second, shownBook(app))
+        assertEquals(second, route.openBook)
+
         compose.runOnUiThread { compose.activity.onBackPressedDispatcher.onBackPressed() }
         driver.waitFor { !showing("screen.reader") }
         driver.settle()
         assertFalse("the first local reader was left under the second", showing("screen.reader"))
         assertNull(route.openBook)
     }
+
+    @Test
+    fun `a middle local book asked for replaces the first`() = aLocalBookReplacesAnotherLocalBook(first, middle)
+
+    @Test
+    fun `the last local book asked for replaces a middle one`() = aLocalBookReplacesAnotherLocalBook(middle, last)
+
+    @Test
+    fun `the first local book asked for replaces the last`() = aLocalBookReplacesAnotherLocalBook(last, first)
 
     @Test
     fun `a removed download can be taken back from the snackbar`() {
