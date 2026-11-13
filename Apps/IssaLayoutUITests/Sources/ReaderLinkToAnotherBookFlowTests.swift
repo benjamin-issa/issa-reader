@@ -99,6 +99,66 @@ final class ReaderLinkToAnotherBookFlowTests: XCTestCase {
         try checkSecondLink(to: Self.last)
     }
 
+    /// A series page pushed from the book's own page covers it. A link for the
+    /// same book replaces the stack's path with an equal one, so the series
+    /// page used to stay on top, the request stayed armed with no page to take
+    /// it, and Back later opened the reader nobody had asked for.
+    func testLinkToTheLastBookFromItsSeriesPageOpensItsReader() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-IssaUITestFixture", "-issa.library.mode", "all"]
+        app.launch()
+        XCTAssertTrue(app.descendants(matching: .any)["card.continue"].waitForExistence(timeout: 120),
+                      "the fixture's catalogue never arrived")
+        let target = Self.last
+
+        let inBar = app.tabBars.buttons["Library"].firstMatch
+        (inBar.exists ? inBar : app.buttons["Library"].firstMatch).tap()
+        let search = app.textFields["Title, author, narrator, series, tag"]
+        XCTAssertTrue(search.waitForExistence(timeout: 15), "no library search field")
+        search.tap()
+        search.typeText("\(target.title)\n")
+        let cell = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier == %@", "cell.book.\(target.uuid)")).firstMatch
+        XCTAssertTrue(cell.waitForExistence(timeout: 15), "\(target.title) is not on the shelf")
+        cell.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["screen.bookDetail"].waitForExistence(timeout: 15),
+                      "the book's page did not open")
+
+        let series = app.descendants(matching: .any)["bookDetail.series"].firstMatch
+        var swipes = 0
+        while !(series.exists && series.isHittable), swipes < 6 {
+            app.swipeUp()
+            swipes += 1
+        }
+        XCTAssertTrue(series.exists, "the page has no series link")
+        series.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["screen.series"].waitForExistence(timeout: 15),
+                      "the series page did not open")
+
+        // The widget's case, for the book whose page is under the series page.
+        XCUIDevice.shared.press(.home)
+        sleep(3)
+        try deliverLink(toBook: target.uuid)
+
+        let coach = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label BEGINSWITH %@ OR label BEGINSWITH %@",
+                                  "Reading gestures", "This book is narrated"))
+            .firstMatch
+        if coach.waitForExistence(timeout: 20) {
+            coach.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        }
+        XCTAssertTrue(readerTitle(app, target.title).waitForExistence(timeout: 60),
+                      "the link for the book under the series page opened nothing")
+
+        // Closed, the page is the book's own and nothing opens again on Back.
+        let back = app.buttons["Back to the book"].firstMatch
+        XCTAssertTrue(back.waitForExistence(timeout: 15), "no way back out of the reader")
+        back.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["screen.bookDetail"].waitForExistence(timeout: 15))
+        sleep(3)
+        XCTAssertFalse(readerTitle(app, target.title).exists, "the reader opened again unasked")
+    }
+
     // MARK: -
 
     private func checkSecondLink(to target: (uuid: String, title: String)) throws {
