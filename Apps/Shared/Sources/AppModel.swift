@@ -1311,6 +1311,9 @@ public final class AppModel {
             ratings = mergedRatings
             loadError = nil
             IssaLog.info("library refreshed", ["books": String(fetched.count)])
+            Task { [weak self] in
+                await self?.backfillAudiobookManifests(session: session, generation: generation)
+            }
 
             // Off the refresh gesture entirely: a full catalogue rewrite and a
             // serial drain of queued writes have no business holding the
@@ -2231,16 +2234,51 @@ public final class AppModel {
         public enum Destination: Sendable, Equatable { case read, details }
         public let uuid: String
         public let destination: Destination
+        /// Which request this is. Two links for the same book are two
+        /// requests: the second has to be seen as a change, and has to
+        /// replace whatever the first left half done.
+        public var serial = 0
+
+        public init(uuid: String, destination: Destination, serial: Int = 0) {
+            self.uuid = uuid
+            self.destination = destination
+            self.serial = serial
+        }
     }
 
     public private(set) var pendingBook: PendingBook?
+    private var pendingBookSerial = 0
+
+    /// The window that is handling `pendingBook`, and the request it claimed.
+    ///
+    /// `pendingBook` and `visibleReaderUUID` are the app's, and every window
+    /// of an iPad app watches them, so each would act on one link: close its
+    /// own sheets, route, and race the others. The first window that is not
+    /// in the background to ask owns the request until it is spent or
+    /// replaced; the other windows leave it alone. A closed window gives its
+    /// claim back, and the others are told by this changing.
+    public private(set) var bookLinkOwner: (request: PendingBook, window: UUID)?
+
+    /// Whether `window` is the one to handle `request`, claiming it when no
+    /// window has yet.
+    public func claimBookLink(_ request: PendingBook, for window: UUID) -> Bool {
+        if let owner = bookLinkOwner, owner.request == request { return owner.window == window }
+        bookLinkOwner = (request, window)
+        return true
+    }
+
+    /// A window going away takes its claim with it.
+    public func releaseBookLinks(of window: UUID) {
+        if bookLinkOwner?.window == window { bookLinkOwner = nil }
+    }
 
     /// Set when a `.read` request resolves to a book that has text, and
     /// consumed by that book's screen so it opens the reader straight away.
     private var readerRequest: String?
 
     public func requestBook(_ uuid: String, _ destination: PendingBook.Destination) {
-        pendingBook = PendingBook(uuid: uuid, destination: destination)
+        pendingBookSerial &+= 1
+        pendingBook = PendingBook(uuid: uuid, destination: destination, serial: pendingBookSerial)
     }
 
     /// Accepts `issareader://book/{uuid}`.

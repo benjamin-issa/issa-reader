@@ -21,7 +21,8 @@ struct IntentInboxTests {
         inbox.bookID = "dracula"
 
         inbox.deliver(to: app)
-        #expect(app.pendingBook == AppModel.PendingBook(uuid: "dracula", destination: .read))
+        #expect(app.pendingBook?.uuid == "dracula")
+        #expect(app.pendingBook?.destination == .read)
         #expect(inbox.bookID == nil, "collected means gone, or the next foreground opens it again")
 
         app.requestBook("other", .details)

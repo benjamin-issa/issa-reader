@@ -220,10 +220,10 @@ struct LibraryTabs: View {
     /// almost always to carry on. Library stays first in the bar.
     @State private var selectedTab = Destination.reading
     @State private var showsPlayer = false
-    /// The request whose reader is being closed, and whether the page is
-    /// waiting out the cover's dismissal; see `openPendingBook`.
-    @State private var closingFor: AppModel.PendingBook?
-    @State private var settling = false
+    /// Where this window is in the link it is handling; see `BookLinkFlow`.
+    @State private var flow = BookLinkFlow()
+    /// Which window this is, for the request it claims.
+    @State private var windowID = UUID()
     /// Bumped to rebuild the Library tab's stack from its root. Emptying the
     /// path is not enough: most screens are pushed by
     /// `NavigationLink(destination:)` and never appear in it.
@@ -244,96 +244,106 @@ struct LibraryTabs: View {
     // type in this scope.
     enum Destination: Hashable { case library, reading, settings }
 
-    /// - Parameter force: route even though a reader still reports itself
-    ///   visible, after it has been given long enough to close.
-    private func openPendingBook(force: Bool = false) {
+    /// What this window sees of the request, for `BookLinkFlow`.
+    ///
+    /// A window not in the background takes the request if none has yet, and
+    /// then the others leave it alone: the pending request and the reader on
+    /// screen are the app's, so every window of an iPad app is woken by them,
+    /// and only one may close its sheets and push the page.
+    private func linkSituation() -> BookLinkFlow.Situation {
+        let pending = app.pendingBook
+        let owner = pending.map { scenePhase != .background && app.claimBookLink($0, for: windowID) }
+        return BookLinkFlow.Situation(
+            pending: pending,
+            libraryHasBook: pending.map { request in app.books.contains { $0.uuid == request.uuid } } ?? false,
+            visibleReader: app.visibleReaderUUID,
+            isOwner: owner ?? false,
+            mayHaveSheet: app.playback != nil)
+    }
+
+    /// Decides what the link does now; see `BookLinkFlow` for the stages.
+    ///
+    /// Not for the reader already on screen for the same book: tearing down
+    /// the stack then pushed a *different* `Book` value (a book being read has
+    /// a moving `position`), rebuilt the page and dismissed the reader
+    /// mid-session, so such a link is dropped. A reader for another book is
+    /// closed first: it is a cover owned by the page it was opened from (or by
+    /// the player sheet), which a path reset does not take down. Each owner
+    /// closes its cover on `requestCoversClosed`, the reader's disappearance
+    /// saves its position and releases `visibleReaderUUID`, and the change of
+    /// that comes back here, after a beat for the dismissal, since UIKit
+    /// refuses a presentation made while one is ending. The request is dropped
+    /// rather than consumed for the same book: consuming arms the one-shot
+    /// reader request, which then reopened the reader the next time that
+    /// book's screen appeared.
+    private func openPendingBook() {
+        apply(flow.evaluate(linkSituation()))
+    }
+
+    private func apply(_ step: BookLinkFlow.Step) {
         guard let request = app.pendingBook else { return }
-        // Don't tear down the stack when the reader for this very book is already
-        // on screen. `navigationDestination` keys on the whole Book value, and a
-        // book being read has a moving `position`, so a reset-then-append pushed
-        // a *different* value, rebuilt BookDetailView, and dismissed its open
-        // fullScreenCover reader mid-session — exactly what a "Currently reading"
-        // widget or Handoff deep link to the book you are reading would do. When
-        // the reader is closed we reset, so a deep link opens or reopens it and
-        // Back lands on the library.
-        //
-        // A reader for a different book is closed first. It is a cover owned by
-        // the page it was opened from (or by the player sheet), which a path
-        // reset does not take down: it stayed over the new book's page, and the
-        // page's own reader could not open under it. Each owner closes its
-        // cover on `requestCoversClosed`, the reader's disappearance saves its
-        // position and releases `visibleReaderUUID`, and the change of that
-        // comes back here to route, after a beat for the cover's dismissal to
-        // finish, since UIKit refuses a presentation made while one is ending.
-        //
-        // Decided before the request is consumed, and the request dropped
-        // rather than consumed for the same book: consuming arms the one-shot
-        // reader request, which then reopened the reader the next time that
-        // book's screen appeared. The reader reports itself visible from the
-        // moment its cover is up, so a second link arriving while the book is
-        // still opening is caught here too.
-        let visible = force ? nil : app.visibleReaderUUID
-        switch AppModel.pendingBookAction(for: request.uuid, visibleReader: visible) {
-        case .leave:
-            logRouting("leave", request, force: force)
-            closingFor = nil
-            app.discardPendingBook()
+        switch step {
+        case .nothing:
             return
-        case .closeReaderFirst:
-            // Waits for the library before closing anything for a book that
-            // may not exist.
-            guard app.books.contains(where: { $0.uuid == request.uuid }) else { return }
-            // Once per request: the library refreshing while the cover is
-            // going down comes back here too.
-            guard closingFor != request else { return }
-            closingFor = request
-            logRouting("close first", request, force: force)
-            app.requestCoversClosed(reader: visible)
-            showsPlayer = false
-            if localRoute?.openBook != nil { localRoute?.openBook = nil }
-            // A reader that never reports itself gone must not strand the link.
+        case .discard:
+            logRouting("leave", request)
+            app.discardPendingBook()
+        case let .closeCovers(reader, token):
+            logRouting("close first", request)
+            app.requestCoversClosed(reader: reader)
+            closeOwnCovers()
+            // A reader that never reports itself gone is asked again once,
+            // and then the request is dropped: pushing the page under it was
+            // the fault this replaces.
             Task {
                 try? await Task.sleep(for: .seconds(2))
-                guard app.pendingBook == request, closingFor == request else { return }
-                logRouting("fallback", request, force: true)
-                routePendingBook()
+                apply(flow.closeTimedOut(token: token, linkSituation()))
             }
-            return
+        case let .closeSheetsThenSettle(token):
+            logRouting("close sheets", request)
+            app.requestCoversClosed(reader: nil)
+            closeOwnCovers()
+            armSettle(token)
+        case let .settle(token):
+            logRouting("route after close", request)
+            armSettle(token)
         case .route:
-            if closingFor == request {
-                // The reader has gone: a beat for its dismissal, then the page.
-                guard !settling else { return }
-                settling = true
-                logRouting("route after close", request, force: force)
-                Task {
-                    try? await Task.sleep(for: .milliseconds(400))
-                    if app.pendingBook == request { routePendingBook() }
-                    settling = false
-                }
-                return
-            }
-            logRouting("route", request, force: force)
+            logRouting("route", request)
             routePendingBook()
+        case .giveUp:
+            logRouting("gave up: the reader would not close", request)
+            app.discardPendingBook()
         }
+    }
+
+    /// The beat a cover's dismissal needs before the page is pushed.
+    private func armSettle(_ token: Int) {
+        Task {
+            try? await Task.sleep(for: .milliseconds(400))
+            apply(flow.settleElapsed(token: token, linkSituation()))
+        }
+    }
+
+    private func closeOwnCovers() {
+        showsPlayer = false
+        if localRoute?.openBook != nil { localRoute?.openBook = nil }
     }
 
     /// One line in the diagnostics log for each decision, so a report of a link
     /// that did not open its book can be read back. Ids only, never a title.
-    private func logRouting(_ action: String, _ request: AppModel.PendingBook, force: Bool) {
+    private func logRouting(_ action: String, _ request: AppModel.PendingBook) {
         IssaLog.info("book link", [
             "action": action,
             "book": request.uuid,
             "destination": "\(request.destination)",
             "readerVisible": app.visibleReaderUUID ?? "none",
             "scenePhase": "\(scenePhase)",
-            "forced": String(force),
         ])
     }
 
     /// Spends the request: pushes the page, which opens its reader as it
     /// appears when the request was to read.
     private func routePendingBook() {
-        closingFor = nil
         guard let pending = app.consumePendingBook() else { return }
         // The expanded player is a sheet now, not a tab, so switching tabs no
         // longer moves it out of the way. Left up, it sat over the navigation
@@ -541,6 +551,9 @@ struct LibraryTabs: View {
         .onChange(of: app.books) { openPendingBook() }
         // A reader closed for a link has left: the page can be pushed.
         .onChange(of: app.visibleReaderUUID) { if app.pendingBook != nil { openPendingBook() } }
+        // A window that held a request and closed gives it to the others.
+        .onChange(of: app.bookLinkOwner?.window) { openPendingBook() }
+        .onDisappear { app.releaseBookLinks(of: windowID) }
         // "Show in Library" on a tag or author page: the Library tab, at its
         // root, where the page has already set the filter or the search.
         // This window's, from its own environment: one navigator for the
