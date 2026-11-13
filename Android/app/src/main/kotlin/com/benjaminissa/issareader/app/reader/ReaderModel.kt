@@ -687,9 +687,9 @@ class ReaderModel(
             } else {
                 prepareNarration(epubPackage, generation)
             }
-            // Where the reader landed is the place already held; only a move
-            // from here is worth writing.
-            lastWrittenLocator = locatorForCurrentPage()
+            // The place the reader came back to is the one the server holds; a
+            // book with nothing stored has none, and is saved where it opens.
+            lastWrittenLocator = if (restoring == null) null else locatorForCurrentPage()
             lastWrittenAnchor = null
             phase = Phase.Ready
             IssaLog.info(
