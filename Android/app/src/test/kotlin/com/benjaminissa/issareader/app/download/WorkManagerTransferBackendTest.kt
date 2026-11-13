@@ -318,6 +318,85 @@ class WorkManagerTransferBackendTest {
         assertTrue("work waiting to run keeps the partial it will resume", queuedFile.exists())
     }
 
+    /** A backend that has never seen the work, over the same WorkManager and the same partials: the next launch. */
+    private fun nextProcess() = WorkManagerTransferBackend(
+        context, OkHttpClient(), RecordingEvents(), WorkManager.getInstance(context), partials,
+    )
+
+    /**
+     * Work a 1.7.0 install queued for a paused download it resumed: its bytes
+     * are at the old id's name, which only its input data says. The first
+     * launch of the next release must not take them for an orphan's.
+     */
+    @Test
+    fun `the launch sweep of a new process keeps the partial queued work from an older release names`() = runBlocking {
+        val named = orphan()
+        val stranded = orphan()
+        val work = androidx.work.OneTimeWorkRequestBuilder<TransferWorker>()
+            .setConstraints(androidx.work.Constraints.Builder().setRequiredNetworkType(androidx.work.NetworkType.CONNECTED).build())
+            .setInputData(
+                backend.inputData(
+                    request(), "uuid|ebook|1|9",
+                    WorkManagerTransferBackend.ResumeState(named.path, named.length(), null),
+                ),
+            )
+            .addTag(WorkManagerTransferBackend.TAG)
+            .addTag(WorkManagerTransferBackend.DESCRIPTION_TAG + "uuid|ebook|1|9")
+            .build()
+        WorkManager.getInstance(context).enqueue(work).result.get()
+
+        nextProcess().sweepPartials(emptyList())
+
+        assertTrue("the partial the queued work will resume was deleted", named.exists())
+    }
+
+    /** The same for work this release queued: the sweep of a new process sees the partial by what the work says. */
+    @Test
+    fun `the launch sweep of a new process keeps the partial work from this release names`() = runBlocking {
+        val kept = orphan()
+        val stranded = orphan()
+        val transfer = backend.start(request(), "uuid|ebook|1|10", resumeData(kept)) as WorkManagerTransferBackend.WorkTransfer
+
+        nextProcess().sweepPartials(emptyList())
+
+        assertTrue(backend.partialFile(transfer.id).exists())
+        assertFalse("a partial nothing owns survived", stranded.exists())
+    }
+
+    /** A worker's failure ends the transfer in the same step that decides it: a pause after that is no cancellation. */
+    @Test
+    fun `a failed transfer is over, so a later cancel reports nothing`() {
+        val transfer = backend.start(request(), "uuid|ebook|1|11", null) as WorkManagerTransferBackend.WorkTransfer
+        assertTrue(transfer.begin())
+
+        assertEquals(WorkManagerTransferBackend.Settlement.Failed, transfer.settleError(androidStopped = false))
+        transfer.cancel()
+
+        assertTrue("a cancel after the failure was reported as one", events.completed.isEmpty())
+    }
+
+    /** Android stopping the worker leaves the transfer to run again, and a cancel meanwhile still lands. */
+    @Test
+    fun `a worker Android stopped waits to run again`() {
+        val transfer = backend.start(request(), "uuid|ebook|1|12", null) as WorkManagerTransferBackend.WorkTransfer
+        assertTrue(transfer.begin())
+
+        assertEquals(WorkManagerTransferBackend.Settlement.RunAgain, transfer.settleError(androidStopped = true))
+        assertTrue("it could not run again", transfer.begin())
+    }
+
+    /** A cancellation asked for before the error is the reason, whatever else happened. */
+    @Test
+    fun `an error after a cancel is that cancel`() {
+        val transfer = backend.start(request(), "uuid|ebook|1|13", null) as WorkManagerTransferBackend.WorkTransfer
+        assertTrue(transfer.begin())
+        transfer.cancel()
+
+        val settled = transfer.settleError(androidStopped = true)
+
+        assertTrue(settled is WorkManagerTransferBackend.Settlement.Cancelled)
+    }
+
     @Test
     fun `invalidating ends the backend and says so`() {
         backend.invalidateAndCancel()
