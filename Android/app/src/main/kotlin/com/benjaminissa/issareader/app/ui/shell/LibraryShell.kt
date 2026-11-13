@@ -286,7 +286,10 @@ private fun AnimatedContentTransitionScope<NavBackStackEntry>.popAway(): ExitTra
 @Composable
 private fun MiniPlayer(book: Book, coordinator: PlaybackDriving, modifier: Modifier = Modifier, onExpand: () -> Unit) {
     val environment = LocalAppEnvironment.current
-    val scope = rememberCoroutineScope()
+    // The app's, not the composition's: a press goes through `resume`, which may
+    // reopen a file, and opening the reader mid-way would cancel it between the
+    // seek and the play, leaving the book loaded and silent.
+    val scope = environment.app.scope
     // Redrawn as the engine moves: its observed state bumps a revision.
     coordinator.player.changes.collectAsState().value
     (coordinator as? Observed)?.changes?.collectAsState()?.value
