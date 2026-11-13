@@ -1,0 +1,219 @@
+import XCTest
+
+/// A link for one book arriving while another book's reader is open.
+///
+/// A "Currently reading" widget's second book, a Handoff, a Spotlight result
+/// or a notification all arrive as `issareader://book/<uuid>`. The reader
+/// that is up belongs to the page of the book being read, and the root used
+/// to reset its stack and push the new book's page while that reader stayed
+/// over everything: the other book's link did nothing, and Back from the
+/// reader landed on the page of the book the link had named.
+/// `MenuReaderDeepLinkFlowTests` covers the link to the same book.
+///
+/// Rows other than the first: the middle and the last book of the fixture
+/// library are the targets, and the reader that is open is asserted by the
+/// title it draws under its footer.
+///
+/// Needs the read-along fixture planted under the name of every book it
+/// opens, in both editions, as `scripts/layout-sweep.sh` does for the first.
+@MainActor
+final class ReaderLinkToAnotherBookFlowTests: XCTestCase {
+    private static let open = (uuid: "11111111-1111-4111-8111-111111111111", title: "Peter and Wendy")
+    private static let middle = (uuid: "33333333-3333-4333-8333-333333333333",
+                                 title: "This Is How You Lose the Time War")
+    private static let last = (uuid: "66666666-6666-4666-8666-666666666666",
+                               title: "The Ballad of Songbirds and Snakes")
+
+    override func setUp() {
+        super.setUp()
+        continueAfterFailure = false
+    }
+
+    func testLinkToTheMiddleBookFromTheLibraryTab() throws {
+        try check(openFrom: "Library", link: Self.middle)
+    }
+
+    func testLinkToTheLastBookFromTheLibraryTab() throws {
+        try check(openFrom: "Library", link: Self.last)
+    }
+
+    func testLinkToTheMiddleBookFromTheReadingTab() throws {
+        try check(openFrom: "Reading", link: Self.middle)
+    }
+
+    func testLinkToTheLastBookFromTheReadingTab() throws {
+        try check(openFrom: "Reading", link: Self.last)
+    }
+
+    /// The widget's own sequence: the first book opened by its link, then the
+    /// second book's.
+    func testSecondWidgetLinkWhileTheFirstWasOpenedByLink() throws {
+        try check(openFrom: "link", link: Self.last)
+    }
+
+    func testMiddleWidgetLinkWhileTheFirstWasOpenedByLink() throws {
+        try check(openFrom: "link", link: Self.middle)
+    }
+
+    /// The widget's real case: the phone is on the home screen when the link
+    /// arrives, so the app is brought forward by it.
+    func testLinkFromTheHomeScreenWhileTheReadingTabsReaderWasOpen() throws {
+        try check(openFrom: "Reading", link: Self.last, fromHomeScreen: true)
+    }
+
+    func testLinkFromTheHomeScreenWhileTheLibraryTabsReaderWasOpen() throws {
+        try check(openFrom: "Library", link: Self.middle, fromHomeScreen: true)
+    }
+
+    func testLinkFromTheHomeScreenWhileALinksReaderWasOpen() throws {
+        try check(openFrom: "link", link: Self.last, fromHomeScreen: true)
+    }
+
+    /// The reader opened from a cover's menu sits on a page the screen's router
+    /// pushed, not on one in the tab's path.
+    func testLinkToTheLastBookWhileAMenusReaderWasOpen() throws {
+        try check(openFrom: "menu", link: Self.last)
+    }
+
+    func testLinkToTheMiddleBookFromTheHomeScreenWhileAMenusReaderWasOpen() throws {
+        try check(openFrom: "menu", link: Self.middle, fromHomeScreen: true)
+    }
+
+    // MARK: -
+
+    private func check(openFrom tab: String, link target: (uuid: String, title: String),
+                       fromHomeScreen: Bool = false) throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-IssaUITestFixture", "-issa.library.mode", "all"]
+        app.launch()
+        XCTAssertTrue(app.descendants(matching: .any)["card.continue"].waitForExistence(timeout: 120),
+                      "the fixture's catalogue never arrived")
+
+        try openReader(of: Self.open.uuid, title: Self.open.title, from: tab, in: app)
+        let reader = app.descendants(matching: .any)["screen.reader"]
+        XCTAssertTrue(reader.waitForExistence(timeout: 60),
+                      "the reader never opened: is the planted EPUB on disk under this book's name?")
+        if !readerTitle(app, Self.open.title).waitForExistence(timeout: 20) {
+            let shot = XCTAttachment(screenshot: app.screenshot())
+            shot.lifetime = .keepAlways
+            add(shot)
+            print("TREE", app.debugDescription)
+            print("READERUP", reader.exists)
+            XCTFail("the open reader is not \(Self.open.title)'s")
+        }
+
+        if fromHomeScreen {
+            XCUIDevice.shared.press(.home)
+            sleep(3)
+        }
+        try deliver(link: target.uuid, to: app)
+
+        // The other book's reader, not the one that was open.
+        XCTAssertTrue(readerTitle(app, target.title).waitForExistence(timeout: 60),
+                      "the link for \(target.title) did not open its reader")
+        XCTAssertFalse(readerTitle(app, Self.open.title).exists,
+                       "\(Self.open.title)'s reader is still up")
+
+        // Closing it lands on the linked book's page.
+        let back = app.buttons["Back to the book"].firstMatch
+        XCTAssertTrue(back.waitForExistence(timeout: 15), "no way back out of the reader")
+        back.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["screen.bookDetail"].waitForExistence(timeout: 15),
+                      "closing the reader did not land on a book's page")
+        XCTAssertTrue(
+            app.navigationBars.matching(NSPredicate(format: "identifier CONTAINS %@", target.title))
+                .firstMatch.waitForExistence(timeout: 10),
+            "the page under the reader is not \(target.title)'s")
+    }
+
+    /// Delivers a link to the running app, the way the widget does.
+    ///
+    /// `XCUIApplication.open` does not: it relaunches the app with the link
+    /// (the log shows a second "app launched" for every call), so a link that
+    /// is meant to find a reader open finds a fresh process instead. The link
+    /// is sent by `xcrun simctl openurl`, which a watcher on the host runs when
+    /// this test raises its flag, and the system's "Open in" prompt, which
+    /// that route shows and a widget does not, is answered here. Without the
+    /// watcher (`scripts/deliver-test-links.sh`) the test is skipped.
+    private func deliver(link uuid: String, to app: XCUIApplication) throws {
+        let flag = "/tmp/issa-test-link.flag"
+        try uuid.write(toFile: flag, atomically: true, encoding: .utf8)
+        let deadline = Date().addingTimeInterval(10)
+        while FileManager.default.fileExists(atPath: flag), Date() < deadline { usleep(200_000) }
+        try XCTSkipIf(FileManager.default.fileExists(atPath: flag),
+                      "no watcher delivered the link: run scripts/deliver-test-links.sh")
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let open = springboard.alerts.buttons["Open"].firstMatch
+        if open.waitForExistence(timeout: 20) { open.tap() }
+    }
+
+    private func readerTitle(_ app: XCUIApplication, _ title: String) -> XCUIElement {
+        app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier == %@ AND label CONTAINS %@", "reader.bookTitle", title))
+            .firstMatch
+    }
+
+    private func openReader(of uuid: String, title: String, from tab: String, in app: XCUIApplication) throws {
+        if tab == "link" {
+            app.open(try XCTUnwrap(URL(string: "issareader://book/\(uuid)")))
+            let coach = app.descendants(matching: .any)
+                .matching(NSPredicate(format: "label BEGINSWITH %@ OR label BEGINSWITH %@",
+                                      "Reading gestures", "This book is narrated"))
+                .firstMatch
+            if coach.waitForExistence(timeout: 20) {
+                coach.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+            }
+            return
+        }
+        let inBar = app.tabBars.buttons[tab == "menu" ? "Library" : tab].firstMatch
+        (inBar.exists ? inBar : app.buttons[tab].firstMatch).tap()
+        if tab == "Library" || tab == "menu" {
+            let search = app.textFields["Title, author, narrator, series, tag"]
+            XCTAssertTrue(search.waitForExistence(timeout: 15), "no library search field")
+            search.tap()
+            search.typeText("\(title)\n")
+        }
+        let cell = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier == %@", "cell.book.\(uuid)")).firstMatch
+        let card = app.descendants(matching: .any)["card.continue"].firstMatch
+        if tab == "menu" {
+            XCTAssertTrue(cell.waitForExistence(timeout: 15), "\(title) is not on the shelf")
+            cell.press(forDuration: 1.2)
+            let read = app.buttons.matching(NSPredicate(format: "label == %@ OR label == %@", "Read", "Resume"))
+                .firstMatch
+            XCTAssertTrue(read.waitForExistence(timeout: 10), "the menu offered no Read")
+            read.tap()
+            let coach = app.descendants(matching: .any)
+                .matching(NSPredicate(format: "label BEGINSWITH %@ OR label BEGINSWITH %@",
+                                      "Reading gestures", "This book is narrated"))
+                .firstMatch
+            if coach.waitForExistence(timeout: 20) {
+                coach.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+            }
+            return
+        }
+        var viaCard = false
+        if cell.waitForExistence(timeout: 15) {
+            cell.tap()
+        } else {
+            viaCard = true
+            XCTAssertTrue(card.exists, "\(title) is not on the \(tab) screen")
+            card.tap()
+        }
+        // The Continue card asks for the reader itself, so there is no Read
+        // button to press: a tap at its place would land on the reader.
+        let reader = app.descendants(matching: .any)["screen.reader"].firstMatch
+        if !viaCard || !reader.waitForExistence(timeout: 15) {
+            let read = app.descendants(matching: .any)["action.read"].firstMatch
+            XCTAssertTrue(read.waitForExistence(timeout: 15), "no Read action on the book screen")
+            read.tap()
+        }
+        let coach = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label BEGINSWITH %@ OR label BEGINSWITH %@",
+                                  "Reading gestures", "This book is narrated"))
+            .firstMatch
+        if coach.waitForExistence(timeout: 20) {
+            coach.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        }
+    }
+}
