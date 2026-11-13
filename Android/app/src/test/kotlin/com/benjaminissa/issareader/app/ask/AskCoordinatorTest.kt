@@ -335,6 +335,23 @@ class AskCoordinatorTest {
         }
     }
 
+    /** An install that was asked on 1.7.0, where the flag lived with the other preferences, is not asked again. */
+    @Test
+    fun `an upgrade keeps the answer its old store held`() {
+        val old = InMemoryKeyValueStore().also { it.putBoolean(AskCoordinator.ASKED_FOR_NOTIFICATIONS_KEY, true) }
+        val install = InMemoryKeyValueStore()
+        val notifier = CountingNotifier()
+        AskHarness(notifier = notifier, defaults = old, installState = install).use { harness ->
+            harness.run {
+                val job = assertNotNull(coordinator.ask("What did Alice follow?", source(), boundary()))
+                settle(job)
+                assertEquals("asked again", 0, notifier.authorizationRequests)
+                assertTrue(install.getBoolean(AskCoordinator.ASKED_FOR_NOTIFICATIONS_KEY))
+                assertNull("left behind in the backed-up store", old.getBooleanOrNull(AskCoordinator.ASKED_FOR_NOTIFICATIONS_KEY))
+            }
+        }
+    }
+
     /**
      * Once means once across questions, not one flag set: with the once-only
      * guard deleted, every question asked again and the test above stayed green.

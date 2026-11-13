@@ -653,9 +653,28 @@ class AskCoordinator(
      * the moment the reader has something to be told about later.
      */
     private fun requestNotificationsOnce() {
-        if (installState.getBoolean(ASKED_FOR_NOTIFICATIONS_KEY)) return
+        if (notificationsAlreadyAsked()) return
         installState.putBoolean(ASKED_FOR_NOTIFICATIONS_KEY, true)
         notifier?.requestAuthorizationIfNeeded()
+    }
+
+    /**
+     * Whether the reader has been asked, here or on the release that kept the
+     * flag with the other preferences. An upgrading install has it there and
+     * not in [installState]; taken from the old store, and removed from it, so
+     * a reader who declined is not asked again with Android's last allowed ask.
+     *
+     * The flag, not the permission's state, because an app cannot tell a
+     * permission it never asked for from one the reader denied once without an
+     * activity at hand to ask the system.
+     */
+    private fun notificationsAlreadyAsked(): Boolean {
+        installState.getBooleanOrNull(ASKED_FOR_NOTIFICATIONS_KEY)?.let { return it }
+        if (installState === defaults) return false
+        val before = defaults.getBooleanOrNull(ASKED_FOR_NOTIFICATIONS_KEY) ?: return false
+        installState.putBoolean(ASKED_FOR_NOTIFICATIONS_KEY, before)
+        defaults.remove(ASKED_FOR_NOTIFICATIONS_KEY)
+        return before
     }
 
     /** Whether the sheet should put the system's notification question now. */
