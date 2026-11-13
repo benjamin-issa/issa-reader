@@ -87,7 +87,47 @@ final class ReaderLinkToAnotherBookFlowTests: XCTestCase {
         try check(openFrom: "menu", link: Self.middle, fromHomeScreen: true)
     }
 
+    /// A second link for the book whose page is the one on the stack, its
+    /// reader closed: the path is `[book]` before and after, the page kept its
+    /// identity, and the reader request was left armed with nothing to take
+    /// it. Rows other than the first, as above.
+    func testSecondLinkToTheMiddleBookWhoseReaderWasClosed() throws {
+        try checkSecondLink(to: Self.middle)
+    }
+
+    func testSecondLinkToTheLastBookWhoseReaderWasClosed() throws {
+        try checkSecondLink(to: Self.last)
+    }
+
     // MARK: -
+
+    private func checkSecondLink(to target: (uuid: String, title: String)) throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-IssaUITestFixture", "-issa.library.mode", "all"]
+        app.launch()
+        XCTAssertTrue(app.descendants(matching: .any)["card.continue"].waitForExistence(timeout: 120),
+                      "the fixture's catalogue never arrived")
+
+        try openReader(of: target.uuid, title: target.title, from: "link", in: app)
+        XCTAssertTrue(readerTitle(app, target.title).waitForExistence(timeout: 60),
+                      "the first link did not open \(target.title)'s reader")
+
+        // Closed, onto the book's own page, which stays on the stack.
+        let back = app.buttons["Back to the book"].firstMatch
+        XCTAssertTrue(back.waitForExistence(timeout: 15), "no way back out of the reader")
+        back.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["screen.bookDetail"].waitForExistence(timeout: 15),
+                      "closing the reader did not land on the book's page")
+        XCTAssertFalse(readerTitle(app, target.title).exists, "the reader did not close")
+
+        // The widget's case: from the home screen, for the same book again.
+        XCUIDevice.shared.press(.home)
+        sleep(3)
+        try deliverLink(toBook: target.uuid)
+
+        XCTAssertTrue(readerTitle(app, target.title).waitForExistence(timeout: 60),
+                      "the second link for \(target.title), whose page was already up, opened nothing")
+    }
 
     private func check(openFrom tab: String, link target: (uuid: String, title: String),
                        fromHomeScreen: Bool = false) throws {

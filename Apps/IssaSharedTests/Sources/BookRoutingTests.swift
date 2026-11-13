@@ -60,6 +60,24 @@ struct BookRoutingTests {
         #expect(!app.consumeReaderRequest(for: other))
     }
 
+    /// A read request for a book with no text is a details request in effect,
+    /// and a details request leaves nothing armed: a one-shot reader request
+    /// left over opens the reader the next time that book's page appears.
+    @Test("a read link for a book with no text arms no reader")
+    func aReadLinkForAnAudiobookArmsNoReader() {
+        let app = AppModel(keychain: LocalTestTokens(), notificationCentre: NotificationCenter())
+        let audio = SharedFixtures.book("Listen", uuid: "listen", audiobook: true, ebook: false)
+        let last = SharedFixtures.book("Last", uuid: "last")
+        app.books = [SharedFixtures.book("Dracula", uuid: "dracula"), last, audio]
+
+        app.requestBook("listen", .read)
+        let routed = app.consumePendingBook()
+        #expect(routed?.destination == .details)
+        #expect(!app.consumeReaderRequest(for: audio), "a details request left a reader armed")
+        // And none for the book the request was not about either.
+        #expect(!app.consumeReaderRequest(for: last))
+    }
+
     @Test("asking for the covers to close is seen by every owner of one")
     func closeRequestsCount() {
         let app = AppModel(keychain: LocalTestTokens(), notificationCentre: NotificationCenter())
