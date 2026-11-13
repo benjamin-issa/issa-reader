@@ -204,15 +204,30 @@ open class IssaPlaybackService : MediaLibraryService() {
      * went, headphones were plugged in, a binding or an interval changed in
      * Settings — so the buttons and the commands on offer follow.
      */
-    private fun transportChanged() {
+    internal fun transportChanged(
+        controllers: List<MediaSession.ControllerInfo> = session.connectedControllers,
+        apply: (MediaSession.ControllerInfo, SessionCommands, Player.Commands) -> Unit = { controller, session, player ->
+            this.session.setAvailableCommands(controller, session, player)
+        },
+    ) {
         val transport = host.router.transport
         if (transport != null) player.setSkipIntervals(transport.skipBackwardInterval, transport.skipForwardInterval)
         session.setMediaButtonPreferences(buttons())
-        for (controller in session.connectedControllers) {
+        for (controller in controllers) {
             if (ControllerSurfaces.isCar(session, controller)) continue
-            session.setAvailableCommands(controller, SessionTransport.sessionCommands(), playerCommands(controller))
+            val (sessionCommands, playerCommands) = commandsFor(controller)
+            apply(controller, sessionCommands, playerCommands)
         }
     }
+
+    /**
+     * The commands a controller is offered, when it connects and whenever the
+     * transport changes: none for one that may not browse, so a stranger never
+     * gets any back, and the transport's own for the rest.
+     */
+    private fun commandsFor(controller: MediaSession.ControllerInfo): Pair<SessionCommands, Player.Commands> =
+        if (!mayBrowse(controller)) SessionCommands.EMPTY to Player.Commands.EMPTY
+        else SessionTransport.sessionCommands() to playerCommands(controller)
 
     /** The car's controller is offered the track pair always; its own binding decides what it does. */
     private fun playerCommands(controller: MediaSession.ControllerInfo) =
@@ -444,15 +459,16 @@ open class IssaPlaybackService : MediaLibraryService() {
             // The service is exported, so any app may connect. One that may not
             // browse is connected with no commands: it can neither start,
             // replace nor re-rate playback.
+            val (sessionCommands, playerCommands) = commandsFor(controller)
             if (!mayBrowse(controller)) {
                 return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
-                    .setAvailablePlayerCommands(Player.Commands.EMPTY)
-                    .setAvailableSessionCommands(SessionCommands.EMPTY)
+                    .setAvailablePlayerCommands(playerCommands)
+                    .setAvailableSessionCommands(sessionCommands)
                     .build()
             }
             return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
-                .setAvailablePlayerCommands(playerCommands(controller))
-                .setAvailableSessionCommands(SessionTransport.sessionCommands())
+                .setAvailablePlayerCommands(playerCommands)
+                .setAvailableSessionCommands(sessionCommands)
                 .setMediaButtonPreferences(buttons())
                 .build()
         }

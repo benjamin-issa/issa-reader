@@ -10,6 +10,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.session.LibraryResult
 import androidx.media3.session.MediaLibraryService.LibraryParams
 import androidx.media3.session.MediaSession
+import androidx.media3.session.SessionCommands
 import androidx.media3.session.SessionError
 import androidx.media3.session.SessionResult
 import com.benjaminissa.issareader.core.sync.CarCatalogue
@@ -200,6 +201,21 @@ class IssaPlaybackServiceTest {
             assertTrue(kind, result.availableSessionCommands.contains(SessionTransport.cycleRate))
             assertEquals(kind, LibraryResult.RESULT_SUCCESS, callback.onGetLibraryRoot(session, who, null).await().resultCode)
         }
+    }
+
+    /** A transport change re-offers commands to connected controllers; a stranger must not get any back. */
+    @Test
+    fun aTransportChangeLeavesAStrangerWithNoCommandsAndAnAllowedCallerWithTheirs() {
+        val offered = mutableMapOf<MediaSession.ControllerInfo, Pair<SessionCommands, androidx.media3.common.Player.Commands>>()
+        service.transportChanged(listOf(stranger, bluetooth)) { who, commands, player -> offered[who] = commands to player }
+        val (strangerSession, strangerPlayer) = offered.getValue(stranger)
+        assertFalse(strangerPlayer.contains(androidx.media3.common.Player.COMMAND_PLAY_PAUSE))
+        assertFalse(strangerPlayer.contains(androidx.media3.common.Player.COMMAND_SET_MEDIA_ITEM))
+        assertFalse(strangerSession.contains(SessionTransport.cycleRate))
+        val (allowedSession, allowedPlayer) = offered.getValue(bluetooth)
+        assertTrue(allowedPlayer.contains(androidx.media3.common.Player.COMMAND_PLAY_PAUSE))
+        assertTrue(allowedPlayer.contains(androidx.media3.common.Player.COMMAND_SET_MEDIA_ITEM))
+        assertTrue(allowedSession.contains(SessionTransport.cycleRate))
     }
 
     @Test
