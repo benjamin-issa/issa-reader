@@ -80,14 +80,9 @@ fun IssaRoot(environment: AppEnvironment) {
                 snapshotFlow { localRoute.openBook }.collect { uuid ->
                     val reader = rootNav.currentBackStackEntry?.takeIf { it.destination.hasRoute<ReaderRoute>() }?.toRoute<ReaderRoute>()
                     when {
-                        // Replaces a reader already up, as a server book's link
-                        // does: popped, so it is disposed and saves its place,
-                        // rather than left under a second one. The same book
-                        // already open is left alone.
-                        uuid != null && reader?.bookUuid != uuid -> {
-                            if (reader != null) rootNav.popBackStack(RootRoute, inclusive = false)
-                            actions.openReader(uuid, local = true)
-                        }
+                        // Another book's reader over an open one replaces it: the
+                        // navigation's single-top launch pops the old route.
+                        uuid != null && reader?.bookUuid != uuid -> actions.openReader(uuid, local = true)
                         uuid == null && reader?.local == true -> rootNav.popBackStack(RootRoute, inclusive = false)
                     }
                 }
