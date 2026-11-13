@@ -27,6 +27,10 @@ final class LogStore: @unchecked Sendable {
     private let io = NSRecursiveLock()
     private var pending: [IssaLog.Entry] = []
     private var flushing = false
+    /// When the files were last rewritten without what has aged out.
+    private var lastPruned: Date?
+    /// How often they are.
+    private let pruneEvery: TimeInterval = 10 * 60
 
     /// Roughly a few thousand lines. Small enough to rewrite cheaply, large
     /// enough that six hours of ordinary use rarely needs the previous file.
@@ -138,6 +142,36 @@ final class LogStore: @unchecked Sendable {
             try? data.write(to: currentURL, options: .atomic)
         }
         rotateIfNeeded()
+        pruneIfDue()
+    }
+
+    /// Rewrites the files without what has aged out, the first time this store
+    /// writes and every ten minutes after. The six hours the privacy policy
+    /// promises are a promise about what is kept, not only about what is read:
+    /// rotation alone keeps an old entry until half a megabyte has been logged
+    /// after it, which on a quiet install is never.
+    private func pruneIfDue() {
+        let now = Date()
+        if let lastPruned, now.timeIntervalSince(lastPruned) < pruneEvery { return }
+        lastPruned = now
+        let cutoff = now - IssaLog.window
+        for url in [previousURL, currentURL].compactMap({ $0 }) {
+            guard let data = try? Data(contentsOf: url),
+                  let text = String(data: data, encoding: .utf8)
+            else { continue }
+            let lines = text.split(separator: "\n")
+            let kept = lines.filter { line in
+                guard let entry = try? decoder.decode(IssaLog.Entry.self, from: Data(line.utf8))
+                else { return false }
+                return entry.time >= cutoff
+            }
+            if kept.count == lines.count { continue }
+            if kept.isEmpty {
+                try? FileManager.default.removeItem(at: url)
+            } else {
+                try? Data((kept.joined(separator: "\n") + "\n").utf8).write(to: url, options: .atomic)
+            }
+        }
     }
 
     private func rotateIfNeeded() {
