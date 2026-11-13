@@ -237,6 +237,41 @@ public final class AudioPlayer {
         onRateChosen?(rate)
     }
 
+    /// The system took the audio session: pause, remembering whether the book
+    /// was playing so the end of the interruption can carry on.
+    func interruptionBegan() {
+        // Latched *after* the pause, not before: `pause()` clears it, because
+        // an explicit pause during an interruption must not be undone when the
+        // interruption ends. Setting it first would have this pause wipe the
+        // very flag it is recording.
+        //
+        // A second `began` before the first has ended — a navigation prompt
+        // and then a call — finds the player already paused by the first, and
+        // must not record that as the state to go back to: the end would then
+        // leave a book the listener was in the middle of silent. A pause the
+        // listener makes in between still clears it, through `pause()`.
+        let wasPlaying = isPlaying || wasPlayingBeforeInterruption
+        pause()
+        wasPlayingBeforeInterruption = wasPlaying
+        onInterruption?(false)
+    }
+
+    /// The system gave the session back.
+    func interruptionEnded(shouldResume: Bool) {
+        let resumes = shouldResume && wasPlayingBeforeInterruption
+        // Spent, either way. Without clearing it a second `.ended` with no
+        // intervening `.began` — which the system does deliver — resumed a book
+        // the listener had stopped.
+        wasPlayingBeforeInterruption = false
+        if resumes {
+            #if os(iOS) || os(tvOS)
+            try? AVAudioSession.sharedInstance().setActive(true)
+            #endif
+            play()
+        }
+        onInterruption?(resumes)
+    }
+
     /// Handles the two things that stop audio without the app asking.
     ///
     /// A phone call interrupts; the system says when it is over and whether it
@@ -260,28 +295,10 @@ public final class AudioPlayer {
                 else { return }
                 switch type {
                 case .began:
-                    // Latched *after* the pause, not before: `pause()` clears
-                    // it, because an explicit pause during an interruption must
-                    // not be undone when the interruption ends. Setting it
-                    // first would have this pause wipe the very flag it is
-                    // recording.
-                    let wasPlaying = self.isPlaying
-                    self.pause()
-                    self.wasPlayingBeforeInterruption = wasPlaying
-                    self.onInterruption?(false)
+                    self.interruptionBegan()
                 case .ended:
                     let options = rawOptions.map(AVAudioSession.InterruptionOptions.init) ?? []
-                    let shouldResume = options.contains(.shouldResume)
-                        && self.wasPlayingBeforeInterruption
-                    // Spent, either way. Without clearing it a second `.ended`
-                    // with no intervening `.began` — which the system does
-                    // deliver — resumed a book the listener had stopped.
-                    self.wasPlayingBeforeInterruption = false
-                    if shouldResume {
-                        try? AVAudioSession.sharedInstance().setActive(true)
-                        self.play()
-                    }
-                    self.onInterruption?(shouldResume)
+                    self.interruptionEnded(shouldResume: options.contains(.shouldResume))
                 @unknown default:
                     break
                 }
@@ -649,6 +666,14 @@ public final class AudioPlayer {
         notifyRateObservers(rate)
     }
 
+    /// How many times the player has been paused.
+    ///
+    /// Read before and after a suspension by a start that means to play when
+    /// it gets there: a pause that landed in between is the listener's last
+    /// word, and `isPlaying` cannot say so, because a load leaves it as it
+    /// was and a start from a paused player must still play.
+    public private(set) var pauseCount = 0
+
     /// Stops, and forgets that we were playing before an interruption.
     ///
     /// The latch is set on `.began` and read on `.ended`, and nothing cleared
@@ -656,6 +681,7 @@ public final class AudioPlayer {
     /// paused on the lock screen had the book start again by itself when the
     /// call ended, against an explicit instruction.
     public func pause() {
+        pauseCount &+= 1
         wasPlayingBeforeInterruption = false
         isPlaying = false
         player.rate = 0
@@ -666,14 +692,6 @@ public final class AudioPlayer {
     ///
     /// Only for the item the player still holds — a failure reported for one a
     /// later load replaced is about audio nobody is listening to.
-    /// How many times the player has been paused.
-    ///
-    /// Read before and after a suspension by a start that means to play when
-    /// it gets there: a pause that landed in between is the listener's last
-    /// word, and `isPlaying` cannot say so, because a load leaves it as it
-    /// was and a start from a paused player must still play.
-    public private(set) var pauseCount = 0
-
     func itemDidFail(generation: Int, reason: String) {
         // Once per item: the duration load throwing and the status turning
         // `.failed` are usually the same failure, reported twice.
@@ -681,7 +699,6 @@ public final class AudioPlayer {
         failedItem = generation
         placementPending = false
         player.currentItem?.cancelPendingSeeks()
-        pauseCount &+= 1
         if isPlaying { pause() }
         IssaLog.warning("audio would not play", [
             "href": currentAudioHref ?? "", "error": reason,
