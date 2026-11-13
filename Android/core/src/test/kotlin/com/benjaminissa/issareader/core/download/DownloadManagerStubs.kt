@@ -132,6 +132,8 @@ internal class FakeTransfer(
  */
 internal class FakeBackend(private val events: TransferEvents, private val queue: CoroutineScope) : TransferBackend {
     val started = mutableListOf<FakeTransfer>()
+    val discarded = mutableListOf<String>()
+    val swept = mutableListOf<List<String>>()
     var invalidated = false
         private set
 
@@ -143,6 +145,14 @@ internal class FakeBackend(private val events: TransferEvents, private val queue
         FakeTransfer(description, request, events = events, post = ::post).also { started.add(it) }
 
     override suspend fun runningTransfers(): List<Transfer> = started.filter { it.state == FakeTransfer.State.RUNNING }
+
+    override fun discardResumeData(resumeData: ByteArray) {
+        discarded += resumeData.decodeToString()
+    }
+
+    override suspend fun sweepPartials(keeping: List<ByteArray>) {
+        swept += keeping.map { it.decodeToString() }
+    }
 
     override fun invalidateAndCancel() {
         invalidated = true
@@ -172,6 +182,7 @@ internal fun TestScope.downloadManager(
     tokens: TokenProviding = StubTokens(),
     fenceStore: KeyValueStore? = null,
     destinationFor: (DownloadManager.Job) -> File = { File("/dev/null") },
+    backends: MutableList<FakeBackend>? = null,
 ): DownloadManager {
     val backendQueue = CoroutineScope(StandardTestDispatcher(testScheduler))
     return DownloadManager(
@@ -181,7 +192,7 @@ internal fun TestScope.downloadManager(
         fenceStore = fenceStore,
         dispatcher = StandardTestDispatcher(testScheduler),
         destinationFor = destinationFor,
-        makeBackend = { events -> FakeBackend(events, backendQueue) },
+        makeBackend = { events -> FakeBackend(events, backendQueue).also { backends?.add(it) } },
     )
 }
 

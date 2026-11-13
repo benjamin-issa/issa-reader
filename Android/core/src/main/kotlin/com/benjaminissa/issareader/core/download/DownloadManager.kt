@@ -381,7 +381,8 @@ class DownloadManager(
             // transfer yet. Marked so it stops when the token arrives.
             cancelledBeforeStart.add(job)
         }
-        resumeData.remove(job)
+        // A cancelled download is not resumed, so its partial file goes too.
+        resumeData.remove(job)?.let(backend::discardResumeData)
         setState(job, null)
     }
 
@@ -410,6 +411,7 @@ class DownloadManager(
         keepFence()
         for (task in tasks.values) task.cancel()
         tasks.clear()
+        resumeData.values.forEach(backend::discardResumeData)
         resumeData.clear()
         pausing.clear()
         cancelledBeforeStart.clear()
@@ -438,6 +440,7 @@ class DownloadManager(
     /** Reattaches to whatever the backend carried on with while the app was away. */
     suspend fun reattach() {
         adopt(backend.runningTransfers())
+        backend.sweepPartials(resumeData.values.toList())
     }
 
     /**

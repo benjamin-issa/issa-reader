@@ -39,6 +39,7 @@ class WorkManagerTransferBackendTest {
     private val server = MockWebServer()
     private val events = RecordingEvents()
     private lateinit var backend: WorkManagerTransferBackend
+    private val partials = File(context.cacheDir, "partial-${System.nanoTime()}")
 
     @Before
     fun setUp() {
@@ -49,7 +50,7 @@ class WorkManagerTransferBackendTest {
         server.start()
         backend = WorkManagerTransferBackend(
             context, OkHttpClient(), events, WorkManager.getInstance(context),
-            File(context.cacheDir, "partial-${System.nanoTime()}"),
+            partials,
         )
     }
 
@@ -226,6 +227,50 @@ class WorkManagerTransferBackendTest {
         runWorker(transfer, "uuid|ebook|1|3", resume)
 
         assertEquals("whole new file", events.finished.single().second)
+    }
+
+    private fun resumeData(file: File) = kotlinx.serialization.json.Json.encodeToString(
+        WorkManagerTransferBackend.ResumeState.serializer(),
+        WorkManagerTransferBackend.ResumeState(file.path, file.length(), null),
+    ).encodeToByteArray()
+
+    private fun orphan(name: String = "${java.util.UUID.randomUUID()}.part") =
+        File(partials, name).apply { parentFile!!.mkdirs(); writeText("half a book") }
+
+    @Test
+    fun `a partial handed back and then cancelled is deleted`() {
+        val file = orphan()
+        backend.discardResumeData(resumeData(file))
+        assertFalse(file.exists())
+    }
+
+    @Test
+    fun `discarding never reaches a file outside the partial directory`() {
+        val elsewhere = File(context.cacheDir, "elsewhere-${System.nanoTime()}.part").apply { writeText("x") }
+        backend.discardResumeData(resumeData(elsewhere))
+        assertTrue(elsewhere.exists())
+    }
+
+    @Test
+    fun `a transfer resumed from a kept partial owns it under its own id`() {
+        val kept = orphan()
+        val transfer = backend.start(request(), "uuid|ebook|1|7", resumeData(kept)) as WorkManagerTransferBackend.WorkTransfer
+        assertFalse(kept.exists())
+        assertEquals("half a book", backend.partialFile(transfer.id).readText())
+    }
+
+    @Test
+    fun `the launch sweep deletes partials no one owns and keeps the owned ones`() = runBlocking {
+        val stranded = orphan()
+        val held = orphan()
+        val queued = backend.start(request(), "uuid|ebook|1|8", resumeData(orphan())) as WorkManagerTransferBackend.WorkTransfer
+        val queuedFile = backend.partialFile(queued.id)
+
+        backend.sweepPartials(listOf(resumeData(held)))
+
+        assertFalse("a partial nothing owns is the space the user lost", stranded.exists())
+        assertTrue("a paused download that will resume keeps its partial", held.exists())
+        assertTrue("work waiting to run keeps the partial it will resume", queuedFile.exists())
     }
 
     @Test

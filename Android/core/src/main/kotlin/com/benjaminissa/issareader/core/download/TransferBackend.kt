@@ -30,6 +30,22 @@ interface TransferBackend {
     suspend fun runningTransfers(): List<Transfer>
 
     /**
+     * Throws away what [resumeData] (handed back by a paused or failed
+     * transfer) points at, because nothing will resume it: the download was
+     * cancelled, the book removed, or the account left. A backend that keeps
+     * nothing between transfers has nothing to do.
+     */
+    fun discardResumeData(resumeData: ByteArray) {}
+
+    /**
+     * Deletes the partial files no transfer owns: ones a transfer carried on
+     * with, or still waiting, or one of [keeping] (the resume data the manager
+     * holds for downloads it will resume) does not point at. Called once at
+     * launch, when what an earlier process left behind has no one to resume it.
+     */
+    suspend fun sweepPartials(keeping: List<ByteArray>) {}
+
+    /**
      * Ends this backend for good, cancelling what it carries. It reports back
      * through [TransferEvents.onInvalidated], as it does when it ends unasked.
      */

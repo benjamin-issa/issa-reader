@@ -86,20 +86,25 @@ class WorkManagerTransferBackend(
     override fun start(request: TransferRequest, description: String, resumeData: ByteArray?): Transfer {
         check(!invalidated) { "This transfer backend has been invalidated" }
         val resume = resumeData?.let { runCatching { IssaJson.decodeFromString<ResumeState>(it.decodeToString()) }.getOrNull() }
+        val id = UUID.randomUUID()
+        val transfer = WorkTransfer(id, description, request)
+        transfers[id] = transfer
+        // The partial is the new transfer's from here, named by its id, so a
+        // sweep never sees a file that work is waiting for under another name.
+        val adopted = resume?.let { moveToTransfer(it, id) }
         val work = OneTimeWorkRequestBuilder<TransferWorker>()
+            .setId(id)
             .setConstraints(
                 Constraints.Builder()
                     .setRequiredNetworkType(if (request.allowsMeteredNetwork) NetworkType.CONNECTED else NetworkType.UNMETERED)
                     .build(),
             )
-            .setInputData(inputData(request, description, resume))
+            .setInputData(inputData(request, description, adopted))
             .addTag(TAG)
             // The description again, where a later process can read it back
             // without running the work: WorkInfo carries tags, not input data.
             .addTag(DESCRIPTION_TAG + description)
             .build()
-        val transfer = WorkTransfer(work.id, description, request)
-        transfers[work.id] = transfer
         workManager.enqueueUniqueWork(uniqueName(description), ExistingWorkPolicy.REPLACE, work)
         return transfer
     }
@@ -122,6 +127,40 @@ class WorkManagerTransferBackend(
                 // dropped and its finished file deleted unseen.
                 val description = info.tags.firstOrNull { it.startsWith(DESCRIPTION_TAG) }?.removePrefix(DESCRIPTION_TAG)
                 WorkTransfer(info.id, description = description, request = null)
+            }
+        }
+    }
+
+    /** Renames a kept partial to the one [id] will use, and says where it is now. */
+    private fun moveToTransfer(resume: ResumeState, id: UUID): ResumeState {
+        val source = File(resume.path)
+        val target = partialFile(id)
+        if (!source.exists() || target.exists()) return resume
+        target.parentFile?.mkdirs()
+        return if (source.renameTo(target)) resume.copy(path = target.path) else resume
+    }
+
+    override fun discardResumeData(resumeData: ByteArray) {
+        val resume = runCatching { IssaJson.decodeFromString<ResumeState>(resumeData.decodeToString()) }.getOrNull() ?: return
+        val file = File(resume.path)
+        if (file.parentFile?.canonicalFile == partialDirectory.canonicalFile) file.delete()
+    }
+
+    override suspend fun sweepPartials(keeping: List<ByteArray>) {
+        withContext(Dispatchers.IO) {
+            // Listed before the work is asked about, so a transfer started in
+            // between has its file missing from the list rather than deleted.
+            val files = partialDirectory.listFiles { file -> file.name.endsWith(".part") }.orEmpty()
+            val owned = workManager.getWorkInfosByTagFlow(TAG).first().filter { !it.state.isFinished }.map { it.id }.toMutableSet()
+            owned += transfers.keys
+            val kept = keeping.mapNotNull {
+                runCatching { IssaJson.decodeFromString<ResumeState>(it.decodeToString()) }.getOrNull()?.path?.let(::File)?.canonicalFile
+            }.toSet()
+            for (file in files) {
+                val id = runCatching { UUID.fromString(file.name.removeSuffix(".part")) }.getOrNull()
+                if (id != null && id in owned) continue
+                if (file.canonicalFile in kept) continue
+                file.delete()
             }
         }
     }
@@ -245,8 +284,8 @@ class WorkManagerTransferBackend(
         val resume = input.getString(KEY_RESUME)?.let { runCatching { IssaJson.decodeFromString<ResumeState>(it) }.getOrNull() }
         val partial = partialFile(transfer.id).apply { parentFile?.mkdirs() }
         // Adopt what a paused transfer kept, once.
-        if (resume != null && !partial.exists()) {
-            File(resume.path).takeIf { it.exists() }?.renameTo(partial)
+        if (resume != null) {
+            if (!partial.exists()) File(resume.path).takeIf { it.exists() }?.renameTo(partial)
             transfer.validator = resume.validator
         }
         return try {
