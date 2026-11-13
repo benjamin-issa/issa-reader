@@ -177,4 +177,183 @@ class OfflineAudiobookTest : AppSuite() {
             scope.close()
         }
     }
+
+    // The stand-in's track name, and what the writer may do with it.
+
+    private suspend fun listenOffline(
+        fixture: Fixture,
+        scope: kotlinx.coroutines.CoroutineScope,
+        progress: Double? = null,
+        within: Double? = null,
+        storedHref: String = "server-name.mp3",
+    ): AppModel {
+        val app = testApp(scope)
+        val directory = com.benjaminissa.issareader.app.temporaryDirectory("offline-standin")
+        app.useStore(com.benjaminissa.issareader.core.store.LibraryStore("offline-standin", directory))
+        app.session = fixture.server.session()
+        app.serverAddress = fixture.server.url.toString()
+        var book = SharedFixtures.book("Offline", uuid = fixture.uuid, audiobook = true)
+        if (progress != null) {
+            val locator = com.benjaminissa.issareader.core.model.ReadiumLocator(
+                href = storedHref, type = "audio/mpeg",
+                locations = com.benjaminissa.issareader.core.model.ReadiumLocator.Locations(
+                    progression = within ?: progress, totalProgression = progress,
+                ),
+            )
+            book = book.copy(position = com.benjaminissa.issareader.core.model.StoredPosition(locator = locator, timestamp = 1.0))
+        }
+        app.books = listOf(book)
+        app.startListening(book, NowPlayingController(scope), PlaybackSettingsForTests.make())
+        return app
+    }
+
+    private fun positionWrites(fixture: Fixture) =
+        fixture.server.requests().filter { it.method == "POST" && it.path.endsWith("/positions") }
+
+    /** A kept multi-track manifest means the file is no one track: nothing is written. */
+    @Test
+    fun aKeptMultiTrackManifestWritesNothingOffline() = mainTest {
+        val scope = testScope()
+        val fixture = Fixture()
+        try {
+            fixture.file.writeBytes(wave())
+            BookContentService.saveManifest(
+                AudiobookManifest(
+                    AudiobookManifest.Metadata(),
+                    listOf(AudiobookManifest.Track(href = "a.mp3", duration = 1.0), AudiobookManifest.Track(href = "b.mp3", duration = 1.0)),
+                ),
+                fixture.uuid,
+            )
+            val app = listenOffline(fixture, scope, progress = 0.5, within = 0.5)
+
+            assertEquals(fixture.uuid, app.listeningBook?.uuid)
+            assertFalse(app.listeningWritesPositions)
+            app.flushOpenReaders()
+            assertTrue("written: ${positionWrites(fixture)}", positionWrites(fixture).isEmpty())
+        } finally {
+            fixture.clean()
+            scope.close()
+        }
+    }
+
+    /** No manifest kept and a place that only a one-track book produces: written under the stored name. */
+    @Test
+    fun aSingleTrackStoredPlaceIsWrittenUnderTheServersTrackName() = mainTest {
+        val scope = testScope()
+        val fixture = Fixture()
+        try {
+            fixture.file.writeBytes(wave())
+            val app = listenOffline(fixture, scope, progress = 0.5)
+
+            assertTrue(app.listeningWritesPositions)
+            assertEquals("server-name.mp3", app.listening?.manifest?.playableTracks?.single()?.href)
+            app.flushOpenReaders()
+            val writes = positionWrites(fixture)
+            assertTrue("nothing was written", writes.isNotEmpty())
+            assertTrue(writes.all { it.body.contains("server-name.mp3") && !it.body.contains(fixture.file.name) })
+        } finally {
+            fixture.clean()
+            scope.close()
+        }
+    }
+
+    /** A stored place whose two progressions differ is from a longer book: no name is borrowed and nothing is written. */
+    @Test
+    fun aPlaceThatCouldBeFromAMultiTrackBookWritesNothing() = mainTest {
+        val scope = testScope()
+        val fixture = Fixture()
+        try {
+            fixture.file.writeBytes(wave())
+            val app = listenOffline(fixture, scope, progress = 0.6, within = 0.2)
+
+            assertEquals(fixture.uuid, app.listeningBook?.uuid)
+            assertFalse(app.listeningWritesPositions)
+            app.flushOpenReaders()
+            assertTrue(positionWrites(fixture).isEmpty())
+        } finally {
+            fixture.clean()
+            scope.close()
+        }
+    }
+
+    /** With no stored position there is no name to borrow either. */
+    @Test
+    fun noStoredPlaceWritesNothingUnderTheFilesName() = mainTest {
+        val scope = testScope()
+        val fixture = Fixture()
+        try {
+            fixture.file.writeBytes(wave())
+            val app = listenOffline(fixture, scope)
+            assertFalse(app.listeningWritesPositions)
+            app.flushOpenReaders()
+            assertTrue(positionWrites(fixture).isEmpty())
+        } finally {
+            fixture.clean()
+            scope.close()
+        }
+    }
+
+    /** The measured length is kept beside the file, and not trusted once the file has changed. */
+    @Test
+    fun theMeasuredLengthIsKeptWhileTheFileIsTheSame() {
+        val fixture = Fixture()
+        try {
+            fixture.file.writeBytes(wave())
+            assertNull(BookContentService.savedMeasuredLength(fixture.uuid))
+            BookContentService.saveMeasuredLength(2.0, fixture.uuid)
+            assertEquals(2.0, BookContentService.savedMeasuredLength(fixture.uuid)!!, 0.0)
+            assertFalse(fixture.uuid + " read as a download of its own", fixture.uuid !in BookContentService.downloadedBookUuids())
+            fixture.file.writeBytes(wave() + ByteArray(8))
+            assertNull(BookContentService.savedMeasuredLength(fixture.uuid))
+            BookContentService.saveMeasuredLength(2.0, fixture.uuid)
+            BookContentService.removeDownload(fixture.uuid, BookContentService.Format.AUDIOBOOK)
+            assertNull(BookContentService.savedMeasuredLength(fixture.uuid))
+        } finally {
+            fixture.clean()
+        }
+    }
+
+    /** One book's failing answer does not block the next one's manifest; a lost connection ends the pass. */
+    @Test
+    fun theBackfillGoesOnPastAnAnsweredFailureAndStopsOnATransportOne() = mainTest {
+        val scope = testScope()
+        val first = Fixture()
+        val second = Fixture()
+        val third = Fixture()
+        val server = StubServer { request ->
+            when {
+                request.path.contains(first.uuid) -> Answer(500, "{}")
+                request.path.contains(second.uuid) -> Answer.json(
+                    mapOf(
+                        "metadata" to mapOf("title" to mapOf("und" to "Two")),
+                        "readingOrder" to listOf(mapOf("href" to "two.mp3", "duration" to 2.0)),
+                    ),
+                )
+                else -> Answer.lostConnection
+            }
+        }
+        try {
+            for (fixture in listOf(first, second, third)) fixture.file.writeBytes(wave())
+            val app = testApp(scope)
+            app.session = server.session()
+            app.serverAddress = server.url.toString()
+            app.books = listOf(first, second, third).map { SharedFixtures.book("B", uuid = it.uuid, audiobook = true) }
+
+            app.backfillAudiobookManifests(app.session!!, app.catalogueGeneration)
+
+            assertNull(BookContentService.savedManifest(first.uuid))
+            assertNotNull("the book after the failing one was skipped", BookContentService.savedManifest(second.uuid))
+            val asked = server.requests().map { r -> listOf(first, second, third).indexOfFirst { r.path.contains(it.uuid) } }
+            assertEquals(listOf(0, 1, 2), asked)
+
+            // Asked once per generation: a second pass asks only about the book that never answered.
+            app.backfillAudiobookManifests(app.session!!, app.catalogueGeneration)
+            val again = server.requests().map { r -> listOf(first, second, third).indexOfFirst { r.path.contains(it.uuid) } }
+            assertEquals(listOf(0, 1, 2, 2), again)
+        } finally {
+            server.close()
+            first.clean(); second.clean(); third.clean()
+            scope.close()
+        }
+    }
 }

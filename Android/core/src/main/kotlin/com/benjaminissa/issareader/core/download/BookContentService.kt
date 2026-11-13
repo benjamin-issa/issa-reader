@@ -335,7 +335,10 @@ class BookContentService(private val client: ApiClient, cacheDirectory: File? = 
         fun removeDownload(bookUuid: String, format: Format, directory: File? = null) {
             val base = directory ?: defaultDirectory()
             localUrl(base, bookUuid, format).delete()
-            if (format == Format.AUDIOBOOK) manifestFile(base, bookUuid).delete()
+            if (format == Format.AUDIOBOOK) {
+                manifestFile(base, bookUuid).delete()
+                lengthFile(base, bookUuid).delete()
+            }
         }
 
         /**
@@ -364,6 +367,37 @@ class BookContentService(private val client: ApiClient, cacheDirectory: File? = 
                 IssaLog.failure("save audiobook manifest", e, emptyMap())
             }
         }
+
+        /** Where an audiobook's measured length is kept, beside its file and named so the inventory never reads it as one. */
+        fun lengthFile(directory: File, bookUuid: String): File =
+            File(directory, "${bookUuid.safePathComponent}-${Format.AUDIOBOOK.rawValue}.length")
+
+        /**
+         * Keeps the length measured from a downloaded audiobook's file, with the
+         * file's size and modification time it was measured from, so the whole
+         * file is read once and not on every offline Listen.
+         */
+        fun saveMeasuredLength(seconds: Double, bookUuid: String, directory: File? = null) {
+            val base = directory ?: defaultDirectory()
+            val file = localUrl(base, bookUuid, Format.AUDIOBOOK)
+            if (!file.exists() || !seconds.isFinite() || seconds <= 0) return
+            try {
+                lengthFile(base, bookUuid).writeText("${file.length()} ${file.lastModified()} $seconds")
+            } catch (e: IOException) {
+                IssaLog.failure("save audiobook length", e, emptyMap())
+            }
+        }
+
+        /** The length kept for a download, or null when none was kept or the file is no longer the one it was measured from. */
+        fun savedMeasuredLength(bookUuid: String, directory: File? = null): Double? = runCatching {
+            val base = directory ?: defaultDirectory()
+            val file = localUrl(base, bookUuid, Format.AUDIOBOOK)
+            val parts = lengthFile(base, bookUuid).readText().trim().split(' ')
+            val seconds = parts[2].toDouble()
+            seconds.takeIf {
+                parts[0].toLong() == file.length() && parts[1].toLong() == file.lastModified() && it.isFinite() && it > 0
+            }
+        }.getOrNull()
 
         /** The manifest saved beside a download, or null: none was saved (a download from before they were), or it will not read. */
         fun savedManifest(bookUuid: String, directory: File? = null): AudiobookManifest? = runCatching {

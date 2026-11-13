@@ -925,6 +925,8 @@ class AppModel(
                 ratings = mergedRatings
                 loadError = null
                 IssaLog.info("library refreshed", mapOf("books" to fetched.size.toString()))
+                // A refresh that worked is the proof the server is there.
+                scope.launch { backfillAudiobookManifests(session, generation) }
 
                 // Off the refresh gesture entirely, and behind the same fence:
                 // a full catalogue rewrite and a drain have no business holding
@@ -2263,7 +2265,8 @@ class AppModel(
             }
             val service = AudiobookService(session.client, url, session.tokenProvider)
             try {
-                val manifest = audiobookManifest(book, service, content)
+                val kept = audiobookManifest(book, service, content)
+                val manifest = kept.manifest
                 if (!startStillClaimed(book, generation)) return
                 if (manifest.playableTracks.isEmpty()) {
                     listeningError = "This audiobook has no playable tracks on the server."
@@ -2287,6 +2290,7 @@ class AppModel(
                 if (!startStillClaimed(book, generation)) return
                 val attached = attachListening(
                     manifest, source, emptyList(), null, ListeningResume.ManifestKind.ORIGINAL, book, nowPlaying, settings,
+                    writesPositions = kept.writesPositions,
                 )
                 // A start that produced no audio must not leave the book in the
                 // slot: this is the fall-back.
@@ -2310,6 +2314,7 @@ class AppModel(
         if (job.format != BookContentService.Format.AUDIOBOOK) return
         val session = session ?: return
         val url = ServerAddress.normalize(serverAddress) ?: return
+        val generation = catalogueGeneration
         val manifest = try {
             AudiobookService(session.client, url, session.tokenProvider).manifest(job.bookUuid)
         } catch (e: CancellationException) {
@@ -2317,11 +2322,53 @@ class AppModel(
         } catch (_: Exception) {
             return
         }
-        // Only a single-track audiobook stands in for its manifest; and off the
-        // main thread, since this is file I/O.
-        if (manifest.playableTracks.size != 1) return
+        if (catalogueGeneration != generation || this.session !== session) return
+        // Every manifest, whatever its track count: a multi-track one is not a
+        // way to play the download, but it says the stand-in has no track name
+        // to write under. Off the main thread, since this is file I/O.
         withContext(Dispatchers.IO) { BookContentService.saveManifest(manifest, job.bookUuid) }
     }
+
+    /** Which downloaded audiobooks were asked about, and under which account generation. */
+    private val manifestBackfillAsked = mutableMapOf<String, Int>()
+
+    /**
+     * Keeps the server's manifest for every downloaded audiobook that has none,
+     * the first time the server is reachable.
+     *
+     * A download from before the track list was kept got its copy only when
+     * Listen was pressed with the server answering, so a book played offline
+     * from the start never had the real track names. A book whose request got
+     * an answer, even a failing one, is marked asked and the pass goes on to the
+     * next; only a request that never got an answer ends it, since the rest
+     * would only wait out the same timeout.
+     */
+    internal suspend fun backfillAudiobookManifests(session: Session, generation: Int) {
+        val url = ServerAddress.normalize(serverAddress) ?: return
+        val service = AudiobookService(session.client, url, session.tokenProvider)
+        for (book in books.toList()) {
+            if (catalogueGeneration != generation || this.session !== session) return
+            if (manifestBackfillAsked[book.uuid] == generation) continue
+            if (!isDownloaded(book, BookContentService.Format.AUDIOBOOK)) continue
+            if (withContext(Dispatchers.IO) { BookContentService.savedManifest(book.uuid) } != null) continue
+            val manifest = try {
+                service.manifest(book.uuid)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: StorytellerError.Transport) {
+                return
+            } catch (_: Exception) {
+                if (catalogueGeneration == generation && this.session === session) manifestBackfillAsked[book.uuid] = generation
+                continue
+            }
+            if (catalogueGeneration != generation || this.session !== session) return
+            manifestBackfillAsked[book.uuid] = generation
+            withContext(Dispatchers.IO) { BookContentService.saveManifest(manifest, book.uuid) }
+        }
+    }
+
+    /** What a start plays by, and whether a position written against it names a track the server's manifest has. */
+    internal class ListeningManifest(val manifest: AudiobookManifest, val writesPositions: Boolean = true)
 
     /**
      * The manifest an audiobook plays by. A downloaded single-file audiobook
@@ -2330,30 +2377,40 @@ class AppModel(
      * measured, when the server cannot be asked. Whenever the server does
      * answer for a downloaded book, its manifest is kept.
      */
-    private suspend fun audiobookManifest(book: Book, service: AudiobookService, content: BookContentService): AudiobookManifest {
+    private suspend fun audiobookManifest(book: Book, service: AudiobookService, content: BookContentService): ListeningManifest {
         val downloaded = isDownloaded(book, BookContentService.Format.AUDIOBOOK)
+        var kept: AudiobookManifest? = null
         if (downloaded) {
-            withContext(Dispatchers.IO) { BookContentService.savedManifest(book.uuid) }
-                ?.takeIf { it.playableTracks.size == 1 }?.let { return it }
+            kept = withContext(Dispatchers.IO) { BookContentService.savedManifest(book.uuid) }
+            kept?.takeIf { it.playableTracks.size == 1 }?.let { return ListeningManifest(it) }
         }
         try {
-            return service.manifest(book.uuid).also {
-                if (downloaded && it.playableTracks.size == 1) {
-                    withContext(Dispatchers.IO) { BookContentService.saveManifest(it, book.uuid) }
-                }
-            }
+            return ListeningManifest(
+                service.manifest(book.uuid).also {
+                    if (downloaded) withContext(Dispatchers.IO) { BookContentService.saveManifest(it, book.uuid) }
+                },
+            )
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             if (!downloaded) throw e
             val file = content.localUrl(book, BookContentService.Format.AUDIOBOOK)
             val seconds = withContext(Dispatchers.IO) {
-                (readerServices?.measurer ?: com.benjaminissa.issareader.playback.AudioFileLength).duration(file)
+                BookContentService.savedMeasuredLength(book.uuid)
+                    ?: (readerServices?.measurer ?: com.benjaminissa.issareader.playback.AudioFileLength).duration(file)
+                        ?.also { BookContentService.saveMeasuredLength(it, book.uuid) }
             } ?: throw e
-            IssaLog.info("audiobook manifest unavailable; playing the download", mapOf("book" to book.title))
-            return AudiobookManifest(
-                AudiobookManifest.Metadata(title = mapOf("und" to book.title), duration = seconds),
-                listOf(AudiobookManifest.Track(href = file.name, title = book.title, duration = seconds)),
+            val href = standInHref(book.position?.locator, keptMultiTrack = kept != null)
+            IssaLog.info(
+                "audiobook manifest unavailable; playing the download",
+                mapOf("book" to book.title, "trackNamed" to if (href != null) "stored" else "unknown"),
+            )
+            return ListeningManifest(
+                AudiobookManifest(
+                    AudiobookManifest.Metadata(title = mapOf("und" to book.title), duration = seconds),
+                    listOf(AudiobookManifest.Track(href = href ?: file.name, title = book.title, duration = seconds)),
+                ),
+                writesPositions = href != null,
             )
         }
     }
@@ -2454,6 +2511,7 @@ class AppModel(
         book: Book,
         nowPlaying: NowPlayingController,
         settings: PlaybackSettings,
+        writesPositions: Boolean = true,
     ): ListeningAttachment {
         // Again, now that the suspensions are over: a read-along tapped during
         // them would otherwise still be playing.
@@ -2467,6 +2525,7 @@ class AppModel(
         listening = coordinator
         listeningBook = book
         listeningFormat = formatRead(source)
+        listeningWritesPositions = writesPositions
         // Play and pause both have to reach the widget.
         coordinator.player.setRateObserver(this) { rate -> publishListeningSnapshot(book, coordinator, rate > 0) }
         nowPlaying.attach(coordinator, book, session, chapterTitle = { coordinator.chapterTitle })
@@ -2659,6 +2718,7 @@ class AppModel(
                 // Spends things (`consumeSteering`), so a cancel landing in the
                 // sleep must not run the body.
                 if (!isActive) return@launch
+                if (!listeningWritesPositions) continue
                 val progress = coordinator.bookProgress
                 // Only when it actually moved.
                 if (abs(progress - listeningLastWritten) <= 0.0005) continue
@@ -2678,6 +2738,15 @@ class AppModel(
         }
     }
 
+    /**
+     * Whether the listening writer may record where the engine in the slot is.
+     * False for a stand-in manifest whose track name is the file's own, which no
+     * server manifest has: a place written under it could not be matched to a
+     * track, and would poison the next online resume.
+     */
+    internal var listeningWritesPositions = true
+        private set
+
     /** The book progress the listening writer last wrote, or -1 when it has written nothing since it was armed. */
     private var listeningLastWritten: Double = -1.0
 
@@ -2686,7 +2755,7 @@ class AppModel(
      * on the writer's terms exactly. For the exit flush.
      */
     private suspend fun writeListeningPositionNow() {
-        if (listeningProgressTask == null) return
+        if (listeningProgressTask == null || !listeningWritesPositions) return
         val coordinator = listening ?: return
         val book = listeningBook ?: return
         val progress = coordinator.bookProgress
@@ -3378,6 +3447,23 @@ class AppModel(
          * the chapter the listener is in as the title, and `totalProgression`,
          * which every other client reads to show percent complete.
          */
+        /**
+         * The track name a stand-in manifest may take from the stored audio
+         * position, or null when it may not and nothing is to be written.
+         *
+         * Never when the server's manifest was kept and has several tracks: the
+         * stored name is one of them and the file is not any one. With none kept,
+         * only when the stored place's progress in its track equals its progress
+         * in the book, which only a one-track book produces.
+         */
+        internal fun standInHref(stored: ReadiumLocator?, keptMultiTrack: Boolean): String? {
+            if (keptMultiTrack || stored == null || !stored.isAudioScaled || stored.href.isEmpty()) return null
+            val within = stored.locations?.progression ?: return null
+            val total = stored.locations?.totalProgression ?: return null
+            if (within <= 0 || total <= 0 || abs(within - total) > 0.01) return null
+            return stored.href
+        }
+
         fun audioLocator(coordinator: AudiobookCoordinator): ReadiumLocator {
             val tracks = coordinator.tracks
             val index = min(coordinator.trackIndex, maxOf(tracks.size - 1, 0))
