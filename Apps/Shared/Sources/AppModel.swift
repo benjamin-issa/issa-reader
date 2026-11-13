@@ -2269,16 +2269,27 @@ public final class AppModel {
     /// claim back, and the others are told by this changing.
     public private(set) var bookLinkOwner: (request: PendingBook, window: UUID)?
 
+    /// The windows whose scenes are not in the background.
+    private var foregroundWindows: Set<UUID> = []
+
+    /// Said by each window as its scene changes phase.
+    public func window(_ window: UUID, isInForeground foreground: Bool) {
+        if foreground { foregroundWindows.insert(window) } else { foregroundWindows.remove(window) }
+    }
+
     /// Whether `window` is the one to handle `request`, claiming it when no
-    /// window has yet.
+    /// window has yet. A window in the background does not claim while any
+    /// other is in the foreground: the link is for what the reader can see.
     public func claimBookLink(_ request: PendingBook, for window: UUID) -> Bool {
         if let owner = bookLinkOwner, owner.request == request { return owner.window == window }
+        guard foregroundWindows.contains(window) || foregroundWindows.isEmpty else { return false }
         bookLinkOwner = (request, window)
         return true
     }
 
     /// A window going away takes its claim with it.
     public func releaseBookLinks(of window: UUID) {
+        foregroundWindows.remove(window)
         if bookLinkOwner?.window == window { bookLinkOwner = nil }
     }
 

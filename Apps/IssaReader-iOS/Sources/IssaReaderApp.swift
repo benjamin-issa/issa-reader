@@ -246,13 +246,13 @@ struct LibraryTabs: View {
 
     /// What this window sees of the request, for `BookLinkFlow`.
     ///
-    /// A window not in the background takes the request if none has yet, and
-    /// then the others leave it alone: the pending request and the reader on
+    /// A window takes the request if none has yet (a background one only when
+    /// no window is in the foreground), and then the others leave it alone: the pending request and the reader on
     /// screen are the app's, so every window of an iPad app is woken by them,
     /// and only one may close its sheets and push the page.
     private func linkSituation() -> BookLinkFlow.Situation {
         let pending = app.pendingBook
-        let owner = pending.map { scenePhase != .background && app.claimBookLink($0, for: windowID) }
+        let owner = pending.map { app.claimBookLink($0, for: windowID) }
         return BookLinkFlow.Situation(
             pending: pending,
             libraryHasBook: pending.map { request in app.books.contains { $0.uuid == request.uuid } } ?? false,
@@ -553,6 +553,9 @@ struct LibraryTabs: View {
         .onChange(of: app.visibleReaderUUID) { if app.pendingBook != nil { openPendingBook() } }
         // A window that held a request and closed gives it to the others.
         .onChange(of: app.bookLinkOwner?.window) { openPendingBook() }
+        .onChange(of: scenePhase, initial: true) {
+            app.window(windowID, isInForeground: scenePhase != .background)
+        }
         .onDisappear { app.releaseBookLinks(of: windowID) }
         // "Show in Library" on a tag or author page: the Library tab, at its
         // root, where the page has already set the filter or the search.

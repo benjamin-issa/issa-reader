@@ -165,4 +165,23 @@ struct BookLinkFlowTests {
         app.requestBook("b", .read)
         #expect(app.claimBookLink(app.pendingBook!, for: one))
     }
+
+    @Test("a window in the background does not take a request while another is in the foreground")
+    func backgroundWindowsDoNotClaim() {
+        let app = AppModel(keychain: LifecycleTokens(), notificationCentre: NotificationCenter())
+        app.requestBook("b", .read)
+        let request = app.pendingBook!
+        let behind = UUID(), front = UUID()
+        app.window(behind, isInForeground: false)
+        app.window(front, isInForeground: true)
+        #expect(!app.claimBookLink(request, for: behind))
+        #expect(app.claimBookLink(request, for: front))
+    }
+
+    @Test("with no window in the foreground, any window may take it")
+    func anyWindowWhenNoneIsInFront() {
+        let app = AppModel(keychain: LifecycleTokens(), notificationCentre: NotificationCenter())
+        app.requestBook("b", .read)
+        #expect(app.claimBookLink(app.pendingBook!, for: UUID()))
+    }
 }
