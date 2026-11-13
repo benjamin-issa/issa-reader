@@ -312,4 +312,30 @@ class ExoMediaBackendTest {
         shadowOf(android.os.Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(3_000))
         assertTrue("a second apart, ${ticks.size} ticks in three", ticks.size in 2..4)
     }
+
+    /**
+     * The stream's cookie is for the server it was issued by. A redirect to
+     * another host (or another scheme, for an https server) must not carry it.
+     */
+    @Test
+    fun theStreamTokenCookieGoesToTheServersHostAlone() {
+        val server = AudioLocation.Remote(
+            "https://books.example/api/v2/books/uuid/listen/a.mp3",
+            mapOf("Authorization" to "Bearer t", "Cookie" to "st_token=secret"),
+        )
+        val jar = backend().clientFor(server).cookieJar
+        fun sent(url: String) = jar.loadForRequest(okhttp3.HttpUrl.Builder().scheme(url.substringBefore("://")).host(url.substringAfter("://").substringBefore("/")).build())
+            .map { "${it.name}=${it.value}" }
+
+        assertEquals(listOf("st_token=secret"), sent("https://books.example/x"))
+        assertEquals(emptyList<String>(), sent("https://cdn.elsewhere.example/x"))
+        assertEquals("a subdomain is another host", emptyList<String>(), sent("https://evil.books.example/x"))
+        assertEquals("never in the clear", emptyList<String>(), sent("http://books.example/x"))
+    }
+
+    @Test
+    fun aStreamWithNoCookieKeepsTheSharedClient() {
+        val plain = AudioLocation.Remote("https://books.example/a.mp3", mapOf("Authorization" to "Bearer t"))
+        assertEquals(okhttp3.CookieJar.NO_COOKIES, backend().clientFor(plain).cookieJar)
+    }
 }

@@ -20,6 +20,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -167,7 +168,9 @@ class CoordinatorsOnExoTest {
         val request = requests.first()
         assertEquals("https://books.example/api/v2/books/uuid/listen/The%20Outsider.wav", request.url.toString())
         assertEquals("Bearer secret-token", request.header("Authorization"))
-        assertEquals("st_token=secret-token", request.header("Cookie"))
+        // The cookie is not a request header, which a redirect would carry on
+        // to another host; it is held by the client's jar for this host alone.
+        assertNull(request.header("Cookie"))
         assertEquals(3.0, subject.player.duration, 0.01)
         assertTrue(subject.player.isPlaying)
     }

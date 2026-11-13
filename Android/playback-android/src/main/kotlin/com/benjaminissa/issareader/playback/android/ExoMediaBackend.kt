@@ -32,6 +32,11 @@ import com.benjaminissa.issareader.playback.MediaBackend
 import com.benjaminissa.issareader.playback.MediaTime
 import kotlinx.coroutines.CompletableDeferred
 import okhttp3.Call
+import okhttp3.Cookie
+import okhttp3.CookieJar
+import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import okhttp3.OkHttpClient
 import java.io.IOException
 import kotlin.math.ceil
 
@@ -82,7 +87,7 @@ import kotlin.math.ceil
 @OptIn(UnstableApi::class)
 class ExoMediaBackend(
     private val context: Context,
-    private val httpClient: Call.Factory,
+    private val httpClient: OkHttpClient,
     private val indexSeekingForStreams: Boolean = false,
     clock: Clock? = null,
 ) : MediaBackend {
@@ -248,11 +253,21 @@ class ExoMediaBackend(
         is AudioLocation.LocalFile -> ProgressiveMediaSource.Factory(DefaultDataSource.Factory(context), localExtractors)
             .createMediaSource(MediaItem.fromUri(Uri.fromFile(location.file)))
         is AudioLocation.Remote -> {
-            val network: DataSource.Factory = OkHttpDataSource.Factory(httpClient)
-                .setDefaultRequestProperties(location.headers)
+            // The cookie goes through a jar that offers it to the server's own
+            // host alone: a header set on the request would be sent again to
+            // wherever a redirect led.
+            val network: DataSource.Factory = OkHttpDataSource.Factory(clientFor(location))
+                .setDefaultRequestProperties(location.headers.filterKeys { !it.equals("Cookie", ignoreCase = true) })
             ProgressiveMediaSource.Factory(network, streamExtractors)
                 .createMediaSource(MediaItem.fromUri(location.url))
         }
+    }
+
+    /** The shared client, with the cookie [location] carries held for its own host only. */
+    internal fun clientFor(location: AudioLocation.Remote): OkHttpClient {
+        val header = location.headers.entries.firstOrNull { it.key.equals("Cookie", ignoreCase = true) }?.value ?: return httpClient
+        val url = location.url.toHttpUrlOrNull() ?: return httpClient
+        return httpClient.newBuilder().cookieJar(hostOnlyCookies(url, header)).build()
     }
 
     override fun cancelPendingSeeks() = settleSeek(false)
@@ -415,5 +430,25 @@ class ExoMediaBackend(
     companion object {
         /** A year: past anything a narration could last, and far from overflowing the engine's microseconds. */
         private const val MAXIMUM_SEEK_MILLIS = 365.0 * 24 * 3600 * 1000
+    }
+}
+
+/**
+ * The cookies of a `Cookie` header, offered to [origin]'s host and no other:
+ * the session token is a credential for the server it was issued by, and a
+ * stream that is redirected elsewhere must not carry it along.
+ */
+internal fun hostOnlyCookies(origin: HttpUrl, header: String): CookieJar {
+    val cookies = header.split(';').mapNotNull { pair ->
+        val name = pair.substringBefore('=').trim()
+        val value = pair.substringAfter('=', "").trim()
+        if (name.isEmpty()) return@mapNotNull null
+        runCatching {
+            Cookie.Builder().name(name).value(value).hostOnlyDomain(origin.host).path("/").apply { if (origin.isHttps) secure() }.build()
+        }.getOrNull()
+    }
+    return object : CookieJar {
+        override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {}
+        override fun loadForRequest(url: HttpUrl): List<Cookie> = cookies.filter { it.matches(url) }
     }
 }
