@@ -2748,10 +2748,12 @@ public final class AppModel {
     func installListening(
         _ coordinator: AudiobookCoordinator, book: Book,
         reading format: BookContentService.Format? = .readaloud,
+        standIn: StandIn? = nil,
     ) {
         listening = coordinator
         listeningBook = book
         listeningFormat = format
+        listeningStandIn = standIn
     }
 
     /// Every open book's reader model, one per book, keyed by uuid.
@@ -3637,28 +3639,40 @@ public final class AppModel {
             // before the file is so much as looked at is the bug this order
             // replaces.
             let manifest: AudiobookManifest
-            // Whether a position written against this manifest names a track
-            // the server's own manifest has. Only a stand-in can say no.
-            var writesPositions = true
-            if let kept = savedSingleFileManifest(for: book, content: content) {
+            // Set only for a stand-in, which plays the whole file as one track
+            // and has to say how a place in it reads in the server's terms.
+            var standIn: StandIn?
+            // Read once for the whole start: it is a decode, and both the
+            // single-file shortcut and the stand-in want it.
+            let keptManifest = isDownloaded(book, format: .audiobook)
+                ? content.savedManifest(for: book) : nil
+            if let kept = keptManifest, kept.playableTracks.count == 1 {
                 manifest = kept
+                await settleStandInPlace(for: book, content: content, against: kept)
             } else {
                 do {
                     manifest = try await service.manifest(for: book.uuid)
                     // A download from before the track list was kept gets its
                     // copy the first time the server answers.
                     keepManifest(manifest, for: book, content: content)
+                    await settleStandInPlace(for: book, content: content, against: manifest)
                 } catch {
                     // The server did not answer, and the file is here: it is
                     // the whole book as one file, so a track list over it
                     // stands in for the one that could not be fetched.
-                    guard let stood = await manifestOverDownload(for: book, content: content)
+                    guard let stood = await manifestOverDownload(
+                        for: book, content: content, kept: keptManifest)
                     else { throw error }
+                    let place = BookContentService.standInPlace(bookUUID: book.uuid)
+                    let named = StandIn(
+                        kept: keptManifest, fileLength: stood.fileLength, place: place)
                     IssaLog.info("playing the download without the server's manifest", [
-                        "book": book.title, "trackNamed": stood.hrefKnown ? "kept" : "unknown",
+                        "book": book.title,
+                        "writesPositions": String(named.writesPositions),
+                        "devicePlace": place == nil ? "none" : "kept",
                     ])
                     manifest = stood.manifest
-                    writesPositions = stood.hrefKnown
+                    standIn = named
                 }
             }
             // The network round trip is a suspension like any other, and on a
@@ -3697,7 +3711,7 @@ public final class AppModel {
             guard startStillClaimed(book, since: generation) else { return }
             let attached = await attachListening(
                 manifest: manifest, source: source, chapters: [], timeline: nil,
-                manifestKind: .original, writesPositions: writesPositions,
+                manifestKind: .original, standIn: standIn,
                 book: book, nowPlaying: nowPlaying, settings: settings)
             // A start that produced no audio must not leave the book sitting in
             // the listening slot. `declined` has already set `listeningError`,
@@ -3716,27 +3730,13 @@ public final class AppModel {
         }
     }
 
-    /// The manifest kept with this book's audiobook download, when the download
-    /// can be played from it alone: a single playable file that is on the device
-    /// (and not inside its undo window).
-    private func savedSingleFileManifest(
-        for book: Book, content: BookContentService,
-    ) -> AudiobookManifest? {
-        guard isDownloaded(book, format: .audiobook),
-              let kept = content.savedManifest(for: book),
-              kept.playableTracks.count == 1
-        else { return nil }
-        return kept
-    }
-
     /// Keeps the server's manifest beside a downloaded audiobook, whatever its
     /// track count. Best effort: without a copy the book still plays, from the
     /// server.
     ///
     /// A manifest with several tracks is kept as knowledge, not as a way to
-    /// play: `savedSingleFileManifest` still starts only from a one-track one,
-    /// and `manifestOverDownload` reads a kept multi-track one as the reason
-    /// not to name the downloaded file's track.
+    /// play: a start plays from a kept one-track manifest only, and a kept
+    /// multi-track one is what a stand-in names a place by.
     private func keepManifest(
         _ manifest: AudiobookManifest, for book: Book, content: BookContentService,
     ) {
@@ -3749,66 +3749,89 @@ public final class AppModel {
     }
 
     /// A one-track manifest measured from the downloaded file, for an audiobook
-    /// downloaded before the server's was kept and played while it cannot be
-    /// asked. Nil when the file is not here or has no length.
+    /// played while the server's manifest cannot be fetched. Nil when the file
+    /// is not here or has no length.
     ///
-    /// The track carries the href the server's manifest gives it, because that
-    /// is what a stored position names and what every other client reads back:
-    /// the file's own name on this device is neither. That href is borrowed
-    /// only when the book is known to have one track, since the stand-in is
-    /// one track over the whole file and a place written under one real track
-    /// of several would be read back as a place in that track alone:
-    ///
-    /// - a kept manifest says: the one track's own href when it has one, and
-    ///   nothing when it has several;
-    /// - with none kept, the stored audio position's href, when its fraction
-    ///   of the track and of the book are the same and not zero, which only a
-    ///   one-track book produces.
-    ///
-    /// Otherwise the book is played all the same, but `hrefKnown` is false and
-    /// nothing is written for it until the server's manifest has been kept.
+    /// The track is the whole file, named by the file's own name, and its clock
+    /// is seconds into the file. Which track and offset of the server's that is
+    /// is `OfflineStandIn`'s to say, from the kept manifest this was given: a
+    /// kept one-track manifest never reaches here, since a start plays from it.
     private func manifestOverDownload(
-        for book: Book, content: BookContentService,
-    ) async -> (manifest: AudiobookManifest, hrefKnown: Bool)? {
+        for book: Book, content: BookContentService, kept: AudiobookManifest?,
+    ) async -> (manifest: AudiobookManifest, fileLength: TimeInterval)? {
         guard isDownloaded(book, format: .audiobook) else { return nil }
         let url = content.localURL(for: book, format: .audiobook)
         let name = url.lastPathComponent
         let lengths = await ChunkDurations.measure([name: url], cached: [:])
         guard let length = lengths[name], length > 0 else { return nil }
-        let known: String?
-        if let kept = content.savedManifest(for: book) {
-            known = kept.playableTracks.count == 1 ? kept.playableTracks[0].href : nil
-        } else {
-            known = book.position.flatMap { Self.singleTrackHref(of: $0.locator) }
-        }
         return (
             AudiobookManifest(
                 metadata: .init(title: ["und": book.title], duration: length),
-                readingOrder: [.init(href: known ?? name, title: book.title, duration: length)]),
-            known != nil)
+                readingOrder: [.init(
+                    href: name, type: kept?.playableTracks.first?.type,
+                    title: book.title, duration: length)]),
+            length)
     }
 
-    /// The track a stored audio position names, when its two fractions say the
-    /// book has one track: the fraction of the track and the fraction of the
-    /// book are the same number only then (bar the very start and the very
-    /// end of a book, which every layout shares and which have no use here).
-    private static func singleTrackHref(of locator: ReadiumLocator) -> String? {
-        guard locator.isAudioScaled, !locator.href.isEmpty,
-              let within = locator.locations?.progression,
-              let overall = locator.locations?.totalProgression,
-              within > 0, overall > 0, abs(within - overall) <= 0.001
-        else { return nil }
-        return locator.href
+    /// What a stand-in session needs to name a place the server understands,
+    /// and to pick up where the last one left off.
+    struct StandIn {
+        /// The server's manifest kept beside the download, when it is.
+        let kept: AudiobookManifest?
+        /// The downloaded file's measured length.
+        let fileLength: TimeInterval
+        /// The device-only place the last stand-in session kept, read at the
+        /// start.
+        let place: StandInPlace?
+
+        /// Whether a place in the file can be written to the server.
+        var writesPositions: Bool {
+            kept.map { OfflineStandIn.matches($0, fileLength: fileLength) } ?? false
+        }
     }
 
-    /// Whether the listening writer may record where the engine in the slot
-    /// is. False for a stand-in manifest whose track name is the file's own,
-    /// which no other client has: a place written under it would be one the
-    /// server could not match to a track.
-    private(set) var listeningWritesPositions = true
+    /// Set for the engine in the slot when it is a stand-in, nil for every
+    /// other session.
+    private(set) var listeningStandIn: StandIn?
+
+    /// Whether the listening writer may record a place on the server for the
+    /// engine in the slot. False only for a stand-in with no kept manifest of
+    /// the file's length, which keeps its place on the device instead.
+    var listeningWritesPositions: Bool { listeningStandIn?.writesPositions ?? true }
+
+    /// Takes the device-only place a stand-in session kept and, now that the
+    /// server's manifest is known, writes it as an ordinary position when it
+    /// can be named in the manifest's terms and is newer than the stored one.
+    /// Dropped then; kept when the manifest is not of the file, for offline
+    /// use only.
+    private func settleStandInPlace(
+        for book: Book, content: BookContentService, against manifest: AudiobookManifest,
+    ) async {
+        guard let place = BookContentService.standInPlace(bookUUID: book.uuid),
+              isDownloaded(book, format: .audiobook)
+        else { return }
+        let url = content.localURL(for: book, format: .audiobook)
+        let name = url.lastPathComponent
+        let lengths = await ChunkDurations.measure([name: url], cached: [:])
+        guard let length = lengths[name],
+              let named = OfflineStandIn.place(
+                atFileTime: place.fileSeconds, kept: manifest, fileLength: length)
+        else { return }
+        let stored = books.first { $0.uuid == book.uuid }?.position ?? book.position
+        if place.writtenAt > (stored?.timestamp ?? 0) {
+            await writePosition(
+                Self.locator(for: named, in: manifest),
+                timestamp: place.writtenAt, for: book.uuid, origin: .chosen)
+        }
+        BookContentService.removeStandInPlace(bookUUID: book.uuid)
+    }
 
     /// Which downloaded audiobooks were asked about, and under which account.
     private var manifestBackfillAsked: [String: Int] = [:]
+    /// Books whose last request failed on the transport: asked last in the
+    /// next pass, so one that always times out cannot hold up the rest.
+    private var manifestBackfillTimedOut: Set<String> = []
+    private var manifestBackfillRunning = false
 
     /// Keeps the server's manifest for every downloaded audiobook that has
     /// none, the first time the server is reachable.
@@ -3816,42 +3839,72 @@ public final class AppModel {
     /// A download from before the track list was kept got its copy only when
     /// Listen was pressed with the server answering, so a book played
     /// offline from the start never had the real track names. A refresh that
-    /// worked is the proof the server is there. A book the server answered
-    /// about, even to refuse it, is marked asked and the pass goes on to the
-    /// next; only a request that never got an answer ends the pass, since the
-    /// rest would only wait out the same timeout.
-    private func backfillAudiobookManifests(session: Session, generation: Int) async {
-        guard let url = Self.normalizeServerURL(serverAddress) else { return }
+    /// worked is the proof the server is there. One pass runs at a time. A book
+    /// the server refused, or answered with something unreadable, or with a
+    /// status that will not change, is marked asked and the pass goes on; a
+    /// status that may pass (5xx, 429, 408, 425) leaves it unmarked and the
+    /// pass goes on. A request that never got an answer ends the pass, since
+    /// the rest would only wait out the same timeout, and that book goes last
+    /// the next time.
+    func backfillAudiobookManifests(session: Session, generation: Int) async {
+        guard !manifestBackfillRunning,
+              let url = Self.normalizeServerURL(serverAddress) else { return }
+        manifestBackfillRunning = true
+        defer { manifestBackfillRunning = false }
         let content = BookContentService(client: session.client)
         let service = AudiobookService(
             client: session.client, baseURL: url, tokens: session.tokenProvider)
-        for book in books where isDownloaded(book, format: .audiobook) {
+        let candidates = books.filter {
+            isDownloaded($0, format: .audiobook) && manifestBackfillAsked[$0.uuid] != generation
+        }
+        // The existence check is a stat per book, off the main thread.
+        let uuids = candidates.map(\.uuid)
+        let wanting = await Task.detached {
+            Set(uuids.filter { !BookContentService.hasSavedManifest(bookUUID: $0) })
+        }.value
+        let ordered = candidates.filter { wanting.contains($0.uuid) }
+        let queue = ordered.filter { !manifestBackfillTimedOut.contains($0.uuid) }
+            + ordered.filter { manifestBackfillTimedOut.contains($0.uuid) }
+        for book in queue {
             guard catalogueGeneration == generation, self.session === session else { return }
-            guard manifestBackfillAsked[book.uuid] != generation,
-                  content.savedManifest(for: book) == nil
-            else { continue }
             let manifest: AudiobookManifest
             do {
                 manifest = try await service.manifest(for: book.uuid)
             } catch {
                 guard catalogueGeneration == generation, self.session === session else { return }
-                guard Self.serverAnswered(error) else { return }
-                manifestBackfillAsked[book.uuid] = generation
+                switch Self.backfillOutcome(of: error) {
+                case .refused: manifestBackfillAsked[book.uuid] = generation
+                case .retryLater: break
+                case .timedOut:
+                    manifestBackfillTimedOut.insert(book.uuid)
+                    return
+                case .stop: return
+                }
                 continue
             }
             guard catalogueGeneration == generation, self.session === session else { return }
             manifestBackfillAsked[book.uuid] = generation
+            manifestBackfillTimedOut.remove(book.uuid)
             keepManifest(manifest, for: book, content: content)
+            await settleStandInPlace(for: book, content: content, against: manifest)
         }
     }
 
-    /// Whether a failed request was answered by the server, with a refusal,
-    /// an error or something this app could not read, rather than not reaching
-    /// it, being turned away for the account's sake or being cancelled.
-    private static func serverAnswered(_ error: Error) -> Bool {
+    /// What a failed manifest request means for the backfill.
+    enum BackfillOutcome { case refused, retryLater, timedOut, stop }
+
+    /// Answered with a refusal, something unreadable or a permanent status:
+    /// asked, for this account. A status that may pass: not marked. Not
+    /// reaching the server: the pass ends. Turned away for the account's sake
+    /// or cancelled: the pass ends too.
+    static func backfillOutcome(of error: Error) -> BackfillOutcome {
         switch error as? StorytellerError {
-        case .notFound, .forbidden, .server, .decoding: true
-        default: false
+        case .notFound, .forbidden, .decoding: .refused
+        case let .server(status, message):
+            StorytellerError.server(status: status, message: message).isRetryable
+                ? .retryLater : .refused
+        case .transport: .timedOut
+        default: .stop
         }
     }
 
@@ -3978,7 +4031,7 @@ public final class AppModel {
         chapters: [AudiobookChapter],
         timeline: SMILTimeline?,
         manifestKind: ListeningResume.ManifestKind,
-        writesPositions: Bool = true,
+        standIn: StandIn? = nil,
         book: Book,
         nowPlaying: NowPlayingController,
         settings: PlaybackSettings,
@@ -3998,7 +4051,7 @@ public final class AppModel {
         coordinator.player.gain = VolumeTrim.gain(settings.volumeTrim(for: book.uuid))
         listening = coordinator
         listeningBook = book
-        listeningWritesPositions = writesPositions
+        listeningStandIn = standIn
         // Which file this engine will actually be reading, taken from the
         // source rather than guessed later: `.files` is the read-along's own
         // extracted chunks, `.local` is the single downloaded upload, and a
@@ -4024,7 +4077,7 @@ public final class AppModel {
         )
         let resume = await resolveListeningStart(
             for: book, coordinator: coordinator,
-            timeline: timeline, manifestKind: manifestKind)
+            timeline: timeline, manifestKind: manifestKind, standIn: standIn)
         // The slot, after every suspension. `listening` was published before
         // the two awaits in this method — a resume to resolve, then an
         // AVFoundation item to load, which is seconds — and a hand-off firing
@@ -4284,18 +4337,25 @@ public final class AppModel {
                 // stored locator's clock out from under the reader.
                 guard !Task.isCancelled else { return }
                 guard let self, let coordinator else { return }
-                guard self.listeningWritesPositions else { continue }
                 let progress = coordinator.bookProgress
                 // Only when it actually moved: a paused book must not generate
                 // a write every fifteen seconds forever.
                 guard abs(progress - self.listeningLastWritten) > 0.0005 else { continue }
                 self.listeningLastWritten = progress
+                // A stand-in that cannot name a place on the server keeps it on
+                // the device. Only the server write is skipped: the widget goes
+                // on reading the clock.
+                guard let place = self.listeningServerPlace(of: coordinator, book: book) else {
+                    self.keepStandInPlace(of: coordinator, book: book)
+                    self.publishListeningSnapshot(book: book, coordinator: coordinator)
+                    continue
+                }
                 // A scrub is the listener naming a place; the clock arriving
                 // somewhere is not. The coordinator owns every seek entry point,
                 // so it is the only thing that can tell them apart.
                 let origin: PositionOrigin = coordinator.consumeSteering() ? .chosen : .derived
                 let accepted = await writePosition(
-                    Self.audioLocator(for: coordinator, book: book),
+                    place.locator,
                     timestamp: ProgressService.now(),
                     for: book.uuid,
                     origin: origin,
@@ -4319,7 +4379,7 @@ public final class AppModel {
                 // comment — so a cancel arriving during the write must not
                 // still land the anchor afterwards.
                 guard !Task.isCancelled else { return }
-                if accepted, let anchor = coordinator.currentAnchor {
+                if accepted, let anchor = place.anchor {
                     try? await store?.setAudioAnchor(anchor, forBook: book.uuid)
                 }
                 // `enqueue` suspends, and can drain the network for seconds.
@@ -4353,22 +4413,69 @@ public final class AppModel {
     /// same steering rule, the same guard, and the anchor only for a position
     /// the guard accepted.
     private func writeListeningPositionNow() async {
-        guard listeningProgressTask != nil, listeningWritesPositions,
+        guard listeningProgressTask != nil,
               let coordinator = listening, let book = listeningBook
         else { return }
         let progress = coordinator.bookProgress
         guard abs(progress - listeningLastWritten) > 0.0005 else { return }
         listeningLastWritten = progress
+        guard let place = listeningServerPlace(of: coordinator, book: book) else {
+            keepStandInPlace(of: coordinator, book: book)
+            publishListeningSnapshot(book: book, coordinator: coordinator)
+            return
+        }
         let origin: PositionOrigin = coordinator.consumeSteering() ? .chosen : .derived
         let accepted = await writePosition(
-            Self.audioLocator(for: coordinator, book: book),
+            place.locator,
             timestamp: ProgressService.now(),
             for: book.uuid,
             origin: origin,
         )
-        if accepted, let anchor = coordinator.currentAnchor {
+        if accepted, let anchor = place.anchor {
             try? await store?.setAudioAnchor(anchor, forBook: book.uuid)
         }
+    }
+
+    /// The place to write to the server for the engine in the slot: its own
+    /// locator and anchor, or for a stand-in the track and offset of the kept
+    /// manifest the file's clock maps to. Nil for a stand-in that cannot say.
+    private func listeningServerPlace(
+        of coordinator: AudiobookCoordinator, book: Book,
+    ) -> (locator: ReadiumLocator, anchor: AudioAnchor?)? {
+        guard let standIn = listeningStandIn else {
+            return (Self.audioLocator(for: coordinator, book: book), coordinator.currentAnchor)
+        }
+        guard let kept = standIn.kept,
+              let named = OfflineStandIn.place(
+                atFileTime: coordinator.bookTime, kept: kept, fileLength: standIn.fileLength)
+        else { return nil }
+        let anchor = coordinator.currentAnchor == nil ? nil : AudioAnchor(
+            audioHref: named.track.href, offset: named.offset,
+            writtenAt: Date().timeIntervalSince1970)
+        return (Self.locator(for: named, in: kept), anchor)
+    }
+
+    /// The server's locator for a place named in a manifest's terms, as a
+    /// streamed session writes it.
+    static func locator(
+        for place: OfflineStandIn.Place, in manifest: AudiobookManifest,
+    ) -> ReadiumLocator {
+        ReadiumLocator(
+            href: place.track.href,
+            type: place.track.type ?? "audio/mpeg",
+            title: manifest.title(of: place.track, at: place.trackIndex),
+            locations: .init(
+                progression: place.progression, totalProgression: place.totalProgression),
+        )
+    }
+
+    /// Keeps where a stand-in session is, beside the download and nowhere else:
+    /// file seconds and when.
+    private func keepStandInPlace(of coordinator: AudiobookCoordinator, book: Book) {
+        guard coordinator.bookTime.isFinite else { return }
+        BookContentService.saveStandInPlace(
+            StandInPlace(fileSeconds: coordinator.bookTime, writtenAt: ProgressService.now()),
+            bookUUID: book.uuid)
     }
 
     /// Keeps the widget honest while an audiobook plays.
@@ -4406,6 +4513,34 @@ public final class AppModel {
         )
     }
 
+    /// Where a stand-in resumes. The one clock it plays on is the file's, so
+    /// what is stored is read in the kept manifest's terms, which name the
+    /// tracks it names, and brought onto the file; a device-only place newer
+    /// than the stored position is simply where the listener last was.
+    ///
+    /// `playing` is the ladder run over the stand-in's own single track, kept
+    /// for when there is nothing better to go by.
+    static func standInResolution(
+        _ standIn: StandIn,
+        anchor: AudioAnchor?,
+        stored: StoredPosition?,
+        timeline: SMILTimeline?,
+        playing: ListeningResume.Resolution,
+    ) -> ListeningResume.Resolution {
+        if let place = standIn.place, place.writtenAt > (stored?.timestamp ?? 0) {
+            return .init(
+                bookTime: min(max(place.fileSeconds, 0), standIn.fileLength), reason: .audioPosition)
+        }
+        if let kept = standIn.kept, OfflineStandIn.matches(kept, fileLength: standIn.fileLength) {
+            let resolved = ListeningResume.resolve(
+                anchor: anchor, stored: stored, timeline: timeline, manifest: kept)
+            return .init(
+                bookTime: resolved.bookTime.map { min(max($0, 0), standIn.fileLength) },
+                reason: resolved.reason)
+        }
+        return playing
+    }
+
     /// Where an audiobook should resume, and why.
     ///
     /// The ladder itself lives in `ListeningResume`, which is a pure function
@@ -4421,6 +4556,7 @@ public final class AppModel {
         coordinator: AudiobookCoordinator,
         timeline: SMILTimeline?,
         manifestKind: ListeningResume.ManifestKind,
+        standIn: StandIn? = nil,
     ) async -> ListeningResume.Resolution {
         let anchor = try? await store?.audioAnchor(forBook: book.uuid)
         // The whole position, not just its locator: the ladder compares the
@@ -4428,9 +4564,14 @@ public final class AppModel {
         // say when that was.
         let stored = book.position?.locator
         let overlay = timeline ?? readers[book.uuid]?.timeline
-        let resolution = ListeningResume.resolve(
+        var resolution = ListeningResume.resolve(
             anchor: anchor, stored: book.position, timeline: overlay,
             manifest: coordinator.manifest)
+        if let standIn {
+            resolution = Self.standInResolution(
+                standIn, anchor: anchor, stored: book.position, timeline: overlay,
+                playing: resolution)
+        }
 
         // The fields that say *why*, rather than only that it failed. The old
         // line said "no audio anchor for this book yet" in the one case where

@@ -34,6 +34,7 @@ final class ScriptedServer: URLProtocol, @unchecked Sendable {
         var log: [Request] = []
         var answers: [String: (status: Int, body: Data)] = [:]
         var refusesWrites = false
+        var failing: Set<String> = []
         var holding: Set<String> = []
         var held: [String: [@Sendable () -> Void]] = [:]
         var heldCounts: [String: Int] = [:]
@@ -76,6 +77,12 @@ final class ScriptedServer: URLProtocol, @unchecked Sendable {
     static func answer(_ path: String, on server: URL, status: Int = 200, json object: Any) {
         let body = try! JSONSerialization.data(withJSONObject: object)
         lock.withLock { hosts[key(server)]?.answers[path] = (status, body) }
+    }
+
+    /// Fails every request to `path` from now on as a lost connection would,
+    /// with no answer at all.
+    static func failTransport(_ path: String, on server: URL) {
+        lock.withLock { _ = hosts[key(server)]?.failing.insert(path) }
     }
 
     /// Fails every write from now on as a lost connection would.
@@ -160,7 +167,8 @@ final class ScriptedServer: URLProtocol, @unchecked Sendable {
         let isWrite = ["POST", "PUT", "DELETE"].contains(method)
         let (deferred, refused, status, body): (Bool, Bool, Int, Data) = Self.lock.withLock {
             Self.hosts[host]?.log.append(Request(method: method, path: path, bearer: bearer))
-            let refused = isWrite && Self.hosts[host]?.refusesWrites == true
+            let refused = (isWrite && Self.hosts[host]?.refusesWrites == true)
+                || Self.hosts[host]?.failing.contains(path) == true
             let (status, body) = Self.answer(
                 method: method, path: path, bearer: bearer, scripted: Self.hosts[host]?.answers[path])
             return (Self.hosts[host]?.holding.contains(path) == true, refused, status, body)

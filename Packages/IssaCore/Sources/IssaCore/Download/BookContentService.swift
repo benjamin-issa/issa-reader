@@ -193,6 +193,42 @@ public struct BookContentService: Sendable {
         return try? JSONDecoder().decode(AudiobookManifest.self, from: data)
     }
 
+    /// Whether a manifest is kept for this audiobook: a file-existence check,
+    /// so a pass over many books decodes none of them.
+    public static func hasSavedManifest(bookUUID: String, in directory: URL? = nil) -> Bool {
+        FileManager.default.fileExists(
+            atPath: manifestURL(in: directory ?? defaultDirectory(), bookUUID: bookUUID).path)
+    }
+
+    /// Where the device-only place of a stand-in session is kept: beside the
+    /// download, named for it, and never ending in `.epub`.
+    public static func standInPlaceURL(in directory: URL, bookUUID: String) -> URL {
+        directory.appending(path: "\(bookUUID.safePathComponent)-audiobook-place.json")
+    }
+
+    /// Keeps where a stand-in session got to, for the next one. Static, so a
+    /// flush on the way out of an account needs no client.
+    public static func saveStandInPlace(
+        _ place: StandInPlace, bookUUID: String, in directory: URL? = nil,
+    ) {
+        let url = standInPlaceURL(in: directory ?? defaultDirectory(), bookUUID: bookUUID)
+        guard let data = try? JSONEncoder().encode(place) else { return }
+        try? data.write(to: url, options: .atomic)
+    }
+
+    /// The place a stand-in session kept, or nil when there is none.
+    public static func standInPlace(bookUUID: String, in directory: URL? = nil) -> StandInPlace? {
+        guard let data = try? Data(contentsOf: standInPlaceURL(
+            in: directory ?? defaultDirectory(), bookUUID: bookUUID))
+        else { return nil }
+        return try? JSONDecoder().decode(StandInPlace.self, from: data)
+    }
+
+    public static func removeStandInPlace(bookUUID: String, in directory: URL? = nil) {
+        try? FileManager.default.removeItem(
+            at: standInPlaceURL(in: directory ?? defaultDirectory(), bookUUID: bookUUID))
+    }
+
     /// Whether any edition of this book that carries text is still on the device.
     ///
     /// The question a removal has to ask before it releases what a download left
@@ -413,10 +449,11 @@ public struct BookContentService: Sendable {
         let directory = directory ?? defaultDirectory()
         try? FileManager.default.removeItem(
             at: localURL(in: directory, bookUUID: bookUUID, format: format))
-        // The track list belongs to the audiobook download and goes with it.
+        // The track list and the stand-in's place belong to the audiobook download and go with it.
         if format == .audiobook {
             try? FileManager.default.removeItem(
                 at: manifestURL(in: directory, bookUUID: bookUUID))
+            removeStandInPlace(bookUUID: bookUUID, in: directory)
         }
     }
 }

@@ -131,11 +131,12 @@ extension WidgetStorage {
             return app
         }
 
-        /// The track a stored position names is the server's name for it. The
-        /// file's own name on this device is nobody else's, and a stored
-        /// position under another name was read as another manifest's.
-        @Test("a stand-in manifest names the track the stored position names")
-        func standInNamesTheStoredTrack() async throws {
+        /// The stand-in is one track over the whole file, named by the file. A
+        /// stored position's href names one real track of a book that may have
+        /// many, so it is never borrowed, and with no kept manifest nothing is
+        /// written to the server.
+        @Test("a stand-in manifest is the whole file and writes nothing without a kept manifest")
+        func standInIsTheWholeFile() async throws {
             let app = Self.unreachableApp()
             let uuid = UUID().uuidString
             _ = try Self.plantAudiobook(uuid)
@@ -149,8 +150,10 @@ extension WidgetStorage {
             defer { app.stopListening(nowPlaying: nowPlaying) }
 
             #expect(app.listeningError == nil, "\(app.listeningError ?? "")")
-            #expect(app.listening?.manifest.readingOrder.first?.href == "/api/books/track-1.mp3")
-            #expect(app.listeningWritesPositions, "listening offline was not saved")
+            #expect(app.listening?.manifest.readingOrder.count == 1)
+            #expect(app.listening?.manifest.readingOrder.first?.href
+                == BookContentService.localURL(in: BookContentService.defaultDirectory(), bookUUID: uuid, format: .audiobook).lastPathComponent)
+            #expect(!app.listeningWritesPositions)
         }
 
         /// With no stored position there is no name to borrow, and a place
@@ -412,6 +415,303 @@ extension WidgetStorage {
             try? await Task.sleep(for: .milliseconds(300))
 
             #expect(content.savedManifest(for: book) == nil, "the departed account's manifest was written")
+        }
+
+        // MARK: - The stand-in's place
+
+        private static func threeTracks() -> AudiobookManifest {
+            AudiobookManifest(
+                metadata: .init(title: ["und": "Offline"], duration: 90),
+                readingOrder: [
+                    .init(href: "/api/track-1.mp3", type: "audio/mpeg", duration: 20),
+                    .init(href: "/api/track-2.mp3", type: "audio/mpeg", duration: 30),
+                    .init(href: "/api/track-3.mp3", type: "audio/mpeg", duration: 40),
+                ])
+        }
+
+        /// A stand-in as the session installs it: one track over a file of
+        /// ninety seconds, the writer armed on an interval the test never
+        /// reaches, so every write seen is the flush's.
+        private static func standInSession(
+            kept: AudiobookManifest?, place: StandInPlace? = nil,
+        ) throws -> (app: AppModel, store: LibraryStore, book: Book, coordinator: AudiobookCoordinator, directory: URL) {
+            let app = AppModel(keychain: LifecycleTokens(), notificationCentre: NotificationCenter())
+            let directory = FileManager.default.temporaryDirectory
+                .appending(path: "stand-in-\(UUID().uuidString)", directoryHint: .isDirectory)
+            let store = try LibraryStore(serverKey: "stand-in", directory: directory)
+            app.useStore(store)
+            let uuid = UUID().uuidString
+            let book = SharedFixtures.book("Offline", uuid: uuid, audiobook: true)
+            app.books = [book]
+            app.rebuildDerived()
+            let coordinator = AudiobookCoordinator(
+                manifest: AudiobookManifest(
+                    metadata: .init(title: ["und": "Offline"], duration: 90),
+                    readingOrder: [.init(href: "file.epub", title: "Offline", duration: 90)]),
+                source: .local(URL(fileURLWithPath: "/dev/null")))
+            let standIn = AppModel.StandIn(kept: kept, fileLength: 90, place: place)
+            app.installListening(coordinator, book: book, reading: .audiobook, standIn: standIn)
+            app.watchListeningProgress(book: book, coordinator: coordinator, every: .seconds(3_600))
+            return (app, store, book, coordinator, directory)
+        }
+
+        private static func queuedPositions(
+            _ store: LibraryStore, _ uuid: String,
+        ) async throws -> [MutationDrain.PositionPayload] {
+            try await MutationQueue(store: store).pending()
+                .filter { $0.kind == .position && $0.bookUUID == uuid }
+                .map { try JSONDecoder().decode(MutationDrain.PositionPayload.self, from: $0.payload) }
+        }
+
+        /// A matching kept manifest names the real track and the offset into
+        /// it, as a streamed session writes.
+        @Test("an offline session over a matching kept manifest writes the track and the offset")
+        func offlineSessionWritesTheRealTrack() async throws {
+            let session = try Self.standInSession(kept: Self.threeTracks())
+            defer { session.app.stopListening(nowPlaying: nil); try? FileManager.default.removeItem(at: session.directory) }
+            session.coordinator.player.onTimeUpdate?(45)
+
+            await session.app.flushOpenReaders()
+
+            let written = try await Self.queuedPositions(session.store, session.book.uuid)
+            let locator = try #require(written.first?.locator, "the offline session wrote nothing")
+            #expect(locator.href == "/api/track-2.mp3")
+            #expect(locator.type == "audio/mpeg")
+            let within = try #require(locator.locations?.progression)
+            #expect(abs(within - 25.0 / 30) < 0.0001)
+            let total = try #require(locator.locations?.totalProgression)
+            #expect(abs(total - 0.5) < 0.0001)
+            #expect(BookContentService.standInPlace(bookUUID: session.book.uuid) == nil,
+                    "a place that could be written was also kept on the device")
+        }
+
+        /// With no kept manifest the session writes no server position, and
+        /// keeps its place on the device.
+        @Test("an offline session with no kept manifest writes nothing and keeps its place on the device")
+        func offlineSessionKeepsADevicePlace() async throws {
+            let session = try Self.standInSession(kept: nil)
+            defer {
+                session.app.stopListening(nowPlaying: nil)
+                BookContentService.removeStandInPlace(bookUUID: session.book.uuid)
+                try? FileManager.default.removeItem(at: session.directory)
+            }
+            session.coordinator.player.onTimeUpdate?(45)
+
+            await session.app.flushOpenReaders()
+
+            #expect(try await Self.queuedPositions(session.store, session.book.uuid).isEmpty,
+                    "a place was written under no real track")
+            let place = try #require(BookContentService.standInPlace(bookUUID: session.book.uuid))
+            #expect(place.fileSeconds == 45)
+            #expect(place.writtenAt > 0)
+        }
+
+        /// The next stand-in start resumes from the device place.
+        @Test("a stand-in resumes from the device place after a stop and a restart")
+        func standInResumesFromTheDevicePlace() async throws {
+            let app = Self.unreachableApp()
+            let uuid = UUID().uuidString
+            _ = try Self.plantAudiobook(uuid)
+            defer {
+                BookContentService.removeDownload(bookUUID: uuid, format: .audiobook)
+            }
+            app.refreshDownloadedSet()
+            let book = SharedFixtures.book("Offline", uuid: uuid, audiobook: true)
+            // The first session, left at a place it kept: the clock is driven
+            // as a listener's playing would, and stopped through the write.
+            let first = await Self.listen(app, to: book)
+            let coordinator = try #require(app.listening)
+            coordinator.player.onTimeUpdate?(12)
+            await app.stopListeningWritingPosition(of: uuid, nowPlaying: first)
+            let kept = try #require(BookContentService.standInPlace(bookUUID: uuid), "no place was kept on stop")
+            #expect(abs(kept.fileSeconds - 12) < 2)
+
+            let second = await Self.listen(app, to: book)
+            defer { app.stopListening(nowPlaying: second) }
+
+            let resumed = try #require(app.listening)
+            #expect(abs(resumed.bookTime - kept.fileSeconds) < 1.5,
+                    "the restart began at \(resumed.bookTime), not at the kept \(kept.fileSeconds)")
+        }
+
+        /// Once the real manifest is known the place converts, is written as
+        /// an ordinary position under its own time, and is dropped.
+        @Test("the device place is written once the manifest is known, and dropped")
+        func devicePlaceConvertsWhenTheManifestIsKnown() async throws {
+            let server = ScriptedServer.make("stand-in-convert")
+            defer { ScriptedServer.forget(server) }
+            let uuid = UUID().uuidString
+            ScriptedServer.answer(Endpoint.listen(uuid), on: server, json: [
+                "metadata": ["title": ["und": "Offline"], "duration": 30],
+                "readingOrder": [["href": "/api/track-1.mp3", "type": "audio/mpeg", "duration": 30]],
+            ])
+            let app = AppModel(keychain: LifecycleTokens(), notificationCentre: NotificationCenter())
+            let session = ScriptedServer.session(on: server, storing: "token-A")
+            app.session = session
+            app.serverAddress = server.absoluteString
+            let directory = FileManager.default.temporaryDirectory
+                .appending(path: "stand-in-convert-\(UUID().uuidString)", directoryHint: .isDirectory)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            app.useStore(try LibraryStore(serverKey: "stand-in-convert", directory: directory))
+            _ = try Self.plantAudiobook(uuid)
+            defer { BookContentService.removeDownload(bookUUID: uuid, format: .audiobook) }
+            let book = SharedFixtures.book("Offline", uuid: uuid, audiobook: true)
+            app.books = [book]
+            app.rebuildDerived()
+            app.refreshDownloadedSet()
+            let stamp = ProgressService.now() - 5_000
+            BookContentService.saveStandInPlace(StandInPlace(fileSeconds: 15, writtenAt: stamp), bookUUID: uuid)
+
+            await app.backfillAudiobookManifests(session: session, generation: app.catalogueGeneration)
+
+            let stored = try #require(app.bookByUUID[uuid]?.position, "the kept place was not written")
+            #expect(stored.locator.href == "/api/track-1.mp3")
+            #expect(abs((stored.locator.locations?.totalProgression ?? 0) - 0.5) < 0.0001)
+            #expect(stored.timestamp == stamp, "the place was not written under its own time")
+            #expect(BookContentService.standInPlace(bookUUID: uuid) == nil, "the written place was kept")
+        }
+
+        /// A manifest that is not of the file cannot name the place, so it
+        /// stays for offline use.
+        @Test("a device place the manifest cannot name is kept")
+        func devicePlaceStaysWhenTheManifestIsNotOfTheFile() async throws {
+            let server = ScriptedServer.make("stand-in-mismatch")
+            defer { ScriptedServer.forget(server) }
+            let uuid = UUID().uuidString
+            ScriptedServer.answer(Endpoint.listen(uuid), on: server, json: [
+                "metadata": ["title": ["und": "Offline"], "duration": 100],
+                "readingOrder": [["href": "/api/track-1.mp3", "type": "audio/mpeg", "duration": 100]],
+            ])
+            let app = AppModel(keychain: LifecycleTokens(), notificationCentre: NotificationCenter())
+            let session = ScriptedServer.session(on: server, storing: "token-A")
+            app.session = session
+            app.serverAddress = server.absoluteString
+            let directory = FileManager.default.temporaryDirectory
+                .appending(path: "stand-in-mismatch-\(UUID().uuidString)", directoryHint: .isDirectory)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            app.useStore(try LibraryStore(serverKey: "stand-in-mismatch", directory: directory))
+            _ = try Self.plantAudiobook(uuid)
+            defer { BookContentService.removeDownload(bookUUID: uuid, format: .audiobook) }
+            let book = SharedFixtures.book("Offline", uuid: uuid, audiobook: true)
+            app.books = [book]
+            app.rebuildDerived()
+            app.refreshDownloadedSet()
+            BookContentService.saveStandInPlace(
+                StandInPlace(fileSeconds: 15, writtenAt: ProgressService.now()), bookUUID: uuid)
+
+            await app.backfillAudiobookManifests(session: session, generation: app.catalogueGeneration)
+
+            #expect(app.bookByUUID[uuid]?.position == nil)
+            #expect(BookContentService.standInPlace(bookUUID: uuid) != nil)
+        }
+
+        /// The widget reads the clock whether or not the server is written.
+        @Test("the widget is published during a session that writes nothing")
+        func widgetPublishesWhileNothingIsWritten() async throws {
+            let session = try Self.standInSession(kept: nil)
+            defer {
+                session.app.stopListening(nowPlaying: nil)
+                BookContentService.removeStandInPlace(bookUUID: session.book.uuid)
+                try? FileManager.default.removeItem(at: session.directory)
+            }
+            let publisher = CurrentBookPublisher()
+            session.app.currentBookPublisher = publisher
+            session.app.watchListeningProgress(
+                book: session.book, coordinator: session.coordinator, every: .milliseconds(30))
+            session.coordinator.player.onTimeUpdate?(20)
+
+            let published = await waitUntil { publisher.owner == .listening(session.book.uuid) }
+
+            #expect(published, "the widget froze while the stand-in wrote nothing")
+        }
+
+        // MARK: - The backfill's order and what it marks
+
+        private static func backfillFixture(
+            _ label: String, books uuids: [String],
+        ) async throws -> (app: AppModel, session: Session, server: URL, directory: URL) {
+            let server = ScriptedServer.make(label)
+            let app = AppModel(keychain: LifecycleTokens(), notificationCentre: NotificationCenter())
+            let session = ScriptedServer.session(on: server, storing: "token-A")
+            app.session = session
+            app.serverAddress = server.absoluteString
+            let directory = FileManager.default.temporaryDirectory
+                .appending(path: "backfill-\(UUID().uuidString)", directoryHint: .isDirectory)
+            app.useStore(try LibraryStore(serverKey: label, directory: directory))
+            for uuid in uuids { _ = try plantAudiobook(uuid) }
+            app.books = uuids.map { SharedFixtures.book("Book \($0.prefix(4))", uuid: $0, audiobook: true) }
+            app.rebuildDerived()
+            app.refreshDownloadedSet()
+            return (app, session, server, directory)
+        }
+
+        private static func manifestRequests(_ server: URL, _ uuids: [String]) -> [String] {
+            ScriptedServer.requests(to: server).compactMap { request in
+                uuids.first { Endpoint.listen($0) == request.path }
+            }
+        }
+
+        @Test("a book that times out goes last in the next pass, a 503 stays unasked and a 404 is marked")
+        func backfillOrderAndMarks() async throws {
+            let timedOut = UUID().uuidString, busy = UUID().uuidString
+            let missing = UUID().uuidString, fine = UUID().uuidString
+            let all = [timedOut, busy, missing, fine]
+            let fixture = try await Self.backfillFixture("backfill-order", books: all)
+            defer {
+                ScriptedServer.forget(fixture.server)
+                try? FileManager.default.removeItem(at: fixture.directory)
+                for uuid in all { BookContentService.removeDownload(bookUUID: uuid, format: .audiobook) }
+            }
+            ScriptedServer.failTransport(Endpoint.listen(timedOut), on: fixture.server)
+            ScriptedServer.answer(Endpoint.listen(busy), on: fixture.server, status: 503, json: [:])
+            ScriptedServer.answer(Endpoint.listen(missing), on: fixture.server, status: 404, json: [:])
+            ScriptedServer.answer(Endpoint.listen(fine), on: fixture.server, json: [
+                "metadata": ["title": ["und": "Fine"], "duration": 30],
+                "readingOrder": [["href": "/api/track-1.mp3", "type": "audio/mpeg", "duration": 30]],
+            ])
+            let app = fixture.app
+            let generation = app.catalogueGeneration
+
+            await app.backfillAudiobookManifests(session: fixture.session, generation: generation)
+            #expect(Self.manifestRequests(fixture.server, all) == [timedOut],
+                    "a transport failure should end the pass")
+
+            await app.backfillAudiobookManifests(session: fixture.session, generation: generation)
+            #expect(Self.manifestRequests(fixture.server, all) == [timedOut, busy, missing, fine, timedOut],
+                    "the book that timed out was not moved to the end")
+
+            await app.backfillAudiobookManifests(session: fixture.session, generation: generation)
+            let third = Array(Self.manifestRequests(fixture.server, all).dropFirst(5))
+            #expect(third == [busy, timedOut],
+                    "the 503 should be asked again, the 404 and the kept book not: \(third)")
+        }
+
+        @Test("a second refresh while a pass is running does nothing")
+        func overlappingPassesRunOnce() async throws {
+            let uuid = UUID().uuidString
+            let fixture = try await Self.backfillFixture("backfill-overlap", books: [uuid])
+            defer {
+                ScriptedServer.forget(fixture.server)
+                try? FileManager.default.removeItem(at: fixture.directory)
+                BookContentService.removeDownload(bookUUID: uuid, format: .audiobook)
+            }
+            ScriptedServer.answer(Endpoint.listen(uuid), on: fixture.server, json: [
+                "metadata": ["title": ["und": "Fine"], "duration": 30],
+                "readingOrder": [["href": "/api/track-1.mp3", "type": "audio/mpeg", "duration": 30]],
+            ])
+            ScriptedServer.hold(Endpoint.listen(uuid), on: fixture.server)
+            let app = fixture.app
+            let generation = app.catalogueGeneration
+
+            let first = Task { await app.backfillAudiobookManifests(session: fixture.session, generation: generation) }
+            try #require(await waitUntil { ScriptedServer.held(Endpoint.listen(uuid), on: fixture.server) == 1 })
+            await app.backfillAudiobookManifests(session: fixture.session, generation: generation)
+
+            #expect(ScriptedServer.held(Endpoint.listen(uuid), on: fixture.server) == 1,
+                    "a second pass asked for the same manifest")
+            ScriptedServer.release(Endpoint.listen(uuid), on: fixture.server)
+            await first.value
+            #expect(Self.manifestRequests(fixture.server, [uuid]).count == 1)
         }
     }
 }
