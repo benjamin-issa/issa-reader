@@ -151,8 +151,7 @@ class LibraryStore(
         if (trimmed.isEmpty()) return allBooks()
         // The terms FTS cannot be trusted with: the ones carrying a character
         // its tokenizer discards.
-        // Split on any whitespace, a pasted non-breaking space included.
-        val literalTerms = trimmed.split(Regex("(?U)\\s+"))
+        val literalTerms = trimmed.split(WHITESPACE)
             .filter { term -> term.any { it == '%' || it == '_' || it == '\\' } }
 
         return reading { db ->
@@ -394,6 +393,14 @@ class LibraryStore(
     }
 
     companion object {
+        /**
+         * Any run of whitespace, a pasted non-breaking space included. Spelled
+         * as a class rather than `(?U)\s`: the JVM reads that flag, but
+         * Android's ICU engine rejects it, and the search threw on every call
+         * on a phone. `\p{Z}` is every Unicode space separator.
+         */
+        val WHITESPACE = Regex("[\\t\\n\\u000B\\f\\r\\u0085\\p{Z}]+")
+
         /**
          * The key of the store for books the reader added from their own files.
          *
