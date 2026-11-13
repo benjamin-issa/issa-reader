@@ -250,19 +250,23 @@ public final class AudioPlayer {
         // must not record that as the state to go back to: the end would then
         // leave a book the listener was in the middle of silent. A pause the
         // listener makes in between still clears it, through `pause()`.
-        let wasPlaying = isPlaying || wasPlayingBeforeInterruption
+        let wasPlaying = isPlaying || latchIsLive
         pause()
         wasPlayingBeforeInterruption = wasPlaying
+        // The latch lives from the latest `began`: an interruption that
+        // goes on keeps it, and one whose end never came stops being believed.
+        latchedAt = wasPlaying ? .now : nil
         onInterruption?(false)
     }
 
     /// The system gave the session back.
     func interruptionEnded(shouldResume: Bool) {
-        let resumes = shouldResume && wasPlayingBeforeInterruption
+        let resumes = shouldResume && latchIsLive
         // Spent, either way. Without clearing it a second `.ended` with no
         // intervening `.began` — which the system does deliver — resumed a book
         // the listener had stopped.
         wasPlayingBeforeInterruption = false
+        latchedAt = nil
         if resumes {
             #if os(iOS) || os(tvOS)
             try? AVAudioSession.sharedInstance().setActive(true)
@@ -324,6 +328,20 @@ public final class AudioPlayer {
     /// Whether the interruption arrived mid-playback, so a resume is only
     /// offered to someone who was actually listening.
     private var wasPlayingBeforeInterruption = false
+    private var latchedAt: ContinuousClock.Instant?
+
+    /// How long after the latest interruption began its end may still resume
+    /// the book. The system does not always deliver an `.ended`, and a latch
+    /// that never lapsed let a much later, unrelated interruption's end start
+    /// the book by itself. Internal for the tests.
+    var interruptionLatchLifetime: Duration = .seconds(600)
+
+    /// Whether the book was playing when an interruption began, and that
+    /// interruption is recent enough to be the one now ending.
+    private var latchIsLive: Bool {
+        guard wasPlayingBeforeInterruption, let latchedAt else { return false }
+        return ContinuousClock.now - latchedAt <= interruptionLatchLifetime
+    }
 
     /// Coarse cadence, used when nothing is watching the highlight closely.
     static let idleObservationInterval: TimeInterval = 1.0
@@ -656,6 +674,10 @@ public final class AudioPlayer {
         // when the listener asks for narration and wrong when they only
         // opened the book.
         Self.activateAudioSession()
+        // The listener's own play is the last word on what an interruption
+        // should do afterwards.
+        wasPlayingBeforeInterruption = false
+        latchedAt = nil
         isPlaying = true
         // Intent only, while a load is still placing its item: see
         // `placementPending`.
@@ -683,6 +705,7 @@ public final class AudioPlayer {
     public func pause() {
         pauseCount &+= 1
         wasPlayingBeforeInterruption = false
+        latchedAt = nil
         isPlaying = false
         player.rate = 0
         notifyRateObservers(0)

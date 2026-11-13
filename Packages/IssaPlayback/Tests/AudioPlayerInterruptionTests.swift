@@ -61,4 +61,46 @@ struct AudioPlayerInterruptionTests {
 
         #expect(!player.isPlaying)
     }
+
+    /// The system does not always deliver the `.ended`. A latch that never
+    /// lapsed let a much later interruption's end start the book by itself.
+    @Test("an end that arrives long after the interruption began resumes nothing")
+    func anExpiredLatchResumesNothing() async throws {
+        let player = await playing()
+        player.interruptionLatchLifetime = .milliseconds(20)
+
+        player.interruptionBegan()
+        try await Task.sleep(for: .milliseconds(80))
+        player.interruptionEnded(shouldResume: true)
+
+        #expect(!player.isPlaying, "a book the interruption took long ago started by itself")
+    }
+
+    @Test("a new interruption long after a lost end does not inherit the old latch")
+    func aLostEndDoesNotCarryOver() async throws {
+        let player = await playing()
+        player.interruptionLatchLifetime = .milliseconds(20)
+
+        player.interruptionBegan()
+        try await Task.sleep(for: .milliseconds(80))
+        // The first end never came; an unrelated interruption begins and ends.
+        player.interruptionBegan()
+        player.interruptionEnded(shouldResume: true)
+
+        #expect(!player.isPlaying)
+    }
+
+    @Test("an interruption that goes on is still one: the latest began keeps the latch alive")
+    func aContinuingInterruptionResumes() async throws {
+        let player = await playing()
+        player.interruptionLatchLifetime = .milliseconds(150)
+
+        player.interruptionBegan()
+        try await Task.sleep(for: .milliseconds(100))
+        player.interruptionBegan()
+        try await Task.sleep(for: .milliseconds(100))
+        player.interruptionEnded(shouldResume: true)
+
+        #expect(player.isPlaying)
+    }
 }
