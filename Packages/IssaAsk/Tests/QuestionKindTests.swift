@@ -41,6 +41,48 @@ struct QuestionKindTests {
         }
     }
 
+    @Test("a question that asks more than the relative's name is not the table's")
+    func kinshipThatAsksMoreIsNotWhoIs() {
+        for question in [
+            "Did Ryn's brother help her?",
+            "What did Ryn's brother say to her?",
+            "Where did Ryn's sister go?",
+            "Who is Ryn's brother's wife?",
+            "Who is Ryn's brother married to?",
+            "Is Ryn's brother alive?",
+        ] {
+            guard case let .kinship(_, _, _, form) = Self.kind(question) else {
+                Issue.record("\(question) classified as \(Self.kind(question).label)")
+                continue
+            }
+            #expect(form == .other, "\(question)")
+        }
+        for question in ["Who is Ryn's brother so far?", "Who's Ryn's brother?", "What are the names of Ryn's brothers?",
+                         "What is the name of Ryn's brother?", "Who is the brother of Ryn?"] {
+            guard case let .kinship(_, _, _, form) = Self.kind(question) else {
+                Issue.record("\(question) classified as \(Self.kind(question).label)")
+                continue
+            }
+            #expect(form == .whoIs, "\(question)")
+        }
+    }
+
+    @Test("a curly apostrophe reads as the straight one")
+    func curlyApostrophes() {
+        guard case let .identity(who) = Self.kind("Who\u{2019}s Ryn?") else {
+            Issue.record("Who\u{2019}s Ryn? classified as \(Self.kind("Who\u{2019}s Ryn?").label)")
+            return
+        }
+        #expect(who.tokens == ["ryn"])
+        #expect(Self.kind("What\u{2019}s happened so far?").label == "recap")
+        guard case let .kinship(owner, _, _, form) = Self.kind("Who is Ryn\u{2019}s brother?") else {
+            Issue.record("a curly possessive was not read as one")
+            return
+        }
+        #expect(owner.tokens == ["ryn"])
+        #expect(form == .whoIs)
+    }
+
     @Test("a question with too much in it is a search, not a name lookup")
     func rejectsLongIdentityRemainders() {
         // "Who is the man in the boat by the river?" is a question about a

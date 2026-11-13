@@ -331,8 +331,12 @@ public final class ReadalongCoordinator {
     ///   missing, in which case nothing plays either.
     @discardableResult
     public func play(from entry: SMILEntry) async -> Bool {
+        // A pause that lands while the file opens is the listener's last word.
+        // `isPlaying` cannot say so — a load leaves it as it was — so the
+        // count of pauses is read either side of the wait.
+        let pauses = player.pauseCount
         guard await move(to: entry) else { return false }
-        player.play()
+        if player.pauseCount == pauses { player.play() }
         return true
     }
 

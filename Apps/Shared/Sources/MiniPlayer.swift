@@ -71,9 +71,15 @@ public struct MiniPlayer: View {
 
                 skip(.skipBackward, symbol: "gobackward", label: "Skip back", on: coordinator)
 
+                // Through `perform`, as the skip buttons beside it and every
+                // remote command are: when the file the player holds has
+                // failed, only the coordinator's resume reopens it, and the
+                // player's own play refuses a dead item without a word.
                 Button {
-                    coordinator.player.togglePlayPause()
-                    nowPlaying.publish()
+                    Task {
+                        await coordinator.perform(.playPause, using: settings.commandMap)
+                        nowPlaying.publish()
+                    }
                 } label: {
                     // Tangerine, as in the full player. The same control was ink
                     // here and tangerine there, on the same tab.

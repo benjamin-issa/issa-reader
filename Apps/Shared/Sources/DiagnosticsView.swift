@@ -63,7 +63,7 @@ struct DiagnosticsView: View {
                         .foregroundStyle(Palette.inkQuaternary)
                 }
                 Button {
-                    Clipboard.copy(IssaLog.export())
+                    Clipboard.copy(IssaLog.export(), lifetime: Clipboard.sensitiveLifetime)
                 } label: {
                     Label("Copy to clipboard", systemImage: "doc.on.doc")
                 }

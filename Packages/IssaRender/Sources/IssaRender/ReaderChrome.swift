@@ -64,6 +64,11 @@ public struct ReaderChrome: Sendable, Equatable {
     /// How far into the safe areas the full-screen page may reach, where that
     /// is known. Nil keeps the safe areas whole.
     public let fillEdges: FillEdges?
+    /// How far in from each side the page starts, where the device's own side
+    /// edges are in the way: an iPhone on its side, with the sensor housing
+    /// down one of them. Zero everywhere else, and upright.
+    public let sideLeading: CGFloat
+    public let sideTrailing: CGFloat
 
     public init(
         safeAreaTop: CGFloat,
@@ -74,6 +79,8 @@ public struct ReaderChrome: Sendable, Equatable {
         fillsScreen: Bool = false,
         verticalMargin: CGFloat? = nil,
         fillEdges: FillEdges? = nil,
+        sideLeading: CGFloat = 0,
+        sideTrailing: CGFloat = 0,
     ) {
         self.safeAreaTop = max(0, safeAreaTop)
         self.safeAreaBottom = max(0, safeAreaBottom)
@@ -82,6 +89,8 @@ public struct ReaderChrome: Sendable, Equatable {
         self.fillsScreen = fillsScreen
         self.verticalMargin = max(0, verticalMargin ?? margin)
         self.fillEdges = fillEdges
+        self.sideLeading = max(0, sideLeading)
+        self.sideTrailing = max(0, sideTrailing)
         self.drawsOwnTopBar = drawsOwnTopBar && self.railWidth == 0
     }
 
@@ -139,7 +148,7 @@ public struct ReaderChrome: Sendable, Equatable {
     /// produce nothing at all.
     public func pageSize(in window: CGSize) -> CGSize {
         CGSize(
-            width: max(window.width - railWidth - margin * 2, 1),
+            width: max(window.width - railWidth - sideLeading - sideTrailing - margin * 2, 1),
             height: max(window.height - topReserve - bottomReserve, 1),
         )
     }
@@ -150,6 +159,6 @@ public struct ReaderChrome: Sendable, Equatable {
     /// worth being able to ask, because that is the state in which the layout's
     /// guarantees stop meaning anything.
     public func fits(_ window: CGSize) -> Bool {
-        window.height - topReserve - bottomReserve >= 1 && window.width - railWidth - margin * 2 >= 1
+        window.height - topReserve - bottomReserve >= 1 && window.width - railWidth - sideLeading - sideTrailing - margin * 2 >= 1
     }
 }

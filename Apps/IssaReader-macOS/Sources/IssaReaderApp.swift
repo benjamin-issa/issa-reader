@@ -203,7 +203,7 @@ struct IssaCommands: Commands {
             // server field toggled playback instead. The reader page handles
             // Space itself while it has the keyboard, which is the right
             // scope for it.
-            PlayPauseCommand(nowPlaying: nowPlaying)
+            PlayPauseCommand(nowPlaying: nowPlaying, settings: settings)
 
             Button("Skip Forward") {
                 perform(.skipForward)
@@ -288,13 +288,16 @@ struct FileMenuAddBook: View {
 /// the whole menu bar.
 struct PlayPauseCommand: View {
     let nowPlaying: NowPlayingController
+    let settings: PlaybackSettings
     private let keyReader = KeyReaderNarration.shared
 
     var body: some View {
         Button(nowPlaying.coordinator?.player.isPlaying == true ? "Pause" : "Play") {
             if let coordinator = nowPlaying.coordinator {
-                coordinator.player.togglePlayPause()
-                nowPlaying.publish()
+                Task {
+                    await coordinator.perform(.playPause, using: settings.commandMap)
+                    nowPlaying.publish()
+                }
             } else {
                 ReaderCommand.playPause.post()
             }

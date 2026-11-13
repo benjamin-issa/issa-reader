@@ -641,8 +641,10 @@ struct NarrationStopTests {
         try await Task.sleep(for: .milliseconds(2400))
         #expect(saves.positions == 1, "a save was scheduled")
 
+        // The reader has not moved, so there is nothing to write: the stop
+        // changed neither the place nor the anchor.
         await model.saveProgress()
-        #expect(saves.positions == 2)
+        #expect(saves.positions == 1, "a stop that did not move the reader wrote a place")
         #expect(saves.anchors == 1, "and the voice is no longer anywhere to anchor")
         #expect(saves.lastOrigin == origin, "the position's classification was disturbed")
         let after = try #require(saves.lastLocator)

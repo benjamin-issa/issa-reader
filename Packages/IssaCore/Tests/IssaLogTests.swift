@@ -182,6 +182,37 @@ struct IssaLogTests {
         #expect(second.text(since: Date() - IssaLog.window).contains("written before the crash"))
     }
 
+    /// The six hours are a promise about what is kept, not only about what is
+    /// read: the files themselves must not hold an older line.
+    @Test("an entry older than six hours is gone from the files, not just from the report")
+    func storesNothingOlderThanSixHours() throws {
+        let store = temporaryStore()
+        defer { store.clear() }
+        store.append(entry("seven hours ago", ago: 7 * 3600))
+        store.append(entry("one hour ago", ago: 3600))
+        store.flush()
+        let directory = try #require(store.directory)
+        let kept = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+            .compactMap { try? String(contentsOf: $0, encoding: .utf8) }
+            .joined(separator: "\n")
+        #expect(kept.contains("one hour ago"))
+        #expect(!kept.contains("seven hours ago"))
+    }
+
+    @Test("a previous file that has aged out entirely is deleted")
+    func dropsAPreviousFileThatHasAgedOut() throws {
+        let store = temporaryStore()
+        defer { store.clear() }
+        let directory = try #require(store.directory)
+        let old = try JSONEncoder().encode(["time": (Date() - 9 * 3600).formatted(IssaLog.Entry.stamp),
+                                            "level": "info", "message": "old"])
+        try (String(decoding: old, as: UTF8.self) + "\n")
+            .write(to: directory.appendingPathComponent("previous.log"), atomically: true, encoding: .utf8)
+        store.append(entry("now"))
+        store.flush()
+        #expect(!FileManager.default.fileExists(atPath: directory.appendingPathComponent("previous.log").path))
+    }
+
     @Test("an empty log says so rather than exporting nothing")
     func emptyLogIsExplained() {
         let store = temporaryStore()

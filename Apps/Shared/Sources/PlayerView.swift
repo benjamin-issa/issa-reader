@@ -306,6 +306,12 @@ public struct PlayerView: View {
                 value: Binding(get: { progress }, set: { scrubValue = $0 }),
                 in: 0 ... 1,
                 onEditingChanged: { editing in
+                    // Seeded from where the bar is drawn, before `scrubbing`
+                    // turns the bar over to `scrubValue`. A touch that is lifted
+                    // without moving never calls the setter above, and the
+                    // release would otherwise seek to whatever the last scrub
+                    // left here, or to zero.
+                    if editing { scrubValue = progress }
                     scrubbing = editing
                     if !editing {
                         // Through the bar's own inverse, so a drag lands where
