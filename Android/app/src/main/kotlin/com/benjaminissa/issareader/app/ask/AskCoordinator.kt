@@ -277,6 +277,14 @@ class AskCoordinator(
         }
         if (!on) {
             settings.askEnabled = false
+            // Everything in flight stops with the switch: a warm-up would go
+            // on to prewarm the model, and a question to count tokens and
+            // generate, after the reader was told nothing more is sent.
+            for ((uuid, task) in preparing.toMap()) {
+                task.cancel()
+                preparing.remove(uuid)
+            }
+            for (uuid in jobsState.keys.toList()) cancel(uuid)
             checking?.cancel()
             checking = null
             downloading?.cancel()

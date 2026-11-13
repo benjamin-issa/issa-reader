@@ -4,6 +4,7 @@ import com.benjaminissa.issareader.app.ask.AskHarness.Companion.boundary
 import com.benjaminissa.issareader.app.ask.AskHarness.Companion.source
 import com.benjaminissa.issareader.ask.AskAvailability
 import com.benjaminissa.issareader.ask.AskFailure
+import com.benjaminissa.issareader.ask.ScriptedAnswerModel
 import com.benjaminissa.issareader.ask.android.MlKitStartup
 import com.benjaminissa.issareader.ask.android.ModelDownload
 import kotlinx.coroutines.delay
@@ -241,6 +242,54 @@ class AskSwitchTest {
             delay(20)
             assertEquals(2, platform.availabilityCalls)
             assertEquals(AskSettingsState.Off, coordinator.settingsState)
+        }
+    }
+
+    /** Off means off now: a warm-up that is mid-way does not go on to prewarm the model. */
+    @Test
+    fun `turning Ask off stops a warm-up in flight`() {
+        val inner = ScriptedAnswerModel()
+        val reached = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val release = kotlinx.coroutines.CompletableDeferred<Unit>()
+        var finished = false
+        val model = object : com.benjaminissa.issareader.ask.AnswerModel by inner {
+            override suspend fun prewarm() {
+                reached.complete(Unit)
+                release.await()
+                finished = true
+            }
+        }
+        AskHarness(platform = CountingPlatform(model = model)).use { harness ->
+            harness.run {
+                val source = source()
+                coordinator.prepare(source)
+                val warmUp = coordinator.warmUp(source.bookUuid)!!
+                reached.await()
+
+                coordinator.setEnabled(false)
+                release.complete(Unit)
+                warmUp.join()
+
+                assertTrue("the warm-up was cancelled", warmUp.isCancelled)
+                assertFalse("and never finished its prewarm", finished)
+                assertNull(coordinator.warmUp(source.bookUuid))
+            }
+        }
+    }
+
+    /** ... and a question that has not finished is stopped and forgotten. */
+    @Test
+    fun `turning Ask off stops a question in flight`() = AskHarness().use { harness ->
+        harness.run {
+            val source = source()
+            val job = coordinator.ask("What did Alice follow?", source, boundary())!!
+            val task = job.task!!
+            assertTrue(coordinator.jobs.containsKey(source.bookUuid))
+
+            coordinator.setEnabled(false)
+
+            assertTrue("the question is gone", coordinator.jobs.isEmpty())
+            assertTrue("and its work is cancelled", task.isCancelled)
         }
     }
 }
