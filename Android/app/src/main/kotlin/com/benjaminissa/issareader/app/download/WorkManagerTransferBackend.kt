@@ -92,6 +92,11 @@ class WorkManagerTransferBackend(
         // The partial is the new transfer's from here, named by its id, so a
         // sweep never sees a file that work is waiting for under another name.
         val adopted = resume?.let { moveToTransfer(it, id) }
+        // And the file it is a part of: paused again before the worker runs, the
+        // resume data it hands back has to carry the validator, or the next
+        // request asks for a range with no If-Range and appends to a file the
+        // server has since replaced.
+        transfer.validator = resume?.validator
         val work = OneTimeWorkRequestBuilder<TransferWorker>()
             .setId(id)
             .setConstraints(

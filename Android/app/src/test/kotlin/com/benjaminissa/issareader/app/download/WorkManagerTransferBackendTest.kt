@@ -297,6 +297,30 @@ class WorkManagerTransferBackendTest {
     }
 
     @Test
+    fun `a transfer resumed and paused before its worker ran still carries the validator`() {
+        val partial = orphan().apply { writeText("first half ") }
+        val resume = WorkManagerTransferBackend.ResumeState(partial.path, partial.length(), "\"etag-1\"")
+        val data = kotlinx.serialization.json.Json.encodeToString(WorkManagerTransferBackend.ResumeState.serializer(), resume).encodeToByteArray()
+        val queued = backend.start(request(), "uuid|ebook|1|8", data)
+        var handedBack: ByteArray? = null
+
+        queued.cancelProducingResumeData { handedBack = it }
+
+        val paused = kotlinx.serialization.json.Json.decodeFromString(
+            WorkManagerTransferBackend.ResumeState.serializer(), checkNotNull(handedBack).decodeToString(),
+        )
+        assertEquals("\"etag-1\"", paused.validator)
+        assertEquals("first half ", File(paused.path).readText())
+
+        server.enqueue(MockResponse.Builder().code(206).body("second half").build())
+        val again = backend.start(request(), "uuid|ebook|1|8", handedBack)
+        runWorker(again, "uuid|ebook|1|8", paused)
+        val recorded = server.takeRequest()
+        assertEquals("bytes=11-", recorded.headers["Range"])
+        assertEquals("\"etag-1\"", recorded.headers["If-Range"])
+    }
+
+    @Test
     fun `a transfer resumed from a kept partial owns it under its own id`() {
         val kept = orphan()
         val transfer = backend.start(request(), "uuid|ebook|1|7", resumeData(kept)) as WorkManagerTransferBackend.WorkTransfer
