@@ -64,6 +64,8 @@ struct RootView: View {
             // Zero-sized and invisible; see `LayoutProbe`.
             .overlay(alignment: .topLeading) { LayoutProbe() }
             .overlay(alignment: .topLeading) { DuoProbes(scope: "app") }
+            // What the last book link was decided to do; see `LinkDecisions`.
+            .overlay(alignment: .topLeading) { LinkDecisionProbe() }
         #endif
     }
 
@@ -338,6 +340,9 @@ struct LibraryTabs: View {
     /// One line in the diagnostics log for each decision, so a report of a link
     /// that did not open its book can be read back. Ids only, never a title.
     private func logRouting(_ action: String, _ request: AppModel.PendingBook) {
+        #if ISSA_UITEST_FIXTURE
+        LinkDecisions.shared.record(action, book: request.uuid)
+        #endif
         IssaLog.info("book link", [
             "action": action,
             "book": request.uuid,

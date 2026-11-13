@@ -10,16 +10,23 @@
 set -u
 udid="${1:?usage: deliver-test-links.sh <simulator udid>}"
 flag=/tmp/issa-test-link.flag
+# What `simctl openurl` answered for the last link, written after it ran: the
+# test that raised the flag reads it, since the flag disappearing says only that
+# this took it, not that the system accepted the link.
+ack=/tmp/issa-test-link.ack
 # A flag left by a test that ran with no watcher is not a link for this run,
 # and the flag is not left behind when this stops either.
-rm -f "$flag"
-trap 'rm -f "$flag"' EXIT
+rm -f "$flag" "$ack"
+trap 'rm -f "$flag" "$ack"' EXIT
 trap 'exit 0' INT TERM
 while true; do
   if [ -f "$flag" ]; then
     id=$(cat "$flag")
     rm -f "$flag"
     xcrun simctl openurl "$udid" "issareader://book/$id"
+    # Written whole and moved into place, so the test never reads half of it.
+    echo "$?" > "$ack.tmp"
+    mv -f "$ack.tmp" "$ack"
   fi
   sleep 0.3
 done

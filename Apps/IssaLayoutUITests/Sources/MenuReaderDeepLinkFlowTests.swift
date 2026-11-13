@@ -66,8 +66,23 @@ final class MenuReaderDeepLinkFlowTests: XCTestCase {
         // The widget's link to the book being read, sent to the running app:
         // `XCUIApplication.open` relaunches it, which tests nothing about a
         // link finding a reader already up.
+        let probe = app.descendants(matching: .any)["probe.link"]
+        XCTAssertTrue(probe.waitForExistence(timeout: 10), "the fixture build has no link probe")
+        let before = probe.value as? String
         try deliverLink(toBook: Self.readalongUUID)
-        Thread.sleep(forTimeInterval: 5)
+
+        // Positive evidence first: the app saw this link and decided to leave
+        // the reader as it was. Without it the check below passes when the
+        // link never reached the app.
+        let left = NSPredicate { _, _ in
+            let value = probe.value as? String ?? ""
+            return value != before && value.hasSuffix(":leave:\(Self.readalongUUID)")
+        }
+        let decided = XCTWaiter().wait(
+            for: [XCTNSPredicateExpectation(predicate: left, object: nil)], timeout: 30)
+        XCTAssertEqual(decided, .completed,
+                       "the app never decided to leave the reader up for this link: it read \(probe.value as? String ?? "nothing")")
+        Thread.sleep(forTimeInterval: 3)
         XCTAssertTrue(reader.exists, "a link to the book being read closed its reader")
     }
 }
