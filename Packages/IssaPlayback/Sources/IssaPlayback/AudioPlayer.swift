@@ -251,11 +251,16 @@ public final class AudioPlayer {
         // leave a book the listener was in the middle of silent. A pause the
         // listener makes in between still clears it, through `pause()`.
         let wasPlaying = isPlaying || latchIsLive
-        pause()
+        // Not `pause()`: the system's pause is not the listener's, and a start
+        // that is opening its file reads a changed `pauseCount` as the
+        // listener's last word and never plays. Such a start has `isPlaying`
+        // false and no latch, so nothing would resume it either; see `play()`.
+        stopPlaying()
         wasPlayingBeforeInterruption = wasPlaying
         // The latch lives from the latest `began`: an interruption that
         // goes on keeps it, and one whose end never came stops being believed.
         latchedAt = wasPlaying ? .now : nil
+        interruptedAt = .now
         onInterruption?(false)
     }
 
@@ -267,6 +272,8 @@ public final class AudioPlayer {
         // the listener had stopped.
         wasPlayingBeforeInterruption = false
         latchedAt = nil
+        // Over before the resume below, so that its `play()` plays.
+        interruptedAt = nil
         if resumes {
             #if os(iOS) || os(tvOS)
             try? AVAudioSession.sharedInstance().setActive(true)
@@ -329,6 +336,17 @@ public final class AudioPlayer {
     /// offered to someone who was actually listening.
     private var wasPlayingBeforeInterruption = false
     private var latchedAt: ContinuousClock.Instant?
+    /// When the interruption now in progress began, nil between interruptions.
+    private var interruptedAt: ContinuousClock.Instant?
+
+    /// Whether the system has the session: an interruption has begun and its
+    /// end has not been seen, within the latch's lifetime. The system does not
+    /// always deliver an `.ended`, and a play that waited on one for good
+    /// would leave the book silent for the listener who asks for it.
+    private var isInterrupted: Bool {
+        guard let interruptedAt else { return false }
+        return ContinuousClock.now - interruptedAt <= interruptionLatchLifetime
+    }
 
     /// How long after the latest interruption began its end may still resume
     /// the book. The system does not always deliver an `.ended`, and a latch
@@ -670,6 +688,16 @@ public final class AudioPlayer {
             IssaLog.info("play refused: the loaded audio would not play", [:])
             return
         }
+        // While the system has the session the play is only recorded, as the
+        // book that interruption's end resumes: a start that was still opening
+        // its file when the interruption began arrives here with the session
+        // taken, and playing over it would be heard over the call. A pause by the
+        // listener after this clears the record again.
+        if isInterrupted {
+            wasPlayingBeforeInterruption = true
+            latchedAt = .now
+            return
+        }
         // Activated here, not in `init`: a non-mixable session interrupts
         // whatever else is playing the moment it goes active, which is right
         // when the listener asks for narration and wrong when they only
@@ -705,6 +733,12 @@ public final class AudioPlayer {
     /// call ended, against an explicit instruction.
     public func pause() {
         pauseCount &+= 1
+        stopPlaying()
+    }
+
+    /// Stops, without counting as the listener's pause: what `pause()` does,
+    /// and what an interruption's pause is.
+    private func stopPlaying() {
         wasPlayingBeforeInterruption = false
         latchedAt = nil
         isPlaying = false

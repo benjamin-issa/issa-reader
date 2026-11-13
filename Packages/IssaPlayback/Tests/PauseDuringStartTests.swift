@@ -82,4 +82,76 @@ struct PauseDuringStartTests {
 
         #expect(subject.player.isPlaying)
     }
+
+    /// An interruption is the system's pause, not the listener's: the start
+    /// that was opening its file when it began must not read it as a last word
+    /// and drop the book, and the end of the interruption must find it ready
+    /// to resume.
+    @Test("an interruption that lands while an audiobook start opens its file resumes at its end")
+    func interruptionDuringBookStart() async {
+        let subject = Self.audiobook()
+        subject.player.whileLoadingAsset = { subject.player.interruptionBegan() }
+
+        #expect(await subject.start(atProgress: 0.1) == .landed)
+        #expect(!subject.player.isPlaying, "the book played over the interruption")
+
+        subject.player.interruptionEnded(shouldResume: true)
+
+        #expect(subject.player.isPlaying, "the interruption took a start that was on its way to playing")
+    }
+
+    @Test("an interruption that lands while a chapter start opens its file resumes at its end")
+    func interruptionDuringChapterStart() async {
+        let subject = Self.audiobook()
+        #expect(await subject.start(atProgress: 0.1) == .landed)
+        subject.player.whileLoadingAsset = { subject.player.interruptionBegan() }
+
+        await subject.play(chapter: 1)
+        #expect(!subject.player.isPlaying)
+
+        subject.player.interruptionEnded(shouldResume: true)
+
+        #expect(subject.player.isPlaying)
+    }
+
+    @Test("a read-along start under an interruption resumes at its end")
+    func interruptionDuringReadalongStart() async throws {
+        let (subject, timeline, directory) = try ReadalongClearTests.make(v2: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        subject.player.onTimeUpdate = nil
+        subject.player.onFinishedFile = nil
+        subject.player.whileLoadingAsset = { subject.player.interruptionBegan() }
+
+        #expect(await subject.play(from: timeline.entries[3]))
+        #expect(!subject.player.isPlaying, "the narration played over the interruption")
+
+        subject.player.interruptionEnded(shouldResume: true)
+
+        #expect(subject.player.isPlaying)
+    }
+
+    /// The listener's pause is still the last word, even when it lands inside
+    /// an interruption the start was waiting out.
+    @Test("a pause during the interruption still wins over the start's intent")
+    func pauseDuringInterruptedStart() async {
+        let subject = Self.audiobook()
+        subject.player.whileLoadingAsset = { subject.player.interruptionBegan() }
+        #expect(await subject.start(atProgress: 0.1) == .landed)
+
+        subject.player.pause()
+        subject.player.interruptionEnded(shouldResume: true)
+
+        #expect(!subject.player.isPlaying, "the end of the interruption undid the listener's pause")
+    }
+
+    @Test("an interruption that ends without asking to resume leaves the start's intent unmet")
+    func interruptionEndedWithoutResume() async {
+        let subject = Self.audiobook()
+        subject.player.whileLoadingAsset = { subject.player.interruptionBegan() }
+        #expect(await subject.start(atProgress: 0.1) == .landed)
+
+        subject.player.interruptionEnded(shouldResume: false)
+
+        #expect(!subject.player.isPlaying)
+    }
 }

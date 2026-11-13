@@ -106,4 +106,60 @@ struct AudioPlayerInterruptionTests {
 
         #expect(player.isPlaying)
     }
+
+    /// The system's pause is not the listener's: a start comparing
+    /// `pauseCount` across its suspension reads a bumped count as the
+    /// listener's last word.
+    @Test("an interruption is not counted as a pause by the listener")
+    func interruptionIsNotTheListenersPause() async {
+        let player = await playing()
+        let before = player.pauseCount
+
+        player.interruptionBegan()
+        #expect(player.pauseCount == before)
+
+        player.pause()
+        #expect(player.pauseCount == before &+ 1)
+    }
+
+    /// A play asked for while the session is the system's cannot be heard, and
+    /// is not lost: it is what the interruption's end resumes.
+    @Test("a play asked for during an interruption waits for its end")
+    func playDuringAnInterruptionWaits() async {
+        let player = await playing()
+        player.pause()
+
+        player.interruptionBegan()
+        player.play()
+        #expect(!player.isPlaying, "the book played over the interruption")
+        #expect(player.engineRate == 0)
+
+        player.interruptionEnded(shouldResume: true)
+        #expect(player.isPlaying)
+    }
+
+    @Test("a pause after a play asked for during an interruption wins")
+    func pauseAfterPlayDuringAnInterruption() async {
+        let player = await playing()
+        player.pause()
+
+        player.interruptionBegan()
+        player.play()
+        player.pause()
+        player.interruptionEnded(shouldResume: true)
+
+        #expect(!player.isPlaying)
+    }
+
+    @Test("once the interruption has ended a play plays")
+    func playAfterTheInterruptionPlays() async {
+        let player = await playing()
+        player.interruptionBegan()
+        player.interruptionEnded(shouldResume: false)
+        #expect(!player.isPlaying)
+
+        player.play()
+
+        #expect(player.isPlaying)
+    }
 }
