@@ -90,6 +90,39 @@ enum ReaderInsets {
         return FillEdges.iPhone(safeAreaTop: insets.top, safeAreaBottom: insets.bottom)
     }
 
+    /// How far in from each side of the window the page's text must start to
+    /// stay out from under the hardware: the side safe areas of an iPhone held
+    /// on its side, where the sensor housing and the rounded corners are down
+    /// the left and right edges and the page used to start at its own margin
+    /// from the glass.
+    ///
+    /// Upright, nothing: the sides have no unsafe edge to clear. Only a phone
+    /// — the iPad's and the Mac's side insets are zero — and nothing where a
+    /// rail takes a side (the iPhone Duo) or the window reports a fold or an
+    /// occlusion, which the spread and the rail place themselves.
+    static func sideClearance(
+        isPhone: Bool, window: CGSize, insets: EdgeInsets, railWidth: CGFloat,
+        hasFoldOrOcclusion: Bool = false,
+    ) -> (leading: CGFloat, trailing: CGFloat) {
+        guard isPhone, window.width > window.height, railWidth == 0, !hasFoldOrOcclusion
+        else { return (0, 0) }
+        return (max(0, insets.leading), max(0, insets.trailing))
+    }
+
+    /// `sideClearance` for the device this is running on.
+    static func sideClearance(
+        window: CGSize, insets: EdgeInsets, railWidth: CGFloat, hasFoldOrOcclusion: Bool,
+    ) -> (leading: CGFloat, trailing: CGFloat) {
+        #if os(iOS)
+        sideClearance(
+            isPhone: UIDevice.current.userInterfaceIdiom == .phone,
+            window: window, insets: insets, railWidth: railWidth,
+            hasFoldOrOcclusion: hasFoldOrOcclusion)
+        #else
+        (0, 0)
+        #endif
+    }
+
     /// `fillEdges` for the device this is running on.
     static func fillEdges(
         window: CGSize, insets: EdgeInsets, railWidth: CGFloat, hasFoldOrOcclusion: Bool,

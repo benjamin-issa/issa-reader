@@ -24,6 +24,20 @@ struct ReaderChromeTests {
         #expect(Self.phone.topReserve >= Self.phone.safeAreaTop + ReaderChrome.barHeight)
     }
 
+    @Test("on its side, the page starts clear of the housing and takes the width that is left")
+    func sidesComeOffTheWidth() {
+        let landscape = CGSize(width: 874, height: 402)
+        let chrome = ReaderChrome(
+            safeAreaTop: 0, safeAreaBottom: 21, margin: 24, sideLeading: 62, sideTrailing: 62)
+
+        #expect(chrome.pageSize(in: landscape).width == CGFloat(874 - 62 - 62 - 48))
+        #expect(chrome.fits(landscape))
+
+        // Upright, and with no sides given, nothing moves.
+        let plain = ReaderChrome(safeAreaTop: 0, safeAreaBottom: 21, margin: 24)
+        #expect(plain.pageSize(in: landscape).width == CGFloat(874 - 48))
+    }
+
     @Test("text never ends underneath the footer")
     func textClearsTheFooter() {
         #expect(Self.phone.bottomReserve >= Self.phone.safeAreaBottom + ReaderChrome.barHeight)

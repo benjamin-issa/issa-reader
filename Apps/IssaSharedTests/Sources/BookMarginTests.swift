@@ -264,4 +264,29 @@ struct BookFillScreenTests {
         let notch = EdgeInsets(top: 47, leading: 0, bottom: 34, trailing: 0)
         #expect(ReaderInsets.fillEdges(isPhone: true, window: portrait, insets: notch, railWidth: 0)?.sensorClearance == 0.8 * 47 + 4)
     }
+
+    @Test("the sides are cleared only by a phone on its side, with no rail and no fold")
+    func sideClearanceConditions() {
+        let landscape = CGSize(width: 874, height: 402)
+        let island = EdgeInsets(top: 0, leading: 62, bottom: 21, trailing: 62)
+        let sides = ReaderInsets.sideClearance(isPhone: true, window: landscape, insets: island, railWidth: 0)
+        #expect(sides.leading == 62 && sides.trailing == 62)
+
+        let upright = CGSize(width: 402, height: 874)
+        let portraitInsets = EdgeInsets(top: 62, leading: 0, bottom: 34, trailing: 0)
+        let portrait = ReaderInsets.sideClearance(isPhone: true, window: upright, insets: portraitInsets, railWidth: 0)
+        #expect(portrait.leading == 0 && portrait.trailing == 0, "upright, the page is unchanged")
+        // Even with side insets reported, an upright window is not on its side.
+        let oddPortrait = ReaderInsets.sideClearance(isPhone: true, window: upright, insets: island, railWidth: 0)
+        #expect(oddPortrait.leading == 0 && oddPortrait.trailing == 0)
+
+        let tablet = ReaderInsets.sideClearance(isPhone: false, window: landscape, insets: island, railWidth: 0)
+        #expect(tablet.leading == 0 && tablet.trailing == 0)
+        let duoRail = ReaderInsets.sideClearance(
+            isPhone: true, window: landscape, insets: EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 84), railWidth: 84)
+        #expect(duoRail.leading == 0 && duoRail.trailing == 0, "the Duo's rail takes its own side")
+        let folded = ReaderInsets.sideClearance(
+            isPhone: true, window: landscape, insets: island, railWidth: 0, hasFoldOrOcclusion: true)
+        #expect(folded.leading == 0 && folded.trailing == 0)
+    }
 }

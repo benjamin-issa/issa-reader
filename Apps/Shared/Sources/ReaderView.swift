@@ -284,6 +284,12 @@ public struct ReaderView: View {
                     bottom: deviceInsets.bottom, trailing: deviceInsets.trailing),
                 margin: model.style.pageMargin,
             )
+            // The sides of an iPhone on its side, where the housing is: the
+            // page starts clear of them, as the Duo's spread already does.
+            let sides = ReaderInsets.sideClearance(
+                window: geometry.size, insets: deviceInsets, railWidth: layout.railWidth,
+                hasFoldOrOcclusion: !adaptiveSignals.folds.isEmpty
+                    || !adaptiveSignals.occlusions.isEmpty)
             let chrome = ReaderChrome(
                 safeAreaTop: deviceInsets.top,
                 safeAreaBottom: deviceInsets.bottom,
@@ -298,6 +304,8 @@ public struct ReaderView: View {
                     railWidth: layout.railWidth,
                     hasFoldOrOcclusion: !adaptiveSignals.folds.isEmpty
                         || !adaptiveSignals.occlusions.isEmpty),
+                sideLeading: sides.leading,
+                sideTrailing: sides.trailing,
             )
             // A spread lays the chapter out a page at a time like any other
             // device, each page as tall as the one page would be and as wide
@@ -343,7 +351,7 @@ public struct ReaderView: View {
                 case .ready:
                     pageContent(
                         size: pageSize, layout: layout, chrome: chrome,
-                        width: geometry.size.width - layout.railWidth)
+                        width: geometry.size.width - layout.railWidth - sides.leading - sides.trailing)
                 }
             }
             // Keyed on the page size rather than the window's, because the
@@ -393,8 +401,8 @@ public struct ReaderView: View {
             .padding(.bottom, chrome.hardwareBottom)
             // And clear of the rail, which stands in the unsafe band down the
             // side where the system runs its bars (iPhone Duo).
-            .padding(.leading, layout.railSide == .leading ? layout.railWidth : 0)
-            .padding(.trailing, layout.railSide == .trailing ? layout.railWidth : 0)
+            .padding(.leading, (layout.railSide == .leading ? layout.railWidth : 0) + sides.leading)
+            .padding(.trailing, (layout.railSide == .trailing ? layout.railWidth : 0) + sides.trailing)
             .onChange(of: layout, initial: true) { _, layout in
                 // Held only in the same window: the status bar coming and
                 // going moves the rail's top and not the window, while a new
